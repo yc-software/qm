@@ -63,6 +63,7 @@ const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
   "morning-digest": "x",
   "slack-drafts": "slack",
   x: "x",
+  zoom: "zoom",
 };
 
 export function filterConnectorSkills(

@@ -6,7 +6,7 @@ import { embeddingModelFromDefinition, modelFromOverlay } from "./pi-models.ts";
 import { isEmbeddingModel, type RegisteredModel } from "./model-overlay.ts";
 import { createMemoryEmbedder } from "./embeddings.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
-import { GatewayModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { ModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 
 export class ModelVerificationError extends Error {
   readonly code: string;
@@ -49,7 +49,7 @@ export function verificationFailure(error: unknown): ModelVerificationError {
   if (error instanceof ModelVerificationError) return error;
   let code = "provider_failure";
   if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) code = "timeout";
-  else if (error instanceof GatewayModelUnavailableError) code = "model_unavailable";
+  else if (error instanceof ModelUnavailableError) code = "model_unavailable";
   else if (error instanceof ProviderTurnError) code = VERIFICATION_CODES[error.code];
   reportFailure("model verification", error);
   return new ModelVerificationError(code, VERIFICATION_FAILURES[code]!, { cause: error });

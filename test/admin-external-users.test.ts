@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../src/admin/invite-email.ts";
 import type { Mailer } from "../plugins/chassis/src/resend.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
@@ -109,8 +109,6 @@ test("broker admission preserves configured email members without external invit
   }
   await s.built.identity.deactivate("ops@allowed.example");
   assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "ops@allowed.example"), { allowed: false });
-  await s.built.config.setInternalMemberOverrides(["ops@allowed.example"]);
-  assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "ops@allowed.example"), { allowed: false });
   await s.built.identity.putExternalMember({
     email: "person@corp.example",
     role: "member",
@@ -119,8 +117,6 @@ test("broker admission preserves configured email members without external invit
     createdAt: Date.now() - DAY_MS,
     updatedAt: Date.now(),
   });
-  assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "person@corp.example"), { allowed: false });
-  await s.built.config.setInternalMemberOverrides(["person@corp.example"]);
   assert.deepEqual(await coreEmailAdmission(s.base, SECRET, "person@corp.example"), { allowed: false });
 });
 

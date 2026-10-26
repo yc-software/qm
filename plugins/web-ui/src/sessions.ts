@@ -769,7 +769,7 @@ function sessionWorking(s: CoreSession): boolean {
 }
 
 function statusMarks(s: CoreSession): TemplateResult {
-  const ind = rowIndicators(s, liveThreads(), sessionsState.list);
+  const ind = rowIndicators(s, liveThreads());
   return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
   }${
@@ -1444,7 +1444,6 @@ async function commitRename(s: CoreSession): Promise<void> {
   await persistSessionPatch(s.id, { title: desired });
 }
 
-/** Archive a session by id — closes any surface showing it and updates the Recents list immediately. */
 export function archiveSessionById(sessionId: string): void {
   const s = sessionsState.list.find((x) => x.id === sessionId);
   if (s && !s.archived) {
@@ -1796,13 +1795,15 @@ async function runSessionsRefresh(
   try {
     const surface = sessionsState.webOnly ? "web" : undefined;
     const roots = [...new Set(openConversationIds())];
-    const [page, children] = await Promise.all([
+    const nested = roots.filter((id) => sessionsState.list.some((row) => row.id === id && row.parentSessionId));
+    const [page, children, nestedRows] = await Promise.all([
       fetchSessionPage({ limit: SESSION_BATCH_SIZE, ...(surface ? { surface } : {}) }),
       Promise.all(
         roots.map(
           async (id) => [id, await fetchSessionChildren(id).catch(swallowAs("web-ui: load subagents", null))] as const,
         ),
       ),
+      Promise.all(nested.map((id) => fetchSessionRow({ id }).catch(swallowAs("web-ui: refresh subagent", null)))),
     ]);
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
     if (patchEpoch !== sessionPatchEpoch) {
@@ -1821,6 +1822,10 @@ async function runSessionsRefresh(
       openConversationIds(),
     );
     for (const [id, rows] of children) if (rows) list = mergeChildren(list, id, rows);
+    list = upsertSessions(
+      list,
+      nestedRows.filter((row) => row !== null),
+    );
     sessionsState.list = list;
     sessionsState.hasArchived = Boolean(page.hasArchived);
     if (!activePaged) activeCursor = page.nextCursor;
@@ -1923,8 +1928,6 @@ export async function openSessionInto(
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
-  // Approvals load alongside the transcript but never hold up the first draw:
-  // the chat mounts as soon as entries arrive, and cards attach when this settles.
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
   const entriesRes = await (entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries());
   if (!isLiveConversation(conv) || !isCurrent()) return;

@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -34,11 +35,12 @@ function claims(
   scope: ScopeId = scopeId("personal", actorId),
   extra: Partial<CapabilityClaims> = {},
 ): CapabilityClaims {
+  const dm = { ...D1, audienceScopeId: scopeId("personal", actorId) };
   return {
     actorId,
     scopeId: scope,
-    destination: { type: D1.type, target: D1.target, audienceScopeId: D1.audienceScopeId },
-    destinations: [D1, ROOM],
+    destination: { type: dm.type, target: dm.target, audienceScopeId: dm.audienceScopeId },
+    destinations: [dm, ROOM],
     defaultDestinationKey: D1.key,
     exp: Date.now() + CAPABILITY_TTL_MS,
     ...extra,
@@ -120,23 +122,60 @@ test("unattended cron grants require a live org-admin owner and protect later pa
   assert.deepEqual(cleared.ok ? cleared.cron.unattendedGrants : undefined, []);
 });
 
-test("all five unattended read grant types are accepted on create", async () => {
+test("every unattended read grant type is accepted on create", async () => {
   const { control } = setup();
-  const created = await control.createCron(
-    {
-      schedule: { everyMs: 3_600_000 },
-      action: "nightly usage analysis",
-      unattendedGrants: ["admin.sessions.read", "admin.audit.read", "admin.egress.read", "admin.files.read"],
-    },
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.ok(created.ok, JSON.stringify(created));
-  assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, [
+  const grants = [
     "admin.sessions.read",
     "admin.audit.read",
     "admin.egress.read",
     "admin.files.read",
+    "admin.spend.read",
+    "admin.crons.read",
+  ];
+  const created = await control.createCron(
+    { schedule: { everyMs: 3_600_000 }, action: "nightly usage analysis", unattendedGrants: grants },
+    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
+  );
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, grants);
+});
+
+test("a grant-carrying cron delivers only to its owner: shared or third-party destinations are refused at create and retarget", async () => {
+  const { built, control } = setup();
+  await built.app.upsertDirectory([
+    { principalId: "admin-alice", displayName: "Alice", type: "internal" },
+    { principalId: "U2", displayName: "User Two", type: "internal" },
   ]);
+  await built.app.upsertChannels(
+    [{ channelId: "C-spend", name: "spend", isPrivate: false }],
+    [{ channelId: "C-spend", principalId: "admin-alice" }],
+  );
+  const live = claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true });
+  const request = {
+    schedule: { cron: "0 8 * * 1-5", timezone: "America/Los_Angeles" },
+    action: "daily spend review",
+    unattendedGrants: ["admin.spend.read"],
+  };
+
+  for (const elsewhere of [{ channel: "spend" }, { recipient: "User Two" }, { destinationKey: ROOM.key }]) {
+    const refused = await control.createCron({ ...request, ...elsewhere }, live);
+    assert.equal(refused.ok, false, JSON.stringify(elsewhere));
+    assert.match(refused.ok ? "" : refused.message, /delivers only to them/);
+  }
+
+  const own = await control.createCron(request, live);
+  assert.ok(own.ok, JSON.stringify(own));
+  assert.equal(own.cron.ownerScopeId, scopeId("personal", "admin-alice"));
+
+  const retarget = await control.retargetCron(own.cron.id, ROOM.key, live);
+  assert.equal(retarget.ok, false);
+  assert.match(retarget.ok ? "" : retarget.message, /delivers only to them/);
+
+  const cleared = await control.patchCron(own.cron.id, { unattendedGrants: [] }, claims("admin-alice"));
+  assert.ok(cleared.ok, "removing grants only narrows access, so it needs no live admin turn");
+  assert.deepEqual(cleared.ok ? cleared.cron.unattendedGrants : undefined, []);
+  const moved = await control.retargetCron(own.cron.id, ROOM.key, live);
+  assert.ok(moved.ok, "once grants are gone the cron can deliver anywhere");
 });
 
 test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch reaffirms them", async () => {
@@ -988,8 +1027,8 @@ test("a privileged cron's note is writable by its own fire (grants intact) but r
 
 test("cron runtime create and patch retain ownership gates and refuse unavailable choices", async () => {
   const { built, control } = setup();
-  await built.config.setApprovedHarnesses(["mock"]);
-  const runtime = { harnessId: "mock" as const, modelId: "claude-sonnet-5" };
+  await built.config.setApprovedHarnesses(["pi"]);
+  const runtime = { harnessId: "pi" as const, modelId: "claude-sonnet-5" };
   const created = await control.createCron(
     { title: "runtime", schedule: { everyMs: 60_000 }, action: "check", runtime },
     claims("U1"),
@@ -1013,7 +1052,7 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {
   const { built } = setup();
-  await built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setApprovedHarnesses(["pi"]);
   await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
   for (const surface of ["cron", "keychain-ask"]) {
     const result = await built.app.turn({
@@ -1022,7 +1061,7 @@ test("scheduled runtime is refused before execution when its model is no longer 
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: `cron-runtime-${surface}` },
       text: "must not execute",
-      harness: "mock",
+      harness: "pi",
       model: "claude-sonnet-5",
     });
     assert.equal(result.status, "refused", JSON.stringify(result));
@@ -1032,12 +1071,12 @@ test("scheduled runtime is refused before execution when its model is no longer 
 
 test("queued cron rechecks its runtime after admission and preserves the override in durable work", async (t) => {
   const { built } = setup();
-  await built.config.setApprovedHarnesses(["mock"]);
+  await built.config.setApprovedHarnesses(["pi"]);
   const original = built.runs.enqueue.bind(built.runs);
   t.mock.method(built.runs, "enqueue", async (input: Parameters<typeof original>[0]) => {
     const result = await original(input);
     assert.equal(result.run.request.model, "claude-sonnet-5");
-    assert.equal(result.run.request.harness, "mock");
+    assert.equal(result.run.request.harness, "pi");
     assert.equal(result.run.request.fastMode, false);
     await built.config.setWebuiModels("org:default-org", ["gpt-6-astra"]);
     return result;
@@ -1049,7 +1088,7 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
       actor: { externalId: "U1" },
       conversation: { kind: "dm", threadRef: "cron-runtime-revoked-after-enqueue" },
       text: "must not execute",
-      harness: "mock",
+      harness: "pi",
       model: "claude-sonnet-5",
       fastMode: false,
     }),

@@ -1,13 +1,13 @@
 import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import * as mockHarness from "../src/harness/mock-harness.ts";
+import * as mockHarness from "./support/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
 
 let started!: () => void;
 let release!: () => void;
 let handoffTo: string | undefined;
-mock.module("../src/harness/mock-harness.ts", {
+mock.module("./support/mock-harness.ts", {
   namedExports: {
     ...mockHarness,
     createMockHarness: () => {
@@ -18,7 +18,7 @@ mock.module("../src/harness/mock-harness.ts", {
           handoffTo = undefined;
           return {
             reply: "",
-            runtimeHandoff: { choice: { harnessId: "mock", modelId }, lifetime: "task" as const },
+            runtimeHandoff: { choice: { harnessId: "pi", modelId }, lifetime: "task" as const },
           };
         }
         started();
@@ -31,7 +31,7 @@ mock.module("../src/harness/mock-harness.ts", {
     },
   },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("./support/build-app.ts");
 
 test("a run reports the runtime its turn runs on while working and after it finishes", async () => {
   const built = buildApp(testConfig({ workers: 1 }));

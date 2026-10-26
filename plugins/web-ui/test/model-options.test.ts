@@ -17,16 +17,16 @@ const catalog = { future: metadata("future", "Future API Model"), custom: metada
 test("server metadata controls picker labels, geometry, price, order and effective selection", async () => {
   await applyRuntimeOptions(
     "scope:a",
-    ["pi", "mock"],
-    { pi: ["custom", "future", "custom"], mock: ["future"] },
-    { harnessId: "mock", modelId: "future" },
+    ["pi", "claude"],
+    { pi: ["custom", "future", "custom"], claude: ["future"] },
+    { harnessId: "claude", modelId: "future" },
     catalog,
   );
   assert.deepEqual(
     getModelOptions("scope:a").map((m) => m.value),
-    ["pi:custom", "pi:future", "mock:future"],
+    ["pi:custom", "pi:future", "claude:future"],
   );
-  assert.equal(defaultModelValue("scope:a"), "mock:future");
+  assert.equal(defaultModelValue("scope:a"), "claude:future");
   const model = getModelOptions("scope:a")[1]!;
   assert.equal(model.label, "Future API Model");
   assert.equal(model.model.contextWindow, 98765);
@@ -53,13 +53,13 @@ test("scopes retain independent choices and an unloaded scope does not borrow an
   await applyRuntimeOptions("scope:a", ["pi"], { pi: ["future"] }, { harnessId: "pi", modelId: "future" }, catalog);
   await applyRuntimeOptions(
     "scope:b",
-    ["mock"],
-    { mock: ["custom"] },
-    { harnessId: "mock", modelId: "custom" },
+    ["claude"],
+    { claude: ["custom"] },
+    { harnessId: "claude", modelId: "custom" },
     catalog,
   );
   assert.equal(defaultModelValue("scope:a"), "pi:future");
-  assert.equal(defaultModelValue("scope:b"), "mock:custom");
+  assert.equal(defaultModelValue("scope:b"), "claude:custom");
   assert.deepEqual(getModelOptions("scope:new"), []);
 });
 
@@ -74,9 +74,9 @@ test("OpenRouter and custom provider metadata retains provider grouping", async 
 
 test("harness controls retain their supported surfaces", async () => {
   assert.equal(harnessSupportsEffort("pi"), true);
-  assert.equal(harnessSupportsEffort("mock"), false);
+  assert.equal(harnessSupportsEffort("codex"), false);
   assert.equal(harnessSupportsFastMode("claude"), true);
-  assert.equal(harnessSupportsFastMode("mock"), false);
+  assert.equal(harnessSupportsFastMode("codex"), false);
 });
 
 test("deleted selection retains identity and transcript rendering does not borrow a replacement", async () => {

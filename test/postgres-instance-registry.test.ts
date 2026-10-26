@@ -59,7 +59,7 @@ test(
   async () => {
     await import("./support/auto-fake-sprites.ts");
     const [{ buildApp }, { testConfig }] = await Promise.all([
-      import("../src/wiring.ts"),
+      import("./support/build-app.ts"),
       import("./support/test-config.ts"),
     ]);
     const pool = createPostgresMapFactory(URL!).pool;

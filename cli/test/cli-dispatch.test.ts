@@ -219,7 +219,7 @@ else console.log("{}");
   const config = {
     contract: 1,
     orgId: "acme",
-    publicUrl: "http://localhost:8080",
+    publicUrl: "https://agent.acme.example",
     target: "aws",
     services: ["core"],
     env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app", AWS_DEPLOY_IMAGE_VERSION: "1" } },
@@ -482,7 +482,7 @@ test("infra delete-task-definitions requires explicit destructive confirmation",
       services: ["core"],
       plugins: [],
       skills: [],
-      env: { core: { HARNESS: "mock", AWS_DEPLOY_IMAGE: "acme-sandbox" } },
+      env: { core: { AWS_DEPLOY_IMAGE: "acme-sandbox" } },
       imageOverrides: {},
       aws: {
         accountId: "123456789012",

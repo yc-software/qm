@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { windowedTranscript, type Lease, type SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId, type ScopeId, type SessionEntry, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";

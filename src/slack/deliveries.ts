@@ -1,3 +1,4 @@
+import { escapeSlackText } from "./mrkdwn.ts";
 import { extractPrivateContinuation } from "./external-access.ts";
 import { deployAccessMessage } from "./deploy-access.ts";
 import { approvalDeliveryKey, approvalDeliveryRecipient } from "../core/approval-store.ts";
@@ -161,10 +162,7 @@ export function createDeliveryPoller(deps: {
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
     const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
     if (!base || !id) return attribution;
-    const title = (d.provenance?.sourceTitle?.trim() || "Cron")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
+    const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
     return [
       ...attribution,
       { type: "mrkdwn", text: `${title} · <${base}/crons/${encodeURIComponent(id)}|Settings>`, verbatim: true },
@@ -420,7 +418,17 @@ export function createDeliveryPoller(deps: {
               let card: { text: string; blocks: Array<Record<string, unknown>> } | null = null;
               if (d.destination.deploymentAccess) card = deployAccessMessage(d.destination.deploymentAccess, d.text);
               if (commandApproval)
-                card = approvalMessage([{ ...commandApproval, reason: commandApproval.reason ?? "Approval required" }]);
+                card = approvalMessage([
+                  {
+                    ...commandApproval,
+                    reason: commandApproval.reason ?? "Approval required",
+                    ...(deps.webUiPublicUrl && commandApproval.sessionId
+                      ? {
+                          originUrl: `${deps.webUiPublicUrl.trim().replace(/\/+$/, "")}/s/${encodeURIComponent(commandApproval.sessionId)}`,
+                        }
+                      : {}),
+                  },
+                ]);
               let text = card?.text ?? toSlackMrkdwn(stripReactionDirectives(d.text));
               if (!text.trim() && !d.attachments?.length) return undefined;
               const channel = await openConversationFor(client, [d.destination.target]);

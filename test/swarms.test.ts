@@ -269,6 +269,7 @@ test("ready notifications progress while every provider slot remains fenced afte
     requestId: "follow-up",
     audience: [worker!.id],
     text: "Continue",
+    notify: true,
   });
   for (const fixture of fixtures.slice(0, -1))
     await fixture.service.spawn(fixture.caller, { requestId: "stalled", text: "Work" });
@@ -649,7 +650,7 @@ test("notification and message budgets include initial work and prevent recursio
     swarm.notificationCount = settings.notifications;
   });
   await assert.rejects(
-    service.send(caller, { requestId: "notify", audience: "all", text: "Work" }),
+    service.send(caller, { requestId: "notify", audience: "all", text: "Work", notify: true }),
     /notification budget/,
   );
   await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", notify: false });
@@ -675,7 +676,7 @@ test("without caps, message, notification and spawn counts are unlimited", async
   await service.spawn(caller, { requestId: "one", count: 2, text: "Work", settings: { agents: 64 } });
   await service.sweep();
   for (let index = 0; index < 130; index++)
-    await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work" });
+    await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work", notify: true });
   await service.sweep();
   assert.equal((await runs.list({ limit: 1_000 })).filter((run) => run.request.swarm).length, 262);
   for (let index = 0; index < 33; index++) await service.spawn(caller, { requestId: `spawn-${index}`, text: "Work" });
@@ -810,7 +811,7 @@ test("active recipients receive durable queued unattended work rather than human
   const initial = (await runs.list()).find((run) => run.request.swarm)!;
   const claimed = await runs.claimById(initial.id, "worker", 60_000);
   assert.equal(claimed!.status, "running");
-  await service.send(caller, { requestId: "queue", text: "More work", audience: "all" });
+  await service.send(caller, { requestId: "queue", text: "More work", audience: "all", notify: true });
   await service.sweep();
   const pending = (await runs.inFlightForThread(initial.sessionId)).find((run) => run.id !== initial.id)!;
   assert.equal(pending.status, "pending");

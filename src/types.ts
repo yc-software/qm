@@ -528,6 +528,7 @@ export interface SurfaceContextQuery {
   viewer?: string;
   before?: string;
   match?: string;
+  live?: boolean;
   searchAll?: string;
   viewerToken?: string;
   file?: { ts: string; threadTs?: string; name?: string };
@@ -800,6 +801,7 @@ export interface TurnResult {
   reactions?: string[];
   reason?: string;
   refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
+  errorCode?: string;
   adminUrl?: string;
   runId?: string;
   steered?: true;

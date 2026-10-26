@@ -154,6 +154,107 @@ test("tool service exposes namespaced tools and calls through", async (t) => {
   service.close();
 });
 
+test("destructive annotations mark MCP tools for approval unless the server overrides the policy", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      { name: "read", inputSchema: { type: "object" }, annotations: { readOnlyHint: true, destructiveHint: true } },
+      { name: "drop", inputSchema: { type: "object" }, annotations: { destructiveHint: true } },
+      { name: "plain", inputSchema: { type: "object" } },
+    ],
+  });
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  const approvals = async (partial: Partial<McpServer>) => {
+    await store.put(server({ url: mcp.url, ...partial }));
+    await service.refresh();
+    return Object.fromEntries(service.toolDefs().map((d) => [d.remoteName, d.needsApproval]));
+  };
+  assert.deepEqual(await approvals({}), { read: false, drop: true, plain: false });
+  assert.deepEqual(await approvals({ approval: "all" }), { read: true, drop: true, plain: true });
+  assert.deepEqual(await approvals({ approval: "none" }), { read: false, drop: false, plain: false });
+  service.close();
+});
+
+test("a catalog server is one tool that searches, describes, and invokes as the attested person", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      { name: "find-record", description: "Find a record by name", inputSchema: { type: "object" } },
+      {
+        name: "send-message",
+        description: "Send a message to a contact\nLong detail",
+        inputSchema: { type: "object", properties: { to: { type: "string" } } },
+        annotations: { destructiveHint: true },
+      },
+    ],
+    call: (name, args) => ({ content: [{ type: "text", text: `${name} ${JSON.stringify(args)}` }] }),
+  });
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
+  await service.refresh();
+  assert.deepEqual(
+    service.toolDefs().map((d) => [d.name, d.catalog]),
+    [["records", true]],
+  );
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 0, "a catalog is listed per person on use");
+  assert.equal(
+    await service.call("records", { operation: "search", query: "message" }, "alice@example.com"),
+    "- send-message (needs approval): Send a message to a contact",
+  );
+  assert.match(
+    await service.call("records", { operation: "describe", tool: "send-message" }, "alice@example.com"),
+    /"needsApproval":true/,
+  );
+  assert.equal(
+    await service.needsApproval("records", { operation: "invoke", tool: "send-message" }, "alice@example.com"),
+    true,
+  );
+  assert.equal(
+    await service.needsApproval("records", { operation: "invoke", tool: "find-record" }, "alice@example.com"),
+    false,
+  );
+  assert.equal(await service.needsApproval("records", { operation: "search" }, "alice@example.com"), false);
+  await assert.rejects(
+    service.needsApproval("records", { operation: "invoke", tool: "send_message" }, "alice@example.com"),
+    /Unknown Records tool: send_message\. Search for it first/,
+  );
+  await assert.rejects(
+    service.call("records", { operation: "invoke", tool: "send-message", arguments: { to: "x" } }, "alice@example.com"),
+    /needs the person's approval/,
+    "an approval-requiring tool never goes out without an approval",
+  );
+  assert.equal(
+    await service.call(
+      "records",
+      { operation: "invoke", tool: "send-message", arguments: { to: "x" } },
+      "alice@example.com",
+      "tool-call:abc",
+    ),
+    'send-message {"to":"x"}',
+  );
+  assert.deepEqual(
+    mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => [r.actor, r.approval]),
+    [["alice@example.com", "tool-call:abc"]],
+  );
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 1, "the catalog is cached per person");
+  await service.call("records", { operation: "search" }, "bob@example.com");
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2, "each person gets their own catalog");
+  assert.ok(mcp.requests.every((r) => r.actor === "alice@example.com" || r.actor === "bob@example.com"));
+  await assert.rejects(service.call("records", { operation: "search" }), /needs a signed-in person/);
+  await service.refresh();
+  const lists = mcp.requests.filter((r) => r.rpc === "tools/list").length;
+  await Promise.all([
+    service.call("records", { operation: "search" }, "alice@example.com"),
+    service.call("records", { operation: "search" }, "alice@example.com"),
+  ]);
+  assert.equal(
+    mcp.requests.filter((r) => r.rpc === "tools/list").length,
+    lists + 1,
+    "refresh drops the cache and parallel lookups share one listing",
+  );
+  service.close();
+});
+
 test("disabled server's tools disappear and calls fail", async (t) => {
   const mcp = await startMcpTestServer(t);
   const store = createMcpServerStore(createMemoryMap<McpServer>());

@@ -325,6 +325,26 @@ test("delegated approvals recover native buttons from durable records", async ()
   assert.deepEqual(second.acknowledgements, ["D1"]);
 });
 
+test("an approval too long for Slack links its Deny-only card to the conversation on the web", async () => {
+  const approval = {
+    requestId: "A1",
+    sessionId: "S 1",
+    command: `example_send {"a":"${"&".repeat(15_000)}","to":"attacker@example.com"}`,
+    reason: "this tool asks for approval before each call",
+    request: { actor: { externalId: "U1" } },
+  };
+  const out = await deliver(
+    { type: "principal", target: "U1", commandApprovalId: "A1" },
+    undefined,
+    "https://qm.example.com/",
+    "Approval needed",
+    { approval },
+  );
+  const rendered = JSON.stringify(out.posts[0]!.blocks);
+  assert.match(rendered, /<https:\/\/qm\.example\.com\/s\/S%201\|this conversation in QM>/);
+  assert.doesNotMatch(rendered, /hilo_allow_once|attacker@example\.com/);
+});
+
 for (const approval of [null, { requestId: "A1", command: "publish", request: { actor: { externalId: "U2" } } }]) {
   test(`delegated approvals discard ${approval ? "mismatched" : "expired"} records`, async () => {
     const out = await deliver(

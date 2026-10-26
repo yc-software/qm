@@ -567,21 +567,22 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async descendantsOf(rootIds): Promise<SessionDescendant[]> {
-      const out: SessionDescendant[] = [];
-      const seen = new Set(rootIds);
-      let frontier = rootIds.map((id) => ({ id, rootId: id }));
-      while (frontier.length) {
-        const next: { id: string; rootId: string }[] = [];
-        for (const s of sessions.values()) {
-          const parent = frontier.find((f) => f.id === s.parentSessionId);
-          if (!parent || seen.has(s.id)) continue;
-          seen.add(s.id);
-          out.push({ id: s.id, rootId: parent.rootId, threadRef: s.threadRef });
-          next.push({ id: s.id, rootId: parent.rootId });
+      return [...new Set(rootIds)].flatMap((rootId) => {
+        const out: SessionDescendant[] = [];
+        const seen = new Set([rootId]);
+        let frontier = [rootId];
+        while (frontier.length) {
+          const next: string[] = [];
+          for (const s of sessions.values()) {
+            if (!s.parentSessionId || !frontier.includes(s.parentSessionId) || seen.has(s.id)) continue;
+            seen.add(s.id);
+            out.push({ id: s.id, rootId, threadRef: s.threadRef });
+            next.push(s.id);
+          }
+          frontier = next;
         }
-        frontier = next;
-      }
-      return out;
+        return out;
+      });
     },
 
     async listDescendantsForParticipant(rootId, principalId, limit) {

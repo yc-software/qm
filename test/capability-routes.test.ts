@@ -5,7 +5,8 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -360,36 +361,6 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
       mine.crons.every((c: any) => c.owner === "U1"),
       "a capability must not see other users' crons",
     );
-  });
-
-  it("sets pinned skills on the live speaker's own scope only", async () => {
-    const put = async (body: unknown, token: string) =>
-      fetch(`${base}/v1/pinned-skills`, {
-        method: "PUT",
-        headers: { "content-type": "application/json", "x-agent-capability": token },
-        body: JSON.stringify(body),
-      });
-    const live = { liveActor: true };
-    const mine = await put(
-      { names: ["voice", "drafts"], scopeId: "org:default-org" },
-      await capFor("U3", undefined, live),
-    );
-    assert.equal(mine.status, 200);
-    assert.deepEqual(await built.config.getPinnedSkillsDurable(scopeId("personal", "U3")), ["voice", "drafts"]);
-    assert.deepEqual(await built.config.getPinnedSkillsDurable(scopeId("org", "default-org")), []);
-    const read = await get("/v1/pinned-skills", { "x-agent-capability": await capFor("U3") });
-    assert.deepEqual(((await read.json()) as { names: string[] }).names, ["voice", "drafts"]);
-
-    assert.equal((await put({ names: ["voice"] }, await capChannel("U8", live))).status, 200);
-    assert.deepEqual(await built.config.getPinnedSkillsDurable(scopeId("channel", "C")), ["voice"]);
-
-    assert.equal((await put({ names: ["x"] }, await capFor("U3"))).status, 403, "background turns cannot change pins");
-    assert.equal((await put({}, await capFor("U3", undefined, live))).status, 400, "a missing list does not clear");
-    assert.equal((await put({ names: ["x"] }, await capFor("U3", scopeId("org", "default-org"), live))).status, 403);
-    assert.deepEqual(await built.config.getPinnedSkillsDurable(scopeId("personal", "U3")), ["voice", "drafts"]);
-
-    assert.equal((await put({ names: [] }, await capFor("U3", undefined, live))).status, 200);
-    assert.deepEqual(await built.config.getPinnedSkillsDurable(scopeId("personal", "U3")), []);
   });
 
   it("updates only the caller's OWN personal SOUL, ignoring body scope/actor", async () => {

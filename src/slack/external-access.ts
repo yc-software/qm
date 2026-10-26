@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { extractDirectives } from "./directives.ts";
 import type { SlackUser, ActorAssertion } from "./identity.ts";
 
 export interface ExternalSlackAccess {
@@ -65,13 +66,15 @@ export function externalSlackNamespace(teamId: string, policy: ExternalSlackAcce
 export const PRIVATE_CONTINUATION_INSTRUCTION =
   "This Slack workspace has an external audience. Answer and run code here only with the explicitly available external-safe services. Before any personal memory, files, account, calendar, email, or confidential company service is needed, end this turn with [[continue-private: a concise description of the remaining work]]. The platform acknowledges here and automatically continues in the requesting employee's private DM with this request and its channel context. Do not ask them to repeat it or ask for an additional handoff approval. Do not promise a result back to this channel. Private results stay in the DM. This directive can continue only the current requester's work, never another person's.";
 
+const PRIVATE_CONTINUATION_DIRECTIVE = /\[\[continue-private:((?:(?!\[\[continue-private:)[^\]]|\](?!\]))*)\]\]/gi;
+const TRAILING_PRIVATE_CONTINUATION = /\[\[continue-private:[\s\S]*$/i;
+
 export function extractPrivateContinuation(text: string): { text: string; task?: string } {
-  if (!/\[\[continue-private:/i.test(text)) return { text };
-  const pattern = /\[\[continue-private:([\s\S]*?)\]\]/gi;
-  const tasks = [...text.matchAll(pattern)].map((m) => m[1]!.trim()).filter(Boolean);
-  const cleaned = text
-    .replace(pattern, "")
-    .replace(/\[\[continue-private:[\s\S]*$/gi, "")
-    .trim();
-  return { text: cleaned, ...(tasks.length ? { task: tasks[0]!.slice(0, 16_000) } : {}) };
+  const { text: cleaned, matches } = extractDirectives(
+    text,
+    PRIVATE_CONTINUATION_DIRECTIVE,
+    TRAILING_PRIVATE_CONTINUATION,
+    ([inner]) => inner?.trim().slice(0, 16_000) || undefined,
+  );
+  return { text: cleaned, ...(matches.length ? { task: matches[0]! } : {}) };
 }

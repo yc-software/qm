@@ -5,7 +5,7 @@ import { MODEL_BUDGET_TEXT } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp as buildAppRaw } from "../src/wiring.ts";
+import { buildApp as buildAppRaw } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
@@ -2761,6 +2761,42 @@ test("disabling a grant mode suspends existing grants until it is re-enabled", a
   await config.setApprovalGrantModes(org, { session: true, always: true });
   const restored = await app.turn(dm("!run git push --force origin release"));
   assert.equal(restored.status, "ok", "re-enabling the mode restores the grant without re-approval");
+});
+
+test("a tool that declares approval runs once for the exact approved arguments", async () => {
+  const { app, sessions } = freshApp();
+  const call = '!declared {"to":"a@example.com","body":"hi"}';
+  const first = await app.turn(dm(call));
+  assert.equal(first.status, "pending_approval");
+  const pending = first.pendingApprovals![0]!;
+  assert.match(pending.approvalKey ?? "", /^tool-call:[0-9a-f]{64}$/);
+
+  const always = await app.turn(
+    dm(call, { approval: { requestId: pending.requestId, approved: true, scope: "always" } }),
+  );
+  assert.equal(always.status, "pending_approval", "a per-call approval offers no standing grant");
+
+  const approved = await app.turn(dm(call, { approval: { requestId: pending.requestId, approved: true } }));
+  assert.equal(approved.status, "ok");
+  assert.equal(approved.reply, 'sent {"to":"a@example.com","body":"hi"}');
+
+  const again = await app.turn(dm(call));
+  assert.equal(again.status, "pending_approval", "the approval was consumed by the one call");
+  const changed = await app.turn(dm('!declared {"body":"hi","to":"b@example.com"}'));
+  assert.equal(changed.status, "pending_approval", "different arguments need their own approval");
+
+  const denied = await app.turn(
+    dm(call, { approval: { requestId: again.pendingApprovals![0]!.requestId, approved: false } }),
+  );
+  assert.equal(denied.status, "refused");
+  const notes = (await sessions.getEntries(denied.sessionId!)).filter(
+    (e) => e.type === "user" && (e.payload as { hidden?: boolean }).hidden,
+  );
+  assert.ok(
+    notes.some((e) =>
+      /denied this pending operation, so it did not run: example_send/.test((e.payload as { text: string }).text),
+    ),
+  );
 });
 
 test("Strict posture gates tool actions behind HiLO and honors a session grant", async () => {

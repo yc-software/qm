@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createGoalRecord, openGoal, type GoalRecord } from "../src/harness/goal.ts";
 import type { Harness, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
-import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createMockHarness } from "./support/mock-harness.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
@@ -343,4 +343,59 @@ test("a non-enforcing harness's recorded call cost counts toward a goal's spend 
 
 test("a call without a recorded price stops a spend floor from blocking completion on a non-enforcing harness", async () => {
   assert.doesNotMatch(await completeSpendGoal(0), /floor/i);
+});
+
+test("a goal replaced during a router round is not charged for that round's calls", async () => {
+  const goal = createGoalRecord({ objective: "lane A", floor: { minTurns: 10 } });
+  const { harness } = fakeAdapter(async (turn, round) => {
+    if (round === 0) {
+      Object.assign(
+        turn.goal!,
+        createGoalRecord({ objective: "lane B", floor: { minTurns: 10 }, now: goal.createdAt + 1 }),
+      );
+      return { reply: "", modelCalls: 20 };
+    }
+    return { reply: "", stopped: true };
+  });
+  const emitted: SessionEntry[] = [];
+  await router(harness).turns.runTurn(stubTurn(emitted, { goal }));
+  assert.equal(goal.objective, "lane B");
+  assert.ok(openGoal(goal));
+  assert.match(
+    emitted.map((entry) => JSON.stringify(entry.payload)).join("\n"),
+    /least\): 0\/10 turns/,
+    "the floor prompt counts lane B's turns from zero",
+  );
+});
+
+test("a goal created during a router round is charged for that round", async () => {
+  const { harness, calls } = fakeAdapter(async (turn, round) => {
+    if (round === 0) {
+      await turn.saveGoal?.(createGoalRecord({ objective: "x", capTokens: 100 }));
+      return { reply: "", modelCalls: 5, cacheUsage: { cacheRead: 0, cacheWrite: 0, uncachedInput: 100 } };
+    }
+    return { reply: "", stopped: true };
+  });
+  await router(harness).turns.runTurn(stubTurn([]));
+  assert.match(calls[1]!.input, /token cap is exhausted \(100\/100/);
+});
+
+test("spend recorded after a goal is replaced mid-round is not credited to the replacement", async () => {
+  const goal = createGoalRecord({ objective: "lane A" });
+  const usage = { input: 10, output: 10, costUsd: 2 } as unknown as NonNullable<
+    Parameters<NonNullable<HarnessTurnInput["recordLlmRequest"]>>[0]["usage"]
+  >;
+  const { harness, calls } = fakeAdapter(async (turn, round) => {
+    if (round === 0) {
+      Object.assign(
+        turn.goal!,
+        createGoalRecord({ objective: "lane B", floor: { minUsd: 1 }, now: goal.createdAt + 1 }),
+      );
+      await turn.recordLlmRequest?.({ usage } as never);
+      return { reply: "" };
+    }
+    return { reply: "", stopped: true };
+  });
+  await router(harness).turns.runTurn(stubTurn([], { goal }));
+  assert.match(calls[1]!.input, /least\): \$0\.0000\/\$1 — NOT met/);
 });

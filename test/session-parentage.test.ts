@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { SUBAGENT_TREE_RUN_CAP } from "../src/sessions/session-syscalls.ts";
 import { testConfig } from "./support/test-config.ts";
 

@@ -1,3 +1,4 @@
+import { escapeSlackText } from "./mrkdwn.ts";
 import { isOwnStatusCard } from "./message-gating.ts";
 import { slackMessageToIngestEvent } from "./mirror.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
@@ -25,6 +26,7 @@ export type SlackHistoryReader = (
   threadTs?: string,
   before?: string,
   expandThreads?: boolean,
+  live?: boolean,
 ) => Promise<SlackHistoryPage>;
 
 const MIRROR_CONTEXT_NOTE =
@@ -215,7 +217,13 @@ export function createSlackHistoryReader(deps: {
 
   const backfilled = new Set<string>();
   let shadowPending = false;
-  return async (client, channel, threadTs, before, expandThreads) => {
+  return async (client, channel, threadTs, before, expandThreads, live) => {
+    if (live) {
+      const page = await liveHistory(client, channel, threadTs, before, expandThreads);
+      if (threadTs && page.hasMore)
+        throw new Error("Live Slack thread exceeds the history limit; its replies could not be read completely.");
+      return page;
+    }
     if (deps.source !== "mirror") {
       const live = await liveHistory(client, channel, threadTs, before, expandThreads);
       if (deps.source === "shadow" && !shadowPending) {
@@ -240,7 +248,7 @@ export function createSlackHistoryReader(deps: {
           .map((m) => ({
             ts: m.ts,
             ...(m.subtype !== undefined ? { subtype: m.subtype } : {}),
-            text: m.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+            text: escapeSlackText(m.text),
             ...(m.mentionsSelf ? { mentionsSelf: true } : {}),
             ...(m.sub ? { thread_ts: m.sub } : {}),
             ...(m.self || m.authorId ? { user: m.self ? deps.ids.botUserId : m.authorId } : {}),

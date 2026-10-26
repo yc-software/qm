@@ -129,10 +129,11 @@ export interface HarnessTurnInput {
   goalContinuation?: boolean;
   goalMeter?: GrindMeter;
   saveGoal?(goal: GoalRecord): Promise<void>;
+  goalInbox?: import("./goal.ts").GoalInbox;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
   commandCredentialHandles?: readonly string[];
-  toolApprovalGate?(tool: string): boolean;
+  toolApprovalGate?(tool: string, callKey?: string): boolean;
   emit(entry: NewEntry): Promise<SessionEntry>;
   resumeToolCall?: ResumableToolCall;
   scopeLabel: ScopeId;
@@ -214,8 +215,8 @@ export interface HarnessModelUtilities {
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
 }
 
-type HarnessControlTransport = "mock" | "in-process" | "sdk" | "http" | "json-rpc" | "api";
-type HarnessToolTransport = "mock" | "in-process" | "plugin" | "dynamic" | "in-process-mcp" | "mcp";
+type HarnessControlTransport = "in-process" | "sdk" | "http" | "json-rpc" | "api";
+type HarnessToolTransport = "in-process" | "plugin" | "dynamic" | "in-process-mcp" | "mcp";
 type HarnessCapability =
   "abort" | "steer" | "images" | "thinking-level" | "fast-mode" | "provider-sessions" | "goal-enforcement";
 

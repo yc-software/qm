@@ -117,3 +117,14 @@ test("ambient rendering resolves cached mention names without changing stored me
   assert.ok(prompt.includes("mentioned as <@U00000002>"));
   assert.deepEqual(batch, original);
 });
+
+test("parseAmbientDecision reads the outermost object and stays linear-time on a brace flood", () => {
+  assert.deepEqual(parseAmbientDecision('Sure. {"act": true, "reason": "asked for a digest"} done'), {
+    act: true,
+    reason: "asked for a digest",
+  });
+  const started = performance.now();
+  assert.deepEqual(parseAmbientDecision("{".repeat(60_000)), { act: false });
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 1_000, `brace flood took ${Math.round(elapsed)}ms`);
+});

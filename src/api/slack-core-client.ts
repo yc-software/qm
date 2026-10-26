@@ -59,6 +59,7 @@ interface SlackRunHooks {
 interface StoredApprovalView extends Omit<PendingApproval, "reason"> {
   createdAt?: number;
   reason?: string;
+  sessionId?: string;
   request?: Record<string, unknown>;
 }
 
@@ -85,7 +86,6 @@ export interface SlackCoreClient {
   taskAcknowledgements?: TaskAcknowledgements;
   sessionStatus?: SlackSessionStatus;
   externalSlackParticipants(): Promise<boolean>;
-  internalMemberOverrides(): Promise<string[]>;
   ackEmojiOverride(): Promise<string[] | null>;
   publishEmojiCatalog(emoji: Record<string, string>): Promise<void>;
   surfaceHeaderFacts(scope: ScopeId): Promise<{ agentLabel?: string; modelName: string }>;
@@ -204,10 +204,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
       : {}),
     async externalSlackParticipants() {
       return (await deps.config.getExternalSlackParticipantsDurable(orgScope)) === true;
-    },
-
-    async internalMemberOverrides() {
-      return deps.config.getInternalMemberOverridesDurable();
     },
 
     async ackEmojiOverride() {
@@ -413,6 +409,7 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         requestId: record.requestId,
         ...(record.createdAt !== undefined ? { createdAt: record.createdAt } : {}),
         command: record.command,
+        sessionId: record.sessionId,
         ...(record.reason !== undefined ? { reason: record.reason } : {}),
         ...(record.purpose !== undefined ? { purpose: record.purpose } : {}),
         ...(record.summary !== undefined ? { summary: record.summary } : {}),

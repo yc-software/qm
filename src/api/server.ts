@@ -43,7 +43,9 @@ async function capabilityAdminDenied(
   if (access.agent === "anyone") return null;
   if (claims.aud !== CONTROL_PLANE_AUD) return "admin routes require the per-turn agent token";
   if (!livePersonCapability(claims) && !(access.unattended && claims.grants?.includes(access.unattended.grant))) {
-    return "admin actions through the agent require a turn the admin started themselves — autonomous turns (crons, webhooks) cannot act as an admin";
+    return access.unattended
+      ? `admin actions through the agent require a turn the admin started themselves — this autonomous run lacks the unattended grant ${access.unattended.grant}, which only a cron's org-admin owner can add, from a live turn in their own DM. Report this failure where the run delivers instead of finishing silently.`
+      : "admin actions through the agent require a turn the admin started themselves — autonomous turns (crons, webhooks) cannot use this route. Report this failure where the run delivers instead of finishing silently.";
   }
   if (typeof access.agent === "object") return access.agent.portalOnly;
   if (access.privateRead && parseScopeId(claims.scopeId).kind !== "personal") {
@@ -61,6 +63,15 @@ async function capabilityAdminDenied(
 }
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+function needlessEscape(escaped: string): boolean {
+  const char = String.fromCharCode(Number.parseInt(escaped.slice(0, 2), 16));
+  return encodeURIComponent(char) === char;
+}
+
+function canonicalPath(req: IncomingMessage, pathname: string): boolean {
+  return (req.url ?? "/").split("?", 1)[0] === pathname && !pathname.split("%").slice(1).some(needlessEscape);
+}
 
 function capabilityFromHeaders(req: IncomingMessage): string | null {
   const h = req.headers[CAPABILITY_HEADER];
@@ -492,6 +503,10 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");
       return;
+    }
+    if (!canonicalPath(req, base.pathname)) {
+      sendJson(res, 404, { error: "not_found", message: `${base.method} ${base.pathname}` });
+      return void req.resume();
     }
     const raw = findRoute(rawRoutes, base.method, base.pathname);
     if (raw) {

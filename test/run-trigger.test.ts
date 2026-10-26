@@ -204,7 +204,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
-  it("threads grants only for personal crons", async () => {
+  it("threads grants only for crons homed in and delivering to their owner's own DM", async () => {
     const requests: TurnRequest[] = [];
     const d = deps(async (request) => {
       requests.push(request);
@@ -225,9 +225,13 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
       ownerScopeId: scopeId("channel", "C1"),
       fireKey: "cron:conversation",
     });
+    await runTrigger(d, { ...base, destination: toChannel, fireKey: "cron:owner-to-room" });
+    await runTrigger(d, { ...base, ownerScopeId: scopeId("personal", "U2"), fireKey: "cron:foreign-dm" });
     assert.deepEqual(requests[0]?.unattendedGrants, ["admin.sessions.read"]);
     assert.equal(requests[1]?.unattendedGrants, undefined);
     assert.equal(requests[2]?.unattendedGrants, undefined);
+    assert.equal(requests[3]?.unattendedGrants, undefined, "a personal cron delivering to a room carries no grants");
+    assert.equal(requests[4]?.unattendedGrants, undefined, "a cron homed in someone else's DM carries no grants");
   });
 
   it("a failed fire's error notice carries friendly copy while the fire history keeps the raw reason", async () => {

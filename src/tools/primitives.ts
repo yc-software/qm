@@ -17,6 +17,8 @@ import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
 import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
 import { join } from "node:path";
+import { workspacePathOf } from "../sandbox/exec-file-ops.ts";
+import { DROPPED_PROXY_ENV } from "../sandbox/sandbox-env.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
 import type { CredentialPathSpec } from "../credentials/resident-paths.ts";
 import type { ComputerStatus, ExecResult, Sandbox, SandboxHandle } from "../sandbox/sandbox.ts";
@@ -154,6 +156,7 @@ interface ReadResult {
   content: string | null;
   sourceScopeId: ScopeId | null;
   shared?: true;
+  outsideWorkspace?: true;
 }
 
 export interface SkillResult {
@@ -245,7 +248,8 @@ export interface ToolContext extends SurfaceToolDeps {
   memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
   historyOpen(seq: number): Promise<string | null>;
-  callMcpTool(name: string, args: Record<string, unknown>): Promise<string>;
+  callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string>;
+  mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean>;
   awaitClientResult(
     callId: string,
     timeoutMs: number,
@@ -710,6 +714,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     signal?: AbortSignal,
   ) => {
     const commandEnv: Record<string, string> = {};
+    const addCommandEnv = (key: string, value: string) => {
+      if (DROPPED_PROXY_ENV.has(key) || Object.hasOwn(handle.env ?? {}, key))
+        throw new Error(`requested credentials may not override the computer's environment key: ${key}`);
+      if (Object.hasOwn(commandEnv, key) && commandEnv[key] !== value)
+        throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+      commandEnv[key] = value;
+    };
     const prepared: Array<{
       commit?: () => Promise<void>;
       singleUse?: boolean;
@@ -719,11 +730,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     for (const credential of new Set(requested)) {
       const materialized = credential.resolve ? await credential.resolve() : { env: credential.env ?? [] };
       prepared.push(materialized);
-      for (const { key, value } of materialized.env) {
-        if (key in commandEnv && commandEnv[key] !== value)
-          throw new Error(`requested credentials provide conflicting environment key: ${key}`);
-        commandEnv[key] = value;
-      }
+      for (const { key, value } of materialized.env) addCommandEnv(key, value);
       deps.auditLog?.record({
         at: Date.now(),
         principalId: deps.createdBy,
@@ -743,11 +750,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       ? await prepareExecutionFiles(deps.sandbox, handle, fileCredentials)
       : undefined;
     for (const [key, value] of Object.entries(fileExecution?.env ?? {})) {
-      if (key in commandEnv && commandEnv[key] !== value) {
-        await fileExecution!.finish();
-        throw new Error(`requested credentials provide conflicting environment key: ${key}`);
+      try {
+        addCommandEnv(key, value);
+      } catch (error) {
+        return withCleanup(
+          () => Promise.reject(error),
+          () => fileExecution!.finish(),
+        );
       }
-      commandEnv[key] = value;
     }
     return {
       commandEnv,
@@ -1007,11 +1017,13 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       signal?.throwIfAborted();
       const { handle, resource, crossScope } = await machine(sandboxId);
       const mounts = crossScope ? fallbackMounts.filter((mount) => mount.mountPath === "global") : fallbackMounts;
+      const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
+      if (rel === null) return { content: null, sourceScopeId: null, outsideWorkspace: true };
       return timed("file_op", async () => {
-        const direct = await withAbort(() => deps.sandbox.readFile(handle, path), signal);
+        const direct = await withAbort(() => deps.sandbox.readFile(handle, rel), signal);
         if (direct !== null) return { content: direct, sourceScopeId: resource?.ownerScopeId ?? writableScopeId };
         for (const mount of mounts) {
-          const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, path)), signal);
+          const v = await withAbort(() => deps.sandbox.readFile(handle, join(mount.mountPath, rel)), signal);
           if (v !== null) return { content: v, sourceScopeId: mount.scopeId };
         }
         return { content: null, sourceScopeId: null };
@@ -1039,6 +1051,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return {
         sourceScopeId,
         skills: selected.map(({ skill }) => ({
+          id: skill!.id,
           name: skill!.manifest.name,
           description: skill!.manifest.description,
           source: skill!.scopeId,
@@ -1070,11 +1083,16 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const { handle, resource, crossScope, durableRef } = await machine(sandboxId);
       if (crossScope) throw new Error("files write needs a computer owned by this conversation");
       const ownerScopeId = resource?.ownerScopeId ?? writableScopeId;
+      const rel = path.startsWith("/") ? workspacePathOf(handle.rootDir, path) : path;
+      if (rel === null)
+        throw new Error(
+          `${path} is not in the computer's workspace; only workspace files can be written, so name it relative to the workspace`,
+        );
       await once(() =>
         timed("file_op", async () => {
-          await deps.sandbox.writeFile(handle, path, data);
-          if (ownerScopeId && !isUnderAnyDir(path, persistExclude))
-            await deps.workspace.write(ownerScopeId, durableRef(path), data);
+          await deps.sandbox.writeFile(handle, rel, data);
+          if (ownerScopeId && !isUnderAnyDir(rel, persistExclude))
+            await deps.workspace.write(ownerScopeId, durableRef(rel), data);
         }),
       );
     },
@@ -1230,9 +1248,14 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       return deps.sessionHistory.open(seq);
     },
 
-    async callMcpTool(name: string, args: Record<string, unknown>): Promise<string> {
+    async callMcpTool(name: string, args: Record<string, unknown>, approval?: string): Promise<string> {
       if (!deps.mcp) throw new Error("no MCP connectors are configured");
-      return deps.mcp.call(name, args, deps.createdBy);
+      return deps.mcp.call(name, args, deps.createdBy, approval);
+    },
+
+    async mcpToolNeedsApproval(name: string, args: Record<string, unknown>): Promise<boolean> {
+      if (!deps.mcp) throw new Error("no MCP connectors are configured");
+      return deps.mcp.needsApproval(name, args, deps.createdBy);
     },
 
     async awaitClientResult(callId, timeoutMs, signal, toolName) {

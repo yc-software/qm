@@ -70,7 +70,6 @@ afterEach(() => setGatewayModels([]));
 
 test("gateway configuration no longer requires a model list", () => {
   const parsed = loadConfig({
-    HARNESS: "mock",
     MODEL_GATEWAY_URL: config.url,
     MODEL_GATEWAY_API_KEY: config.apiKey,
     MODEL_GATEWAY_API_KEY_HEADER: config.apiKeyHeader,

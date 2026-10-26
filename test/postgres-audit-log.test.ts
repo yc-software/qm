@@ -44,6 +44,13 @@ test("pg audit log: tail returns newest `limit`, scoped, and reads-its-writes", 
     "scope filter",
   );
 
+  const byActions = await log.tail({ limit: 10, action: ["a1", "a4"] });
+  assert.deepEqual(
+    byActions.map((e) => e.action),
+    ["a4", "a1"],
+    "action list filter",
+  );
+
   const all = await log.events();
   assert.deepEqual(
     all.map((e) => e.action),

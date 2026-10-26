@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { serverDeps } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -48,7 +49,7 @@ test("settings projections preserve values while excluding unrelated payloads", 
     if (["customize", "credentials", "connectors"].includes(view))
       assert.equal("modelsByHarness" in projected, false, view);
     if (view === "slack-settings") {
-      for (const key of ["externalSlackParticipants", "internalMemberOverrides", "channelHeaderPinDefault", "ackEmoji"])
+      for (const key of ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"])
         assert.equal(key in projected, true);
       assert.equal("orgAmbient" in projected, false);
     }

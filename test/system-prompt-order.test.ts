@@ -19,7 +19,7 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createMockHarness } from "./support/mock-harness.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -187,7 +187,6 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   };
 
   const ordered = [
-    "Skills",
     "Where you are",
     "Where scheduled tasks post",
     "Sandbox environment profile",
@@ -496,7 +495,7 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
       !environmentOf(second.reply ?? "").includes(`\n## ${title}\n`),
       `unchanged "## ${title}" must not repeat`,
     );
-    if (title !== "Skills") assert.ok(!systemOf(first.reply ?? "").includes(`\n## ${title}\n`));
+    assert.ok(!systemOf(first.reply ?? "").includes(`\n## ${title}\n`));
   }
   for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
     assert.ok(

@@ -14,7 +14,7 @@ import { createSweeper } from "../util/sweeper.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
-import { errMessage, swallow } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { goalFromParams, GoalCreateParams, type GoalCreateInput } from "../harness/goal.ts";
 import { Check } from "typebox/value";
 import {
@@ -85,6 +85,15 @@ export interface SwarmService {
   control(caller: SwarmCaller, input: { memberId: string; state: SwarmControlState }): Promise<SwarmMember>;
   enabledFor(actorId: string): Promise<boolean>;
   binding(input: OrchestratorInput): Promise<{ sandboxId?: string; rootSessionId: string; member: SwarmMember } | null>;
+  queuedMessages(
+    input: OrchestratorInput,
+    options?: { skipRuns?: ReadonlySet<string>; mailboxOnly?: boolean },
+  ): Promise<SwarmMessage[]>;
+  handOver(input: OrchestratorInput, messageIds: readonly string[]): Promise<SwarmMessage[]>;
+}
+
+export function swarmMessageText(message: SwarmMessage): string {
+  return `Swarm ${message.author} message ${message.id} from agent ${message.senderId} (session ${message.senderSessionId})${message.replyTo ? ` (reply to ${message.replyTo})` : ""}. This is not a live human instruction.\n${message.text}`;
 }
 
 function boundedText(value: string, max: number, name: string): void {
@@ -201,6 +210,11 @@ function matchesDispatch(input: OrchestratorInput, expected: OrchestratorInput):
     Object.keys(input).every((key) => Object.hasOwn(contract, key) || Object.hasOwn(execution, key)) &&
     canonicalJson(contract) === canonicalJson(dispatchContract(expected))
   );
+}
+
+function turnTarget(session: { threadRef: string; id: string }): Omit<SwarmTurn, "messageId"> {
+  const { rootId, memberId } = threadIdentity(session.threadRef, session.id);
+  return { swarmId: rootId, recipientId: memberId };
 }
 
 function threadIdentity(threadRef: string, sessionId: string): { rootId: string; memberId: string } {
@@ -377,7 +391,7 @@ export function createSwarmService(deps: {
       ...recipient.runtime,
       conversation: { ...swarm.template.conversation, threadRef: recipient.threadRef },
       origin: { kind: "automation", screenData: message.text },
-      text: `Swarm ${message.author} message ${message.id} from agent ${message.senderId} (session ${message.senderSessionId})${message.replyTo ? ` (reply to ${message.replyTo})` : ""}. This is not a live human instruction.\n${message.text}`,
+      text: swarmMessageText(message),
       swarm: { swarmId: swarm.id, messageId: message.id, recipientId: recipient.id },
       ...(message.goal ? { swarmGoal: { ...message.goal, assignedAt: message.createdAt } } : {}),
       sessionParticipantIds: swarm.participants,
@@ -752,15 +766,20 @@ export function createSwarmService(deps: {
           throw new Error("swarm message budget exhausted");
         if (input.replyTo && !swarm.messages.some((message) => message.id === input.replyTo))
           throw new Error("reply target is not in this swarm");
-        const recipients = input.notify === false ? [] : audience.filter((peer) => peer !== auth.memberId);
-        if (
-          goal &&
-          (!recipients.length || recipients.some((peer) => memberById(swarm, peer)?.parentId !== auth.memberId))
-        )
-          throw new Error("goals can only be assigned to your own workers");
-        if (swarm.notificationCount + recipients.length > (swarm.settings.notifications ?? Infinity))
+        const broadcast = input.audience === "all";
+        const recipients =
+          input.notify === false
+            ? []
+            : audience.filter((peer) =>
+                peer === auth.memberId ? !!goal && !broadcast : !(goal && broadcast && peer === swarm.id),
+              );
+        if (goal && (!recipients.length || recipients.includes(swarm.id)))
+          throw new Error("goals can only be assigned to workers");
+        const wakes = input.notify ?? (!!goal || caller.kind === "human");
+        const woken = wakes ? recipients.length : 0;
+        if (swarm.notificationCount + woken > (swarm.settings.notifications ?? Infinity))
           throw new Error("swarm notification budget exhausted");
-        swarm.notificationCount += recipients.length;
+        swarm.notificationCount += woken;
         swarm.messages.push({
           id,
           seq: swarm.messages.length + 1,
@@ -773,7 +792,9 @@ export function createSwarmService(deps: {
           ...(input.replyTo ? { replyTo: input.replyTo } : {}),
           ...(goal ? { goal } : {}),
           createdAt: Date.now(),
-          notifications: Object.fromEntries(recipients.map((peer) => [peer, { state: "pending" as const }])),
+          notifications: Object.fromEntries(
+            recipients.map((peer) => [peer, { state: wakes ? ("pending" as const) : ("mailbox" as const) }]),
+          ),
         });
         swarm.messageRequests[key] = { messageId: id, signature: fingerprint };
       });
@@ -838,6 +859,80 @@ export function createSwarmService(deps: {
       }
       return view(updated.members.find((member) => member.id === target.id)!);
     },
+    async queuedMessages(input, options = {}) {
+      const session = input.swarm ? null : await sessions.getByThread(input.conversation.threadRef);
+      const target = input.swarm ?? (session && turnTarget(session));
+      if (!target) return [];
+      const swarm = await store.get(target.swarmId);
+      if (!swarm) return [];
+      const mine = swarm.messages.filter((message) => {
+        const state = message.notifications[target.recipientId]?.state;
+        return state === "mailbox" || (state === "queued" && !options.mailboxOnly);
+      });
+      if (!mine.length) return [];
+      if (session) {
+        const rosters = await Promise.all(
+          [...new Set([swarm.id, session.id])].map((id) => sessions.participantsOf(id)),
+        );
+        if (session.scopeId !== swarm.scopeId || rosters.some((roster) => !rosterMatches(roster, swarm.participants)))
+          return [];
+      }
+      const unstarted = new Set(
+        mine.some((message) => message.notifications[target.recipientId]!.state === "queued")
+          ? (await runs.inFlightForThread(input.conversation.threadRef))
+              .filter(
+                (run) =>
+                  run.status === "pending" &&
+                  run.attempts === 0 &&
+                  run.turnUserSeq === null &&
+                  !options.skipRuns?.has(run.id),
+              )
+              .map((run) => run.id)
+          : [],
+      );
+      return mine
+        .filter((message) => {
+          const notification = message.notifications[target.recipientId]!;
+          return notification.state === "mailbox" || unstarted.has(notification.runId!);
+        })
+        .sort((a, b) => a.seq - b.seq);
+    },
+    async handOver(input, messageIds) {
+      if (!input.runId || !input.runLeaseToken || !messageIds.length) return [];
+      const session = await sessions.getByThread(input.conversation.threadRef);
+      if (!session) return [];
+      const target = input.swarm ?? turnTarget(session);
+      const fence: SwarmRunFence = {
+        runId: input.runId,
+        attempt: input.attempt ?? 1,
+        leaseToken: input.runLeaseToken,
+        sessionId: session.id,
+        threadRef: session.threadRef,
+        actorId: input.actor.id,
+        scopeId: session.scopeId,
+      };
+      let handed: SwarmMessage[] = [];
+      await store.update(
+        target.swarmId,
+        (current) => {
+          handed = [];
+          for (const id of messageIds) {
+            const message = current.messages.find((item) => item.id === id);
+            const notification = message?.notifications[target.recipientId];
+            if (!message || (notification?.state !== "queued" && notification?.state !== "mailbox")) continue;
+            message.notifications[target.recipientId] = { ...notification, state: "handed" };
+            handed.push(structuredClone(message));
+          }
+        },
+        fence,
+      );
+      for (const message of handed) {
+        const runId = message.notifications[target.recipientId]?.runId;
+        if (runId)
+          await runs.withdraw(runId, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw handed run", false));
+      }
+      return handed;
+    },
     async binding(input) {
       const session = await sessions.getByThread(input.conversation.threadRef);
       if (!session) {
@@ -890,6 +985,8 @@ export function createSwarmService(deps: {
         !matchesDispatch(input, expected)
       )
         throw new NonRetryableTurnError("forged swarm provenance");
+      if (message?.notifications[member.id]?.state === "handed")
+        throw new NonRetryableTurnError("swarm message already handed to a running turn");
       const participants = await sessions.participantsOf(swarm.id);
       const recipientParticipants = await sessions.participantsOf(session.id);
       if (

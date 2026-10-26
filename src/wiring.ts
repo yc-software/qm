@@ -87,31 +87,7 @@ import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts"
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import {
-  createMemoryConfigStore,
-  type ScopedConfigStore,
-  type PersistedSoul,
-  type PersistedSoulRevision,
-  type PersistedCommandPolicy,
-  type PersistedSecurityPosture,
-  type PersistedSharingPosture,
-  type PersistedApprovalGrantModes,
-  type PersistedEgressPolicy,
-  type PersistedScopedFlag,
-  type PersistedBaseModel,
-  type PersistedApprovedHarnesses,
-  type PersistedInternalMemberOverrides,
-  type PersistedWebuiModels,
-  type PersistedPeopleDirectoryUrl,
-  type PersistedAckEmoji,
-  type PersistedPinnedSkills,
-  type PersistedSlackEmojiCatalog,
-  type PersistedBranding,
-  type PersistedBrowseMaxSteps,
-  type PersistedBrowseModel,
-  type PersistedAutoFlaggerConfig,
-  type PersistedDeploymentIdentity,
-} from "./resolution/config-store.ts";
+import { configStoreMaps, createMemoryConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
@@ -300,7 +276,6 @@ import {
   createConnectorClientResolver,
   deriveConnectorKey,
   type SecretKey,
-  type StoredConnectorClient,
 } from "./connectors/connector-client-store.ts";
 import {
   createBrowserSessionStore,
@@ -324,7 +299,6 @@ import { createMemorySessionStore } from "./sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { createMemoryToolOutputStore, createPostgresToolOutputStore } from "./sessions/tool-output.ts";
 import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
-import { createMockHarness } from "./harness/mock-harness.ts";
 import {
   fileCompanyChatGPTAuth,
   keychainCompanyChatGPTAuth,
@@ -588,6 +562,7 @@ export function buildApp(
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
+    harnesses?: Partial<Record<HarnessId, Harness>>;
   } = {},
 ): BuiltApp {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
@@ -673,7 +648,6 @@ export function buildApp(
   const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
-    isOverridden: (id) => configStore.getInternalMemberOverrides().includes(id.trim().toLowerCase()),
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
@@ -683,33 +657,7 @@ export function buildApp(
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
   const configStore = createMemoryConfigStore(config.orgId, {
-    connectorClients: artifactMap<StoredConnectorClient>("connector_clients"),
-    souls: artifactMap<PersistedSoul>("soul_configs"),
-    soulHistory: artifactMap<PersistedSoulRevision>("soul_history"),
-    commandPolicies: artifactMap<PersistedCommandPolicy>("command_policies"),
-    securityPostures: artifactMap<PersistedSecurityPosture>("security_postures"),
-    sharingPostures: artifactMap<PersistedSharingPosture>("sharing_postures"),
-    approvalGrantModes: artifactMap<PersistedApprovalGrantModes>("approval_grant_modes"),
-    egressPolicies: artifactMap<PersistedEgressPolicy>("egress_policies"),
-    unfulfilledInsights: artifactMap<PersistedScopedFlag>("unfulfilled_insights_flag"),
-    externalSlackParticipants: artifactMap<PersistedScopedFlag>("external_slack_participants_flag"),
-    channelHeaderPin: artifactMap<PersistedScopedFlag>("channel_header_pin_flag"),
-    baseModels: artifactMap<PersistedBaseModel>("base_model_configs"),
-    approvedHarnesses: artifactMap<PersistedApprovedHarnesses>("approved_harness_configs"),
-    internalMemberOverrides: artifactMap<PersistedInternalMemberOverrides>("internal_member_overrides"),
-    orgAmbient: artifactMap<PersistedScopedFlag>("org_ambient_flag"),
-    interactiveFastMode: artifactMap<PersistedScopedFlag>("interactive_fast_mode_flag"),
-    individualModelAuth: artifactMap<PersistedScopedFlag>("individual_model_auth_flag"),
-    webuiModels: artifactMap<PersistedWebuiModels>("webui_model_configs"),
-    peopleDirectoryUrls: artifactMap<PersistedPeopleDirectoryUrl>("people_directory_urls"),
-    ackEmoji: artifactMap<PersistedAckEmoji>("ack_emoji"),
-    pinnedSkills: artifactMap<PersistedPinnedSkills>("pinned_skills"),
-    slackEmojiCatalog: artifactMap<PersistedSlackEmojiCatalog>("slack_emoji_catalog"),
-    branding: artifactMap<PersistedBranding>("branding_configs"),
-    browseMaxSteps: artifactMap<PersistedBrowseMaxSteps>("browse_max_steps_configs"),
-    browseModels: artifactMap<PersistedBrowseModel>("browse_model_configs"),
-    autoFlaggerConfigs: artifactMap<PersistedAutoFlaggerConfig>("auto_flagger_configs"),
-    deploymentIdentity: artifactMap<PersistedDeploymentIdentity>("deployment_identity"),
+    ...configStoreMaps(artifactMap),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
@@ -1478,32 +1426,33 @@ export function buildApp(
   const adapters = new Map<HarnessId, Harness>([
     [
       "pi",
-      createPiHarness({
-        ...piHarnessConfigOptions(config),
-        modelGateway: gatewayTransport,
-        resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
-        resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-        resolveProviderKeys: resolvePiProviderKeys,
-        ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
-        signals: runSignals,
-      }),
+      overrides.harnesses?.pi ??
+        createPiHarness({
+          ...piHarnessConfigOptions(config),
+          modelGateway: gatewayTransport,
+          resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
+          resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
+          resolveProviderKeys: resolvePiProviderKeys,
+          ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+          signals: runSignals,
+        }),
     ],
     [
       "claude",
-      createClaudeHarness({
-        ...claudeHarnessConfigOptions(config),
-        ...(config.claudeAuthCredential && keychain
-          ? {
-              authEnv: keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, [
-                "CLAUDE_CODE_OAUTH_TOKEN",
-                "ANTHROPIC_AUTH_TOKEN",
-              ]),
-            }
-          : {}),
-        signals: runSignals,
-      }),
+      overrides.harnesses?.claude ??
+        createClaudeHarness({
+          ...claudeHarnessConfigOptions(config),
+          ...(config.claudeAuthCredential && keychain
+            ? {
+                authEnv: keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, [
+                  "CLAUDE_CODE_OAUTH_TOKEN",
+                  "ANTHROPIC_AUTH_TOKEN",
+                ]),
+              }
+            : {}),
+          signals: runSignals,
+        }),
     ],
-    ["mock", createMockHarness()],
   ]);
   const fallbackHarness = config.harness as HarnessId;
   const fallback = {
@@ -1826,7 +1775,10 @@ export function buildApp(
   const canReadScope = createCanReadScope({ managedGroups: projects, directory, identity, teams, sessions });
   const canWriteScope = createCanWriteScope({ managedGroups: projects, directory, identity, teams });
   const canManageScope = createCanManageScope({ managedGroups: projects, directory, identity, sessions });
-  const managesArtifactHome = createManagesArtifactHome({ managedGroups: projects, directory }, canManageScope);
+  const managesArtifactHome = createManagesArtifactHome(
+    { managedGroups: projects, directory, identity, teams },
+    canManageScope,
+  );
   const currentScopeMembers = createCurrentScopeMembers({ managedGroups: projects, directory, identity });
   const isCurrentSharedScopeMember = createIsCurrentSharedScopeMember({ managedGroups: projects, directory, identity });
   membership.canReadScope = canReadScope;
@@ -1958,6 +1910,17 @@ export function buildApp(
     statements: [
       "DROP TABLE IF EXISTS turn_wall_clock_configs",
       "DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'",
+    ],
+  });
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/pinned_skills/0002-drop",
+    statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
+  });
+  pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/internal_member_overrides/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS internal_member_overrides",
+      "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'",
     ],
   });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
@@ -2360,10 +2323,7 @@ export function buildApp(
   const inboxRealtime = createInboxRealtime({
     loops: loopStore,
     items: loopItems,
-    requestFire: (loopId) =>
-      void loopFire
-        .fire(loopId, `loop:${loopId}:slack-event:${Date.now()}`)
-        .catch(swallowAs("inbox loop: slack event fire", undefined)),
+    enqueue: (loop, entries) => loopIngress.enqueueConversation(loop, entries),
   });
   const keychainApprovals = keychain
     ? createKeychainApprovals({
@@ -3237,6 +3197,7 @@ export function serverDeps(
             featureFlags: built.featureFlags,
             items: built.loops.items,
             errors: built.errors,
+            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
             tokens: built.keychain,
             directory: built.directory,
             ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),

@@ -56,6 +56,7 @@ import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./a
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
+import { listUnattendedGrants } from "./admin/unattended-grants.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
@@ -77,6 +78,8 @@ const timed =
 
 const GRANTS = "admin grant changes (promote/revoke) are portal-only — the agent cannot manage who governs the org";
 const IMPERSONATE = "impersonating a user is portal-only — the agent cannot act as another person";
+const MCP_SERVERS =
+  "registering or changing an MCP server is portal-only — the agent cannot change which tools it can call or which calls need approval";
 const LINKS = "identity links are portal-only — the agent cannot decide which sign-ins belong to one person";
 
 const routes: Route<ApiCtx>[] = [
@@ -92,7 +95,13 @@ const routes: Route<ApiCtx>[] = [
     { method: "GET", path: "/v1/admin/model-providers", auth: "either", handle: getModelProviders },
     { method: "PUT", path: "/v1/admin/model-providers/:provider", auth: "either", handle: putModelProvider },
     { method: "GET", path: "/v1/admin/mcp-servers", auth: "either", handle: getMcpServers },
-    { method: "PUT", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: putMcpServer },
+    {
+      method: "PUT",
+      path: "/v1/admin/mcp-servers/:id",
+      auth: "either",
+      admin: { agent: { portalOnly: MCP_SERVERS } },
+      handle: putMcpServer,
+    },
     { method: "DELETE", path: "/v1/admin/mcp-servers/:id", auth: "either", handle: deleteMcpServer },
     { method: "DELETE", path: "/v1/admin/model-providers/:provider", auth: "either", handle: deleteModelProvider },
     { method: "POST", path: "/v1/admin/model-registry/lookup", auth: "either", handle: lookupRegistryModel },
@@ -136,8 +145,20 @@ const routes: Route<ApiCtx>[] = [
       handle: getCredentialUsageSummary,
     },
     { method: "GET", path: "/v1/admin/resources", auth: "either", handle: getAdminResources },
+    {
+      method: "GET",
+      path: "/v1/admin/unattended-grants",
+      auth: "either",
+      handle: (ctx) => listUnattendedGrants(ctx, routes),
+    },
     { method: "GET", path: "/v1/admin/retention", auth: "either", handle: retention },
-    { method: "GET", path: "/v1/admin/spend", auth: "either", handle: spend },
+    {
+      method: "GET",
+      path: "/v1/admin/spend",
+      auth: "either",
+      admin: { unattended: { grant: "admin.spend.read", summary: "read the org spend report" } },
+      handle: spend,
+    },
     {
       method: "GET",
       path: "/v1/admin/egress",
@@ -279,7 +300,7 @@ const routes: Route<ApiCtx>[] = [
       method: "GET",
       path: "/v1/admin/crons",
       auth: "either",
-      admin: { privateRead: "always" },
+      admin: { privateRead: "always", unattended: { grant: "admin.crons.read", summary: "list a scope's crons" } },
       handle: listAdminArtifacts,
     },
     {

@@ -1,4 +1,6 @@
 import { createAdminCall } from "../src/tools/admin.ts";
+import { adminRoutes } from "../src/api/routes/admin.ts";
+import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
 import { createAgentTools } from "../src/harness/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import "./support/auto-fake-sprites.ts";
@@ -11,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -293,10 +295,17 @@ test("an unattended admin-read grant opens only the five read-only routes and ke
     }
 
     const ungranted = await capFor("admin-alice", { live: false });
-    assert.equal(
-      (await fetch(`${s.base}/v1/admin/sessions`, { headers: { "x-agent-capability": ungranted } })).status,
-      403,
+    const ungrantedRead = await fetch(`${s.base}/v1/admin/spend`, { headers: { "x-agent-capability": ungranted } });
+    assert.equal(ungrantedRead.status, 403);
+    assert.match(
+      ((await ungrantedRead.json()) as { message: string }).message,
+      /lacks the unattended grant admin\.spend\.read/,
     );
+    const noGrantRoute = await fetch(`${s.base}/v1/admin/memory?${scopeQ}`, {
+      headers: { "x-agent-capability": ungranted },
+    });
+    assert.equal(noGrantRoute.status, 403);
+    assert.match(((await noGrantRoute.json()) as { message: string }).message, /cannot use this route/);
     const channelGrant = await capFor("admin-alice", {
       live: false,
       grants: ["admin.sessions.read"],
@@ -320,12 +329,16 @@ test("each new unattended read grant opens exactly its own routes", async () => 
       ["admin.audit.read", [`/v1/admin/audit?${scopeQ}`]],
       ["admin.egress.read", [`/v1/admin/egress?${scopeQ}`]],
       ["admin.files.read", [`/v1/admin/files?${scopeQ}`]],
+      ["admin.spend.read", ["/v1/admin/spend"]],
+      ["admin.crons.read", [`/v1/admin/crons?${scopeQ}`]],
     ];
     const crossDenied = [
       `/v1/admin/sessions?${scopeQ}`,
       `/v1/admin/audit?${scopeQ}`,
       `/v1/admin/egress?${scopeQ}`,
       `/v1/admin/files?${scopeQ}`,
+      "/v1/admin/spend",
+      `/v1/admin/crons?${scopeQ}`,
     ];
     for (const [grant, allowed] of cases) {
       const token = await capFor("admin-alice", { live: false, grants: [grant] });
@@ -355,6 +368,45 @@ test("each new unattended read grant opens exactly its own routes", async () => 
       (await fetch(`${s.base}/v1/admin/audit?${scopeQ}`, { headers: { "x-agent-capability": combined } })).status,
       403,
     );
+  } finally {
+    await s.close();
+  }
+});
+
+test("the unattended-grant listing mirrors the route annotations and only answers a live org admin", async () => {
+  const s = start();
+  try {
+    const expected = adminRoutes.flatMap((route) =>
+      "path" in route && route.admin?.unattended
+        ? [{ grant: route.admin.unattended.grant, method: route.method, path: route.path }]
+        : [],
+    );
+    const listing = await createAdminCall(s.base, await capFor("admin-alice"))({ action: "unattended_grants" });
+    assert.equal(listing.status, 200);
+    const grants = (listing.body as { grants: Array<Record<string, string>> }).grants;
+    assert.deepEqual(
+      grants.map(({ grant, method, path }) => ({ grant, method, path })),
+      expected,
+    );
+    assert.deepEqual(new Set(grants.map((entry) => entry.grant)), new Set(UNATTENDED_ADMIN_GRANTS));
+    assert.ok(grants.every((entry) => entry.summary));
+    assert.deepEqual(
+      grants.filter((entry) => entry.action === "spend" || entry.action === "crons").map((entry) => entry.grant),
+      ["admin.spend.read", "admin.crons.read"],
+    );
+    assert.ok(!grants.some((entry) => entry.path === "/v1/admin/users"));
+    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "unattended-grants.read"));
+
+    const nonAdmin = await fetch(`${s.base}/v1/admin/unattended-grants`, {
+      headers: { "x-agent-capability": await capFor("U1") },
+    });
+    assert.equal(nonAdmin.status, 403);
+    const unattended = await fetch(`${s.base}/v1/admin/unattended-grants`, {
+      headers: {
+        "x-agent-capability": await capFor("admin-alice", { live: false, grants: [...UNATTENDED_ADMIN_GRANTS] }),
+      },
+    });
+    assert.equal(unattended.status, 403);
   } finally {
     await s.close();
   }
@@ -393,6 +445,66 @@ test("grant management refuses agent tokens outright — promote/revoke stays in
 
     const u9 = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": await capFor("U9") } });
     assert.equal(((await u9.json()) as any).isAdmin, false, "the refused promote really didn't land");
+  } finally {
+    await s.close();
+  }
+});
+
+test("admin walls hold for every spelling of a path, and encoded params still route", async () => {
+  const s = start();
+  try {
+    const live = await capFor("admin-alice");
+    const unattended = await capFor("admin-alice", { live: false });
+    for (const [path, status] of [
+      ["/v1/admin/grants", 403],
+      ["/v1/%61dmin/grants", 404],
+      ["/v1/admin/gr%61nts", 404],
+    ] as const) {
+      const promote = await fetch(`${s.base}${path}`, {
+        method: "POST",
+        headers: { "x-agent-capability": live, "content-type": "application/json" },
+        body: JSON.stringify({ principalId: "U9", role: "org_admin", scopeId: ORG }),
+      });
+      assert.equal(promote.status, status, `promote via ${path}`);
+    }
+    for (const [path, status] of [
+      ["/v1/admin/grants/admin-bob", 403],
+      ["/v1/%61dmin/grants/admin-bob", 404],
+    ] as const) {
+      const revoke = await fetch(`${s.base}${path}?scope=${encodeURIComponent(ORG)}&role=org_admin`, {
+        method: "DELETE",
+        headers: { "x-agent-capability": unattended },
+      });
+      assert.equal(revoke.status, status, `unattended revoke via ${path}`);
+    }
+    const whoami = async (who: string) =>
+      (
+        (await (
+          await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": await capFor(who) } })
+        ).json()) as any
+      ).isAdmin;
+    assert.equal(await whoami("U9"), false);
+    assert.equal(await whoami("admin-bob"), true);
+
+    const scope = await fetch(`${s.base}/v1/admin/scopes/${encodeURIComponent(ORG)}`, {
+      headers: { "x-agent-capability": live },
+    });
+    assert.equal(scope.status, 200);
+  } finally {
+    await s.close();
+  }
+});
+
+test("MCP server registration refuses agent tokens — the agent cannot change which calls need approval", async () => {
+  const s = start();
+  try {
+    const res = await fetch(`${s.base}/v1/admin/mcp-servers/crm`, {
+      method: "PUT",
+      headers: { "x-agent-capability": await capFor("admin-alice"), "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://tools.example.com/mcp", approval: "none", validate: false }),
+    });
+    assert.equal(res.status, 403);
+    assert.match(((await res.json()) as any).message, /portal-only/);
   } finally {
     await s.close();
   }

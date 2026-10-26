@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import {
   createKeychain,
@@ -820,6 +821,16 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
     k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "not a key" }),
     (e: KeychainError) => e.status === 400,
     "a bad single envKey is rejected too",
+  );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", secret: "s", envKey: "AGENT_API_URL" }),
+    (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
+    "a single envKey in the harness namespace is rejected",
+  );
+  await assert.rejects(
+    k.save({ ownerId: "U1", service: "x", fields: [{ envKey: "AGENT_API_TOKEN", value: "t" }] }),
+    (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
+    "a field envKey in the harness namespace is rejected",
   );
 });
 
@@ -1649,6 +1660,7 @@ test("manifest merges credential representations without conflating login identi
   assert.match(rendered, /`connector:gmail\.googleapis\.com:default`(?! \(execute scope)/);
   assert.match(rendered, /NEEDS RECONNECT/);
   assert.match(rendered, /token expires at/);
+  assert.ok(rendered.includes("token in `$VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`"));
   assert.match(rendered, /account work, EXPIRED/);
   assert.match(rendered, /account personal, expires at/);
   assert.notEqual(credentialHandle(first), credentialHandle(second));

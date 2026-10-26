@@ -83,7 +83,7 @@ let currentGitSha = "";
 let handle = "";
 let sandbox: SandboxResolution | null = null;
 let durability = { sessionStore: "memory", runStore: "memory", databaseUrl: "" };
-let harness = "mock";
+let harness = "pi";
 let watch = true;
 let bootId = "";
 let bootedAt: number | null = null;
@@ -316,16 +316,13 @@ async function assembleAndPrepare(spec: BootSpec): Promise<SpecInputs> {
   const assembled = await assembleEnv({
     worktree,
     callerEnv: spec.callerEnv,
-    allowMock: spec.callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
     log,
   });
   for (const w of assembled.warnings) phase("env", "warn", w);
   harness = assembled.harness;
   let harnessDetail = `live ${assembled.harness} turns (anthropic key from ${assembled.anthropicKeySource})`;
-  if (assembled.harness === "mock") harnessDetail = "mock turns";
-  else if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
-  if (assembled.codexAuthSource && assembled.harness !== "mock")
-    harnessDetail += `; company ChatGPT subscription from ${assembled.codexAuthSource}`;
+  if (assembled.harness === "claude") harnessDetail = "live claude turns (native CLI authentication)";
+  if (assembled.codexAuthSource) harnessDetail += `; company ChatGPT subscription from ${assembled.codexAuthSource}`;
   phase("env", "ok", harnessDetail);
 
   phase("deps", "start");
@@ -714,7 +711,6 @@ async function reload(body: Record<string, unknown>): Promise<Record<string, unk
     const assembled = await assembleEnv({
       worktree,
       callerEnv,
-      allowMock: callerEnv.DEV_INSTANCE_ALLOW_MOCK === "1",
       log,
     });
     const dryEnvSha = computeEnvSha(assembled.env);
@@ -816,7 +812,6 @@ async function statusReport(): Promise<StatusReport> {
     slackEnabled,
     webEnabled: readBootSpec().web !== false,
     watch,
-    turnsLive: harness !== "mock",
     publicApiUrl: sandbox?.publicApiUrl ?? null,
     children: childStatuses,
   };

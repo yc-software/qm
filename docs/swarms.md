@@ -146,24 +146,32 @@ them even if they were not in the intended audience. Root and worker participant
 rosters must remain the original roster; changes fail closed. Current scope and
 identity authorization is rechecked before access and execution.
 
-Notification state is persisted as `pending`, `queued` with a durable `runId`, or
-`failed`. A queued notification means the run was accepted, not that the agent has
+Notification state is persisted as `pending`, `mailbox`, `queued` with a durable
+`runId`, `handed`, or `failed`. A queued notification means the run was accepted, not that the agent has
 finished. Idle recipients wake through the normal durable worker queue. Active
 recipients receive queued unattended turns, not forged human steer signals.
 Notification enqueue uses a stable deduplication key so a crash between enqueue
 and acknowledgment does not enqueue another run. Agent-only turns have no Slack
 delivery target, and the delivery layer also refuses swarm result delivery.
 
-Set `notify:false` for a durable message without a wakeup. Sending to oneself does
-not wake oneself. There are no automatic reply-to-reply notifications: agents
-explicitly decide whether a response warrants another turn. When `notifications`
-is set, every generated turn consumes that budget.
+By default an agent's message wakes nobody; a message from a human or carrying a
+goal wakes its recipients. Lineage plays no part: every other recipient of an
+agent's message gets a `mailbox` notification: no turn runs,
+and the message is handed to the recipient at the start of its next turn, whatever
+starts it, or to a running goal turn like a queued message. They count as delivered
+once the turn's opening entry that carries them is saved, even if that turn later
+stops or fails, because they are already in its transcript. Set `notify:true` when
+the recipient must act now, or `notify:false` for a durable message nobody is
+handed. Turns outside swarm delivery see their mailbox only while the swarm's
+participant rosters are unchanged. Sending to oneself does not wake oneself unless
+the message carries a goal. When
+`notifications` is set, every woken recipient consumes that budget.
 
 ### Worker goals
 
 A worker turn normally ends when the worker replies, and the worker then waits
-for its next message. To keep a worker working, its parent can attach a goal to
-`spawn` or `send`:
+for its next message. To keep a worker working, any member can attach a goal to
+`spawn` or `send`, including a goal sent to itself:
 
 ```json
 {
@@ -180,11 +188,31 @@ turn runs under the normal goal loop: the worker is prompted to continue until t
 goal's governor approves completion or pauses it, or an optional `token_cap` is
 spent. A turn that carries a goal runs without the swarm `turnMs` deadline; other
 turns keep it. `floor` and `token_cap` take the same keys as the goal tool, and
-neither is required. Only a parent can assign goals, and
-only to its own workers; a goal needs `notify`. The worker treats its parent as
-the user for the goal and messages it when it needs a decision. Each goal message
+neither is required. Goals go to workers, not the root session (a goal sent to
+`all` skips the root and the sender), and a goal needs `notify`. The worker treats the agent that sent the goal as the user for it and
+messages that agent when it needs a decision. When a goal is complete, the worker
+decides what comes next: a new goal for itself, a message to whoever must act, or
+other work. Each goal message
 installs a fresh goal once (a retried delivery does not reinstall it), so sending
 a goal again replaces a paused or finished one and starts a new token budget.
+
+While a goal turn runs, messages sent to that worker do not wait for the turn to
+end. The turn checks for the worker's queued messages after each tool call (at
+most every few seconds) and each time the worker ends a reply, including the reply
+that would end the turn. It screens them like a mid-turn message and hands them
+over in order, on the tool result or with the next prompt. When the turn returns
+without being stopped or cancelled, it marks them handed in the swarm and
+withdraws their queued turns, so they never run again; if the turn fails or is
+stopped first they stay queued and run as their own turns. A goal in one of them replaces the running goal at once,
+so any member can redirect a busy worker; its work floor counts from when the
+message was sent. A message the screen blocks stays queued, with every message
+after it, and runs as its own turn later; a blocked mailbox message reaches the
+next turn only as a notice that it was withheld.
+
+A worker blocked on another agent can call goal action update `"wait"` with a note
+naming what it waits for. The goal's clock stops and the call returns with the
+next message that reaches the worker, resuming the goal, or after 30 minutes so the
+worker can reassess.
 
 ### Ask, read, and tail
 

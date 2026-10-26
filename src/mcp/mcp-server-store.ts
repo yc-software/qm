@@ -9,6 +9,8 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 
 export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oauth-user";
 
+export type McpApprovalPolicy = "annotations" | "all" | "none";
+
 export interface McpServer {
   id: string;
   name: string;
@@ -23,7 +25,15 @@ export interface McpServer {
   oauthAuthorizeUrl?: string;
   oauthTokenUrl?: string;
   oauthScopes?: string[];
-  tools?: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  tools?: Array<{
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+  }>;
+  approval?: McpApprovalPolicy;
+  catalog?: boolean;
+  attestActor?: boolean;
   readOnly: boolean;
   enabled: boolean;
   updatedAt: number;

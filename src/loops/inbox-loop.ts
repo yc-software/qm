@@ -1,13 +1,15 @@
-import type { Loop } from "../types.ts";
+import type { Loop, LoopItem } from "../types.ts";
+import type { LoopItemLedger } from "./item-ledger.ts";
 import { scopeId } from "../types.ts";
 import type { LoopStore } from "./loop-store.ts";
-import { SOURCE_IDS } from "./sources/index.ts";
+import { SOURCE_IDS, adapterForItem } from "./sources/index.ts";
+import { EVENT_TEXT_CHARS, type LatestEvent } from "./ingress.ts";
 
 const INBOX_LOOP_NAME = "Inbox";
 
 const INBOX_LOOP_SURFACE = "inbox";
 
-export const INBOX_SYNC_TASK_VERSION = 6;
+export const INBOX_SYNC_TASK_VERSION = 7;
 
 export const INBOX_SYNC_DEFAULT_EVERY_MS = 15 * 60 * 1000;
 
@@ -21,8 +23,8 @@ const INBOX_SUCCESS_CONDITION =
 export function renderInboxSyncTask(loopId: string): string {
   return `Inbox sync v${INBOX_SYNC_TASK_VERSION}. Keep the user's QM inbox loop current: every Slack message and email genuinely WAITING ON A REPLY FROM THEM gets a ledger item with a ready-to-send draft in their own voice. The inbox UI is the only delivery surface — never message the user, and NEVER send a reply yourself; you produce drafts only.
 
-1. GET $AGENT_API_URL/v1/loops/${loopId}/items (agent capability header) — note existing items: skip complete items already tracked unless a NEWER inbound message has arrived since (compare sourceAt); re-post such items with the fresh message and a fresh draft. Refresh an agent draft when sourceAt is newer than proposal.at, even if the ledger already contains the latest message; realtime updates refresh message data before drafting. Preserve human-edited drafts. Repair incomplete open items first: an existing dedupeKey with missing sourcePayload, title, snippet, source metadata, or proposal is unfinished work, not a reason to skip it. Re-read its original conversation using the dedupeKey and summary, then ingest the complete item and draft under that same dedupeKey even when no newer message arrived. Never invent message content from a summary; if the source is unavailable, leave the item pending for retry.
-   - Closed-loop detection: BEFORE scanning for new items, re-read the exact source conversation of EVERY unresolved item (held, pending, processed, or failed), regardless of lastScanAt, age, read/unread state, or whether Gmail still labels it INBOX. The intake watermark is NOT a reconciliation watermark. If the LATEST message is FROM THE USER THEMSELVES — their own Slack userId on Slack, or their own email address in the From line on Gmail — they already replied outside QM, so POST $AGENT_API_URL/v1/loops/${loopId}/items/<itemId>/action with {"kind":"replied","args":{"text":"<their message, <=200 chars>","sourceAt":<reply timestamp in ms>}} to close it. Ignore Gmail drafts and recognize SENT messages, including send-as aliases. Only close when the reply is newer than the waiting message and there is no later inbound ask. If a source read fails or is incomplete, retain the item and retry later; do not treat it as resolved. This applies to both Gmail and Slack items. Do NOT reopen or redraft an item the user has already answered.
+1. GET $AGENT_API_URL/v1/loops/${loopId}/items (agent capability header) — note existing items: skip complete items already tracked; a newer message in a tracked conversation is reported as an event (below), never re-posted or redrafted here. Preserve human-edited drafts. Repair incomplete open items first: an existing dedupeKey with missing sourcePayload, title, snippet, source metadata, or proposal is unfinished work, not a reason to skip it. Re-read its original conversation using the dedupeKey and summary, then ingest the complete item and draft under that same dedupeKey even when no newer message arrived. Never invent message content from a summary; if the source is unavailable, leave the item pending for retry.
+   - Closed-loop detection: BEFORE scanning for new items, re-read the exact source conversation of EVERY unresolved item (held, pending, processed, or failed), regardless of lastScanAt, age, read/unread state, or whether Gmail still labels it INBOX. The intake watermark is NOT a reconciliation watermark. Whenever the LATEST message in that conversation is newer than the item's sourceAt, report it as an event and let the Loop decide: POST $AGENT_API_URL/v1/loops/${loopId}/events with {"events":[{"sourceKey":"<item sourceKey>","author":"owner"|"other","at":<message timestamp in ms>,"text":"<the message, <=${EVENT_TEXT_CHARS} chars>","from":"<sender name, for other>"}]} (up to 20 events per call). author is "owner" when the user wrote it themselves (their own Slack userId on Slack; their own address or a send-as alias in the From line, or the SENT label, on Gmail), else "other". Ignore Gmail drafts. Never resolve, dismiss, or redraft these items yourself: the event is judged by the Loop, which closes answered conversations and redrafts reopened ones. If a source read fails or is incomplete, retain the item and retry later; do not treat it as resolved. This applies to both Gmail and Slack items.
 2. Keep a lastScanAt watermark in a state file on your workspace (e.g. ~/workspace/inbox-sync/STATE.md); scan each connected source since that watermark (fall back to ~3 days on first run), and advance the watermark only after a successful pass, so outages and missed fires backfill instead of leaving silent gaps. Skip a source whose app is not connected. Judge "waiting on a reply" like a good chief of staff, with a deliberate asymmetry: (a) NEEDS REPLY: direct questions, requests, intros, and personal messages that expect acknowledgment; when in any doubt, this bucket. (b) PROBABLY RESOLVED: the transcript reads closed (a thanks, a "sounds good", a thread someone else already answered) but a reasonable person might still send a word; post the item anyway with "probablyResolved": true in the item body and a draft included; the UI shows these in a muted section. NEVER silently drop a human conversation you judged resolved; demote it instead. (c) SKIP entirely: only unmistakable machine noise (newsletters, receipts, calendar notices, bot chatter). Human words never skip; the lowest they go is probablyResolved.
    - Gmail (use the google-workspace skill): INBOX threads where the LAST message is inbound and the user is in To or Cc. sourceKey = the Gmail threadId. Record gmail metadata: threadId, messageId, the RFC-2822 Message-ID header (rfcMessageId), subject, and the reply recipients (to = reply-all sender+others minus the user; cc as appropriate).
    - Slack (use your Slack access as the user): unanswered DMs, @mentions, and thread replies addressed to the user. ONE ITEM PER CONVERSATION, never per message: for unthreaded DMs and group DMs sourceKey = the channelId alone (two people posting in the same group DM is ONE item, refreshed with the latest state and a single draft answering everything outstanding); for all threaded asks sourceKey = channelId:threadTs (channelId:ts of a top-level message anchoring its own thread). Record slack metadata: channelId, channelLabel ("#channel" or "DM with <name>"), ts (the LATEST waiting message), userId (the Slack user id of that message's sender), isDirectMessage from Slack conversations.info is_im/is_mpim (NEVER infer group DMs from C/G ID prefixes), and threadTs for every threaded ask. For a top-level CHANNEL mention, threadTs is the original mentioned message ts, even before anyone replies. Preserve that anchor forever: unrelated channel chatter must not replace, refresh, or resolve this item. Read conversations.replies for that root, not the channel tail. For mentions inside a thread, include the root and only that thread. Relevant messages immediately before/after a channel mention may be included in context with nearby:true; never label these as thread replies, and never include unrelated neighboring messages.
@@ -59,6 +61,43 @@ export async function ensureDefaultInboxLoops(store: LoopStore, owner: string): 
     loops.push(loop);
   }
   return loops;
+}
+
+export function isReplyLoop(loop: Loop, item: LoopItem): boolean {
+  return Boolean(adapterForItem(item)) && loop.shipActions.length === 1 && loop.shipActions[0]?.action === "send";
+}
+
+export const REPLY_DECISION = [
+  'First decide whether the person still owes a reply in this conversation. sourcePayload.latestEvent, when present, is the newest message an event saw: author "owner" means the person wrote it themselves (in Gmail, Slack, or from QM).',
+  'If the person has already answered and nothing newer asks anything of them, end with {"resolution":{"kind":"replied","reason":"<one line>"}}. If the conversation needs nothing from them (closed out, a plain thanks, someone else answered, machine noise), end with {"resolution":{"kind":"no_reply_needed","reason":"<one line>"}}. Re-read the conversation from the source when the payload is not enough to tell. When in doubt, draft a reply.',
+].join("\n");
+
+export async function applyReplyResolution(
+  items: Pick<LoopItemLedger, "recordAction">,
+  loop: Loop,
+  item: LoopItem,
+  parsed: unknown,
+): Promise<boolean> {
+  const resolution = isReplyLoop(loop, item) ? parseResolution(parsed) : null;
+  if (!resolution) return false;
+  const latest = item.sourcePayload?.latestEvent as LatestEvent | undefined;
+  const ownText = latest?.author === "owner" ? latest.text : undefined;
+  const result = resolution.kind === "replied" ? ownText : resolution.reason;
+  await items.recordAction(item.id, {
+    kind: resolution.kind,
+    outcome: "dismissed",
+    ...(result ? { result } : {}),
+  });
+  return true;
+}
+
+function parseResolution(parsed: unknown): { kind: "replied" | "no_reply_needed"; reason: string } | null {
+  if (!parsed || typeof parsed !== "object" || !("resolution" in parsed)) return null;
+  const raw = (parsed as { resolution?: unknown }).resolution;
+  if (!raw || typeof raw !== "object") return null;
+  const { kind, reason } = raw as { kind?: unknown; reason?: unknown };
+  if (kind !== "replied" && kind !== "no_reply_needed") return null;
+  return { kind, reason: typeof reason === "string" ? reason.slice(0, 500) : "" };
 }
 
 export function renderSourceInboxTask(loopId: string, source: string): string {

@@ -130,7 +130,7 @@ test("store reload and independent readers observe edits and soft deletion witho
   assert.deepEqual(inFlight.cost, spec.cost);
   assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
   assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
-  for (const harness of ["pi", "mock"]) assert.equal(modelSupportedByHarness(MODEL_ID, harness), true);
+  assert.equal(modelSupportedByHarness(MODEL_ID, "pi"), true);
   assert.equal(modelSupportedByHarness(MODEL_ID, "claude"), false);
   assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);
   await writer.upsert(

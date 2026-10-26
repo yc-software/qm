@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
@@ -1271,75 +1271,6 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
 
     assert.equal((await putModel("org:default-org", "", ALICE)).status, 200, "empty modelId clears the override");
     assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).baseModel, null);
-  } finally {
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
-
-test("admin governance: people-directory URL round-trips, validates scheme, and is org-scoped", async () => {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-peopledir-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    config: built.config,
-    auditLog: built.auditLog,
-  });
-  server.listen(0);
-  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const putUrl = (scope: string, url: string, headers: Record<string, string>) =>
-    fetch(base + `/v1/admin/scopes/${encodeURIComponent(scope)}/people-directory-url`, {
-      method: "PUT",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-  try {
-    assert.equal(
-      (await getJson(base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl,
-      null,
-      "no directory by default",
-    );
-
-    assert.equal(
-      (await putUrl("org:default-org", "https://www.example.com/people", { "x-admin-actor": "nobody@default-org" }))
-        .status,
-      403,
-      "admin-gated",
-    );
-    assert.equal(
-      (await putUrl("org:default-org", "example.com/people", ALICE)).status,
-      400,
-      "a URL without an http(s) scheme is rejected",
-    );
-    assert.equal(
-      (await putUrl("channel:C1", "https://example.com/people", ALICE)).status,
-      400,
-      "org-wide only — a channel scope is rejected",
-    );
-
-    assert.equal((await putUrl("org:default-org", "https://www.example.com/people", ALICE)).status, 200);
-    assert.equal(
-      (await getJson(base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl,
-      "https://www.example.com/people",
-    );
-    assert.equal(
-      built.config.getPeopleDirectoryUrl("org:default-org"),
-      "https://www.example.com/people",
-      "the store the resolver reads sees the change",
-    );
-
-    const nonString = await fetch(base + "/v1/admin/scopes/org%3Adefault-org/people-directory-url", {
-      method: "PUT",
-      headers: { ...ALICE, "content-type": "application/json" },
-      body: JSON.stringify({ url: 123 }),
-    });
-    assert.equal(nonString.status, 400, "a non-string url is rejected, not treated as a clear");
-    assert.equal(
-      built.config.getPeopleDirectoryUrl("org:default-org"),
-      "https://www.example.com/people",
-      "the value is untouched by a malformed body",
-    );
-
-    assert.equal((await putUrl("org:default-org", "", ALICE)).status, 200, "empty url clears it");
-    assert.equal((await getJson(base, "/v1/admin/scopes/org:default-org")).peopleDirectoryUrl, null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

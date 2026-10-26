@@ -355,13 +355,14 @@ test("fly secrets push warns that staged secrets are not live when machines are 
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: {},
     sandbox: { app: "acme-sb" },
   };
   writeFileSync(
     join(dir, ".env"),
     [
+      "PUBLIC_API_URL=https://acme.example.com",
       "CAPABILITY_SECRET=capability-secret-that-is-long-enough",
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
@@ -411,13 +412,14 @@ test("fly secrets push stays quiet about staging when no machines are running", 
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: {},
     sandbox: { app: "acme-sb" },
   };
   writeFileSync(
     join(dir, ".env"),
     [
+      "PUBLIC_API_URL=https://acme.example.com",
       "CAPABILITY_SECRET=capability-secret-that-is-long-enough",
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
@@ -463,13 +465,14 @@ test("fly secrets push removes the disabled Fly app publisher token", async () =
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: {},
     sandbox: { app: "acme-sb" },
   };
   writeFileSync(
     join(dir, ".env"),
     [
+      "PUBLIC_API_URL=https://acme.example.com",
       "CAPABILITY_SECRET=capability-secret-that-is-long-enough",
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,
@@ -508,12 +511,13 @@ test("fly secrets push falls back to an ambient secret when the scaffold entry i
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: {},
   };
   writeFileSync(
     join(dir, ".env"),
     [
+      "PUBLIC_API_URL=https://acme.example.com",
       "CAPABILITY_SECRET=cap",
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       "CORE_SIGNING_SECRET=",
@@ -863,7 +867,7 @@ test("fly live readiness rejects a healthy machine on the wrong configured image
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: { core: configured },
   };
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
@@ -899,7 +903,7 @@ test("fly live readiness resolves deployment tags to their immutable image diges
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: { core: `registry.fly.io/acme-core@${digest}` },
   };
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
@@ -994,7 +998,7 @@ test("fly secrets push rejects weak signing keys before staging anything", async
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: {},
   };
   writeFileSync(
@@ -1023,7 +1027,7 @@ test("fly secrets push refuses an unmarked pre-existing app", async () => {
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: {},
     sandbox: { app: "acme-sb" },
   };
@@ -1069,7 +1073,7 @@ test("fly secrets push refuses a same-named app outside the configured Fly organ
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: {},
     sandbox: { app: "acme-sb" },
   };
@@ -1118,13 +1122,14 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     services: ["core", "portal"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
     imageOverrides: {},
     secretEnv: { core: { DEPLOY_APPS_SESSION_SECRET: "PORTAL_SESSION_SECRET", EXTRA_API_KEY: "EXTRA_API_KEY" } },
   };
   writeFileSync(
     join(dir, ".env"),
     [
+      "PUBLIC_API_URL=https://acme.example.com",
       "CAPABILITY_SECRET=cap",
       `CONNECTOR_SECRET_KEY=${"connector".repeat(4)}`,
       `CORE_SIGNING_SECRET=${"core-signing".repeat(3)}`,

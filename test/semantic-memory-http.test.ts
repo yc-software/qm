@@ -10,7 +10,7 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import assert from "node:assert/strict";
 import { createServer as httpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";

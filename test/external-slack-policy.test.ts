@@ -413,3 +413,20 @@ test("delegated human-origin runs cannot restart themselves as a person's privat
     assert.equal(await client.privateContinuationSource!(delegated.run.id), null);
   }
 });
+
+test("private continuation extraction skips code, keeps the first directive, and stays linear-time on an opener flood", () => {
+  assert.deepEqual(
+    extractPrivateContinuation("OK [[continue-private: a [[continue-private: b]] tail [[continue-private: c]]"),
+    { text: "OK", task: "b" },
+  );
+  assert.deepEqual(extractPrivateContinuation("Use `[[continue-private: like this]]` to hand off"), {
+    text: "Use `[[continue-private: like this]]` to hand off",
+  });
+  assert.deepEqual(extractPrivateContinuation("Plain reply"), { text: "Plain reply" });
+  const flood = "][[continue-private:".repeat(25_000) + "]";
+  const started = performance.now();
+  const out = extractPrivateContinuation(flood);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 1_000, `opener flood took ${Math.round(elapsed)}ms`);
+  assert.deepEqual(out, { text: "]" });
+});

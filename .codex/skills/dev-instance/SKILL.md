@@ -142,8 +142,7 @@ The dev instance should exercise the real system:
 
 - real LLM: needs a model credential for the harness you run. Core supports
   `HARNESS=pi|claude`; the launcher runs Pi when it finds an Anthropic key and honours an
-  explicit `HARNESS=claude`. Pass `DEV_INSTANCE_ALLOW_MOCK=1` for a deliberate no-model
-  wiring check. Pi's GPT models can also use a ChatGPT subscription: set `CODEX_AUTH_FILE`
+  explicit `HARNESS=claude`. Pi's GPT models can also use a ChatGPT subscription: set `CODEX_AUTH_FILE`
   to a local Codex CLI `auth.json`. The auth-file path is for local dev instances; deployed
   production processes use an API key or a keychain credential (`CODEX_AUTH_CREDENTIAL` /
   `CLAUDE_AUTH_CREDENTIAL`), whose secret lives encrypted in its owner's keychain.
@@ -168,7 +167,6 @@ Only use escape hatches for deliberate wiring checks — this is how you ask for
 the full real stack when a test doesn't need it:
 
 ```bash
-DEV_INSTANCE_ALLOW_MOCK=1 bash scripts/dev-instance.sh up
 DEV_INSTANCE_ALLOW_MEMORY=1 bash scripts/dev-instance.sh up
 DEV_INSTANCE_WATCH=0 bash scripts/dev-instance.sh up
 DEV_INSTANCE_RECLAIM_STALE=0 bash scripts/dev-instance.sh up

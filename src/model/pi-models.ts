@@ -17,7 +17,7 @@ import {
   type ModelOverlay,
 } from "./model-overlay.ts";
 import { providerBaseUrl } from "./provider-endpoints.ts";
-import { isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
+import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./custom-providers.ts";
 
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
@@ -49,7 +49,7 @@ export const THINKING_LEVELS = [
   "max",
   "ultracode",
 ] as const;
-export const HARNESS_IDS = ["pi", "claude", "mock"] as const;
+export const HARNESS_IDS = ["pi", "claude"] as const;
 export type HarnessId = (typeof HARNESS_IDS)[number];
 
 export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
@@ -631,7 +631,20 @@ function resolveBaseModel(id: string): PiModel | undefined {
   if (overlay && !isEmbeddingModel(overlay)) {
     return modelFromOverlay(overlay, false);
   }
-  return (resolveCustomModel(id) as unknown as PiModel | undefined) ?? OPENROUTER_CATALOG_MODELS.get(id);
+  const custom = resolveCustomModel(id);
+  return custom ? customPiModel(custom) : OPENROUTER_CATALOG_MODELS.get(id);
+}
+
+function customPiModel(custom: CustomRuntimeModel): PiModel {
+  const model = custom as unknown as PiModel;
+  if (model.api !== "anthropic-messages") return model;
+  const known = resolveBuiltinModel(custom.upstreamId);
+  if (known?.api !== "anthropic-messages" || !modelSupportsAdaptiveThinking(known)) return model;
+  return {
+    ...model,
+    compat: { forceAdaptiveThinking: true },
+    ...(known.thinkingLevelMap ? { thinkingLevelMap: known.thinkingLevelMap } : {}),
+  };
 }
 
 export function modelFromOverlay(spec: ModelOverlay, useOrgEndpoints = true): PiModel | undefined {
@@ -682,12 +695,12 @@ export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
 }
 
 export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
-  if (id && modelRequestOverrides(id)) return harness === "pi" || harness === "mock";
-  if (id && isGatewayModelId(id)) return (harness === "pi" || harness === "mock") && Boolean(resolveGatewayModel(id));
+  if (id && modelRequestOverrides(id)) return harness === "pi";
+  if (id && isGatewayModelId(id)) return harness === "pi" && Boolean(resolveGatewayModel(id));
   if (!id || unavailableOverlays.has(id)) return false;
-  if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!) && (harness === "pi" || harness === "mock");
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi" || harness === "mock";
-  if (harness === "pi" || harness === "mock") return Boolean(resolveModel(id));
+  if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!) && harness === "pi";
+  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi";
+  if (harness === "pi") return Boolean(resolveModel(id));
   const provider = resolveModel(id)?.provider;
   if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
   return false;

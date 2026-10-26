@@ -187,7 +187,7 @@ interface SecurityScreenInput {
 }
 
 const DATA_BEARING_SURFACES = new Set(["monitor", "webhook"]);
-const MAX_SCREEN_CHARS = 16_000;
+export const MAX_SCREEN_CHARS = 16_000;
 
 export interface SecurityScreenPayload {
   content: string;

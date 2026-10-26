@@ -1474,8 +1474,8 @@ const apiRoutes: readonly WebRoute[] = [
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
         ...(welcomeCohort ? { welcomeCohort } : {}),
-        ...(suggestedActivities.length ? { suggestedActivities } : {}),
         ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
+        ...(suggestedActivities.length && !activityConfig ? { suggestedActivities } : {}),
         permissions,
       });
     },
@@ -1721,12 +1721,36 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/suggested-activities",
     handle: async (c) => {
-      const input = JSON.parse((await readBody(c.req)) || "{}") as { timezone?: unknown; poll?: unknown };
+      const input = JSON.parse((await readBody(c.req)) || "{}") as {
+        timezone?: unknown;
+        poll?: unknown;
+        refresh?: unknown;
+      };
       const response = await coreFetch(
         "POST",
         "/v1/suggested-activities",
-        JSON.stringify({ principalId: c.user, seeds: suggestedActivities, timezone: input.timezone, poll: input.poll }),
+        JSON.stringify({
+          principalId: c.user,
+          seeds: suggestedActivities,
+          timezone: input.timezone,
+          poll: input.poll,
+          refresh: input.refresh,
+        }),
         60_000,
+      );
+      return json(c.res, response.status, JSON.parse(response.text));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/suggested-activities/dismiss",
+    handle: async (c) => {
+      const input = JSON.parse((await readBody(c.req)) || "{}") as { id?: unknown };
+      const response = await coreFetch(
+        "POST",
+        "/v1/suggested-activities/dismiss",
+        JSON.stringify({ principalId: c.user, id: input.id }),
+        15_000,
       );
       return json(c.res, response.status, JSON.parse(response.text));
     },

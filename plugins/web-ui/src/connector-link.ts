@@ -29,6 +29,10 @@ export const CONNECTOR_LABELS: Record<string, { name: string; hosts: string }> =
     name: "X (Twitter)",
     hosts: "Posts & profile",
   },
+  zoom: {
+    name: "Zoom",
+    hosts: "Meetings",
+  },
 };
 
 export interface ConnectorLink {

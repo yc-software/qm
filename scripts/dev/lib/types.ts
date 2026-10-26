@@ -99,7 +99,6 @@ export interface StatusReport {
   webEnabled?: boolean;
   slackEnabled: boolean;
   watch: boolean;
-  turnsLive: boolean;
   publicApiUrl: string | null;
   children: Record<string, ChildStatus & { slack?: SlackHealth }>;
 }

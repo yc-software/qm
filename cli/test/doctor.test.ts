@@ -45,9 +45,10 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
   const deferredConfig: QmConfig = {
     ...withoutSandbox,
     services: ["core", "slack"],
-    env: { core: { HARNESS: "mock" } },
+    env: { core: {} },
   };
   const required = new Map([
+    ["PUBLIC_API_URL", "https://acme.example.com"],
     ["CAPABILITY_SECRET", "a".repeat(64)],
     ["CONNECTOR_SECRET_KEY", "b".repeat(64)],
     ["CORE_SIGNING_SECRET", "c".repeat(64)],
@@ -119,7 +120,7 @@ test("remote doctor keeps missing local email values distinct from disabled emai
     sandbox: undefined,
     services: ["core", "portal", "auth"],
     env: {
-      core: { HARNESS: "mock" },
+      core: {},
       auth: { AUTH_EMAIL_TRANSPORT: "resend", AUTH_ALLOWED_EMAIL_DOMAIN: "example.com" },
     },
   };
@@ -579,6 +580,7 @@ test("doctor treats a missing sandbox block as info (no Fly checks), not a failu
     await doctorCommon(
       noSandbox,
       new Map([
+        ["PUBLIC_API_URL", "https://acme.example.com"],
         ["CAPABILITY_SECRET", "capability-value"],
         ["CONNECTOR_SECRET_KEY", "connector-value".repeat(3)],
         ["CORE_SIGNING_SECRET", "source-value".repeat(4)],

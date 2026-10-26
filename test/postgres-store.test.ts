@@ -2245,6 +2245,14 @@ test("pg run store: delivery state round-trips; onTerminal fires once with it", 
     await runs.fail(parked.id, c!.leaseToken!, "boom", { retry: true });
     assert.equal(seen.length, 2, "exhausted attempts park the run and fire");
     assert.equal(seen[1], `${parked.id}:failed:`);
+
+    const limited = (await runs.enqueue({ sessionId: "sLimited", request: turn("z"), maxAttempts: 1 })).run;
+    const l = await runs.claimById(limited.id, "w3", 5_000);
+    await runs.fail(limited.id, l!.leaseToken!, "slow down", {
+      retry: true,
+      stop: { kind: "error", code: "rate_limit", status: 429 },
+    });
+    assert.equal((await runs.get(limited.id))?.result?.errorCode, "rate_limit");
   } finally {
     await close();
   }

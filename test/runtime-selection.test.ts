@@ -45,8 +45,9 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
     resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { harnessId: "pi", modelId: "claude-sonnet-4-6" }),
     { harnessId: "pi", modelId: "claude-sonnet-4-6" },
   );
+  await config.setApprovedHarnesses(["pi"]);
   assert.throws(
-    () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { harnessId: "mock", modelId: "claude-opus-4-8" }),
+    () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { harnessId: "claude", modelId: "claude-opus-4-8" }),
     /not approved/,
   );
 });

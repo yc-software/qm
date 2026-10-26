@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { posix } from "node:path";
 import { shq } from "../util/shell.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { makeTar, parseTar } from "./tar.ts";
@@ -27,8 +28,13 @@ function workspaceRel(rel: string): string {
   return rel.replace(/^\/+/, "");
 }
 
+export function workspacePathOf(rootDir: string, absPath: string): string | null {
+  const rel = posix.relative(posix.normalize(rootDir), posix.normalize(absPath));
+  return rel && !rel.startsWith("..") && !posix.isAbsolute(rel) ? rel : null;
+}
+
 export function posixJoin(base: string, rel: string): string {
-  const clean = workspaceRel(rel);
+  const clean = workspaceRel((rel.startsWith("/") && workspacePathOf(base, rel)) || rel);
   return clean ? `${base.replace(/\/+$/, "")}/${clean}` : base;
 }
 

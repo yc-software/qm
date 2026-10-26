@@ -14,7 +14,7 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "../src/harness/mock-harness.ts";
+import { createMockHarness } from "./support/mock-harness.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -227,6 +227,35 @@ test("background: a turn that never used its eagerly provisioned box returns bef
   assert.equal(g.teardownStarted, 2, "the detached tail reached teardown");
   assert.equal(g.teardownOpts[1]?.homeUnchanged, true, "an unused box tells the backend there is nothing to snapshot");
   assert.equal(g.teardownOpts[0]?.homeUnchanged, undefined, "a used box does not");
+  g.release();
+  for (let i = 0; i < 200 && g.teardownFinished < 2; i++) await tick();
+  assert.equal(g.teardownFinished, 2);
+});
+
+test("background: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
+  const g = gatedSandbox();
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), true);
+
+  const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7", background: true });
+  assert.equal(first.status, "ok");
+  for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
+  g.release();
+  for (let i = 0; i < 200 && g.teardownFinished === 0; i++) await tick();
+
+  const turn = orch.handleTurn({ ...dm("dm:U1:t7", "!finish-silent-paused"), runId: "r8", background: true });
+  const paused = await Promise.race([turn, new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000))]);
+  assert.ok(paused, "the paused turn returned while the teardown was still gated");
+  assert.equal(paused.status, "pending_approval");
+  assert.equal(paused.pendingApprovals?.length, 1);
+  assert.equal(g.provisioned, 2, "the box was provisioned eagerly for the paused turn");
+  assert.equal(g.teardownFinished, 1, "the approval card returned without waiting for that box's teardown");
+
+  const { lease } = await sessions.acquireLease(paused.sessionId!);
+  assert.ok(lease, "the resumed turn can claim the session while the box is still being reclaimed");
+  await sessions.releaseLease(lease!);
+
+  for (let i = 0; i < 200 && g.teardownStarted < 2; i++) await tick();
+  assert.equal(g.teardownStarted, 2, "the detached tail still reclaims the box");
   g.release();
   for (let i = 0; i < 200 && g.teardownFinished < 2; i++) await tick();
   assert.equal(g.teardownFinished, 2);

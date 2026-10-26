@@ -4,7 +4,12 @@
 // HTTP destination every scope's agents can call, so it is governed like a
 // model-provider credential, not like a personal connector.
 
-import { isValidMcpServerId, type McpServer, type McpServerAuthMode } from "../../../mcp/mcp-server-store.ts";
+import {
+  isValidMcpServerId,
+  type McpApprovalPolicy,
+  type McpServer,
+  type McpServerAuthMode,
+} from "../../../mcp/mcp-server-store.ts";
 import { isAccountType, PROVIDERS } from "../../../connectors/oauth.ts";
 import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../../../mcp/oauth-discovery.ts";
 import { sendJson } from "../../http.ts";
@@ -12,6 +17,7 @@ import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 
 const AUTH_MODES: McpServerAuthMode[] = ["none", "bearer", "client-credentials", "oauth-user"];
+const APPROVAL_POLICIES: McpApprovalPolicy[] = ["annotations", "all", "none"];
 
 async function actor(ctx: ApiCtx) {
   const scope = orgScope(ctx.deps);
@@ -39,11 +45,12 @@ export async function getMcpServers(ctx: ApiCtx): Promise<void> {
   const servers = await ctx.deps.mcpServers.list();
   return sendJson(ctx.res, 200, {
     servers: servers.map(redact),
-    tools: ctx.deps.mcpToolService?.toolDefs().map(({ name, serverId, description, readOnly }) => ({
+    tools: ctx.deps.mcpToolService?.toolDefs().map(({ name, serverId, description, readOnly, needsApproval }) => ({
       name,
       serverId,
       description,
       readOnly,
+      needsApproval,
     })),
   });
 }
@@ -81,13 +88,38 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `auth must be one of ${AUTH_MODES.join(", ")}` });
   }
   const existing = await ctx.deps.mcpServers.get(id);
+  const approval = b.approval ?? existing?.approval ?? "annotations";
+  if (!APPROVAL_POLICIES.includes(approval)) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: `approval must be one of ${APPROVAL_POLICIES.join(", ")}`,
+    });
+  }
   const oauthUser = auth === "oauth-user";
+  const catalog = (b.catalog ?? existing?.catalog) === true;
+  const attestActor = (b.attestActor ?? existing?.attestActor) === true;
+  if ((catalog || attestActor) && oauthUser) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message: "catalog and attestActor are not available with oauth-user auth",
+    });
+  }
   if (oauthUser && PROVIDERS[id]) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `id ${id} is reserved by a built-in connector` });
   }
   const credentialScope = oauthUser ? "per-user" : (b.credentialScope ?? existing?.credentialScope ?? "shared");
   if (credentialScope !== "shared" && credentialScope !== "per-user") {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "credentialScope must be shared or per-user" });
+  }
+  if (
+    attestActor &&
+    (!catalog || credentialScope !== "shared" || (auth !== "bearer" && auth !== "client-credentials"))
+  ) {
+    return sendJson(ctx.res, 400, {
+      error: "bad_request",
+      message:
+        "attestActor requires catalog, shared credentials, and bearer or client-credentials auth, so only QM can assert the person",
+    });
   }
   const credentialHost = b.credentialHost ?? existing?.credentialHost ?? (oauthUser ? parsed.hostname : undefined);
   if (
@@ -166,6 +198,9 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
           clientSecret: typeof b.clientSecret === "string" && b.clientSecret ? b.clientSecret : existing?.clientSecret,
         }
       : {}),
+    ...(approval === "annotations" ? {} : { approval }),
+    ...(catalog ? { catalog } : {}),
+    ...(attestActor ? { attestActor } : {}),
     readOnly: b.readOnly !== false,
     enabled: b.enabled !== false,
     updatedAt: Date.now(),
@@ -191,7 +226,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   let toolNames: string[] | undefined;
   if (b.validate !== false && !oauthUser && ctx.deps.mcpToolService) {
     try {
-      toolNames = await ctx.deps.mcpToolService.probe(server);
+      toolNames = await ctx.deps.mcpToolService.probe(server, authorized.id);
     } catch (e) {
       return sendJson(ctx.res, 400, {
         error: "unreachable",

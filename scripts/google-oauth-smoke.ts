@@ -187,7 +187,6 @@ const built = buildApp({
   orgId,
   sessionStore: "memory",
   runStore: "memory",
-  harness: "mock",
 });
 const core = createServer(built.app, {
   signingSecret: secret,

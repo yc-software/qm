@@ -31,6 +31,7 @@ test("provider skills are visible only for connectors configured by the admin", 
     skill("linear"),
     skill("x"),
     skill("slack-drafts"),
+    skill("zoom"),
   ];
   assert.deepEqual(
     filterConnectorSkills(all, []).map((entry) => entry.skill?.manifest.name),

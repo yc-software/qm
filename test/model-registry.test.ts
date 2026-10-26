@@ -103,7 +103,7 @@ test("Opus 5.5 is selectable with compatible harnesses and credentials, without 
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
   assert.ok(FAST_MODE_MODEL_IDS.includes(id));
   assert.equal(safeModelMetadata(id)?.label, "Opus 5.5");
-  for (const harness of ["pi", "claude", "mock"]) {
+  for (const harness of ["pi", "claude"]) {
     assert.equal(modelSupportedByHarness(id, harness), true);
     assert.equal(defaultModelForHarness(harness), "claude-opus-5");
   }
@@ -127,7 +127,7 @@ test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, an
   assert.equal(safeModelMetadata(id)?.label, "Sonnet 5.5");
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
-  for (const harness of ["pi", "claude", "mock"]) {
+  for (const harness of ["pi", "claude"]) {
     assert.equal(modelSupportedByHarness(id, harness), true);
     assert.equal(defaultModelForHarness(harness), "claude-opus-5");
   }
@@ -156,7 +156,7 @@ test("Haiku 5.5 offers every effort, keeps thinking off available, rejects tempe
   ]);
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
-  for (const harness of ["pi", "claude", "mock"]) {
+  for (const harness of ["pi", "claude"]) {
     assert.equal(modelSupportedByHarness(id, harness), true);
     assert.equal(defaultModelForHarness(harness), "claude-opus-5");
   }
@@ -189,7 +189,6 @@ test("provider-key gating applies only to key-authed harnesses (no over-hiding o
   });
   const all = { anthropic: true, openai: true, openrouter: true, codexOAuth: true };
   assert.deepEqual(modelProviderAvailabilityFor("claude", noKeys), all);
-  assert.deepEqual(modelProviderAvailabilityFor("mock", noKeys), all);
   assert.deepEqual(modelProviderAvailabilityFor("pi", noKeys, { ...noKeys, codexOAuth: true }), {
     ...noKeys,
     codexOAuth: true,

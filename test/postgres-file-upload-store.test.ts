@@ -28,8 +28,9 @@ test(
       checksums: ["hash"],
       uploadId: "provider-upload",
       state: "pending",
-      expiresAt: 0,
+      expiresAt: Date.now() + 60_000,
       createdAt: Date.now(),
+      lastActivityAt: Date.now(),
     });
     const uploads = Array.from({ length: MAX_ACTIVE_UPLOADS + 3 }, row);
     const results = await Promise.allSettled(uploads.map((r, i) => (i % 2 ? first : second).insert(r)));
@@ -47,7 +48,7 @@ test(
       second.transition(accepted.id, ["pending"], "aborting"),
     ]);
     assert.equal(claims.filter(Boolean).length, 1);
-    assert.ok((await second.expired(Date.now())).some((r) => r.id === accepted.id));
+    assert.ok((await second.expired(Date.now() + 120_000)).some((r) => r.id === accepted.id));
     for (const item of uploads) await first.transition(item.id, ["pending", "completing", "aborting"], "aborted");
     await second.insert(row());
   },
@@ -73,6 +74,7 @@ test("expired upload batches rotate durably without starving later rows", { skip
       uploadId: "upload",
       state: "completing",
       createdAt: now,
+      lastActivityAt: now,
       expiresAt: i,
     });
   }
@@ -106,9 +108,47 @@ test("terminal failed uploads release active quota", { skip: !url }, async () =>
       uploadId: "upload",
       state: "completing",
       createdAt: Date.now(),
+      lastActivityAt: Date.now(),
       expiresAt: Date.now(),
     });
     await store.transition(id, ["completing"], "failed");
   }
   assert.equal((await store.get(ids.at(-1)!))!.state, "failed");
 });
+
+test(
+  "active lists the actor's unfinished uploads that hold quota; touch records activity",
+  { skip: !url },
+  async () => {
+    const store = createPostgresFileUploadStore(url!);
+    const actorId = `active-uploads-${randomUUID()}`;
+    const now = Date.now();
+    const row = (expiresAt: number, owner = actorId): FileUpload => ({
+      id: randomUUID().replaceAll("-", ""),
+      actorId: owner,
+      scopeId: scopeId("personal", owner),
+      name: "file",
+      mimetype: "text/plain",
+      sizeBytes: 1,
+      partSize: 64 * 1024 * 1024,
+      checksums: ["hash"],
+      uploadId: "upload",
+      state: "pending",
+      createdAt: now,
+      lastActivityAt: now,
+      expiresAt,
+    });
+    const stale = Array.from({ length: MAX_ACTIVE_UPLOADS }, () => row(now - 1));
+    for (const r of stale) await store.insert(r);
+    const live = row(now + 60_000);
+    const aborted = row(now + 60_000);
+    await store.insert(live);
+    await store.insert(aborted);
+    await store.transition(aborted.id, ["pending"], "aborted");
+    await store.insert(row(now + 60_000, `other-${actorId}`));
+    assert.ok(await store.touch(live.id, now + 5_000));
+    assert.equal(await store.touch(aborted.id, now + 5_000), false);
+    assert.deepEqual(await store.active(actorId, now), [{ ...live, lastActivityAt: now + 5_000 }]);
+    assert.equal((await store.get(aborted.id))!.lastActivityAt, now);
+  },
+);

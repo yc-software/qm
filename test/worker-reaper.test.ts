@@ -10,7 +10,7 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import { createReaper } from "../src/runs/reaper.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";

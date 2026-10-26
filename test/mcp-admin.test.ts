@@ -8,7 +8,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -87,6 +87,39 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await store.get("crm"))?.credentialScope, "shared");
   assert.equal((await store.get("crm"))?.credentialHost, undefined);
   assert.equal((await store.get("crm"))?.credentialAccountType, undefined);
+  assert.equal((await put({ approval: "sometimes" })).status, 400);
+  assert.equal((await put({ approval: "all" })).status, 200);
+  assert.equal((await store.get("crm"))?.approval, "all");
+  assert.equal((await put({})).status, 200);
+  assert.equal((await store.get("crm"))?.approval, "all", "an update that omits the policy keeps it");
+  assert.equal((await put({ approval: "annotations" })).status, 200);
+  assert.equal((await store.get("crm"))?.approval, undefined);
+  assert.equal((await put({ attestActor: true })).status, 400);
+  assert.equal(
+    (await put({ catalog: true, attestActor: true })).status,
+    400,
+    "an unauthenticated upstream cannot trust the actor",
+  );
+  assert.equal(
+    (
+      await put({
+        catalog: true,
+        attestActor: true,
+        auth: "bearer",
+        bearerToken: "t",
+        credentialScope: "per-user",
+        credentialHost: "accounts.example.com",
+      })
+    ).status,
+    400,
+    "a per-person token could otherwise assert someone else",
+  );
+  assert.equal(
+    (await put({ catalog: true, attestActor: true, auth: "bearer", bearerToken: "t", credentialScope: "shared" }))
+      .status,
+    200,
+  );
+  assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
 });
 
 test("production wiring never uses operator fallback tokens for per-user MCP calls", async (t) => {

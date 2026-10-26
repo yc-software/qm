@@ -98,6 +98,23 @@ test("buildContextWindow labels self messages, resolves mentions, threads, files
   assert.ok(self.text.length <= 601 && self.text.endsWith("…"), "long text is clipped");
 });
 
+test("buildContextWindow preserves reaction counts without inventing missing reaction data", () => {
+  const w = buildContextWindow(
+    [
+      ctxMsg("1700000001.000100", "agent", "completed", {
+        isSelf: true,
+        reactions: [{ name: "white_check_mark", count: 2 }],
+      }),
+      ctxMsg("1700000002.000100", "Alice", "waiting", { reactions: [] }),
+      ctxMsg("1700000003.000100", "Bob", "search result"),
+    ],
+    { count: 10 },
+  );
+  assert.deepEqual(w.messages[0]!.reactions, [{ name: "white_check_mark", count: 2 }]);
+  assert.deepEqual(w.messages[1]!.reactions, []);
+  assert.equal(Object.hasOwn(w.messages[2]!, "reactions"), false);
+});
+
 test("recentWindow keeps the contiguous recent window — a NON-latest message in it is not dropped", () => {
   const candidates = [
     { ts: "1700000000.000001", name: "Carol", text: "Yeah it's pretty nice", authorId: "U_CAROL" },

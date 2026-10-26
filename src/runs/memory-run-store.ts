@@ -7,6 +7,7 @@ import {
   leaseLapsed,
   releasesDedupKey,
   runPriority,
+  stopErrorCode,
   withTraceCarrier,
 } from "./run-store.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
@@ -409,7 +410,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
         ? `run parked after ${countedClaims(run)} claims without completing (suspected crash loop)`
         : error;
-    run.result = { status: "failed", sessionId: run.sessionId, reason };
+    run.result = { status: "failed", sessionId: run.sessionId, reason, ...stopErrorCode(opts?.stop) };
     run.finishedAt = Date.now();
     settle(run);
     return { requeued: false, applied: true };

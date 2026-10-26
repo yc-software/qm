@@ -4,6 +4,7 @@ import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
 import { swallow } from "../util/errors.ts";
+import { isObj } from "../util/objects.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -95,6 +96,19 @@ function toToken(
   };
 }
 
+function oauthErrorDetail(body: unknown): string {
+  if (!isObj(body)) return "";
+  const nested = isObj(body.error) ? body.error : undefined;
+  const code = nested ? (nested.code ?? nested.type) : body.error;
+  const description = nested ? nested.message : (body.error_description ?? body.reason);
+  return [code, description].filter((part): part is string => typeof part === "string" && part.length > 0).join(": ");
+}
+
+export async function oauthFailure(action: string, res: { status: number; json(): Promise<unknown> }): Promise<Error> {
+  const detail = oauthErrorDetail(await res.json().catch(() => undefined));
+  return new Error(`${action} failed (${res.status})${detail ? `: ${detail}` : ""}`);
+}
+
 const resourceBody = (p: OAuthProviderConfig): Record<string, string> =>
   p.authParams?.resource ? { resource: p.authParams.resource } : {};
 
@@ -120,7 +134,7 @@ function makeTokenAdapters(opts: {
     basic || !client.secret ? { client_id: client.id } : { client_id: client.id, client_secret: client.secret };
   const checkErrorBody = (raw: Record<string, unknown>): void => {
     if (opts.rejectErrorBody && raw.error)
-      throw new Error(`${prefix}oauth error: ${String(raw.error_description ?? raw.error)}`);
+      throw new Error(`${prefix}oauth error: ${oauthErrorDetail(raw) || String(raw.error)}`);
   };
   return {
     async exchange({ provider, client, code, redirectUri, fetchImpl, now, codeVerifier }) {
@@ -136,7 +150,7 @@ function makeTokenAdapters(opts: {
           ...resourceBody(provider),
         }).toString(),
       });
-      if (!res.ok) throw new Error(`${prefix}token exchange failed (${res.status})`);
+      if (!res.ok) throw await oauthFailure(`${prefix}token exchange`, res);
       const raw = (await res.json()) as Record<string, unknown>;
       checkErrorBody(raw);
       return { hosts: provider.hosts, token: toToken(raw, undefined, now), raw };
@@ -152,7 +166,7 @@ function makeTokenAdapters(opts: {
           ...resourceBody(provider),
         }).toString(),
       });
-      if (!res.ok) throw new Error(`${prefix}token refresh failed (${res.status})`);
+      if (!res.ok) throw await oauthFailure(`${prefix}token refresh`, res);
       const raw = (await res.json()) as Record<string, unknown>;
       checkErrorBody(raw);
       return toToken(raw, token.refreshToken, now, token.grantedScopes);
@@ -187,6 +201,8 @@ const github = makeTokenAdapters({ acceptJson: true, rejectErrorBody: true, labe
 
 const x = makeTokenAdapters({ acceptJson: true, rejectErrorBody: true, label: "x", clientAuth: "basic" });
 
+const zoom = makeTokenAdapters({ acceptJson: true, rejectErrorBody: true, label: "zoom", clientAuth: "basic" });
+
 const slackExchange: OAuthExchangeAdapter = async ({ provider, client, code, redirectUri, fetchImpl }) => {
   const res = await fetchImpl(provider.tokenUrl, {
     method: "POST",
@@ -198,7 +214,7 @@ const slackExchange: OAuthExchangeAdapter = async ({ provider, client, code, red
       client_secret: client.secret,
     }).toString(),
   });
-  if (!res.ok) throw new Error(`slack token exchange failed (${res.status})`);
+  if (!res.ok) throw await oauthFailure("slack token exchange", res);
   const raw = (await res.json()) as Record<string, unknown>;
   if (raw.ok !== true) throw new Error(`slack oauth error: ${String(raw.error ?? "unknown")}`);
   const authedUser = (raw.authed_user ?? {}) as Record<string, unknown>;
@@ -215,7 +231,7 @@ const notionExchange: OAuthExchangeAdapter = async ({ provider, client, code, re
     headers: { "content-type": "application/json", authorization: `Basic ${basic}` },
     body: JSON.stringify({ grant_type: "authorization_code", code, redirect_uri: redirectUri }),
   });
-  if (!res.ok) throw new Error(`notion token exchange failed (${res.status})`);
+  if (!res.ok) throw await oauthFailure("notion token exchange", res);
   const raw = (await res.json()) as Record<string, unknown>;
   const access = String(raw.access_token ?? "");
   if (!access) throw new Error("notion token exchange returned no access_token");
@@ -455,6 +471,33 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
       ],
       scopesRationale:
         "tweet.read/users.read back reads; tweet.write lets the connecting user post as themselves; offline.access issues a refresh token so the 2-hour access token renews.",
+    },
+  },
+
+  zoom: {
+    label: "Zoom",
+    hosts: ["api.zoom.us"],
+    authUrl: "https://zoom.us/oauth/authorize",
+    tokenUrl: "https://zoom.us/oauth/token",
+    scopes: [],
+    clientIdEnv: "ZOOM_OAUTH_CLIENT_ID",
+    clientSecretEnv: "ZOOM_OAUTH_CLIENT_SECRET",
+    redirectPath: "zoom/callback",
+    consentMode: "standard",
+    egressRule: ["api.zoom.us"],
+    exchange: zoom.exchange,
+    refresh: zoom.refresh,
+    setupGuide: {
+      console: "Zoom App Marketplace → Develop → Build App → General app",
+      url: "https://marketplace.zoom.us/",
+      steps: [
+        "Create a General app and choose User-managed. Until it is published, only users in your Zoom account can connect it.",
+        "Add the redirect URI shown below as the OAuth redirect URL and to the OAuth allow list, with strict mode on.",
+        "Under Scopes, add meeting:read:meeting, meeting:read:list_meetings, meeting:write:meeting, meeting:update:meeting, meeting:delete:meeting, and user:read:user.",
+        "Paste the Client ID + Client secret below — the Development credentials unless the app is published.",
+      ],
+      scopesRationale:
+        "Zoom grants the scopes configured on the app rather than a requested list; the meeting scopes let the agent find, create, reschedule, and cancel meetings the connecting user hosts or schedules, and user:read:user reads their Zoom profile and timezone.",
     },
   },
 };

@@ -12,7 +12,7 @@ import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
-import { envKey } from "./connector-token.ts";
+import { connectorTokenNote, envKey } from "./connector-token.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -553,6 +553,10 @@ function defaultEnvKey(service: string): string {
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+function isPersonalCredentialEnvKey(envKey: string): boolean {
+  return ENV_KEY_RE.test(envKey) && !envKey.startsWith("AGENT_");
+}
+
 function legacyUsernameEnvKey(passwordEnvKey: string): string {
   const base = passwordEnvKey.replace(/_(PASSWORD|PASS|TOKEN|SECRET|API_KEY|KEY)$/i, "");
   return `${base || passwordEnvKey}_USERNAME`;
@@ -933,8 +937,8 @@ export function createKeychain(deps: {
         ? input.fields.map((f) => ({ envKey: f.envKey.trim(), value: f.value, secret: f.secret !== false }))
         : undefined;
     if (fields) {
-      if (fields.some((f) => !ENV_KEY_RE.test(f.envKey)))
-        throw new KeychainError(400, "each credential field needs a valid environment-variable envKey");
+      if (fields.some((f) => !isPersonalCredentialEnvKey(f.envKey)))
+        throw new KeychainError(400, "each credential field needs a valid environment-variable envKey outside AGENT_*");
       if (fields.some((f) => !f.value || !f.value.trim()))
         throw new KeychainError(400, "each credential field needs a value");
       if (new Set(fields.map((f) => f.envKey)).size !== fields.length)
@@ -945,8 +949,8 @@ export function createKeychain(deps: {
     else if (fields) secret = JSON.stringify(Object.fromEntries(fields.map((f) => [f.envKey, f.value])));
     if (!secret || !secret.trim()) throw new KeychainError(400, "empty secret");
     const envKey = kind === "env" && !fields ? input.envKey?.trim() || defaultEnvKey(service) : undefined;
-    if (envKey && !ENV_KEY_RE.test(envKey))
-      throw new KeychainError(400, "envKey must be a valid environment-variable name");
+    if (envKey && !isPersonalCredentialEnvKey(envKey))
+      throw new KeychainError(400, `envKey ${envKey} must be a valid environment-variable name outside AGENT_*`);
     const fieldsMeta = fields?.map((f) => ({ envKey: f.envKey, secret: f.secret }));
     const targets = files?.map((f) => f.path);
     const t = now();
@@ -1712,7 +1716,7 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
 function connectorDescription(cm: ConnectorMeta): string {
   return `connected app ${cm.host}, account ${cm.accountType ?? "default"}${
     cm.needsReconnect ? ", NEEDS RECONNECT — owner must reconnect the app before use" : ""
-  }${typeof cm.expiresAt === "number" ? `, token expires at ${new Date(cm.expiresAt).toISOString()}` : ""}`;
+  }${typeof cm.expiresAt === "number" ? `, token expires at ${new Date(cm.expiresAt).toISOString()}` : ""}; ${connectorTokenNote(cm.host)}`;
 }
 
 export const MAX_CREDENTIAL_FILES = 500;

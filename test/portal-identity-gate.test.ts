@@ -5,7 +5,8 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp, type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
@@ -360,6 +361,19 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       { "x-portal-identity": await token("U1") },
     );
     assert.equal(r.status, 403);
+  });
+
+  it("a web turn is gated whichever way its path is spelled", async () => {
+    const turn = {
+      surface: "web",
+      text: "hi",
+      actor: { externalId: "U2" },
+      conversation: { kind: "dm", threadRef: "t" },
+    };
+    const identity = { "x-portal-identity": await token("U1") };
+    assert.equal((await post("/v1/turns", turn, identity)).status, 403);
+    assert.equal((await post("/v1/%74urns", turn, identity)).status, 404);
+    assert.equal((await post("/v1/%74urns", turn)).status, 404);
   });
 
   it("a slack turn carries no portal identity and is not gated (different trust authority)", async () => {

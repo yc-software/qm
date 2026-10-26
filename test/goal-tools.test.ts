@@ -4,6 +4,8 @@ import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tool
 import { createGrindMeter } from "../src/harness/grind.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import {
+  GovernorUndecided,
+  supersedeGoal,
   bankGoalTurn,
   goalContinuationPrompt,
   goalFloorUnmet,
@@ -128,13 +130,15 @@ test("agent cannot close a user-paused goal or replace it", async () => {
   assert.match(textOf(conflict as never), /already registered/);
 });
 
-test("the agent cannot self-complete: without a governor the request is rejected", async () => {
-  const { ref, create, update } = toolbox();
+test("the agent cannot self-complete: without a governor the request decides nothing", async () => {
+  const { ref, create, update, saved } = toolbox();
   delete ref.governGoal;
   await create.execute("c1", { objective: "ship it" });
+  const before = structuredClone(saved());
   const res = await update.execute("u1", { status: "complete", note: "trust me" });
-  assert.match(textOf(res as never), /did not accept completion/);
+  assert.match(textOf(res as never), /could not reach a decision \(no independent governor/);
   assert.equal(ref.goal?.status, "active");
+  assert.deepEqual(saved(), before);
 });
 
 test("a governor approval closes the goal and sees only the objective and evidence", async () => {
@@ -188,15 +192,22 @@ test("a completion request can draw a step back, then a pause that ends the goal
   assert.deepEqual(seenWork, ["tool_call execute: sleep 240", "tool_call execute: sleep 240"]);
 });
 
-test("a failing governor never closes the goal", async () => {
-  const { ref, create, update } = toolbox();
-  ref.governGoal = async () => {
-    throw new Error("model down");
-  };
+test("a governor that refuses or fails decides nothing: the goal stays active and nothing is held against it", async () => {
+  const { ref, create, update, saved } = toolbox();
   await create.execute("c1", { objective: "suite green" });
-  const res = await update.execute("u1", { status: "complete", note: "done" });
-  assert.match(textOf(res as never), /governor failed/);
-  assert.equal(ref.goal?.status, "active");
+  const earlier = { verdict: "step_back" as const, reasons: "same test rerun three times" };
+  ref.goal!.governor = earlier;
+  const before = structuredClone(saved());
+  for (const failure of [new Error("provider refusal"), new GovernorUndecided("its reply was not a verdict")]) {
+    ref.governGoal = async () => {
+      throw failure;
+    };
+    const res = await update.execute("u1", { status: "complete", note: "done" });
+    assert.match(textOf(res as never), /could not reach a decision[\s\S]*not a rejection/);
+    assert.equal(ref.goal?.status, "active");
+    assert.deepEqual(ref.goal?.governor, earlier);
+    assert.deepEqual(saved(), before);
+  }
 });
 
 test("update with no active goal errors cleanly", async () => {
@@ -341,7 +352,7 @@ test("agent cannot pause a goal or bypass its work floor", async () => {
   assert.deepEqual(ref.goal, before);
 });
 
-test("goal update schema offers only complete, resume and cancel", () => {
+test("goal update schema offers only complete, resume, cancel and wait", () => {
   const { tools } = toolbox();
   const goal = tools.find((tool) => tool.name === "goal")!;
   assert.doesNotMatch(JSON.stringify(goal.parameters), /"paused"|"blocked"|"active"/);
@@ -372,6 +383,44 @@ test("update reads named workspace files into the governor's evidence", async ()
   assert.match(seen, /<file path="report.md">\n# Findings\nthree candidates\n<\/file>/);
   assert.match(seen, /<file path="gone.md">\n\[missing: no such file\]/);
   assert.equal(ref.goal?.status, "complete");
+});
+
+test("update reads evidence from the named sandbox and says why a file could not be read", async () => {
+  const { ref, create, update } = toolbox();
+  const reads: Array<[string, string | undefined]> = [];
+  ref.current = {
+    read: async (path: string, _signal: AbortSignal | undefined, sandboxId?: string) => {
+      reads.push([path, sandboxId]);
+      if (sandboxId === "gone") throw new Error("sandbox not found: gone");
+      if (path === "report.md") return { content: "on sb1", sourceScopeId: null };
+      return { content: null, sourceScopeId: null, ...(path.startsWith("/home") ? { outsideWorkspace: true } : {}) };
+    },
+  } as unknown as ToolContextRef["current"];
+  let seen = "";
+  ref.governGoal = async (input) => {
+    seen = input.evidence ?? "";
+    return { verdict: "continue", reasons: "not yet" };
+  };
+  await create.execute("c1", { objective: "write the report" });
+  await update.execute("u1", {
+    status: "complete",
+    note: "done",
+    files: ["report.md", "/home/user/code.txt", "typo.md"],
+    sandbox_id: "sb1",
+  });
+  assert.deepEqual(reads, [
+    ["report.md", "sb1"],
+    ["/home/user/code.txt", "sb1"],
+    ["typo.md", "sb1"],
+  ]);
+  assert.match(seen, /<file path="report.md">\non sb1\n<\/file>/);
+  assert.match(
+    seen,
+    /<file path="\/home\/user\/code.txt">\n\[not in the computer's workspace: \/home\/user\/code.txt; only workspace files/,
+  );
+  assert.match(seen, /<file path="typo.md">\n\[missing: no such file\]/);
+  await update.execute("u2", { status: "complete", note: "done", files: ["report.md"], sandbox_id: "gone" });
+  assert.match(seen, /<file path="report.md">\n\[unreadable: sandbox not found: gone\]/);
 });
 
 function nextTurn(goal: GoalRecord) {
@@ -501,4 +550,167 @@ test("goal get says when a spend floor is waived", async () => {
   ref.goalMeter!.unpricedCalls = 1;
   const report = await get.execute("c2", {});
   assert.match(textOf(report as never), /Work floor .*spend floor waived.* — met/);
+});
+
+test("wait holds a swarm worker's goal with its clock stopped until a message arrives, then resumes it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_000_000 });
+  const { ref, create, update, saved } = toolbox();
+  await create.execute("c1", { objective: "merge lanes", floor: { minMs: 3_600_000 } });
+  assert.match(
+    textOf((await update.execute("u1", { status: "wait", note: "worker 7" })) as never),
+    /only for swarm workers/,
+  );
+  let polls = 0;
+  const acknowledged: string[] = [];
+  ref.goalInbox = {
+    async receive(goal) {
+      if (goal.status !== "paused") return [];
+      return ++polls === 3 ? [{ id: "m9", text: "Swarm agent message m9: lane C is at 41.2, -70.1" }] : [];
+    },
+    async acknowledge(ids) {
+      acknowledged.push(...ids);
+    },
+  };
+  assert.match(textOf((await update.execute("u2", { status: "wait", note: "  " })) as never), /who or what/);
+  ref.goalMeter = createGrindMeter(Date.now() - 5 * 60_000);
+  ref.goal!.createdAt = ref.goalMeter.startedAt;
+  const waiting = update.execute("u3", { status: "wait", note: "lane C coordinates from worker 7" });
+  for (let i = 0; i < 20 && polls < 3; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  const result = await waiting;
+  assert.match(textOf(result as never), /active again[\s\S]*lane C is at 41\.2/);
+  assert.deepEqual(acknowledged, ["m9"]);
+  assert.equal(saved()?.status, "active");
+  assert.equal(saved()?.activeMs, 5 * 60_000, "the time before the wait is banked and the wait itself is not counted");
+  assert.ok(
+    (saved()?.activeSince ?? 0) >= 1_010_000,
+    "the clock restarts when the goal resumes, not when the wait began",
+  );
+});
+
+test("wait gives up after thirty minutes and resumes the goal so the worker can reassess", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  ref.goalInbox = { receive: async () => [], acknowledge: async () => {} };
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
+  for (let i = 0; i < 400; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  assert.match(textOf((await waiting) as never), /No swarm message reached you in 30 minutes/);
+  assert.equal(ref.goal?.status, "active");
+});
+
+test("swarm messages ride on the next tool result and can replace the goal", async () => {
+  const { ref, create, get } = toolbox();
+  await create.execute("c1", { objective: "lane A", floor: { minTurns: 5 } });
+  const saved: string[] = [];
+  ref.emit = async (entry) => {
+    if (entry.type === "tool_result") saved.push(JSON.stringify(entry.payload));
+    return undefined;
+  };
+  let pending = [{ id: "m2", text: "Swarm agent message m2: take lane B" }];
+  const acknowledged: string[] = [];
+  ref.goalMeter = createGrindMeter();
+  ref.goalMeter.turns = 9;
+  ref.goalInbox = {
+    async receive() {
+      const out = pending;
+      pending = [];
+      return out;
+    },
+    async acknowledge(ids, goal) {
+      acknowledged.push(...ids);
+      supersedeGoal(goal, { objective: "lane B", assignedAt: goal.createdAt + 1 });
+    },
+  };
+  const result = await get.execute("g1", {});
+  assert.match(textOf(result as never), /take lane B/);
+  assert.match(saved.at(-1)!, /take lane B/, "the message is saved with the tool result that carried it");
+  assert.deepEqual(acknowledged, ["m2"]);
+  assert.equal(ref.goal?.objective, "lane B");
+  assert.equal(ref.goalMeter.turns, 0, "the replacement's turn floor starts from zero");
+  pending = [{ id: "m3", text: "too soon" }];
+  assert.doesNotMatch(
+    textOf((await get.execute("g2", {})) as never),
+    /too soon/,
+    "the inbox is polled at most every few seconds",
+  );
+});
+
+test("a completion decided after the goal was replaced is dropped, not applied to the new goal", async () => {
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "lane A" });
+  ref.governGoal = async () => {
+    ref.goal!.objective = "lane B";
+    ref.goal!.createdAt += 1;
+    return { verdict: "complete", reasons: "lane A proven" };
+  };
+  const res = await update.execute("u1", { status: "complete", note: "lane A evidence" });
+  assert.match(textOf(res as never), /replaced this one while the governor was deciding/);
+  assert.equal(ref.goal?.status, "active");
+  assert.equal(ref.goal?.objective, "lane B");
+});
+
+test("wait ends when its turn's tool signal aborts", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  ref.goalInbox = { receive: async () => [], acknowledge: async () => {} };
+  const turn = new AbortController();
+  ref.abortSignal = turn.signal;
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
+  for (let i = 0; i < 3; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  turn.abort();
+  for (let i = 0; i < 2; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  assert.match(textOf((await waiting) as never), /interrupted/);
+  assert.equal(ref.goal?.status, "active");
+});
+
+test("a message that arrives during a wait still reaches the worker when saving the goal fails", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  ref.goalInbox = {
+    receive: async () => [{ id: "m1", text: "Swarm agent message: lane B is done" }],
+    acknowledge: async () => {},
+  };
+  ref.saveGoal = async () => {
+    throw new Error("database blip");
+  };
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
+  for (let i = 0; i < 2; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  assert.match(textOf((await waiting) as never), /lane B is done/);
+  assert.equal(ref.goal?.status, "active");
+});
+
+test("wait ends and says so when the swarm inbox cannot be read", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { ref, create, update } = toolbox();
+  await create.execute("c1", { objective: "merge lanes" });
+  ref.goalInbox = {
+    receive: async () => {
+      throw new Error("swarm store unavailable");
+    },
+    acknowledge: async () => {},
+  };
+  const waiting = update.execute("u1", { status: "wait", note: "worker 7" });
+  for (let i = 0; i < 3; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(5_000);
+  }
+  assert.match(textOf((await waiting) as never), /could not be read \(swarm store unavailable\)/);
+  assert.equal(ref.goal?.status, "active");
 });

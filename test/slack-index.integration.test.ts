@@ -252,9 +252,6 @@ class FakeCore implements SlackCoreClient {
   async externalSlackParticipants(): Promise<boolean> {
     return this.externalParticipants;
   }
-  async internalMemberOverrides(): Promise<string[]> {
-    return [];
-  }
   async ackEmojiOverride(): Promise<string[] | null> {
     return null;
   }

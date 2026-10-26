@@ -40,7 +40,7 @@ export interface CustomProviderSpec {
 }
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,31}$/;
-const RESERVED = new Set<string>([...PROVIDER_IDS, "mock"]);
+const RESERVED = new Set<string>(PROVIDER_IDS);
 
 export function validateCustomProviderSpec(spec: CustomProviderSpec): void {
   if (!SLUG_RE.test(spec.id)) {
@@ -104,6 +104,7 @@ export interface CustomRuntimeModel {
   maxTokens: number;
 }
 
+const CUSTOM_MODEL_PREFIX = "custom/";
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8_192;
 
@@ -115,7 +116,7 @@ function customProviderApi(protocol: CustomProviderProtocol): CustomRuntimeModel
 
 function toRuntimeModel(provider: CustomProviderSpec, m: CustomModelSpec): CustomRuntimeModel {
   return {
-    id: `custom/${provider.id}/${m.id}`,
+    id: `${CUSTOM_MODEL_PREFIX}${provider.id}/${m.id}`,
     upstreamId: m.id,
     name: m.name?.trim() || m.id,
     provider: provider.id,
@@ -157,6 +158,10 @@ export function setCustomProviders(specs: CustomProviderSpec[]): void {
 /** Bumps on every registry change — lets callers cache derived artifacts. */
 export function customProvidersVersion(): number {
   return version;
+}
+
+export function hasCustomModelPrefix(id: string): boolean {
+  return id.startsWith(CUSTOM_MODEL_PREFIX);
 }
 
 export function resolveCustomModel(id: string): CustomRuntimeModel | undefined {

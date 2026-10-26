@@ -10,12 +10,12 @@ function config(): QmConfig {
   return {
     contract: 1,
     orgId: "acme",
-    publicUrl: "http://acme.example.com",
+    publicUrl: "https://acme.example.com",
     target: "aws",
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { HARNESS: "mock", AWS_DEPLOY_IMAGE: "acme-microvm" } },
+    env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm" } },
     imageOverrides: {},
     aws: {
       accountId: "123456789012",

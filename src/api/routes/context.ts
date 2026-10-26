@@ -94,6 +94,7 @@ async function createSurfaceContextRequest(ctx: ApiCtx): Promise<void> {
     ...(await rateLimitRecipient(ctx)),
     ...(before ? { before } : {}),
     ...(match ? { match } : {}),
+    ...(b.live === true ? { live: true } : {}),
   };
   const request = await app.createContextRequest(resolved.source, query);
   return awaitFulfillment(ctx, request.id, query.channelName);

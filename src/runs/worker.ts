@@ -189,11 +189,9 @@ export function createWorker(deps: WorkerDeps): Worker {
   let generation = 0;
   let wake: (() => void) | null = null;
   let unsubscribe: (() => void) | undefined;
-  const notify = (): boolean => {
+  const notify = (): void => {
     generation++;
-    if (!wake) return false;
-    wake();
-    return true;
+    wake?.();
   };
   async function waitForWork(observed: number): Promise<void> {
     if (stopped || observed !== generation) return;

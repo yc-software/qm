@@ -1,6 +1,7 @@
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { adminRoutes } from "./routes/admin.ts";
+import { unattendedGrantListing } from "./routes/admin/unattended-grants.ts";
 import { UNATTENDED_ADMIN_GRANTS } from "./control-service.ts";
 
 interface AgentApiRoute {
@@ -69,7 +70,7 @@ const FAMILIES: AgentApiFamily[] = [
   {
     when: (view) => view.swarmsEnabled,
     guidance:
-      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Only a parent can assign goals, to its own workers; send a goal again to replace a paused one.",
+      "Swarm workers are ordinary sessions with private blank computers. Inspect peers and their context, then send to chosen IDs or all; shared history is visible to every member. Notifications queue unattended turns. Each swarm gets one shared board computer (inspect returns board.sandboxId) that the root and every worker reach with execute's sandbox_id; pass forumSandboxId at creation to use an existing shared computer instead. Spawn accepts model, effort and fastMode to choose the runtime for the workers it creates; children inherit it unless they choose again. POST action control with memberId and state active, paused or stopped pauses delivery to, resumes, or stops a descendant worker. To keep a worker going instead of stopping after one reply, give it a goal on spawn or send ({objective, floor?, token_cap?}): its turn then runs like a goal turn, past the swarm turn deadline, until the goal is complete, paused or out of tokens. Any member can send any worker, itself included, a goal (not the root session); send a goal again to replace a running, paused or finished one.",
     routes: [
       {
         method: "GET",
@@ -81,13 +82,13 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/swarm",
         summary:
-          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?,goal?} sends to explicit peer ids or all; {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
+          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?,goal?} sends to explicit peer ids or all, leaving each recipient's copy in its mailbox for its next turn unless notify:true or a goal wakes them (notify:false records only); {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
       },
     ],
   },
   {
     guidance:
-      'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files.',
+      'Publish important outputs to durable Files before retiring a sandbox. Run: curl -fsS "$AGENT_API_URL/v1/files/upload-client" -H "x-agent-capability: $AGENT_API_TOKEN" -o /tmp/qm-upload.py && python3 /tmp/qm-upload.py path/to/file. The helper uploads directly to S3, retries parts, and resumes when rerun with the same file. Only final success means the file is published. Files are saved to this conversation\'s scope. Up to 100 GiB per file, including empty files. If the upload quota is full, the helper\'s --list and --abort ID free slots.',
     routes: [
       {
         method: "GET",
@@ -99,6 +100,11 @@ const FAMILIES: AgentApiFamily[] = [
         path: "/v1/files/uploads",
         summary:
           "begin a direct upload with {name,mimetype?,scopeId?,sizeBytes,checksums,requestId?}; checksums are ordered base64 SHA-256 hashes of 64 MiB parts",
+      },
+      {
+        method: "GET",
+        path: "/v1/files/uploads",
+        summary: "list your unfinished uploads here",
       },
       { method: "GET", path: "/v1/files/uploads/:id", summary: "inspect an owned upload session" },
       {
@@ -215,13 +221,19 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/action",
         summary:
-          'act on a held item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, "replied" ({args:{text}}) closes an item the person already answered themselves outside QM and never demotes one sent from here, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
+          'act on a held item — body {kind, args?}. kind "edit" replaces the proposal ({args:{proposal}}), "dismiss" drops the item, "reopen" un-dismisses it, and any action the loop\'s source declares (e.g. "send", or Slack\'s "react" with {args:{name}}, which annotates the item without closing it) executes it and records the outcome',
       },
       {
         method: "POST",
         path: "/v1/loops/:id/items/:itemId/followup",
         summary:
           "chat about one held item — body {message}; the reply lands on the item's thread and may revise its proposal",
+      },
+      {
+        method: "POST",
+        path: "/v1/loops/:id/events",
+        summary:
+          'report new messages in conversations already on the ledger — body {events:[{sourceKey, author:"owner"|"other", at, text?, from?}]}; each event is judged by the loop\'s work stage, which may close or redraft the item',
       },
     ],
   },
@@ -416,17 +428,6 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    routes: [
-      { method: "GET", path: "/v1/pinned-skills", summary: "list the skills pinned to this conversation's scope" },
-      {
-        method: "PUT",
-        path: "/v1/pinned-skills",
-        summary:
-          "replace this scope's pinned skills — body {names: string[]} in display order (max 6; [] clears); they always lead the per-turn skills shortlist. Personal pins apply to that person's DMs, channel pins to that channel. Live person turns only",
-      },
-    ],
-  },
-  {
     when: (v) => !!v.claims.memory,
     guidance: "Memory bodies and curation rules are documented in the memory skill.",
     routes: [
@@ -493,7 +494,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/surface-context",
         summary:
-          "fetch recent messages from a channel/DM YOU can see (count/before/match) — a private channel only if you're a member; directory-resolved, never a raw address",
+          "fetch recent messages from a channel/DM YOU can see (count/before/match) — a private channel only if you're a member; live:true reads Slack directly for current reaction counts (reactions:[] means none), with no mirror fallback on failure; omitted uses configured history; directory-resolved, never a raw address",
       },
       {
         method: "POST",
@@ -690,10 +691,8 @@ const unattendedFamilies = (): AgentApiFamily[] =>
     when: (v) => !livePersonCapability(v.claims) && v.claims.grants?.includes(grant) === true,
     guidance:
       "This cron has a specific read-only admin grant. Use only these listed routes; flag any other admin action to a human.",
-    routes: adminRoutes.flatMap((route) =>
-      "path" in route && route.admin?.unattended?.grant === grant
-        ? [{ method: route.method, path: route.path, summary: route.admin.unattended.summary }]
-        : [],
+    routes: unattendedGrantListing(adminRoutes).flatMap((entry) =>
+      entry.grant === grant ? [{ method: entry.method, path: entry.path, summary: entry.summary }] : [],
     ),
   }));
 

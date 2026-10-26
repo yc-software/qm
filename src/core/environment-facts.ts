@@ -72,7 +72,9 @@ export function renderConnectedAppsBlock(
     }
   }
   if (connected.length) {
-    lines.push(`Connected: ${connected.join(", ")}. Use them directly; their auth is wired.`);
+    lines.push(
+      `Connected: ${connected.join(", ")}. Use their tools directly; for API calls, select the app's credential in execute.credentials and send its token yourself.`,
+    );
   }
   if (reconnect.length) {
     lines.push(`Needs reconnect: ${reconnect.join(", ")}. Do not use these apps until the user reconnects them.`);

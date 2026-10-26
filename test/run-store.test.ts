@@ -335,6 +335,22 @@ for (const backend of backends) {
     assert.equal(failed?.result?.reason, "provider rejected the request");
   });
 
+  test(`[${backend.name}] a run that exhausts its attempts keeps the provider error code on its result`, async () => {
+    const { runs } = backend.make();
+    const r = (await runs.enqueue({ sessionId: "s1", request: turn("hi"), maxAttempts: 1 })).run;
+    const claimed = await runs.claim("w1", 5_000);
+    await runs.fail(r.id, claimed!.leaseToken!, "slow down", {
+      retry: true,
+      stop: { kind: "error", code: "rate_limit", status: 429 },
+    });
+    assert.deepEqual((await runs.get(r.id))?.result, {
+      status: "failed",
+      sessionId: "s1",
+      reason: "slow down",
+      errorCode: "rate_limit",
+    });
+  });
+
   test(`[${backend.name}] reaper does not requeue a run that completed after its lease expired`, async () => {
     const { runs } = backend.make();
     const r = (await runs.enqueue({ sessionId: "s1", request: turn("hi") })).run;

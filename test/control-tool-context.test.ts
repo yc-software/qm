@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import { createToolContext, type ToolContextDeps, CONTROL_UNAVAILABLE } from "../src/tools/primitives.ts";
 import { scopeId, type WorkspaceLayer } from "../src/types.ts";
@@ -80,6 +80,54 @@ test("createToolContext.cronCreate creates a real cron through the shared servic
   assert.ok(stored);
   assert.equal(stored.owner, "U1");
   assert.equal(stored.title, "digest");
+});
+
+test("the cron tool lets a live org-admin owner attach unattended admin-read grants and shows them back", async () => {
+  const { built } = build();
+  const control = createControlService(built.app, built.scheduler, built.admin);
+  const ctx = ctxFor({ control, controlClaims: { ...claims("admin-alice"), liveActor: true } });
+  const cron = createAgentTools({ current: ctx }, { controlTools: true }).find((t) => t.name === "cron")!;
+  const run = async (params: Record<string, unknown>) =>
+    (
+      (await cron.execute("call", params as never, undefined, undefined, {} as never)) as {
+        content: Array<{ text: string }>;
+      }
+    ).content[0]!.text;
+
+  const created = await run({
+    action: "create",
+    title: "Spend review",
+    schedule: { everyMs: 3_600_000 },
+    task: "review spend",
+    unattendedGrants: ["admin.spend.read", "admin.crons.read"],
+  });
+  const id = /Created cron (\S+)/.exec(created)?.[1];
+  assert.ok(id, created);
+  assert.deepEqual((await built.app.getCron(id))?.unattendedGrants, ["admin.spend.read", "admin.crons.read"]);
+  assert.match(await run({ action: "get", id }), /unattended grants: admin\.spend\.read, admin\.crons\.read/);
+
+  await run({ action: "patch", id, unattendedGrants: ["admin.spend.read"] });
+  assert.deepEqual((await built.app.getCron(id))?.unattendedGrants, ["admin.spend.read"]);
+
+  const nonAdmin = createAgentTools(
+    { current: ctxFor({ control, controlClaims: { ...claims("U1"), liveActor: true } }) },
+    { controlTools: true },
+  ).find((t) => t.name === "cron")!;
+  const refused = (
+    (await nonAdmin.execute(
+      "call",
+      {
+        action: "create",
+        schedule: { everyMs: 3_600_000 },
+        task: "review spend",
+        unattendedGrants: ["admin.spend.read"],
+      } as never,
+      undefined,
+      undefined,
+      {} as never,
+    )) as { content: Array<{ text: string }> }
+  ).content[0]!.text;
+  assert.match(refused, /\[error\].*current org admin/);
 });
 
 test("webhook registration through the tool requires a live person and leaves refused calls without effects", async () => {

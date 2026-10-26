@@ -11,7 +11,7 @@ import { once } from "node:events";
 import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { withTraceCarrier } from "../src/runs/run-store.ts";
 

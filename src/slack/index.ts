@@ -131,22 +131,6 @@ export async function startSlackPlugin(
     return ackOverrideCache.names;
   }
 
-  const INTERNAL_OVERRIDES_CACHE_MS = 60_000;
-  let internalOverridesCache: { members: ReadonlySet<string>; fetchedAt: number } | undefined;
-  async function internalOverrides(): Promise<ReadonlySet<string>> {
-    if (internalOverridesCache && Date.now() - internalOverridesCache.fetchedAt < INTERNAL_OVERRIDES_CACHE_MS) {
-      return internalOverridesCache.members;
-    }
-    try {
-      const members = new Set(await core.internalMemberOverrides());
-      internalOverridesCache = { members, fetchedAt: Date.now() };
-      return members;
-    } catch (err) {
-      swallow("slack: internal-member-overrides read", err);
-      return internalOverridesCache?.members ?? new Set();
-    }
-  }
-
   const EXTERNAL_PARTICIPANTS_CACHE_MS = 30_000;
   let externalParticipantsCache: { on: boolean; fetchedAt: number } | undefined;
   async function externalParticipantsEnabled(): Promise<boolean> {
@@ -235,7 +219,6 @@ export async function startSlackPlugin(
     core,
     ids,
     coreSingleton: CORE_SINGLETON && !cfg.externalAccess,
-    internalOverrides,
     ...(cfg.userSnapshotTtlMs ? { userSnapshotTtlMs: cfg.userSnapshotTtlMs } : {}),
     ...(cfg.channelMembersTtlMs ? { channelMembersTtlMs: cfg.channelMembersTtlMs } : {}),
     ...(cfg.maxPrivateChannels ? { maxPrivateChannels: cfg.maxPrivateChannels } : {}),

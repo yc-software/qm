@@ -42,10 +42,11 @@ Limits the API enforces (don't offer what it will refuse):
   Open reads can expose private data to everyone in the conversation: retrieve and
   report only what the request needs. Two other exceptions: org-targeted
   memory/config reads work anywhere (org content is ambient to every conversation), and
-  a cron can carry **unattended read grants** (`unattendedGrants` on the cron:
-  `admin.sessions.read`, `admin.audit.read`, `admin.egress.read`, `admin.files.read`)
-  — set only on a live turn by the cron's owner, who must be a current org admin, on a
-  personal-scope cron running as its owner. Each grant opens exactly its own GET
+  a cron can carry **unattended read grants** (`unattendedGrants` on the cron tool;
+  see [Scheduling admin-reading work](#scheduling-admin-reading-work)) — set only on a
+  live turn by the cron's owner, who must be a current org admin, on a cron that lives
+  in and delivers only to their own DM (never a channel, group or another person).
+  Each grant opens exactly its own GET
   routes to that cron's autonomous fires, audited as the owner
   (re-checked live — revoking their admin grant closes it). Other mutations work
   anywhere; the room sees what changed, by design.
@@ -233,12 +234,35 @@ Not available through you: who governs the org changes only in the admin dashboa
 where the admin acts directly. If asked, point them there — don't try the API
 (`POST/DELETE /v1/admin/grants` refuses agent tokens).
 
+## Scheduling admin-reading work
+
+Cron fires are autonomous, so the admin plane refuses them unless the cron carries
+the grant each route needs (webhooks can't carry grants). When an admin asks for scheduled work that
+reads admin data, settle the grants at creation, not after the first fire fails:
+
+1. Work out which admin tool actions or admin API routes the task will call.
+2. Fetch the live mapping with the admin tool's `unattended_grants` action
+   (`GET /v1/admin/unattended-grants`, org admins on a live turn only). It is built
+   from the routes themselves: each entry gives the grant, method, path, summary and,
+   where one exists, the admin tool action. Reads it doesn't list have no grant.
+3. Create the cron from a live turn in the admin's own DM, delivering to that DM, with
+   exactly the grants those reads need in `unattendedGrants`.
+4. If a needed action or route has no grant, or the cron can't carry grants (not the
+   owner's own DM, not a live turn by a current org admin, or delivery to a channel,
+   group or another person), tell the admin plainly before or at creation which part
+   won't work unattended. Don't create a cron that will fail on its first fire without
+   saying so.
+5. After creating it, confirm the grants appear in the cron's details (the create
+   result or `get`).
+
 ## Failure modes
 
 - `403 admin grant required for this scope` — the user isn't an org admin (or was just
   revoked). Say so; don't retry or work around it.
 - `403 … require a turn the admin started themselves` — this is an autonomous run
-  (cron/webhook); admin actions only ride turns the admin personally initiated. Say so.
+  (cron/webhook) without the unattended grant the route needs. Report it where the run
+  delivers — never finish silently — naming the grant the message cites so the owner can
+  add it from their DM.
 - `403 … returns private content — ask the agent in a DM` — the shared room does not have effective Open access for this live admin turn;
   tell the admin to ask again in a DM with you (or, for reads they want recurring
   on a schedule, to put an unattended read grant on a personal-scope cron — from

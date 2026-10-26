@@ -22,7 +22,6 @@ test(
           NODE_ENV: "test",
           DATABASE_URL: databaseUrl,
           SESSION_STORE: "postgres",
-          HARNESS: "mock",
           SANDBOX_BACKEND: "local",
           CONNECTOR_SECRET_KEY: "migration-test-connector-secret",
           CAPABILITY_SECRET: "migration-test-capability-secret",

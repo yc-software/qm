@@ -153,7 +153,15 @@ in it; it rides only as a runner argument, never into chat or logs.
 
 ## 2. Run the task with the embedded runner
 
-The runtime is already on your computer at `/opt/browser-engine/venv` — do not pip install.
+The runtime lives at `/opt/browser-engine/venv`. Some computer images don't ship it; a
+missing runtime is not a missing browser (the browser is remote). Run the skill's installer
+first. It does nothing when the runtime is present and takes about 30 seconds otherwise:
+
+```bash
+sh "<skill dir>/install-runtime.sh"
+```
+
+If it fails, report the browser as unavailable and quote the installer's error output.
 Write the runner once per session, then invoke it per task:
 
 ```bash
