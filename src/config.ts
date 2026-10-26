@@ -1014,7 +1014,7 @@ function harnessEnvStrict(value: string | undefined): Config["harness"] {
 }
 
 /** AGENT_EGRESS_PROXY_URL, else the egress proxy the selected sandbox backend already uses. */
-export function agentEgressProxyUrlFromEnv(
+function agentEgressProxyUrlFromEnv(
   env: NodeJS.ProcessEnv,
   sandboxBackend: SandboxBackendName,
 ): string | undefined {

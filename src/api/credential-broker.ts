@@ -42,8 +42,6 @@ export function createBrokerFetch(egress?: AgentEgress): BrokerFetch {
   };
 }
 
-export const realBrokerFetch: BrokerFetch = createBrokerFetch();
-
 export interface BrokerRequest {
   credential?: unknown;
   method?: unknown;

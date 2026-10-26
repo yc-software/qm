@@ -106,6 +106,7 @@
     "tar-stream": "^3.2.0",
     "tree-sitter-bash": "^0.25.1",
     "typebox": "^1.1.38",
+    "undici": "8.12.3",
     "web-tree-sitter": "^0.27.0",
     "ws": "^8.21.1",
     "zod": "4.6.7"

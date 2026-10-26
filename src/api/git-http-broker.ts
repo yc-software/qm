@@ -27,7 +27,7 @@ export type GitHttpFetch = (
 ) => Promise<GitHttpFetchResponse>;
 
 /** Upstream fetch for brokered git smart-HTTP calls: through `egress` when given, else direct. */
-export function createGitHttpFetch(egress?: AgentEgress): GitHttpFetch {
+function createGitHttpFetch(egress?: AgentEgress): GitHttpFetch {
   return async (url, init, ctx) => {
     const req: RequestInit & { duplex?: "half" } = {
       method: init.method,
