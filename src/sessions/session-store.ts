@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
+import type { ScopeId, Session, SessionType, SpawnMeta } from "../types.ts";
+import { isUserMessage, type Item, type NewItem } from "./items.ts";
 import { sleep } from "../util/async.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 
@@ -17,43 +18,27 @@ export function promptEnvelopeBody(envelope: unknown): { hash: string; body: str
   return { hash: createHash("sha256").update(body).digest("hex"), body };
 }
 
-const CONTEXT_SUMMARY_KIND = "context_summary";
-
-export interface ContextSummaryPayload {
-  kind: typeof CONTEXT_SUMMARY_KIND;
-  throughSeq: number;
-  text: string;
+export function contextSummary(item: Item): { throughSeq: number; text: string } | null {
+  return item.kind === "ContextCompaction" && item.throughSeq !== null && item.text !== null
+    ? { throughSeq: item.throughSeq, text: item.text }
+    : null;
 }
 
-export function contextSummaryPayload(entry: SessionEntry): ContextSummaryPayload | null {
-  const payload = entry.payload as Partial<ContextSummaryPayload> | null;
-  if (
-    entry.type === "system" &&
-    payload?.kind === CONTEXT_SUMMARY_KIND &&
-    typeof payload.throughSeq === "number" &&
-    typeof payload.text === "string"
-  ) {
-    return { kind: CONTEXT_SUMMARY_KIND, throughSeq: payload.throughSeq, text: payload.text };
-  }
-  return null;
-}
-
-export function createContextSummaryPayload(throughSeq: number, text: string): ContextSummaryPayload {
-  return { kind: CONTEXT_SUMMARY_KIND, throughSeq, text };
+export function contextSummaryItem(throughSeq: number, text: string): NewItem<"ContextCompaction"> {
+  return { kind: "ContextCompaction", throughSeq, text };
 }
 
 export interface ContextWindow {
-  entries: SessionEntry[];
-  totalEntries: number;
+  items: Item[];
+  totalItems: number;
 }
 
-export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow {
-  let latest: ContextSummaryPayload | null = null;
-  for (const entry of entries) latest = contextSummaryPayload(entry) ?? latest;
-  const throughSeq = latest?.throughSeq;
+export function contextWindowFromItems(items: Item[]): ContextWindow {
+  let throughSeq: number | undefined;
+  for (const item of items) throughSeq = contextSummary(item)?.throughSeq ?? throughSeq;
   return {
-    entries: throughSeq === undefined ? [...entries] : entries.filter((entry) => entry.seq > throughSeq),
-    totalEntries: entries.length,
+    items: throughSeq === undefined ? [...items] : items.filter((item) => item.seq > throughSeq),
+    totalItems: items.length,
   };
 }
 
@@ -61,6 +46,7 @@ export interface Lease {
   sessionId: string;
   token: string;
   turnId?: string;
+  fenceToken?: string;
 }
 
 export type LeaseHolder = "turn" | "compaction" | "fork" | "backfill";
@@ -115,13 +101,6 @@ export interface StoreOptions {
   leaseTtlMs?: number;
 }
 
-export interface NewEntry {
-  type: EntryType;
-  payload: unknown;
-  scopeLabel: ScopeId;
-  author?: string;
-}
-
 interface ParticipantViewPatch {
   title?: string | null;
   archived?: boolean;
@@ -144,7 +123,7 @@ export interface SessionPin extends NewSessionPin {
 
 export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
 
-export interface GetEntriesOptions {
+export interface GetItemsOptions {
   transcript?: boolean;
   turnId?: string;
   sinceSeq?: number;
@@ -298,8 +277,8 @@ export interface ParticipantWindow {
   validToSeq: number | null;
 }
 
-export function entryWithinTenure(
-  entry: Pick<SessionEntry, "seq" | "createdAt">,
+export function itemWithinTenure(
+  entry: Pick<Item, "seq" | "createdAt">,
   window: Pick<ParticipantWindow, "validFrom" | "validTo" | "validFromSeq" | "validToSeq">,
 ): boolean {
   const fromOk = window.validFromSeq !== null ? entry.seq >= window.validFromSeq : entry.createdAt >= window.validFrom;
@@ -393,10 +372,12 @@ export interface ParticipantScope {
   lastActivityAt: number | null;
 }
 
+export type SearchHitType = "user" | "assistant" | "text";
+
 export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
   sessionId: string;
   seq: number;
-  type: EntryType;
+  type: SearchHitType;
   author?: string;
   text: string;
   createdAt: number;
@@ -404,7 +385,7 @@ export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "cha
 
 export interface NewSearchEntry {
   seq: number;
-  type: EntryType;
+  type: SearchHitType;
   author?: string;
   text: string;
   createdAt: number;
@@ -424,30 +405,26 @@ export interface SessionSummary {
   lastMessage: string;
 }
 
-export function userMessagePreview(payload: unknown, maxLen = 160): string {
-  let text = "";
-  if (typeof payload === "string") text = payload;
-  else if (payload && typeof payload === "object" && typeof (payload as { text?: unknown }).text === "string") {
-    text = (payload as { text: string }).text;
-  }
+export function userMessagePreview(text: string | null | undefined, maxLen = 160): string {
+  const raw = text ?? "";
   const kept =
-    text
+    raw
       .split("\n\n")
       .filter((p) => !/^\s*\[/.test(p))
       .join("\n\n")
-      .trim() || text.trim();
+      .trim() || raw.trim();
   const oneLine = kept.replace(/\s+/g, " ").trim();
   return oneLine.length > maxLen ? oneLine.slice(0, maxLen - 1) + "…" : oneLine;
 }
 
 export const ENTRY_STRING_BUDGET = 2_000;
 
-export type TranscriptEntry = SessionEntry & { truncated?: true };
+export type TranscriptItem = Item & { truncated?: true };
 
-const PROJECTED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["tool_call", "tool_result"]);
-const MODEL_ONLY_FIELDS: Partial<Record<EntryType, ReadonlySet<string>>> = {
-  user: new Set(["environment", "environmentSnapshot", "memoryRecall"]),
-  thinking: new Set(["thinkingSignature"]),
+const MODEL_ONLY_FIELDS: Partial<Record<Item["kind"], ReadonlySet<string>>> = {
+  UserMessage: new Set(["environment", "environmentSnapshot", "memoryRecall"]),
+  SteeringMessage: new Set(["environment", "environmentSnapshot", "memoryRecall"]),
+  Reasoning: new Set(["thinkingSignature"]),
 };
 const WALK_DEPTH = 8;
 
@@ -481,24 +458,27 @@ function shortenStrings(value: unknown, depth: number): { value: unknown; trunca
   return truncated ? { value: next, truncated } : { value, truncated };
 }
 
-function postsToTheConversation(entry: SessionEntry): boolean {
-  const p = entry.payload as { action?: unknown } | null;
-  return entry.type === "tool_call" && p?.action === "post";
+function postsToTheConversation(item: Item): boolean {
+  return item.kind === "ToolCall" && item.body.action === "post";
 }
 
-function withoutModelContext(entry: SessionEntry, fields: ReadonlySet<string>): TranscriptEntry {
-  const payload = entry.payload;
-  if (!payload || typeof payload !== "object" || !Object.keys(payload).some((k) => fields.has(k))) return entry;
-  const visible = Object.fromEntries(Object.entries(payload).filter(([k]) => !fields.has(k)));
-  return { ...entry, payload: visible, truncated: true };
+function withoutModelContext(item: Item, fields: ReadonlySet<string>): TranscriptItem {
+  if (!Object.keys(item.body).some((k) => fields.has(k))) return item;
+  return {
+    ...item,
+    body: Object.fromEntries(Object.entries(item.body).filter(([k]) => !fields.has(k))),
+    truncated: true,
+  };
 }
 
-function projectEntry(entry: SessionEntry): TranscriptEntry {
-  const modelOnly = MODEL_ONLY_FIELDS[entry.type];
-  if (modelOnly) return withoutModelContext(entry, modelOnly);
-  if (!PROJECTED_TYPES.has(entry.type) || postsToTheConversation(entry)) return entry;
-  const walked = shortenStrings(entry.payload, 0);
-  return walked.truncated ? { ...entry, payload: walked.value, truncated: true } : entry;
+function projectItem(item: Item): TranscriptItem {
+  const modelOnly = MODEL_ONLY_FIELDS[item.kind];
+  if (modelOnly) return withoutModelContext(item, modelOnly);
+  if ((item.kind !== "ToolCall" && item.kind !== "ToolResult") || postsToTheConversation(item)) return item;
+  const body = shortenStrings(item.body, 0);
+  const text = shortenStrings(item.text, 0);
+  if (!body.truncated && !text.truncated) return item;
+  return { ...item, body: body.value as Record<string, unknown>, text: text.value as string | null, truncated: true };
 }
 
 function payloadBytes(value: unknown, depth: number): number {
@@ -521,32 +501,28 @@ function payloadBytes(value: unknown, depth: number): number {
 }
 
 export function windowedTranscript(
-  entries: SessionEntry[],
+  items: Item[],
   window?: { tailTurns?: number; sinceSeq?: number; beforeSeq?: number },
-): { entries: TranscriptEntry[]; earlier: number } {
+): { items: TranscriptItem[]; earlier: number } {
   if (window?.beforeSeq !== undefined) {
-    const at = entries.findIndex((e) => e.seq >= window.beforeSeq!);
-    entries = entries.slice(0, at < 0 ? entries.length : at);
+    const at = items.findIndex((e) => e.seq >= window.beforeSeq!);
+    items = items.slice(0, at < 0 ? items.length : at);
   }
   let cut = 0;
   if (window?.sinceSeq !== undefined) {
-    const at = entries.findIndex((e) => e.seq >= window.sinceSeq!);
-    cut = at < 0 ? entries.length : at;
+    const at = items.findIndex((e) => e.seq >= window.sinceSeq!);
+    cut = at < 0 ? items.length : at;
   } else if (window?.tailTurns !== undefined && window.tailTurns > 0) {
     let turns = 0;
-    for (let i = entries.length - 1; i >= 0; i--) {
-      if (entries[i]!.type !== "user") continue;
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (!isUserMessage(items[i]!)) continue;
       if (++turns === window.tailTurns) {
         cut = i;
         break;
       }
     }
   }
-  return { entries: (cut > 0 ? entries.slice(cut) : entries).map(projectEntry), earlier: cut };
-}
-
-export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {
-  return e.type === "user" && (e.payload as { overheard?: unknown } | null)?.overheard === true;
+  return { items: (cut > 0 ? items.slice(cut) : items).map(projectItem), earlier: cut };
 }
 
 export class DuplicateCallError extends Error {
@@ -588,16 +564,16 @@ export interface SessionStore {
   releaseLease(lease: Lease): Promise<void>;
   forceReleaseLease(sessionId: string): Promise<void>;
 
-  append(lease: Lease, entry: NewEntry): Promise<SessionEntry>;
-  appendMany(lease: Lease, entries: readonly NewEntry[]): Promise<SessionEntry[]>;
-  getEntries(sessionId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  append(lease: Lease, item: NewItem): Promise<Item>;
+  appendMany(lease: Lease, items: readonly NewItem[]): Promise<Item[]>;
+  getItems(sessionId: string, opts?: GetItemsOptions): Promise<Item[]>;
   hasDeliveryEntry(sessionId: string, deliveryKey: string, slackTs?: string): Promise<boolean>;
-  countEntriesBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
+  countItemsBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
-  getEntry(sessionId: string, seq: number): Promise<SessionEntry | undefined>;
-  latestEntrySeq(sessionId: string): Promise<number>;
+  getItem(sessionId: string, seq: number): Promise<Item | undefined>;
+  latestItemSeq(sessionId: string): Promise<number>;
   goals(sessionIds: readonly string[]): Promise<Map<string, GoalRecord>>;
-  setGoal(lease: Lease, goal: GoalRecord, notices?: readonly NewEntry[]): Promise<void>;
+  setGoal(lease: Lease, goal: GoalRecord, notices?: readonly NewItem[]): Promise<void>;
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
@@ -623,7 +599,7 @@ export interface SessionStore {
   listPins(sessionId: string): Promise<SessionPin[]>;
   removePin(sessionId: string, pinId: string): Promise<boolean>;
 
-  visibleEntries(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<SessionEntry[]>;
+  visibleItems(sessionId: string, principalId: string, opts?: GetItemsOptions): Promise<Item[]>;
 
   searchEntries(principalId: string, query: string, limit?: number): Promise<EntrySearchHit[]>;
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createKeychain, KeychainError, ASK_TTL_MS } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -49,9 +49,9 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
   });
   const state: { members: Principal[] } = { members: [{ id: "U_REQUESTER", type: "internal" }] };
   const requests: TurnRequest[] = [];
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const deps: AskResolutionDeps = {
-    deliveries,
+    outbound,
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     currentScopeMembers: async () => state.members,
@@ -88,7 +88,7 @@ async function fixture(scope: ScopeId = "channel:C_SHARED") {
     purpose: "read only the dummy account",
   });
   requests.length = 0;
-  return { k, clock, credential, crons, cron, state, requests, deliveries, deps, ...approved };
+  return { k, clock, credential, crons, cron, state, requests, outbound, deps, ...approved };
 }
 
 for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-shared"] as const) {
@@ -124,7 +124,7 @@ for (const scope of ["channel:C_SHARED", "group:G_SHARED", "group:web-project-sh
       materializeGrant(f.k, f.grant.id, scope, request.actor.externalId),
       (error: KeychainError) => error.status === 410,
     );
-    const pending = await f.deliveries.pending("principal");
+    const pending = await f.outbound.pending("principal");
     assert.equal(pending.length, 1);
     assert.equal(pending[0]!.destination.target, "U_REQUESTER");
   });

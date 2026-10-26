@@ -1,20 +1,19 @@
 import type { RuntimeChoice } from "./harness.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 import { isHarnessId } from "../model/pi-models.ts";
 import { isObj } from "../util/objects.ts";
 
 export function recoveredRuntime(
-  entries: readonly SessionEntry[],
+  entries: readonly Item[],
   runId: string,
   actorId: string,
 ): { choice: RuntimeChoice; lifetime: "task" | "scope" } | undefined {
   for (const entry of [...entries].reverse()) {
-    const p = entry.payload;
+    const p = entry.body;
     if (
-      entry.type !== "tool_result" ||
-      !isObj(p) ||
-      p.tool !== "runtime" ||
-      p.runId !== runId ||
+      entry.kind !== "ToolResult" ||
+      entry.tool !== "runtime" ||
+      entry.turnId !== runId ||
       p.actorId !== actorId ||
       !isObj(p.runtimeHandoff)
     )

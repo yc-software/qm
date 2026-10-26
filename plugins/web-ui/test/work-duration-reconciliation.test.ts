@@ -1,54 +1,64 @@
+import type { Item } from "../src/items.ts";
+import { item } from "./item-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { entriesToMessages, type AssistantWork, type SessionEntry, type WorkBlock } from "../src/core-bridge.ts";
+import { itemsToMessages, type AssistantWork, type WorkBlock } from "../src/core-bridge.ts";
 import { workSeconds, workedLabel } from "../src/work-duration.ts";
 
-const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Parameters<
-  typeof entriesToMessages
->[1];
+const MODEL = { id: "m", api: "anthropic", provider: "anthropic" } as unknown as Parameters<typeof itemsToMessages>[1];
 
 test("waiting for an approval decision does not count as active work", () => {
-  const activity: WorkBlock["activity"] = [
-    { seq: 1, parentSeq: null, type: "tool_call", payload: { command: "help" }, createdAt: 101_000 },
-    { seq: 2, parentSeq: 1, type: "tool_result", payload: { blocked: "needs_approval" }, createdAt: 108_000 },
+  const items = [
+    item("ToolCall", { seq: 1, createdAt: 101_000, body: { command: "help" } }),
+    item("ToolResult", { seq: 2, createdAt: 108_000, body: { blocked: "needs_approval" } }),
   ];
+  const activity: WorkBlock["activity"] = items.map((entry) => ({ item: entry }));
   assert.equal(workSeconds({ status: "working", startedAt: 100_000, activity }), 8);
   assert.equal(workSeconds({ status: "complete", startedAt: 100_000, finishedAt: 700_000, activity }), 8);
-  const history = entriesToMessages([
-    ...activity,
-    { seq: 3, type: "approval_resolved", payload: { command: "help", approved: false }, createdAt: 700_000 },
+  const history = itemsToMessages([
+    ...items,
+    item("ElicitationResponse", {
+      seq: 3,
+      createdAt: 700_000,
+      elicitId: "req",
+      approved: false,
+      body: { command: "help" },
+    }),
   ]);
   assert.equal(workSeconds((history[0] as AssistantWork).work!), 7);
   const resumed = [
     ...activity,
-    { seq: 4, parentSeq: null, type: "text" as const, payload: { text: "continuing" }, createdAt: 710_000 },
+    { item: item("AgentMessage", { seq: 4, createdAt: 710_000, variant: "narration", text: "continuing" }) },
   ];
   assert.equal(workSeconds({ status: "complete", startedAt: 700_000, finishedAt: 715_000, activity: resumed }), 15);
 });
 
-for (const type of ["approval_request", "tool_result", "tool_call"] as const) {
-  test(`${type} timing preserves initial thinking without counting the approval wait`, () => {
-    const activity: WorkBlock["activity"] = [
-      { seq: 1, parentSeq: null, type: "tool_call", payload: { command: "help" }, createdAt: 112_000 },
-      {
+for (const kind of ["Elicitation", "ToolResult", "ToolCall"] as const) {
+  test(`${kind} timing preserves initial thinking without counting the approval wait`, () => {
+    const items: Item[] = [
+      item("ToolCall", { seq: 1, createdAt: 112_000, body: { command: "help" } }),
+      item(kind, {
         seq: 2,
-        parentSeq: 1,
-        type,
-        payload: { blocked: "needs_approval", workStartedAt: 100_000, workFinishedAt: 113_000 },
         createdAt: 113_000,
-      },
+        ...(kind === "Elicitation" ? { elicitId: "req" } : {}),
+        body: { blocked: "needs_approval", workStartedAt: 100_000, workFinishedAt: 113_000 },
+      }),
     ];
+    const activity: WorkBlock["activity"] = items.map((entry) => ({ item: entry }));
     const live = workSeconds({ status: "complete", startedAt: 100_000, activity });
     for (const decided of [false, true]) {
-      const entries: SessionEntry[] = [...activity];
+      const history: Item[] = [...items];
       if (decided)
-        entries.push({
-          seq: 3,
-          type: "approval_resolved",
-          payload: { command: "help", approved: false },
-          createdAt: 700_000,
-        });
-      const work = (entriesToMessages(entries)[0] as AssistantWork).work!;
+        history.push(
+          item("ElicitationResponse", {
+            seq: 3,
+            createdAt: 700_000,
+            elicitId: "req",
+            approved: false,
+            body: { command: "help" },
+          }),
+        );
+      const work = (itemsToMessages(history)[0] as AssistantWork).work!;
       assert.equal(workSeconds(work), live);
       assert.equal(workSeconds(work), 13);
     }
@@ -59,22 +69,16 @@ test("work duration survives a transcript refresh — persisted turn timing wins
   const runStartedAt = 100_000;
   const runFinishedAt = 113_000;
 
-  const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "hi" }, createdAt: 99_000, seq: 1 },
-    { type: "tool_call", payload: { tool: "execute", command: "ls" }, createdAt: 112_000, seq: 2, parentSeq: 1 },
-    {
-      type: "tool_result",
-      payload: { tool: "execute", code: 0, result: "a" },
-      createdAt: 112_000,
-      seq: 3,
-      parentSeq: 2,
-    },
-    {
-      type: "assistant",
-      payload: { text: "done", workStartedAt: runStartedAt, workFinishedAt: runFinishedAt },
+  const items: Item[] = [
+    item("UserMessage", { createdAt: 99_000, seq: 1, text: "hi" }),
+    item("ToolCall", { createdAt: 112_000, seq: 2, tool: "execute", body: { command: "ls" } }),
+    item("ToolResult", { createdAt: 112_000, seq: 3, tool: "execute", text: "a", body: { code: 0 } }),
+    item("AgentMessage", {
       createdAt: 112_100,
       seq: 4,
-    },
+      text: "done",
+      body: { workStartedAt: runStartedAt, workFinishedAt: runFinishedAt },
+    }),
   ];
 
   const liveWork: WorkBlock = {
@@ -86,7 +90,7 @@ test("work duration survives a transcript refresh — persisted turn timing wins
   const liveLabel = workedLabel("Worked", workSeconds(liveWork));
   assert.equal(liveLabel, "Worked for 13s");
 
-  const msgs = entriesToMessages(entries, MODEL);
+  const msgs = itemsToMessages(items, MODEL);
   const rebuilt = (msgs[1] as AssistantWork).work;
   assert.ok(rebuilt, "the assistant reply carries a work block after refresh");
   assert.equal(rebuilt.startedAt, runStartedAt, "persisted turn start round-trips");
@@ -101,8 +105,8 @@ test("fold expansion does not change the duration — the label derives only fro
     startedAt: 100_000,
     finishedAt: 113_000,
     activity: [
-      { seq: 2, parentSeq: 1, type: "tool_call", payload: { tool: "execute" }, createdAt: 112_000 },
-      { seq: 3, parentSeq: 2, type: "tool_result", payload: { tool: "execute" }, createdAt: 112_000 },
+      { item: item("ToolCall", { seq: 2, createdAt: 112_000, tool: "execute" }) },
+      { item: item("ToolResult", { seq: 3, createdAt: 112_000, tool: "execute" }) },
     ],
   };
 
@@ -121,13 +125,13 @@ test("fold expansion does not change the duration — the label derives only fro
 });
 
 test("historical transcripts without persisted timing keep the activity-inference fallback", () => {
-  const entries: SessionEntry[] = [
-    { type: "user", payload: { text: "hi" }, createdAt: 100, seq: 1 },
-    { type: "tool_call", payload: { tool: "execute", command: "ls" }, createdAt: 110, seq: 2, parentSeq: 1 },
-    { type: "tool_result", payload: { tool: "execute", code: 0 }, createdAt: 120, seq: 3, parentSeq: 2 },
-    { type: "assistant", payload: { text: "done" }, createdAt: 130, seq: 4 },
+  const items: Item[] = [
+    item("UserMessage", { createdAt: 100, seq: 1, text: "hi" }),
+    item("ToolCall", { createdAt: 110, seq: 2, tool: "execute", body: { command: "ls" } }),
+    item("ToolResult", { createdAt: 120, seq: 3, tool: "execute", body: { code: 0 } }),
+    item("AgentMessage", { createdAt: 130, seq: 4, text: "done" }),
   ];
-  const work = (entriesToMessages(entries, MODEL)[1] as AssistantWork).work;
+  const work = (itemsToMessages(items, MODEL)[1] as AssistantWork).work;
   assert.equal(work?.startedAt, 110);
   assert.equal(work?.finishedAt, 130);
 });
@@ -144,32 +148,12 @@ test("live and completed work use compact minute and second labels", () => {
   }
 });
 
-test("work duration ends at final-answer start while the run stays active and survives history projection", () => {
-  const phase = {
-    seq: 3,
-    parentSeq: null,
-    type: "text_start" as const,
-    payload: { phase: "final_answer", streamOffset: 11 },
-    createdAt: 108_000,
+test("work duration ends at final-answer start while the run stays active", () => {
+  const work: WorkBlock = {
+    status: "working",
+    startedAt: 100_000,
+    activity: [{ marker: "text_start", seq: 3, createdAt: 108_000, phase: "final_answer", streamOffset: 11 }],
   };
-  const work: WorkBlock = { status: "working", startedAt: 100_000, activity: [phase] };
   assert.equal(workSeconds(work), 8);
   assert.equal(work.status, "working");
-  const entries: SessionEntry[] = [
-    { seq: 1, type: "user", payload: { text: "check" }, createdAt: 100_000 },
-    { seq: 2, type: "text", payload: { text: "Checking.", phase: "commentary" }, createdAt: 102_000 },
-    phase,
-    {
-      seq: 4,
-      type: "assistant",
-      payload: { text: "All clear.", workStartedAt: 100_000, workFinishedAt: 115_000 },
-      createdAt: 115_000,
-    },
-  ];
-  const messages = entriesToMessages(entries, MODEL);
-  const answer = messages.find((message) => message.role === "assistant") as AssistantWork;
-  assert.ok(answer.work);
-  assert.equal(workSeconds(answer.work), 8);
-  assert.equal(answer.work.status, "complete");
-  assert.equal(answer.work.activity.find((entry) => entry.type === "text_start")?.seq, 3);
 });

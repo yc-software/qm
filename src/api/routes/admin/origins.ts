@@ -1,5 +1,5 @@
 import type { App } from "../../app.ts";
-import { parseScopeId, type Cron, type Delivery, type Session } from "../../../types.ts";
+import { parseScopeId, type Cron, type Session } from "../../../types.ts";
 import type { SessionSummary } from "../../../sessions/session-store.ts";
 import { parseWakeFireKey, wakeTriggerLabel } from "../../../triggers/provenance.ts";
 
@@ -136,28 +136,5 @@ export async function sessionOrigin(
     fireSlot: parsed.fireSlot,
     sourceId: parsed.sourceId,
     ...(parsed.monologue ? { monologue: true } : {}),
-  };
-}
-
-export async function deliveryOrigin(
-  app: App,
-  delivery: Delivery,
-  requestedScope: string,
-): Promise<AdminOrigin | null> {
-  const provenance = delivery.provenance;
-  const parsed = parseWakeFireKey(provenance?.fireKey ?? delivery.idempotencyKey);
-  const trigger = parsed?.trigger ?? provenance?.trigger;
-  if (!trigger || trigger === "conversation") return null;
-  if (trigger === "cron" && parsed?.trigger === "cron")
-    return cronWakeOrigin(app, parsed, requestedScope, requestedScope);
-  return {
-    kind: "background_wake",
-    label: wakeTriggerLabel(trigger),
-    trigger,
-    fireKey: provenance?.fireKey ?? parsed?.fireKey ?? delivery.idempotencyKey,
-    fireSlot: parsed?.fireSlot ?? null,
-    sourceId: parsed?.sourceId ?? null,
-    ...(provenance?.sourceScopeId ? { sourceScopeId: provenance.sourceScopeId } : {}),
-    ...(provenance?.sourceThreadRef ? { sourceThreadRef: provenance.sourceThreadRef } : {}),
   };
 }

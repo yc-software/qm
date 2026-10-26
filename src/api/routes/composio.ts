@@ -1,3 +1,4 @@
+import { runLeaseHeld } from "../../runs/run-store.ts";
 import { hasSlackAccount } from "./slack-composio.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
@@ -36,13 +37,11 @@ export async function activeRun(ctx: ApiCtx): Promise<boolean> {
   const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
   if (
     !run ||
-    run.status !== "running" ||
     !cap.runLeaseToken ||
-    run.leaseToken !== cap.runLeaseToken ||
     run.attempts !== cap.runAttempt ||
     run.sessionId !== cap.threadRef ||
     !samePerson(run.request.actor.id, cap.actorId) ||
-    (run.leaseExpiresAt ?? 0) <= Date.now()
+    !(await runLeaseHeld(ctx.deps.runs!, run, cap.runLeaseToken))
   ) {
     sendJson(ctx.res, 403, {
       error: "inactive_run",

@@ -27,7 +27,8 @@ import type { EnvironmentStore } from "../../environments/environment-store.ts";
 import type { SessionStore } from "../../sessions/session-store.ts";
 import type { SessionStateBus } from "../../runs/session-state-bus.ts";
 import type { SessionSyscallsFactory } from "../../sessions/session-syscalls.ts";
-import type { DeliveryStore } from "../../delivery/delivery-store.ts";
+import type { Outbound } from "../../surfaces/outbound.ts";
+import type { RecentDmPosts } from "../../surfaces/recent-dm-posts.ts";
 import type { WorkspaceStore } from "../../workspace/workspace-store.ts";
 import type { Sandbox } from "../../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../../processes/process-registry.ts";
@@ -101,6 +102,7 @@ export interface OrchestratorInput extends Omit<
   attempt?: number;
   resumeCause?: RunStop;
   runLeaseToken?: string;
+  turnFenceToken?: string;
 
   runStartedAt?: number;
   finalAttempt?: boolean;
@@ -110,6 +112,7 @@ export interface OrchestratorInput extends Omit<
   sessionParticipantIds?: readonly string[];
   scopeVersion?: string;
   swarm?: SwarmTurn;
+  wakeCause?: "child_done";
   swarmGoal?: GoalCreateInput & { assignedAt: number };
   trace?: TraceCarrier;
 }
@@ -203,7 +206,8 @@ export interface OrchestratorDeps {
   credentialUsage?: CredentialUsageSink;
   keychain?: Keychain;
   serviceCreds?: ServiceCredentialStore;
-  deliveries?: DeliveryStore;
+  outbound?: Outbound;
+  recentDmPosts?: DurableMap<RecentDmPosts>;
   directory?: DirectoryStore;
   projects?: Pick<ProjectStore, "recognizes" | "name">;
   isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;

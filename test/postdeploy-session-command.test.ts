@@ -50,7 +50,10 @@ test("session command preserves archive then database checks with bounded reques
       return Response.json({});
     }
     events.push("persisted");
-    return Response.json({ session: { title: "Canary" }, entries: [{ type: "user" }, { type: "assistant" }] });
+    return Response.json({
+      session: { title: "Canary" },
+      items: [{ kind: "UserMessage" }, { kind: "AgentMessage", variant: null }],
+    });
   });
   const config = testConfig({
     databaseUrl: "postgres://unused",

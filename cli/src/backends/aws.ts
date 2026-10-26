@@ -916,7 +916,10 @@ async function runAwsCandidateMigration(
       throw new CliError(`AWS could not start the migration task${failures ? ` (${failures})` : ""}`);
     }
     step(`migration task: ${taskArn}`);
-    await awaitEcsTaskExit(aws, taskArn, "migration");
+    await awaitEcsTaskExit(aws, taskArn, "migration", {
+      deadlineMs: envNum("QM_AWS_MIGRATION_DEADLINE_MS", envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000)),
+      stopOnTimeout: true,
+    });
     ok(`candidate ${label} migrations applied`);
   } finally {
     if (taskDefinition && !existingTaskDefinition) {
@@ -1242,9 +1245,14 @@ async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<
   await awaitEcsTaskExit(aws, taskArn, "canary");
 }
 
-async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, kind: string): Promise<void> {
+async function awaitEcsTaskExit(
+  aws: AwsConfig,
+  taskArn: string,
+  kind: string,
+  options: { deadlineMs?: number; stopOnTimeout?: boolean } = {},
+): Promise<void> {
   const pollMs = envNum("QM_AWS_ROLLOUT_POLL_MS", 5_000);
-  const deadline = Date.now() + envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
+  const deadline = Date.now() + (options.deadlineMs ?? envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000));
   for (;;) {
     const described = awsJson<{
       tasks?: Array<{
@@ -1267,6 +1275,27 @@ async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, kind: string): 
       );
     }
     if (Date.now() > deadline) {
+      if (options.stopOnTimeout && task) {
+        try {
+          awsText(aws, [
+            "ecs",
+            "stop-task",
+            "--cluster",
+            aws.cluster,
+            "--task",
+            taskArn,
+            "--reason",
+            `qm deploy stopped waiting for the ${kind} task`,
+          ]);
+        } catch (stopError) {
+          warn(`could not stop ${kind} task ${taskArn}: ${errMessage(stopError)}`);
+        }
+        throw new CliError(
+          `AWS ${kind} task did not finish before the deadline and was stopped. A migration task usually waits on the ` +
+            "qm:schema-migrations advisory lock; check pg_locks for another session holding it (for example an " +
+            "operator index build) before redeploying.",
+        );
+      }
       throw new CliError(
         task
           ? `timed out waiting for the AWS ${kind} task; ${taskArn} is still ${task.lastStatus ?? "unknown"} and was left running`

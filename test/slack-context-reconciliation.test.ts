@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { isOverheard } from "../src/sessions/items.ts";
 
 function reply(): Response {
   const events = [
@@ -81,11 +82,9 @@ for (const warm of [false, true]) {
       const next = JSON.stringify(JSON.parse(requests.at(-1)!).messages);
       assert.equal(next.split("Shall I restart the worker?").length - 1, 1);
       const session = await built.app.getSession(first.sessionId!);
-      const imports = session!.entries.filter(
-        (e) => e.type === "user" && (e.payload as { overheard?: boolean }).overheard,
-      );
+      const imports = session!.items.filter(isOverheard);
       assert.equal(imports.length, 3);
-      assert.equal((imports[1]!.payload as { sourceRole?: string }).sourceRole, "agent");
+      assert.equal(imports[1]!.body.sourceRole, "agent");
     } finally {
       globalThis.fetch = originalFetch;
       await built.runtime.stop();

@@ -1006,3 +1006,30 @@ test("a subscription-only company ChatGPT deployment defaults pi to the plain Co
   );
   assert.equal(configuredModelForHarness(base, "pi"), undefined);
 });
+
+test("QM_ROLES defaults to every role and a split core runs no background work", () => {
+  const all = loadConfig({});
+  assert.deepEqual(all.roles, ["api", "surfaces", "harness"]);
+  assert.equal(all.backgroundWorkEnabled, true);
+  const core = loadConfig({ QM_ROLES: "api" });
+  assert.deepEqual(core.roles, ["api"]);
+  assert.equal(core.backgroundWorkEnabled, false);
+  const harness = loadConfig({ QM_ROLES: "harness, surfaces" });
+  assert.deepEqual(harness.roles, ["harness", "surfaces"]);
+  assert.equal(harness.backgroundWorkEnabled, true);
+  assert.equal(loadConfig({ QM_ROLES: "harness", BACKGROUND_WORK_ENABLED: "0" }).backgroundWorkEnabled, false);
+  assert.throws(() => loadConfig({ QM_ROLES: "api,workers" }), /QM_ROLES="api,workers" must list/);
+  assert.throws(() => loadConfig({ QM_ROLES: "api", BACKGROUND_WORK_ENABLED: "1" }), /needs the harness role/);
+  assert.throws(() => loadConfig({ QM_ROLES: "api,surfaces" }), /surfaces needs harness too/);
+  assert.throws(
+    () =>
+      loadConfig({
+        QM_ROLES: "harness,surfaces",
+        BACKGROUND_DEPLOYMENT_ID: "d1",
+        DEPLOYMENT_CONTROL_SECRET: "x",
+        DATABASE_URL: "postgres://x/y",
+        CONNECTOR_SECRET_KEY: "k".repeat(64),
+      }),
+    /cannot split roles while BACKGROUND_DEPLOYMENT_ID/,
+  );
+});

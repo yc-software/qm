@@ -6,7 +6,7 @@ import { createRoutedMemoryService } from "./provider-router.ts";
 import type { MemoryService } from "./memory-service.ts";
 import { createMemorableMemoryProvider } from "./memorable/provider.ts";
 import { createSecretValueMasker } from "../security/secret-masking.ts";
-import type { SessionEntry } from "../types.ts";
+import type { Item } from "../sessions/items.ts";
 
 function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
   return {
@@ -30,14 +30,14 @@ export function createConfiguredMemoryService(opts: {
   defaultMemory: MemoryService;
   config?: MemoryProviderConfig;
   /** Session trace access for providers that derive memory from tool-call history (currently "memorable"). */
-  sessionEntries?: (sessionId: string) => Promise<SessionEntry[]>;
+  sessionItems?: (sessionId: string) => Promise<Item[]>;
   onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture") => void;
 }): MemoryService {
   if (!opts.config) return opts.defaultMemory;
   const providers: Record<string, MemoryService> = { default: opts.defaultMemory };
   for (const provider of opts.config.providers) {
     if (provider.type === "memorable") {
-      if (!opts.sessionEntries)
+      if (!opts.sessionItems)
         throw new Error(`memory provider ${provider.id} needs session access to record procedures`);
       providers[provider.id] = createMemorableMemoryProvider({
         argv: provider.argv,
@@ -45,7 +45,7 @@ export function createConfiguredMemoryService(opts: {
         injectTimeoutMs: provider.injectTimeoutMs,
         recordTimeoutMs: provider.recordTimeoutMs,
         mask: createSecretValueMasker(provider.redactValues),
-        loadEntries: opts.sessionEntries,
+        loadItems: opts.sessionItems,
       });
       continue;
     }

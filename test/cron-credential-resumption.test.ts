@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
@@ -25,10 +25,10 @@ async function fixture() {
     action: "read the dummy account and report the result",
     destination: recipient,
   });
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const requests: TurnRequest[] = [];
   const deps: AskResolutionDeps = {
-    deliveries,
+    outbound,
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     getCron: (id) => crons.get(id),
@@ -52,7 +52,7 @@ async function fixture() {
     createdAt: Date.now(),
     expiresAt: Date.now() + 60_000,
   };
-  return { crons, cron, deps, ask, deliveries, requests };
+  return { crons, cron, deps, ask, outbound, requests };
 }
 
 test("cron credential approval resumes the original fire once and delivers to the current destination", async () => {
@@ -78,7 +78,7 @@ test("cron credential approval resumes the original fire once and delivers to th
   assert.equal(request.unattendedGrants, undefined, "grants never ride a fire that delivers to another person");
   assert.match(request.text, /approved access until revoked/);
   assert.ok(!request.text.includes(f.ask.id) && !request.text.includes(f.ask.purpose));
-  const pending = await f.deliveries.pending("principal");
+  const pending = await f.outbound.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.destination.target, "U_CAROL");
   assert.equal(pending[0]!.text, "dummy scheduled result");
@@ -102,7 +102,7 @@ for (const changed of ["missing", "archived", "scope", "owner"] as const) {
 
     assert.equal(outcome.ran, false);
     assert.equal(f.requests.length, 0);
-    assert.equal((await f.deliveries.pending("principal")).length, 0);
+    assert.equal((await f.outbound.pending("principal")).length, 0);
   });
 }
 
@@ -114,7 +114,7 @@ test("cron credential approval fails closed when no cron lookup is available", a
 
   assert.equal(outcome.ran, false);
   assert.equal(f.requests.length, 0);
-  assert.equal((await f.deliveries.pending("principal")).length, 0);
+  assert.equal((await f.outbound.pending("principal")).length, 0);
 });
 
 test("cron credential approval does not restore a removed delivery destination", async () => {
@@ -125,7 +125,7 @@ test("cron credential approval does not restore a removed delivery destination",
 
   assert.equal(f.requests.length, 1);
   assert.equal(f.requests[0]!.triggerDestination, undefined);
-  assert.equal((await f.deliveries.pending("principal")).length, 0);
+  assert.equal((await f.outbound.pending("principal")).length, 0);
 });
 
 for (const schedule of [{ everyMs: 60_000 }, { cron: "0 9 * * *", timezone: "UTC" }]) {
@@ -138,7 +138,7 @@ for (const schedule of [{ everyMs: 60_000 }, { cron: "0 9 * * *", timezone: "UTC
 
     assert.equal(outcome.ran, false);
     assert.equal(f.requests.length, 0);
-    assert.equal((await f.deliveries.pending("principal")).length, 0);
+    assert.equal((await f.outbound.pending("principal")).length, 0);
   });
 }
 
@@ -152,5 +152,5 @@ test("cron credential approval resumes a disabled one-shot job in its original f
   assert.equal(outcome.ran, true);
   assert.equal(f.requests.length, 1);
   assert.equal(f.requests[0]!.conversation.threadRef, f.ask.requesterThreadRef);
-  assert.equal((await f.deliveries.pending("principal")).length, 1);
+  assert.equal((await f.outbound.pending("principal")).length, 1);
 });

@@ -7,6 +7,7 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
 import type { GrantedHandle, IncomingAttachment } from "../src/types.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
+import { storedItem, type NewItem } from "../src/sessions/items.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
 import {
@@ -245,27 +246,22 @@ test("materializeInbound records the surface file id so a later turn can tell th
 });
 
 test("withoutAlreadyIngested drops images this context already holds and keeps everything else", () => {
-  const entry = (type: string, payload: unknown) => ({
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: type as never,
-    payload,
-    scopeLabel: "org:test" as never,
-    createdAt: 0,
-  });
+  const entry = (item: NewItem) => storedItem(item, { sessionId: "s", seq: 1, createdAt: 0 });
   const entries = [
-    entry("user", {
+    entry({
+      kind: "UserMessage",
       text: "here",
-      attachments: [
-        { name: "shot.png", mimetype: "image/png", sizeBytes: 3, direction: "in", sourceId: "Fseen" },
-        { name: "plan.pdf", mimetype: "application/pdf", sizeBytes: 3, direction: "in", sourceId: "Fpdf" },
-        { name: "huge.png", mimetype: "image/png", sizeBytes: 6_000_000, direction: "in", sourceId: "Fhuge" },
-        { name: "old.png", mimetype: "image/png", sizeBytes: 3, direction: "in" },
-      ],
+      body: {
+        attachments: [
+          { name: "shot.png", mimetype: "image/png", sizeBytes: 3, direction: "in", sourceId: "Fseen" },
+          { name: "plan.pdf", mimetype: "application/pdf", sizeBytes: 3, direction: "in", sourceId: "Fpdf" },
+          { name: "huge.png", mimetype: "image/png", sizeBytes: 6_000_000, direction: "in", sourceId: "Fhuge" },
+          { name: "old.png", mimetype: "image/png", sizeBytes: 3, direction: "in" },
+        ],
+      },
     }),
-    entry("assistant", { attachments: [{ name: "out.png", direction: "out", sourceId: "Fout" }] }),
-    entry("user", { text: "no files" }),
+    entry({ kind: "AgentMessage", body: { attachments: [{ name: "out.png", direction: "out", sourceId: "Fout" }] } }),
+    entry({ kind: "UserMessage", text: "no files" }),
   ];
   const seen = { name: "shot.png", mimetype: "image/png", sizeBytes: 3, blobId: "b1", sourceId: "Fseen" };
   const fresh = { name: "new.png", mimetype: "image/png", sizeBytes: 3, blobId: "b2", sourceId: "Fnew" };

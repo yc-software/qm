@@ -247,7 +247,6 @@ export const adminOperations = {
     "/scopes/:scope/auto-flagger/test",
     { ...scope, value: object },
   ),
-  shadow_deliveries: operation("Read shadow-delivery diagnostics.", "GET", "/deliveries/shadow", scope),
   slack_mirror: operation("List mirrored Slack containers.", "GET", "/slack-mirror", scope),
   slack_messages: operation("Read a page of mirrored Slack messages.", "GET", "/slack-mirror/messages", {
     ...scope,

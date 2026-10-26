@@ -28,7 +28,7 @@ test("gateway only (no surface-provided context) still names the gateway", () =>
   assert.doesNotMatch(out, /Identifiers for this conversation/);
 });
 
-test("web gateway keeps scheduled deliveries in the web conversation by default", () => {
+test("web gateway keeps scheduled outbound in the web conversation by default", () => {
   const out = renderGatewayContext("web");
   assert.match(out, /over web\./);
   assert.match(out, /no explicit destination posts back into this web conversation/);

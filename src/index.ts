@@ -14,6 +14,9 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
 
 const config = loadConfig();
+const servesApi = config.roles.includes("api");
+const slackIngress =
+  config.roles.includes("surfaces") && config.backgroundWorkEnabled && !config.backgroundDeploymentId;
 
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
@@ -26,20 +29,22 @@ const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLA
 let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
 if (slackConfig) slackEnvironmentState = "configured";
 else if (envSlackAttempted) slackEnvironmentState = "partial";
-const managedSlack = process.env.QM_SLACK_SERVICE_URL
-  ? createManagedSlack({
-      serviceUrl: process.env.QM_SLACK_SERVICE_URL,
-      token: process.env.QM_SLACK_SERVICE_TOKEN ?? "",
-      appId: process.env.QM_SLACK_APP_ID ?? "",
-      store: built.slackInstallation,
-      reconcile:
-        config.backgroundWorkEnabled || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
+const managedSlack =
+  process.env.QM_SLACK_SERVICE_URL && config.roles.includes("surfaces")
+    ? createManagedSlack({
+        serviceUrl: process.env.QM_SLACK_SERVICE_URL,
+        token: process.env.QM_SLACK_SERVICE_TOKEN ?? "",
+        appId: process.env.QM_SLACK_APP_ID ?? "",
+        store: built.slackInstallation,
+        reconcile: slackIngress || config.backgroundDeploymentId ? () => slackRuntime.reconcile() : undefined,
+      })
+    : undefined;
+const server = servesApi
+  ? createServer(built.app, {
+      ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
+      managedSlack,
     })
-  : undefined;
-const server = createServer(built.app, {
-  ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
-  managedSlack,
-});
+  : null;
 
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
@@ -48,12 +53,16 @@ await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
-server.listen(config.port, () => {
+server?.listen(config.port, () => {
   console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
+    `[qm] listening on :${config.port} (roles=${config.roles.join(",")}, org=${config.orgId}, store=${config.sessionStore}, ` +
       `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });
+if (!server)
+  console.log(
+    `[qm] running without the api role (roles=${config.roles.join(",")}, org=${config.orgId}, workers=${config.workers})`,
+  );
 
 if (config.deployAppsDomain) {
   const domain = config.deployAppsDomain;
@@ -113,7 +122,7 @@ const slackRuntime = createSlackRuntimeReconciler({
   startPlugin: (desired) => startSlackPlugin(desired, built.slackCore),
   onError: reportFailureAs("slack plugin reconciliation", undefined),
 });
-if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) slackRuntime.start();
+if (slackIngress) slackRuntime.start();
 
 const slackAccountRuntimes = slackAccountConfigsFromEnv(process.env).map((account) =>
   createSlackRuntimeReconciler({
@@ -123,8 +132,7 @@ const slackAccountRuntimes = slackAccountConfigsFromEnv(process.env).map((accoun
     onError: reportFailureAs("slack account reconciliation", undefined, `account=${account.accountId}`),
   }),
 );
-if (config.backgroundWorkEnabled && !config.backgroundDeploymentId)
-  for (const runtime of slackAccountRuntimes) runtime.start();
+if (slackIngress) for (const runtime of slackAccountRuntimes) runtime.start();
 
 let backgroundController: ReturnType<typeof createBackgroundController> | undefined;
 if (built.backgroundOwnership) {
@@ -185,8 +193,8 @@ function shutdown(signal: string): void {
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
   built.deploymentLayerRefresh.stop();
-  server.close();
-  server.closeIdleConnections();
+  server?.close();
+  server?.closeIdleConnections();
   stopWithBackstop(
     {
       async stop() {
@@ -197,7 +205,7 @@ function shutdown(signal: string): void {
     },
     config.shutdownDrainMs,
     "qm",
-    () => server.closeAllConnections(),
+    () => server?.closeAllConnections(),
   );
 }
 process.on("SIGINT", () => shutdown("SIGINT"));

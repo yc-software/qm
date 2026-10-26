@@ -218,7 +218,9 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       const shutdown = deps.shutdown?.();
       if (shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
       const claimed =
-        run.status === "running" ? null : await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
+        run.status === "running" || deps.inlineTurns === false
+          ? null
+          : await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
       if (claimed) {
         try {
           const result = await processRun(

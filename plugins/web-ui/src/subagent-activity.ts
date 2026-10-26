@@ -1,4 +1,5 @@
-import type { CoreSession, SessionEntry } from "./core-bridge.ts";
+import type { CoreSession } from "./core-bridge.ts";
+import type { Item } from "./items.ts";
 
 type SubagentState = "working" | "waiting" | "done" | "failed";
 
@@ -97,21 +98,21 @@ function clip(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-function toolLine(payload: { tool?: unknown; action?: unknown; command?: unknown }): string | null {
-  if (typeof payload.tool !== "string" || !payload.tool) return null;
-  const action = typeof payload.action === "string" && payload.action ? ` ${payload.action}` : "";
-  const command = typeof payload.command === "string" && payload.command ? ` · ${payload.command}` : "";
-  return clip(`${payload.tool}${action}${command}`, 120);
+function toolLine(item: Item): string | null {
+  if (!item.tool) return null;
+  const { action, command } = item.body;
+  const actionText = typeof action === "string" && action ? ` ${action}` : "";
+  const commandText = typeof command === "string" && command ? ` · ${command}` : "";
+  return clip(`${item.tool}${actionText}${commandText}`, 120);
 }
 
-export function peekLines(entries: readonly SessionEntry[], max = 4): PeekLine[] {
+export function peekLines(items: readonly Item[], max = 4): PeekLine[] {
   const lines: PeekLine[] = [];
-  for (const entry of entries) {
-    const payload = (entry.payload ?? {}) as { tool?: unknown; action?: unknown; command?: unknown; text?: unknown };
-    const tool = entry.type === "tool_call" ? toolLine(payload) : null;
+  for (const item of items) {
+    const tool = item.kind === "ToolCall" ? toolLine(item) : null;
     if (tool) lines.push({ kind: "tool", text: tool });
-    else if ((entry.type === "assistant" || entry.type === "text") && typeof payload.text === "string") {
-      const text = clip(payload.text, 240);
+    else if (item.kind === "AgentMessage" && item.variant !== "files_delivered" && item.text !== null) {
+      const text = clip(item.text, 240);
       if (text) lines.push({ kind: "text", text });
     }
   }

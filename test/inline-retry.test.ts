@@ -65,3 +65,16 @@ test("inline waiting returns another worker's result without executing twice", a
   assert.equal((await pending).reply, "other worker");
   assert.equal((await built.runs.get(claimed!.id))?.attempts, 1);
 });
+
+test("a process without the harness role waits for a harness instead of running the turn", async () => {
+  const built = buildApp(testConfig({ runWaitMs: 300, roles: ["api"] }));
+  const keepAlive = setInterval(() => {}, 100);
+  try {
+    await assert.rejects(built.app.turn({ ...request, idempotencyKey: "core-only" }), /did not finish within 300ms/);
+    const [run] = await built.runs.inFlightForThread(request.conversation.threadRef);
+    assert.equal(run?.status, "pending");
+    assert.equal(run?.attempts, 0);
+  } finally {
+    clearInterval(keepAlive);
+  }
+});

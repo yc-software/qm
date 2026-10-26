@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { RunStore } from "../runs/run-store.ts";
+import { isUnstarted, runLeaseHeld, type RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
@@ -276,8 +276,10 @@ export function createSwarmService(deps: {
         actorId,
         scopeId: session.scopeId,
       };
-      if (!run.leaseExpiresAt) throw new Error("active capability run required");
-      assertSwarmRun(fence, run);
+      assertSwarmRun(fence, {
+        ...run,
+        turnFenceHeld: run.engine === "absurd" && (await runLeaseHeld(runs, run, fence.leaseToken)),
+      });
     }
     const identity = threadIdentity(session.threadRef, session.id);
     const swarm = await store.get(identity.rootId);
@@ -882,10 +884,7 @@ export function createSwarmService(deps: {
           ? (await runs.inFlightForThread(input.conversation.threadRef))
               .filter(
                 (run) =>
-                  run.status === "pending" &&
-                  run.attempts === 0 &&
-                  run.turnUserSeq === null &&
-                  !options.skipRuns?.has(run.id),
+                  isUnstarted(run) && run.attempts === 0 && run.turnUserSeq === null && !options.skipRuns?.has(run.id),
               )
               .map((run) => run.id)
           : [],

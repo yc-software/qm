@@ -17,7 +17,6 @@ import type {
   Principal,
   ScopeId,
   Session,
-  SessionEntry,
   TurnRequest,
   TurnResult,
   TurnRuntime,
@@ -27,7 +26,8 @@ import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { Readable } from "node:stream";
 import { type FileArtifact, type FileArtifactStore, type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
-import type { SessionStore, TranscriptEntry } from "../sessions/session-store.ts";
+import type { SessionStore, TranscriptItem } from "../sessions/session-store.ts";
+import type { Item } from "../sessions/items.ts";
 import { type Sandbox } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
@@ -59,7 +59,7 @@ import { type AdminService } from "../admin/admin-service.ts";
 import type { CronStore, CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CronFireRecord } from "../cron/fire-store.ts";
 import type { WebhookStore, WebhookEvent, CreateWebhookInput } from "../webhooks/webhook-store.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound } from "../surfaces/outbound.ts";
 import type {
   ChannelMembership,
   ChannelResolution,
@@ -74,7 +74,6 @@ import type {
   Cron,
   CronFireLogEntry,
   CronFireNote,
-  Delivery,
   Destination,
   SurfaceContextQuery,
   SurfaceContextRequest,
@@ -187,7 +186,6 @@ interface ReachNowInput {
 export type ReachNowResult =
   | {
       ok: true;
-      delivery: Delivery;
       recipient?: { principalId: string; displayName: string };
       channel?: { channelId: string; name: string };
       group?: { groupId: string };
@@ -314,7 +312,7 @@ export interface App {
     startedAt: number | null;
     finishedAt: number | null;
   } | null>;
-  getRunToolEntries(runId: string, viewer?: string, afterSeq?: number): Promise<SessionEntry[]>;
+  getRunToolItems(runId: string, viewer?: string, afterSeq?: number): Promise<Item[]>;
   stopConversation(threadRef: string, viewer?: string): Promise<boolean>;
   activeRunForThread(
     threadRef: string,
@@ -336,15 +334,15 @@ export interface App {
   getSession(
     sessionId: string,
     window?: TranscriptWindow,
-  ): Promise<{ session: Session; entries: TranscriptEntry[]; earlierEntries?: number; pins?: SessionPinView[] } | null>;
+  ): Promise<{ session: Session; items: TranscriptItem[]; earlierItems?: number; pins?: SessionPinView[] } | null>;
   getSessionForViewer(
     sessionId: string,
     principalId: string,
     window?: TranscriptWindow,
   ): Promise<{
     session: Session;
-    entries: TranscriptEntry[];
-    earlierEntries?: number;
+    items: TranscriptItem[];
+    earlierItems?: number;
     pins?: SessionPinView[];
     goal?: GoalView;
     runtime?: TurnRuntime;
@@ -354,11 +352,7 @@ export interface App {
     principalId: string,
     visibility: { minSeq: number; maxSeq: number; minCreatedAt: number; maxCreatedAt: number },
   ): Promise<boolean>;
-  getSessionEntryForViewer(
-    sessionId: string,
-    principalId: string,
-    seq: number,
-  ): Promise<{ entry: SessionEntry } | null>;
+  getSessionItemForViewer(sessionId: string, principalId: string, seq: number): Promise<{ item: Item } | null>;
   pinConversationItem(
     threadRef: string,
     addedBy: string,
@@ -418,7 +412,7 @@ export interface App {
     sessionId: string,
     principalId: string,
     opts?: { upToSeq?: number },
-  ): Promise<{ session: Session; entries: SessionEntry[] } | null>;
+  ): Promise<{ session: Session; items: Item[] } | null>;
   listFilesForViewer(principalId: string, opts?: ListOwnedOptions, inScope?: ScopeId): Promise<FileListPage>;
   uploadFileForViewer(
     principalId: string,
@@ -476,8 +470,7 @@ export interface App {
   listWebhooks(): Promise<Webhook[]>;
   setWebhookEnabled(id: string, enabled: boolean): Promise<void>;
   updateWebhook(id: string, patch: { action: string }): Promise<Webhook | null>;
-  pendingDeliveries(type: string, claimMs?: number): Promise<Delivery[]>;
-  enqueueDelivery(input: {
+  postToSurface(input: {
     destination: Destination;
     text: string;
     idempotencyKey: string;
@@ -512,8 +505,6 @@ export interface App {
     container: string,
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
-  ackDelivery(id: string, slackApiMs?: number): Promise<void>;
-  ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
   upsertChannels(
@@ -544,7 +535,6 @@ export interface App {
   directoryChannels(): Promise<DirectoryChannel[]>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;
   channelVisibleTo(actorId: string, channelId: string, isPrivate?: boolean): Promise<boolean>;
-  recordPrincipalDelivery(deliveryId: string, recipientThreadRef: string): Promise<void>;
   reachNow(input: ReachNowInput): Promise<ReachNowResult>;
   resolveReachTarget(target: ReachTarget, authorityId: string, opts?: ReachOpts): Promise<ReachResolution>;
   deploy(input: DeployInput): Promise<Deployment>;
@@ -649,6 +639,7 @@ export interface AppDeps {
   leaseTtlMs: number;
   maxAttempts: number;
   runWaitMs?: number;
+  inlineTurns?: boolean;
   turnStream?: TurnStream;
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
@@ -674,7 +665,7 @@ export interface AppDeps {
   config: ScopedConfigStore;
   crons: CronStore;
   webhooks: WebhookStore;
-  deliveries: DeliveryStore;
+  outbound: Outbound;
   directory: DirectoryStore;
   teams?: Pick<TeamStore, "isMember">;
   emailAuthMembers?: DirectoryMember[];

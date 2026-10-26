@@ -1,5 +1,4 @@
 import type {
-  Delivery,
   DeliveryProvenance,
   Destination,
   OutgoingAttachment,
@@ -7,7 +6,7 @@ import type {
   SurfaceContextResult,
 } from "../types.ts";
 import { scopeId as makeScopeId } from "../types.ts";
-import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { Outbound, PostReceipt } from "../surfaces/outbound.ts";
 import type { ChannelResolution, GroupResolution, RecipientResolution } from "../directory/directory-store.ts";
 import { isVisible } from "../directory/visibility.ts";
 import { swallow } from "../util/errors.ts";
@@ -256,15 +255,14 @@ export async function resolveReachTarget(
   };
 }
 
-export interface ReachEnqueueInput {
-  deliveries: DeliveryStore;
+export interface ReachPostInput {
+  outbound: Pick<Outbound, "send">;
   destination: Destination;
   text: string;
   attachments?: OutgoingAttachment[];
   idempotencyKey: string;
   provenance?: DeliveryProvenance;
   attributeAs?: string;
-  shadow?: boolean;
 }
 
 export function withSlackUnfurlOption(destination: Destination, unfurlLinks: boolean | undefined): Destination {
@@ -297,24 +295,22 @@ export function withWebTranscriptText(destination: Destination): Destination {
   return destination.type === "web" ? { ...destination, webTranscript: { kind: "reply" } } : destination;
 }
 
-export async function reachEnqueue(input: ReachEnqueueInput): Promise<Delivery> {
+export async function reachPost(input: ReachPostInput): Promise<PostReceipt | void> {
   if (input.destination.react || input.destination.delete) {
-    return input.deliveries.enqueue({
+    return input.outbound.send({
       destination: input.destination,
       text: "",
       idempotencyKey: input.idempotencyKey,
       ...(input.provenance ? { provenance: input.provenance } : {}),
-      ...(input.shadow ? { shadow: true } : {}),
     });
   }
   const relaySender = isThirdPartyRelay(input.destination, input.attributeAs) ? input.attributeAs?.trim() : undefined;
-  return input.deliveries.enqueue({
+  return input.outbound.send({
     destination: relaySender ? { ...input.destination, relaySender } : input.destination,
     text: input.text,
     ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     idempotencyKey: input.idempotencyKey,
     ...(input.provenance ? { provenance: input.provenance } : {}),
-    ...(input.shadow ? { shadow: true } : {}),
   });
 }
 

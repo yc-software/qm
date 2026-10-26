@@ -21,8 +21,9 @@ import { defineHarness } from "../src/harness/harness.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
+import { scopeId, type Conversation, type Principal } from "../src/types.ts";
+import type { Item, NewItem } from "../src/sessions/items.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
@@ -69,31 +70,14 @@ function buildScenario(interruptAfterToolResult = false) {
         turns.push(turn.input);
         continued.push(turn.continueTurn);
         environments.push(turn.environment);
-        if (!turn.continueTurn)
-          await turn.emit({
-            type: "user",
-            payload: { text: turn.input },
-            scopeLabel: turn.scopeLabel,
-          });
+        if (!turn.continueTurn) await turn.emit({ kind: "UserMessage", text: turn.input });
         if (interruptAfterToolResult && turns.length === 1) {
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", callId: "c1", command: "ls" },
-            scopeLabel: turn.scopeLabel,
-          });
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "execute", callId: "c1", result: "a.txt" },
-            scopeLabel: turn.scopeLabel,
-          });
+          await turn.emit({ kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } });
+          await turn.emit({ kind: "ToolResult", tool: "execute", callId: "c1", text: "a.txt" });
           throw new Error("interrupted after recording a tool result");
         }
         const reply = "it runs on this conversation's computer";
-        await turn.emit({
-          type: "assistant",
-          payload: { text: reply },
-          scopeLabel: turn.scopeLabel,
-        });
+        await turn.emit({ kind: "AgentMessage", text: reply });
         return { reply, modelCalls: 1 };
       },
       async screenSecurity() {
@@ -129,7 +113,7 @@ function buildScenario(interruptAfterToolResult = false) {
       acl,
     }),
     acl,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
   });
   const input = (text: string, extra: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
     surface: "web",
@@ -139,10 +123,10 @@ function buildScenario(interruptAfterToolResult = false) {
     text,
     ...extra,
   });
-  const asks = async (): Promise<SessionEntry[]> => {
+  const asks = async (): Promise<Item[]> => {
     const session = (await sessions.getByThread(conversation.threadRef))!;
-    return (await sessions.getEntries(session.id, { limit: 200 })).filter(
-      (e) => e.type === "user" && String((e.payload as { text?: string }).text ?? "").startsWith(ASK),
+    return (await sessions.getItems(session.id, { limit: 200 })).filter(
+      (e) => e.kind === "UserMessage" && (e.text ?? "").startsWith(ASK),
     );
   };
   return { orchestrator, sessions, runs, turns, continued, environments, sandbox, input, asks };
@@ -196,17 +180,9 @@ test("a retry does not claim a later message's answer as its own", async () => {
   const mine = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
   const { lease } = await sessions.acquireLease(session.id);
-  const boundary = await sessions.append(lease!, {
-    type: "user",
-    payload: { text: ASK },
-    scopeLabel: session.scopeId,
-  });
-  await sessions.append(lease!, { type: "user", payload: { text: "a later ask" }, scopeLabel: session.scopeId });
-  await sessions.append(lease!, {
-    type: "assistant",
-    payload: { text: "answering the later ask" },
-    scopeLabel: session.scopeId,
-  });
+  const boundary = await sessions.append(lease!, { kind: "UserMessage", text: ASK });
+  await sessions.append(lease!, { kind: "UserMessage", text: "a later ask" });
+  await sessions.append(lease!, { kind: "AgentMessage", text: "answering the later ask" });
   await sessions.releaseLease(lease!);
   await runs.noteTurnUserSeq(mine.id, boundary.seq);
 
@@ -235,16 +211,13 @@ test("the replay does not need the session lease, so a busy session cannot reque
   }
 });
 
-async function seedTurn(
-  sessions: ReturnType<typeof buildScenario>["sessions"],
-  entries: Array<{ type: "user" | "assistant" | "tool_call" | "tool_result"; payload: Record<string, unknown> }>,
-): Promise<number> {
+async function seedTurn(sessions: ReturnType<typeof buildScenario>["sessions"], items: NewItem[]): Promise<number> {
   const session = await sessions.getOrCreateByThread(conversation.threadRef, "dm", "personal:U1");
   const { lease } = await sessions.acquireLease(session.id);
   let first = -1;
   try {
-    for (const e of entries) {
-      const appended = await sessions.append(lease!, { type: e.type, payload: e.payload, scopeLabel: session.scopeId });
+    for (const item of items) {
+      const appended = await sessions.append(lease!, item);
       if (first < 0) first = appended.seq;
     }
   } finally {
@@ -257,10 +230,10 @@ test("a steer mid-turn does not make an answered turn look unanswered", async ()
   const { orchestrator, sessions, runs, turns, input, asks } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
-    { type: "user", payload: { text: "also check the log", ts: "1", steered: true } },
-    { type: "assistant", payload: { text: "checked both" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } },
+    { kind: "SteeringMessage", text: "also check the log", body: { ts: "1" } },
+    { kind: "AgentMessage", text: "checked both" },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 
@@ -275,8 +248,8 @@ test("a turn that recorded no reply replays as silent, not as an empty answer", 
   const { orchestrator, sessions, runs, turns, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "assistant", payload: { text: "" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "AgentMessage", text: "" },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 
@@ -294,7 +267,7 @@ test("a resume whose recorded work ends at a tool result asks the harness to con
     /interrupted after recording a tool result/,
   );
   const original = (await asks())[0]!;
-  assert.ok((original.payload as { environmentSnapshot?: unknown }).environmentSnapshot);
+  assert.ok(original.body.environmentSnapshot);
   assert.match(environments[0]!, /## Where you are/);
 
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
@@ -330,8 +303,8 @@ test("a resume whose last tool call has no recorded result settles it and does n
   const { orchestrator, sessions, runs, turns, continued, input } = buildScenario();
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   const marker = await seedTurn(sessions, [
-    { type: "user", payload: { text: ASK } },
-    { type: "tool_call", payload: { tool: "execute", callId: "c1", command: "ls" } },
+    { kind: "UserMessage", text: ASK },
+    { kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } },
   ]);
   await runs.noteTurnUserSeq(run.id, marker);
 
@@ -339,11 +312,11 @@ test("a resume whose last tool call has no recorded result settles it and does n
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined], "the seeded turn has no recorded environment, so its context is sent");
   assert.equal(turns[0], "");
-  const settled = (await sessions.getEntries((await sessions.getByThread(conversation.threadRef))!.id)).find(
-    (e) => e.type === "tool_result",
+  const settled = (await sessions.getItems((await sessions.getByThread(conversation.threadRef))!.id)).find(
+    (e) => e.kind === "ToolResult",
   );
   assert.ok(settled);
-  assert.match(String((settled.payload as { result?: unknown }).result), /^\[system\] This call was interrupted/);
+  assert.match(String(settled.text), /^\[system\] This call was interrupted/);
 });
 
 test("a first attempt and a no-work retry are never asked to continue", async () => {

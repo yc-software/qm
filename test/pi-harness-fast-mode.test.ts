@@ -14,8 +14,7 @@ import {
 } from "../src/harness/pi-harness.ts";
 import type { PiHarnessOptions } from "../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type NewItem } from "../src/sessions/items.ts";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { defaultInteractiveThinkingLevel, getRequiredModel } from "../src/model/pi-models.ts";
 
@@ -378,7 +377,7 @@ async function runTurn(
       orgScopeId: "org:test" as HarnessTurnInput["orgScopeId"],
       runtime: { modelId, fastMode },
       ...(!gateway && modelId === ASTRA.id ? { providerKeys: { openai: "sk-openai-direct" } } : {}),
-      emit: async (entry: NewEntry) => ({ ...entry, seq: seq++, createdAt: Date.now() }) as unknown as SessionEntry,
+      emit: async (item: NewItem) => storedItem(item, { sessionId, seq: seq++, createdAt: Date.now() }),
       recordModelCall: () => {},
       recordLlmRequest: (rec: HarnessLlmRequestRecord) => {
         rows.push(rec);
@@ -550,9 +549,9 @@ test("compaction retries a refused summary on the configured fallback model", as
     const text = await harness.models.compactHistory!({
       session: { id: "compact-fallback" } as HarnessTurnInput["session"],
       history: [
-        { seq: 1, kind: "user", payload: { text: "hello" }, createdAt: 1 },
-        { seq: 2, kind: "assistant", payload: { text: "hi" }, createdAt: 2 },
-      ] as unknown as SessionEntry[],
+        storedItem({ kind: "UserMessage", text: "hello" }, { sessionId: "compact-fallback", seq: 1, createdAt: 1 }),
+        storedItem({ kind: "AgentMessage", text: "hi" }, { sessionId: "compact-fallback", seq: 2, createdAt: 2 }),
+      ],
       recordModelCall: () => {},
     });
     assert.match(text, /summary of the work/);

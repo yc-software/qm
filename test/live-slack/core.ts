@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import type { Item } from "../../src/sessions/items.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
@@ -97,7 +98,7 @@ export class CoreClient {
     return this.request("GET", `/v1/admin/sessions?scope=${encodeURIComponent(this.orgScope)}&limit=200`);
   }
 
-  getSession(id: string): Promise<{ session: { threadRef?: string; scopeId?: string }; entries: unknown[] }> {
+  getSession(id: string): Promise<{ session: { threadRef?: string; scopeId?: string }; items: Item[] }> {
     return this.request(
       "GET",
       `/v1/admin/sessions/${encodeURIComponent(id)}?scope=${encodeURIComponent(this.orgScope)}`,
@@ -150,13 +151,13 @@ export class CoreClient {
     if (!res.ok) throw new Error(`core DELETE /v1/crons/${cron.id}: ${res.status}`);
   }
 
-  async findSessionByThread(channel: string, rootTs?: string): Promise<{ id: string; entries: unknown[] } | null> {
+  async findSessionByThread(channel: string, rootTs?: string): Promise<{ id: string; items: Item[] } | null> {
     const wanted = rootTs ? `ch:${channel}:${rootTs}` : `dm:${channel}`;
     const { sessions } = await this.listSessions();
     for (const s of sessions) {
       try {
         const full = await this.getSession(s.id);
-        if (full.session?.threadRef === wanted) return { id: s.id, entries: full.entries };
+        if (full.session?.threadRef === wanted) return { id: s.id, items: full.items };
       } catch {
         void 0;
       }

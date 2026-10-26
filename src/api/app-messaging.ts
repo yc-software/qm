@@ -8,7 +8,7 @@ import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { randomUUID } from "node:crypto";
 import {
-  reachEnqueue,
+  reachPost,
   withSlackUnfurlOption,
   withReact,
   withDelete,
@@ -80,8 +80,7 @@ export function createMessagingMethods(
   | "listWebhookEvents"
   | "setWebhookEnabled"
   | "updateWebhook"
-  | "pendingDeliveries"
-  | "enqueueDelivery"
+  | "postToSurface"
   | "ingestSurfaceEvents"
   | "searchSurface"
   | "readSurfaceMessages"
@@ -96,8 +95,6 @@ export function createMessagingMethods(
   | "deleteContextRequest"
   | "pendingContextRequests"
   | "fulfillContextRequest"
-  | "ackDelivery"
-  | "ackDeliveryByKey"
   | "setRunDeliveryState"
   | "upsertDirectory"
   | "upsertChannels"
@@ -116,7 +113,6 @@ export function createMessagingMethods(
   | "cronAdminUrl"
   | "channelName"
   | "ambientJudge"
-  | "recordPrincipalDelivery"
   | "reachNow"
   | "resolveReachTarget"
 > {
@@ -306,11 +302,8 @@ export function createMessagingMethods(
     updateWebhook(id, patch) {
       return deps.webhooks.update(id, patch);
     },
-    pendingDeliveries(type, claimMs) {
-      return claimMs && claimMs > 0 ? deps.deliveries.claimPending(type, claimMs) : deps.deliveries.pending(type);
-    },
-    async enqueueDelivery(input) {
-      await deps.deliveries.enqueue(input);
+    async postToSurface(input) {
+      await deps.outbound.send(input);
     },
     async ingestSurfaceEvents(events, surface = "slack", self) {
       if (!deps.surfaceCache || !events.length) return { upserted: 0 };
@@ -413,16 +406,8 @@ export function createMessagingMethods(
       );
       return merged != null;
     },
-    async ackDelivery(id, slackApiMs) {
-      await deps.deliveries.ack(id, Date.now(), slackApiMs);
-    },
-    async ackDeliveryByKey(idempotencyKey) {
-      await deps.deliveries.ackByKey(idempotencyKey, Date.now());
-    },
-    async setRunDeliveryState(runId, state) {
-      const found = await deps.runs.setDeliveryState(runId, null, state);
-      if (found && state.editRef) await deps.deliveries.setEditRefByKey(`run:${runId}`, state.editRef);
-      return found;
+    setRunDeliveryState(runId, state) {
+      return deps.runs.setDeliveryState(runId, null, state);
     },
 
     async upsertDirectory(members, syncedAt) {
@@ -527,22 +512,6 @@ export function createMessagingMethods(
       return chan ? `#${chan.name.replace(/^#/, "")}` : undefined;
     },
     ...(deps.ambientJudge ? { ambientJudge: deps.ambientJudge } : {}),
-    async recordPrincipalDelivery(deliveryId, recipientThreadRef) {
-      const delivery = await deps.deliveries.get(deliveryId);
-      if (!delivery || delivery.destination.type !== "principal") return;
-      const recipientId = delivery.destination.target;
-      const recipientScope = scopeId("personal", recipientId);
-      const session = await deps.sessions.getOrCreateByThread(
-        recipientThreadRef,
-        "dm",
-        recipientScope,
-        undefined,
-        "slack",
-      );
-      await deps.deliveries.recordRecipientThread(delivery.id, recipientThreadRef, Date.now());
-      await deps.sessions.addParticipant(session.id, recipientId);
-    },
-
     async reachNow(input): Promise<ReachNowResult> {
       const hasNamedTarget =
         input.recipient !== undefined || input.channel !== undefined || input.participants !== undefined;
@@ -594,14 +563,15 @@ export function createMessagingMethods(
         baseDestination = withThread(baseDestination, input.threadTs);
       }
       const sender = await deps.directory.get(input.senderId).catch(() => null);
-      const delivery = await reachEnqueue({
-        deliveries: deps.deliveries,
+      const idempotencyKey = `reach:${randomUUID()}`;
+      await reachPost({
+        outbound: deps.outbound,
         destination: withDelete(
           withReact(withSlackUnfurlOption(baseDestination, input.unfurlLinks), input.react),
           input.delete,
         ),
         text: input.text ?? "",
-        idempotencyKey: `reach:${randomUUID()}`,
+        idempotencyKey,
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(!input.react && !input.delete && sender?.displayName ? { attributeAs: sender.displayName } : {}),
       });
@@ -609,10 +579,10 @@ export function createMessagingMethods(
         at: Date.now(),
         principalId: input.senderId,
         action: "reach_now",
-        resource: delivery.id,
+        resource: idempotencyKey,
         scopeLabel: input.senderScope,
       });
-      return { ok: true, delivery, ...extra };
+      return { ok: true, ...extra };
     },
 
     resolveReachTarget(target, authorityId, opts) {

@@ -1173,8 +1173,8 @@ for (const surfaceTools of [false, true]) {
         ...base.turns,
         runTurn: async (turn) => {
           seen.push(turn);
-          await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-          await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
+          await turn.emit({ kind: "UserMessage", text: turn.input });
+          await turn.emit({ kind: "AgentMessage", text: "ok" });
           return { reply: "ok" };
         },
       },
@@ -1195,10 +1195,10 @@ for (const surfaceTools of [false, true]) {
     assert.doesNotMatch(seen[2]!.environment!, /ALPHA_MARKER/);
     assert.match(seen[2]!.environment!, /GAMMA_MARKER/);
     assert.match(seen[2]!.environment!, /\nU1: 1 earlier fact was consolidated or removed/);
-    const entries = await sessions.getEntries(first.sessionId!);
-    const users = entries.filter((entry) => entry.type === "user");
-    assert.match(JSON.stringify(users[0]!.payload), /memoryRecall/);
-    assert.doesNotMatch(JSON.stringify(users[1]!.payload), /ALPHA_MARKER|BETA_MARKER/);
+    const entries = await sessions.getItems(first.sessionId!);
+    const users = entries.filter((entry) => entry.kind === "UserMessage");
+    assert.match(JSON.stringify(users[0]!.body), /memoryRecall/);
+    assert.doesNotMatch(JSON.stringify(users[1]!.body), /ALPHA_MARKER|BETA_MARKER/);
   });
 }
 
@@ -1216,7 +1216,7 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
   const input = dm("dm:U1:snapshot-cache", "hello");
   const first = await orchestrator.handleTurn(input);
   assert.equal(first.status, "ok");
-  const originalHistory = await sessions.getEntries(first.sessionId!);
+  const originalHistory = await sessions.getItems(first.sessionId!);
   const cron = await crons.create({
     owner: actor.id,
     createdBy: actor.id,
@@ -1249,7 +1249,7 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
   assert.match(seen[3]!.environment!, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[3]!.environment!, /Other Linux|synthetic status|No active scheduled work/);
   assert.deepEqual(seen[1]!.history, originalHistory);
-  assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
+  assert.deepEqual((await sessions.getItems(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
 });
 
 test("connector revocation refreshes the environment without treating historical inventories as authority", async () => {

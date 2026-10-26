@@ -402,7 +402,7 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
   }
 });
 
-test("pg map: webhook history retains concurrent deliveries across store instances", { skip }, async () => {
+test("pg map: webhook history retains concurrent outbound across store instances", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const makeStore = () =>
     createWebhookStore(factory.map<Webhook>("map_webhooks"), factory.map<WebhookHistory>("map_webhook_history"));

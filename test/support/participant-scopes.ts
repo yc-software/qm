@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import type { ScopeId, SpawnMeta } from "../../src/types.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
 
-async function appendUser(store: SessionStore, sessionId: string, scope: ScopeId, text: string): Promise<void> {
+async function appendUser(store: SessionStore, sessionId: string, text: string): Promise<void> {
   const { lease } = await store.acquireLease(sessionId);
   assert.ok(lease);
-  await store.append(lease, { type: "user", payload: { text }, scopeLabel: scope });
+  await store.append(lease, { kind: "UserMessage", text });
   await store.releaseLease(lease);
 }
 
@@ -13,7 +13,7 @@ export async function assertLateJoinerScopes(store: SessionStore, prefix: string
   const scope = `channel:${prefix}-C1` as ScopeId;
   const session = await store.getOrCreateByThread(`slack:${prefix}-C1:1`, "channel", scope, "eng");
   await store.addParticipant(session.id, `${prefix}-early`);
-  await appendUser(store, session.id, scope, "before the late joiner");
+  await appendUser(store, session.id, "before the late joiner");
   await store.addParticipant(session.id, `${prefix}-late`);
 
   const [early] = await store.participantScopes(`${prefix}-early`);
@@ -28,7 +28,7 @@ export async function assertLateJoinerScopes(store: SessionStore, prefix: string
   ]);
   assert.equal((await store.getForParticipant(session.id, `${prefix}-late`))?.hasEntries, false);
 
-  await appendUser(store, session.id, scope, "after the late joiner");
+  await appendUser(store, session.id, "after the late joiner");
   const [late] = await store.participantScopes(`${prefix}-late`);
   assert.equal(late?.sessionCount, 1, "the late joiner counts the session once it has something they can see");
 }

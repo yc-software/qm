@@ -126,6 +126,7 @@ export interface Config {
   backgroundJobTtlMs: number;
   sandboxCapabilityTtlMs: number;
   backgroundJobTtlMaxMs: number;
+  roles: QmRole[];
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
   deploymentControlSecret?: string;
@@ -990,6 +991,39 @@ export function numEnv(value: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+const QM_ROLES = ["api", "surfaces", "harness"] as const;
+type QmRole = (typeof QM_ROLES)[number];
+
+function rolesFromEnv(value: string | undefined): QmRole[] {
+  if (value === undefined || value.trim() === "") return [...QM_ROLES];
+  const roles = [
+    ...new Set(
+      value
+        .split(",")
+        .map((role) => role.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  const unknown = roles.filter((role) => !(QM_ROLES as readonly string[]).includes(role));
+  if (unknown.length || !roles.length)
+    throw new Error(
+      `QM_ROLES=${JSON.stringify(value)} must list one or more of ${QM_ROLES.join(", ")}, comma-separated.`,
+    );
+  return roles as QmRole[];
+}
+
+function backgroundWorkFor(roles: readonly QmRole[], env: NodeJS.ProcessEnv): boolean {
+  if (roles.includes("surfaces") && !roles.includes("harness"))
+    throw new Error(
+      "QM_ROLES with surfaces needs harness too: Slack sending and context reads run in the process that runs turns.",
+    );
+  const explicit = boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED);
+  if (roles.includes("harness")) return explicit ?? CONFIG_DEFAULTS.backgroundWorkEnabled;
+  if (explicit)
+    throw new Error("BACKGROUND_WORK_ENABLED=1 needs the harness role; add harness to QM_ROLES or unset it.");
+  return false;
+}
+
 function boolEnvStrict(name: string, value: string | undefined): boolean | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const parsed = boolEnv(value);
@@ -1199,6 +1233,9 @@ function resolveStoreKinds(env: NodeJS.ProcessEnv): Pick<Config, "sessionStore" 
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const roles = rolesFromEnv(env.QM_ROLES);
+  if (roles.length < QM_ROLES.length && env.BACKGROUND_DEPLOYMENT_ID)
+    throw new Error("QM_ROLES cannot split roles while BACKGROUND_DEPLOYMENT_ID is set; unset one of them.");
   const token = env.SPEND_EXPORT_TOKEN;
   if (token) {
     const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
@@ -1582,8 +1619,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     backgroundJobTtlMaxMs:
       (numEnvStrict("BACKGROUND_JOB_TTL_MAX_SEC", env.BACKGROUND_JOB_TTL_MAX_SEC) ??
         CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
-    backgroundWorkEnabled:
-      boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
+    roles,
+    backgroundWorkEnabled: backgroundWorkFor(roles, env),
     ...(env.BACKGROUND_DEPLOYMENT_ID
       ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
       : {}),

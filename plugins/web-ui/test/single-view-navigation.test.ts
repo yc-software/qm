@@ -25,7 +25,7 @@ const env = await browserEnv({
     if (path.endsWith("/approvals")) return Response.json({ approvals: [] });
     if (path.startsWith("/api/sessions?")) return Response.json({ sessions: known });
     const id = path.match(/^\/api\/sessions\/([^/?]+)/)?.[1];
-    if (id) return Response.json({ session: known.find((s) => s.id === id), entries: [] });
+    if (id) return Response.json({ session: known.find((s) => s.id === id), items: [] });
     return Response.json({ contexts: [], items: [], crons: [] });
   },
 });

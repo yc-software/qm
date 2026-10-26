@@ -5,8 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildTestApp, type TestApp } from "./support/test-app.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -47,8 +46,10 @@ function claims(
   };
 }
 
-function setup(): { built: BuiltApp; control: ControlService } {
-  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET }));
+function setup(): { built: TestApp; control: ControlService } {
+  const built = buildTestApp(
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET }),
+  );
   const control = createControlService(built.app, built.scheduler, built.admin);
   return { built, control };
 }
@@ -338,7 +339,7 @@ test("a recurring cron addressed to a teammate targets them directly and sends n
   );
   assert.ok(r.ok, JSON.stringify(r));
   assert.equal(r.cron.destination?.target, "U2");
-  assert.equal((await built.deliveries.pending("principal")).length, 0);
+  assert.equal((await built.posts.pending("principal")).length, 0);
 });
 
 test("a recurring teammate cron stops delivering once the recipient is no longer an addressable teammate", async () => {
@@ -354,7 +355,7 @@ test("a recurring teammate cron stops delivering once the recipient is no longer
   assert.ok(r.ok, JSON.stringify(r));
   await runNowSettled(built.scheduler, r.cron.id);
   assert.deepEqual(
-    (await built.deliveries.pending("principal")).map((d) => [d.destination.target, d.text]),
+    (await built.posts.pending("principal")).map((d) => [d.destination.target, d.text]),
     [["U2", "standup notes are due"]],
   );
   await built.app.upsertDirectory([
@@ -362,7 +363,7 @@ test("a recurring teammate cron stops delivering once the recipient is no longer
     { principalId: "U2", displayName: "Bob", type: "guest" },
   ]);
   await runNowSettled(built.scheduler, r.cron.id);
-  assert.equal((await built.deliveries.pending("principal")).length, 1);
+  assert.equal((await built.posts.pending("principal")).length, 1);
   assert.equal((await built.crons.listFires(r.cron.id)).runs.at(-1)?.status, "refused");
 });
 

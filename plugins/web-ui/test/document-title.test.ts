@@ -116,7 +116,7 @@ test("document title follows session switches, split-pane focus, and sign-out", 
         modelCatalog: {},
         effective: { harnessId: "pi", modelId: "" },
         session,
-        entries: [],
+        items: [],
         sessions: sessionsState.list,
         contexts: [],
       });

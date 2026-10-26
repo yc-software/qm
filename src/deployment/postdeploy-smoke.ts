@@ -189,7 +189,7 @@ export async function checkLiveSession(
     const titleSignal = (timing.timeout ?? AbortSignal.timeout)(60_000);
     let persisted = (await request("GET", sessionPath, undefined, false, titleSignal)) as {
       session?: { title?: string | null };
-      entries?: Array<{ type?: string }>;
+      items?: Array<{ kind?: string; variant?: string | null }>;
     };
     while (!persisted.session?.title?.trim() && timing.now() < titleDeadline && !titleSignal.aborted) {
       await timing.sleep(Math.min(500, titleDeadline - timing.now()));
@@ -198,9 +198,9 @@ export async function checkLiveSession(
     }
     if (timing.now() >= titleDeadline || titleSignal.aborted || !persisted.session?.title?.trim())
       throw new Error("live session has no generated title");
-    if (!persisted.entries?.some((entry) => entry.type === "user"))
+    if (!persisted.items?.some((item) => item.kind === "UserMessage"))
       throw new Error("live session has no persisted user turn");
-    if (!persisted.entries.some((entry) => entry.type === "assistant")) {
+    if (!persisted.items.some((item) => item.kind === "AgentMessage" && !item.variant)) {
       throw new Error("live session has no persisted assistant turn");
     }
 

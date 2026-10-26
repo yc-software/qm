@@ -5,13 +5,9 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createApp, type AppDeps } from "../src/api/app.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -21,7 +17,7 @@ const SECRET = "dm-relay-secret".repeat(3);
 describe("agent → teammate DM: the cron recipient route (§10)", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: ReturnType<typeof buildTestApp>;
 
   const capDm = async (actorId: string) =>
     await mintCapabilityToken(
@@ -47,7 +43,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     });
 
   before(async () => {
-    built = buildApp(
+    built = buildTestApp(
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "dm-relay-")),
         signingSecret: SECRET,
@@ -320,16 +316,14 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     );
     assert.equal(res.status, 200);
     const body = (await res.json()) as any;
-    assert.ok(body.deliveryId, "returns the enqueued delivery id");
     assert.equal(body.recipient.principalId, "U-alice");
     assert.equal(body.recipient.displayName, "Alice");
     const after = (await (
       await fetch(`${base}/v1/crons`, { headers: { "x-agent-capability": await capDm("U-carol") } })
     ).json()) as any;
     assert.equal((after.crons ?? []).length, (before.crons ?? []).length);
-    const pending = await built.app.pendingDeliveries("principal");
-    const d = pending.find((x) => x.id === body.deliveryId);
-    assert.ok(d, "delivery is in the principal queue");
+    const d = (await built.posts.pending("principal")).at(-1);
+    assert.ok(d, "posted to the principal surface");
     assert.equal(d!.text, "ship it 🚀");
     assert.equal(d!.destination.relaySender, "Carol");
     assert.equal(d!.destination.onBehalfOf, "U-carol");
@@ -344,8 +338,8 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as any;
     assert.equal(body.channel.channelId, "C-eng");
-    const d = (await built.app.pendingDeliveries("slack")).find((x) => x.id === body.deliveryId);
-    assert.ok(d, "delivery is in the channel queue");
+    const d = (await built.posts.pending("slack")).at(-1);
+    assert.ok(d, "posted to the channel");
     assert.equal(d!.text, "heads up team");
     assert.equal(d!.destination.unfurlLinks, false);
   });
@@ -359,9 +353,8 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     assert.equal(res.status, 200);
     const body = (await res.json()) as any;
     assert.equal(body.group.groupId, "G-jrs");
-    const pending = await built.app.pendingDeliveries("group");
-    const d = pending.find((x) => x.id === body.deliveryId);
-    assert.ok(d, "delivery is in the group queue");
+    const d = (await built.posts.pending("group")).at(-1);
+    assert.ok(d, "posted to the group DM");
     assert.equal(d!.text, "heads up");
     assert.equal(d!.destination.relaySender, "Carol");
     assert.equal(d!.destination.type, "group");
@@ -399,14 +392,22 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
 });
 
 describe("agent → teammate DM: delivery events in the recipient's session (anti-amnesia, §10)", () => {
-  it("records a recipient delivery event without appending a normal assistant turn", async () => {
-    const deliveries = createDeliveryStore();
-    const sessions = createMemorySessionStore();
-    const directory = createDirectoryStore();
-    await directory.replace([{ principalId: "U-carol", displayName: "Carol", type: "internal" }]);
-    const app = createApp({ deliveries, sessions, directory } as unknown as AppDeps);
+  const slackDm = () => {
+    const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dm-relay-events-")) }));
+    built.outbound.register(["principal", "slack"], async () => ({ recipientThreadRef: "dm:D-alice" }));
+    return built;
+  };
+  const settle = async (check: () => Promise<boolean>) => {
+    for (let i = 0; i < 100 && !(await check()); i++) await new Promise((r) => setTimeout(r, 5));
+  };
 
-    const d = await deliveries.enqueue({
+  it("records a recipient delivery event without appending a normal assistant turn", async () => {
+    const built = slackDm();
+    await built.app.upsertDirectory([
+      { principalId: "U-carol", displayName: "Carol", type: "internal" },
+      { principalId: "U-alice", displayName: "Alice", type: "internal" },
+    ]);
+    await built.outbound.send({
       destination: {
         type: "principal",
         target: "U-alice",
@@ -427,38 +428,41 @@ describe("agent → teammate DM: delivery events in the recipient's session (ant
       },
     });
 
-    await app.recordPrincipalDelivery(d.id, "dm:D-alice");
-
-    const session = await sessions.getByThread("dm:D-alice");
+    await settle(async () => {
+      const s = await built.sessions.getByThread("dm:D-alice");
+      return !!s && (await built.sessions.participantsOf(s.id)).includes("U-alice");
+    });
+    const session = await built.sessions.getByThread("dm:D-alice");
     assert.ok(session, "recipient DM session created");
     assert.equal(session!.surface, "slack");
-    const entries = await sessions.getEntries(session!.id);
+    assert.ok((await built.sessions.participantsOf(session!.id)).includes("U-alice"));
     assert.equal(
-      entries.some((e) => e.type === "assistant"),
+      (await built.sessions.getItems(session!.id)).some((e) => e.kind === "AgentMessage"),
       false,
       "principal delivery is not fake chat history",
     );
-    const events = await deliveries.listByRecipientThread("dm:D-alice");
-    assert.equal(events.length, 1);
-    assert.equal(events[0]!.text, "the deploy is done");
-    assert.equal(events[0]!.destination.onBehalfOf, "U-carol");
-    assert.equal(events[0]!.recipientThreadRef, "dm:D-alice");
-    assert.equal(events[0]!.provenance?.fireKey, "cron:c1:slot");
-    assert.equal(events[0]!.provenance?.sourceUserSeq, 0);
-    assert.equal(events[0]!.provenance?.sourceAssistantEntrySeq, 1);
+
+    await new Promise((r) => setTimeout(r, 20));
+    await built.app.turn({
+      surface: "test",
+      actor: { externalId: "U-alice" },
+      conversation: { kind: "dm", threadRef: "dm:D-alice" },
+      text: "what was that?",
+    });
+    const latest = (await built.sessions.listLlmRequests(session!.id)).at(-1) as any;
+    const footer = latest.promptEnvelope.messages.at(-1).content;
+    assert.match(footer, /Delivered here since the user's last message/);
+    assert.match(footer, /\[cron\] from U-carol: the deploy is done/);
   });
 
   it("is a no-op for a non-principal delivery", async () => {
-    const deliveries = createDeliveryStore();
-    const sessions = createMemorySessionStore();
-    const directory = createDirectoryStore();
-    const app = createApp({ deliveries, sessions, directory } as unknown as AppDeps);
-    const d = await deliveries.enqueue({
+    const built = slackDm();
+    await built.outbound.send({
       destination: { type: "slack", target: "C1" },
       text: "hi channel",
       idempotencyKey: "k2",
     });
-    await app.recordPrincipalDelivery(d.id, "dm:D-alice");
-    assert.equal(await sessions.getByThread("dm:D-alice"), null);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(await built.sessions.getByThread("dm:D-alice"), null);
   });
 });
