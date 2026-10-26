@@ -66,6 +66,14 @@ test("approving an ask from a Slack group thread resumes it when external Slack 
     text: "needs github",
   } as TurnRequest);
   assert.equal(seeded.status, "ok", JSON.stringify(seeded));
+  const direct = await b.app.turn({
+    surface: "web",
+    actor: { externalId: "U_BOB" },
+    triggered: true,
+    conversation: { kind: "group", channelRef: "G1", threadRef, audience: [{ externalId: "U_BOB" }] },
+    text: "resume",
+  } as TurnRequest);
+  assert.equal(direct.status, "refused");
   const ask = await askFrom(b, "group:G1", threadRef, {
     type: "slack",
     target: "G1:1700000000.000100",
@@ -76,12 +84,12 @@ test("approving an ask from a Slack group thread resumes it when external Slack 
   let resumed;
   for (let i = 0; i < 400 && !resumed; i++) {
     await new Promise((r) => setTimeout(r, 25));
-    assert.ok(!(await b.deliveries.pending("slack")).some((d) => d.idempotencyKey === fallbackKey));
     resumed = (await b.runs.list({ threadRef })).find(
       (r) => r.request.surface === "keychain-ask" && r.status === "done",
     );
   }
   assert.equal(resumed?.request.slackSource?.accountId, "default");
+  assert.ok(!(await b.deliveries.pending("slack")).some((d) => d.idempotencyKey === fallbackKey));
 });
 
 test("a thread from a Slack account with an external policy still refuses triggered resumes", async (t) => {

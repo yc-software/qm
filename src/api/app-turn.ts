@@ -107,11 +107,6 @@ export function createTurnMethods(
       const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
         ? (await deps.sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
         : false;
-      const priorSlackSource =
-        historicalSlack && req.triggered && !req.slackSource
-          ? (await deps.runs.latestForThread(req.conversation.threadRef))?.request.slackSource
-          : undefined;
-      if (priorSlackSource) req = { ...req, slackSource: priorSlackSource };
       if (!externalSlackRequestAllowed(req, deps.externalSlackPolicies, historicalSlack))
         return {
           status: "refused",
