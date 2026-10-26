@@ -517,6 +517,24 @@ test("recovery snapshots follow the native interval and supersede the previous c
   assert.deepEqual(fake.snapshots(), [], "destroying the scope deletes its snapshot");
 });
 
+test("a job computer on native E2B gets no recovery snapshot and no portable checkpoint", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const counting = instrumentedSnapshotStore();
+  const s = make({
+    client: { ...fake.client, nativePause: true },
+    store,
+    snapshots: counting.store,
+    nativeSnapshotIntervalMs: 0,
+  });
+  const jobScope = "job-1234";
+  const h = await s.provision([{ scopeId: jobScope, mountPath: "/", mode: "rw" }]);
+  await s.teardown(h);
+  await s.teardown(await s.provision([{ scopeId: jobScope, mountPath: "/", mode: "rw" }]), { keepWarm: true });
+  assert.deepEqual(fake.snapshots(), []);
+  assert.equal(counting.puts(), 0);
+  assert.equal((await store.get(jobScope))?.recoverySnapshotId, undefined);
+});
+
 test("legacy keepWarm teardown still takes its portable checkpoint", async () => {
   const counting = instrumentedSnapshotStore();
   const s = make({ snapshots: counting.store });

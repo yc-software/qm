@@ -33,7 +33,13 @@ import {
   type ManagedAgentsSessionInfo,
   type ManagedAgentsSession,
 } from "./managed-agents-client.ts";
-import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  HOME_SNAPSHOT_PRUNE,
+  isJobComputerScope,
+  snapshotDue,
+  type HomeSnapshotStore,
+} from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
@@ -157,6 +163,7 @@ export function createManagedAgentsSandbox(workspace: WorkspaceStore, opts: Mana
   }
 
   async function captureCheckpoint(scope: string, session: ManagedAgentsSession): Promise<void> {
+    if (isJobComputerScope(scope)) return;
     const stored = await store.get(scope);
     const previous = stored?.checkpointId;
     const captured = await session.createCheckpoint(CHECKPOINT_LABEL);
