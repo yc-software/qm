@@ -2680,6 +2680,11 @@ const apiRoutes: readonly WebRoute[] = [
       const resolved = await resolveWebConversation(user, threadRef, scope, channelName);
       if ("error" in resolved) return json(res, 403, resolved);
 
+      // Core folds surfaceBriefing into conversationHeader, which this route strips from browser
+      // bodies on purpose. On a shared thread that would put one person's page state into history
+      // every member reads, so both fields ride only the caller's own thread.
+      const ownThread = threadRef.startsWith(ownPrefix);
+
       const turn = {
         ...(await webTurnBase(req, user, resolved.conversation, threadRef, text)),
         ...(harness ? { harness } : {}),
@@ -2687,8 +2692,8 @@ const apiRoutes: readonly WebRoute[] = [
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         ...(timezone ? { timezone } : {}),
-        ...(clientTools ? { clientTools } : {}),
-        ...(surfaceBriefing !== undefined ? { surfaceBriefing } : {}),
+        ...(ownThread && clientTools ? { clientTools } : {}),
+        ...(ownThread && surfaceBriefing !== undefined ? { surfaceBriefing } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(approval ? { approval } : {}),
         ...(proactiveOpener ? { proactiveOpener: true } : {}),

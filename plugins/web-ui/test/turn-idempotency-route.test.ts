@@ -152,7 +152,7 @@ test("a turn that drops clientTools leaves the embedder's tools unreachable", as
 });
 
 test("a turn that drops surfaceBriefing leaves the surface's context unsent", async () => {
-  const surfaceBriefing = { name: "Panel", instructions: "Be brief", state: { page: "inbox" } };
+  const surfaceBriefing = { name: "Panel", instructions: "Be brief", state: "URL: /inbox" };
   assert.equal((await postTurn({ surfaceBriefing })).status, 202);
   assert.deepEqual(turns.at(-1)?.surfaceBriefing, surfaceBriefing);
 });
@@ -173,6 +173,23 @@ test("a proxy that swallows core's 400 hides which surfaceBriefing field is malf
   const response = await postTurn({ surfaceBriefing: { instructions: "x" } });
   assert.equal(response.status, 400);
   assert.match(((await response.json()) as { error: string }).error, /surfaceBriefing\.name/);
+});
+
+test("a shared thread that carried a briefing would put one person's page into everyone's history", async () => {
+  const response = await fetch(`${base}/api/turn`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      text: "hello",
+      threadRef: "web:bob:app-edit:sample-app",
+      clientTools: [{ name: "ui__scroll", description: "Scroll", inputSchema: { type: "object" } }],
+      surfaceBriefing: { name: "Panel", state: "URL: /inbox" },
+    }),
+  });
+
+  assert.equal(response.status, 202);
+  assert.equal(turns.at(-1)?.surfaceBriefing, undefined);
+  assert.equal(turns.at(-1)?.clientTools, undefined);
 });
 
 test("a turn that skips an empty clientTools array makes the embedder's declaration vanish", async () => {
