@@ -6,7 +6,6 @@ import {
   APPROVAL_ACTION_IDS,
   type ApprovalActionId,
   type StoredApproval,
-  approvalDecisionContext,
   approvalDecisionMessage,
   approvalMessage,
   clip,
@@ -373,7 +372,7 @@ export function createApprovals(deps: {
             cardChannel,
             messageTs,
             reply,
-            replyBlocks.length < 50 ? [...replyBlocks, approvalDecisionContext(ctx, decided)] : undefined,
+            replyBlocks.length < 48 ? [...replyBlocks, ...approvalDecisionMessage(ctx, decided).blocks] : undefined,
           );
         }
         if (result.attachments?.length) {

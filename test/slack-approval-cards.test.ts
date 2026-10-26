@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  approvalDecisionContext,
   approvalDecisionMessage,
   approvalMessage,
   approvalCardDestination,
@@ -404,12 +403,4 @@ test("the decision card names who decided and what, with the arguments in a cont
   );
   assert.match((shell.blocks[0] as any).text.text, /^:white_check_mark: Allowed always by <@U2> · `rm -rf build` · /);
   assert.equal(shell.blocks.length, 1, "a short command needs no detail line");
-
-  const replyContext = approvalDecisionContext(catalogCall, { decision: "once", by: "U2", at, state: "done" }) as any;
-  assert.equal(replyContext.type, "context");
-  assert.match(
-    replyContext.elements[0].text,
-    /^:white_check_mark: Allowed once by <@U2> · ycli · `calendar_create_event` · /,
-  );
-  assert.equal(replyContext.elements[1].text, context.elements[0].text);
 });

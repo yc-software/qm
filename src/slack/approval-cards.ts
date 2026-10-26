@@ -1,5 +1,5 @@
 import { clip, inlineCode } from "./util.ts";
-import { slackSectionBlocks } from "./mrkdwn.ts";
+import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
@@ -57,7 +57,6 @@ interface ToolCallView {
   args: Record<string, unknown>;
 }
 
-const TOOL_CALL_COMMAND = /^(\S+(?: [a-z_]+)?) (\{[\s\S]*\})$/;
 const ARG_VALUE_MAX = 500;
 const DECISION_SUBJECT_MAX = 150;
 const DECISION_DETAIL_MAX = 1_500;
@@ -67,23 +66,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function toolCallView(p: { command: string; summary?: string; kind?: string }): ToolCallView | null {
-  if (p.kind === "input" || !p.summary) return null;
-  const match = TOOL_CALL_COMMAND.exec(p.command);
-  if (!match || match[1] !== p.summary) return null;
+  if (p.kind === "input" || !p.summary || !p.command.startsWith(`${p.summary} {`)) return null;
   let params: unknown;
   try {
-    params = JSON.parse(match[2]!);
+    params = JSON.parse(p.command.slice(p.summary.length + 1));
   } catch {
     return null;
   }
   if (!isRecord(params)) return null;
   if (params.operation === "invoke" && typeof params.tool === "string" && isRecord(params.arguments ?? {}))
-    return { label: match[1], tool: params.tool, args: (params.arguments ?? {}) as Record<string, unknown> };
-  return { label: match[1], args: params };
-}
-
-function escapeMrkdwn(text: string): string {
-  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    return { label: p.summary, tool: params.tool, args: (params.arguments ?? {}) as Record<string, unknown> };
+  return { label: p.summary, args: params };
 }
 
 function argText(value: unknown): string {
@@ -94,15 +87,15 @@ function argLines(args: Record<string, unknown>): string[] {
   return Object.entries(args).map(([key, value]) => {
     const text = clip(argText(value), ARG_VALUE_MAX);
     return text.includes("\n")
-      ? `${escapeMrkdwn(key)}:\n\`\`\`${escapeMrkdwn(text.replace(/`/g, "'"))}\`\`\``
-      : `${escapeMrkdwn(key)}: ${inlineCode(escapeMrkdwn(text))}`;
+      ? `${escapeSlackText(key)}:\n\`\`\`${escapeSlackText(text.replace(/`/g, "'"))}\`\`\``
+      : `${escapeSlackText(key)}: ${inlineCode(escapeSlackText(text))}`;
   });
 }
 
 function toolTitle(view: ToolCallView): string {
   return view.tool
-    ? `${escapeMrkdwn(view.label)} · ${inlineCode(escapeMrkdwn(view.tool))}`
-    : inlineCode(escapeMrkdwn(view.label));
+    ? `${escapeSlackText(view.label)} · ${inlineCode(escapeSlackText(view.tool))}`
+    : inlineCode(escapeSlackText(view.label));
 }
 
 export function approvalMessage(approvals: readonly PendingApproval[]): SlackApprovalMessage {
@@ -208,7 +201,7 @@ function approvalDecisionDetail(p: { command: string; summary?: string; kind?: s
     const entries = Object.entries(view.args);
     if (!entries.length) return null;
     return clip(
-      entries.map(([key, value]) => `${escapeMrkdwn(key)}: ${escapeMrkdwn(argText(value))}`).join(" · "),
+      entries.map(([key, value]) => `${escapeSlackText(key)}: ${escapeSlackText(argText(value))}`).join(" · "),
       DECISION_DETAIL_MAX,
     );
   }
@@ -227,20 +220,6 @@ export function approvalDecisionMessage(
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: clip([line, ...extra].join("\n"), 2900) } },
       ...(detail ? [{ type: "context", elements: [{ type: "mrkdwn", text: detail }] }] : []),
-    ],
-  };
-}
-
-export function approvalDecisionContext(
-  p: { command: string; summary?: string; kind?: string },
-  record: ApprovalDecisionRecord,
-): Record<string, unknown> {
-  const detail = approvalDecisionDetail(p);
-  return {
-    type: "context",
-    elements: [
-      { type: "mrkdwn", text: clip(approvalDecisionLine(p, record), 2900) },
-      ...(detail ? [{ type: "mrkdwn", text: detail }] : []),
     ],
   };
 }

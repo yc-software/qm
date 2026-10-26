@@ -279,7 +279,7 @@ test("an allow click shows who allowed it while running and keeps that record un
   await clicked;
   const final = f.updates.at(-1);
   assert.equal(final.text, "Removed it.");
-  const context = final.blocks.at(-1);
-  assert.equal(context.type, "context");
-  assert.match(context.elements[0].text, /^:white_check_mark: Allowed once by <@U2> · `rm -rf \/tmp\/x` · /);
+  const decision = final.blocks.at(-1);
+  assert.equal(decision.type, "section");
+  assert.match(decision.text.text, /^:white_check_mark: Allowed once by <@U2> · `rm -rf \/tmp\/x` · /);
 });

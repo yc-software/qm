@@ -1,3 +1,4 @@
+import { escapeSlackText } from "./mrkdwn.ts";
 import { isOwnStatusCard } from "./message-gating.ts";
 import { slackMessageToIngestEvent } from "./mirror.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
@@ -247,7 +248,7 @@ export function createSlackHistoryReader(deps: {
           .map((m) => ({
             ts: m.ts,
             ...(m.subtype !== undefined ? { subtype: m.subtype } : {}),
-            text: m.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+            text: escapeSlackText(m.text),
             ...(m.mentionsSelf ? { mentionsSelf: true } : {}),
             ...(m.sub ? { thread_ts: m.sub } : {}),
             ...(m.self || m.authorId ? { user: m.self ? deps.ids.botUserId : m.authorId } : {}),
