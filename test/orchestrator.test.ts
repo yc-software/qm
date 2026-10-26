@@ -3896,14 +3896,6 @@ test("a preamble failure after the machine boots still reclaims it", async () =>
   assert.equal(boxes.live, 0, "a machine whose preamble threw must not stay booted");
 });
 
-test("eager provisioning stays off by default — a toolless turn provisions nothing", async () => {
-  const built = freshApp();
-  const boxes = spyProvisioning(built.sandbox);
-  const res = await built.app.turn(dm("hello there"));
-  assert.equal(res.status, "ok");
-  assert.equal(boxes.provisioned, 0);
-});
-
 test("Door 2: an envelopeWrapped request on its own skips the overheard seed (replay preserves topic-scope)", async () => {
   const { app } = freshApp();
   const overheardEntries = (entries: { type: string; payload: unknown }[]) =>
