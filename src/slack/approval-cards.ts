@@ -1,5 +1,6 @@
 import { clip, inlineCode } from "./util.ts";
 import { escapeSlackText, slackSectionBlocks } from "./mrkdwn.ts";
+import { isObj } from "../util/objects.ts";
 import { parseDeliveryTarget } from "./delivery.ts";
 
 export const APPROVAL_ACTION_IDS = ["hilo_allow_once", "hilo_allow_session", "hilo_allow_always", "hilo_deny"] as const;
@@ -61,10 +62,6 @@ const ARG_VALUE_MAX = 500;
 const DECISION_SUBJECT_MAX = 150;
 const DECISION_DETAIL_MAX = 1_500;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function toolCallView(p: { command: string; summary?: string; kind?: string }): ToolCallView | null {
   if (p.kind === "input" || !p.summary || !p.command.startsWith(`${p.summary} {`)) return null;
   let params: unknown;
@@ -73,8 +70,13 @@ function toolCallView(p: { command: string; summary?: string; kind?: string }): 
   } catch {
     return null;
   }
-  if (!isRecord(params)) return null;
-  if (params.operation === "invoke" && typeof params.tool === "string" && isRecord(params.arguments ?? {}))
+  if (!isObj(params) || Array.isArray(params)) return null;
+  if (
+    params.operation === "invoke" &&
+    typeof params.tool === "string" &&
+    isObj(params.arguments ?? {}) &&
+    !Array.isArray(params.arguments)
+  )
     return { label: p.summary, tool: params.tool, args: (params.arguments ?? {}) as Record<string, unknown> };
   return { label: p.summary, args: params };
 }
@@ -87,7 +89,7 @@ function argLines(args: Record<string, unknown>): string[] {
   return Object.entries(args).map(([key, value]) => {
     const text = clip(argText(value), ARG_VALUE_MAX);
     return text.includes("\n")
-      ? `${escapeSlackText(key)}:\n\`\`\`${escapeSlackText(text.replace(/`/g, "'"))}\`\`\``
+      ? `${escapeSlackText(key)}:\n\`\`\`${escapeSlackText(text.replaceAll("`", "'"))}\`\`\``
       : `${escapeSlackText(key)}: ${inlineCode(escapeSlackText(text))}`;
   });
 }
