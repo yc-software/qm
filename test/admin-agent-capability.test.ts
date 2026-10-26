@@ -38,6 +38,7 @@ function start(withConfig = true) {
       signingSecret: SECRET,
       capabilitySecret: SECRET,
       apiBaseUrl: "http://core.example.test",
+      sharingPosture: "isolated",
     }),
   );
   void built.directory.replaceChannels(

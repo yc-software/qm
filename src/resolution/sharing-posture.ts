@@ -1,6 +1,8 @@
 export const SHARING_POSTURES = ["isolated", "open"] as const;
 export type SharingPosture = (typeof SHARING_POSTURES)[number];
 
+export const DEFAULT_SHARING_POSTURE: SharingPosture = "open";
+
 export function parseSharingPosture(value: unknown): SharingPosture | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();

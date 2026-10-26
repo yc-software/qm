@@ -1521,7 +1521,7 @@ export function buildApp(
     return routed.choice;
   });
 
-  if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
+  if (config.securityScreen === "off" || config.securityScreenProxy) {
     delete harness.models.screenSecurity;
   }
 

@@ -418,7 +418,7 @@ test("sharing posture round-trips through scoped governance with organization an
         body: JSON.stringify({ posture }),
       });
 
-    assert.equal((await read(org)).sharingPosture, "isolated");
+    assert.equal((await read(org)).sharingPosture, "open");
     assert.equal((await put(org, "open")).status, 200);
     assert.equal((await read(room)).sharingPosture, "open");
     assert.equal((await put(personal, "isolated")).status, 200);

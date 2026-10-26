@@ -117,12 +117,9 @@ can only tighten:
 - **Auto** (default) — blocks private-network access.
 - **Dangerous** — no tool approval gates, and content screening only observes.
 
-Content screening is a deployment setting, `securityScreen.mode`: `off` (default),
-`observe`, or `enforce`, with `securityScreen.classifier` choosing the built-in
-`model` or an external `proxy`. When on, it classifies external content under every
-posture. `observe` only records verdicts in the audit log. `enforce` quarantines
-flagged content pending release approval, except under Dangerous, which caps
-screening at `observe`.
+Content screening observes: it classifies external content under every posture and
+records verdicts in the audit log without acting on them. The classifier is the
+built-in model unless the deployment names an external proxy screener.
 
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.

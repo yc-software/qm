@@ -781,11 +781,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       };
       const buildInboundScreen = async () => {
         let overheard: OverheardEntryPayload[] = [];
-        if (screenInbound) {
+        if (screenInbound && conversation.kind !== "dm" && input.overheard?.length) {
           const existingSession = await deps.sessions.getByThread(conversation.threadRef);
           const existingEntries = existingSession ? await deps.sessions.getEntries(existingSession.id) : [];
-          const recorded = recordedMessageTimestamps(existingEntries);
-          overheard = conversation.kind === "dm" ? [] : selectOverheardToImport(input.overheard ?? [], recorded);
+          overheard = selectOverheardToImport(input.overheard, recordedMessageTimestamps(existingEntries));
         }
         let hasUnscreenableAttachment = false;
         const attachmentPromptData: Array<{ source: string; content: string }> = [];

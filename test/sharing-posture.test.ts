@@ -39,8 +39,6 @@ test("durable sharing policy composes organization, personal, and room vetoes an
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
 
-  assert.equal(await reader.resolveSharingPostureDurable(personal, room), "isolated");
-  await writer.setSharingPosture(org, "open");
   assert.equal(await reader.resolveSharingPostureDurable(personal, room), "open");
   await writer.setSharingPosture(personal, "isolated");
   assert.equal(await reader.resolveSharingPostureDurable(personal, room), "isolated");
@@ -71,8 +69,6 @@ test("Open membership re-checks durable organization, person, room, and membersh
     config: reader,
     isCurrentSharedScopeMember: async () => member,
   };
-  assert.equal(await isOpenScopeMember(input), false);
-  await writer.setSharingPosture(org, "open");
   assert.equal(await isOpenScopeMember(input), true);
   for (const scope of [personal, room, org]) {
     await writer.setSharingPosture(scope, "isolated");

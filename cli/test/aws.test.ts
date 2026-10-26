@@ -641,8 +641,6 @@ test("AWS routes security screen proxy configuration and its token only to core"
   const screened: QmConfig = {
     ...config,
     securityScreen: {
-      mode: "enforce",
-      classifier: "proxy",
       provider: "example-screen",
       endpoint: "https://screen.example.test/classify",
     },
@@ -653,7 +651,6 @@ test("AWS routes security screen proxy configuration and its token only to core"
       Object.entries(serviceEnvironment(screened, "core")).filter(([name]) => name.startsWith("SECURITY_SCREEN_")),
     ),
     {
-      SECURITY_SCREEN_CLASSIFIER: "proxy",
       SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
       SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
     },

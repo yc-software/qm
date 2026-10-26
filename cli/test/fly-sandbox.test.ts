@@ -51,8 +51,6 @@ test("the fly target routes security screen proxy configuration only to core", (
   const screened: QmConfig = {
     ...config,
     securityScreen: {
-      mode: "observe",
-      classifier: "proxy",
       provider: "example-screen",
       endpoint: "https://screen.example.test/classify",
     },
@@ -64,7 +62,6 @@ test("the fly target routes security screen proxy configuration only to core", (
       ),
     ),
     {
-      SECURITY_SCREEN_CLASSIFIER: "proxy",
       SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
       SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
     },

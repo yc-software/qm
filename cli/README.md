@@ -176,10 +176,9 @@ receipts must keep the submission slot occupied until the CLI exits.
 sandboxes boot their platform's stock image; tools and skills arrive through the
 deployment-layer sync, which every ordinary `up` performs.
 
-Content screening is off by default. Set `securityScreen: { "mode": "observe" }`
-to record classifier verdicts without acting on them, or `"enforce"` to quarantine
-flagged content. The classifier is the built-in model unless `"classifier": "proxy"`
-names an external screener with a provider label and HTTPS endpoint; route its token
+Content screening records classifier verdicts without acting on them. The classifier
+is the built-in model unless `securityScreen: { "provider": …, "endpoint": … }` names
+an external screener with a provider label and HTTPS endpoint; route its token
 through `secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`.
 
 ## Commands

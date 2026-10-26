@@ -33,6 +33,8 @@ const POSTURE_RANK: Record<SecurityPosture, number> = {
   strict: 2,
 };
 
+export const DEFAULT_SECURITY_POSTURE: SecurityPosture = "auto";
+
 export function parseSecurityPosture(value: unknown): SecurityPosture | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase();

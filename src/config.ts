@@ -31,12 +31,11 @@ import type { OrgBranding } from "./resolution/config-store.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "./deployment/secret-schema.ts";
 import { DEFAULT_CAPTURE_QUIET_MS } from "./memory/strategies/per-turn.ts";
 import {
-  parseSecurityPosture,
-  SECURITY_SCREEN_MODES,
+  DEFAULT_SECURITY_POSTURE,
   type SecurityPosture,
   type SecurityScreenMode,
 } from "./security/security-posture.ts";
-import { parseSharingPosture, type SharingPosture } from "./resolution/sharing-posture.ts";
+import { DEFAULT_SHARING_POSTURE, type SharingPosture } from "./resolution/sharing-posture.ts";
 import {
   parseSlackContextSource,
   type SlackContextSource,
@@ -190,7 +189,6 @@ export interface Config {
   turnLeaseWaitMs: number;
   securityScreenTimeoutMs: number;
   securityScreen: SecurityScreenMode;
-  securityScreenClassifier: "model" | "proxy";
   securityScreenProxy?: {
     provider: string;
     endpoint: string;
@@ -1081,37 +1079,6 @@ function secretsBackendEnvStrict(value: string | undefined, prefix: string): Con
   throw new Error(`SECRETS_BACKEND=${JSON.stringify(value)} is not recognized — use env or aws, or unset it.`);
 }
 
-function securityPostureEnvStrict(value: string | undefined): SecurityPosture {
-  if (value === undefined || value.trim() === "") return "auto";
-  const posture = parseSecurityPosture(value);
-  if (posture) return posture;
-  throw new Error(
-    `HARNESS_SECURITY_POSTURE=${JSON.stringify(value)} is not recognized — use dangerous, auto, or strict, or unset it.`,
-  );
-}
-
-function sharingPostureEnvStrict(value: string | undefined): SharingPosture {
-  if (value === undefined || value.trim() === "") return "isolated";
-  const posture = parseSharingPosture(value);
-  if (posture) return posture;
-  throw new Error(
-    `HARNESS_SHARING_POSTURE=${JSON.stringify(value)} is not recognized — use isolated or open, or unset it.`,
-  );
-}
-
-function choiceEnvStrict<T extends string>(name: string, value: string | undefined, choices: readonly T[]): T {
-  if (value === undefined || value.trim() === "") return choices[0]!;
-  const choice = value.trim().toLowerCase();
-  if ((choices as readonly string[]).includes(choice)) return choice as T;
-  throw new Error(`${name}=${JSON.stringify(value)} is not recognized — use ${choices.join(", ")}, or unset it.`);
-}
-
-const RETIRED_SECURITY_SCREEN_ENV = [
-  "SECURITY_SCREEN_BACKEND",
-  "SECURITY_SCREEN_ALL_POSTURES",
-  "SECURITY_SCREEN_PROXY_ROLLOUT",
-] as const;
-
 function csvPaths(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
   if (boolEnv(value) === false) return [];
@@ -1360,34 +1327,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `[config] ${retiredBrainEnv.join(", ")} ${retiredBrainEnv.length === 1 ? "is" : "are"} retired and ignored — the brain integration was removed; point an external knowledge server at MEMORY_PROVIDER_CONFIG (docs/memory-providers.md). Remove the variables.`,
     );
   }
-  const retiredScreenEnv = RETIRED_SECURITY_SCREEN_ENV.filter((name) => env[name]?.trim());
-  const retiredScreenOff =
-    retiredScreenEnv.length === 1 &&
-    env.SECURITY_SCREEN_BACKEND?.trim().toLowerCase() === "off" &&
-    !env.SECURITY_SCREEN?.trim();
-  if (retiredScreenOff) {
-    console.warn("[config] SECURITY_SCREEN_BACKEND=off is retired and read as SECURITY_SCREEN=off. Replace it.");
-  } else if (retiredScreenEnv.length) {
-    throw new Error(
-      `${retiredScreenEnv.join(", ")} ${retiredScreenEnv.length === 1 ? "is" : "are"} retired — set SECURITY_SCREEN=off|observe|enforce and SECURITY_SCREEN_CLASSIFIER=model|proxy instead, and remove the old variables.`,
+  const ignoredPostureEnv = [
+    "HARNESS_SECURITY_POSTURE",
+    "HARNESS_SHARING_POSTURE",
+    "SECURITY_SCREEN",
+    "SECURITY_SCREEN_CLASSIFIER",
+    "SECURITY_SCREEN_BACKEND",
+    "SECURITY_SCREEN_ALL_POSTURES",
+    "SECURITY_SCREEN_PROXY_ROLLOUT",
+  ].filter((name) => env[name]?.trim());
+  if (ignoredPostureEnv.length) {
+    console.warn(
+      `[config] ${ignoredPostureEnv.join(", ")} ${ignoredPostureEnv.length === 1 ? "is" : "are"} no longer read: the default security posture is ${DEFAULT_SECURITY_POSTURE}, the default sharing posture is ${DEFAULT_SHARING_POSTURE}, and screening observes. Remove the variables.`,
     );
   }
-  const securityScreen = choiceEnvStrict("SECURITY_SCREEN", env.SECURITY_SCREEN, SECURITY_SCREEN_MODES);
-  const securityScreenClassifier = choiceEnvStrict("SECURITY_SCREEN_CLASSIFIER", env.SECURITY_SCREEN_CLASSIFIER, [
-    "model",
-    "proxy",
-  ] as const);
   const proxyProvider = env.SECURITY_SCREEN_PROXY_PROVIDER?.trim();
   const proxyEndpoint = env.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const proxyToken = env.SECURITY_SCREEN_PROXY_TOKEN?.trim();
-  const hasProxyConfig = [proxyProvider, proxyEndpoint, proxyToken].some(Boolean);
-  if (securityScreenClassifier === "proxy" && (!proxyProvider || !proxyEndpoint || !proxyToken)) {
+  const hasProxyScreen = [proxyProvider, proxyEndpoint, proxyToken].some(Boolean);
+  if (hasProxyScreen && (!proxyProvider || !proxyEndpoint || !proxyToken)) {
     throw new Error(
-      "SECURITY_SCREEN_CLASSIFIER=proxy requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN",
+      "SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN must be set together",
     );
-  }
-  if (securityScreenClassifier !== "proxy" && hasProxyConfig) {
-    throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
   }
   if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {
     throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must be a lowercase DNS label");
@@ -1496,11 +1457,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
     harness,
-    securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
-    sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
-    securityScreen,
-    securityScreenClassifier,
-    ...(securityScreenClassifier === "proxy"
+    securityPosture: DEFAULT_SECURITY_POSTURE,
+    sharingPosture: DEFAULT_SHARING_POSTURE,
+    securityScreen: "observe",
+    ...(hasProxyScreen
       ? { securityScreenProxy: { provider: proxyProvider!, endpoint: proxyEndpoint!, token: proxyToken! } }
       : {}),
     sandboxBackend,

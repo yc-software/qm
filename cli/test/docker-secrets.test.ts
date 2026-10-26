@@ -92,8 +92,6 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
           secretEnv: ["SB_TOKEN", "SLACK_BOT_TOKEN"],
         },
         securityScreen: {
-          mode: "enforce",
-          classifier: "proxy",
           provider: "example-screen",
           endpoint: "https://screen.example.test/classify",
         },
@@ -157,10 +155,8 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     assert.ok(signerArgs, "coreless plugin starts");
     assert.ok(!signerArgs.includes("CORE_API_URL=http://core:8080"), "coreless plugin gets no core endpoint");
     assert.ok(!signerArgs.includes("--env-file"), "coreless plugin gets no source-auth secret");
-    assert.ok(argv.includes("SECURITY_SCREEN_CLASSIFIER=proxy"));
     assert.ok(argv.includes("SECURITY_SCREEN_PROXY_PROVIDER=example-screen"));
     assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify"));
-    assert.ok(argv.includes("SECURITY_SCREEN=enforce"));
 
     assert.ok(
       argv.includes("WEB_UI_PUBLIC_URL=http://folded.example.com/web-ui"),

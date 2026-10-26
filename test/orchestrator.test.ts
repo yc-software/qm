@@ -4210,29 +4210,6 @@ test("activated resource defaults preserve an existing computer and stop eager p
   assert.equal(boxes.provisioned, 1);
 });
 
-test("default screening does not invoke a model for inbound data or tool results", async () => {
-  const built = freshApp({ securityScreen: loadConfig({}).securityScreen });
-  let captured: ProvisionOptions | undefined;
-  const provision = built.sandbox.provision.bind(built.sandbox);
-  built.sandbox.provision = (layers, options) => {
-    captured = options;
-    return provision(layers, options);
-  };
-  const result = await built.app.turn(
-    dm("!run printf screening-default-ok", {
-      surface: "webhook",
-      triggered: true,
-      securityScreenData: "ordinary external event",
-    }),
-  );
-  assert.equal(result.status, "ok");
-  assert.match(result.reply ?? "", /screening-default-ok/);
-  assert.equal(built.screenSecurity, undefined);
-  const claims = await verifyCapabilityToken(captured!.egressToken!, TEST_CAPABILITY_SECRET);
-  assert.equal(claims?.egress?.denyPrivateNetworks, true);
-  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
-});
-
 for (const combined of [true, false]) {
   test(`turn cleanup retains recent and malformed paths and removes stale files (combined=${combined})`, async () => {
     const built = freshApp();

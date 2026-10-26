@@ -102,33 +102,35 @@ test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
-test("harness security posture defaults to auto and validates named modes", () => {
-  assert.equal(loadConfig({}).securityPosture, "auto");
-  assert.equal(loadConfig({}).securityScreen, "off");
-  assert.equal(loadConfig({}).securityScreenClassifier, "model");
-  assert.equal(loadConfig({ SECURITY_SCREEN: "Observe" }).securityScreen, "observe");
-  assert.equal(loadConfig({ SECURITY_SCREEN: "enforce" }).securityScreen, "enforce");
-  assert.throws(() => loadConfig({ SECURITY_SCREEN: "shadow" }), /SECURITY_SCREEN="shadow" is not recognized/);
+test("postures are fixed and the screen classifier follows the proxy settings", () => {
+  for (const env of [
+    {},
+    { HARNESS_SECURITY_POSTURE: "strict", HARNESS_SHARING_POSTURE: "isolated", SECURITY_SCREEN: "off" },
+  ]) {
+    const config = loadConfig(env);
+    assert.equal(config.securityPosture, "auto");
+    assert.equal(config.sharingPosture, "open");
+    assert.equal(config.securityScreen, "observe");
+  }
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (message: string) => warnings.push(message);
+  try {
+    loadConfig({ HARNESS_SHARING_POSTURE: "isolated", SECURITY_SCREEN: "enforce" });
+  } finally {
+    console.warn = original;
+  }
+  assert.deepEqual(warnings, [
+    "[config] HARNESS_SHARING_POSTURE, SECURITY_SCREEN are no longer read: the default security posture is auto, the default sharing posture is open, and screening observes. Remove the variables.",
+  ]);
   assert.equal(loadConfig({}).securityScreenProxy, undefined);
   assert.equal(loadConfig({}).securityScreenTimeoutMs, 15_000);
   assert.equal(loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: "25" }).securityScreenTimeoutMs, 25);
-  assert.equal(loadConfig({ HARNESS_SECURITY_POSTURE: "Dangerous" }).securityPosture, "dangerous");
-  assert.equal(loadConfig({ HARNESS_SECURITY_POSTURE: "strict" }).securityPosture, "strict");
-  assert.throws(
-    () => loadConfig({ HARNESS_SECURITY_POSTURE: "permissive" }),
-    /HARNESS_SECURITY_POSTURE="permissive" is not recognized/,
-  );
   const proxy = {
-    SECURITY_SCREEN: "observe",
-    SECURITY_SCREEN_CLASSIFIER: "proxy",
     SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
     SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
     SECURITY_SCREEN_PROXY_TOKEN: "test-token",
   };
-  assert.throws(
-    () => loadConfig({ SECURITY_SCREEN_CLASSIFIER: "proxy" }),
-    /requires SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN/,
-  );
   assert.deepEqual(loadConfig(proxy).securityScreenProxy, {
     provider: "example-screen",
     endpoint: "https://screen.example.test/classify",
@@ -142,7 +144,7 @@ test("harness security posture defaults to auto and validates named modes", () =
   }
   assert.throws(
     () => loadConfig({ SECURITY_SCREEN_PROXY_PROVIDER: "example-screen" }),
-    /requires SECURITY_SCREEN_CLASSIFIER=proxy/,
+    /SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN must be set together/,
   );
   for (const provider of ["Bad Provider", "surface", "origin", "-leading", `${"x".repeat(64)}`]) {
     assert.throws(
@@ -161,29 +163,6 @@ test("harness security posture defaults to auto and validates named modes", () =
       /SECURITY_SCREEN_PROXY_ENDPOINT/,
     );
   }
-});
-
-test("retired security screen variables fail loudly unless they only said off", () => {
-  assert.equal(loadConfig({ SECURITY_SCREEN_BACKEND: "off" }).securityScreen, "off");
-  for (const env of [
-    { SECURITY_SCREEN_BACKEND: "proxy" },
-    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN: "observe" },
-    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN_ALL_POSTURES: "false" },
-    { SECURITY_SCREEN_ALL_POSTURES: "true" },
-    { SECURITY_SCREEN_PROXY_ROLLOUT: "shadow" },
-  ]) {
-    assert.throws(() => loadConfig(env), /retired.*SECURITY_SCREEN=off\|observe\|enforce/);
-  }
-});
-
-test("sharing posture defaults to isolated and accepts only isolated or open", () => {
-  assert.equal(loadConfig({}).sharingPosture, "isolated");
-  assert.equal(loadConfig({ HARNESS_SHARING_POSTURE: "Open" }).sharingPosture, "open");
-  assert.equal(loadConfig({ HARNESS_SHARING_POSTURE: "isolated" }).sharingPosture, "isolated");
-  assert.throws(
-    () => loadConfig({ HARNESS_SHARING_POSTURE: "dangerous" }),
-    /HARNESS_SHARING_POSTURE="dangerous" is not recognized/,
-  );
 });
 
 test("Modal without an egress proxy warns that sandboxes run fail-open", () => {

@@ -7,8 +7,12 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
-import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
-import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
+import {
+  composeSecurityPosture,
+  DEFAULT_SECURITY_POSTURE,
+  type SecurityPosture,
+} from "../security/security-posture.ts";
+import { composeSharingPostures, DEFAULT_SHARING_POSTURE, type SharingPosture } from "./sharing-posture.ts";
 import type { ApprovalGrantModes } from "../types.ts";
 import {
   deriveConnectorKey,
@@ -443,8 +447,8 @@ export function createMemoryConfigStore(
       cacheBaseModel(org, saved);
     });
   };
-  const defaultSecurityPosture = opts.defaultSecurityPosture ?? "auto";
-  const defaultSharingPosture = opts.defaultSharingPosture ?? "isolated";
+  const defaultSecurityPosture = opts.defaultSecurityPosture ?? DEFAULT_SECURITY_POSTURE;
+  const defaultSharingPosture = opts.defaultSharingPosture ?? DEFAULT_SHARING_POSTURE;
   const orgDefaultPolicy = defaultOrgPolicy();
   const orgDefaultEgress: EgressPolicy = { allowedHosts: [], deniedHosts: [] };
   const DEFAULT_APPROVAL_GRANT_MODES: ApprovalGrantModes = { session: true, always: true };

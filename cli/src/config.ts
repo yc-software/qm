@@ -58,11 +58,7 @@ export interface SandboxConfig {
   secretEnv?: string[];
 }
 
-type SecurityScreenMode = "off" | "observe" | "enforce";
-
-export type SecurityScreenConfig =
-  | { mode: SecurityScreenMode; classifier: "model" }
-  | { mode: SecurityScreenMode; classifier: "proxy"; provider: string; endpoint: string };
+export type SecurityScreenConfig = { provider: string; endpoint: string };
 
 export interface AwsServiceConfig {
   ecrRepository: string;
@@ -174,11 +170,8 @@ export interface QmConfig {
 
 export function securityScreenEnv(config: Pick<QmConfig, "securityScreen">): Record<string, string> {
   const screen = config.securityScreen;
-  const base = { SECURITY_SCREEN: screen?.mode ?? "off" };
-  if (screen?.classifier !== "proxy") return base;
+  if (!screen) return {};
   return {
-    ...base,
-    SECURITY_SCREEN_CLASSIFIER: "proxy",
     SECURITY_SCREEN_PROXY_PROVIDER: screen.provider,
     SECURITY_SCREEN_PROXY_ENDPOINT: screen.endpoint,
   };
@@ -436,28 +429,7 @@ const isPlainObject = (x: unknown): x is Record<string, unknown> =>
 function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfig | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new CliError(`${path}: "securityScreen" must be an object`);
-  if (Object.keys(raw).length === 1 && raw.backend === "off") {
-    warn(`${path}: securityScreen.backend "off" is retired and read as mode "off" — use { "mode": "off" }`);
-    return { mode: "off", classifier: "model" };
-  }
-  const retired = ["backend", "allPostures", "rollout"].filter((key) => key in raw);
-  if (retired.length) {
-    throw new CliError(
-      `${path}: securityScreen.${retired.join(", securityScreen.")} ${retired.length === 1 ? "is" : "are"} retired — use securityScreen.mode ("off", "observe", or "enforce") and securityScreen.classifier ("model" or "proxy")`,
-    );
-  }
-  if (raw.mode !== "off" && raw.mode !== "observe" && raw.mode !== "enforce") {
-    throw new CliError(`${path}: "securityScreen.mode" must be "off", "observe", or "enforce"`);
-  }
-  const classifier = raw.classifier ?? "model";
-  if (classifier === "model") {
-    if (Object.keys(raw).some((key) => key !== "mode" && key !== "classifier")) {
-      throw new CliError(`${path}: securityScreen provider and endpoint require classifier proxy`);
-    }
-    return { mode: raw.mode, classifier };
-  }
-  if (classifier !== "proxy") throw new CliError(`${path}: "securityScreen.classifier" must be "model" or "proxy"`);
-  const allowed = new Set(["mode", "classifier", "provider", "endpoint"]);
+  const allowed = new Set(["provider", "endpoint"]);
   for (const key of Object.keys(raw)) {
     if (!allowed.has(key)) throw new CliError(`${path}: "securityScreen.${key}" is not recognized`);
   }
@@ -490,7 +462,7 @@ function validateSecurityScreen(raw: unknown, path: string): SecurityScreenConfi
       `${path}: "securityScreen.endpoint" must be an HTTPS URL without credentials, a fragment, or a trailing hostname dot`,
     );
   }
-  return { mode: raw.mode, classifier, provider: raw.provider, endpoint: raw.endpoint };
+  return { provider: raw.provider, endpoint: raw.endpoint };
 }
 
 export function readConfigOrgId(path: string): string | undefined {
@@ -630,15 +602,7 @@ function validate(raw: unknown, path: string): QmConfig {
     return entries;
   });
   const securityScreen = validateSecurityScreen(o["securityScreen"], path);
-  const managedSecurityScreenEnv = [
-    "SECURITY_SCREEN",
-    "SECURITY_SCREEN_CLASSIFIER",
-    "SECURITY_SCREEN_PROXY_PROVIDER",
-    "SECURITY_SCREEN_PROXY_ENDPOINT",
-    "SECURITY_SCREEN_BACKEND",
-    "SECURITY_SCREEN_ALL_POSTURES",
-    "SECURITY_SCREEN_PROXY_ROLLOUT",
-  ];
+  const managedSecurityScreenEnv = ["SECURITY_SCREEN_PROXY_PROVIDER", "SECURITY_SCREEN_PROXY_ENDPOINT"];
   for (const [service, values] of Object.entries(env)) {
     for (const name of [...managedSecurityScreenEnv, "SECURITY_SCREEN_PROXY_TOKEN"]) {
       if (values?.[name] !== undefined) {
@@ -658,11 +622,11 @@ function validate(raw: unknown, path: string): QmConfig {
       throw new CliError(`${path}: SECURITY_SCREEN_PROXY_TOKEN may be routed only to core`);
     }
   }
-  if (securityScreen?.classifier === "proxy" && secretEnv.core?.SECURITY_SCREEN_PROXY_TOKEN === undefined) {
-    throw new CliError(`${path}: securityScreen classifier proxy requires secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`);
+  if (securityScreen && secretEnv.core?.SECURITY_SCREEN_PROXY_TOKEN === undefined) {
+    throw new CliError(`${path}: securityScreen requires secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`);
   }
-  if (securityScreen?.classifier !== "proxy" && secretEnv.core?.SECURITY_SCREEN_PROXY_TOKEN !== undefined) {
-    throw new CliError(`${path}: secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN requires securityScreen classifier proxy`);
+  if (!securityScreen && secretEnv.core?.SECURITY_SCREEN_PROXY_TOKEN !== undefined) {
+    throw new CliError(`${path}: secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN requires securityScreen`);
   }
   for (const [service, values] of Object.entries(env)) {
     if (!isServiceName(service)) continue;

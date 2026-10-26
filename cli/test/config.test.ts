@@ -1214,8 +1214,6 @@ test("secretEnv (per-service) validates service keys, env-var names, and managed
 
 test("securityScreen declares one external proxy and requires secret-store routing", () => {
   const securityScreen = {
-    mode: "observe",
-    classifier: "proxy",
     provider: "example-screen",
     endpoint: "https://screen.example.test/classify",
   };
@@ -1224,15 +1222,14 @@ test("securityScreen declares one external proxy and requires secret-store routi
     ({ path }) => assert.deepEqual(loadConfigAt(path).config.securityScreen, securityScreen),
   );
   withConfig({ securityScreen }, ({ path }) =>
-    assert.throws(() => loadConfigAt(path), /classifier proxy requires secretEnv\.core\.SECURITY_SCREEN_PROXY_TOKEN/),
+    assert.throws(() => loadConfigAt(path), /securityScreen requires secretEnv\.core\.SECURITY_SCREEN_PROXY_TOKEN/),
   );
   withConfig({ secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "EXAMPLE_SCREEN_TOKEN" } } }, ({ path }) =>
     assert.throws(() => loadConfigAt(path), /SECURITY_SCREEN_PROXY_TOKEN requires securityScreen/),
   );
   for (const invalid of [
-    { ...securityScreen, classifier: "sdk" },
-    { ...securityScreen, mode: "shadow" },
-    { ...securityScreen, backend: "proxy" },
+    { ...securityScreen, mode: "observe" },
+    { ...securityScreen, backend: "off" },
     { ...securityScreen, provider: "Bad Provider" },
     { ...securityScreen, provider: "surface" },
     { ...securityScreen, provider: "origin" },
@@ -1248,8 +1245,6 @@ test("securityScreen declares one external proxy and requires secret-store routi
 
 test("securityScreen owns its derived environment and keeps its token on core", () => {
   const securityScreen = {
-    mode: "enforce",
-    classifier: "proxy",
     provider: "example-screen",
     endpoint: "https://screen.example.test/classify",
   };
@@ -1292,13 +1287,13 @@ test("securityScreen owns its derived environment and keeps its token on core", 
       securityScreen,
       secretEnv: {
         core: { SECURITY_SCREEN_PROXY_TOKEN: "EXAMPLE_SCREEN_TOKEN" },
-        slack: { SECURITY_SCREEN_CLASSIFIER: "EXAMPLE_SCREEN_CLASSIFIER" },
+        slack: { SECURITY_SCREEN_PROXY_PROVIDER: "EXAMPLE_SCREEN_PROVIDER" },
       },
     },
     ({ path }) =>
       assert.throws(
         () => loadConfigAt(path),
-        /secretEnv\.slack\.SECURITY_SCREEN_CLASSIFIER.*managed by securityScreen/,
+        /secretEnv\.slack\.SECURITY_SCREEN_PROXY_PROVIDER.*managed by securityScreen/,
       ),
   );
   withConfig(
@@ -1423,31 +1418,11 @@ test("blank model provider overrides preserve the declared provider in runtime a
   );
 });
 
-test("screening defaults off and the model classifier needs no proxy settings", () => {
-  assert.deepEqual(securityScreenEnv({}), { SECURITY_SCREEN: "off" });
-  for (const mode of ["off", "observe", "enforce"] as const) {
-    withConfig({ securityScreen: { mode } }, ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.deepEqual(securityScreenEnv(config), { SECURITY_SCREEN: mode });
-    });
-    withConfig({ securityScreen: { mode, provider: "example-screen" } }, ({ path }) =>
-      assert.throws(() => loadConfigAt(path), /require classifier proxy/),
-    );
-    withConfig(
-      { securityScreen: { mode }, secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "TOKEN" } } },
-      ({ path }) => assert.throws(() => loadConfigAt(path), /requires securityScreen classifier proxy/),
-    );
-  }
-  withConfig({ securityScreen: { backend: "off" } }, ({ path }) =>
-    assert.deepEqual(securityScreenEnv(loadConfigAt(path).config), { SECURITY_SCREEN: "off" }),
+test("without a proxy screener the deployment renders no screening settings", () => {
+  assert.deepEqual(securityScreenEnv({}), {});
+  withConfig({ secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "TOKEN" } } }, ({ path }) =>
+    assert.throws(() => loadConfigAt(path), /requires securityScreen/),
   );
-  for (const retired of [
-    { backend: "model" },
-    { mode: "enforce", allPostures: true },
-    { mode: "observe", rollout: "shadow" },
-  ]) {
-    withConfig({ securityScreen: retired }, ({ path }) => assert.throws(() => loadConfigAt(path), /retired/));
-  }
 });
 
 test("AWS ownership control is opt-in and reserves deployment identity allocation", () => {
@@ -1475,12 +1450,10 @@ test("AWS ownership control is opt-in and reserves deployment identity allocatio
   );
 });
 
-test("proxy deployment rendering names the mode and classifier", () => {
+test("proxy deployment rendering names the provider and endpoint", () => {
   withConfig(
     {
       securityScreen: {
-        mode: "enforce",
-        classifier: "proxy",
         provider: "fixture",
         endpoint: "https://screen.example.test/classify",
       },
@@ -1488,8 +1461,6 @@ test("proxy deployment rendering names the mode and classifier", () => {
     },
     ({ path }) => {
       assert.deepEqual(securityScreenEnv(loadConfigAt(path).config), {
-        SECURITY_SCREEN: "enforce",
-        SECURITY_SCREEN_CLASSIFIER: "proxy",
         SECURITY_SCREEN_PROXY_PROVIDER: "fixture",
         SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
       });
