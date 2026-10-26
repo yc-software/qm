@@ -10,7 +10,7 @@ import { pipeToResponse, sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const FORWARDED_HEADERS = ["accept", "content-type", "anthropic-version", "anthropic-beta"];
-const MAX_BODY_BYTES = 32 * 1024 * 1024;
+const UPSTREAM_REQUEST_LIMIT_BYTES = 32 * 1024 * 1024;
 
 function redactGatewayKey(apiKey: string): (text: string) => string {
   return createExactSecretValueMasker([apiKey, apiKey.slice(apiKey.lastIndexOf(" ") + 1)]);
@@ -102,8 +102,7 @@ async function proxy(ctx: ApiCtx): Promise<void> {
       const text = redactGatewayKey(gateway.apiKey)(await response.text());
       const retryAfter = response.headers.get("retry-after");
       const operatorFault = response.status >= 500 || response.status === 401 || response.status === 403;
-      if (operatorFault)
-        reportFailure("sandbox model: gateway refused", new Error(`${response.status} ${path}`), text.slice(0, 1024));
+      if (operatorFault) reportFailure("sandbox model: gateway refused", new Error(`${response.status} ${path}`), text);
       res.writeHead(operatorFault ? 502 : response.status, {
         "content-type": contentType,
         ...(retryAfter ? { "retry-after": retryAfter } : {}),
@@ -112,7 +111,8 @@ async function proxy(ctx: ApiCtx): Promise<void> {
     }
     res.writeHead(response.status, { "content-type": contentType, "cache-control": "no-store" });
     pipeToResponse(res, Readable.fromWeb(response.body as WebReadableStream), "model stream failed");
-  } catch {
+  } catch (error) {
+    if (!controller.signal.aborted) reportFailure("sandbox model: gateway request", error, path);
     if (!res.headersSent)
       sendJson(res, 502, { error: { message: "the model gateway could not complete the request" } });
     else res.destroy();
@@ -125,7 +125,7 @@ export const sandboxModelRoutes: Route[] = [
   {
     match: (_method, pathname) => pathname.startsWith(`${SANDBOX_MODEL_PREFIX}/`),
     auth: { aud: SANDBOX_MODEL_AUD, bearer: true },
-    maxBodyBytes: MAX_BODY_BYTES,
+    maxBodyBytes: UPSTREAM_REQUEST_LIMIT_BYTES,
     handle: proxy,
   },
 ];
