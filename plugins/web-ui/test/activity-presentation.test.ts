@@ -1,3 +1,4 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -8,20 +9,25 @@ import {
   thinkingPresentation,
   sessionPresentation,
 } from "../src/activity-presentation.ts";
-import type { ToolRowModel, ToolPayload, TimelineItem } from "../src/timeline.ts";
+import type { ToolRowModel, TimelineItem } from "../src/timeline.ts";
 
-function row(command: string, result: ToolPayload | null = { code: 0 }): ToolRowModel {
+type Fields = NonNullable<Parameters<typeof item>[1]>;
+
+const callItem = (tool: string, body: Record<string, unknown>) =>
+  item("ToolCall", { seq: 1, createdAt: 1, tool, body });
+const resultItem = (fields: Fields) => item("ToolResult", { seq: 2, createdAt: 2, ...fields });
+
+function row(command: string, result: Fields | null = { body: { code: 0 } }): ToolRowModel {
   return {
-    call: {
-      seq: 1,
-      parentSeq: null,
-      type: "tool_call",
-      payload: { tool: "sandbox", action: "exec", command },
-      createdAt: 1,
-    },
-    result: result ? { seq: 2, parentSeq: null, type: "tool_result", payload: result, createdAt: 2 } : null,
+    call: callItem("sandbox", { action: "exec", command }),
+    result: result ? resultItem(result) : null,
   };
 }
+
+const call = (tool: string, body: Record<string, unknown>): ToolRowModel => ({
+  call: callItem(tool, body),
+  result: null,
+});
 
 test("simple shell reads and searches get semantic labels, compound commands stay exact", () => {
   assert.equal(activityLabel(row("cat /workspace/src/main.ts"), "complete"), "main.ts");
@@ -33,7 +39,7 @@ test("simple shell reads and searches get semantic labels, compound commands sta
     "rg -g '*.ts' foo src",
     "python3 <<'PY'\nprint(1)\nPY",
   ]) {
-    assert.equal(activityDescription({ tool: "execute", command }).category, "execute");
+    assert.equal(activityDescription(call("execute", { command })).category, "execute");
   }
   assert.equal(
     activityLabel(row("rg -n 'gateway|secret' src/main.ts"), "complete"),
@@ -41,15 +47,15 @@ test("simple shell reads and searches get semantic labels, compound commands sta
   );
   assert.equal(activityLabel(row("sed -n '1,120p' src/main.ts"), "complete"), "main.ts");
   assert.equal(activityLabel(row("rg --files src"), "complete"), "Searched for files in src");
-  assert.deepEqual(activityDescription({ tool: "skill", name: "publish" }), {
+  assert.deepEqual(activityDescription(call("skill", { name: "publish" })), {
     category: "read",
     target: "publish",
   });
-  assert.deepEqual(activityDescription({ tool: "skills", action: "read", name: "admin", path: "SKILL.md" }), {
+  assert.deepEqual(activityDescription(call("skills", { action: "read", name: "admin", path: "SKILL.md" })), {
     category: "read",
     target: "admin",
   });
-  assert.deepEqual(activityDescription({ tool: "skill", name: "publish", path: "templates/x.md" }), {
+  assert.deepEqual(activityDescription(call("skill", { name: "publish", path: "templates/x.md" })), {
     category: "read",
     target: "publish/x.md",
   });
@@ -58,8 +64,8 @@ test("simple shell reads and searches get semantic labels, compound commands sta
 test("status labels never report missing or failed results as successful", () => {
   assert.equal(activityLabel(row("npm test", null), "working"), "Running npm test");
   assert.equal(activityLabel(row("npm test", null), "complete"), "Tried running npm test");
-  assert.equal(activityLabel(row("cat missing", { code: 1 }), "complete"), "missing · exit 1");
-  assert.equal(activityLabel(row("npm test", { blocked: "needs_approval" }), "working"), null);
+  assert.equal(activityLabel(row("cat missing", { body: { code: 1 } }), "complete"), "missing · exit 1");
+  assert.equal(activityLabel(row("npm test", { body: { blocked: "needs_approval" } }), "working"), null);
 });
 
 test("groups describe categories and surface errors and approvals", () => {
@@ -72,13 +78,13 @@ test("groups describe categories and surface errors and approvals", () => {
     category: "read",
     attention: false,
   });
-  items.push({ kind: "tool", row: row("false", { code: 1 }) });
+  items.push({ kind: "tool", row: row("false", { body: { code: 1 } }) });
   assert.equal(activityGroupSummary(items, "complete").attention, false);
   assert.doesNotMatch(activityGroupSummary(items, "complete").label, /failed/);
-  items.push({ kind: "tool", row: row("sleep 60", { code: 124, timedOut: true, isError: true }) });
+  items.push({ kind: "tool", row: row("sleep 60", { isError: true, body: { code: 124, timedOut: true } }) });
   assert.equal(activityGroupSummary(items, "complete").attention, true);
   assert.match(activityGroupSummary(items, "complete").label, /1 failed/);
-  items.push({ kind: "tool", row: row("run", { blocked: "needs_approval" }) });
+  items.push({ kind: "tool", row: row("run", { body: { blocked: "needs_approval" } }) });
   assert.doesNotMatch(activityGroupSummary(items, "working").label, /Approval needed/);
 });
 
@@ -98,28 +104,27 @@ test("thinking titles become disclosure labels without repeating the heading", (
 
 test("session actions identify their recipient and retain failure state", () => {
   const tool = row("");
-  tool.call!.payload = {
-    tool: "session",
+  tool.call = callItem("session", {
     action: "send_message",
     target: "compaction-exact",
     text: "Check the remaining tests",
-  };
+  });
   assert.deepEqual(sessionPresentation(tool, "complete"), {
     label: "Sent message to",
     target: "compaction-exact",
     preview: "Check the remaining tests",
   });
-  tool.result!.payload = { isError: true };
+  tool.result = resultItem({ isError: true });
   assert.equal(sessionPresentation(tool, "complete")?.label, "Failed to send message to");
-  tool.call!.payload = { tool: "session", action: "open", name: "worker" };
-  tool.result!.payload = { title: "Named worker", sessionId: "id" };
+  tool.call = callItem("session", { action: "open", name: "worker" });
+  tool.result = resultItem({ body: { title: "Named worker", sessionId: "id" } });
   assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
-  tool.call!.payload = { tool: "sessions", action: "open", name: "worker" };
+  tool.call = callItem("sessions", { action: "open", name: "worker" });
   assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
-  tool.call!.payload = { tool: "subagents", action: "open", name: "worker" };
+  tool.call = callItem("subagents", { action: "open", name: "worker" });
   assert.equal(sessionPresentation(tool, "complete")?.target, "Named worker");
-  tool.call!.payload = { tool: "sessions", action: "list" };
-  tool.result!.payload = {};
+  tool.call = callItem("sessions", { action: "list" });
+  tool.result = resultItem({});
   assert.equal(sessionPresentation(tool, "complete")?.target, "sessions");
 });
 
@@ -127,57 +132,57 @@ test("activity grouping preserves speech boundaries and chronological item ident
   const tool: TimelineItem = { kind: "tool", row: row("npm test") };
   const speech: TimelineItem = {
     kind: "text",
-    activity: { seq: 8, parentSeq: null, type: "text", payload: { text: "Checking" }, createdAt: 2 },
+    item: item("AgentMessage", { seq: 8, createdAt: 2, variant: "narration", text: "Checking" }),
   };
-  const thought: TimelineItem = {
-    kind: "thinking",
-    activity: { seq: 9, parentSeq: null, type: "thinking", payload: { thinking: "**Check**\nDetails" }, createdAt: 3 },
-  };
+  const thought: TimelineItem = { kind: "thinking", seq: 9, step: null, text: "**Check**\nDetails" };
   assert.deepEqual(activityGroups([tool, speech, thought, tool]), [[tool], [speech], [thought, tool]]);
   assert.deepEqual(activityGroups([]), []);
 });
 
 test("resolved approval history does not mark a group as needing action", () => {
-  const blocked = row("npm test", { blocked: "needs_approval" });
+  const blocked = row("npm test", { body: { blocked: "needs_approval" } });
   assert.equal(activityGroupSummary([{ kind: "tool", row: blocked }], "complete").attention, false);
 });
 
 test("purpose takes precedence over commands while retaining failure and incomplete states", () => {
   const tool = row("cat /workspace/report.csv");
-  tool.call!.payload = { ...(tool.call!.payload as ToolPayload), purpose: "  Check the sales totals  " };
+  tool.call = { ...tool.call!, body: { ...tool.call!.body, purpose: "  Check the sales totals  " } };
   assert.equal(activityLabel(tool, "complete"), "Check the sales totals");
   tool.result = null;
   assert.equal(activityLabel(tool, "working"), "Check the sales totals");
   assert.equal(activityLabel(tool, "complete"), "Check the sales totals · Unconfirmed");
-  tool.result = row("", { code: 1 }).result;
+  tool.result = resultItem({ body: { code: 1 } });
   assert.equal(activityLabel(tool, "complete"), "Check the sales totals · exit 1");
-  tool.result = row("", { code: 124, timedOut: true, isError: true }).result;
+  tool.result = resultItem({ isError: true, body: { code: 124, timedOut: true } });
   assert.equal(activityLabel(tool, "complete"), "Check the sales totals · Failed");
-  tool.result = row("", { blocked: "needs_approval" }).result;
+  tool.result = resultItem({ body: { blocked: "needs_approval" } });
   assert.equal(activityLabel(tool, "working"), null);
-  tool.call!.payload = { tool: "sandbox", action: "start_process", purpose: "Start the preview server" };
+  tool.call = callItem("sandbox", { action: "start_process", purpose: "Start the preview server" });
   tool.result = null;
   assert.equal(activityLabel(tool, "working"), "Start the preview server");
-  tool.call!.payload = { tool: "execute", command: "cat report.csv", purpose: "  " };
+  tool.call = callItem("execute", { command: "cat report.csv", purpose: "  " });
   assert.equal(activityLabel(tool, "working"), "Reading report.csv");
 });
 
 test("ordinary command exits stay neutral while tool errors retain failure labels", () => {
-  for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
+  for (const [toolName, identity] of [
+    ["execute", {}],
+    ["sandbox", { action: "exec" }],
+  ] as const) {
     for (const [command, label] of [
       ["grep absent file", "Searched for absent in file"],
       ["[ -d dir ]", "[ -d dir ]"],
     ]) {
-      const tool = row(command!, { code: 1, isError: false });
-      tool.call!.payload = { ...identity, command };
+      const tool = row(command!, { isError: false, body: { code: 1 } });
+      tool.call = callItem(toolName, { ...identity, command });
       assert.equal(activityLabel(tool, "complete"), `${label} · exit 1`);
       for (const result of [
-        { code: 1, isError: true },
-        { code: 124, timedOut: true },
-        { error: "provider unavailable" },
-        { denied: true },
+        { isError: true, body: { code: 1 } },
+        { body: { code: 124, timedOut: true } },
+        { body: { error: "provider unavailable" } },
+        { body: { denied: true } },
       ]) {
-        tool.result = row(command!, result).result;
+        tool.result = resultItem(result);
         assert.match(activityLabel(tool, "complete")!, /Failed/);
         assert.doesNotMatch(activityLabel(tool, "complete")!, /exit/);
       }
@@ -186,10 +191,21 @@ test("ordinary command exits stay neutral while tool errors retain failure label
 });
 
 test("historical completed nonzero exits do not inherit the old error flag", () => {
-  for (const identity of [{ tool: "execute" }, { tool: "sandbox", action: "exec" }]) {
-    for (const output of [{ result: "[exit 1]" }, { unscreened: true, result: "[NOT security-screened]\n[exit 1]" }]) {
-      const tool = row("[ -d dir ]", { ...identity, ...output, code: 1, timedOut: false, isError: true });
-      tool.call!.payload = { ...identity, command: "[ -d dir ]", purpose: "Check directory" };
+  for (const [toolName, identity] of [
+    ["execute", {}],
+    ["sandbox", { action: "exec" }],
+  ] as const) {
+    for (const output of [
+      { text: "[exit 1]", body: {} },
+      { text: "[NOT security-screened]\n[exit 1]", body: { unscreened: true } },
+    ]) {
+      const tool = row("[ -d dir ]", {
+        tool: toolName,
+        text: output.text,
+        isError: true,
+        body: { ...identity, ...output.body, code: 1, timedOut: false },
+      });
+      tool.call = callItem(toolName, { ...identity, command: "[ -d dir ]", purpose: "Check directory" });
       assert.equal(activityLabel(tool, "complete"), "Check directory · exit 1");
       assert.deepEqual(activityGroupSummary([{ kind: "tool", row: tool }], "complete"), {
         label: "Ran commands",
@@ -202,10 +218,7 @@ test("historical completed nonzero exits do not inherit the old error flag", () 
         { denied: true },
         { quarantined: true },
       ]) {
-        const failed = {
-          ...tool,
-          result: { ...tool.result!, payload: { ...(tool.result!.payload as ToolPayload), ...failure } },
-        };
+        const failed = { ...tool, result: { ...tool.result!, body: { ...tool.result!.body, ...failure } } };
         assert.equal(activityLabel(failed, "complete"), "Check directory · Failed");
       }
     }

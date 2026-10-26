@@ -1,4 +1,5 @@
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import type { OrchestratorInput } from "../src/core/orchestrator/types.ts";
 import { createSessionMethods } from "../src/api/app-sessions.ts";
 import { Readable } from "node:stream";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
@@ -11,32 +12,35 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { scopeId, type SessionEntry } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
-function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return {
-    sessionId: "s1",
-    seq,
-    parentSeq: null,
-    type,
-    payload,
-    scopeLabel: scopeId("personal", "alice"),
-    createdAt: seq,
-  };
+function entry(item: NewItem, seq: number): Item {
+  return storedItem(item, { sessionId: "s1", seq, createdAt: seq });
 }
 
 const entries = [
-  entry("user", { text: "RAW_CONTEXT_SECRET", display: "Hello", attachments: [{ secret: "ATTACHMENT_SECRET" }] }, 1),
-  entry("thinking", { text: "THINKING_SECRET" }, 2),
-  entry("tool_call", { action: "execute", command: "COMMAND_SECRET", callId: "exec" }, 3),
-  entry("tool_result", { text: "RESULT_SECRET", callId: "exec" }, 4),
-  entry("text", { text: "INTERMEDIATE_SECRET" }, 5),
-  entry("assistant", { text: "Hello back", metadata: "METADATA_SECRET" }, 6),
-  entry("user", { text: "HIDDEN_SECRET", hidden: true }, 7),
-  entry("user", { text: "OVERHEARD_SECRET", overheard: true }, 8),
-  entry("tool_call", { action: "post", callId: "post", text: "Published reply", secret: "POST_SECRET" }, 9),
-  entry("tool_result", { callId: "post", ok: true, secret: "POST_RESULT_SECRET" }, 10),
-  entry("assistant", { text: "UNPUBLISHED_SECRET" }, 11),
+  entry(
+    {
+      kind: "UserMessage",
+      text: "RAW_CONTEXT_SECRET",
+      body: { display: "Hello", attachments: [{ secret: "ATTACHMENT_SECRET" }] },
+    },
+    1,
+  ),
+  entry({ kind: "Reasoning", text: "THINKING_SECRET" }, 2),
+  entry({ kind: "ToolCall", callId: "exec", body: { action: "execute", command: "COMMAND_SECRET" } }, 3),
+  entry({ kind: "ToolResult", callId: "exec", text: "RESULT_SECRET" }, 4),
+  entry({ kind: "AgentMessage", variant: "narration", text: "INTERMEDIATE_SECRET" }, 5),
+  entry({ kind: "AgentMessage", text: "Hello back", body: { metadata: "METADATA_SECRET" } }, 6),
+  entry({ kind: "UserMessage", text: "HIDDEN_SECRET", hidden: true }, 7),
+  entry({ kind: "UserMessage", text: "OVERHEARD_SECRET", body: { overheard: true } }, 8),
+  entry(
+    { kind: "ToolCall", callId: "post", body: { action: "post", text: "Published reply", secret: "POST_SECRET" } },
+    9,
+  ),
+  entry({ kind: "ToolResult", callId: "post", body: { ok: true, secret: "POST_RESULT_SECRET" } }, 10),
+  entry({ kind: "AgentMessage", text: "UNPUBLISHED_SECRET" }, 11),
 ];
 
 test("shared transcript allowlists visible message fields and published replies", () => {
@@ -48,9 +52,9 @@ test("shared transcript allowlists visible message fields and published replies"
   assert.equal(JSON.stringify(sharedMessages(entries)).includes("SECRET"), false);
   assert.deepEqual(
     sharedMessages([
-      entry("tool_call", { action: "post", text: "FAILED_SECRET", callId: "p" }, 1),
-      entry("tool_result", { callId: "p", ok: false }, 2),
-      entry("assistant", { text: "Final answer" }, 3),
+      entry({ kind: "ToolCall", callId: "p", body: { action: "post", text: "FAILED_SECRET" } }, 1),
+      entry({ kind: "ToolResult", callId: "p", body: { ok: false } }, 2),
+      entry({ kind: "AgentMessage", text: "Final answer" }, 3),
     ]),
     [{ role: "assistant", text: "Final answer" }],
   );
@@ -58,7 +62,10 @@ test("shared transcript allowlists visible message fields and published replies"
 
 test("a delivery into the conversation is shared as the assistant's message", () => {
   assert.deepEqual(
-    sharedMessages([entry("user", { text: "remind me" }, 1), entry("assistant", { text: "Standup now" }, 2)]),
+    sharedMessages([
+      entry({ kind: "UserMessage", text: "remind me" }, 1),
+      entry({ kind: "AgentMessage", text: "Standup now" }, 2),
+    ]),
     [
       { role: "user", text: "remind me" },
       { role: "assistant", text: "Standup now" },
@@ -69,15 +76,21 @@ test("a delivery into the conversation is shared as the assistant's message", ()
 test("work phases and approval decisions remain outside the shared message snapshot", () => {
   assert.deepEqual(
     sharedMessages([
-      entry("user", { text: "Run the check" }, 1),
-      entry("text_start", { phase: "commentary", streamOffset: 0 }, 2),
-      entry("text", { text: "PRIVATE_WORK_NARRATION" }, 3),
-      entry("approval_request", { requestId: "r", command: "PRIVATE_COMMAND" }, 4),
-      entry("approval_resolved", { requestId: "r", command: "PRIVATE_COMMAND", approved: false }, 5),
-      entry("approval_request", { requestId: "r", command: "PRIVATE_COMMAND" }, 6),
-      entry("approval_resolved", { requestId: "r", command: "PRIVATE_COMMAND", approved: true, scope: "once" }, 7),
-      entry("text_start", { phase: "final_answer", streamOffset: 22 }, 8),
-      entry("assistant", { text: "Check complete", stopped: true }, 9),
+      entry({ kind: "UserMessage", text: "Run the check" }, 1),
+      entry({ kind: "AgentMessage", variant: "narration", text: "PRIVATE_WORK_NARRATION" }, 3),
+      entry({ kind: "Elicitation", elicitId: "r", body: { command: "PRIVATE_COMMAND" } }, 4),
+      entry({ kind: "ElicitationResponse", elicitId: "r", approved: false, body: { command: "PRIVATE_COMMAND" } }, 5),
+      entry({ kind: "Elicitation", elicitId: "r", body: { command: "PRIVATE_COMMAND" } }, 6),
+      entry(
+        {
+          kind: "ElicitationResponse",
+          elicitId: "r",
+          approved: true,
+          body: { command: "PRIVATE_COMMAND", scope: "once" },
+        },
+        7,
+      ),
+      entry({ kind: "AgentMessage", text: "Check complete", body: { stopped: true } }, 9),
     ]),
     [
       { role: "user", text: "Run the check" },
@@ -98,10 +111,10 @@ test("fresh shares freeze messages and authorized attachments with separate audi
     },
   };
   const identity = createIdentityService();
-  const deliveries = createDeliveryStore();
+  const { runs } = createMemoryRunStore();
   const original = [
     ...entries,
-    entry("user", { text: "File", attachments: [{ artifactId: "f1", secret: "SECRET" }] }, 12),
+    entry({ kind: "UserMessage", text: "File", body: { attachments: [{ artifactId: "f1", secret: "SECRET" }] } }, 12),
   ];
   let visible = original;
   let accessible = true;
@@ -134,7 +147,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
       params: { id: "s1", token: parts[3], fileId: parts[5] },
       body: body ? JSON.parse(body) : null,
       actor: null,
-      deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, deliveries },
+      deps: { identity, sessionShares: store, sessionShareBytes: countedBytes, runs },
       app: {
         canViewSessionSnapshot: async (_id: string, user: string, bounds: { minSeq: number }) =>
           accessible && user === "alice" && visible.some((entry) => entry.seq === bounds.minSeq),
@@ -142,7 +155,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
           accessible && user === "alice"
             ? {
                 session: { id: "s1", threadRef: "web:alice:s1", scopeId: scopeId("personal", "alice") },
-                entries: visible,
+                items: visible,
               }
             : null,
         openFileForViewer: async (id: string, user: string) =>
@@ -182,7 +195,7 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.notEqual(fileId, "f1");
   assert.equal((await read(token, "external")).status, 404);
   assert.equal((await read(token, "internal", "", "")).status, 403);
-  visible = [...original, entry("user", { text: "New message" }, 13)];
+  visible = [...original, entry({ kind: "UserMessage", text: "New message" }, 13)];
   const second = (await (await create()).json()) as { share: { token: string } };
   assert.notEqual(second.share.token, token);
   assert.equal((await (await read(token)).text()).includes("New message"), false);
@@ -191,50 +204,50 @@ test("fresh shares freeze messages and authorized attachments with separate audi
   assert.equal((await read(external.share.token, "external", "", "")).status, 200);
   assert.equal((await read(external.share.token)).status, 404);
   assert.equal((await read(second.share.token, "internal", `/files/${fileId}`)).status, 404);
-  visible = [entry("user", { text: "Generate file" }, 1), entry("assistant", { text: "Generated" }, 2)];
-  const delivery = await deliveries.enqueue({
-    destination: { type: "web", target: "web:alice:s1" },
-    text: "Generated",
-    attachments: [{ artifactId: "f1", blobId: "blob-f1", name: "example.html", mimetype: "text/html", sizeBytes: 34 }],
-    provenance: {
-      sourceSessionId: "s1",
-      sourceThreadRef: "web:alice:s1",
-      sourceScopeId: scopeId("personal", "alice"),
-      sourceAssistantEntrySeq: 2,
-      trigger: "conversation",
-      surface: "web",
-      fireKey: "test",
-    },
-    idempotencyKey: "generated",
-  });
-  const pendingShare = (await (await create()).json()) as { share: { token: string } };
-  assert.equal((await (await read(pendingShare.share.token)).text()).includes("example.html"), false);
-  for (const [index, change] of [
-    { shadow: true },
-    { destination: { type: "web", target: "another-thread" } },
-    { provenance: { ...delivery.provenance!, sourceSessionId: "another-session" } },
-    { provenance: { ...delivery.provenance!, sourceAssistantEntrySeq: 99 } },
-  ].entries()) {
-    const rejected = await deliveries.enqueue({
-      destination: delivery.destination,
-      text: "PRIVATE_DELIVERY_TEXT",
-      attachments: delivery.attachments,
-      provenance: delivery.provenance,
-      ...change,
-      idempotencyKey: `excluded-${index}`,
+  visible = [
+    entry({ kind: "UserMessage", text: "Generate file" }, 1),
+    entry({ kind: "AgentMessage", text: "Generated" }, 2),
+  ];
+  const file = { artifactId: "f1", blobId: "blob-f1", name: "example.html", mimetype: "text/html", sizeBytes: 34 };
+  const webReply = async (over: { deliveryTarget?: string; sessionId?: string; seq?: number; text?: string } = {}) =>
+    (
+      await runs.enqueue({
+        sessionId: "web:alice:s1",
+        request: {
+          surface: "web",
+          deliveryTarget: over.deliveryTarget ?? "web:alice:s1",
+          actor: { id: "alice", type: "internal" },
+          conversation: { kind: "dm", threadRef: "web:alice:s1", audience: [] },
+          origin: { kind: "direct" },
+          text: "Generate file",
+        } as OrchestratorInput,
+      })
+    ).run;
+  const finish = async (runId: string, over: { sessionId?: string; seq?: number; text?: string } = {}) => {
+    const claimed = await runs.claimById(runId, "w1", 5_000);
+    await runs.complete(runId, claimed!.leaseToken!, {
+      status: "ok",
+      reply: over.text ?? "Generated",
+      sessionId: over.sessionId ?? "s1",
+      sourceAssistantEntrySeq: over.seq ?? 2,
+      attachments: [file],
     });
-    await deliveries.ack(rejected.id, Date.now());
+  };
+  for (const change of [{ deliveryTarget: "another-thread" }, { sessionId: "another-session" }, { seq: 99 }]) {
+    const rejected = await webReply(change);
+    await finish(rejected.id, { ...change, text: "PRIVATE_DELIVERY_TEXT" });
   }
-  const excludedShare = (await (await create()).json()) as { share: { token: string } };
-  const excludedText = await (await read(excludedShare.share.token)).text();
-  assert.equal(excludedText.includes("example.html"), false);
+  const generated = await webReply();
+  const pendingShare = (await (await create()).json()) as { share: { token: string } };
+  const excludedText = await (await read(pendingShare.share.token)).text();
+  assert.equal(excludedText.includes("example.html"), false, "unfinished and mismatched runs share no files");
   assert.equal(excludedText.includes("PRIVATE_DELIVERY_TEXT"), false);
-  await deliveries.ack(delivery.id, Date.now());
+  await finish(generated.id);
   const generatedShare = (await (await create()).json()) as { share: { token: string } };
   assert.equal((await (await read(generatedShare.share.token)).text()).includes("example.html"), true);
   visible = original;
   const beforePuts = puts;
-  visible = [...original, entry("user", { attachments: [{ artifactId: "missing" }] }, 13)];
+  visible = [...original, entry({ kind: "UserMessage", body: { attachments: [{ artifactId: "missing" }] } }, 13)];
   assert.equal((await create()).status, 409);
   assert.equal(puts, beforePuts);
   visible = original;
@@ -258,15 +271,18 @@ test("fresh shares freeze messages and authorized attachments with separate audi
 
 test("attachment projection includes only user and delivered attachments", () => {
   const messages = sharedMessages([
-    entry("user", { attachments: [{ artifactId: "user" }] }, 1),
-    entry("tool_result", { tool: "execute", files: [{ artifactId: "private" }] }, 2),
-    entry("tool_result", { tool: "attach", files: [{ artifactId: "failed" }], isError: true }, 3),
-    entry("tool_result", { tool: "attach", files: [{ artifactId: "old", name: "a" }] }, 4),
-    entry("tool_result", { tool: "attach", files: [{ artifactId: "new", name: "a" }] }, 5),
-    entry("assistant", { text: "Here" }, 6),
-    entry("tool_call", { action: "post", callId: "p", text: "Posted" }, 8),
-    entry("tool_result", { callId: "p", files: [{ artifactId: "posted" }] }, 9),
-    entry("assistant", { text: "private final" }, 10),
+    entry({ kind: "UserMessage", body: { attachments: [{ artifactId: "user" }] } }, 1),
+    entry({ kind: "ToolResult", callId: "a1", tool: "execute", body: { files: [{ artifactId: "private" }] } }, 2),
+    entry(
+      { kind: "ToolResult", callId: "a2", tool: "attach", isError: true, body: { files: [{ artifactId: "failed" }] } },
+      3,
+    ),
+    entry({ kind: "ToolResult", callId: "a3", tool: "attach", body: { files: [{ artifactId: "old", name: "a" }] } }, 4),
+    entry({ kind: "ToolResult", callId: "a4", tool: "attach", body: { files: [{ artifactId: "new", name: "a" }] } }, 5),
+    entry({ kind: "AgentMessage", text: "Here" }, 6),
+    entry({ kind: "ToolCall", callId: "p", body: { action: "post", text: "Posted" } }, 8),
+    entry({ kind: "ToolResult", callId: "p", body: { files: [{ artifactId: "posted" }] } }, 9),
+    entry({ kind: "AgentMessage", text: "private final" }, 10),
   ]);
   assert.deepEqual(messages, [
     { role: "user", text: "", attachmentIds: ["user"] },
@@ -308,14 +324,22 @@ test("snapshot authorization checks mixed tenure bounds without reading transcri
 });
 
 test("staged tool attachments are never shared without confirmed delivery", () => {
-  const staged = entry("tool_result", { tool: "attach", ok: true, files: [{ artifactId: "PRIVATE_STAGED_FILE" }] }, 1);
+  const staged = entry(
+    {
+      kind: "ToolResult",
+      callId: "a5",
+      tool: "attach",
+      body: { ok: true, files: [{ artifactId: "PRIVATE_STAGED_FILE" }] },
+    },
+    1,
+  );
   for (const following of [
     [],
-    [entry("assistant", { text: "Done" }, 2)],
-    [entry("user", { text: "Next turn" }, 2)],
+    [entry({ kind: "AgentMessage", text: "Done" }, 2)],
+    [entry({ kind: "UserMessage", text: "Next turn" }, 2)],
     [
-      entry("tool_call", { action: "post", callId: "p", text: "Posted" }, 2),
-      entry("tool_result", { callId: "p", ok: true }, 3),
+      entry({ kind: "ToolCall", callId: "p", body: { action: "post", text: "Posted" } }, 2),
+      entry({ kind: "ToolResult", callId: "p", body: { ok: true } }, 3),
     ],
   ]) {
     assert.equal(JSON.stringify(sharedMessages([staged, ...following])).includes("PRIVATE_STAGED_FILE"), false);

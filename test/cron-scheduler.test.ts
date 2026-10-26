@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
@@ -30,7 +30,7 @@ function harness(
   maxFiresPerTick?: number,
 ) {
   const crons = createCronStore();
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const identity = createIdentityService();
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
@@ -41,14 +41,14 @@ function harness(
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries,
+    outbound,
     idempotency: createIdempotencyStore(),
     identity,
     run,
     ...(directory ? { directory } : {}),
     ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
   });
-  return { crons, deliveries, calls, scheduler, identity };
+  return { crons, outbound, calls, scheduler, identity };
 }
 
 test("scheduler threads stored unattended grants into owner-mode turns", async () => {
@@ -66,7 +66,7 @@ test("scheduler threads stored unattended grants into owner-mode turns", async (
 });
 
 test("a channel cron runs in the channel scope and delivers its real output to the channel", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, outbound, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
@@ -79,14 +79,14 @@ test("a channel cron runs in the channel scope and delivers its real output to t
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "channel");
   assert.equal(calls[0]?.conversation.channelRef, "C1");
-  const pending = await deliveries.pending("slack");
+  const pending = await outbound.pending("slack");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
   assert.equal(pending[0]?.provenance?.sourceTitle, "Daily standup");
 });
 
 test("a group-DM cron runs in the group scope and delivers its real output to the group", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, outbound, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
@@ -98,13 +98,13 @@ test("a group-DM cron runs in the group scope and delivers its real output to th
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "group");
   assert.equal(calls[0]?.conversation.channelRef, "G1");
-  const pending = await deliveries.pending("group");
+  const pending = await outbound.pending("group");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
 test("a group-DM relay message delivers verbatim, floored to the group", async () => {
-  const { crons, deliveries, scheduler } = harness();
+  const { crons, outbound, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     message: "standup in 5 🚀",
@@ -114,11 +114,11 @@ test("a group-DM relay message delivers verbatim, floored to the group", async (
     destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
   });
   await runNowSettled(scheduler, cron.id);
-  assert.equal((await deliveries.pending("group"))[0]?.text, "standup in 5 🚀");
+  assert.equal((await outbound.pending("group"))[0]?.text, "standup in 5 🚀");
 });
 
 test("a group-DM cron composed at another scope delivers verbatim (person-keyed parity, §10)", async () => {
-  const { crons, deliveries, scheduler } = harness();
+  const { crons, outbound, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "private digest",
@@ -128,7 +128,7 @@ test("a group-DM cron composed at another scope delivers verbatim (person-keyed 
     destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
   });
   await runNowSettled(scheduler, cron.id);
-  assert.equal((await deliveries.pending("group"))[0]?.text, "CRON-OUTPUT-XYZ");
+  assert.equal((await outbound.pending("group"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
 test("a channel cron fire gives the agent the people-here roster with real <@…> mention ids", async () => {
@@ -177,7 +177,7 @@ test("a DM cron fire carries no mention roster (DMs already notify their owner)"
 });
 
 test("a personal cron runs as a DM and delivers to the owner", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, outbound, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "drink water",
@@ -188,11 +188,11 @@ test("a personal cron runs as a DM and delivers to the owner", async () => {
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls[0]?.conversation.kind, "dm");
-  assert.equal((await deliveries.pending("slack"))[0]?.text, "CRON-OUTPUT-XYZ");
+  assert.equal((await outbound.pending("slack"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
 test("output composed at one scope delivers verbatim to a channel the owner may post to (person-keyed parity, §10)", async () => {
-  const { crons, deliveries, scheduler } = harness();
+  const { crons, outbound, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "private digest",
@@ -202,11 +202,11 @@ test("output composed at one scope delivers verbatim to a channel the owner may 
     destination: { type: "slack", target: "C9", audienceScopeId: scopeId("channel", "C9") },
   });
   await runNowSettled(scheduler, cron.id);
-  assert.equal((await deliveries.pending("slack"))[0]?.text, "CRON-OUTPUT-XYZ");
+  assert.equal((await outbound.pending("slack"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
 test("a personal cron with a principal destination delivers its real output to the teammate", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, outbound, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "let Alice know the deploy is done",
@@ -228,13 +228,13 @@ test("a personal cron with a principal destination delivers its real output to t
     audienceScopeId: scopeId("personal", "U-alice"),
     onBehalfOf: "U1",
   });
-  const pending = await deliveries.pending("principal");
+  const pending = await outbound.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
 test("a recurring verbatim reminder to a teammate delivers to the teammate", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, outbound, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
     message: "daily standup notes are due",
@@ -250,7 +250,7 @@ test("a recurring verbatim reminder to a teammate delivers to the teammate", asy
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 0);
-  const pending = await deliveries.pending("principal");
+  const pending = await outbound.pending("principal");
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.destination.target, "U-alice");
   assert.equal(pending[0]?.text, "daily standup notes are due");
@@ -259,7 +259,7 @@ test("a recurring verbatim reminder to a teammate delivers to the teammate", asy
 });
 
 test("a teammate-DM cron created in a channel delivers its real output (§10 parity gate)", async () => {
-  const { crons, deliveries, scheduler } = harness();
+  const { crons, outbound, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "summarize this channel and DM it to Alice",
@@ -274,11 +274,11 @@ test("a teammate-DM cron created in a channel delivers its real output (§10 par
     },
   });
   await runNowSettled(scheduler, cron.id);
-  assert.equal((await deliveries.pending("principal"))[0]?.text, "CRON-OUTPUT-XYZ");
+  assert.equal((await outbound.pending("principal"))[0]?.text, "CRON-OUTPUT-XYZ");
 });
 
 test("a cron with a literal message delivers it verbatim, without running a turn", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, outbound, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { firstFireAt: 1 },
     message: "standup moved to 4pm",
@@ -294,11 +294,11 @@ test("a cron with a literal message delivers it verbatim, without running a turn
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 0, "a literal message must not re-run a turn (that's the immediate-send confusion)");
-  assert.equal((await deliveries.pending("principal"))[0]?.text, "standup moved to 4pm");
+  assert.equal((await outbound.pending("principal"))[0]?.text, "standup moved to 4pm");
 });
 
 test("a destination-less cron runs its action but delivers nothing", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, outbound, calls, scheduler } = harness();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "nightly cleanup",
@@ -308,7 +308,7 @@ test("a destination-less cron runs its action but delivers nothing", async () =>
   });
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls.length, 1);
-  assert.equal((await deliveries.pending("slack")).length, 0);
+  assert.equal((await outbound.pending("slack")).length, 0);
 });
 
 test("a one-shot cron is auto-disabled after it fires", async () => {
@@ -328,7 +328,7 @@ test("a one-shot cron is auto-disabled after it fires", async () => {
 
 test("only the leader instance fires due crons on tick (non-leader skips)", async () => {
   const crons = createCronStore();
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const idempotency = createIdempotencyStore();
   const identity = createIdentityService();
   const calls: TurnRequest[] = [];
@@ -340,7 +340,7 @@ test("only the leader instance fires due crons on tick (non-leader skips)", asyn
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries,
+    outbound,
     idempotency,
     identity,
     run,
@@ -525,7 +525,7 @@ test("capped rotation is driven by durable attempt order, not tick arrival times
 test("a cron whose attempt marker cannot persist is held back and cannot starve the rest", async () => {
   const backing = createMemoryMap<Cron>();
   const crons = createCronStore(backing);
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -554,7 +554,7 @@ test("a cron whose attempt marker cannot persist is held back and cannot starve 
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons: flaky,
-    deliveries,
+    outbound,
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run,
@@ -579,7 +579,7 @@ test("a cron whose attempt marker cannot persist is held back and cannot starve 
 test("capped rotation survives a scheduler restart mid-cycle", async () => {
   const backing = createMemoryMap<Cron>();
   const crons = createCronStore(backing);
-  const deliveries = createDeliveryStore();
+  const outbound = recordingOutbound();
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -589,7 +589,7 @@ test("capped rotation survives a scheduler restart mid-cycle", async () => {
     createScheduler({
       ...singleProcessDeps(),
       crons,
-      deliveries,
+      outbound,
       idempotency: createIdempotencyStore(),
       identity: createIdentityService(),
       run,
@@ -716,23 +716,19 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     const session = await sessions.getOrCreateByThread(req.conversation.threadRef!, "dm", scope);
     sessionIds.push(session.id);
-    priorAssistantSeen.push((await sessions.getEntries(session.id)).filter((e) => e.type === "assistant").length);
+    priorAssistantSeen.push((await sessions.getItems(session.id)).filter((i) => i.kind === "AgentMessage").length);
     texts.push(req.text);
     const { lease } = await sessions.acquireLease(session.id);
     assert.ok(lease, "fires are serial, so the lease is always free");
-    await sessions.append(lease, { type: "user", payload: { text: req.text }, scopeLabel: scope });
-    await sessions.append(lease, {
-      type: "assistant",
-      payload: { text: replies[sessionIds.length - 1] ?? "ok" },
-      scopeLabel: scope,
-    });
+    await sessions.append(lease, { kind: "UserMessage", text: req.text });
+    await sessions.append(lease, { kind: "AgentMessage", text: replies[sessionIds.length - 1] ?? "ok" });
     await sessions.releaseLease(lease);
     return { status: "ok", reply: replies[sessionIds.length - 1] ?? "ok", sessionId: session.id };
   };
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run,
@@ -771,7 +767,7 @@ test("an idempotency-skipped cron fire does not create fire log history", async 
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: {
       once: async () => false,
       committed: async () => true,
@@ -846,7 +842,7 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: async () => {
@@ -884,7 +880,7 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: async (req) => {
@@ -948,7 +944,7 @@ for (const queued of [false, true]) {
     const scheduler = createScheduler({
       ...singleProcessDeps(),
       crons,
-      deliveries: createDeliveryStore(),
+      outbound: recordingOutbound(),
       idempotency: createIdempotencyStore(),
       identity: createIdentityService(),
       advisoryLock: createMemoryAdvisoryLock(),
@@ -1049,7 +1045,7 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     now: () => clock,
@@ -1119,7 +1115,7 @@ test("queue mode: while the queue runs, the interval scheduler's leader lease is
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons: createCronStore(),
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: async () => ({ status: "ok", reply: "OUT" }),
@@ -1156,7 +1152,7 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity,
     run: async (req) => {
@@ -1389,7 +1385,7 @@ test("a one-shot whose session is busy is deferred, stays enabled, and fires onc
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: busyOnce(calls),
@@ -1439,7 +1435,7 @@ test("a fire that is still busy ten minutes past its slot gives up: consumed and
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: async (req) => {
@@ -1472,7 +1468,7 @@ test("queue mode: a busy fire releases its slot and is re-queued to run after th
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: busyOnce(calls),
@@ -1532,7 +1528,7 @@ test("scheduler stop waits for delayed queue startup and supports an awaited res
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons: createCronStore(),
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: async () => ({ status: "ok", reply: "unused" }),
@@ -1570,7 +1566,7 @@ test("scheduler cannot resume after uncertain queue shutdown until a stop retry 
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons: createCronStore(),
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: async () => ({ status: "ok", reply: "unused" }),
@@ -1605,7 +1601,7 @@ test("scheduler relinquishes queue claims before a long turn drains and preserve
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     now: () => 1000,
@@ -1690,7 +1686,7 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     now: () => 1000,
@@ -1770,7 +1766,7 @@ test("manual cron preparation and detached fire retain admission across pause", 
     ...singleProcessDeps(),
     admittedWork: work,
     crons,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(),
     identity: createIdentityService(),
     run: () =>

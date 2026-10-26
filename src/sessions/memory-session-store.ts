@@ -1,17 +1,16 @@
-import { transcriptEntries } from "./transcript-source.ts";
+import { transcriptItems } from "./transcript-source.ts";
 import { randomUUID } from "node:crypto";
-import type { Session, SessionEntry, ScopeId } from "../types.ts";
+import type { ScopeId, Session } from "../types.ts";
 import type { GoalRecord } from "../harness/goal.ts";
 import type {
   AttributedTurn,
   EntrySearchHit,
   ScopeActivity,
-  GetEntriesOptions,
+  GetItemsOptions,
   LeaseAttempt,
   LeaseHolder,
   LeasePeek,
   LlmRequestRecord,
-  NewEntry,
   NewLlmRequest,
   NewSearchEntry,
   NewSessionPin,
@@ -26,18 +25,11 @@ import type {
   SpendRow,
   StoreOptions,
 } from "./session-store.ts";
+import { matchesSearchTerms, searchAuthor, searchHitType, searchTerms } from "./entry-search.ts";
 import {
-  entrySearchAuthor,
-  entrySearchText,
-  matchesSearchTerms,
-  searchEntryType,
-  searchTerms,
-} from "./entry-search.ts";
-import {
-  contextWindowFromEntries,
+  contextWindowFromItems,
   cronIdOf,
-  entryWithinTenure,
-  isOverheardEntry,
+  itemWithinTenure,
   DuplicateCallError,
   promptEnvelopeBody,
   sessionCategory,
@@ -45,7 +37,7 @@ import {
   userMessagePreview,
   isWebThread,
 } from "./session-store.ts";
-import { entryFromItem, itemFromEntry } from "./items.ts";
+import { isOverheard, isUserMessage, storedItem, type Item, type NewItem } from "./items.ts";
 import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
 function toParticipantWindow(
@@ -73,7 +65,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
   const now = opts.now ?? (() => Date.now());
   const leaseTtlMs = opts.leaseTtlMs ?? 5 * 60_000;
   const sessions = new Map<string, Session>();
-  const entries = new Map<string, SessionEntry[]>();
+  const entries = new Map<string, Item[]>();
   const goals = new Map<string, GoalRecord>();
   const searchIndex = new Map<string, NewSearchEntry[]>();
   const llmRequests = new Map<string, LlmRequestRecord[]>();
@@ -107,10 +99,10 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     if (!s) return null;
     const view = windows.get(sessionId)?.get(principalId);
     const all = entries.get(sessionId) ?? [];
-    const log = all.filter((e) => e.type === "user");
+    const log = all.filter(isUserMessage);
     const lastActivityAt = log.length ? Math.max(s.createdAt, ...log.map((e) => e.createdAt)) : s.createdAt;
-    const visible = view ? all.some((e) => entryWithinTenure(e, view)) : false;
-    const replies = all.filter((e) => e.type === "assistant" || e.type === "text");
+    const visible = view ? all.some((e) => itemWithinTenure(e, view)) : false;
+    const replies = all.filter((e) => e.kind === "AgentMessage" && e.variant !== "files_delivered");
     const lastReply = replies.length ? Math.max(...replies.map((e) => e.createdAt)) : null;
     const unread = lastReply !== null && lastReply > (view?.readAt ?? 0) && isWebThread(s.threadRef);
     return {
@@ -256,11 +248,11 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       leases.delete(sessionId);
     },
 
-    async append(lease, entry: NewEntry): Promise<SessionEntry> {
-      return (await this.appendMany(lease, [entry]))[0]!;
+    async append(lease, item: NewItem): Promise<Item> {
+      return (await this.appendMany(lease, [item]))[0]!;
     },
 
-    async appendMany(lease, batch: readonly NewEntry[]): Promise<SessionEntry[]> {
+    async appendMany(lease, batch: readonly NewItem[]): Promise<Item[]> {
       const held = leases.get(lease.sessionId);
       if (!held || held.token !== lease.token || now() >= held.expiresAt) {
         throw new Error("append without a valid session lease");
@@ -269,43 +261,34 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const log = entries.get(lease.sessionId);
       if (!log) throw new Error(`unknown session: ${lease.sessionId}`);
       const copied = structuredClone(batch);
-      const scopeLabel = sessions.get(lease.sessionId)?.scopeId ?? (copied[0]?.scopeLabel as ScopeId);
-      const items = copied.map((entry) =>
-        itemFromEntry(entry.type, entry.payload, { turnId: lease.turnId, author: entry.author }),
-      );
-      const calls = new Set(
-        log.flatMap((e) => {
-          const id = (e.payload as { callId?: unknown } | null)?.callId;
-          return (e.type === "tool_call" || e.type === "tool_result") && typeof id === "string"
-            ? [`${e.type}:${id}`]
-            : [];
-        }),
-      );
-      for (const [index, item] of items.entries()) {
+      const calls = new Set(log.flatMap((e) => (e.callId ? [`${e.kind}:${e.callId}`] : [])));
+      for (const item of copied) {
         if (!item.callId) continue;
-        const key = `${copied[index]!.type}:${item.callId}`;
+        const key = `${item.kind}:${item.callId}`;
         if (calls.has(key)) throw new DuplicateCallError(lease.sessionId, [item.callId]);
         calls.add(key);
       }
-      return items.map((item) => {
-        const seq = log.length;
-        const full = entryFromItem({
+      return copied.map((item) => {
+        const full = storedItem(item, {
           sessionId: lease.sessionId,
-          seq,
-          ...item,
-          scopeLabel,
+          seq: log.length,
           createdAt: now(),
+          turnId: lease.turnId ?? null,
         });
+        if (full.kind === "Retraction" && typeof full.body.ts === "string") {
+          const ts = full.body.ts;
+          full.targetSeq =
+            log.findLast((other) => other.kind === "UserMessage" && other.externalId === ts)?.seq ?? null;
+        }
         log.push(full);
-        const searchType = searchEntryType(full);
-        const text = searchType ? entrySearchText(full.payload) : null;
-        if (searchType && text?.trim()) {
+        const searchType = searchHitType(full);
+        if (searchType && full.text?.trim()) {
           const index = searchIndex.get(full.sessionId) ?? [];
-          const author = entrySearchAuthor(full);
+          const author = searchAuthor(full);
           index.push({
             seq: full.seq,
             type: searchType,
-            text,
+            text: full.text,
             createdAt: full.createdAt,
             ...(author ? { author } : {}),
           });
@@ -316,42 +299,38 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async hasDeliveryEntry(sessionId, deliveryKey, slackTs) {
-      return (entries.get(sessionId) ?? []).some((entry) => {
-        const payload = entry.payload as { deliveryKey?: string; ts?: string } | null;
-        return (
-          payload?.deliveryKey === deliveryKey ||
-          (slackTs !== undefined && entry.type === "user" && payload?.ts === slackTs)
-        );
-      });
+      return (entries.get(sessionId) ?? []).some(
+        (item) =>
+          item.kind === "UserMessage" &&
+          (item.body.deliveryKey === deliveryKey || (slackTs !== undefined && item.externalId === slackTs)),
+      );
     },
 
-    async getEntries(sessionId, opts?: GetEntriesOptions) {
-      const all = (entries.get(sessionId) ?? []).filter(
-        (e) => opts?.turnId === undefined || (e.payload as { runId?: string } | null)?.runId === opts.turnId,
-      );
-      const log = opts?.transcript ? transcriptEntries(all) : all;
+    async getItems(sessionId, opts?: GetItemsOptions) {
+      const all = (entries.get(sessionId) ?? []).filter((e) => opts?.turnId === undefined || e.turnId === opts.turnId);
+      const log = opts?.transcript ? transcriptItems(all) : all;
       const since = opts?.sinceSeq ?? 0;
       const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
-    async countEntriesBefore(sessionId, beforeSeq, principalId) {
+    async countItemsBefore(sessionId, beforeSeq, principalId) {
       const win = principalId === undefined ? undefined : windows.get(sessionId)?.get(principalId);
       if (principalId !== undefined && !win) return 0;
-      return transcriptEntries((entries.get(sessionId) ?? []).filter((e) => !win || entryWithinTenure(e, win))).filter(
+      return transcriptItems((entries.get(sessionId) ?? []).filter((e) => !win || itemWithinTenure(e, win))).filter(
         (e) => e.seq < beforeSeq,
       ).length;
     },
 
     async getContextWindow(sessionId) {
-      return contextWindowFromEntries(entries.get(sessionId) ?? []);
+      return contextWindowFromItems(entries.get(sessionId) ?? []);
     },
 
-    async getEntry(sessionId, seq) {
+    async getItem(sessionId, seq) {
       return (entries.get(sessionId) ?? []).find((e) => e.seq === seq);
     },
 
-    async latestEntrySeq(sessionId) {
+    async latestItemSeq(sessionId) {
       return (entries.get(sessionId)?.length ?? 0) - 1;
     },
 
@@ -633,11 +612,11 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       return true;
     },
 
-    async visibleEntries(sessionId, principalId, opts?: GetEntriesOptions) {
+    async visibleItems(sessionId, principalId, opts?: GetItemsOptions) {
       const win = windows.get(sessionId)?.get(principalId);
       if (!win) return [];
-      const all = (entries.get(sessionId) ?? []).filter((e) => entryWithinTenure(e, win));
-      const visible = (opts?.transcript ? transcriptEntries(all) : all).filter(
+      const all = (entries.get(sessionId) ?? []).filter((e) => itemWithinTenure(e, win));
+      const visible = (opts?.transcript ? transcriptItems(all) : all).filter(
         (e) => e.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
       );
       return opts?.limit !== undefined ? visible.slice(-opts.limit) : visible;
@@ -671,7 +650,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         const session = sessions.get(sessionId);
         if (!session) continue;
         for (const row of indexed) {
-          if (!entryWithinTenure(row, win)) continue;
+          if (!itemWithinTenure(row, win)) continue;
           const entry = entries.get(sessionId)?.[row.seq];
           if (!entry) continue;
           if (!matchesSearchTerms(row.text, terms)) continue;
@@ -742,7 +721,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           continue;
         if (page.cronId && cronIdOf(s.threadRef) !== page.cronId) continue;
         const log = entries.get(s.id) ?? [];
-        const userEntries = log.filter((e) => e.type === "user" && !isOverheardEntry(e));
+        const userEntries = log.filter((e) => isUserMessage(e) && !isOverheard(e));
         out.push({
           id: s.id,
           type: s.type,
@@ -753,8 +732,8 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
           messages: log.length,
           lastActivity: log.length ? log[log.length - 1]!.createdAt : s.createdAt,
           createdAt: s.createdAt,
-          firstMessage: userEntries.length ? userMessagePreview(userEntries[0]!.payload) : (s.title ?? ""),
-          lastMessage: userEntries.length ? userMessagePreview(userEntries[userEntries.length - 1]!.payload, 100) : "",
+          firstMessage: userEntries.length ? userMessagePreview(userEntries[0]!.text) : (s.title ?? ""),
+          lastMessage: userEntries.length ? userMessagePreview(userEntries[userEntries.length - 1]!.text, 100) : "",
         });
       }
       out.sort((a, b) => b.lastActivity - a.lastActivity || idDesc(a.id, b.id));
@@ -800,12 +779,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       const DAY = 86_400_000;
       const out: AttributedTurn[] = [];
       for (const [sessionId, byPrincipal] of windows) {
-        const log = (entries.get(sessionId) ?? []).filter((e) => e.type === "user" && !isOverheardEntry(e));
+        const log = (entries.get(sessionId) ?? []).filter((e) => isUserMessage(e) && !isOverheard(e));
         for (const [principalId, w] of byPrincipal) {
           const buckets = new Map<number, { turns: number; firstAt: number; lastAt: number }>();
           for (const e of log) {
             const t = e.createdAt;
-            if (!entryWithinTenure(e, w)) continue;
+            if (!itemWithinTenure(e, w)) continue;
             const day = Math.floor(t / DAY);
             const b = buckets.get(day);
             if (b) {

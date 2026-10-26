@@ -1,4 +1,4 @@
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -29,7 +29,6 @@ function fixture() {
   const audits: Array<{ action: string; resource?: string }> = [];
   const deps: Partial<ServerDeps> = {
     keychain,
-    deliveries: createDeliveryStore(),
     serviceCreds: keychain,
     acl,
     composioReturns: createMemoryMap(),
@@ -1063,8 +1062,23 @@ test("authorization failures keep a redacted upstream cause for operators", asyn
 async function slackReplyFixture() {
   const f = fixture();
   await f.own();
-  f.app.getSessionForViewer = async (id, viewer) =>
-    id === "session" && viewer === "alice" ? { session: { threadRef: "ch:C123:123.456" } } : null;
+  const sessions = createMemorySessionStore();
+  const session = await sessions.getOrCreateByThread(
+    "ch:C123:123.456",
+    "channel",
+    scopeId("personal", "alice"),
+    undefined,
+    "slack",
+  );
+  f.deps.sessions = sessions;
+  f.app.getSessionForViewer = async (id, viewer) => (id === "session" && viewer === "alice" ? { session } : null);
+  const receipts = async () =>
+    (await sessions.getItems(session.id)).map((e): Record<string, unknown> => ({
+      kind: e.kind,
+      text: e.text,
+      externalId: e.externalId,
+      ...e.body,
+    }));
   f.deps.slackAccounts = createMemoryMap();
   await f.deps.slackAccounts.put("alice", {
     principalId: "alice",
@@ -1083,7 +1097,7 @@ async function slackReplyFixture() {
   };
   const identity = { data: { ok: true, user_id: "U123", team_id: "T123" } };
   const message = { sessionId: "session", text: "Hello", clientMessageId: "01234567-0123-4123-8123-012345678901" };
-  return { ...f, account, identity, message };
+  return { ...f, account, identity, message, sessions, receipts };
 }
 
 test("Slack replies use only the viewer's verified user connection and server-side thread destination", async () => {
@@ -1096,15 +1110,13 @@ test("Slack replies use only the viewer's verified user connection and server-si
   });
   assert.equal(result.status, 200);
   assert.equal(result.data.sent, true);
-  const receipts = await f.deps.deliveries!.pending("web");
+  const receipts = await f.receipts();
   assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]!.kind, "UserMessage");
   assert.equal(receipts[0]!.text, "Hello");
-  assert.deepEqual(receipts[0]!.destination.webTranscript, {
-    kind: "slack_reply",
-    sessionId: "session",
-    ts: "123.789",
-    name: "Alice",
-  });
+  assert.equal(receipts[0]!.externalId, "123.789");
+  assert.equal(receipts[0]!.name, "Alice");
+  assert.equal(receipts[0]!.slackReplyReceipt, true);
   const request = JSON.parse(String(f.calls.at(-1)!.init!.body));
   assert.equal(request.connected_account_id, "ca_alice");
   assert.equal(request.endpoint, "https://slack.com/api/chat.postMessage");
@@ -1226,15 +1238,13 @@ test("native Slack replies use the authenticated user's token and server destina
   f.nativeReplies.push(f.nativeIdentity, { ok: true }, { ok: true, ts: "123.789" });
   const result = await f.invoke("/v1/composio/slack/reply", { ...f.message, channel: "COTHER" });
   assert.equal(result.data.sent, true);
-  const receipts = await f.deps.deliveries!.pending("web");
+  const receipts = await f.receipts();
   assert.equal(receipts.length, 1);
+  assert.equal(receipts[0]!.kind, "UserMessage");
   assert.equal(receipts[0]!.text, "Hello");
-  assert.deepEqual(receipts[0]!.destination.webTranscript, {
-    kind: "slack_reply",
-    sessionId: "session",
-    ts: "123.789",
-    name: "Alice",
-  });
+  assert.equal(receipts[0]!.externalId, "123.789");
+  assert.equal(receipts[0]!.name, "Alice");
+  assert.equal(receipts[0]!.slackReplyReceipt, true);
   assert.equal(f.calls.length, 0);
   const sent = f.nativeCalls.at(-1)!;
   assert.equal(sent.method, "chat.postMessage");
@@ -1310,7 +1320,7 @@ test("native Slack access denial and uncertain sends never fall through to anoth
 
 test("a confirmed Slack send is distinguished from a failed transcript write", async () => {
   const f = await slackReplyFixture();
-  f.deps.deliveries!.enqueue = async () => {
+  f.sessions.appendMany = async () => {
     throw new Error("database unavailable");
   };
   f.replies.push(f.account, f.identity, { data: { ok: true } }, { data: { ok: true, ts: "123.789" } });

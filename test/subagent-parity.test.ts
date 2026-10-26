@@ -26,7 +26,7 @@ import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-t
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureName } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
@@ -100,7 +100,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
           current: turn.tools,
           scopeLabel: turn.scopeLabel,
           emit: async (entry: Parameters<typeof turn.emit>[0]) => {
-            if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
+            if (entry.kind === "ToolResult") results.push({ isError: entry.isError ?? undefined });
             return turn.emit(entry);
           },
           screenToolResult: turn.screenToolResult,
@@ -167,7 +167,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       acl,
     }),
     acl,
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     featureFlags,
     sessionSyscalls,
     mcp: {

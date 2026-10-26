@@ -75,23 +75,15 @@ for (const backend of ["memory", "postgres"] as const) {
       assert.ok(lease);
       const entries = await store.appendMany(
         lease,
-        Array.from({ length: 5 }, (_, n) => ({
-          type: "user" as const,
-          payload: { text: `message ${n}` },
-          scopeLabel: scope,
-        })),
+        Array.from({ length: 5 }, (_, n) => ({ kind: "UserMessage" as const, text: `message ${n}` })),
       );
       assert.deepEqual(
         entries.map((entry) => entry.seq),
         [0, 1, 2, 3, 4],
       );
-      assert.deepEqual((await store.getEntries(session.id)).slice(-5), entries);
+      assert.deepEqual((await store.getItems(session.id)).slice(-5), entries);
       assert.deepEqual(await store.appendMany(lease, []), []);
-      const batch = [5, 6].map((n) => ({
-        type: "user" as const,
-        payload: { text: `message ${n}` },
-        scopeLabel: scope,
-      }));
+      const batch = [5, 6].map((n) => ({ kind: "UserMessage" as const, text: `message ${n}` }));
       if (backend === "postgres") {
         const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
         try {
@@ -101,7 +93,7 @@ for (const backend of ["memory", "postgres"] as const) {
           );
           try {
             await assert.rejects(store.appendMany(lease, batch));
-            assert.equal((await store.getEntries(session.id)).length, 5);
+            assert.equal((await store.getItems(session.id)).length, 5);
           } finally {
             await pool.query(`ALTER TABLE items DROP CONSTRAINT ${constraint}`);
           }
@@ -134,16 +126,16 @@ for (const backend of ["memory", "postgres"] as const) {
       assert.ok(lease);
       await store.setGoal(lease, goal(`first ${i}`));
       const notice = {
-        type: "system" as const,
-        payload: { kind: "goal_cancelled", objective: `goal ${i}`, cancelledBy: "u" },
-        scopeLabel: scope,
+        kind: "Wake" as const,
+        wakeCause: "system" as const,
+        body: { kind: "goal_cancelled", objective: `goal ${i}`, cancelledBy: "u" },
       };
       await store.setGoal(lease, { ...goal(`goal ${i}`), status: "paused" }, [notice]);
       await store.releaseLease(lease);
       await assert.rejects(store.setGoal(lease, goal("stale lease"), [notice]), /valid session lease/);
       assert.deepEqual(
-        (await store.getEntries(id)).map((entry) => entry.payload),
-        [{ ...notice.payload, cause: "system" }],
+        (await store.getItems(id)).map((item) => ({ kind: item.kind, wakeCause: item.wakeCause, body: item.body })),
+        [notice],
         "the notice lands with the goal and not with a rejected write",
       );
     }

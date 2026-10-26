@@ -1,5 +1,14 @@
 import { postCallText, postResultOk } from "./surface-post.ts";
-import type { PendingApproval, ToolActivity, WorkBlock } from "./core-bridge.ts";
+import type { PendingApproval, WorkBlock } from "./core-bridge.ts";
+import {
+  activityItems,
+  isHidden,
+  isNarration,
+  isUserMessage,
+  reasoningStepKey,
+  type Item,
+  type WorkActivity,
+} from "./items.ts";
 
 export interface ToolPayload {
   sessionId?: string;
@@ -11,7 +20,6 @@ export interface ToolPayload {
   status?: string;
   children?: number;
 
-  tool?: string;
   command?: string;
   background?: boolean;
   purpose?: string;
@@ -29,8 +37,6 @@ export interface ToolPayload {
   reason?: string;
   code?: number;
   timedOut?: boolean;
-  isError?: boolean;
-  result?: string;
   quarantined?: boolean;
   action?: string;
   process_id?: string;
@@ -40,17 +46,17 @@ export interface ToolPayload {
 }
 
 export interface ToolRowModel {
-  call: ToolActivity | null;
-  result: ToolActivity | null;
-  approval?: ToolActivity;
+  call: Item | null;
+  result: Item | null;
+  approval?: Item;
   attempts?: number;
   pending?: PendingApproval;
 }
 
 export type TimelineItem =
-  | { kind: "steer"; activity: ToolActivity }
-  | { kind: "thinking"; activity: ToolActivity }
-  | { kind: "text"; activity: ToolActivity }
+  | { kind: "steer"; item: Item }
+  | { kind: "thinking"; seq: number; step: string | null; text: string }
+  | { kind: "text"; item: Item }
   | { kind: "tool"; row: ToolRowModel }
   | { kind: "approval"; approval: PendingApproval };
 
@@ -69,16 +75,28 @@ function isTerminalWorkStatus(status: WorkBlock["status"]): boolean {
 
 export type ToolRowKind = "running" | "ok" | "failed" | "attempted" | "approval";
 
-export function toolCategory(payload: ToolPayload): string {
-  if (payload.tool === "execute" && payload.background === true) return "background";
-  if (payload.tool === "files") {
+export function toolBody(item: Item | null | undefined): ToolPayload {
+  return (item?.body ?? {}) as ToolPayload;
+}
+
+export function rowTool(row: Pick<ToolRowModel, "call" | "result">): string | null {
+  return row.call?.tool ?? row.result?.tool ?? null;
+}
+
+export function rowArgs(row: Pick<ToolRowModel, "call" | "result">): ToolPayload {
+  return { ...toolBody(row.result), ...toolBody(row.call) };
+}
+
+export function toolCategory(tool: string | null, payload: ToolPayload): string {
+  if (tool === "execute" && payload.background === true) return "background";
+  if (tool === "files") {
     if (payload.action === "read" || payload.action === "write") return payload.action;
     return "share";
   }
-  if (payload.tool === "skills") return payload.action === "read" ? "skill" : "share";
-  if (payload.tool === "apps") return payload.action === "publish" ? "publish" : "share";
-  if (payload.tool === "sessions" || payload.tool === "subagents") return "session";
-  if (payload.tool !== "sandbox") return payload.tool ?? "unknown";
+  if (tool === "skills") return payload.action === "read" ? "skill" : "share";
+  if (tool === "apps") return payload.action === "publish" ? "publish" : "share";
+  if (tool === "sessions" || tool === "subagents") return "session";
+  if (tool !== "sandbox") return tool ?? "unknown";
   if (payload.action === "exec") return "execute";
   if (
     [
@@ -95,26 +113,26 @@ export function toolCategory(payload: ToolPayload): string {
   return "sandbox";
 }
 
-export function toolExecutionOutput(result: ToolPayload): string | null {
-  return typeof result.code === "number" && typeof result.result === "string" ? result.result : null;
+export function toolExecutionOutput(result: Item | null): string | null {
+  return result && typeof result.body.code === "number" ? result.text : null;
 }
 
 export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): ToolRowKind {
-  const result = (row.result?.payload ?? {}) as ToolPayload;
+  const result = toolBody(row.result);
   if (result.blocked === "needs_approval") return "approval";
   if (!row.result) {
     if (!isTerminalWorkStatus(status)) return "running";
     return status === "failed" ? "failed" : "attempted";
   }
   const completedNonzeroExecution =
-    toolCategory({ ...result, ...((row.call?.payload ?? {}) as ToolPayload) }) === "execute" &&
+    toolCategory(rowTool(row), rowArgs(row)) === "execute" &&
     typeof result.code === "number" &&
     Number.isFinite(result.code) &&
     result.code !== 0 &&
     result.timedOut === false &&
-    toolExecutionOutput(result) !== null;
+    toolExecutionOutput(row.result) !== null;
   const failed =
-    (result.isError === true && !completedNonzeroExecution) ||
+    (row.result.isError === true && !completedNonzeroExecution) ||
     !!result.error ||
     result.denied === true ||
     result.timedOut === true ||
@@ -122,23 +140,18 @@ export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): Too
   return failed ? "failed" : "ok";
 }
 
-function callIdOf(a: ToolActivity): string | undefined {
-  const id = (a.payload as { callId?: unknown } | null)?.callId;
-  return typeof id === "string" && id ? id : undefined;
-}
-
 export function postSpeechText(row: ToolRowModel, allowInFlight = false): string | null {
-  const text = postCallText(row.call?.payload);
+  const text = row.call ? postCallText(row.call) : null;
   if (!text?.trim()) return null;
-  if (row.result) return postResultOk(row.result.payload) ? text : null;
+  if (row.result) return postResultOk(row.result) ? text : null;
   return allowInFlight && !row.approval && !row.pending ? text : null;
 }
 
 function orphanCallSignature(row: ToolRowModel): string | null {
   if (!row.call || row.result || row.approval) return null;
-  const p = (row.call.payload ?? {}) as ToolPayload;
+  const p = toolBody(row.call);
   return [
-    p.tool ?? "unknown",
+    row.call.tool ?? "unknown",
     p.action ?? "",
     p.sandbox_id ?? "",
     p.process_id ?? "",
@@ -195,34 +208,28 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   const items: TimelineItem[] = [];
   const rowByCallId = new Map<string, ToolRowModel>();
   let open: ToolRowModel | null = null;
-  for (const a of work.activity) {
-    if (a.type === "text_start") continue;
-    if (a.type === "user") {
-      if (
-        (a.payload as { steered?: boolean; hidden?: boolean } | null)?.steered &&
-        !(a.payload as { hidden?: boolean } | null)?.hidden
-      )
-        items.push({ kind: "steer", activity: a });
+  for (const a of activityItems(work.activity)) {
+    if (isUserMessage(a)) {
+      if (a.kind === "SteeringMessage" && !isHidden(a)) items.push({ kind: "steer", item: a });
       open = null;
-    } else if (a.type === "thinking") {
-      items.push({ kind: "thinking", activity: a });
+    } else if (a.kind === "Reasoning") {
+      if (a.body.redacted !== true)
+        items.push({ kind: "thinking", seq: a.seq, step: reasoningStepKey(a), text: a.text ?? "" });
       open = null;
-    } else if (a.type === "text") {
-      items.push({ kind: "text", activity: a });
+    } else if (a.kind === "AgentMessage") {
+      items.push({ kind: "text", item: a });
       open = null;
-    } else if (a.type === "approval_resolved") {
+    } else if (a.kind === "ElicitationResponse") {
       open = null;
-    } else if (a.type === "tool_call") {
+    } else if (a.kind === "ToolCall") {
       const row: ToolRowModel = { call: a, result: null };
-      const cid = callIdOf(a);
-      if (cid) rowByCallId.set(cid, row);
+      if (a.callId) rowByCallId.set(a.callId, row);
       open = row;
       items.push({ kind: "tool", row });
-    } else if (a.type === "tool_result") {
-      const cid = callIdOf(a);
-      const matched = cid ? rowByCallId.get(cid) : undefined;
+    } else if (a.kind === "ToolResult") {
+      const matched = a.callId ? rowByCallId.get(a.callId) : undefined;
       if (matched && !matched.result) matched.result = a;
-      else if (!cid && open && !open.result) open.result = a;
+      else if (!a.callId && open && !open.result) open.result = a;
       else items.push({ kind: "tool", row: { call: null, result: a } });
     } else {
       items.push({ kind: "tool", row: { call: null, result: null, approval: a } });
@@ -231,23 +238,14 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   }
   if (!isTerminalWorkStatus(work.status)) {
     liveReasoning(work).forEach((block, i) =>
-      items.push({
-        kind: "thinking",
-        activity: {
-          seq: -1 - i,
-          parentSeq: null,
-          type: "thinking",
-          payload: { thinking: block.text, step: { id: block.step, index: block.index } },
-          createdAt: 0,
-        },
-      }),
+      items.push({ kind: "thinking", seq: -1 - i, step: `${block.step}:${block.index}`, text: block.text }),
     );
   }
   const collapsed = collapseToolItems(items, work.status);
   for (const item of collapsed) {
     if (item.kind !== "tool") continue;
-    const cmd = (item.row.call?.payload as ToolPayload | undefined)?.command;
-    const blocked = (item.row.result?.payload as ToolPayload | undefined)?.blocked === "needs_approval";
+    const cmd = toolBody(item.row.call).command;
+    const blocked = toolBody(item.row.result).blocked === "needs_approval";
     if (!cmd || !blocked) continue;
     const queue = pendingByCmd.get(cmd);
     if (queue?.length) item.row.pending = queue.shift();
@@ -256,13 +254,8 @@ function buildTimelineUncached(work: WorkBlock): TimelineItem[] {
   return collapsed;
 }
 
-export function thinkingStepKey(payload: unknown): string | null {
-  const step = (payload as { step?: { id?: unknown; index?: unknown } } | null)?.step;
-  return step ? `${String(step.id)}:${String(step.index)}` : null;
-}
-
 function liveReasoning(work: WorkBlock): NonNullable<WorkBlock["reasoning"]> {
-  const persisted = new Set(work.activity.map((a) => (a.type === "thinking" ? thinkingStepKey(a.payload) : null)));
+  const persisted = new Set(activityItems(work.activity).map(reasoningStepKey));
   return (work.reasoning ?? []).filter((b) => b.text.trim() && !persisted.has(`${b.step}:${b.index}`));
 }
 
@@ -286,15 +279,17 @@ function collapseToolItems(items: TimelineItem[], status: WorkBlock["status"]): 
 }
 
 export function sessionToolView(
-  call: ToolPayload,
-  result: ToolPayload,
+  row: Pick<ToolRowModel, "call" | "result">,
   sessions: readonly { id: string; title?: string | null }[],
 ): { action: string; chipTitle?: string; sessionId?: string; detail: string } {
+  const call = toolBody(row.call);
+  const result = toolBody(row.result);
+  const output = row.result?.text ?? "";
   const action = call.interrupt === true ? "interrupt" : (call.action ?? result.action ?? "");
   const target = result.sessionId ?? call.target;
   const session =
     sessions.find((row) => row.id === target || row.title === target) ??
-    sessions.find((row) => result.result?.includes(`(sessionId ${row.id})`));
+    sessions.find((row) => output.includes(`(sessionId ${row.id})`));
   const sessionId = session?.id ?? result.sessionId;
   let chipTitle = session?.title || result.title || call.name || "Subagent";
   let detail = "";
@@ -323,24 +318,24 @@ export function currentTextPhase(work: WorkBlock): {
   streamOffset: number;
   startedAt: number;
 } | null {
-  const entry = work.activity.findLast((activity) => activity.type === "text_start");
-  if (!entry) return null;
-  const payload = entry.payload as { phase?: unknown; streamOffset?: unknown } | null;
+  const entry = work.activity.findLast((activity) => "marker" in activity);
+  if (!entry || !("marker" in entry)) return null;
+  const { phase, streamOffset } = entry;
   if (
-    (payload?.phase !== undefined && payload.phase !== "commentary" && payload.phase !== "final_answer") ||
-    typeof payload?.streamOffset !== "number" ||
-    !Number.isSafeInteger(payload.streamOffset) ||
-    payload.streamOffset < 0
+    (phase !== undefined && phase !== "commentary" && phase !== "final_answer") ||
+    typeof streamOffset !== "number" ||
+    !Number.isSafeInteger(streamOffset) ||
+    streamOffset < 0
   )
     return null;
-  return { phase: payload.phase, streamOffset: payload.streamOffset, startedAt: entry.createdAt };
+  return { phase, streamOffset, startedAt: entry.createdAt };
 }
 
 export function streamedAnswer(text: string, work: WorkBlock): string {
   const phase = currentTextPhase(work);
   if (phase) {
-    const lastText = work.activity.findLast((entry) => entry.type === "text_start" || entry.type === "text");
-    if (phase.phase !== "final_answer" && lastText?.type === "text") return "";
+    const lastText = work.activity.findLast((entry) => "marker" in entry || isNarration(entry.item));
+    if (phase.phase !== "final_answer" && lastText && "item" in lastText) return "";
     return streamTextFrom(text, phase.streamOffset, work.streamStartOffset ?? 0);
   }
   return work.streamStartOffset
@@ -355,11 +350,11 @@ function streamTextFrom(text: string, offset: number, startOffset: number): stri
   return "…earlier output omitted\n\n" + text.slice(boundary).trimStart();
 }
 
-export function streamingTextTail(text: string, activity: ToolActivity[]): string {
+export function streamingTextTail(text: string, activity: readonly WorkActivity[]): string {
   let tail = text;
-  for (const entry of activity) {
-    if (entry.type !== "text") continue;
-    const spoken = ((entry.payload as { text?: string } | null)?.text ?? "").trim();
+  for (const item of activityItems(activity)) {
+    if (!isNarration(item)) continue;
+    const spoken = (item.text ?? "").trim();
     if (!spoken) continue;
     const candidate = tail.trimStart();
     if (candidate.startsWith(spoken)) tail = candidate.slice(spoken.length).replace(/^\s*?\n\n/, "");
@@ -373,16 +368,13 @@ export function messageWorkTimeline(work: WorkBlock, finalText: string): Timelin
   const timeline = buildTimeline(work);
   const lastText = finalText.trim() ? timeline.findLastIndex((item) => item.kind === "text") : -1;
   return timeline.filter((item, index) => {
-    if (item.kind === "thinking") {
-      const payload = item.activity.payload as { thinking?: string; redacted?: boolean } | null;
-      return !payload?.redacted && Boolean(payload?.thinking?.trim());
-    }
+    if (item.kind === "thinking") return Boolean(item.text.trim());
     if (item.kind !== "text") return true;
-    const payload = item.activity.payload as { text?: string; demoted?: boolean; phase?: string } | null;
+    const text = item.item.text?.trim() ?? "";
     return (
-      !payload?.demoted &&
-      Boolean(payload?.text?.trim()) &&
-      !(index === lastText && payload?.phase !== "commentary" && payload?.text?.trim() === finalText.trim())
+      item.item.body.demoted !== true &&
+      Boolean(text) &&
+      !(index === lastText && item.item.body.phase !== "commentary" && text === finalText.trim())
     );
   });
 }

@@ -43,9 +43,8 @@ async function withTabs(run: (requests: string[]) => Promise<void>): Promise<voi
       return Response.json({
         session,
         sessions: list,
-        entries: [],
-        approvals: [],
         items: [],
+        approvals: [],
         scopeId: "personal:tester",
         approvedHarnesses: [],
         modelsByHarness: {},

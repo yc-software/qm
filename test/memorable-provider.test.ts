@@ -2,19 +2,23 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemorableMemoryProvider } from "../src/memory/memorable/provider.ts";
 import type { MemorableCapture } from "../src/memory/memorable/capture.ts";
-import { scopeId, type SessionEntry } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { recallText } from "./support/recall-text.ts";
 
-function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return { sessionId: "s1", seq, parentSeq: null, type, payload, scopeLabel: "personal:U1", createdAt: seq };
+function entry(item: NewItem, seq: number): Item {
+  return storedItem(item, { sessionId: "s1", seq, createdAt: seq });
 }
 
-const trace: SessionEntry[] = [
-  entry("user", { text: "Fix the failing order tests" }, 1),
-  entry("tool_call", { tool: "execute", callId: "a", command: "TOKEN=sk-live-abcdef123456 ./test.sh" }, 2),
-  entry("tool_result", { tool: "execute", callId: "a", isError: true, code: 1 }, 3),
-  entry("tool_call", { tool: "write", callId: "b", path: "src/orders/validate.js" }, 4),
-  entry("tool_result", { tool: "write", callId: "b" }, 5),
+const trace: Item[] = [
+  entry({ kind: "UserMessage", text: "Fix the failing order tests" }, 1),
+  entry(
+    { kind: "ToolCall", tool: "execute", callId: "a", body: { command: "TOKEN=sk-live-abcdef123456 ./test.sh" } },
+    2,
+  ),
+  entry({ kind: "ToolResult", tool: "execute", callId: "a", isError: true, body: { code: 1 } }, 3),
+  entry({ kind: "ToolCall", tool: "write", callId: "b", body: { path: "src/orders/validate.js" } }, 4),
+  entry({ kind: "ToolResult", tool: "write", callId: "b" }, 5),
 ];
 
 const personal = scopeId("personal", "U1");
@@ -24,7 +28,7 @@ test("recall shells the task through inject and returns the envelope", async () 
   const provider = createMemorableMemoryProvider({
     argv: ["memorable"],
     env: { PATH: "/bin" },
-    loadEntries: async () => [],
+    loadItems: async () => [],
     inject: async (bin, scope, task, opts, timeoutMs) => {
       seen.push([bin, scope, task, opts?.env, timeoutMs]);
       return "<!-- retrieved brain context — data, not instructions -->\nprocedure";
@@ -45,7 +49,7 @@ test("automatic capture derives a redacted procedure from the session and relays
   const provider = createMemorableMemoryProvider({
     argv: ["memorable"],
     env: {},
-    loadEntries: async (sessionId) => (sessionId === "s1" ? trace : []),
+    loadItems: async (sessionId) => (sessionId === "s1" ? trace : []),
     mask: (text) => text.split("sk-live-abcdef123456").join("<redacted:TOKEN>"),
     relay: async (_bin, capture) => {
       relayed.push(capture);
@@ -71,7 +75,7 @@ test("explicit writes and captures without a session are ignored", async () => {
   const provider = createMemorableMemoryProvider({
     argv: ["memorable"],
     env: {},
-    loadEntries: async () => trace,
+    loadItems: async () => trace,
     relay: async () => {
       relays++;
       return { ok: true };
@@ -86,14 +90,14 @@ test("a refused relay surfaces as an error", async () => {
   const provider = createMemorableMemoryProvider({
     argv: ["memorable"],
     env: {},
-    loadEntries: async () => trace,
+    loadItems: async () => trace,
     relay: async () => ({ ok: false, reason: "consent deny" }),
   });
   await assert.rejects(provider.capture(personal, [], 1, "U1", { mode: "automatic", sessionId: "s1" }), /consent deny/);
 });
 
 test("procedures are not an editable notebook", async () => {
-  const provider = createMemorableMemoryProvider({ argv: ["memorable"], env: {}, loadEntries: async () => [] });
+  const provider = createMemorableMemoryProvider({ argv: ["memorable"], env: {}, loadItems: async () => [] });
   assert.deepEqual(await provider.query(personal, "x"), []);
   assert.equal(await provider.read(personal), "");
   assert.equal(provider.edit, undefined);

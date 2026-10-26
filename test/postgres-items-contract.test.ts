@@ -8,6 +8,7 @@ import { readFile } from "node:fs/promises";
 import { createLocalDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { applyPgMigrations, createPgPool, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import type { NewItem } from "../src/sessions/items.ts";
 import { DuplicateCallError } from "../src/sessions/session-store.ts";
 import {
   createPostgresToolOutputStore,
@@ -52,49 +53,15 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
     assert.ok(lease);
     const runId = randomUUID();
     const turn = { ...lease, turnId: runId };
-    const user = await store.append(turn, {
-      type: "user",
-      payload: { text: "hi" },
-      scopeLabel: scope,
-      author: "alice",
-    });
-    await store.append(turn, {
-      type: "user",
-      payload: { text: "also", steered: true },
-      scopeLabel: scope,
-      author: "bob",
-    });
-    await store.append(turn, {
-      type: "assistant",
-      payload: { text: "hello" },
-      scopeLabel: scope,
-      author: "ignored-on-agent-items",
-    });
-    await store.append(
-      { ...lease, turnId: "not-a-uuid" },
-      {
-        type: "tool_call",
-        payload: { tool: "execute", callId: "c1" },
-        scopeLabel: scope,
-      },
-    );
-    await store.append(lease, { type: "system", payload: { kind: "turn_failure", message: "x" }, scopeLabel: scope });
-    const stopped = await store.append(turn, {
-      type: "system",
-      payload: { kind: "turn_stopped", reason: "user", text: "Stopped" },
-      scopeLabel: scope,
-      author: "alice",
-    });
-    assert.deepEqual((await store.getEntry(session.id, stopped.seq))?.payload, {
-      kind: "turn_stopped",
-      reason: "user",
-      text: "Stopped",
-      runId,
-    });
-    await assert.rejects(
-      store.append(lease, { type: "system", payload: { kind: "goal", goal: {} }, scopeLabel: scope }),
-      /goal/,
-    );
+    const user = await store.append(turn, { kind: "UserMessage", text: "hi", author: "alice" });
+    await store.append(turn, { kind: "SteeringMessage", text: "also", author: "bob" });
+    await store.append(turn, { kind: "AgentMessage", text: "hello", author: "ignored-on-agent-items" });
+    await store.append({ ...lease, turnId: "not-a-uuid" }, { kind: "ToolCall", tool: "execute", callId: "c1" });
+    await store.append(lease, { kind: "Error", errorCode: "turn_failure", text: "x" });
+    const stopped = await store.append(turn, { kind: "Stop", author: "alice", body: { reason: "user" } });
+    const read = await store.getItem(session.id, stopped.seq);
+    assert.equal(read?.turnId, runId);
+    assert.deepEqual(read?.body, { reason: "user" });
     await store.releaseLease(lease);
 
     const rows = (
@@ -116,7 +83,7 @@ test("pg items keep turn, author and time in typed columns", { skip }, async () 
       ],
     );
     assert.equal(Number(rows[0].ms), user.createdAt);
-    assert.equal((await store.getEntries(session.id))[0]!.createdAt, user.createdAt);
+    assert.equal((await store.getItems(session.id))[0]!.createdAt, user.createdAt);
     await assert.rejects(
       raw.query(
         "INSERT INTO items(tenant_id, session_id, seq, kind, author, body, created_at) VALUES (qm_tenant_id(), $1, 9, 'AgentMessage', 'x', '{}', now())",
@@ -134,22 +101,14 @@ test("pg items reject a second call with the same call id, leaving the log untou
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
     const callId = "cron:1";
-    const call = {
-      type: "tool_call" as const,
-      payload: { tool: "deliver", callId, text: "hi" },
-      scopeLabel: scope,
-    };
-    const result = {
-      type: "tool_result" as const,
-      payload: { tool: "deliver", callId, result: "delivered" },
-      scopeLabel: scope,
-    };
+    const call: NewItem = { kind: "ToolCall", tool: "deliver", callId, body: { text: "hi" } };
+    const result: NewItem = { kind: "ToolResult", tool: "deliver", callId, text: "delivered" };
     await store.appendMany(lease, [call, result]);
     await assert.rejects(store.appendMany(lease, [call, result]), DuplicateCallError);
-    const entries = await store.getEntries(session.id);
-    assert.equal(entries.length, 2);
-    assert.equal((entries[0]!.payload as { callId: string }).callId, callId);
-    const next = await store.append(lease, { type: "assistant", payload: { text: "after" }, scopeLabel: scope });
+    const items = await store.getItems(session.id);
+    assert.equal(items.length, 2);
+    assert.equal(items[0]!.callId, callId);
+    const next = await store.append(lease, { kind: "AgentMessage", text: "after" });
     assert.equal(next.seq, 2);
     await store.releaseLease(lease);
   });
@@ -184,28 +143,29 @@ test(
         const callId = `call_${randomUUID()}__thought__${randomBytes(4_500).toString("base64")}`;
         const { lease } = await store.acquireLease(session.id);
         assert.ok(lease);
-        const call = { type: "tool_call" as const, payload: { tool: "execute", callId }, scopeLabel: scope };
+        const call = { kind: "ToolCall" as const, tool: "execute", callId };
         await store.append(lease, call);
         await store.append(lease, {
-          type: "tool_result",
-          payload: {
-            tool: "execute",
-            callId,
-            result: "head…tail",
-            output: { blob, chars: full.length, shownChars: 8 },
-          },
-          scopeLabel: scope,
+          kind: "ToolResult",
+          tool: "execute",
+          callId,
+          text: "head…tail",
+          blobSha: blob,
+          body: { output: { chars: full.length, shownChars: 8 } },
         });
         await assert.rejects(store.append(lease, call), DuplicateCallError);
         await store.append(lease, {
-          type: "tool_result",
-          payload: { tool: "execute", callId: "toolu_short", result: "head…tail", output: { blob } },
-          scopeLabel: scope,
+          kind: "ToolResult",
+          tool: "execute",
+          callId: "toolu_short",
+          text: "head…tail",
+          blobSha: blob,
+          body: { output: {} },
         });
         await store.releaseLease(lease);
-        const entries = await store.getEntries(session.id);
+        const items = await store.getItems(session.id);
         assert.deepEqual(
-          entries.map((entry) => (entry.payload as { callId?: string }).callId),
+          items.map((item) => item.callId),
           [callId, callId, "toolu_short"],
         );
         const markerPath = /tool-output\/\S+(?=;)/.exec(cutToolOutput(full, 1, callId)!.text)![0];
@@ -247,7 +207,7 @@ test(
       const session = await store.getOrCreateByThread("web:residue", "dm", scope);
       const { lease } = await store.acquireLease(session.id);
       assert.ok(lease);
-      await store.append(lease, { type: "user", payload: { text: "one" }, scopeLabel: scope });
+      await store.append(lease, { kind: "UserMessage", text: "one" });
       await store.releaseLease(lease);
       await store.addParticipant(session.id, "bob", undefined, { includeHistory: true });
       await store.addParticipant(session.id, "carol");
@@ -272,24 +232,25 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
     const session = await store.getOrCreateByThread("slack:T1:C1:1.0", "dm", scope);
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
-    const receipt = {
-      type: "user" as const,
-      payload: { text: "sent from web", name: "Alice", ts: "2.0", slackReplyReceipt: true, deliveryKey: "k-1" },
-      scopeLabel: scope,
+    const receipt: NewItem = {
+      kind: "UserMessage",
+      text: "sent from web",
+      externalId: "2.0",
+      body: { name: "Alice", slackReplyReceipt: true, deliveryKey: "k-1" },
     };
     await store.appendMany({ ...lease, turnId: randomUUID() }, [receipt]);
     assert.equal(await store.hasDeliveryEntry(session.id, "k-1"), true);
     assert.equal(await store.hasDeliveryEntry(session.id, "k-2", "2.0"), true);
     assert.equal(await store.hasDeliveryEntry(session.id, "k-2", "3.0"), false);
     const texts = async () =>
-      (await store.getEntries(session.id, { transcript: true })).map((e) => {
-        const payload = e.payload as { text?: string; slackReplyReceipt?: boolean };
-        return [payload.text, payload.slackReplyReceipt === true];
-      });
+      (await store.getItems(session.id, { transcript: true })).map((item) => [
+        item.text,
+        item.body.slackReplyReceipt === true,
+      ]);
     assert.deepEqual(await texts(), [["sent from web", true]]);
-    await store.append(lease, { type: "user", payload: { text: "sent from web", ts: "2.0" }, scopeLabel: scope });
+    await store.append(lease, { kind: "UserMessage", text: "sent from web", externalId: "2.0" });
     assert.deepEqual(await texts(), [["sent from web", false]]);
-    assert.equal(await store.countEntriesBefore(session.id, 10), 1);
-    assert.equal((await store.getEntries(session.id)).length, 2);
+    assert.equal(await store.countItemsBefore(session.id, 10), 1);
+    assert.equal((await store.getItems(session.id)).length, 2);
   });
 });

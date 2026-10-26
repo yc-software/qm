@@ -17,24 +17,12 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { securityScreenPayload } from "../src/security/security-posture.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
 
 function fakeIdentity() {
   return {
     refresh: async () => {},
     classify: () => ({ type: "internal" as const }),
-  };
-}
-
-function fakeDeliveries() {
-  const sent: Array<{ text: string }> = [];
-  return {
-    sent,
-    store: {
-      enqueue: async (d: { text: string }) => {
-        sent.push(d);
-        return { id: "d1" };
-      },
-    },
   };
 }
 
@@ -58,7 +46,7 @@ function service(
   const items = createLoopItemLedger();
   const outputs = createLoopOutputStore();
   const grants = overrides?.grants ?? createShipGrantStore();
-  const deliveries = fakeDeliveries();
+  const outbound = recordingOutbound();
   const turns: TurnRequest[] = [];
   const idempotency = createIdempotencyStore();
   const fire = createLoopFireService({
@@ -71,7 +59,7 @@ function service(
     outputs,
     grants,
     trigger: {
-      deliveries: deliveries.store as never,
+      outbound,
       idempotency,
       identity: fakeIdentity() as never,
       ...(overrides?.directory ? { directory: overrides.directory } : {}),
@@ -88,7 +76,7 @@ function service(
       },
     },
   });
-  return { loops, crons, items, outputs, grants, fire, turns, deliveries, idempotency };
+  return { loops, crons, items, outputs, grants, fire, turns, outbound, idempotency };
 }
 
 const base = { owner: "josh", createdBy: "josh", ownerScopeId: scopeId("personal", "josh") };
@@ -342,8 +330,8 @@ test("the scheduler sweep pings a stale loop without waiting for another fire", 
   await s.loops.recordFireOutcome(loop.id, "ok");
   const firedAt = (await s.loops.get(loop.id))!.lastFiredAt!;
   await s.fire.sweepStale(firedAt + 1_001);
-  assert.equal(s.deliveries.sent.length, 1);
-  assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
+  assert.equal(s.outbound.posts.length, 1);
+  assert.match(s.outbound.posts[0]!.text, /trigger looks dead/);
 });
 
 test("the scheduler sweep detects a stale loop that has never fired", async () => {
@@ -353,8 +341,8 @@ test("the scheduler sweep detects a stale loop that has never fired", async () =
     destination: { type: "slack", target: "C1", audienceScopeId: base.ownerScopeId },
   });
   await s.fire.sweepStale(loop.createdAt + 1_001);
-  assert.equal(s.deliveries.sent.length, 1);
-  assert.match(s.deliveries.sent[0]!.text, /trigger looks dead/);
+  assert.equal(s.outbound.posts.length, 1);
+  assert.match(s.outbound.posts[0]!.text, /trigger looks dead/);
 });
 
 test("a stale-loop ping is withheld from a group DM its owner has left", async () => {
@@ -370,7 +358,7 @@ test("a stale-loop ping is withheld from a group DM its owner has left", async (
     destination: { type: "group", target: "G1", audienceScopeId: scopeId("group", "G1") },
   });
   await s.fire.sweepStale(loop.createdAt + 1_001);
-  assert.equal(s.deliveries.sent.length, 0);
+  assert.equal(s.outbound.posts.length, 0);
 });
 
 test("a stale-loop ping still reaches the owner's web conversation", async () => {
@@ -380,7 +368,7 @@ test("a stale-loop ping still reaches the owner's web conversation", async () =>
     destination: { type: "web", target: "web:josh:t1", audienceScopeId: base.ownerScopeId },
   });
   await s.fire.sweepStale(loop.createdAt + 1_001);
-  assert.equal(s.deliveries.sent.length, 1);
+  assert.equal(s.outbound.posts.length, 1);
 });
 
 test("review saturation pings once and recovers after outputs drain", async () => {
@@ -391,15 +379,15 @@ test("review saturation pings once and recovers after outputs drain", async () =
   });
   await s.fire.fire(loop.id, "f1");
   assert.equal((await s.loops.get(loop.id))?.health, "degraded");
-  assert.equal(s.deliveries.sent.length, 1);
-  assert.match(s.deliveries.sent[0]!.text, /waiting for review/);
+  assert.equal(s.outbound.posts.length, 1);
+  assert.match(s.outbound.posts[0]!.text, /waiting for review/);
   await s.fire.fire(loop.id, "saturated");
-  assert.equal(s.deliveries.sent.length, 1);
+  assert.equal(s.outbound.posts.length, 1);
   const output = (await s.outputs.awaitingReview(loop.id))[0]!;
   await s.fire.shipOutput(loop.id, output.id, "reviewer");
   await s.fire.fire(loop.id, "drained");
   assert.equal((await s.loops.get(loop.id))?.health, "healthy");
-  assert.equal(s.deliveries.sent.length, 1);
+  assert.equal(s.outbound.posts.length, 1);
 });
 
 test("prompt fences cannot be escaped by loop, item, output, or reviewer text", async () => {
@@ -631,7 +619,7 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
     const scheduler = createScheduler({
       ...singleProcessDeps(),
       crons: s.crons,
-      deliveries: s.deliveries.store as never,
+      outbound: s.outbound,
       idempotency: s.idempotency,
       identity: fakeIdentity() as never,
       run: async () => {
@@ -653,7 +641,7 @@ for (const unattendedGrants of [undefined, ["admin.sessions.read"]]) {
       assert.equal(turn.surfaceTools, undefined);
       assert.equal(turn.readOnly, undefined);
     }
-    assert.equal(s.deliveries.sent.length, 0);
+    assert.equal(s.outbound.posts.length, 0);
   });
 }
 
@@ -933,8 +921,8 @@ test("persistent inbox failures still quarantine and alert the owner when no des
   for (let i = 0; i < 3; i++) await s.fire.fire(loop.id, `broken-${i}`);
   const after = await s.loops.get(loop.id);
   assert.equal(after?.state, "quarantined");
-  assert.equal(s.deliveries.sent.length, 1);
-  const alert = s.deliveries.sent[0] as { text: string; destination?: { type: string; target: string } };
+  assert.equal(s.outbound.posts.length, 1);
+  const alert = s.outbound.posts[0] as { text: string; destination?: { type: string; target: string } };
   assert.match(alert.text, /quarantined: 3 consecutive failed fires/);
   assert.deepEqual(
     { type: alert.destination?.type, target: alert.destination?.target },
@@ -943,7 +931,7 @@ test("persistent inbox failures still quarantine and alert the owner when no des
   const next = await s.fire.fire(loop.id, "after-quarantine");
   assert.equal(next.status, "failed");
   assert.match(next.note ?? "", /quarantined: 3 consecutive failed fires/);
-  assert.equal(s.deliveries.sent.length, 1);
+  assert.equal(s.outbound.posts.length, 1);
 });
 
 test("a rate-limited intake on a generic loop degrades it without quarantine", async () => {
@@ -1013,7 +1001,7 @@ test("reply followups allow only explicit current send requests through the vers
     } else assert.match(prompt, /Do NOT execute the item's action/);
     assert.equal(next?.thread?.[0]?.text, "Make it shorter\n\nSend it");
     assert.equal(next?.proposal?.data.body, "Draft reply");
-    assert.equal(s.deliveries.sent.length, 0);
+    assert.equal(s.outbound.posts.length, 0);
   }
 });
 

@@ -5,11 +5,10 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { reachEnqueue } from "../src/reach/reach.ts";
+import { recordingOutbound } from "./support/recording-outbound.ts";
+import { reachPost } from "../src/reach/reach.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -24,7 +23,7 @@ describe("POST /v1/reach with files", () => {
   let base: string;
   let bareBase: string;
   let noSandboxBase: string;
-  let built: BuiltApp;
+  let built: ReturnType<typeof buildTestApp>;
 
   const capDm = async (actorId: string) =>
     await mintCapabilityToken(
@@ -49,7 +48,7 @@ describe("POST /v1/reach with files", () => {
 
   before(async () => {
     void fakeSprites;
-    built = buildApp(testConfig({ signingSecret: SECRET }));
+    built = buildTestApp(testConfig({ signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
@@ -106,8 +105,8 @@ describe("POST /v1/reach with files", () => {
     return resources.create(actorId, scope, resources.defaultBackend());
   };
 
-  const readDelivered = async (deliveryId: string) => {
-    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === deliveryId);
+  const readDelivered = async () => {
+    const d = (await built.posts.pending("principal")).at(-1);
     assert.ok(d?.attachments?.length);
     const out: string[] = [];
     for (const a of d!.attachments!) {
@@ -128,7 +127,7 @@ describe("POST /v1/reach with files", () => {
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 200);
-    assert.deepEqual(await readDelivered(((await res.json()) as any).deliveryId), ["stored.txt:from Files\n"]);
+    assert.deepEqual(await readDelivered(), ["stored.txt:from Files\n"]);
   });
 
   it("refuses a stored Files ID the sender cannot view, without revealing it", async () => {
@@ -154,7 +153,7 @@ describe("POST /v1/reach with files", () => {
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(ok.status, 200);
-    assert.deepEqual(await readDelivered(((await ok.json()) as any).deliveryId), ["nobox.txt:no box\n"]);
+    assert.deepEqual(await readDelivered(), ["nobox.txt:no box\n"]);
     const refused = await post(
       noSandboxBase,
       "/v1/reach",
@@ -206,7 +205,7 @@ describe("POST /v1/reach with files", () => {
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 200);
-    assert.deepEqual(await readDelivered(((await res.json()) as any).deliveryId), ["only-here.md:second box\n"]);
+    assert.deepEqual(await readDelivered(), ["only-here.md:second box\n"]);
   });
 
   it("refuses an unauthorized, unknown, or retired sandbox_id instead of falling back to the default", async () => {
@@ -257,9 +256,8 @@ describe("POST /v1/reach with files", () => {
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 200);
-    const body = (await res.json()) as any;
-    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === body.deliveryId);
-    assert.ok(d, "delivery is in the principal queue");
+    const d = (await built.posts.pending("principal")).at(-1);
+    assert.ok(d, "posted to the principal surface");
     assert.equal(d!.attachments?.length, 1, "the named file rides the delivery as an attachment");
     const a = d!.attachments![0]!;
     assert.equal(a.name, "report.md");
@@ -274,7 +272,7 @@ describe("POST /v1/reach with files", () => {
   });
 
   it("is all-or-nothing: a missing path refuses the WHOLE call and enqueues nothing", async () => {
-    const beforeCount = (await built.app.pendingDeliveries("principal")).length;
+    const beforeCount = (await built.posts.pending("principal")).length;
     const res = await post(
       base,
       "/v1/reach",
@@ -286,11 +284,7 @@ describe("POST /v1/reach with files", () => {
     assert.equal(body.error, "attach_failed");
     assert.match(body.message, /reports\/nope\.md \(not found\)/);
     assert.match(body.message, /nothing was sent/);
-    assert.equal(
-      (await built.app.pendingDeliveries("principal")).length,
-      beforeCount,
-      "no text-only delivery leaked out",
-    );
+    assert.equal((await built.posts.pending("principal")).length, beforeCount, "no text-only delivery leaked out");
   });
 
   it("rolls back the good file's staging when a mixed list fails — no orphaned blob or artifact behind the 400", async () => {
@@ -405,23 +399,24 @@ describe("POST /v1/reach with files", () => {
       { "x-agent-capability": await capDm("U-carol") },
     );
     assert.equal(res.status, 200);
-    const body = (await res.json()) as any;
-    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === body.deliveryId);
+    const d = (await built.posts.pending("principal")).at(-1);
     assert.ok(d);
+    assert.equal(d!.text, "no files here");
     assert.equal(d!.attachments, undefined);
   });
 });
 
-describe("reachEnqueue cross-scope delivery", () => {
+describe("reachPost cross-scope delivery", () => {
   it("a delivery composed in one scope carries text AND attachments into another (person-keyed parity, §10)", async () => {
-    const deliveries = createDeliveryStore();
-    const d = await reachEnqueue({
-      deliveries,
-      destination: { type: "channel", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") },
+    const outbound = recordingOutbound();
+    await reachPost({
+      outbound,
+      destination: { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") },
       text: "composed output",
       attachments: [{ name: "report.txt", mimetype: "text/plain", sizeBytes: 6, blobId: "b1" }],
       idempotencyKey: "k-cross-scope",
     });
+    const d = outbound.posts.at(-1)!;
     assert.equal(d.text, "composed output");
     assert.equal(d.attachments?.length, 1, "attachments ride the delivery");
   });

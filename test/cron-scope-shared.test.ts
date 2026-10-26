@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { composeCronEditNotice, notifyOwnerOfCronEdit, type CronEditNoticeSink } from "../src/triggers/edit-notice.ts";
 import type { Cron } from "../src/types.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound, type PostLog } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -15,7 +15,7 @@ const members = [
 ];
 const toChannel: Destination = { type: "slack", target: "C-eng", audienceScopeId: scopeId("channel", "C-eng") };
 
-function captureDeps(): { deps: TriggerDeps; seen: TurnRequest[] } {
+function captureDeps(): { deps: TriggerDeps & { outbound: PostLog }; seen: TurnRequest[] } {
   const seen: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     seen.push(req);
@@ -23,7 +23,7 @@ function captureDeps(): { deps: TriggerDeps; seen: TurnRequest[] } {
   };
   return {
     deps: {
-      deliveries: createDeliveryStore(),
+      outbound: recordingOutbound(),
       idempotency: createIdempotencyStore(createMemoryMap()),
       identity: createIdentityService(),
       run,
@@ -48,7 +48,7 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
     assert.equal(req.ownerKeychainUnion, true);
     assert.equal(req.actor.externalId, "U-carol");
     assert.equal(req.conversation.kind, "channel");
-    assert.equal((await deps.deliveries.pending("slack")).length, 1);
+    assert.equal((await deps.outbound.pending("slack")).length, 1);
   });
 
   it("a webhook in a channel runs as its owner without their keychain", async () => {
@@ -250,7 +250,7 @@ describe("notifyOwnerOfCronEdit: the one chokepoint both edit paths share", () =
     return {
       enqueued,
       sink: {
-        enqueueDelivery: async (i) =>
+        postToSurface: async (i) =>
           void enqueued.push(i as { destination: { target: string }; text: string; idempotencyKey: string }),
         directoryMember: async (p) => members[p] ?? null,
         cronAdminUrl: (c) => `https://x/admin/?cron=${c.id}`,

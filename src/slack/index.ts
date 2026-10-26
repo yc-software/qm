@@ -31,7 +31,7 @@ import { createApprovals } from "./approvals.ts";
 import { createTurnHandler } from "./turn-handler.ts";
 import { registerSlackEvents } from "./events.ts";
 import { createSurfaceContextFulfiller } from "./surface-context.ts";
-import { createDeliveryPoller } from "./deliveries.ts";
+import { createSlackSender } from "./sender.ts";
 import { createDeferredAckReceiver } from "./deferred-ack.ts";
 import { createHttpEventsReceiver } from "./http-events.ts";
 import { parseChannelPage, parseLogLevel } from "./payloads.ts";
@@ -49,7 +49,7 @@ const slackAccountClients = new Map<
     client: any;
     teamId: string;
     policy?: ExternalSlackAccess;
-    inFlightRuns?: { add(id: string): void; delete(id: string): void };
+    inFlightRuns?: { add(id: string): void; delete(id: string): void; has(id: string): boolean };
   }
 >();
 
@@ -425,7 +425,7 @@ export async function startSlackPlugin(
     ...(cfg.userToken ? { userToken: cfg.userToken } : {}),
     clientOptions: CLIENT_OPTIONS,
   });
-  const deliveries = createDeliveryPoller({
+  const sendToSlack = createSlackSender({
     clientForAccount: (id, teamId) => {
       const account = slackAccountClients.get(id);
       if (!account || (teamId && account.teamId !== teamId)) return undefined;
@@ -441,6 +441,9 @@ export async function startSlackPlugin(
     threads,
     clientForIdentity,
     webUiPublicUrl: cfg.webUiPublicUrl,
+    defaultClient: app.client,
+    runInFlight: (runId) =>
+      flow.inFlightRuns.has(runId) || [...slackAccountClients.values()].some((a) => a.inFlightRuns?.has(runId)),
   });
 
   let auth: AuthTestResponse;
@@ -512,44 +515,16 @@ export async function startSlackPlugin(
     emojiCatalogTimer = setInterval(publishEmojiCatalog, EMOJI_CATALOG_REFRESH_MS);
   }
 
-  let deliveriesPollInFlight = false;
-  let deliveriesPollAgain = false;
-  let followerRetry: ReturnType<typeof setTimeout> | undefined;
-  const drainDeliveries = (): void => {
-    if (stopped) return;
-    if (deliveriesPollInFlight) {
-      deliveriesPollAgain = true;
-      return;
-    }
-    deliveriesPollInFlight = true;
-    void deliveries
-      .pollDeliveries(app.client)
-      .then((ranAsLeader) => {
-        if (!ranAsLeader && !stopped && !followerRetry) {
-          followerRetry = setTimeout(() => {
-            followerRetry = undefined;
-            drainDeliveries();
-          }, 5_000);
-          followerRetry.unref?.();
-        }
-      })
-      .catch(swallowAs("slack: delivery drain", undefined))
-      .finally(() => {
-        deliveriesPollInFlight = false;
-        if (deliveriesPollAgain) {
-          deliveriesPollAgain = false;
-          drainDeliveries();
-        }
-      });
-  };
   statusSweep.start();
-  let unsubscribeDeliveries = (): void => {};
-  let deliveriesTimer: NodeJS.Timeout | undefined;
-  if (CORE_SINGLETON || cfg.externalAccess) {
-    unsubscribeDeliveries = core.onDeliveryEnqueued(drainDeliveries);
-    deliveriesTimer = setInterval(drainDeliveries, 60_000);
-    drainDeliveries();
-  }
+  const unregisterSender = core.registerSender(["slack", "group", "principal"], sendToSlack);
+  const reconcileTaskAcks = (): void => {
+    if (!stopped)
+      void core.taskAcknowledgements
+        ?.reconcile(app.client)
+        .catch(swallowAs("slack: task ack reconciliation", undefined));
+  };
+  const taskAckTimer = CORE_SINGLETON ? setInterval(reconcileTaskAcks, 60_000) : undefined;
+  taskAckTimer?.unref?.();
 
   const contextRequestsInFlight = new Set<string>();
 
@@ -581,10 +556,9 @@ export async function startSlackPlugin(
       if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
       await statusSweep.stop();
       await replaySweeper?.stop();
-      if (deliveriesTimer) clearInterval(deliveriesTimer);
       if (emojiCatalogTimer) clearInterval(emojiCatalogTimer);
-      if (followerRetry) clearTimeout(followerRetry);
-      unsubscribeDeliveries();
+      if (taskAckTimer) clearInterval(taskAckTimer);
+      unregisterSender();
       unsubscribeContextRequests();
       try {
         await app.stop();

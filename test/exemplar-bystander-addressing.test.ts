@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -15,7 +15,7 @@ const REQUEST = "<@U_CAROL> can you review these drafts and flag anything I miss
 
 test("exemplar: a thread reply addressed to a teammate arrives author-attributed and the turn may stay silent", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-exemplar-"));
-  const built = buildApp(testConfig({ dataDir }));
+  const built = buildTestApp(testConfig({ dataDir }));
   built.runtime.start();
   try {
     const channel = "C_DRAFT_FIXTURE";
@@ -66,23 +66,17 @@ test("exemplar: a thread reply addressed to a teammate arrives author-attributed
     while (Date.now() < deadline && !trigger) {
       const sub = await built.sessions.getByThread(`ch:${channel}:${root}`);
       if (sub) {
-        const entries = await built.sessions.getEntries(sub.id);
-        trigger = entries.find(
-          (e: any) => e.type === "user" && String((e.payload as any)?.text ?? "").includes("review these drafts"),
-        );
+        const items = await built.sessions.getItems(sub.id);
+        trigger = items.find((e) => e.kind === "UserMessage" && String(e.text ?? "").includes("review these drafts"));
       }
       if (!trigger) await sleep(50);
     }
     assert.ok(trigger, "the message reached the turn's session");
-    assert.equal((trigger.payload as any).name, "Alice", "the trigger is author-attributed");
-    assert.equal((trigger.payload as any).text, REQUEST, "the message text is preserved");
+    assert.equal(trigger.body.name, "Alice", "the trigger is author-attributed");
+    assert.equal(trigger.text, REQUEST, "the message text is preserved");
 
     await sleep(500);
-    assert.deepEqual(
-      await built.deliveries.pending("slack"),
-      [],
-      "no delivery: the bot neither replied nor acted as Alice",
-    );
+    assert.deepEqual(await built.posts.pending("slack"), [], "no delivery: the bot neither replied nor acted as Alice");
   } finally {
     await built.runtime.stop();
   }

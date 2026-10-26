@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { isVisible, type VisibilityDirectory } from "../src/directory/visibility.ts";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
+import { recordingOutbound, type PostLog } from "./support/recording-outbound.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -79,9 +79,9 @@ describe("isVisible: the shared action gate", () => {
   });
 });
 
-function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDeps {
+function triggerDeps(run: (req: TurnRequest) => Promise<TurnResult>): TriggerDeps & { outbound: PostLog } {
   return {
-    deliveries: createDeliveryStore(),
+    outbound: recordingOutbound(),
     idempotency: createIdempotencyStore(createMemoryMap()),
     identity: createIdentityService(),
     run,
@@ -102,7 +102,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       destination,
     });
     assert.equal(out.authzFailed, false);
-    assert.equal((await deps.deliveries.pending("slack")).length, 1);
+    assert.equal((await deps.outbound.pending("slack")).length, 1);
   });
 
   it("skips delivery (without disabling) when the owner can no longer see the private channel", async () => {
@@ -121,7 +121,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       destination,
     });
     assert.equal(out.authzFailed, false, "not disabled — staleness must not kill a cron");
-    assert.equal((await deps.deliveries.pending("slack")).length, 0, "no post to a channel the owner can't see");
+    assert.equal((await deps.outbound.pending("slack")).length, 0, "no post to a channel the owner can't see");
     assert.match(out.note ?? "", /no longer visible/);
     assert.equal(out.status, "refused", "a withheld delivery is not recorded as a success");
   });
@@ -148,7 +148,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       "the fire is consumed and RECORDED (a cron logs it; nothing spins or conflates with dedupe)",
     );
     assert.equal(out.authzFailed, false, "skip-not-disable");
-    assert.equal((await deps.deliveries.pending("slack")).length, 0);
+    assert.equal((await deps.outbound.pending("slack")).length, 0);
     assert.match(out.note ?? "", /no longer a member/);
   });
 
@@ -174,7 +174,7 @@ describe("runTrigger: fire-time visibility gate", () => {
     });
     assert.equal(ranTurn, false);
     assert.equal(out.ran, true);
-    assert.equal((await deps.deliveries.pending("principal")).length, 0);
+    assert.equal((await deps.outbound.pending("principal")).length, 0);
   });
 
   it("skips a verbatim relay into a now-invisible group DM", async () => {
@@ -191,7 +191,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       surface: "cron",
       destination,
     });
-    assert.equal((await deps.deliveries.pending("group")).length, 0);
+    assert.equal((await deps.outbound.pending("group")).length, 0);
     assert.match(out.note ?? "", /no longer visible/);
   });
 
@@ -211,7 +211,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       destination,
     });
     assert.equal(
-      (await deps.deliveries.pending("slack")).length,
+      (await deps.outbound.pending("slack")).length,
       1,
       "thread suffix must be stripped before the membership lookup",
     );
@@ -234,7 +234,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       destination,
     });
     assert.equal(out.note, undefined, "an im target must not be treated as an unknown directory channel");
-    assert.equal((await deps.deliveries.pending("slack")).length, 1, "the owner's own DM is always visible to them");
+    assert.equal((await deps.outbound.pending("slack")).length, 1, "the owner's own DM is always visible to them");
   });
 
   it("a personal-audience slack destination fails closed for anyone but the scope owner", async () => {
@@ -252,7 +252,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       surface: "cron",
       destination,
     });
-    assert.equal((await deps.deliveries.pending("slack")).length, 0);
+    assert.equal((await deps.outbound.pending("slack")).length, 0);
     assert.match(out.note ?? "", /no longer visible/);
   });
 
@@ -273,6 +273,6 @@ describe("runTrigger: fire-time visibility gate", () => {
       destination,
     });
     assert.equal(out.authzFailed, false);
-    assert.equal((await deps.deliveries.pending("principal")).length, 1);
+    assert.equal((await deps.outbound.pending("principal")).length, 1);
   });
 });

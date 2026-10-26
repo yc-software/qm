@@ -53,7 +53,8 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
+import type { ConversationTurn, ScopeId } from "../types.ts";
+import { isReply, isUserMessage, type Item } from "../sessions/items.ts";
 import type { GapPhase, GapPhases, LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { providerTurnError } from "./provider-error.ts";
@@ -111,7 +112,6 @@ import {
   userPromptText,
   seedPriorTurns,
   legacyAssistant,
-  WAKE_KIND,
   type PiReplayMessage,
   type SeededMessage,
 } from "./replay.ts";
@@ -301,12 +301,9 @@ const DETECT_PERSONA_CAP = 2000;
 
 export function renderDetectPrompt(detect: HarnessDetectInput): string {
   const recentAssistantTurns = detect.history
-    .filter((e) => e.type === "assistant")
+    .filter(isReply)
     .slice(-4)
-    .map((e) => {
-      const text = (e.payload as { text?: string } | null)?.text ?? "";
-      return `assistant (you): ${text}`.trim();
-    })
+    .map((e) => `assistant (you): ${e.text ?? ""}`.trim())
     .filter((l) => l.length > 0);
   const reacts = Boolean(detect.reactionGuidance?.trim());
   const parts: string[] = [];
@@ -1613,7 +1610,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     model: Model<Api>,
     sessionId: string,
     systemPrompt: string,
-    history: SessionEntry[],
+    history: Item[],
     priorTurns: ConversationTurn[] | undefined,
     turnProviderKeys: ProviderKeys | undefined,
     ref: TurnSession["ref"],
@@ -1790,7 +1787,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           runtimeHandoff: undefined,
           runtimeMutationPending: false,
           runtimeInFlight: new Set(),
-          runtimeRunId: dispatched.runId,
           runtimeActorId: dispatched.runtimeActorId,
           pendingApprovals: [],
           pausedOnApproval: undefined,
@@ -1867,22 +1863,21 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const userEntry = continueTurn
             ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
             : await turn.emit({
-                type: "user",
-                payload: {
-                  text: turn.input,
+                kind: "UserMessage",
+                text: turn.input,
+                externalId: turn.triggerTs ?? turn.entryTs ?? null,
+                author: turn.runtimeActorId ?? null,
+                body: {
                   ...(turn.environment ? { environment: turn.environment } : {}),
                   ...(goalNote.trim() ? { goalNote } : {}),
-                  ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
                   ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
                   ...imageRefs(turn.images),
                 },
-                scopeLabel: turn.scopeLabel,
-                ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
               });
           const modelPrompt =
             (userEntry
               ? dayMarkerPrefix(
-                  turn.history.findLast((e) => e.type === "user" && e.seq < userEntry.seq),
+                  turn.history.findLast((e) => isUserMessage(e) && e.seq < userEntry.seq),
                   userEntry,
                 )
               : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
@@ -1938,7 +1933,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               persist(() =>
                 steer
                   ? recordSteerIntake(turn, steer)
-                  : turn.emit({ type: "system", payload: { kind: WAKE_KIND, text }, scopeLabel: turn.scopeLabel }),
+                  : turn.emit({ kind: "Wake", wakeCause: "system", body: { text } }),
               );
             }
             await thinkTail;
@@ -2445,10 +2440,12 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
           // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
           const reply = entry.ref.silentRequested ? "" : closingText;
+          const closing = steps.closing(reply);
           await turn.emit({
-            type: "assistant",
-            payload: { text: reply, ...steps.closing(reply) },
-            scopeLabel: turn.scopeLabel,
+            kind: "AgentMessage",
+            text: reply,
+            step: closing?.step ?? null,
+            body: closing?.body ?? {},
           });
           const pendingApprovals = entry.ref.pendingApprovals ?? [];
           const modelCalls = entry.ref.modelCalls ?? 0;

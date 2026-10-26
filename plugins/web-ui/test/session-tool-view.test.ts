@@ -1,14 +1,30 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sessionToolView } from "../src/timeline.ts";
+import { sessionToolView as viewOf } from "../src/timeline.ts";
+import { item } from "./item-fixture.ts";
 
 const sessions = [{ id: "child-123", title: "bug 1" }];
+
+const sessionToolView = (
+  call: Record<string, unknown>,
+  result: Record<string, unknown>,
+  list: typeof sessions,
+  text: string | null = null,
+) =>
+  viewOf(
+    {
+      call: item("ToolCall", { tool: "subagents", body: call }),
+      result: item("ToolResult", { tool: "subagents", text, body: result }),
+    },
+    list,
+  );
 
 test("created badges recover a known child from historical result text", () => {
   const view = sessionToolView(
     { action: "open", name: "Original name" },
-    { result: 'Opened subagent "Original name" (sessionId child-123). It is working now.' },
+    {},
     sessions,
+    'Opened subagent "Original name" (sessionId child-123). It is working now.',
   );
   assert.equal(view.sessionId, "child-123");
   assert.equal(view.chipTitle, "bug 1");

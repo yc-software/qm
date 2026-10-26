@@ -1,4 +1,5 @@
 import type { TranscriptPage } from "./core-bridge.ts";
+import { activitySeq, type WorkActivity } from "./items.ts";
 
 export function messageLinkSeq(search: string): number | null {
   const value = new URLSearchParams(search).get("seq");
@@ -13,25 +14,25 @@ export async function loadMessageTranscript(
   tailTurns: number,
 ): Promise<TranscriptPage> {
   let page = await load({ tailTurns });
-  let first = page.entries[0]?.seq;
-  while (seq !== null && first !== undefined && seq < first && (page.earlierEntries ?? 0) > 0) {
+  let first = page.items[0]?.seq;
+  while (seq !== null && first !== undefined && seq < first && (page.earlierItems ?? 0) > 0) {
     const older = await load({ tailTurns: Math.max(tailTurns, 40), beforeSeq: first });
-    const next = older.entries[0]?.seq;
+    const next = older.items[0]?.seq;
     if (next === undefined || next >= first) break;
-    const entries = new Map([...older.entries, ...page.entries].map((entry) => [entry.seq, entry]));
-    page = { ...page, entries: [...entries.values()], earlierEntries: older.earlierEntries ?? 0 };
+    const items = new Map([...older.items, ...page.items].map((item) => [item.seq, item]));
+    page = { ...page, items: [...items.values()], earlierItems: older.earlierItems ?? 0 };
     first = next;
   }
   return page;
 }
 
 export function messageEntrySeqs(message: unknown): number[] {
-  const value = message as { entrySeq?: number; entrySeqs?: number[]; work?: { activity?: Array<{ seq: number }> } };
+  const value = message as { entrySeq?: number; entrySeqs?: number[]; work?: { activity?: WorkActivity[] } };
   return [
     ...new Set([
       ...(value.entrySeq !== undefined ? [value.entrySeq] : []),
       ...(value.entrySeqs ?? []),
-      ...(value.work?.activity ?? []).map((entry) => entry.seq),
+      ...(value.work?.activity ?? []).map(activitySeq),
     ]),
   ];
 }

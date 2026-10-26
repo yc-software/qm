@@ -63,9 +63,8 @@ test("the admin scope directory lists every known scope with labels and counts (
     await s.built.sessions.addParticipant(session.id, "U1");
     const { lease } = await s.built.sessions.acquireLease(session.id);
     await s.built.sessions.append(lease!, {
-      type: "user",
-      payload: { text: "ship the board deck" },
-      scopeLabel: "channel:C9",
+      kind: "UserMessage",
+      text: "ship the board deck",
     });
     await s.built.sessions.releaseLease(lease!);
     await s.built.app.createCron({

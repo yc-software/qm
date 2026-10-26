@@ -2,7 +2,6 @@ import "./instrument.ts";
 import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { browserErrorConfig } from "./browser-error-config.ts";
 import { flushErrorReporting, reportBackendError } from "../../chassis/src/error-reporting.ts";
-import { swallow } from "../../chassis/src/errors.ts";
 import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
@@ -161,7 +160,7 @@ function rememberRun(runId: string, user: string, threadRef: string): void {
   activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
 }
 
-const deliveryClients = new Map<string, Set<ServerResponse>>();
+const eventClients = new Map<string, Set<ServerResponse>>();
 
 function ownerOfWebThread(threadRef: string): string | null {
   if (!threadRef.startsWith("web:")) return null;
@@ -511,64 +510,6 @@ async function slackWorkspaceUrl(): Promise<string | null> {
   return urlValue;
 }
 
-const WEB_DELIVERY_POLL_MS = Number(process.env.WEB_DELIVERY_POLL_MS ?? 2500);
-const WEB_DELIVERY_GIVEUP_MS = 60_000;
-let deliveriesPollInFlight = false;
-let deliveriesPollFailing = false;
-
-interface PendingWebDelivery {
-  id: string;
-  createdAt: number;
-  destination?: { target?: string };
-}
-
-export async function drainWebDeliveries(): Promise<void> {
-  if (deliveriesPollInFlight) return;
-  deliveriesPollInFlight = true;
-  try {
-    noteDeliveriesPoll(await pollWebDeliveries());
-  } catch (e) {
-    noteDeliveriesPoll(e);
-  } finally {
-    deliveriesPollInFlight = false;
-  }
-}
-
-function noteDeliveriesPoll(failure: unknown): void {
-  if (failure === undefined) {
-    if (deliveriesPollFailing) console.log("[web-ui] web delivery poll recovered");
-    deliveriesPollFailing = false;
-    return;
-  }
-  if (!deliveriesPollFailing) swallow("web-ui: web delivery poll (further failures quiet until recovery)", failure);
-  deliveriesPollFailing = true;
-}
-
-async function pollWebDeliveries(): Promise<unknown> {
-  const r = await coreFetch("GET", "/v1/deliveries?type=web");
-  if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
-  const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
-  const now = Date.now();
-  let failure: unknown;
-  for (const d of pending) {
-    const target = d.destination?.target ?? "";
-    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
-    if (conns && conns.size) {
-      for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
-    } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
-      continue;
-    }
-    try {
-      const ack = await coreFetch("POST", `/v1/deliveries/${encodeURIComponent(d.id)}/ack`);
-      if (ack.status !== 200)
-        failure ??= new Error(`ack delivery ${d.id} http ${ack.status}: ${ack.text.slice(0, 200)}`);
-    } catch (e) {
-      failure ??= e;
-    }
-  }
-  return failure;
-}
-
 const SSE_HEARTBEAT_MS = 15_000;
 const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
 
@@ -591,7 +532,7 @@ function forwardSessionState(frame: SessionStateFrame): void {
   }
   const { participants: _participants, ...visible } = frame;
   for (const user of targets) {
-    for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "session_state", visible);
+    for (const res of eventClients.get(user) ?? []) sseEvent(res, "session_state", visible);
   }
 }
 
@@ -653,7 +594,7 @@ function runStateFeed(): Promise<void> {
     "session_state",
     (data) => forwardSessionState(data as SessionStateFrame),
     () => {
-      for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "session_state_resync", {});
+      for (const conns of eventClients.values()) for (const res of conns) sseEvent(res, "session_state_resync", {});
     },
   );
 }
@@ -668,15 +609,15 @@ function runInboxFeed(): Promise<void> {
 }
 
 function resyncInbox(): void {
-  for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
+  for (const conns of eventClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
 }
 
 async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
-  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
+  if (!ev.loopId || !ev.itemId || !eventClients.size) return;
   const r = await coreFetch(
     "POST",
     "/v1/inbox/viewers",
-    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
+    JSON.stringify({ loopId: ev.loopId, candidates: [...eventClients.keys()] }),
   ).catch(() => null);
   if (r?.status === 404) return;
   let viewers: string[] | undefined;
@@ -687,7 +628,7 @@ async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: str
   }
   if (!viewers) return resyncInbox();
   const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
-  for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
+  for (const user of viewers) for (const res of eventClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
 }
 
 async function coreFetch(
@@ -2136,7 +2077,7 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/sessions/:id/entries/:seq",
+    path: "/api/sessions/:id/items/:seq",
     handle: async (c) => {
       const { res, user } = c;
       const { id, seq } = c.params as { id: string; seq: string };
@@ -2144,7 +2085,7 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(
         res,
         "GET",
-        `/v1/sessions/${encodeURIComponent(id)}/entries/${seq}?viewer=${encodeURIComponent(user)}`,
+        `/v1/sessions/${encodeURIComponent(id)}/items/${seq}?viewer=${encodeURIComponent(user)}`,
       );
     },
   },
@@ -2693,7 +2634,7 @@ const apiRoutes: readonly WebRoute[] = [
   },
   {
     method: "GET",
-    path: "/api/deliveries/events",
+    path: "/api/session-events",
     handle: async (c) => {
       const { req, res, user } = c;
       res.writeHead(200, {
@@ -2703,20 +2644,20 @@ const apiRoutes: readonly WebRoute[] = [
         "x-accel-buffering": "no",
       });
       res.write(": open\n\n");
-      let set = deliveryClients.get(user);
+      let set = eventClients.get(user);
       if (!set) {
         set = new Set();
-        deliveryClients.set(user, set);
+        eventClients.set(user, set);
       }
       set.add(res);
       const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
       beat.unref?.();
       req.on("close", () => {
         clearInterval(beat);
-        const s = deliveryClients.get(user);
+        const s = eventClients.get(user);
         if (s) {
           s.delete(res);
-          if (!s.size) deliveryClients.delete(user);
+          if (!s.size) eventClients.delete(user);
         }
       });
       return;
@@ -3568,8 +3509,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
           console.warn("[web-ui] dist-web/ not built, run `npm run build`");
         if (ALLOW.length === 0)
           console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
-        t.unref?.();
         void runStateFeed();
         void runInboxFeed();
         void sweepDictationSpool();

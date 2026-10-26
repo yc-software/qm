@@ -1,4 +1,5 @@
-import type { SessionEntry, SurfaceContextQuery, SurfaceContextResult } from "../types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../types.ts";
+import { isUserMessage, type Item } from "../sessions/items.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 
@@ -21,32 +22,23 @@ function clip(t: string): string {
 }
 
 export function webConversationWindow(
-  entries: readonly SessionEntry[],
+  entries: readonly Item[],
   owner: string,
   threadRoot: string,
   q: Partial<Pick<SurfaceContextQuery, "count" | "before" | "match">>,
 ): SurfaceContextResult {
   const sentCallIds = new Set<string>();
   for (const e of entries) {
-    if (e.type !== "tool_result") continue;
-    const p = (e.payload ?? {}) as { callId?: unknown; action?: unknown; ok?: unknown; isError?: unknown };
-    if (typeof p.callId === "string" && p.action === "post" && p.isError !== true && p.ok !== false)
-      sentCallIds.add(p.callId);
+    if (e.kind !== "ToolResult") continue;
+    if (e.callId && e.body.action === "post" && e.isError !== true && e.body.ok !== false) sentCallIds.add(e.callId);
   }
   const all: WindowMessage[] = [];
   const self = new Set<string>();
   for (const e of entries) {
-    const p = (e.payload ?? {}) as {
-      text?: unknown;
-      display?: unknown;
-      action?: unknown;
-      callId?: unknown;
-      hidden?: unknown;
-      name?: unknown;
-    };
-    const text = typeof p.text === "string" ? p.text : "";
+    const p = e.body;
     const time = new Date(e.createdAt).toISOString().slice(0, 16).replace("T", " ");
-    if (e.type === "user" && !p.hidden) {
+    if (isUserMessage(e) && !e.hidden) {
+      const text = e.text ?? "";
       const display = typeof p.display === "string" && p.display.trim() ? p.display : text;
       if (display.trim()) {
         all.push({
@@ -58,13 +50,14 @@ export function webConversationWindow(
         });
       }
     } else if (
-      e.type === "tool_call" &&
+      e.kind === "ToolCall" &&
       p.action === "post" &&
-      text.trim() &&
-      typeof p.callId === "string" &&
-      sentCallIds.has(p.callId)
+      typeof p.text === "string" &&
+      p.text.trim() &&
+      e.callId &&
+      sentCallIds.has(e.callId)
     ) {
-      all.push({ ts: contextTs(e.seq), time, author: "you", text: clip(text), threadTs: threadRoot });
+      all.push({ ts: contextTs(e.seq), time, author: "you", text: clip(p.text), threadTs: threadRoot });
       self.add(contextTs(e.seq));
     }
   }
@@ -86,12 +79,7 @@ export function webConversationWindow(
 export async function answerWebContextRequest(
   sessions: Pick<
     SessionStore,
-    | "sessionsByThreadRefs"
-    | "visibleEntries"
-    | "getEntries"
-    | "countEntriesBefore"
-    | "latestEntrySeq"
-    | "participantWindowsOf"
+    "sessionsByThreadRefs" | "visibleItems" | "getItems" | "countItemsBefore" | "latestItemSeq" | "participantWindowsOf"
   >,
   query: SurfaceContextQuery,
 ): Promise<{ result?: SurfaceContextResult; error?: string }> {
@@ -106,7 +94,7 @@ export async function answerWebContextRequest(
   const [session] = await sessions.sessionsByThreadRefs([target]);
   if (!session) return { error: "that conversation isn't readable on the web surface" };
   const viewer = query.viewer?.trim() || owner;
-  const { entries } = await createTranscriptSource(sessions).forViewer(session.id, viewer);
+  const { items } = await createTranscriptSource(sessions).forViewer(session.id, viewer);
   const root = target.slice(target.lastIndexOf(":") + 1);
-  return { result: webConversationWindow(entries, owner, root, query) };
+  return { result: webConversationWindow(items, owner, root, query) };
 }

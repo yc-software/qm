@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import {
+  crashLoopReason,
   countedClaims,
   isTerminal,
   leaseLapsed,
@@ -408,7 +409,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
     run.status = "failed";
     const reason =
       !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
-        ? `run parked after ${countedClaims(run)} claims without completing (suspected crash loop)`
+        ? crashLoopReason(countedClaims(run))
         : error;
     run.result = { status: "failed", sessionId: run.sessionId, reason, ...stopErrorCode(opts?.stop) };
     run.finishedAt = Date.now();

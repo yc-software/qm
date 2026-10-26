@@ -194,7 +194,7 @@ test("read_thread, whats_new and mirror search retain coverage notes and contain
   ]);
   const tools = createSurfaceToolDeps({
     deps: {
-      deliveries: {},
+      outbound: {},
       surfaceCache: cache,
       slackContextSource: "mirror",
       surfaceContext: {

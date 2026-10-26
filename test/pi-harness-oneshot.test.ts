@@ -28,7 +28,7 @@ import {
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type NewItem } from "../src/sessions/items.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 
@@ -56,43 +56,12 @@ test("seedRawMessagesIntoSession pushes the reconstructed tool round (incl. tool
     agent: { state: { messages: liveMessages } },
     sessionManager: { appendMessage: (m: unknown) => persisted.push(m) },
   };
-  const history: SessionEntry[] = [
-    {
-      sessionId: "s",
-      seq: 1,
-      parentSeq: null,
-      type: "user",
-      payload: { text: "sign up" },
-      scopeLabel: "org:default-org",
-      createdAt: 1,
-    },
-    {
-      sessionId: "s",
-      seq: 2,
-      parentSeq: null,
-      type: "tool_call",
-      payload: { tool: "execute", command: "browse", callId: "c1" },
-      scopeLabel: "org:default-org",
-      createdAt: 2,
-    },
-    {
-      sessionId: "s",
-      seq: 3,
-      parentSeq: null,
-      type: "tool_result",
-      payload: { tool: "execute", callId: "c1", result: "user: a / pass: b", isError: false },
-      scopeLabel: "org:default-org",
-      createdAt: 3,
-    },
-    {
-      sessionId: "s",
-      seq: 4,
-      parentSeq: null,
-      type: "assistant",
-      payload: { text: "done" },
-      scopeLabel: "org:default-org",
-      createdAt: 4,
-    },
+  const at = (item: NewItem, seq: number) => storedItem(item, { sessionId: "s", seq, createdAt: seq });
+  const history = [
+    at({ kind: "UserMessage", text: "sign up" }, 1),
+    at({ kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "browse" } }, 2),
+    at({ kind: "ToolResult", tool: "execute", callId: "c1", text: "user: a / pass: b", isError: false }, 3),
+    at({ kind: "AgentMessage", text: "done" }, 4),
   ];
   seedRawMessagesIntoSession(stubSession, reconstructMessagesFromHistory(history));
 
@@ -530,15 +499,10 @@ test("oneShot routes configured models through the model gateway without mutatin
   const input: Parameters<typeof compact>[0] = {
     session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],
     history: [
-      {
-        sessionId: "summary-session",
-        seq: 136,
-        parentSeq: null,
-        type: "user",
-        payload: { text: "what? local recovery what?" },
-        scopeLabel: "personal:test",
-        createdAt: 0,
-      },
+      storedItem(
+        { kind: "UserMessage", text: "what? local recovery what?" },
+        { sessionId: "summary-session", seq: 136, createdAt: 0 },
+      ),
     ],
     recordModelCall: () => {},
   };
@@ -553,7 +517,7 @@ test("oneShot routes configured models through the model gateway without mutatin
     .flatMap((message) => message.content)
     .map((block) => block.text ?? "")
     .join("\n");
-  assert.ok(prompt.indexOf("</conversation>") > prompt.indexOf("user#136"));
+  assert.ok(prompt.indexOf("</conversation>") > prompt.indexOf("UserMessage#136"));
   assert.match(prompt.slice(prompt.indexOf("</conversation>")), /Create a structured context checkpoint summary/);
   stopReason = "max_tokens";
   await assert.rejects(compact(input), /did not complete \(length\)/);
@@ -844,15 +808,18 @@ test("renderDetectPrompt uses prior assistant replies, not assembled prior user 
     recentContext: "carol: Can you send the chart?",
     systemPrompt: "You are Agent Prod.",
     history: [
-      {
-        type: "user",
-        payload: { text: "## The conversation right now\nnoisy rendered Slack block\n\nCan you send the chart?" },
-      },
-      {
-        type: "assistant",
-        payload: { text: "I can send the chart if you share it again." },
-      },
-    ] as any,
+      storedItem(
+        {
+          kind: "UserMessage",
+          text: "## The conversation right now\nnoisy rendered Slack block\n\nCan you send the chart?",
+        },
+        { sessionId: "s", seq: 1, createdAt: 1 },
+      ),
+      storedItem(
+        { kind: "AgentMessage", text: "I can send the chart if you share it again." },
+        { sessionId: "s", seq: 2, createdAt: 2 },
+      ),
+    ],
     recordModelCall() {},
   });
 

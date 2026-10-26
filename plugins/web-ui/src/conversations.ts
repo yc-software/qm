@@ -85,10 +85,6 @@ export function ensureDeliveryStream(): void {
   if (deliveryStreamOpen) return;
   deliveryStreamOpen = true;
   subscribeDeliveries(
-    (threadRef) => {
-      void refreshSessions({ silent: true });
-      for (const conv of live) conv.onDelivery(threadRef);
-    },
     (event) => {
       if (event.state === "ui") {
         handleUiSignal(event as Parameters<typeof handleUiSignal>[0], [...live], sessionsState.list);

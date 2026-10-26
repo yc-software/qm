@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import type { SlackCoreClient } from "../src/slack/index.ts";
 import type { TurnResult } from "../src/types.ts";
+import type { SurfaceSender } from "../src/surfaces/outbound.ts";
 
 type Handler = (args: any) => Promise<void>;
 
@@ -338,9 +339,6 @@ class FakeCore implements SlackCoreClient {
     this.directories.push(body);
     return true;
   }
-  holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
-    return fn(new Promise<void>(() => {}));
-  }
   holdDirectorySync<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
     return fn(new Promise<void>(() => {}));
   }
@@ -349,14 +347,11 @@ class FakeCore implements SlackCoreClient {
     return fn(new Promise<void>(() => {}));
   }
 
-  async claimDeliveries(): Promise<[]> {
-    return [];
-  }
-  async ackDelivery(): Promise<void> {}
-  deliverySubscriptions = 0;
-  onDeliveryEnqueued(): () => void {
-    this.deliverySubscriptions++;
-    return () => {};
+  readonly senders: Array<{ types: readonly string[]; send: SurfaceSender }> = [];
+  registerSender(types: readonly string[], send: SurfaceSender): () => void {
+    const entry = { types, send };
+    this.senders.push(entry);
+    return () => void this.senders.splice(this.senders.indexOf(entry), 1);
   }
   async pendingContextRequests(): Promise<[]> {
     return [];
@@ -1613,7 +1608,6 @@ test("a non-singleton account still serves turns but runs no core-singleton subs
   const f = await fixture({ coreSingleton: false });
   try {
     assert.deepEqual(f.core.directories, []);
-    assert.equal(f.core.deliverySubscriptions, 0);
     assert.equal(f.core.contextSubscriptions, 0);
     assert.equal(f.core.modelChangeListeners.length, 0);
     assert.equal(f.core.headerPinChangeListeners.length, 0);
@@ -1628,7 +1622,6 @@ test("a non-singleton account still serves turns but runs no core-singleton subs
 test("the default account keeps every core-singleton subsystem", async () => {
   const f = await fixture();
   try {
-    assert.equal(f.core.deliverySubscriptions, 1);
     assert.equal(f.core.contextSubscriptions, 1);
     assert.equal(f.core.modelChangeListeners.length, 1);
     assert.equal(f.core.headerPinChangeListeners.length, 1);
@@ -1637,6 +1630,29 @@ test("the default account keeps every core-singleton subsystem", async () => {
     await f.stop();
   }
 });
+
+for (const coreSingleton of [true, false]) {
+  test(`${coreSingleton ? "the default" : "a non-singleton"} account registers a Slack sender that posts through its client until stopped`, async () => {
+    const f = await fixture({ coreSingleton });
+    try {
+      assert.deepEqual(
+        f.core.senders.map((s) => s.types),
+        [["slack", "group", "principal"]],
+      );
+      await f.core.senders[0]!.send({
+        destination: { type: "slack", target: "C1:100.1" },
+        text: "a cron update",
+        idempotencyKey: "reach:1",
+      });
+      const posted = f.client.posts.find((p) => p.text === "a cron update");
+      assert.equal(posted?.channel, "C1");
+      assert.equal(posted?.thread_ts, "100.1");
+    } finally {
+      await f.stop();
+    }
+    assert.deepEqual(f.core.senders, []);
+  });
+}
 
 test("a gated account joining a channel stays silent — no welcome, no header", async () => {
   const f = await fixture({

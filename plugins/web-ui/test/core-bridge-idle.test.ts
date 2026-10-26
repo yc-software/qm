@@ -1,3 +1,5 @@
+import { activitySeq } from "../src/items.ts";
+import { item } from "./item-fixture.ts";
 import { buildTimeline } from "../src/timeline.ts";
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -164,7 +166,7 @@ test("tool-activity growth (no assistant text) ALSO resets the idle clock", asyn
     status: "running",
     result: null,
     partial: "",
-    activity: Array.from({ length: n }, (_, i) => ({ seq: i, type: "tool_call" })),
+    activity: Array.from({ length: n }, (_, i) => ({ item: item("ToolCall", { seq: i }) })),
   }));
   snapshots.push({
     status: "done",
@@ -261,7 +263,7 @@ test("resume streams can finish from an initial terminal run snapshot without po
     status: "done",
     result: { status: "ok", reply: "done" },
     partial: "do",
-    activity: [{ seq: 1, type: "tool_call", payload: { tool: "execute" }, createdAt: 100 }],
+    activity: [{ item: item("ToolCall", { seq: 1, createdAt: 100, tool: "execute" }) }],
     startedAt: 100,
     finishedAt: 200,
   });
@@ -292,10 +294,12 @@ test("pending approval pauses without adding approval instructions to the transc
     partial: "",
     activity: [
       {
-        seq: 1,
-        type: "tool_call",
-        payload: { tool: "execute", command: "git push --force origin main" },
-        createdAt: 100,
+        item: item("ToolCall", {
+          seq: 1,
+          createdAt: 100,
+          tool: "execute",
+          body: { command: "git push --force origin main" },
+        }),
       },
     ],
     startedAt: 100,
@@ -320,7 +324,7 @@ test("a reattached background wake that ended silent is a clean stop, never 'The
     status: "done",
     result: { status: "silent" },
     partial: "",
-    activity: [{ seq: 1, type: "tool_call", payload: { tool: "background" }, createdAt: 100 }],
+    activity: [{ item: item("ToolCall", { seq: 1, createdAt: 100, tool: "background" }) }],
     startedAt: 100,
     finishedAt: 200,
   });
@@ -344,10 +348,12 @@ test("approval denial is rendered as a normal status, not a stream error", async
     partial: "",
     activity: [
       {
-        seq: 1,
-        type: "tool_call",
-        payload: { tool: "execute", command: "git push --force origin main" },
-        createdAt: 100,
+        item: item("ToolCall", {
+          seq: 1,
+          createdAt: 100,
+          tool: "execute",
+          body: { command: "git push --force origin main" },
+        }),
       },
     ],
     startedAt: 100,
@@ -431,19 +437,18 @@ test("a stored quarantine refusal renders the canned copy on the web, never the 
   assert.match(final.errorMessage ?? "", /security screen flagged/);
 });
 
-test("live run polling includes only consumed visible steering in activity order", async () => {
+test("live run polling includes consumed steering in activity order", async () => {
   instantSleep();
   stubRuns([
     {
       status: "done",
       result: { status: "ok", reply: "Done" },
       activity: [
-        { seq: 1, type: "user", createdAt: 1, payload: { text: "start" } },
-        { seq: 2, type: "tool_call", createdAt: 2, payload: { tool: "execute", callId: "a" } },
-        { seq: 3, type: "tool_result", createdAt: 3, payload: { tool: "execute", callId: "a" } },
-        { seq: 4, type: "user", createdAt: 4, payload: { text: "Change direction", steered: true } },
-        { seq: 5, type: "user", createdAt: 5, payload: { text: "Hidden", steered: true, hidden: true } },
-        { seq: 6, type: "tool_call", createdAt: 6, payload: { tool: "execute", callId: "b" } },
+        { item: item("UserMessage", { seq: 1, createdAt: 1, text: "start" }) },
+        { item: item("ToolCall", { seq: 2, createdAt: 2, tool: "execute", callId: "a" }) },
+        { item: item("ToolResult", { seq: 3, createdAt: 3, tool: "execute", callId: "a" }) },
+        { item: item("SteeringMessage", { seq: 4, createdAt: 4, text: "Change direction" }) },
+        { item: item("ToolCall", { seq: 6, createdAt: 6, tool: "execute", callId: "b" }) },
       ],
     },
   ]);
@@ -452,10 +457,7 @@ test("live run polling includes only consumed visible steering in activity order
   partial.work = { status: "thinking", activity: [] };
   await pollRun(stream, partial, "run-steer", freshAcc(Date.now()));
   const final = (await drain(stream)) as AssistantWork;
-  assert.deepEqual(
-    final.work!.activity.map((entry) => entry.seq),
-    [2, 3, 4, 6],
-  );
+  assert.deepEqual(final.work!.activity.map(activitySeq), [2, 3, 4, 6]);
   assert.deepEqual(
     buildTimeline(final.work!).map((item) => item.kind),
     ["tool", "steer", "tool"],

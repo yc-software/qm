@@ -5,7 +5,8 @@ import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { isPersonAuthored, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { traceCarrier } from "../../plugins/chassis/src/error-reporting.ts";
 
-type RunStatus = "pending" | "running" | "done" | "failed";
+type RunStatus = "queued" | "pending" | "running" | "done" | "failed";
+type RunEngine = "legacy" | "absurd";
 
 export type RunPriority = 0 | 1 | 2;
 export const MAX_PREEMPTIONS = 3;
@@ -34,6 +35,7 @@ export interface ReapEvent {
 export interface RunDeliveryState {
   replying?: boolean;
   editRef?: string;
+  postedAt?: number;
 }
 
 export type RunStop =
@@ -73,6 +75,10 @@ export interface Run {
   startedAt: number | null;
   finishedAt: number | null;
   lastStop?: RunStop | null;
+  engine?: RunEngine;
+  absurdQueue?: string | null;
+  absurdTaskId?: string | null;
+  absurdRunId?: string | null;
 }
 
 interface TerminalCursor {
@@ -136,6 +142,9 @@ export interface RunStore {
   deferReturn(runId: string, delayMs: number): Promise<void>;
 
   onTerminal(listener: (run: Run) => void): void;
+  emitTerminal?(run: Run): void;
+  leaseHeld?(run: Run, token: string): Promise<boolean>;
+  cancelTurn?(runId: string): Promise<unknown>;
 
   get(runId: string): Promise<Run | null>;
 
@@ -163,6 +172,12 @@ export interface RunStore {
 }
 
 const TERMINAL = new Set<Run["status"]>(["done", "failed"]);
+export function isUnstarted(run: Pick<Run, "status" | "engine" | "attempts" | "turnUserSeq">): boolean {
+  if (run.status === "queued") return true;
+  if (run.status !== "pending") return false;
+  return run.engine !== "absurd" || (run.attempts === 0 && run.turnUserSeq === null);
+}
+
 export function isTerminal(status: Run["status"]): boolean {
   return TERMINAL.has(status);
 }
@@ -180,6 +195,32 @@ export function errorParks(
   maxClaims?: number,
 ): boolean {
   return run.errorAttempts + 1 >= run.maxAttempts || (maxClaims !== undefined && countedClaims(run) >= maxClaims);
+}
+
+export function crashLoopReason(claims: number): string {
+  return `run parked after ${claims} claims without completing (suspected crash loop)`;
+}
+
+export async function stopRun(
+  runs: Pick<RunStore, "cancelTurn" | "withdraw">,
+  run: Pick<Run, "id" | "engine" | "status">,
+): Promise<void> {
+  if (run.engine === "absurd") await runs.cancelTurn?.(run.id);
+  else if (run.status === "pending") await runs.withdraw(run.id);
+}
+
+export function legacyLeaseHeld(
+  run: Pick<Run, "status" | "leaseToken" | "leaseExpiresAt">,
+  token: string,
+  asOf = Date.now(),
+): boolean {
+  return (
+    run.status === "running" && run.leaseToken === token && run.leaseExpiresAt !== null && run.leaseExpiresAt > asOf
+  );
+}
+
+export async function runLeaseHeld(runs: Pick<RunStore, "leaseHeld">, run: Run, token: string): Promise<boolean> {
+  return runs.leaseHeld ? runs.leaseHeld(run, token) : legacyLeaseHeld(run, token);
 }
 
 export function leaseLapsed(run: Pick<Run, "status" | "leaseExpiresAt">, asOf: number): boolean {

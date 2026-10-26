@@ -4,8 +4,8 @@ import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
-import type { ScopeId, SessionEntry } from "../src/types.ts";
+import type { ScopeId } from "../src/types.ts";
+import { isUserMessage, itemFields, messageTs, storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
@@ -79,11 +79,11 @@ function resultMessage(text: string, overrides: Record<string, unknown> = {}): F
 
 function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
   turn: HarnessTurnInput;
-  entries: SessionEntry[];
+  entries: Item[];
   modelCalls: Array<{ model: string; inputTokens: number; entryCount: number }>;
   llmRequests: HarnessLlmRequestRecord[];
 } {
-  const entries: SessionEntry[] = [];
+  const entries: Item[] = [];
   const modelCalls: Array<{ model: string; inputTokens: number; entryCount: number }> = [];
   const llmRequests: HarnessLlmRequestRecord[] = [];
   const scope = "org:test" as unknown as ScopeId;
@@ -96,13 +96,8 @@ function harnessTurn(overrides: Partial<HarnessTurnInput> = {}): {
     scopeLabel: scope,
     orgScopeId: scope,
     readOnly: true,
-    emit: async (entry: NewEntry) => {
-      const saved = {
-        ...entry,
-        sessionId: "session-1",
-        seq: entries.length + 1,
-        createdAt: Date.now(),
-      } as SessionEntry;
+    emit: async (item: NewItem) => {
+      const saved = storedItem(item, { sessionId: "session-1", seq: entries.length + 1, createdAt: Date.now() });
       entries.push(saved);
       return saved;
     },
@@ -176,13 +171,9 @@ test("a steered turn persists every reply, not only the last result's", async ()
   const result = await harness.turns.runTurn(turn);
 
   assert.equal(result.reply, "All four done.");
-  const assistantTexts = entries
-    .filter((entry) => entry.type === "assistant")
-    .map((entry) => (entry.payload as { text: string }).text);
+  const assistantTexts = entries.filter((entry) => entry.kind === "AgentMessage").map((entry) => entry.text);
   assert.deepEqual(assistantTexts, ["The capital of France is Paris.", "All four done."]);
-  const userTexts = entries
-    .filter((entry) => entry.type === "user")
-    .map((entry) => (entry.payload as { text: string }).text);
+  const userTexts = entries.filter(isUserMessage).map((entry) => entry.text);
   assert.deepEqual(userTexts, ["what is the capital of france?", "now do the other three"]);
 });
 
@@ -244,10 +235,9 @@ for (const late of [
     assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
     assert.deepEqual(deltas, ["Visible partial"]);
-    assert.deepEqual(
-      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
-      [{ text: "Visible partial", stopped: true }],
-    );
+    assert.deepEqual(entries.filter((entry) => entry.kind === "AgentMessage").map(itemFields), [
+      { text: "Visible partial", stopped: true },
+    ]);
   });
 }
 
@@ -278,7 +268,7 @@ for (const bookkeeping of ["request recording", "thinking persistence"]) {
     else {
       const emit = turn.emit;
       turn.emit = async (entry) => {
-        if (entry.type === "thinking") await pause();
+        if (entry.kind === "Reasoning") await pause();
         return emit(entry);
       };
     }
@@ -290,10 +280,9 @@ for (const bookkeeping of ["request recording", "thinking persistence"]) {
     assert.equal(result.stopped, true);
     assert.equal(result.stoppedByUser, undefined);
     assert.equal(result.reply, "Visible partial");
-    assert.deepEqual(
-      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
-      [{ text: "Visible partial", stopped: true }],
-    );
+    assert.deepEqual(entries.filter((entry) => entry.kind === "AgentMessage").map(itemFields), [
+      { text: "Visible partial", stopped: true },
+    ]);
   });
 }
 
@@ -323,7 +312,7 @@ for (const ending of ["close", "throw"]) {
     };
     const emit = turn.emit;
     turn.emit = async (entry) => {
-      if (entry.type === "assistant") await pause();
+      if (entry.kind === "AgentMessage") await pause();
       return emit(entry);
     };
     const running = harness.turns.runTurn(turn);
@@ -333,10 +322,9 @@ for (const ending of ["close", "throw"]) {
     const result = await running;
     assert.equal(result.stopped, undefined);
     assert.equal(result.reply, "Final full answer");
-    assert.deepEqual(
-      entries.filter((entry) => entry.type === "assistant").map((entry) => entry.payload),
-      [{ text: "Final full answer" }],
-    );
+    assert.deepEqual(entries.filter((entry) => entry.kind === "AgentMessage").map(itemFields), [
+      { text: "Final full answer" },
+    ]);
   });
 }
 
@@ -519,8 +507,8 @@ test("Claude preserves a committed runtime handoff when SDK interruption returns
   const result = await harness.turns.runTurn(turn);
   assert.deepEqual(result.runtimeHandoff, { choice, lifetime: "task" });
   assert.equal(result.stopped, undefined);
-  assert.equal(entries.filter((entry) => entry.type === "assistant").length, 0);
-  assert.ok(entries.some((entry) => entry.type === "tool_result"));
+  assert.equal(entries.filter((entry) => entry.kind === "AgentMessage").length, 0);
+  assert.ok(entries.some((entry) => entry.kind === "ToolResult"));
 });
 
 for (const terminal of [{ stop_reason: "max_tokens" }, { is_error: true }]) {
@@ -578,10 +566,10 @@ test("steering forwards prepared images and file paths while retaining the origi
     { type: "text", text: "check this\nThe file is in inbox/steer/photo.png" },
     { type: "image", source: { type: "base64", media_type: "image/png", data: "YWJj" } },
   ]);
-  const entry = entries.find((e) => (e.payload as { steered?: boolean }).steered);
+  const entry = entries.find((e) => e.kind === "SteeringMessage");
   assert.ok(entry);
-  assert.equal((entry.payload as { text: string }).text, "check this");
-  assert.equal((entry.payload as { attachments: Array<{ artifactId: string }> }).attachments[0]?.artifactId, "f1");
+  assert.equal(entry.text, "check this");
+  assert.equal((entry.body.attachments as Array<{ artifactId: string }>)[0]?.artifactId, "f1");
 });
 
 test("Claude sends documents without persisting their contents in session entries", async () => {
@@ -680,10 +668,10 @@ for (const surfaceTools of [false, true]) {
     assert.equal(result.silent, true);
     assert.equal(result.reply, "");
     assert.equal(
-      entries.some((entry) => entry.type === "assistant"),
+      entries.some((entry) => entry.kind === "AgentMessage"),
       false,
     );
-    assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
+    assert.ok(entries.some((entry) => entry.kind === "ToolResult" && entry.body.silent === true));
   });
 }
 
@@ -697,11 +685,11 @@ test("Claude emits repeated-text steers only at distinct native user echoes", as
     const first = (await iterator.next()).value as unknown as FakeSdkMessage;
     await signals.send("echo-intake", { kind: "steer", text: "same text", ts: "two" });
     const second = (await iterator.next()).value as unknown as FakeSdkMessage;
-    assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+    assert.equal(entries.filter(isUserMessage).length, 1);
     assert.equal((await signals.pending("echo-intake")).length, 2);
     yield first;
     yield first;
-    assert.equal(entries.filter((entry) => entry.type === "user").length, 2);
+    assert.equal(entries.filter(isUserMessage).length, 2);
     yield {
       ...second,
       message: {
@@ -718,11 +706,8 @@ test("Claude emits repeated-text steers only at distinct native user echoes", as
   };
   await createClaudeHarness({ signals }).turns.runTurn(turn);
   assert.deepEqual(capturedOptions.extraArgs, { "replay-user-messages": null });
-  const users = entries.filter((entry) => entry.type === "user");
-  assert.deepEqual(
-    users.map((entry) => (entry.payload as { ts?: string }).ts),
-    [undefined, "one", "two"],
-  );
+  const users = entries.filter(isUserMessage);
+  assert.deepEqual(users.map(messageTs), [null, "one", "two"]);
   assert.equal((await signals.pending("echo-intake")).length, 0);
 });
 
@@ -737,7 +722,7 @@ test("Claude retains a queued message which the SDK never consumes", async () =>
     yield resultMessage("original reply");
   };
   await createClaudeHarness({ signals }).turns.runTurn(turn);
-  assert.equal(entries.filter((entry) => entry.type === "user").length, 1);
+  assert.equal(entries.filter(isUserMessage).length, 1);
   assert.equal((await signals.pending("no-echo"))[0]?.signal.ts, "pending");
 });
 
@@ -753,34 +738,16 @@ test("Claude continues a resumed turn with its recorded request live and no new 
   };
   const ask = "list the files";
   const history = [
-    {
-      sessionId: "session-1",
-      seq: 1,
-      parentSeq: null,
-      type: "user",
-      payload: { text: ask, runId: "run-resume" },
-      scopeLabel: "org:test",
-      createdAt: 1,
-    },
-    {
-      sessionId: "session-1",
-      seq: 2,
-      parentSeq: null,
-      type: "tool_call",
-      payload: { tool: "execute", callId: "c1", command: "ls" },
-      scopeLabel: "org:test",
-      createdAt: 2,
-    },
-    {
-      sessionId: "session-1",
-      seq: 3,
-      parentSeq: null,
-      type: "tool_result",
-      payload: { tool: "execute", callId: "c1", result: "a.txt" },
-      scopeLabel: "org:test",
-      createdAt: 3,
-    },
-  ] as SessionEntry[];
+    storedItem({ kind: "UserMessage", text: ask }, { sessionId: "session-1", seq: 1, createdAt: 1 }),
+    storedItem(
+      { kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } },
+      { sessionId: "session-1", seq: 2, createdAt: 2 },
+    ),
+    storedItem(
+      { kind: "ToolResult", tool: "execute", callId: "c1", text: "a.txt" },
+      { sessionId: "session-1", seq: 3, createdAt: 3 },
+    ),
+  ];
   const { turn, entries, llmRequests } = harnessTurn({
     input: "fallback input",
     history,
@@ -792,8 +759,8 @@ test("Claude continues a resumed turn with its recorded request live and no new 
   const result = await createClaudeHarness({}).turns.runTurn(turn);
   assert.equal(result.reply, "picking up");
   assert.deepEqual(
-    entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
-    ["assistant"],
+    entries.map((entry) => entry.kind).filter((kind) => kind !== "Reasoning"),
+    ["AgentMessage"],
   );
   assert.equal(prompted.length, 1);
   const prompt = JSON.parse(prompted[0]!) as Array<{ text: string }>;
@@ -839,23 +806,24 @@ for (const shutdown of [false, true]) {
     assert.equal(result.stopped, true);
     assert.equal(result.stoppedByUser, undefined);
     assert.deepEqual(
-      entries.map((entry) => entry.type).filter((type) => type !== "thinking"),
-      shutdown ? ["user", "tool_call", "tool_result"] : ["user", "tool_call", "tool_result", "assistant", "system"],
+      entries.map((entry) => entry.kind).filter((kind) => kind !== "Reasoning"),
+      shutdown
+        ? ["UserMessage", "ToolCall", "ToolResult"]
+        : ["UserMessage", "ToolCall", "ToolResult", "AgentMessage", "Stop"],
     );
+    const runId = "00000000-0000-4000-8000-000000000001";
     const partial = findTrailingPartialTurn(
-      entries.map((entry) => (entry.type === "user" ? { ...entry, payload: { runId: "run-1" } } : entry)),
-      "run-1",
+      entries.map((entry) => (entry.kind === "UserMessage" ? { ...entry, turnId: runId } : entry)),
+      runId,
     );
     if (shutdown) {
       assert.ok(partial);
       assert.notEqual(resumeStrategy(entries, partial).kind, "restart");
       assert.equal(turnAtSeq(entries, partial.userSeq)?.answer, undefined);
     } else {
-      assert.deepEqual(entries.at(-2)!.payload, { text: "Visible partial", stopped: true });
-      assert.deepEqual(entries.at(-1)!.payload, {
-        kind: "turn_stopped",
-        reason: "because the run was cancelled",
-      });
+      assert.deepEqual(itemFields(entries.at(-2)!), { text: "Visible partial", stopped: true });
+      assert.equal(entries.at(-1)!.kind, "Stop");
+      assert.deepEqual(entries.at(-1)!.body, { reason: "because the run was cancelled" });
       assert.equal(partial, null);
     }
   });
@@ -878,7 +846,7 @@ test("Claude records the stop when the worker cancels a turn before any output",
   assert.equal(result.stopped, true);
   assert.equal(result.reply, "");
   assert.deepEqual(
-    entries.filter((e) => e.type !== "user").map((e) => e.payload),
-    [{ kind: "turn_stopped", reason: "because the run was cancelled" }],
+    entries.filter((e) => e.kind !== "UserMessage").map((e) => ({ kind: e.kind, ...e.body })),
+    [{ kind: "Stop", reason: "because the run was cancelled" }],
   );
 });

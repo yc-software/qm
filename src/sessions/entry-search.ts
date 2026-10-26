@@ -1,10 +1,13 @@
-import type { EntryType, SessionEntry } from "../types.ts";
+import { isUserMessage, type Item } from "./items.ts";
+import type { SearchHitType } from "./session-store.ts";
 
 export const SEARCH_HIT_LIMIT = 40;
-const SEARCHABLE_ENTRY_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(["user", "assistant", "text"]);
 
-export function searchEntryType(entry: Pick<SessionEntry, "type" | "payload">): EntryType | null {
-  return SEARCHABLE_ENTRY_TYPES.has(entry.type) ? entry.type : null;
+export function searchHitType(item: Pick<Item, "kind" | "variant">): SearchHitType | null {
+  if (isUserMessage(item)) return "user";
+  if (item.kind !== "AgentMessage") return null;
+  if (item.variant === "narration") return "text";
+  return item.variant === null ? "assistant" : null;
 }
 const MAX_TERMS = 8;
 
@@ -30,15 +33,9 @@ export function tsPrefixQuery(query: string): string | null {
   return terms.map((t) => (t.length >= MIN_PREFIX_LEN ? `${t}:*` : t)).join(" & ");
 }
 
-export function entrySearchText(payload: unknown): string | null {
-  if (typeof payload === "string") return payload;
-  const text = (payload as { text?: unknown } | null)?.text;
-  return typeof text === "string" ? text : null;
-}
-
-export function entrySearchAuthor(entry: Pick<SessionEntry, "type" | "payload">): string | undefined {
-  if (entry.type !== "user") return undefined;
-  const name = (entry.payload as { name?: unknown } | null)?.name;
+export function searchAuthor(item: Pick<Item, "kind" | "body">): string | undefined {
+  if (!isUserMessage(item)) return undefined;
+  const name = item.body.name;
   return typeof name === "string" && name.trim() ? name.trim() : undefined;
 }
 

@@ -1,15 +1,16 @@
 import { currentTextPhase } from "./timeline.ts";
 import { goalElapsedLabel, type GoalStripState } from "./goal-strip.ts";
 import { workPausedForApproval, type WorkBlock } from "./core-bridge.ts";
+import { activityCreatedAt } from "./items.ts";
 
 export function workSeconds(work: WorkBlock): number {
-  const times = work.activity.map((a) => a.createdAt).filter((t) => typeof t === "number" && t > 0);
+  const times = work.activity.map(activityCreatedAt).filter((t) => typeof t === "number" && t > 0);
   const start = work.startedAt ?? (times.length ? Math.min(...times) : null);
   if (start == null) return 0;
   const live = work.status === "thinking" || work.status === "working";
   const phase = currentTextPhase(work);
   const last = work.activity.at(-1);
-  let end = workPausedForApproval(work) ? last!.createdAt : work.finishedAt;
+  let end = workPausedForApproval(work) ? activityCreatedAt(last!) : work.finishedAt;
   if (phase?.phase === "final_answer") end = phase.startedAt;
   if (end == null) {
     if (live) end = Date.now();
@@ -40,7 +41,7 @@ export function goalWorked(messages: readonly unknown[], goal: GoalStripState): 
   for (const m of messages as readonly GoalTurn[]) {
     const work = m.role === "assistant" ? m.work : undefined;
     if (!work) continue;
-    const times = work.activity.map((a) => a.createdAt).filter((t) => typeof t === "number" && t > 0);
+    const times = work.activity.map(activityCreatedAt).filter((t) => typeof t === "number" && t > 0);
     const start = work.startedAt ?? (times.length ? Math.min(...times) : undefined);
     if (!counting) {
       if (start === undefined || (work.finishedAt ?? Infinity) < goal.createdAt) continue;

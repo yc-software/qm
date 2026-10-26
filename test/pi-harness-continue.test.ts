@@ -3,31 +3,28 @@ import assert from "node:assert/strict";
 import { continuableContext, createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type Item, type NewItem } from "../src/sessions/items.ts";
 
 type Sink = {
-  entries: Array<{ seq: number; type: string; payload: unknown }>;
+  entries: Item[];
 };
 
 type RequestBody = { messages: Array<{ role: string; content: unknown }> };
 
-function entry(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "personal:tester", createdAt: seq };
+function entry(item: NewItem, seq: number): Item {
+  return storedItem(item, { sessionId: "s", seq, createdAt: seq });
 }
 
-const ASK = entry("user", { text: "list the files", runId: "run-1" }, 1);
-const CALL = entry("tool_call", { tool: "execute", callId: "c1", command: "ls" }, 2);
-const RESULT = entry("tool_result", { callId: "c1", result: "a.txt\nb.txt" }, 3);
+const ASK = entry({ kind: "UserMessage", text: "list the files" }, 1);
+const CALL = entry({ kind: "ToolCall", tool: "execute", callId: "c1", body: { command: "ls" } }, 2);
+const RESULT = entry({ kind: "ToolResult", callId: "c1", text: "a.txt\nb.txt" }, 3);
 const SAFE_CALL = entry(
-  "tool_call",
   {
+    kind: "ToolCall",
     tool: "history",
-    query: "budget",
     callId: "c-budget",
-    retrySafe: true,
-    rerun: { tool: "history", input: { query: "budget" } },
+    body: { query: "budget", retrySafe: true, rerun: { tool: "history", input: { query: "budget" } } },
   },
   2,
 );
@@ -43,10 +40,10 @@ function turnInput(sink: Sink, overrides: Partial<HarnessTurnInput>): HarnessTur
     tools: {} as HarnessTurnInput["tools"],
     scopeLabel: "personal:tester" as HarnessTurnInput["scopeLabel"],
     orgScopeId: "org:test" as HarnessTurnInput["orgScopeId"],
-    emit: async (e: NewEntry) => {
-      const appended = { ...e, seq: seq++, createdAt: Date.now() };
-      sink.entries.push({ seq: appended.seq, type: e.type, payload: e.payload });
-      return appended as unknown as SessionEntry;
+    emit: async (e: NewItem) => {
+      const appended = storedItem(e, { sessionId: "resume", seq: seq++, createdAt: Date.now() });
+      sink.entries.push(appended);
+      return appended;
     },
     recordModelCall: () => {},
     ...overrides,
@@ -77,7 +74,7 @@ function sse(text: string): Response {
   return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
-async function runResume(history: SessionEntry[], overrides: Partial<HarnessTurnInput> = {}) {
+async function runResume(history: Item[], overrides: Partial<HarnessTurnInput> = {}) {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const sink: Sink = { entries: [] };
   const requests: RequestBody[] = [];
@@ -133,8 +130,8 @@ test("a genuine resume whose context ends at a recorded tool result continues th
     "the request reaches the model once and nothing else is prompted",
   );
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["assistant"],
+    sink.entries.map((e) => e.kind),
+    ["AgentMessage"],
     "no user entry is appended for the resumed attempt",
   );
 });
@@ -155,8 +152,8 @@ test("a resume that re-runs a retry-safe call continues the assistant turn right
   assert.equal(result.reply, "done: two files");
   assert.deepEqual(queries, ["budget"], "the interrupted call ran exactly once");
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["tool_result", "assistant"],
+    sink.entries.map((e) => e.kind),
+    ["ToolResult", "AgentMessage"],
     "no note entry follows the re-run",
   );
   const flattened = JSON.stringify(requests[0]!.messages);
@@ -170,8 +167,8 @@ test("a resume whose last tool call never recorded a result continues silently a
   assert.ok(JSON.stringify(requests[0]!.messages.at(-1)).includes(INTERRUPTED_TOOL_RESULT));
   assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["assistant"],
+    sink.entries.map((e) => e.kind),
+    ["AgentMessage"],
   );
 });
 
@@ -180,23 +177,28 @@ test("a resume that died before any work continues from the recorded request wit
   assert.equal(requests[0]!.messages.length, 1);
   assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["assistant"],
+    sink.entries.map((e) => e.kind),
+    ["AgentMessage"],
   );
 });
 
 test("a resume that died before delivering its reply drops that reply and continues without a prompt", async () => {
   const partialReply = entry(
-    "text",
     {
+      kind: "AgentMessage",
+      variant: "narration",
       text: "Here are",
-      step: {
-        id: "s1",
-        index: 0,
-        stopReason: "stop",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-test",
+      step: 0,
+      body: {
+        wire: {
+          message: {
+            id: "s1",
+            stopReason: "stop",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "claude-test",
+          },
+        },
       },
     },
     4,
@@ -209,15 +211,15 @@ test("a resume that died before delivering its reply drops that reply and contin
   assert.ok(!JSON.stringify(requests[0]!.messages).includes("Here are"));
   assert.deepEqual(userTexts(requests), ["── Wednesday, December 31, 1969 ──\nlist the files"]);
   assert.deepEqual(
-    sink.entries.map((e) => e.type),
-    ["assistant"],
+    sink.entries.map((e) => e.kind),
+    ["AgentMessage"],
   );
 });
 
 test("without the resume signal a context ending at a tool result is prompted normally", async () => {
   const { sink, requests } = await runResume([ASK, CALL, RESULT], { input: "follow-up question" });
   assert.equal(JSON.stringify(requests[0]!.messages).includes("follow-up question"), true);
-  assert.equal(sink.entries[0]?.type, "user");
+  assert.equal(sink.entries[0]?.kind, "UserMessage");
 });
 
 test("continuableContext trims a trailing assistant and needs a user or tool result to continue from", () => {

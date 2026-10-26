@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
-import type { Orchestrator } from "../core/orchestrator.ts";
+import type { Orchestrator, OrchestratorInput } from "../core/orchestrator.ts";
 import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import {
@@ -32,7 +32,8 @@ export interface ProcessDeps {
 
 export const LEASE_LOST_CONSECUTIVE = 3;
 
-const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
+export const CLAIM_FAIL_REPORT_CONSECUTIVE = 20;
+const SWARM_CLAIM_BUDGET = 3;
 
 export async function processRun(
   deps: ProcessDeps,
@@ -105,25 +106,17 @@ async function attemptRun(
   };
   try {
     if (opts?.shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId: run.id };
-    if (run.request.swarm && !run.request.swarmGoal) {
-      const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
-      workDeadline = setTimeout(() => cancel.abort(), turnMs);
-    }
-    if (run.request.swarm && countedClaims(run) > 3) throw new NonRetryableTurnError("swarm claim budget exhausted");
+    workDeadline = swarmTurnLimits(run, cancel);
     started = true;
-    const result = await deps.orchestrator.handleTurn({
-      ...run.request,
-      origin: resolveTurnOrigin(run.request),
-      runId: run.id,
-      attempt: run.attempts,
-      ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
-      runLeaseToken: token,
-      finalAttempt: errorParks(run, deps.runs.maxClaims),
-      background: opts?.background ?? false,
-      cancel: cancel.signal,
-      ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
-      ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
-    });
+    const result = await deps.orchestrator.handleTurn(
+      runTurnInput(run, {
+        token,
+        maxClaims: deps.runs.maxClaims,
+        background: opts?.background ?? false,
+        cancel: cancel.signal,
+        ...(opts?.shutdown ? { shutdown: opts.shutdown } : {}),
+      }),
+    );
     stopBeat();
     if (opts?.shutdown?.aborted) return result;
     if (!(await deps.runs.complete(run.id, token, result))) {
@@ -133,17 +126,7 @@ async function attemptRun(
   } catch (err) {
     stopBeat();
     if (opts?.shutdown?.aborted) throw err;
-    console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
-    if (!errorAlreadyReported(err))
-      deps.errors?.record(
-        {
-          category: "turn",
-          code: "error",
-          message: `run ${run.id}: ${errMessage(err)}`,
-          scopeLabel: conversationScope(run.request.conversation, run.request.actor.id),
-        },
-        err,
-      );
+    recordTurnError(deps.errors, run, err);
     await deps.runs.fail(run.id, token, turnFailureMessage(err), {
       retry: !isNonRetryable(err),
       retryAfterMs: retryDelay(run.errorAttempts),
@@ -159,6 +142,58 @@ async function attemptRun(
         .releaseLease(run.id, token, started ? handbackStop(opts.shutdown) : undefined)
         .catch((e) => swallow(`worker: shutdown handback failed run=${run.id}; lease will expire after exit`, e));
   }
+}
+
+export function runTurnInput(
+  run: Run,
+  opts: {
+    token: string;
+    maxClaims: number | undefined;
+    background: boolean;
+    cancel: AbortSignal;
+    shutdown?: AbortSignal;
+    fenced?: boolean;
+  },
+): OrchestratorInput {
+  return {
+    ...run.request,
+    origin: resolveTurnOrigin(run.request),
+    runId: run.id,
+    attempt: run.attempts,
+    ...(run.lastStop ? { resumeCause: run.lastStop } : {}),
+    runLeaseToken: opts.token,
+    ...(opts.fenced ? { turnFenceToken: opts.token } : {}),
+    finalAttempt: errorParks(run, opts.maxClaims),
+    background: opts.background,
+    cancel: opts.cancel,
+    ...(opts.shutdown ? { shutdown: opts.shutdown } : {}),
+    ...(run.startedAt !== null ? { runStartedAt: run.startedAt } : {}),
+  };
+}
+
+export function swarmTurnLimits(
+  run: Pick<Run, "request" | "attempts" | "preemptions">,
+  cancel: AbortController,
+): ReturnType<typeof setTimeout> | undefined {
+  if (run.request.swarm && countedClaims(run) > SWARM_CLAIM_BUDGET)
+    throw new NonRetryableTurnError("swarm claim budget exhausted");
+  if (!run.request.swarm || run.request.swarmGoal) return undefined;
+  const { turnMs } = resolveSwarmSettings({ turnMs: run.request.turnWallClockMs });
+  return setTimeout(() => cancel.abort(), turnMs);
+}
+
+export function recordTurnError(errors: ErrorLog | undefined, run: Run, err: unknown): void {
+  console.error(`[worker] run ${run.id} turn failed: ${errMessage(err)}`);
+  if (!errorAlreadyReported(err))
+    errors?.record(
+      {
+        category: "turn",
+        code: "error",
+        message: `run ${run.id}: ${errMessage(err)}`,
+        scopeLabel: conversationScope(run.request.conversation, run.request.actor.id),
+      },
+      err,
+    );
 }
 
 export interface WorkerDeps extends ProcessDeps {
@@ -325,7 +360,7 @@ export function createWorker(deps: WorkerDeps): Worker {
   };
 }
 
-function runStopFor(err: unknown): RunStop {
+export function runStopFor(err: unknown): RunStop {
   if (err instanceof ProviderTurnError)
     return { kind: "error", code: err.code, ...(err.status !== undefined ? { status: err.status } : {}) };
   return { kind: "error" };

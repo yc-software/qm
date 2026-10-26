@@ -23,20 +23,16 @@ test("migrations drop an empty session_tape and the store keeps working without 
     const session = await store.getOrCreateByThread("web:tapeless", "dm", scope, undefined, "web");
     await store.addParticipant(session.id, "alice");
     const { lease } = await store.acquireLease(session.id);
-    await store.append(lease!, {
-      type: "user",
-      payload: { text: "before the drop" },
-      scopeLabel: scope,
-    });
+    await store.append(lease!, { kind: "UserMessage", text: "before the drop" });
 
     assert.equal((await raw.query("SELECT to_regclass('session_tape') AS t")).rows[0].t, null);
     await applyPgMigrations(raw, registeredPgMigrations(url.toString()));
     assert.equal((await raw.query("SELECT to_regclass('session_tape') AS t")).rows[0].t, null);
 
-    await store.append(lease!, { type: "assistant", payload: { text: "after the drop" }, scopeLabel: scope });
+    await store.append(lease!, { kind: "AgentMessage", text: "after the drop" });
     await store.releaseLease(lease!);
     assert.deepEqual(
-      (await store.visibleEntries(session.id, "alice")).map((entry) => (entry.payload as { text: string }).text),
+      (await store.visibleItems(session.id, "alice")).map((item) => item.text),
       ["before the drop", "after the drop"],
     );
     await store.deleteSession(session.id);

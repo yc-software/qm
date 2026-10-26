@@ -4,14 +4,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
-import type { SessionEntry } from "../src/types.ts";
+import { storedItem, type NewItem } from "../src/sessions/items.ts";
 
 function freshApp() {
-  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
+  return buildTestApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-dedup-")) }));
 }
 
 const actor = { externalId: "U1" };
@@ -35,13 +35,13 @@ test("a retried turn does not re-post: the same position dedups against the deli
   const req = channelTurn("!post-lost-result deploy is done", { idempotencyKey: "dedup-retry-1" });
 
   await assert.rejects(built.app.turn(req), /boom/);
-  const afterFirst = await built.deliveries.pending("slack");
+  const afterFirst = await built.posts.pending("slack");
   assert.equal(afterFirst.length, 1, "the interrupted attempt already enqueued its post");
 
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
-  const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
+  const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.equal(rows.length, 1, "the retry's re-post collapses onto the first attempt's delivery");
   assert.equal(rows[0]!.text, "deploy is done", "the delivered copy is the first attempt's, keyed not text-matched");
   assert.match(
@@ -59,7 +59,7 @@ test("a resumed turn's NEW post after a completed one is delivered, not swallowe
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
-  const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
+  const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.deepEqual(
     rows.map((d) => d.text).sort(),
     ["first update", "second update"],
@@ -85,7 +85,7 @@ test("a retried automation fire (surface 'monitor') still seeds past its recorde
   const res = await built.app.turn(req);
   assert.equal(res.status, "silent", res.reason);
 
-  const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
+  const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.deepEqual(
     rows.map((d) => d.text).sort(),
     ["monitor first", "monitor second"],
@@ -98,39 +98,26 @@ test("distinct posts in one turn each get their own key and all deliver", async 
   const res = await built.app.turn(channelTurn("!post2 alpha|beta", { idempotencyKey: "dedup-two-1" }));
   assert.equal(res.status, "silent", res.reason);
 
-  const rows = (await built.deliveries.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
+  const rows = (await built.posts.pending("slack")).filter((d) => d.idempotencyKey.startsWith("post:"));
   assert.deepEqual(rows.map((d) => d.text).sort(), ["alpha", "beta"]);
   assert.equal(new Set(rows.map((d) => d.idempotencyKey)).size, 2);
 });
 
 test("completedSurfaceEnqueues counts only completed surface enqueue calls after the interrupted user entry", () => {
-  const entry = (seq: number, type: SessionEntry["type"], payload: unknown): SessionEntry =>
-    ({ seq, parentSeq: null, type, payload, createdAt: seq }) as SessionEntry;
+  const entry = (seq: number, item: NewItem) => storedItem(item, { sessionId: "s", seq, createdAt: seq });
   const entries = [
-    entry(0, "user", { text: "!go" }),
-    entry(1, "tool_call", { tool: "slack", action: "post", callId: "a" }),
-    entry(2, "tool_result", { tool: "slack", action: "post", callId: "a", ok: true }),
-    entry(3, "tool_call", { tool: "execute", command: "make", callId: "b" }),
-    entry(4, "tool_result", { tool: "execute", callId: "b", ok: true }),
-    entry(5, "tool_call", { tool: "slack", action: "reach", callId: "c" }),
-    entry(6, "tool_result", { tool: "slack", action: "reach", callId: "c", ok: true }),
-    entry(7, "tool_call", { tool: "slack", action: "post", callId: "d" }),
-    entry(8, "tool_result", { tool: "slack", callId: "d", interrupted: true, isError: true }),
+    entry(0, { kind: "UserMessage", text: "!go" }),
+    entry(1, { kind: "ToolCall", tool: "slack", callId: "a", body: { action: "post" } }),
+    entry(2, { kind: "ToolResult", tool: "slack", callId: "a", body: { action: "post", ok: true } }),
+    entry(3, { kind: "ToolCall", tool: "execute", callId: "b", body: { command: "make" } }),
+    entry(4, { kind: "ToolResult", tool: "execute", callId: "b", body: { ok: true } }),
+    entry(5, { kind: "ToolCall", tool: "slack", callId: "c", body: { action: "reach" } }),
+    entry(6, { kind: "ToolResult", tool: "slack", callId: "c", body: { action: "reach", ok: true } }),
+    entry(7, { kind: "ToolCall", tool: "slack", callId: "d", body: { action: "post" } }),
+    entry(8, { kind: "ToolResult", tool: "slack", callId: "d", isError: true, body: { interrupted: true } }),
   ];
   assert.equal(completedSurfaceEnqueues(entries, 0, "slack"), 2, "the interrupted post at seq 7 is not counted");
   assert.equal(completedSurfaceEnqueues(entries, 5, "slack"), 0, "entries at or before sinceSeq are excluded");
-
-  const noCallIds = [
-    entry(0, "user", { text: "!go" }),
-    entry(1, "tool_call", { tool: "slack", action: "post" }),
-    entry(2, "tool_result", { tool: "post", ok: true }),
-    entry(3, "tool_call", { tool: "slack", action: "post" }),
-  ];
-  assert.equal(
-    completedSurfaceEnqueues(noCallIds, 0, "slack"),
-    1,
-    "callId-less results pair with the latest open call",
-  );
 });
 
 test("turnPostKeys mints deterministic per-destination position keys and seeds past recorded work", () => {

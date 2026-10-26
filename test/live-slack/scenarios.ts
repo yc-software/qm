@@ -38,7 +38,7 @@ export const scenarios: Scenario[] = [
       assert.match(reply.text ?? "", /\b391\b/);
       const session = await ctx.core.findSessionByThread(ch.id, root);
       assert.ok(session, "no core session found for runtime handoff");
-      const choice = assertRuntimeHandoff(session.entries);
+      const choice = assertRuntimeHandoff(session.items);
       type ModelCall = { step: number; model: string; createdAt: number; usage: { output: number } | null };
       let modelCalls: ModelCall[];
       const deadline = Date.now() + 30_000;
@@ -150,9 +150,7 @@ export const scenarios: Scenario[] = [
       assert.match(reply.text ?? "", uname, `no uname output in reply: ${reply.text?.slice(0, 300)}`);
       const session = await ctx.core.findSessionByThread(ch.id, root);
       assert.ok(session, "no core session found for the thread");
-      const ran = session.entries.some(
-        (e: any) => e.type === "tool_result" && /Linux/.test(JSON.stringify(e.payload ?? {})),
-      );
+      const ran = session.items.some((e) => e.kind === "ToolResult" && /Linux/.test(e.text ?? ""));
       assert.ok(
         ran,
         "core transcript has no execute tool_result with Linux output — reply was not from a real sandbox run",
@@ -174,17 +172,18 @@ export const scenarios: Scenario[] = [
 
       const session = await ctx.core.findSessionByThread(ch.id, root);
       assert.ok(session, "no core session found for the thread");
-      const ran = session.entries.some(
-        (e: any) =>
-          e.type === "tool_result" &&
-          (e.payload?.tool === "execute" || (e.payload?.tool === "sandbox" && e.payload.action === "exec")) &&
-          succeededWithStdout(e.payload, `${marker}\n`),
+      const ran = session.items.some(
+        (e) =>
+          e.kind === "ToolResult" &&
+          (e.tool === "execute" || (e.tool === "sandbox" && e.body.action === "exec")) &&
+          succeededWithStdout(e, `${marker}\n`),
       );
       assert.ok(ran, "core transcript has no successful command execution — cannot evaluate performance");
 
       for (let attempt = 0; ; attempt++) {
-        const { entries } = await ctx.core.getSession(session.id);
-        if (entries.some((e: any) => e.type === "assistant" && typeof e.payload?.workFinishedAt === "number")) break;
+        const { items } = await ctx.core.getSession(session.id);
+        if (items.some((e) => e.kind === "AgentMessage" && !e.variant && typeof e.body.workFinishedAt === "number"))
+          break;
         assert.ok(attempt < 30, "turn did not finish recording its performance metrics");
         await sleep(1000);
       }
@@ -526,9 +525,9 @@ export const scenarios: Scenario[] = [
 
       const session = await ctx.core.findSessionByThread(ch.id, root);
       assert.ok(session, "no core session found for the thread");
-      const digest = session.entries
-        .filter((e: any) => e.type === "thinking" || e.type === "tool_call")
-        .map((e: any) => `[${e.type}] ${JSON.stringify(e.payload ?? {}).slice(0, 500)}`)
+      const digest = session.items
+        .filter((e) => e.kind === "Reasoning" || e.kind === "ToolCall")
+        .map((e) => `[${e.kind}] ${JSON.stringify({ tool: e.tool, text: e.text, ...e.body }).slice(0, 500)}`)
         .join("\n")
         .slice(0, 7000);
 

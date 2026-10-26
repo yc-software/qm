@@ -1,17 +1,16 @@
+import { item } from "./item-fixture.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDesktopExecutor } from "../src/desktop-computer.ts";
 
 const desk = (call: () => Promise<{ content: string; isError?: boolean }>) => ({ call });
 const entry = (id: string, createdAt = Date.now()) => ({
-  type: "tool_call",
-  createdAt,
-  payload: {
-    client: true,
+  item: item("ToolCall", {
+    createdAt,
     tool: "desktop",
     callId: id,
-    args: { code: "await computer.listApps()" },
-  },
+    body: { client: true, args: { code: "await computer.listApps()" } },
+  }),
 });
 
 test("only the submitting desktop executes an active call, once despite duplicate snapshots", async () => {
@@ -51,7 +50,7 @@ test("completed or expired calls never execute", async () => {
     desktopClientId: "mine",
     status: "running",
     alive: true,
-    activity: [entry("old", Date.now() - 60_000), entry("done"), { type: "tool_result", payload: { callId: "done" } }],
+    activity: [entry("old", Date.now() - 60_000), entry("done"), { item: item("ToolResult", { callId: "done" }) }],
   });
   assert.equal(actions, 0);
 });

@@ -22,6 +22,10 @@ export const FEATURES = {
   external_app_sharing: { label: "External app sharing (public links, outside emails)" },
   loop_triage: { label: "Loop triage (prioritize and consolidate)" },
   swarms: { label: "Swarms", personalOnly: true },
+  absurd_turns: {
+    label: "Turns on Absurd (experimental)",
+    hint: "Runs new turns in the selected conversations on the Absurd durable-execution queue instead of the legacy run queue. A conversation switches once its legacy turns have finished. Turning this off sends new turns back to the legacy queue; turns already on Absurd finish there. Turn it on only after every instance runs a build that knows about it.",
+  },
   team_scopes: { label: "Team scopes" },
   ui_canvas: {
     label: "UI canvas and UI state (agent code runs in the page)",

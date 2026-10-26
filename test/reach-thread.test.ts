@@ -2,8 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildTestApp } from "./support/test-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -15,7 +14,7 @@ const TS = "1723497600.123456";
 describe("POST /v1/reach with threadTs", () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: ReturnType<typeof buildTestApp>;
 
   const cap = async (actorId: string) =>
     await mintCapabilityToken(
@@ -31,7 +30,7 @@ describe("POST /v1/reach with threadTs", () => {
     });
 
   before(async () => {
-    built = buildApp(testConfig({ signingSecret: SECRET }));
+    built = buildTestApp(testConfig({ signingSecret: SECRET }));
     await built.app.upsertDirectory([
       { principalId: "U-carol", displayName: "Carol", type: "internal" },
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
@@ -49,26 +48,23 @@ describe("POST /v1/reach with threadTs", () => {
   it("threads a channel post: the delivery target carries channel:threadTs", async () => {
     const res = await post({ channel: "eng", text: "in the thread", threadTs: TS });
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { deliveryId: string };
-    const d = (await built.app.pendingDeliveries("slack")).find((x) => x.id === body.deliveryId);
-    assert.ok(d, "delivery enqueued for the slack surface");
+    const d = (await built.posts.pending("slack")).at(-1);
+    assert.ok(d, "posted to the slack surface");
     assert.equal(d!.destination.target, `C-eng:${TS}`);
   });
 
   it("an unthreaded channel post keeps a bare channel target", async () => {
     const res = await post({ channel: "eng", text: "top level" });
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { deliveryId: string };
-    const d = (await built.app.pendingDeliveries("slack")).find((x) => x.id === body.deliveryId);
+    const d = (await built.posts.pending("slack")).at(-1);
     assert.equal(d!.destination.target, "C-eng");
   });
 
   it("threads a DM to a person without changing its principal target", async () => {
     const res = await post({ recipient: "Alice", text: "in the DM thread", threadTs: TS });
     assert.equal(res.status, 200);
-    const body = (await res.json()) as { deliveryId: string };
-    const d = (await built.app.pendingDeliveries("principal")).find((x) => x.id === body.deliveryId);
-    assert.ok(d, "delivery enqueued for the principal surface");
+    const d = (await built.posts.pending("principal")).at(-1);
+    assert.ok(d, "posted to the principal surface");
     assert.equal(d!.destination.target, "U-alice");
     assert.equal(d!.destination.threadTs, TS);
   });
