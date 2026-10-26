@@ -971,16 +971,10 @@ test("a job computer is invisible and untargetable for everyone, and only the jo
   await assert.rejects(router.provision(layers, { sandboxId: job.id }), /sandbox not found/);
 });
 
-test("retiring a job computer is skipped when its state moved on, and a job computer's home is not kept", async () => {
-  const kept: Array<[string, boolean | undefined]> = [];
-  const { resources } = fixture((backend) => {
-    const destroy = backend.destroyScope!.bind(backend);
-    backend.destroyScope = async (id, opts) => {
-      kept.push([id, opts?.keepHome]);
-      await destroy(id, opts);
-    };
-  });
+test("retiring a job computer is skipped when its state moved on, and its backing scope is marked as a job's", async () => {
+  const { resources } = fixture();
   const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
+  assert.ok(job.backingScopeId.startsWith("job-"));
   await resources.retireJobComputer(job.id, "provisioning");
   assert.deepEqual(
     (await resources.jobComputers()).map((s) => s.id),
@@ -990,11 +984,7 @@ test("retiring a job computer is skipped when its state moved on, and a job comp
   await resources.retireJobComputer(job.id, "ready");
   assert.deepEqual(await resources.jobComputers(), []);
   const room = await resources.create("alice", "personal:alice", "local", "room");
-  await resources.retire("alice", room.id);
-  assert.deepEqual(kept, [
-    [job.backingScopeId, false],
-    [room.backingScopeId, true],
-  ]);
+  assert.ok(room.backingScopeId.startsWith("sandbox-"));
 });
 
 test("a job computer whose destroy fails keeps its record for retry, and is refused where it cannot be retired", async () => {

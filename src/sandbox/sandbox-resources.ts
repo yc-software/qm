@@ -5,6 +5,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus } from "./sandbox.ts";
+import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 
 export interface SandboxResource {
   id: string;
@@ -150,7 +151,7 @@ export function createSandboxResources(opts: {
     const retiring = { ...current, state: "retired" as const, cleanupPending: true };
     await opts.records.put(current.id, retiring);
     try {
-      await backend.destroyScope(current.backingScopeId, { keepHome: !current.jobOnly });
+      await backend.destroyScope(current.backingScopeId);
       await opts.records.put(current.id, { ...retiring, cleanupPending: false, error: undefined });
     } catch (error) {
       await opts.records.put(current.id, { ...retiring, error: String(error) });
@@ -290,7 +291,7 @@ export function createSandboxResources(opts: {
         id,
         backend: backend as SandboxBackendName,
         ownerScopeId: scopeId,
-        backingScopeId: `sandbox-${id}`,
+        backingScopeId: jobOnly ? `${JOB_COMPUTER_SCOPE_PREFIX}${id}` : `sandbox-${id}`,
         name: name?.trim().slice(0, 120) || backend,
         createdBy: actorId,
         createdAt: new Date().toISOString(),
