@@ -551,12 +551,6 @@ export function loggablePath(url: string | undefined): string {
 }
 
 export function createServer(app: App, deps: ServerOptions = {}): Server {
-  if (!deps.signingSecret && deps.allowUnauthenticatedCore) {
-    console.warn(
-      "[server] ALLOW_UNAUTHENTICATED_CORE=1 — HTTP ingress is UNAUTHENTICATED (intentionally isolated deployments only).",
-    );
-    return buildServer(app, deps, true);
-  }
   if (!isStrongSigningSecret(deps.signingSecret)) {
     throw new Error(
       `CORE_SIGNING_SECRET must be at least ${MIN_SIGNING_SECRET_LENGTH} characters; tests that intentionally need unsigned source auth must use createInsecureTestServer`,

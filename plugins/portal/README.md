@@ -224,7 +224,7 @@ the playground org — so a playground must be its own deployment with nothing
 sensitive at org scope: no org-wide credential grants, no real connector
 credentials, no company data. A cleared cookie mints a fresh principal, so pair
 this with the core's real brakes: `BUDGET_USD_PER_WINDOW`,
-`ORG_BUDGET_USD_PER_WINDOW`, `RATE_LIMIT_PER_WINDOW`, and a single pinned model
+`ORG_BUDGET_USD_PER_WINDOW`, and a single pinned model
 via the admin `base-model` / `webui-models` resources. Nothing
 garbage-collects an abandoned visitor's scope yet.
 

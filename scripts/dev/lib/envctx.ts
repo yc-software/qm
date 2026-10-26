@@ -144,7 +144,6 @@ export async function assembleEnv(opts: {
     harness = "pi";
     env.HARNESS = harness;
     if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
-    if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
   } else {
     throw new Error(
       `ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login (CODEX_AUTH_FILE) is required: dev instances exercise real LLM calls by default. Export a key or add one to ${liveEnvFile}.`,
@@ -153,9 +152,6 @@ export async function assembleEnv(opts: {
 
   for (const key of DEV_SECURITY_SECRET_KEYS) {
     if (!env[key] && wtEnv[key]) env[key] = wtEnv[key];
-  }
-  for (const k of ["SURFACE_DEBUG_FOOTER"]) {
-    if (!env[k] && wtEnv[k]) env[k] = wtEnv[k];
   }
 
   return { env, anthropicKeySource, openaiKeySource, codexAuthSource, harness, liveEnvFile, warnings };

@@ -41,7 +41,6 @@ export function createDeploymentMethods(
   | "runDeploymentGitPush"
   | "deploymentGitUrlFor"
   | "authorizesDeploymentGitAccess"
-  | "reapIdleDeployments"
   | "listEnvironments"
   | "createEnvironment"
   | "resolveEnvironmentByName"
@@ -210,9 +209,6 @@ export function createDeploymentMethods(
       if (!d) return false;
       const current = await principalGitPermission(d, principalId);
       return permission === "write" ? current === "write" : current !== null;
-    },
-    reapIdleDeployments(ttlMs, now) {
-      return deps.deploy.reapIdleDeployments(ttlMs, now);
     },
 
     async listEnvironments() {

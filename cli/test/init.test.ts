@@ -137,12 +137,10 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     assert.equal(config.appPrefix, "acme");
     assert.deepEqual(
       {
-        SNAPSHOT_STORE: config.env.core?.SNAPSHOT_STORE,
-        TRANSFER_STORE: config.env.core?.TRANSFER_STORE,
         S3_BUCKET: config.env.core?.S3_BUCKET,
         S3_REGION: config.env.core?.S3_REGION,
       },
-      { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
+      { S3_BUCKET: "acme-data", S3_REGION: "auto" },
     );
     assert.deepEqual(config.secretEnv?.core, { ADMIN_GRANTS: "ADMIN_GRANTS" });
     assert.equal(config.env.slack?.SLACK_IDENTITY_EMAIL, "1");

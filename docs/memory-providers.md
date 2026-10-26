@@ -82,10 +82,6 @@ MCP reads receive `query` and `acting_user` by default. Writes receive `content`
 
 Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. External routes fail open by default so an outage does not block recall; set `failOpen: false` on a route to make it strict. Provider calls time out after `timeoutMs` (3 seconds by default). Explicit writes always fail visibly. QM continues to decide readable/writable scopes and passes the acting user to the provider.
 
-## Migrating from the retired `BRAIN_*` variables
-
-Earlier releases wired an external knowledge server through `BRAIN=mcp`, `BRAIN_MCP_URL`, `BRAIN_QUERY_TOOL`, and the `BRAIN_RO_*`/`BRAIN_RW_*` OAuth client pairs, exposing `read_brain` and `write_brain` tools. Those variables are ignored now; startup logs a `[config]` warning while any of them is still set. Express the same server as an `mcp` provider above: `url` takes the old `BRAIN_MCP_URL`, `read.tool` the old `BRAIN_QUERY_TOOL`, and `read`/`write` name the env variables holding each OAuth client pair. Static bearer tokens (`BRAIN_AUTH=bearer`) have no equivalent; the provider framework authenticates with client credentials only.
-
 ## Procedural memory (Memorable)
 
 A provider with `type: "memorable"` records _procedures_ rather than facts: when a turn's

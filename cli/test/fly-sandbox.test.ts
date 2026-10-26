@@ -557,7 +557,7 @@ test("fly live check requires deployed machines and a healthy public endpoint", 
     services: ["core", "web-ui", "portal"],
     plugins: [],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const liveEnvs = Object.fromEntries(
@@ -618,7 +618,7 @@ test("fly live readiness rejects the wrong organization identity, region, and re
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const fake = fakeFly(
@@ -664,7 +664,7 @@ test("fly live readiness rejects the wrong region after deployment identity matc
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
@@ -701,7 +701,7 @@ test("fly live readiness rejects rendered environment drift after identity and r
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const env = { ...generatedEnv(derivedTomlFor(config, "core", repoRoot)), S3_BUCKET: "wrong-bucket" };
@@ -738,7 +738,7 @@ test("fly live readiness requires the generated TCP check for plugins", async ()
     services: ["core"],
     plugins: [{ name: "linear", image: "ghcr.io/example/linear:1" }],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const plugin: ResolvedPlugin = { name: "linear", kind: "image", image: "ghcr.io/example/linear:1", env: {} };
@@ -785,7 +785,7 @@ test("fly live readiness rejects a plugin whose TCP check is not passing", async
     services: ["core"],
     plugins: [{ name: "linear", image: "ghcr.io/example/linear:1" }],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const plugin: ResolvedPlugin = { name: "linear", kind: "image", image: "ghcr.io/example/linear:1", env: {} };
@@ -829,7 +829,7 @@ test("fly live readiness fails when core cannot round-trip durable object storag
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
@@ -938,7 +938,7 @@ test("fly live check rejects stopped workloads even when the public endpoint res
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const fake = fakeFly(
@@ -968,7 +968,7 @@ test("fly live check rejects a configured workload with no deployed machine", as
     services: ["core"],
     plugins: [],
     skills: [],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
   const fake = fakeFly(

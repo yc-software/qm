@@ -364,44 +364,6 @@ test("mirror read interface: ingest is queryable by search + readMessages + acti
   }
 });
 
-test("dev debug footer: a surfaceTools reply carries an admin session deep-link (SURFACE_DEBUG_FOOTER)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "ap-footer-"));
-  const built = buildApp(testConfig({ dataDir, surfaceDebugFooter: true, publicWebUrl: "https://portal.test" }));
-  built.runtime.start();
-  try {
-    const container = "C-footer";
-    await built.app.setChannelPolicy(container, "", "U-admin", undefined, undefined, true);
-    await built.app.ingestSurfaceEvents([
-      { container, ts: "1.0", authorId: "U1", text: "hey help !engage !post ahoy", createdAt: 1 },
-    ]);
-    const pending = await pollDeliveries(built.deliveries);
-    assert.equal(pending.length, 1);
-    const footer = pending[0].destination.debugFooter as string;
-    assert.ok(footer, "the reply carries a debug footer when the flag is on");
-    assert.match(footer, /<https:\/\/portal\.test\/admin\/history\/s\/[^|?]+\|session>/);
-    assert.match(footer, /<https:\/\/portal\.test\/admin\/history\/s\/[^|?]+\?turn=\d+\|context>/);
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
-test("no debug footer when SURFACE_DEBUG_FOOTER is off (prod default)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "ap-nofooter-"));
-  const built = buildApp(testConfig({ dataDir, publicWebUrl: "https://portal.test" }));
-  built.runtime.start();
-  try {
-    await built.app.setChannelPolicy("C-nf", "", "U-admin", undefined, undefined, true);
-    await built.app.ingestSurfaceEvents([
-      { container: "C-nf", ts: "1.0", authorId: "U1", text: "hey help !engage !post ahoy", createdAt: 1 },
-    ]);
-    const pending = await pollDeliveries(built.deliveries);
-    assert.equal(pending.length, 1);
-    assert.equal(pending[0].destination.debugFooter, undefined, "no footer in the default (prod) config");
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
 test("the worker DECIDES where to post: a thread_ts roots the reply under the message it chose", async () => {
   const built = freshApp();
   built.runtime.start();

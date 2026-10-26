@@ -92,7 +92,6 @@ export interface DeployService {
   deploymentLogs(idOrName: string, opts: { tailLines: number }): Promise<string | null>;
   gitRepoPath(idOrName: string): Promise<string | null>;
   pushGit<T>(id: string, runReceivePack: () => Promise<{ result: T; ok: boolean }>): Promise<T>;
-  reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
   deployOrUpdate(input: DeployOrUpdateInput): Promise<Deployment>;
   deploymentGrantees(idOrName: string): Promise<DeploymentGrantee[]>;
   canManageDeployment(idOrName: string, callerId: string, actingScopeId?: ScopeId): Promise<boolean>;
@@ -670,29 +669,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
         }
         return result;
       });
-    },
-
-    async reapIdleDeployments(ttlMs, now = Date.now()) {
-      const result = await leaderLease.hold("deployments:reaper", async () => {
-        if (deps.provider.profile.managedScaleToZero) return 0;
-        let stopped = 0;
-        for (const d of await deps.deployStore.list()) {
-          if (d.status !== "running") continue;
-          if (d.alwaysOn) continue;
-          const last = d.lastAccessAt ?? d.versions[d.versions.length - 1]?.createdAt ?? 0;
-          if (now - last < ttlMs) continue;
-          await withDeployLock(d.id, async () => {
-            const cur = await deps.deployStore.get(d.id);
-            if (!cur || cur.status !== "running" || cur.alwaysOn) return;
-            await deps.provider.destroy(cur);
-            await deps.deployStore.setStatus(d.id, "stopped");
-            await deps.deployStore.setEndpoint(d.id, null);
-            stopped++;
-          });
-        }
-        return stopped;
-      });
-      return result ?? 0;
     },
 
     async deployOrUpdate(input) {

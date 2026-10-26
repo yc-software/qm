@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createMemoryStrategy, parseMemoryStrategyKind } from "../src/memory/strategy.ts";
+import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts } from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import type { HarnessModelUtilities } from "../src/harness/harness.ts";
@@ -83,12 +83,7 @@ test("per-turn does not capture when the model says NONE", async () => {
   assert.equal(await memory.read(SCOPE), "");
 });
 
-test("MEMORY_STRATEGY parsing: per-turn is the default, agent-only disables post-turn extraction", () => {
-  assert.equal(parseMemoryStrategyKind(undefined), "per-turn");
-  assert.equal(parseMemoryStrategyKind("per-turn"), "per-turn");
-  assert.equal(parseMemoryStrategyKind("bogus"), "per-turn");
-  assert.equal(parseMemoryStrategyKind("agent-only"), "agent-only");
-
+test("agent-only disables post-turn extraction; per-turn keeps it", () => {
   const { memory } = freshMemory();
   const harness = createMockHarness().models;
   assert.equal(createMemoryStrategy("agent-only", { harness, memory }).strategy.onTurnEnd, undefined);

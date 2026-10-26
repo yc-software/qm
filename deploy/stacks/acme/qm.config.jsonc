@@ -17,8 +17,6 @@
     },
     "core": {
       "HARNESS": "pi",
-      "SNAPSHOT_STORE": "s3",
-      "TRANSFER_STORE": "s3",
       "S3_BUCKET": "acme-data",
       "S3_REGION": "auto",
     },

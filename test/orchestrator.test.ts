@@ -11,7 +11,7 @@ import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
-import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
+import { verifyCapabilityToken, EGRESS_PROXY_AUD, SANDBOX_CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { egressClaimAllowingControlPlane } from "../src/core/orchestrator.ts";
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
@@ -1165,58 +1165,48 @@ test("turn timezone rides the prompt and control-plane capability token", async 
   assert.equal(invalidClaims!.timezone, undefined, "invalid surface timezones are omitted from the token");
 });
 
-for (const hours of [undefined, "72", "0", "none"]) {
-  test(`sandbox-facing turn tokens honor deployment TTL ${hours ?? "default"}`, async () => {
-    const ttl = loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: hours }).sandboxCapabilityTtlMs;
-    const { app, sandbox, serviceCreds, acl } = freshApp({
-      signingSecret: "test-secret",
-      apiBaseUrl: "https://core.example.com",
-      sandboxCapabilityTtlMs: ttl,
-    });
-    await serviceCreds.setServiceCredential("org:default-org", {
-      slug: "test-service",
-      name: "Test service",
-      secret: "synthetic",
-      host: "api.example.com",
-    });
-    await grantCred(acl, "org:default-org", "test-service");
-    let captured: ProvisionOptions | undefined;
-    let executed: Record<string, string> | undefined;
-    const provision = sandbox.provision.bind(sandbox);
-    sandbox.provision = (layers, opts) => {
-      captured = opts;
-      return provision(layers, opts);
-    };
-    const run = sandbox.run.bind(sandbox);
-    sandbox.run = (handle, command, opts) => {
-      if (command === "echo ttl") executed = handle.env;
-      return run(handle, command, opts);
-    };
-    const before = Date.now();
-    const res = await app.turn(
-      dm(`!execute ${JSON.stringify({ command: "echo ttl", credentials: ["test-service"] })}`),
-    );
-    assert.equal(res.status, "ok", res.reason);
-    const tokens = {
-      AGENT_API_TOKEN: captured!.env!.AGENT_API_TOKEN!,
-      AGENT_OAUTH_CONSENT_TOKEN: captured!.env!.AGENT_OAUTH_CONSENT_TOKEN!,
-      AGENT_CREDENTIAL_TOKEN: executed!.AGENT_CREDENTIAL_TOKEN!,
-      egressToken: captured!.egressToken!,
-    };
-    for (const [name, token] of Object.entries(tokens)) {
-      const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
-      assert.ok(claims, `${name} verifies`);
-      if (ttl === 0) {
-        assert.equal(claims.exp, 0);
-        assert.ok(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, Number.MAX_SAFE_INTEGER));
-      } else {
-        assert.ok(claims.exp >= before + ttl && claims.exp <= Date.now() + ttl, name);
-        assert.ok(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, claims.exp - 1));
-        assert.equal(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, claims.exp), null);
-      }
-    }
+test("sandbox-facing turn tokens expire after the 48-hour sandbox capability lifetime", async () => {
+  const ttl = SANDBOX_CAPABILITY_TTL_MS;
+  const { app, sandbox, serviceCreds, acl } = freshApp({
+    signingSecret: "test-secret",
+    apiBaseUrl: "https://core.example.com",
   });
-}
+  await serviceCreds.setServiceCredential("org:default-org", {
+    slug: "test-service",
+    name: "Test service",
+    secret: "synthetic",
+    host: "api.example.com",
+  });
+  await grantCred(acl, "org:default-org", "test-service");
+  let captured: ProvisionOptions | undefined;
+  let executed: Record<string, string> | undefined;
+  const provision = sandbox.provision.bind(sandbox);
+  sandbox.provision = (layers, opts) => {
+    captured = opts;
+    return provision(layers, opts);
+  };
+  const run = sandbox.run.bind(sandbox);
+  sandbox.run = (handle, command, opts) => {
+    if (command === "echo ttl") executed = handle.env;
+    return run(handle, command, opts);
+  };
+  const before = Date.now();
+  const res = await app.turn(dm(`!execute ${JSON.stringify({ command: "echo ttl", credentials: ["test-service"] })}`));
+  assert.equal(res.status, "ok", res.reason);
+  const tokens = {
+    AGENT_API_TOKEN: captured!.env!.AGENT_API_TOKEN!,
+    AGENT_OAUTH_CONSENT_TOKEN: captured!.env!.AGENT_OAUTH_CONSENT_TOKEN!,
+    AGENT_CREDENTIAL_TOKEN: executed!.AGENT_CREDENTIAL_TOKEN!,
+    egressToken: captured!.egressToken!,
+  };
+  for (const [name, token] of Object.entries(tokens)) {
+    const claims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
+    assert.ok(claims, `${name} verifies`);
+    assert.ok(claims.exp >= before + ttl && claims.exp <= Date.now() + ttl, name);
+    assert.ok(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, claims.exp - 1));
+    assert.equal(await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET, claims.exp), null);
+  }
+});
 
 test("unattended grants enter capability claims only on non-live turns", async () => {
   const config = testConfig({

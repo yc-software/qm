@@ -192,15 +192,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "AGENT37_API_KEY",
     service: "core",
-    required: {
-      when: {
-        kind: "any",
-        conditions: [
-          { kind: "sandbox-backend", backend: "agent37" },
-          { kind: "env-equals", service: "core", name: "SANDBOX_SECONDARY_BACKEND", value: "agent37" },
-        ],
-      },
-    },
+    required: { when: { kind: "sandbox-backend", backend: "agent37" } },
     description: "Agent37 API key for the agent-computer substrate.",
     generate: "mint a key in the Agent37 dashboard (https://agent37.com/dashboard/cloud/api-keys)",
   },

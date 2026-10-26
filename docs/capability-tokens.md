@@ -35,14 +35,8 @@ before rolling back. Leaving the updated verifiers in place is the safe rollback
 
 Turn tokens handed to sandboxes (agent API, credential broker, egress proxy, OAuth
 consent) expire 48 hours after the turn starts, which bounds how long background jobs
-launched by that turn keep their access. Set `SANDBOX_CAPABILITY_TTL_HOURS` on every
-process that issues capabilities to change it: a positive number of hours, or `0` /
-`none` for no expiry (`exp: 0`). The value is read
-once at startup; an invalid value fails startup. Tokens already issued keep the
-lifetime they were minted with. Revocation and scope checks still apply to
-non-expiring tokens. This does not remove run/lease, background-job, provider, or
-credential lifetime limits. Non-expiring bearer tokens increase exposure if leaked;
-keep the default unless unattended work requires longer access.
+launched by that turn keep their access. This does not remove run/lease, background-job,
+provider, or credential lifetime limits.
 
 Deploy the updated verifier to every core and worker, and any separately deployed
 egress proxy, before enabling no expiry. Older verifiers reject `exp: 0`.

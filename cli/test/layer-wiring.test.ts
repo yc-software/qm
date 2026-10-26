@@ -74,11 +74,6 @@ test("the deployment's sandbox/ skills + tools wire into the core via DEPLOYMENT
     const out = await plan(dir);
     assert.match(out, /DEPLOYMENT_LAYER/, "core env advertises DEPLOYMENT_LAYER");
     assert.match(out, new RegExp(`${join(dir, "sandbox")} → /layer \\(skills, tools\\)`));
-    assert.doesNotMatch(
-      out,
-      /PLUGIN_SKILLS_DIRS/,
-      "layer skills seed via the DEPLOYMENT_LAYER store, not PLUGIN_SKILLS_DIRS (which would replace the image's plugin defaults)",
-    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

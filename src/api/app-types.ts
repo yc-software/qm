@@ -626,7 +626,6 @@ export interface App {
     opts: { secret: string; baseUrl: string; ttlMs?: number },
   ): Promise<DeploymentGitUrl | null>;
   authorizesDeploymentGitAccess(id: string, principalId: string, permission: "read" | "write"): Promise<boolean>;
-  reapIdleDeployments(ttlMs: number, now?: number): Promise<number>;
   listEnvironments(): Promise<{ environment: Environment; attachments: EnvironmentAttachment[] }[]>;
   createEnvironment(input: { scopeId: ScopeId; name: string; actorId: string }): Promise<Environment>;
   resolveEnvironmentByName(name: string): Promise<Environment | null>;

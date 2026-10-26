@@ -11,8 +11,6 @@ output "microvm_execution_role_arn" { value = var.deploy_microvm_execution_role_
 output "object_store_bucket" { value = aws_s3_bucket.objects.bucket }
 output "core_object_store_environment" {
   value = {
-    SNAPSHOT_STORE = "s3"
-    TRANSFER_STORE = "s3"
     S3_BUCKET      = aws_s3_bucket.objects.bucket
     S3_REGION      = var.region
   }

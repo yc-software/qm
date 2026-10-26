@@ -150,7 +150,7 @@ The dev instance should exercise the real system:
   Docker Postgres container and runs core with `SESSION_STORE=postgres` and
   `RUN_STORE=postgres`
 - production data is never copied into a dev instance
-- captured model context: request capture is on unless overridden, so you can read back what the model was actually sent
+- captured model context: request capture is always on, so you can read back what the model was actually sent
 - fast local edits: runs Node surfaces with `--watch` and serves the web UI through
   Vite HMR on the dev surface instead of a separate browser build loop
 - stale pool recovery: `status` shows each deploy's start time and age; if all pool

@@ -72,7 +72,6 @@
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/client-ecs": "3.1096.0",
     "@aws-sdk/client-s3": "^3.1061.0",
-    "@aws-sdk/client-secrets-manager": "^3.1089.0",
     "@aws-sdk/client-sts": "^3.1075.0",
     "@aws-sdk/credential-provider-node": "^3.972.70",
     "@aws-sdk/s3-request-presigner": "^3.1061.0",

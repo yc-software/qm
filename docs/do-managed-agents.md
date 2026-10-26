@@ -33,7 +33,7 @@ Other knobs: `DO_AGENTS_SIZE_SLUG`, `DO_AGENTS_IDLE_TIMEOUT_SEC`, `DO_AGENTS_NAM
 
 ## Good to know
 
-- Commands and file transfers go over a port-forward to the microVM rather than DigitalOcean's REST exec, which caps output and runtime. Long commands are bounded only by `SANDBOX_TIMEOUT_SEC`.
+- Commands and file transfers go over a port-forward to the microVM rather than DigitalOcean's REST exec, which caps output and runtime. Long commands are bounded only by the 600-second default command timeout.
 - QM doesn't reap idle machines itself. DigitalOcean's idle timeout does, and paused sessions still count against team quota.
 - Sessions allow `bash` outright, since QM already runs its own approval gates.
 - `scripts/managed-agents-sandbox-smoke.ts` checks a token and template end to end before you point a deployment at them.

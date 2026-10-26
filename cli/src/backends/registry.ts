@@ -209,13 +209,6 @@ const fly: HostingProvider = {
     if (!config.flyOrg?.trim())
       errors.push({ clause: "config.v1", message: 'contract config.fly.flyOrg: target "fly" requires "flyOrg"' });
     const core = config.env.core ?? {};
-    if (core.SNAPSHOT_STORE !== "s3" || core.TRANSFER_STORE !== "s3") {
-      errors.push({
-        clause: "config.v1",
-        message:
-          'contract config.fly.durability: a Fly deployment requires env.core.SNAPSHOT_STORE and TRANSFER_STORE to be "s3"',
-      });
-    }
     if (!core.S3_BUCKET?.trim() || !core.S3_REGION?.trim()) {
       errors.push({
         clause: "config.v1",

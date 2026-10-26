@@ -1,7 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
-import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import {
   createKeychain,
   type KeychainCredential,
@@ -41,47 +39,16 @@ function makeKeychain(
   return keychain;
 }
 
-test("operator token fallback can model per-user credentials and host-wide service credentials", async () => {
-  const empty = makeKeychain();
-  const tokens = withOperatorTokenFallback(
-    empty,
-    ["gmail.googleapis.com", "tools.example.com"],
-    createEnvSecretSource({
-      [envKey("gmail.googleapis.com", "U1")]: "alice-oauth",
-      [envKey("gmail.googleapis.com", "U2")]: "bob-oauth",
-      VAULT_TOKEN_TOOLS_EXAMPLE_COM: "shared-tool-token",
-    }),
-  );
-  assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U1"), "alice-oauth");
-  assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U2"), "bob-oauth");
-  assert.equal(await tokens.connectorAccessToken("tools.example.com", "U1"), "shared-tool-token");
-  assert.equal(await tokens.connectorAccessToken("api.x.com", "U1"), null);
-});
-
-test("envKey: the host-wide form keeps its documented shape; per-user keys never collide across principals", () => {
-  assert.equal(envKey("gmail.googleapis.com"), "VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM");
-  assert.notEqual(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a-b@c.com"));
-  assert.notEqual(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a_b@c.com"));
-  assert.equal(envKey("gmail.googleapis.com", "a.b@c.com"), envKey("gmail.googleapis.com", "a.b@c.com"));
-});
-
-test("connector tokens: per-user token + refresh; least-privilege (no shared fallback by default)", async () => {
+test("connector tokens: per-user token + refresh; no shared fallback", async () => {
   let refreshed = 0;
-  const tokens = withOperatorTokenFallback(
-    makeKeychain({
-      now: () => 10_000,
-      skewMs: 0,
-      refresh: async (_host, t) => {
-        refreshed++;
-        return { accessToken: "fresh-" + (t.refreshToken ?? ""), refreshToken: t.refreshToken, expiresAt: 1_000_000 };
-      },
-    }),
-    ["search.public.test"],
-    createEnvSecretSource({
-      [envKey("private.example.test")]: "shared-private-token",
-      [envKey("search.public.test")]: "public-key",
-    }),
-  );
+  const tokens = makeKeychain({
+    now: () => 10_000,
+    skewMs: 0,
+    refresh: async (_host, t) => {
+      refreshed++;
+      return { accessToken: "fresh-" + (t.refreshToken ?? ""), refreshToken: t.refreshToken, expiresAt: 1_000_000 };
+    },
+  });
 
   await tokens.setConnectorToken("private.example.test", "U1", { accessToken: "alice-private", expiresAt: 1_000_000 });
   assert.equal(await tokens.connectorAccessToken("private.example.test", "U1"), "alice-private");
@@ -111,8 +78,6 @@ test("connector tokens: per-user token + refresh; least-privilege (no shared fal
   assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U2"), null);
 
   assert.equal(await tokens.connectorAccessToken("private.example.test", "U9"), null);
-
-  assert.equal(await tokens.connectorAccessToken("search.public.test", "U9"), "public-key");
 });
 
 test("disconnect revokes connector grants so reconnect does not resurrect sharing", async () => {
@@ -465,14 +430,4 @@ test("oauthRevoke: a capability token disconnects its own connector, but not a n
   const stranger = await call(cap("U1"), { provider: "google", principalId: "U9" });
   assert.equal(stranger.status, 400);
   assert.equal(deleted.length, 0);
-});
-
-test("operator token fallback: an empty per-user secret falls through to the host-wide token", async () => {
-  const tokens = withOperatorTokenFallback(makeKeychain(), ["gmail.googleapis.com"], {
-    get: async (name) => {
-      if (name === envKey("gmail.googleapis.com", "U1")) return "";
-      return name === envKey("gmail.googleapis.com") ? "host-wide" : undefined;
-    },
-  });
-  assert.equal(await tokens.connectorAccessToken("gmail.googleapis.com", "U1"), "host-wide");
 });

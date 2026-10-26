@@ -12,7 +12,6 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { startMcpTestServer } from "./support/mcp-test-server.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -120,48 +119,6 @@ test("MCP admin validates and preserves credential scope, without returning secr
     200,
   );
   assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
-});
-
-test("production wiring never uses operator fallback tokens for per-user MCP calls", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "mcp-wiring-"));
-  const previous = process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM;
-  process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = "operator-token";
-  const built = buildApp(testConfig({ dataDir: dir, egressServiceHosts: ["accounts.example.com"] }));
-  const remote = await startMcpTestServer(t, {
-    tools: [{ name: "identity", inputSchema: { type: "object" } }],
-    call: (_name, _args, authorization) => ({ content: [{ type: "text", text: authorization ?? "" }] }),
-  });
-  const calls = () => remote.requests.filter((r) => r.rpc === "tools/call").length;
-  t.after(async () => {
-    built.mcpToolService.close();
-    if (previous === undefined) delete process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM;
-    else process.env.VAULT_TOKEN_ACCOUNTS_EXAMPLE_COM = previous;
-    await rm(dir, { recursive: true, force: true });
-  });
-  await built.mcpServers.put({
-    id: "crm",
-    name: "CRM",
-    url: `${remote.url}/mcp`,
-    auth: "none",
-    credentialScope: "per-user",
-    credentialHost: "accounts.example.com",
-    readOnly: true,
-    enabled: true,
-    updatedAt: Date.now(),
-    updatedBy: "internal:admin",
-  });
-  await built.mcpToolService.refresh();
-  assert.equal(
-    await built.connectorTokens.connectorAccessToken("accounts.example.com", "internal:alice"),
-    "operator-token",
-  );
-  await assert.rejects(built.mcpToolService.call("crm_identity", {}, "internal:alice"), /Connect your account/);
-  assert.equal(calls(), 0);
-  await built.connectorTokens.setConnectorToken("accounts.example.com", "internal:alice", {
-    accessToken: "alice-only",
-  });
-  assert.equal(await built.mcpToolService.call("crm_identity", {}, "internal:alice"), "Bearer alice-only");
-  assert.equal(calls(), 1);
 });
 
 test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadata, and never shadows built-in connectors", async (t) => {

@@ -18,8 +18,6 @@
     "core": {
       "PUBLIC_WEB_URL": "https://beta-portal.fly.dev",
       "STACK_MARKER": "beta-sandboxes",
-      "SNAPSHOT_STORE": "s3",
-      "TRANSFER_STORE": "s3",
       "S3_BUCKET": "beta-data",
       "S3_REGION": "auto"
     },

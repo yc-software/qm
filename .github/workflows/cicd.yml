@@ -260,6 +260,9 @@ jobs:
       - name: Oxlint
         if: needs.reuse.outputs.reusable != 'true'
         run: npm run lint:ox
+      - name: Config template
+        if: needs.reuse.outputs.reusable != 'true'
+        run: node scripts/check-config-template.ts
 
   core-postgres:
     name: Core Postgres tests

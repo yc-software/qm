@@ -461,7 +461,7 @@ function secretNames(app: string): Set<string> | undefined {
 function flyProviderSecrets(config: QmConfig, workload: string): string[] {
   if (workload !== "core") return [];
   const core = config.env.core ?? {};
-  if (core.SNAPSHOT_STORE !== "s3" && core.TRANSFER_STORE !== "s3") return [];
+  if (!core.S3_BUCKET?.trim()) return [];
   return ["AWS_ACCESS_KEY_ID", "AWS_ENDPOINT_URL_S3", "AWS_SECRET_ACCESS_KEY"];
 }
 
@@ -1709,7 +1709,7 @@ export async function flyCheckLive(
   }
 
   const coreEnv = config.env.core ?? {};
-  if (coreEnv.SNAPSHOT_STORE === "s3" || coreEnv.TRANSFER_STORE === "s3") {
+  if (coreEnv.S3_BUCKET?.trim()) {
     if (!coreMachineId) {
       failures.push(`${ctx.appPrefix}-core: cannot run the S3 durability probe without an identified machine`);
     } else {

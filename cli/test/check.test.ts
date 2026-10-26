@@ -74,10 +74,10 @@ test("every Fly deployment requires durable S3-compatible stores", () => {
   const ephemeral = deployment(() => {}, base);
   const durable = deployment(() => {}, {
     ...base,
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "acme-data", S3_REGION: "auto" } },
   });
   try {
-    assert.throws(() => check(ephemeral), /Fly deployment requires env\.core\.SNAPSHOT_STORE/);
+    assert.throws(() => check(ephemeral), /Fly deployment requires env\.core\.S3_BUCKET/);
     assert.doesNotThrow(() => check(durable));
   } finally {
     rmSync(ephemeral.dir, { recursive: true, force: true });

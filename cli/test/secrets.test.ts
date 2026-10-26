@@ -182,10 +182,9 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
   );
 });
 
-test("the Agent37 key is required for either sandbox route", () => {
+test("the Agent37 key is required for the agent37 sandbox backend", () => {
   for (const config of [
     makeConfig({ env: { core: { SANDBOX_BACKEND: "agent37" } } }),
-    makeConfig({ env: { core: { SANDBOX_SECONDARY_BACKEND: "agent37" } } }),
     makeConfig({ sandbox: { backend: "agent37" } }),
   ]) {
     assert.equal(secretByName(config, "AGENT37_API_KEY").required, true);

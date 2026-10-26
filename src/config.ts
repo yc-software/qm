@@ -6,7 +6,6 @@ import {
 import { errMessage } from "./util/errors.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
-import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
 import { parseScopeId } from "./types.ts";
 import type { LegacySandboxScopeDefaults } from "./sandbox/sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox/sandbox-routing.ts";
@@ -18,13 +17,8 @@ import {
   type ProviderBaseUrls,
 } from "./model/provider-endpoints.ts";
 import { join, resolve } from "node:path";
-import {
-  parseMemoryCaptureMode,
-  parseMemoryRecallMode,
-  type MemoryCaptureMode,
-  type MemoryRecallMode,
-} from "./memory/policy.ts";
-import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
+import { DEFAULT_MEMORY_POLICY, type MemoryCaptureMode, type MemoryRecallMode } from "./memory/policy.ts";
+import { DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "./memory/strategy.ts";
 import { parseMemoryProviderConfig, type MemoryProviderConfig } from "./memory/provider-config.ts";
 import { sanitizeBranding } from "./resolution/branding.ts";
 import type { OrgBranding } from "./resolution/config-store.ts";
@@ -64,7 +58,6 @@ export interface Config {
   swarmsEnabled?: boolean;
   swarmDefaults?: SwarmSettings;
   production: boolean;
-  allowUnauthenticatedCore: boolean;
   port: number;
   dataDir: string;
   orgId: string;
@@ -83,7 +76,6 @@ export interface Config {
   sandboxBackend: SandboxBackendName;
   sandboxSecondaryBackend?: SandboxBackendName;
   deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b";
-  egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
   codexAuthFile?: string;
@@ -104,7 +96,6 @@ export interface Config {
   providerBaseUrls: ProviderBaseUrls;
   modelGateway?: ModelGatewayTransportConfig;
   brokerCredentials?: DeploymentBrokerCredential[];
-  piCaptureRequests: boolean;
   piSystemCacheSplit: boolean;
   adminGrants?: string;
   trustedOidcAdminIssuer?: string;
@@ -124,7 +115,6 @@ export interface Config {
   runMaxAgeMs: number;
   runWaitMs: number;
   backgroundJobTtlMs: number;
-  sandboxCapabilityTtlMs: number;
   backgroundJobTtlMaxMs: number;
   backgroundWorkEnabled: boolean;
   backgroundDeploymentId?: string;
@@ -141,8 +131,6 @@ export interface Config {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  secretsBackend: "env" | "aws";
-  secretsPrefix: string;
   apiBaseUrl?: string;
   publicUrl?: string;
   gmailPubSub?: { topic: string; audience: string; serviceAccount: string };
@@ -158,12 +146,9 @@ export interface Config {
   deploymentLayerDir?: string;
   layerEnv?: Readonly<Record<string, string | undefined>>;
   filesDirectUploadsEnabled: boolean;
-  snapshotStore: "local" | "s3";
-  transferStore: "local" | "s3";
   s3Bucket?: string;
   s3Region?: string;
   s3Prefix?: string;
-  deployIdleTtlMs?: number;
   deployGitDir: string;
   deployDialTimeoutMs: number;
   deployAppsSessionSecret?: string;
@@ -174,10 +159,9 @@ export interface Config {
   cronFireConcurrency: number;
   memoryRecall: MemoryRecallMode;
   memoryCapture: MemoryCaptureMode;
+  memoryCaptureQuietMs: number;
   memoryStrategy: MemoryStrategyKind;
   memoryProviderConfig?: MemoryProviderConfig;
-  memoryCaptureQuietMs: number;
-  memoryCaptureMaxTurns?: number;
   workers: number;
   leaseTtlMs: number;
   heartbeatIntervalMs: number;
@@ -198,7 +182,6 @@ export interface Config {
   };
   scratchExecEnabled: boolean;
   reachExecEnabled: boolean;
-  surfaceDebugFooter: boolean;
   eagerProvisionEnabled: boolean;
   awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
@@ -270,7 +253,6 @@ interface AwsSandboxEnv {
   maximumDurationInSeconds?: number;
   rotateAfterSeconds?: number;
   snapshotIntervalMs?: number;
-  defaultTimeoutSec?: number;
   cpus?: number;
   memoryMb?: number;
   diskGb?: number;
@@ -315,9 +297,6 @@ function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
       ? { snapshotIntervalMs: numEnvStrict("AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", env.AWS_SANDBOX_SNAPSHOT_INTERVAL_MS) }
       : {}),
     ...(env.QM_CORE_CONTAINER ? { coreContainer: env.QM_CORE_CONTAINER } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
     ...(numEnvStrict("AWS_SANDBOX_CPUS", env.AWS_SANDBOX_CPUS) !== undefined
       ? { cpus: numEnvStrict("AWS_SANDBOX_CPUS", env.AWS_SANDBOX_CPUS) }
       : {}),
@@ -336,7 +315,6 @@ interface LocalSandboxEnv {
   cpus?: number;
   memoryMb?: number;
   coreContainer?: string;
-  defaultTimeoutSec?: number;
 }
 
 function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
@@ -349,9 +327,6 @@ function localSandboxEnv(env: NodeJS.ProcessEnv): LocalSandboxEnv {
     ...(numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) !== undefined
       ? { memoryMb: numEnvStrict("LOCAL_SANDBOX_MEMORY_MB", env.LOCAL_SANDBOX_MEMORY_MB) }
       : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
@@ -363,7 +338,6 @@ interface SpritesSandboxEnv {
   egressProxyAdditionalUrls?: string[];
   snapshotS3Bucket?: string;
   memoryMb?: number;
-  defaultTimeoutSec?: number;
 }
 
 function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
@@ -383,9 +357,6 @@ function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
     ...(numEnvStrict("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) !== undefined
       ? { memoryMb: numEnvStrict("SPRITES_MEMORY_MB", env.SPRITES_MEMORY_MB) }
       : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
@@ -402,7 +373,6 @@ interface E2bSandboxEnv {
   snapshotIntervalSec?: number;
   nativeSnapshotIntervalSec?: number;
   maxLifetimeSec?: number;
-  defaultTimeoutSec?: number;
 }
 
 function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
@@ -430,9 +400,6 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
           ),
         }
       : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
@@ -446,7 +413,6 @@ interface ManagedAgentsSandboxEnv {
   egressProxyUrl?: string;
   snapshotS3Bucket?: string;
   snapshotIntervalSec?: number;
-  defaultTimeoutSec?: number;
 }
 
 function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEnv {
@@ -463,9 +429,6 @@ function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEn
     ...(env.DO_AGENTS_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.DO_AGENTS_SNAPSHOT_S3_BUCKET } : {}),
     ...(numEnvStrict("DO_AGENTS_SNAPSHOT_INTERVAL_SEC", env.DO_AGENTS_SNAPSHOT_INTERVAL_SEC) !== undefined
       ? { snapshotIntervalSec: numEnvStrict("DO_AGENTS_SNAPSHOT_INTERVAL_SEC", env.DO_AGENTS_SNAPSHOT_INTERVAL_SEC) }
-      : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
   };
 }
@@ -489,7 +452,6 @@ interface ModalSandboxEnv {
   egressProxyUrl?: string;
   snapshotS3Bucket?: string;
   snapshotIntervalSec?: number;
-  defaultTimeoutSec?: number;
 }
 
 function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
@@ -526,7 +488,6 @@ function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
     ...(num("MODAL_SNAPSHOT_INTERVAL_SEC") !== undefined
       ? { snapshotIntervalSec: num("MODAL_SNAPSHOT_INTERVAL_SEC") }
       : {}),
-    ...(num("SANDBOX_TIMEOUT_SEC") !== undefined ? { defaultTimeoutSec: num("SANDBOX_TIMEOUT_SEC") } : {}),
   };
 }
 
@@ -542,7 +503,6 @@ interface SmolmachinesSandboxEnv {
   egressProxyUrl?: string;
   snapshotS3Bucket?: string;
   snapshotIntervalSec?: number;
-  defaultTimeoutSec?: number;
 }
 
 function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv {
@@ -573,9 +533,6 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
           ),
         }
       : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
@@ -587,7 +544,6 @@ interface PorterSandboxEnv {
   homeDir?: string;
   ttlSec?: number;
   egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
 }
 
 interface PorterDeployEnv {
@@ -656,9 +612,6 @@ function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
     ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
     ...(ttlSec !== undefined ? { ttlSec } : {}),
     ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
@@ -671,7 +624,6 @@ interface Agent37SandboxEnv {
   memoryGb?: number;
   diskGb?: number;
   egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
 }
 
 function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
@@ -690,9 +642,6 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
       ? { diskGb: numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) }
       : {}),
     ...(env.AGENT37_EGRESS_PROXY_URL ? { egressProxyUrl: env.AGENT37_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
   };
 }
 
@@ -706,7 +655,6 @@ interface SuperserveSandboxEnv {
   retentionSec?: number;
   egressAllow?: string[];
   egressDeny?: string[];
-  defaultTimeoutSec?: number;
   configGeneration?: number;
 }
 
@@ -741,9 +689,6 @@ function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
       : {}),
     ...(egressAllow ? { egressAllow } : {}),
     ...(egressDeny ? { egressDeny } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
     ...(configGeneration !== undefined ? { configGeneration } : {}),
   };
 }
@@ -968,7 +913,7 @@ export const CONFIG_DEFAULTS = {
   securityScreenTimeoutMs: 15_000,
   workers: 16,
   leaseTtlMs: 120_000,
-  heartbeatIntervalMs: 10_000,
+  heartbeatIntervalMs: 40_000,
   reaperIntervalMs: 15_000,
   shutdownDrainMs: 30_000,
   maxAttempts: 3,
@@ -1067,20 +1012,6 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
   );
 }
 
-function secretsBackendEnvStrict(value: string | undefined, prefix: string): Config["secretsBackend"] {
-  if (value === undefined || value.trim() === "") return "env";
-  const backend = value.trim();
-  if (backend === "env") return backend;
-  if (backend === "aws") {
-    if (!prefix)
-      throw new Error(
-        "SECRETS_BACKEND=aws requires a non-empty SECRETS_PREFIX (e.g. qm-prod-) so lookups can't collide across stacks sharing an account.",
-      );
-    return backend;
-  }
-  throw new Error(`SECRETS_BACKEND=${JSON.stringify(value)} is not recognized — use env or aws, or unset it.`);
-}
-
 function securityPostureEnvStrict(value: string | undefined): SecurityPosture {
   if (value === undefined || value.trim() === "") return "auto";
   const posture = parseSecurityPosture(value);
@@ -1111,16 +1042,6 @@ const RETIRED_SECURITY_SCREEN_ENV = [
   "SECURITY_SCREEN_ALL_POSTURES",
   "SECURITY_SCREEN_PROXY_ROLLOUT",
 ] as const;
-
-function csvPaths(value: string | undefined): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (boolEnv(value) === false) return [];
-  return value
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((p) => resolve(p));
-}
 
 export function modelGatewayFromEnv(env: NodeJS.ProcessEnv): ModelGatewayTransportConfig | undefined {
   const names = ["MODEL_GATEWAY_URL", "MODEL_GATEWAY_API_KEY", "MODEL_GATEWAY_API_KEY_HEADER", "MODEL_GATEWAY_MODELS"];
@@ -1347,19 +1268,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
 
-  if (env.SANDBOX_SECONDARY_BACKEND?.trim()) {
-    console.warn(
-      `[config] SANDBOX_SECONDARY_BACKEND=${JSON.stringify(env.SANDBOX_SECONDARY_BACKEND.trim())} is retired and ignored — every backend whose credential is present is constructed; per-scope routes pick between them. Remove the variable.`,
-    );
-  }
-  const retiredBrainEnv = ["BRAIN", "BRAIN_MCP_URL", "BRAIN_RO_CLIENT_ID", "BRAIN_RW_CLIENT_ID"].filter((name) =>
-    env[name]?.trim(),
-  );
-  if (retiredBrainEnv.length) {
-    console.warn(
-      `[config] ${retiredBrainEnv.join(", ")} ${retiredBrainEnv.length === 1 ? "is" : "are"} retired and ignored — the brain integration was removed; point an external knowledge server at MEMORY_PROVIDER_CONFIG (docs/memory-providers.md). Remove the variables.`,
-    );
-  }
   const retiredScreenEnv = RETIRED_SECURITY_SCREEN_ENV.filter((name) => env[name]?.trim());
   const retiredScreenOff =
     retiredScreenEnv.length === 1 &&
@@ -1406,16 +1314,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       );
     }
   }
-  const securityScreenTimeoutMs =
-    numEnvStrict("SECURITY_SCREEN_TIMEOUT_MS", env.SECURITY_SCREEN_TIMEOUT_MS) ??
-    CONFIG_DEFAULTS.securityScreenTimeoutMs;
-  if (
-    !Number.isSafeInteger(securityScreenTimeoutMs) ||
-    securityScreenTimeoutMs <= 0 ||
-    securityScreenTimeoutMs > 2_147_483_647
-  ) {
-    throw new Error("SECURITY_SCREEN_TIMEOUT_MS must be a positive integer no greater than 2147483647");
-  }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL || publicApiUrl;
   const deployProvider = env.DEPLOY_PROVIDER ?? "docker";
@@ -1452,11 +1350,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
   ) as NodeJS.ProcessEnv;
   if (providerBaseUrls.anthropic) claudeProcessEnv.ANTHROPIC_BASE_URL = providerBaseUrls.anthropic;
-  const turnWallClockMs =
-    (numEnvStrict("TURN_WALL_CLOCK_SEC", env.TURN_WALL_CLOCK_SEC) ?? CONFIG_DEFAULTS.turnWallClockSec) * 1000;
-  const runMaxAgeMs =
-    numEnvStrict("RUN_MAX_AGE_MS", env.RUN_MAX_AGE_MS) ??
-    (turnWallClockMs > 0 ? 2 * turnWallClockMs : CONFIG_DEFAULTS.runMaxAgeMs);
   const slack = slackPluginConfigFromEnv(env);
   const externalSlackPolicies = Object.fromEntries(
     [...(slack ? [slack] : []), ...slackAccountConfigsFromEnv(env)]
@@ -1478,7 +1371,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { suggestedActivitiesContext: env.SUGGESTED_ACTIVITIES_CONTEXT.slice(0, 8000) }
       : {}),
     production: env.NODE_ENV === "production",
-    allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
@@ -1506,13 +1398,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     sandboxBackend,
     legacySandboxScopeDefaults,
     deployProvider,
-    ...(env.EGRESS_SERVICE_HOSTS
-      ? {
-          egressServiceHosts: env.EGRESS_SERVICE_HOSTS.split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
-        }
-      : {}),
     ...(orgBrandingFromEnv(env) ? { brandingDefault: orgBrandingFromEnv(env) } : {}),
     ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
     ...(codexAuthFile ? { codexAuthFile } : {}),
@@ -1549,39 +1434,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     ...(env.RESEND_API_KEY?.trim() ? { resendApiKey: env.RESEND_API_KEY.trim() } : {}),
     ...(env.AUTH_EMAIL_FROM?.trim() ? { emailFrom: env.AUTH_EMAIL_FROM.trim() } : {}),
-    piCaptureRequests: boolEnvStrict("PI_CAPTURE_REQUESTS", env.PI_CAPTURE_REQUESTS) ?? true,
     piSystemCacheSplit: boolEnvStrict("PI_SYSTEM_CACHE_SPLIT", env.PI_SYSTEM_CACHE_SPLIT) ?? false,
-    rateLimitPerWindow:
-      numEnvStrict("RATE_LIMIT_PER_WINDOW", env.RATE_LIMIT_PER_WINDOW) ?? CONFIG_DEFAULTS.rateLimitPerWindow,
-    rateLimitWindowMs:
-      numEnvStrict("RATE_LIMIT_WINDOW_MS", env.RATE_LIMIT_WINDOW_MS) ?? CONFIG_DEFAULTS.rateLimitWindowMs,
+    rateLimitPerWindow: CONFIG_DEFAULTS.rateLimitPerWindow,
+    rateLimitWindowMs: CONFIG_DEFAULTS.rateLimitWindowMs,
     ...(numEnvStrict("BUDGET_USD_PER_WINDOW", env.BUDGET_USD_PER_WINDOW) !== undefined
       ? { budgetUsdPerWindow: numEnvStrict("BUDGET_USD_PER_WINDOW", env.BUDGET_USD_PER_WINDOW) }
       : {}),
     ...(numEnvStrict("ORG_BUDGET_USD_PER_WINDOW", env.ORG_BUDGET_USD_PER_WINDOW) !== undefined
       ? { orgBudgetUsdPerWindow: numEnvStrict("ORG_BUDGET_USD_PER_WINDOW", env.ORG_BUDGET_USD_PER_WINDOW) }
       : {}),
-    budgetWindowMs: numEnvStrict("BUDGET_WINDOW_MS", env.BUDGET_WINDOW_MS) ?? CONFIG_DEFAULTS.budgetWindowMs,
-    ...(numEnvStrict("MAX_CONTEXT_TOKENS", env.MAX_CONTEXT_TOKENS) !== undefined
-      ? { maxContextTokens: numEnvStrict("MAX_CONTEXT_TOKENS", env.MAX_CONTEXT_TOKENS) }
-      : {}),
-    execTimeoutDefaultMs:
-      (numEnvStrict("EXEC_TIMEOUT_DEFAULT_SEC", env.EXEC_TIMEOUT_DEFAULT_SEC) ??
-        CONFIG_DEFAULTS.execTimeoutDefaultSec) * 1000,
-    execTimeoutMaxMs:
-      (numEnvStrict("EXEC_TIMEOUT_MAX_SEC", env.EXEC_TIMEOUT_MAX_SEC) ?? CONFIG_DEFAULTS.execTimeoutMaxSec) * 1000,
-    turnWallClockMs,
+    budgetWindowMs: CONFIG_DEFAULTS.budgetWindowMs,
+    execTimeoutDefaultMs: CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000,
+    execTimeoutMaxMs: CONFIG_DEFAULTS.execTimeoutMaxSec * 1000,
+    turnWallClockMs: CONFIG_DEFAULTS.turnWallClockSec * 1000,
     swarmsEnabled: boolEnvStrict("SWARMS_ENABLED", env.SWARMS_ENABLED) ?? true,
     swarmDefaults,
-    runMaxAgeMs,
-    runWaitMs: (turnWallClockMs > 0 ? turnWallClockMs : runMaxAgeMs) + 60_000,
-    sandboxCapabilityTtlMs: parseSandboxCapabilityTtlMs(env.SANDBOX_CAPABILITY_TTL_HOURS),
-    backgroundJobTtlMs:
-      (numEnvStrict("BACKGROUND_JOB_TTL_SEC", env.BACKGROUND_JOB_TTL_SEC) ?? CONFIG_DEFAULTS.backgroundJobTtlSec) *
-      1000,
-    backgroundJobTtlMaxMs:
-      (numEnvStrict("BACKGROUND_JOB_TTL_MAX_SEC", env.BACKGROUND_JOB_TTL_MAX_SEC) ??
-        CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
+    runMaxAgeMs: CONFIG_DEFAULTS.runMaxAgeMs,
+    runWaitMs: CONFIG_DEFAULTS.runMaxAgeMs + 60_000,
+    backgroundJobTtlMs: CONFIG_DEFAULTS.backgroundJobTtlSec * 1000,
+    backgroundJobTtlMaxMs: CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000,
     backgroundWorkEnabled:
       boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
     ...(env.BACKGROUND_DEPLOYMENT_ID
@@ -1589,10 +1460,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
-    monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
-    skillSyncPollMs: numEnvStrict("SKILL_SYNC_POLL_MS", env.SKILL_SYNC_POLL_MS) ?? CONFIG_DEFAULTS.skillSyncPollMs,
-    monitorHeartbeatMs:
-      (numEnvStrict("MONITOR_HEARTBEAT_SEC", env.MONITOR_HEARTBEAT_SEC) ?? CONFIG_DEFAULTS.monitorHeartbeatSec) * 1000,
+    monitorPollMs: CONFIG_DEFAULTS.monitorPollMs,
+    skillSyncPollMs: CONFIG_DEFAULTS.skillSyncPollMs,
+    monitorHeartbeatMs: CONFIG_DEFAULTS.monitorHeartbeatSec * 1000,
     ...(env.CORE_SIGNING_SECRET ? { signingSecret: env.CORE_SIGNING_SECRET } : {}),
     ...((env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET)
       ? { capabilitySecret: env.CAPABILITY_SECRET ?? env.CORE_SIGNING_SECRET }
@@ -1605,8 +1475,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
-    secretsBackend: secretsBackendEnvStrict(env.SECRETS_BACKEND, env.SECRETS_PREFIX ?? ""),
-    secretsPrefix: env.SECRETS_PREFIX ?? "",
     layerEnv: { ...env },
     ...(publicApiUrl ? { apiBaseUrl: publicApiUrl } : {}),
     ...(publicUrl ? { publicUrl } : {}),
@@ -1626,57 +1494,39 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
     runStore,
     ...(env.SKILL_SIGNING_SECRET ? { skillSigningSecret: env.SKILL_SIGNING_SECRET } : {}),
-    seedSkills: boolEnvStrict("SEED_SKILLS", env.SEED_SKILLS) ?? true,
-    skillsSeedDir: resolve(env.SKILLS_SEED_DIR ?? "./skills-seed"),
-    pluginSkillDirs: csvPaths(env.PLUGIN_SKILLS_DIRS) ?? defaultPluginSkillDirs(),
+    seedSkills: true,
+    skillsSeedDir: resolve("./skills-seed"),
+    pluginSkillDirs: defaultPluginSkillDirs(),
     ...(env.DEPLOYMENT_LAYER ? { deploymentLayerDir: resolve(env.DEPLOYMENT_LAYER) } : {}),
-    memoryRecall: parseMemoryRecallMode(env.MEMORY_RECALL),
-    memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
-    memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
+    memoryRecall: DEFAULT_MEMORY_POLICY.recall,
+    memoryCapture: DEFAULT_MEMORY_POLICY.capture,
+    memoryStrategy: DEFAULT_MEMORY_STRATEGY,
+    memoryCaptureQuietMs: DEFAULT_CAPTURE_QUIET_MS,
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
-    memoryCaptureQuietMs:
-      numEnvStrict("MEMORY_CAPTURE_QUIET_MS", env.MEMORY_CAPTURE_QUIET_MS) ?? DEFAULT_CAPTURE_QUIET_MS,
-    ...(numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) !== undefined
-      ? { memoryCaptureMaxTurns: numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) }
-      : {}),
     filesDirectUploadsEnabled: boolEnvStrict("FILES_DIRECT_UPLOADS_ENABLED", env.FILES_DIRECT_UPLOADS_ENABLED) ?? false,
-    snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
-    transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
     ...(env.S3_PREFIX ? { s3Prefix: env.S3_PREFIX } : {}),
-    ...(numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) !== undefined
-      ? { deployIdleTtlMs: numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) }
-      : {}),
-    deployGitDir: env.DEPLOY_GIT_DIR ? resolve(env.DEPLOY_GIT_DIR) : join(dataDir, "deploy-git"),
-    deployDialTimeoutMs:
-      numEnvStrict("DEPLOY_DIAL_TIMEOUT_MS", env.DEPLOY_DIAL_TIMEOUT_MS) ?? CONFIG_DEFAULTS.deployDialTimeoutMs,
+    deployGitDir: join(dataDir, "deploy-git"),
+    deployDialTimeoutMs: CONFIG_DEFAULTS.deployDialTimeoutMs,
     ...deployAppsEnv(env, publicUrl),
-    deepIdleMachineMs:
-      numEnvStrict("DEEP_IDLE_MACHINE_MS", env.DEEP_IDLE_MACHINE_MS) ?? CONFIG_DEFAULTS.deepIdleMachineMs,
-    devIdleMachineMs: numEnvStrict("DEV_IDLE_MACHINE_MS", env.DEV_IDLE_MACHINE_MS) ?? CONFIG_DEFAULTS.devIdleMachineMs,
+    deepIdleMachineMs: CONFIG_DEFAULTS.deepIdleMachineMs,
+    devIdleMachineMs: CONFIG_DEFAULTS.devIdleMachineMs,
     cronFireConcurrency:
       numEnvStrict("CRON_FIRE_CONCURRENCY", env.CRON_FIRE_CONCURRENCY) ?? CONFIG_DEFAULTS.cronFireConcurrency,
     workers: numEnvStrict("WORKERS", env.WORKERS) ?? CONFIG_DEFAULTS.workers,
-    leaseTtlMs: numEnvStrict("LEASE_TTL_MS", env.LEASE_TTL_MS) ?? CONFIG_DEFAULTS.leaseTtlMs,
-    heartbeatIntervalMs:
-      numEnvStrict("HEARTBEAT_INTERVAL_MS", env.HEARTBEAT_INTERVAL_MS) ??
-      Math.max(1_000, Math.floor((numEnvStrict("LEASE_TTL_MS", env.LEASE_TTL_MS) ?? CONFIG_DEFAULTS.leaseTtlMs) / 3)),
-    reaperIntervalMs: numEnvStrict("REAPER_INTERVAL_MS", env.REAPER_INTERVAL_MS) ?? CONFIG_DEFAULTS.reaperIntervalMs,
+    leaseTtlMs: CONFIG_DEFAULTS.leaseTtlMs,
+    heartbeatIntervalMs: CONFIG_DEFAULTS.heartbeatIntervalMs,
+    reaperIntervalMs: CONFIG_DEFAULTS.reaperIntervalMs,
     shutdownDrainMs: numEnvStrict("SHUTDOWN_DRAIN_MS", env.SHUTDOWN_DRAIN_MS) ?? CONFIG_DEFAULTS.shutdownDrainMs,
-    maxAttempts: numEnvStrict("MAX_ATTEMPTS", env.MAX_ATTEMPTS) ?? CONFIG_DEFAULTS.maxAttempts,
-    maxClaims: numEnvStrict("MAX_CLAIMS", env.MAX_CLAIMS) ?? CONFIG_DEFAULTS.maxClaims,
-    processReaperIntervalMs:
-      numEnvStrict("PROCESS_REAPER_INTERVAL_MS", env.PROCESS_REAPER_INTERVAL_MS) ??
-      CONFIG_DEFAULTS.processReaperIntervalMs,
-    approvalSummaryTimeoutMs:
-      numEnvStrict("APPROVAL_SUMMARY_TIMEOUT_MS", env.APPROVAL_SUMMARY_TIMEOUT_MS) ??
-      CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
-    turnLeaseWaitMs: numEnvStrict("TURN_LEASE_WAIT_MS", env.TURN_LEASE_WAIT_MS) ?? CONFIG_DEFAULTS.turnLeaseWaitMs,
-    securityScreenTimeoutMs,
+    maxAttempts: CONFIG_DEFAULTS.maxAttempts,
+    maxClaims: CONFIG_DEFAULTS.maxClaims,
+    processReaperIntervalMs: CONFIG_DEFAULTS.processReaperIntervalMs,
+    approvalSummaryTimeoutMs: CONFIG_DEFAULTS.approvalSummaryTimeoutMs,
+    turnLeaseWaitMs: CONFIG_DEFAULTS.turnLeaseWaitMs,
+    securityScreenTimeoutMs: CONFIG_DEFAULTS.securityScreenTimeoutMs,
     scratchExecEnabled: boolEnvStrict("EXECUTE_SCRATCH", env.EXECUTE_SCRATCH) ?? false,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
-    surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
     eagerProvisionEnabled: boolEnvStrict("EAGER_PROVISION", env.EAGER_PROVISION) ?? true,
     awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),

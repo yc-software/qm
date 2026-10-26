@@ -313,7 +313,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   assert.equal(fromCaller.env.BOTH, "caller");
   assert.equal(fromCaller.harness, "pi");
   assert.equal(fromCaller.env.HARNESS, "pi");
-  assert.equal(fromCaller.env.PI_CAPTURE_REQUESTS, "1");
   assert.equal(fromCaller.anthropicKeySource, "your shell export");
 
   for (const legacy of ["opencode", "codex"]) {

@@ -4063,18 +4063,6 @@ test("sessions is a web UI tool: Slack turns get subagents only", () => {
   assert.ok(!createAgentTools({ current: fakeToolContext() }).some((tool) => tool.name === "sessions"));
 });
 
-test("background process guidance reflects the configured sandbox token lifetime", () => {
-  const guidance = (opts?: { sandboxCapabilityTtlMs?: number }) =>
-    createAgentTools({ current: fakeToolContext() }, { sandboxResources: true, ...opts })
-      .map((tool) => tool.description)
-      .join("\n");
-  assert.match(guidance(), /turn tokens expire 48 hours/);
-  assert.match(guidance({ sandboxCapabilityTtlMs: 72 * 3_600_000 }), /turn tokens expire 72 hours/);
-  const unlimited = guidance({ sandboxCapabilityTtlMs: 0 });
-  assert.match(unlimited, /does not expire those turn tokens/);
-  assert.doesNotMatch(unlimited, /turn tokens expire \d+ hours/);
-});
-
 test("core tools carry retrySafe while client tools cannot advertise automatic replay", async () => {
   const emitted: Emitted[] = [];
   const ref: ToolContextRef = {

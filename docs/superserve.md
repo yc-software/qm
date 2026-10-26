@@ -63,7 +63,6 @@ to build and verify a new template, preserve resident work, and replace sandboxe
 | `SUPERSERVE_EGRESS_ALLOW`      | Unset       | Comma-separated outbound allow rules.                                              |
 | `SUPERSERVE_EGRESS_DENY`       | Unset       | Comma-separated outbound deny rules.                                               |
 | `SUPERSERVE_CONFIG_GENERATION` | Automatic   | Explicit rollout sequence.                                                         |
-| `SANDBOX_TIMEOUT_SEC`          | `600`       | Default command deadline in seconds.                                               |
 
 Ending a turn leaves its sandbox running until the active-time limit, so other
 turns sharing it can continue. Background work can extend that limit to QM's

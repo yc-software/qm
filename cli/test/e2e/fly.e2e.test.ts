@@ -31,7 +31,7 @@ function flyConfig(label: string): string {
     flyOrg: "e2e-org",
     region: "sjc",
     services: ["core", "web-ui"],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "qm-e2e-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "qm-e2e-data", S3_REGION: "auto" } },
   });
 }
 
@@ -84,7 +84,7 @@ test("--target fly overrides a docker config's target for one run", () => {
     flyOrg: "e2e-org",
     region: "sjc",
     services: ["core"],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "qm-e2e-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "qm-e2e-data", S3_REGION: "auto" } },
   });
   const { result } = fly(["plan", "--target", "fly"], cfg, { secrets: [] });
   assert.equal(result.code, 0, result.out);
@@ -129,7 +129,7 @@ test("explicit --build-from overrides a configured imageFrom default", () => {
     region: "sjc",
     imageFrom: "configured-source",
     services: ["core"],
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "qm-e2e-data", S3_REGION: "auto" } },
+    env: { core: { S3_BUCKET: "qm-e2e-data", S3_REGION: "auto" } },
   });
   const { result } = fly(["plan", "--build-from", repoRoot], cfg, { secrets: [] });
   assert.equal(result.code, 0, result.out);

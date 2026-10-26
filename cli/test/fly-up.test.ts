@@ -116,7 +116,7 @@ else console.log("ok");
     plugins: [],
     skills: [],
     env: {
-      core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
+      core: { S3_BUCKET: "acme-data", S3_REGION: "auto" },
     },
     imageOverrides: {},
     sandbox: { app: "acme-sandboxes" },

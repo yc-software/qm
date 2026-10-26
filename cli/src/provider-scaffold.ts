@@ -191,7 +191,7 @@ export const flyScaffold: ProviderScaffold = {
   "flyOrg": "personal",
 `,
       services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
-      env: `{ "core": { "HARNESS": "pi", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
+      env: `{ "core": { "HARNESS": "pi", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: `,
 
   // The initial admin seed is kept in the provider secret store, never in config.

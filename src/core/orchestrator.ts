@@ -1521,11 +1521,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       credential.host === host && (credential.accountType ?? "default") === (accountType ?? "default"),
                   )
                 : await tokens.connectorTokenStatus(host, actor.id, accountType);
-              const healthy = status?.connected && !status.needsReconnect;
-              const operatorFallback =
-                accountType === undefined &&
-                tokens.operatorFallbackHosts?.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
-              if (!healthy && !operatorFallback) continue;
+              if (!status?.connected || status.needsReconnect) continue;
               addCredential(
                 {
                   handle: `connector:${host}:${accountType ?? "default"}`,
@@ -1537,14 +1533,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     return { env: [{ key: envKey(host), value: token }] };
                   },
                 },
-                `${
-                  !healthy && operatorFallback
-                    ? `${host}, configured operator fallback; availability checked on use`
-                    : `${host} connector, account ${accountType ?? "default"}`
-                }; ${connectorTokenNote(host)}`,
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
+                `${host} connector, account ${accountType ?? "default"}; ${connectorTokenNote(host)}`,
+                "credentialId" in status ? status.credentialId : undefined,
                 actor.id,
-                healthy && status && "credentialId" in status ? status.credentialId : undefined,
+                "credentialId" in status ? status.credentialId : undefined,
               );
             }
           }
@@ -1620,8 +1612,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let actorIsOrgAdmin = false;
       let orgMemoryWrite: ScopeId | undefined;
       let controlClaims: CapabilityClaims | undefined;
-      const sandboxTokenTtlMs = deps.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
-      const sandboxTokenExpiry = sandboxTokenTtlMs === 0 ? 0 : Date.now() + sandboxTokenTtlMs;
+      const sandboxTokenExpiry = Date.now() + SANDBOX_CAPABILITY_TTL_MS;
       const scopeAttestation = {
         ...(external ? { externalSlack: true as const } : {}),
         actorId: actor.id,

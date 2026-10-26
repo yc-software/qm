@@ -406,8 +406,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       AWS_DEPLOY_REGION: aws.region,
       SESSION_STORE: "postgres",
       RUN_STORE: "postgres",
-      SNAPSHOT_STORE: "s3",
-      TRANSFER_STORE: "s3",
       S3_BUCKET: config.env.core?.S3_BUCKET?.trim() || awsObjectStoreBucket(config),
       S3_REGION: aws.region,
     };

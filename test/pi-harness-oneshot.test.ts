@@ -124,7 +124,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
         apiKeyHeader: "api-key",
         models: { "claude-opus-5": "router/opus" },
       },
-      piCaptureRequests: false,
       piSystemCacheSplit: true,
 
       scratchExecEnabled: true,
@@ -136,7 +135,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       execTimeoutMaxMs: 33_000,
       backgroundJobTtlMs: 44_000,
       backgroundJobTtlMaxMs: 55_000,
-      sandboxCapabilityTtlMs: 66_000,
     }),
   );
   assert.deepEqual(opts, {
@@ -150,7 +148,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       apiKeyHeader: "api-key",
       models: { "claude-opus-5": "router/opus" },
     },
-    captureRequests: false,
     systemCacheSplit: true,
     sandboxResources: true,
     scratchExec: true,
@@ -162,7 +159,6 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
     execTimeoutCeilingMs: 33_000,
     backgroundJobTtlMs: 44_000,
     backgroundJobTtlMaxMs: 55_000,
-    sandboxCapabilityTtlMs: 66_000,
   });
 });
 

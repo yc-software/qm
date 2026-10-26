@@ -18,8 +18,6 @@
     "core": {
       "WEB_UI_PUBLIC_URL": "https://demo-agent.example.com/web-ui",
       "PUBLIC_WEB_URL": "https://demo-agent.example.com",
-      "SNAPSHOT_STORE": "s3",
-      "TRANSFER_STORE": "s3",
       "S3_BUCKET": "demo-agent-data",
       "S3_REGION": "auto"
     },

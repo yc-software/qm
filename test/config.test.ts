@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   harnessCarriedModelAuth,
   baseModelProviders,
@@ -94,12 +94,10 @@ test("deploy provider defaults to docker and rejects unknown values", () => {
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "flly" }), /DEPLOY_PROVIDER="flly" is not recognized/);
 });
 
-test("production and unauthenticated-core escape hatch are parsed once", () => {
+test("production is parsed once", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), /missing or insecure required core secrets/);
   assert.equal(loadConfig(productionEnv).production, true);
   assert.equal(loadConfig({}).production, false);
-  assert.equal(loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "yes" }).allowUnauthenticatedCore, true);
-  assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
 test("harness security posture defaults to auto and validates named modes", () => {
@@ -110,8 +108,6 @@ test("harness security posture defaults to auto and validates named modes", () =
   assert.equal(loadConfig({ SECURITY_SCREEN: "enforce" }).securityScreen, "enforce");
   assert.throws(() => loadConfig({ SECURITY_SCREEN: "shadow" }), /SECURITY_SCREEN="shadow" is not recognized/);
   assert.equal(loadConfig({}).securityScreenProxy, undefined);
-  assert.equal(loadConfig({}).securityScreenTimeoutMs, 15_000);
-  assert.equal(loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: "25" }).securityScreenTimeoutMs, 25);
   assert.equal(loadConfig({ HARNESS_SECURITY_POSTURE: "Dangerous" }).securityPosture, "dangerous");
   assert.equal(loadConfig({ HARNESS_SECURITY_POSTURE: "strict" }).securityPosture, "strict");
   assert.throws(
@@ -134,12 +130,6 @@ test("harness security posture defaults to auto and validates named modes", () =
     endpoint: "https://screen.example.test/classify",
     token: "test-token",
   });
-  for (const timeout of ["0", "-1", "1.5", "2147483648"]) {
-    assert.throws(
-      () => loadConfig({ SECURITY_SCREEN_TIMEOUT_MS: timeout }),
-      /SECURITY_SCREEN_TIMEOUT_MS must be a positive integer/,
-    );
-  }
   assert.throws(
     () => loadConfig({ SECURITY_SCREEN_PROXY_PROVIDER: "example-screen" }),
     /requires SECURITY_SCREEN_CLASSIFIER=proxy/,
@@ -217,31 +207,24 @@ test("boolEnv: one vocabulary for every boolean env knob", () => {
 
 test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   const off = loadConfig({
-    SEED_SKILLS: "off",
     EXECUTE_SCRATCH: "off",
     REACH_EXEC: "off",
-    PI_CAPTURE_REQUESTS: "off",
     EAGER_PROVISION: "off",
   });
-  assert.equal(off.seedSkills, false);
   assert.equal(off.eagerProvisionEnabled, false);
   assert.equal(off.scratchExecEnabled, false);
   assert.equal(off.reachExecEnabled, false);
-  assert.equal(off.piCaptureRequests, false);
 
   const on = loadConfig({
-    SEED_SKILLS: "yes",
     EXECUTE_SCRATCH: "on",
     REACH_EXEC: "1",
     PI_SYSTEM_CACHE_SPLIT: "on",
   });
-  assert.equal(on.seedSkills, true);
   assert.equal(on.scratchExecEnabled, true);
   assert.equal(on.reachExecEnabled, true);
   assert.equal(on.piSystemCacheSplit, true);
 
   const unset = loadConfig({});
-  assert.equal(unset.piCaptureRequests, true, "capture defaults on");
   assert.equal(unset.piSystemCacheSplit, false, "cache split defaults off");
   assert.equal(unset.eagerProvisionEnabled, true, "eager provision defaults on");
 });
@@ -321,38 +304,6 @@ test("defaults come from CONFIG_DEFAULTS, set exactly once", () => {
   const def = loadConfig({});
   assert.equal(CONFIG_DEFAULTS.workers, 16);
   assert.equal(def.workers, CONFIG_DEFAULTS.workers);
-  assert.equal(def.rateLimitPerWindow, CONFIG_DEFAULTS.rateLimitPerWindow);
-  assert.equal(def.rateLimitWindowMs, CONFIG_DEFAULTS.rateLimitWindowMs);
-  assert.equal(def.monitorPollMs, CONFIG_DEFAULTS.monitorPollMs);
-  assert.equal(def.approvalSummaryTimeoutMs, CONFIG_DEFAULTS.approvalSummaryTimeoutMs);
-  assert.equal(def.deployDialTimeoutMs, CONFIG_DEFAULTS.deployDialTimeoutMs);
-  assert.equal(def.execTimeoutDefaultMs, CONFIG_DEFAULTS.execTimeoutDefaultSec * 1000);
-  assert.equal(def.execTimeoutMaxMs, CONFIG_DEFAULTS.execTimeoutMaxSec * 1000);
-  assert.equal(def.backgroundJobTtlMs, CONFIG_DEFAULTS.backgroundJobTtlSec * 1000);
-  assert.equal(def.backgroundJobTtlMaxMs, CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000);
-  assert.equal(def.turnWallClockMs, CONFIG_DEFAULTS.turnWallClockSec * 1000);
-  assert.equal(def.turnWallClockMs, 0);
-  assert.equal(def.runMaxAgeMs, 24 * 60 * 60_000);
-  assert.equal(def.runWaitMs, def.runMaxAgeMs + 60_000);
-});
-
-test("turn wall clock config drives run bounds only when capped", () => {
-  const capped = loadConfig({ TURN_WALL_CLOCK_SEC: "120" });
-  assert.equal(capped.turnWallClockMs, 120_000);
-  assert.equal(capped.runMaxAgeMs, 240_000);
-  assert.equal(capped.runWaitMs, 180_000);
-  const explicit = loadConfig({ TURN_WALL_CLOCK_SEC: "120", RUN_MAX_AGE_MS: "999999" });
-  assert.equal(explicit.runMaxAgeMs, 999_999);
-});
-
-test("APPROVAL_SUMMARY_TIMEOUT_MS overrides the approval-summary deadline; unset uses the 6s default", () => {
-  assert.equal(loadConfig({ APPROVAL_SUMMARY_TIMEOUT_MS: "9000" }).approvalSummaryTimeoutMs, 9000);
-  assert.equal(loadConfig({}).approvalSummaryTimeoutMs, 6_000);
-});
-
-test("deploy proxy dial timeout is parsed once from config", () => {
-  assert.equal(loadConfig({ DEPLOY_DIAL_TIMEOUT_MS: "1234" }).deployDialTimeoutMs, 1234);
-  assert.throws(() => loadConfig({ DEPLOY_DIAL_TIMEOUT_MS: "soon" }), /DEPLOY_DIAL_TIMEOUT_MS="soon" is not a number/);
 });
 
 test("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
@@ -370,15 +321,6 @@ test("PUBLIC_API_URL is not treated as the human-facing web URL", () => {
   assert.equal(web.apiBaseUrl, "https://agent-api.example");
   assert.equal(web.publicUrl, "https://portal.example");
   assert.equal(web.publicWebUrl, "https://portal.example");
-});
-
-test("plugin skill directories can be overridden or disabled", () => {
-  assert.deepEqual(loadConfig({ PLUGIN_SKILLS_DIRS: "plugins/onboarding/skills, custom/skills" }).pluginSkillDirs, [
-    resolve("plugins/onboarding/skills"),
-    resolve("custom/skills"),
-  ]);
-  assert.deepEqual(loadConfig({ PLUGIN_SKILLS_DIRS: "0" }).pluginSkillDirs, []);
-  assert.deepEqual(loadConfig({}).pluginSkillDirs, [resolve("plugins/onboarding/skills")]);
 });
 
 test("HARNESS=pi can boot before an admin configures a model provider", () => {
@@ -515,9 +457,6 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     }).superserveSandbox?.template,
     "qm-agent-1.0.0",
   );
-  const config = loadConfig({ SANDBOX_SECONDARY_BACKEND: "smolmachines" });
-  assert.equal(config.sandboxBackend, "local");
-  assert.ok(!("sandboxSecondaryBackend" in config));
 });
 
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
@@ -533,12 +472,6 @@ test("Fly identity and Slack runtime settings are parsed once into Config", () =
     appToken: "xapp-test",
     apiUrl: "https://slack.example/api",
   });
-});
-
-test("maxClaims defaults from CONFIG_DEFAULTS and MAX_CLAIMS overrides", () => {
-  assert.equal(loadConfig({}).maxClaims, CONFIG_DEFAULTS.maxClaims);
-  assert.equal(loadConfig({ MAX_CLAIMS: "5" }).maxClaims, 5);
-  assert.throws(() => loadConfig({ MAX_CLAIMS: "lots" }), /MAX_CLAIMS="lots" is not a number/);
 });
 
 test("MODEL_PROVIDER declares the vendor that bills the base model", () => {
@@ -830,28 +763,6 @@ test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
   assert.throws(() => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: path }), /must not be readable by group or others/);
 });
 
-test("retired brain environment does not configure a runtime integration and warns once", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg: unknown) => void warnings.push(String(msg));
-  let config;
-  try {
-    config = loadConfig({
-      BRAIN: "mcp",
-      BRAIN_MCP_URL: "https://unused.invalid",
-      BRAIN_RO_CLIENT_ID: "retired",
-      BRAIN_RO_CLIENT_SECRET: "retired",
-    });
-  } finally {
-    console.warn = original;
-  }
-  assert.deepEqual({ ...config, layerEnv: {} }, loadConfig({}));
-  const retired = warnings.filter((w) => w.includes("retired and ignored"));
-  assert.equal(retired.length, 1);
-  assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
-  assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
-});
-
 test("Modal native retention and interval configuration are independent of legacy portable checkpoint throttling", () => {
   const config = loadConfig({
     MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC: "60",
@@ -984,13 +895,6 @@ test("the spend export token is optional, strong, trimmed and never shared with 
       `${name} must not share the export token`,
     );
   }
-});
-
-test("sandbox capability TTL is deployment-configurable with a 48-hour default", () => {
-  assert.equal(loadConfig({}).sandboxCapabilityTtlMs, 48 * 3_600_000);
-  assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "168" }).sandboxCapabilityTtlMs, 168 * 3_600_000);
-  assert.equal(loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "none" }).sandboxCapabilityTtlMs, 0);
-  assert.throws(() => loadConfig({ SANDBOX_CAPABILITY_TTL_HOURS: "-5" }), /SANDBOX_CAPABILITY_TTL_HOURS/);
 });
 
 test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {

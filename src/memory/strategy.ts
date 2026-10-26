@@ -26,10 +26,6 @@ export type MemoryStrategyKind = "per-turn" | "agent-only";
 
 export const DEFAULT_MEMORY_STRATEGY: MemoryStrategyKind = "per-turn";
 
-export function parseMemoryStrategyKind(value: string | undefined): MemoryStrategyKind {
-  return value === "agent-only" ? value : DEFAULT_MEMORY_STRATEGY;
-}
-
 export interface MemoryStrategyDeps {
   harness: HarnessModelUtilities;
   memory: MemoryService;

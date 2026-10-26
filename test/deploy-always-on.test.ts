@@ -165,38 +165,6 @@ test("rename and rollback branches carry alwaysOn too", async () => {
   assert.ok(!(await deployStore.get(d.id))!.alwaysOn);
 });
 
-test("reaper re-checks alwaysOn under the deploy lock (no stale-snapshot destroy)", async () => {
-  const deployStore = createDeployStore();
-  let destroys = 0;
-  const provider: DeployProvider = {
-    profile: { managedScaleToZero: false },
-    apply: async () => ({ host: "127.0.0.1", port: 5000 }),
-    destroy: async () => {
-      destroys++;
-    },
-  };
-  const deploy = createDeployService({
-    ...singleProcessDeps(),
-    deployStore,
-    provider,
-    auditLog: { record() {}, events: async () => [], tail: async () => [] },
-    acl: createAclStore(),
-    deployDir: mkdtempSync(join(tmpdir(), "always-on-")),
-  });
-  const d = await deploy.deploy({ ...owner, entrypoint: "x", files: [] });
-
-  const realList = deployStore.list.bind(deployStore);
-  deployStore.list = async () => {
-    const snapshot = (await realList()).map((x) => ({ ...x, alwaysOn: undefined }));
-    await deployStore.setAlwaysOn(d.id, true);
-    return snapshot;
-  };
-  const stopped = await deploy.reapIdleDeployments(1, Date.now() + 1_000_000);
-  assert.equal(stopped, 0);
-  assert.equal(destroys, 0);
-  assert.equal((await deployStore.get(d.id))!.status, "running");
-});
-
 test("maintainDeployments re-ensures a live endpoint only for running always-on deployments", async () => {
   const ctx = svc({ resolve: async () => ({ host: "127.0.0.1", port: 5001 }) });
   const { deploy } = ctx;

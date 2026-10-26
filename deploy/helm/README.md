@@ -88,8 +88,6 @@ services:
     replicas: 2
     env:
       SESSION_STORE: postgres
-      SNAPSHOT_STORE: s3
-      TRANSFER_STORE: s3
       S3_BUCKET: qm-example-data
       S3_REGION: us-west-2
 ```
@@ -115,7 +113,7 @@ Core keeps durable state in two places: Postgres (`DATABASE_URL`) and an object
 store for file bytes. Choose one of two layouts.
 
 **Shared storage (recommended, supports multiple replicas).** Set `DATABASE_URL`
-with `SESSION_STORE=postgres`, `SNAPSHOT_STORE=s3`, `TRANSFER_STORE=s3`, `S3_BUCKET`
+with `SESSION_STORE=postgres`, `S3_BUCKET`
 and `S3_REGION` (optionally `S3_PREFIX`) on core, use a remote `SANDBOX_BACKEND`,
 and leave `services.core.persistence` disabled. Sessions and runs then live in
 Postgres, and uploaded artifacts, session shares, published-app source archives and

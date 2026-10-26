@@ -331,7 +331,6 @@ export interface AgentToolsOptions {
   execTimeoutCeilingMs?: number;
   backgroundJobTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
-  sandboxCapabilityTtlMs?: number;
   mcpTools?: McpToolDescriptor[];
   controlTools?: boolean;
   sandboxResources?: boolean;
@@ -359,7 +358,6 @@ export function coreToolOptions(config: Config): CoreToolOptions {
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
-    sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,
   };
 }
 
@@ -398,12 +396,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const bgTtlMaxSec = Math.round((opts?.backgroundJobTtlMaxMs ?? CONFIG_DEFAULTS.backgroundJobTtlMaxSec * 1000) / 1000);
   const bgTtlMin = Math.round(bgTtlSec / 60);
   const bgTtlMaxMin = Math.round(bgTtlMaxSec / 60);
-  const capabilityTtlMs = opts?.sandboxCapabilityTtlMs ?? SANDBOX_CAPABILITY_TTL_MS;
-  const capabilityTtlHours = capabilityTtlMs / 3_600_000;
-  const capabilityExpiry =
-    capabilityTtlMs === 0
-      ? "Two limits: this deployment does not expire those turn tokens, but authorization checks still apply (publish checkpoints to durable Files and retain the file ID for the later turn or cron)"
-      : `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
+  const capabilityTtlHours = SANDBOX_CAPABILITY_TTL_MS / 3_600_000;
+  const capabilityExpiry = `Two limits: those turn tokens expire ${capabilityTtlHours} hours after the turn that launched the job started (past that they 401 — publish checkpoints to durable Files and verify success before expiry, retaining the file ID for the later turn or cron; if publication is unavailable, report it and retain needed local state on a scoped computer)`;
   const log = async (type: EntryType, payload: unknown): Promise<void> => {
     if (!ref.emit || !ref.scopeLabel) return;
     if (type === "tool_result" && isObj(payload)) {

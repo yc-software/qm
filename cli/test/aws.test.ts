@@ -602,8 +602,6 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
   assert.equal(microvm.AWS_SANDBOX_S3_BUCKET, awsObjectStoreBucket(config));
   assert.equal(core.SESSION_STORE, "postgres");
   assert.equal(core.RUN_STORE, "postgres");
-  assert.equal(core.SNAPSHOT_STORE, "s3");
-  assert.equal(core.TRANSFER_STORE, "s3");
   assert.equal(core.S3_REGION, "us-west-2");
   assert.equal(core.DEPLOY_PROVIDER, "aws");
   assert.equal(core.AWS_DEPLOY_REGION, "us-west-2");
@@ -622,7 +620,6 @@ test("AWS hosting preserves an explicit publishing provider independently of san
       assert.equal(core.DEPLOY_PROVIDER, provider);
       assert.equal(core.SANDBOX_BACKEND, sandbox?.backend ?? "aws");
       assert.equal(core.SESSION_STORE, "postgres");
-      assert.equal(core.SNAPSHOT_STORE, "s3");
       assert.equal(serviceEnvironment(selected, "portal").DEPLOY_PROVIDER, undefined);
     }
   }

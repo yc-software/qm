@@ -6,21 +6,7 @@ import { mintSignedPayload, verifySignedPayload } from "./signed-token.ts";
 
 export const CAPABILITY_TTL_MS = 60 * 60_000;
 export const DEPLOYMENT_CREDENTIAL_TTL_MS = 10 * 365 * 24 * 60 * 60_000;
-const DEFAULT_SANDBOX_CAPABILITY_TTL_HOURS = 48;
-
-export function parseSandboxCapabilityTtlMs(value: string | undefined): number {
-  const raw = value?.trim().toLowerCase();
-  if (!raw) return DEFAULT_SANDBOX_CAPABILITY_TTL_HOURS * 3_600_000;
-  if (raw === "none" || raw === "0") return 0;
-  const hours = Number(raw);
-  if (!Number.isFinite(hours) || hours <= 0 || !Number.isSafeInteger(hours * 3_600_000))
-    throw new Error(
-      `SANDBOX_CAPABILITY_TTL_HOURS=${JSON.stringify(value)} must be a positive number of hours, or 0/none for no expiry.`,
-    );
-  return hours * 3_600_000;
-}
-
-export const SANDBOX_CAPABILITY_TTL_MS = parseSandboxCapabilityTtlMs(undefined);
+export const SANDBOX_CAPABILITY_TTL_MS = 48 * 3_600_000;
 
 export const BROWSER_MODEL_AUD = "browser-model";
 
@@ -163,10 +149,7 @@ export async function verifyCapabilityToken(
   if (claims.runLeaseToken !== undefined && (typeof claims.runLeaseToken !== "string" || !claims.runLeaseToken))
     return null;
   if (claims.deployment !== undefined && (typeof claims.deployment !== "string" || !claims.deployment)) return null;
-  if (claims.exp === 0) {
-    if (![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, EGRESS_PROXY_AUD].includes(claims.aud ?? ""))
-      return null;
-  } else if (!Number.isSafeInteger(claims.exp) || now >= claims.exp) return null;
+  if (!Number.isSafeInteger(claims.exp) || now >= claims.exp) return null;
   return claims;
 }
 

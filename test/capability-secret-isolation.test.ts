@@ -102,17 +102,11 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
     server.close();
   });
 
-  it("production refuses an unauthenticated core unless explicitly isolated", () => {
+  it("production refuses an unauthenticated core", () => {
     assert.throws(
       () => createServer(built.app, { production: true, scheduler: built.scheduler }),
       /CORE_SIGNING_SECRET/,
     );
-    const server = createServer(built.app, {
-      production: true,
-      allowUnauthenticatedCore: true,
-      scheduler: built.scheduler,
-    });
-    server.close();
   });
 
   it("production enables signed-identity enforcement without a separate opt-in", () => {

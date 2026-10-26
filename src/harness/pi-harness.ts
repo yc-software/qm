@@ -181,7 +181,6 @@ export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
     ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
     ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
     ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
-    captureRequests: config.piCaptureRequests,
     systemCacheSplit: config.piSystemCacheSplit,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,

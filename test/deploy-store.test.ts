@@ -4,13 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  createDeployStore,
-  deployCurrentGitRef,
-  deployTouchDebounceMs,
-  publicUrlOf,
-  type Deployment,
-} from "../src/deploy/deploy-store.ts";
+import { createDeployStore, deployCurrentGitRef, publicUrlOf, type Deployment } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
@@ -186,14 +180,6 @@ test("touch records last-access for scale-to-zero (C3)", async () => {
   assert.equal((await s.get(d.id))!.lastAccessAt, 12345);
   assert.equal((await s.list()).find((x) => x.id === d.id)!.lastAccessAt, 12345);
   await s.touch("nope", 1);
-});
-
-test("the touch debounce is clamped well under the reap TTL so steady traffic never looks idle", () => {
-  assert.equal(deployTouchDebounceMs(undefined), 60_000);
-  assert.equal(deployTouchDebounceMs(0), 60_000);
-  assert.equal(deployTouchDebounceMs(6 * 60 * 60_000), 60_000);
-  assert.equal(deployTouchDebounceMs(60_000), 15_000);
-  assert.equal(deployTouchDebounceMs(1_000), 250);
 });
 
 test("touch is debounced per id within the window", async () => {

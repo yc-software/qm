@@ -38,7 +38,6 @@ import {
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
-import { adminSessionUrl } from "../../util/admin-links.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
@@ -182,12 +181,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return { ok: false, message: errMessage(e) };
     }
   };
-  const buildDebugFooter = (): string | undefined => {
-    if (!deps.surfaceDebugFooter || !deps.publicWebUrl) return undefined;
-    const base = adminSessionUrl(deps.publicWebUrl, session.id);
-    const contextUrl = spine.turnUserEntrySeq !== undefined ? `${base}?turn=${spine.turnUserEntrySeq}` : base;
-    return `<${base}|session>   <${contextUrl}|context>`;
-  };
   let coverageChecked = false;
   let coverageSince: string | undefined;
   const coverageForTurn = async (): Promise<string | undefined> => {
@@ -239,7 +232,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       }
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
-      const footer = buildDebugFooter();
       const run = input.runId ? await deps.runs?.get(input.runId) : null;
       const editRef =
         !editRefConsumed && destination.target === currentDestination.target ? run?.deliveryState?.editRef : undefined;
@@ -247,7 +239,6 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const projectedDestination = {
         ...destination,
         ...(editRef ? { editRef } : {}),
-        ...(footer ? { debugFooter: footer } : {}),
       };
       const sent = await enqueue(projectedDestination, postText, seq, f.attachments);
       return sent.ok && f.attachments?.length ? { ...sent, attachments: postedFileMetas(f.attachments) } : sent;

@@ -12,9 +12,6 @@ available until the new revision has passed operational checks.
   `sandbox.baseImage` identifies their build input. Supply sandbox tools through
   deployment layers and configure the selected backend through its supported
   settings.
-- `SANDBOX_SECONDARY_BACKEND` is retired. `SANDBOX_BACKEND` selects the primary
-  backend; additional configured backends become available through their
-  credentials and backend settings. Remove the old secondary setting.
 - The `sandbox_routing` table, `SANDBOX_RESOURCES_ENABLED`, and the sandbox
   migration endpoints and agent action are retired. Sandbox resources are always
   on; scoped execution uses the selected sandbox resource. Disposable computers use

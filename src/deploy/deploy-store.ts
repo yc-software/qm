@@ -248,11 +248,6 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
   };
 }
 
-export function deployTouchDebounceMs(reapTtlMs?: number): number {
-  if (!reapTtlMs || reapTtlMs <= 0) return TOUCH_DEBOUNCE_MS;
-  return Math.min(TOUCH_DEBOUNCE_MS, Math.floor(reapTtlMs / 4));
-}
-
 function isNameConflict(e: unknown): boolean {
   const err = e as { code?: string; constraint?: string } | null;
   return err?.code === "23505" && err?.constraint === NAME_INDEX;
