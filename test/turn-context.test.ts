@@ -251,6 +251,7 @@ test("source selection precedes name shadowing and preserves skill-level grants"
 
 test("semantic recall reuses the turn's memory snapshot instead of reloading notebooks", async () => {
   const { input, memory } = await fixture();
+  await memory.capture("org:test", ["ORG_FACT"], Date.now());
   const loads: string[] = [];
   const counted = {
     ...memory,

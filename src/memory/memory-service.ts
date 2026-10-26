@@ -21,7 +21,7 @@ const MEMORY_FACTS_FILE = "memory/facts.json";
 
 export interface MemoryRecallContext {
   query?: string;
-  facts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
+  disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
   actorId?: string;
   sessionId?: string;
   maxChars?: number;

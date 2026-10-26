@@ -4,7 +4,7 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { disclosedMemory, MemoryDisclosureDenied, type MemoryDisclosure } from "../src/memory/disclosure.ts";
-import { MemoryFactsMissing, factHash, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
+import { MemoryFactsMissing, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { recallText } from "./support/recall-text.ts";
@@ -327,7 +327,7 @@ test("semantic recall ranks only currently disclosed facts and rechecks membersh
       const facts = f.notebooks.get(input.scope) ?? [];
       return facts
         .filter((fact) => input.ids.includes(fact.id))
-        .map((fact) => ({ factId: fact.id, hash: factHash(fact.text), score: 1 }));
+        .map((fact) => ({ factId: fact.id, updatedAt: fact.updatedAt, score: 1 }));
     },
   });
   const view = disclosedMemory(semantic, f.access);

@@ -88,16 +88,16 @@ export async function resolveTurnContext(input: ContextInput) {
       for (const { scope } of notebooks) recordRead(scope, "memory");
       return {
         held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
-        loaded: new Map(notebooks.flatMap(({ scope, facts }) => (facts ? [[scope, facts] as const] : []))),
+        loaded: new Map(notebooks.flatMap(({ scope, facts }) => (facts?.length ? [[scope, facts] as const] : []))),
         facts: notebooks.flatMap(({ facts }) => facts ?? []),
         complete: notebooks.every(({ facts }) => !!facts),
       };
     },
-    recallMemory: (query: string, facts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>) =>
+    recallMemory: (query: string, disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>) =>
       recallAcrossScopes(
         memory,
         read,
-        { query, actorId: input.actor.id, maxChars: RECALL_MAX_CHARS, ...(facts ? { facts } : {}) },
+        { query, actorId: input.actor.id, maxChars: RECALL_MAX_CHARS, ...(disclosedFacts ? { disclosedFacts } : {}) },
         memoryLabels,
       ),
     searchMemory: async (query: string, limit = 20, scope?: ScopeId): Promise<string[] | null> => {

@@ -1,11 +1,9 @@
 import type { SessionEntry } from "../types.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
-import { factCandidate, factHash, recentCandidates, type MemoryCandidate } from "./facts.ts";
+import { factCandidate, recentCandidates, type MemoryCandidate } from "./facts.ts";
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 import { disclosedMemory } from "./disclosure.ts";
-
-const RECALL_CANDIDATES = 200;
 
 export function memoryRecallQuery(message: string, visibleEntries: readonly SessionEntry[]): string {
   const recent = visibleEntries
@@ -48,7 +46,7 @@ export function createSemanticMemoryService(
       ...notebook,
       withDisclosure: (access) => view(disclosedMemory(notebook, access)),
       async recall(scope: string, context: MemoryRecallContext = {}): Promise<MemoryCandidate[]> {
-        const facts = context.facts?.get(scope) ?? (await notebook.facts?.(scope)) ?? [];
+        const facts = context.disclosedFacts?.get(scope) ?? (await notebook.facts?.(scope)) ?? [];
         if (!facts.length) return [];
         try {
           const query = index && context.query?.trim() ? await queryFor(context) : undefined;
@@ -58,12 +56,11 @@ export function createSemanticMemoryService(
               scope,
               ...query,
               ids: facts.map((fact) => fact.id),
-              limit: RECALL_CANDIDATES,
               minSimilarity: opts.minSimilarity,
             });
             return matches.flatMap((match) => {
               const fact = byId.get(match.factId);
-              return fact && factHash(fact.text) === match.hash ? [factCandidate(fact, match.score)] : [];
+              return fact?.updatedAt === match.updatedAt ? [factCandidate(fact, match.score)] : [];
             });
           }
           return recentCandidates(facts);

@@ -12,7 +12,6 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createSemanticMemoryService, memoryRecallQuery } from "../src/memory/semantic-recall.ts";
 import { createMemoryEmbedder, unitVector, type MemoryEmbedder } from "../src/model/embeddings.ts";
 import { recallAcrossScopes, renderRecall } from "../src/memory/cross-scope.ts";
-import { factHash } from "../src/memory/facts.ts";
 import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
 
 const recall = async (memory: MemoryService, scope: string, context: MemoryRecallContext = {}) =>
@@ -238,15 +237,15 @@ test("fallback reloads current disclosed facts after an edit races the index que
   assert.doesNotMatch(result[0]!.text, /old private/);
 });
 
-test("recall drops index matches whose text changed after the notebook was loaded", async (t) => {
+test("recall drops index matches for facts changed after the notebook was loaded", async (t) => {
   const { base, embedder } = await fixture(t);
   await base.capture("personal:a", ["browser preference", "browser history"], AT);
+  const [first, second] = await base.facts!("personal:a");
   const memory = createSemanticMemoryService(base, async () => embedder, {
-    async search(input) {
-      assert.equal(input.limit, 200);
+    async search() {
       return [
-        { factId: "1", hash: factHash("browser preference"), score: 0.9 },
-        { factId: "2", hash: factHash("browser history, since edited"), score: 0.8 },
+        { factId: first!.id, updatedAt: first!.updatedAt, score: 0.9 },
+        { factId: second!.id, updatedAt: second!.updatedAt + 1, score: 0.8 },
       ];
     },
   });

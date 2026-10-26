@@ -1,6 +1,5 @@
 import type { MemoryService } from "../../src/memory/memory-service.ts";
 import type { MemoryVectorStore } from "../../src/memory/postgres-vector-store.ts";
-import { factHash } from "../../src/memory/facts.ts";
 
 export function scoredMemoryIndex(
   base: MemoryService,
@@ -13,10 +12,10 @@ export function scoredMemoryIndex(
         .flatMap((fact) => {
           const similarity = score(fact.text);
           if (!input.ids.includes(fact.id) || similarity < (input.minSimilarity ?? 0.2)) return [];
-          return [{ factId: fact.id, hash: factHash(fact.text), score: similarity, at: fact.createdAt }];
+          return [{ factId: fact.id, updatedAt: fact.updatedAt, score: similarity, at: fact.createdAt }];
         })
         .sort((a, b) => b.score - a.score || b.at - a.at);
-      return rows.slice(0, input.limit);
+      return rows;
     },
   };
 }

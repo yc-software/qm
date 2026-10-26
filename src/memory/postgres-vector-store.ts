@@ -12,7 +12,7 @@ export interface MemoryVector {
 
 interface MemoryVectorMatch {
   factId: string;
-  hash: string;
+  updatedAt: number;
   score: number;
 }
 
@@ -21,7 +21,6 @@ interface MemoryVectorSearch {
   model: string;
   vector: number[];
   ids: readonly string[];
-  limit: number;
   minSimilarity?: number;
 }
 
@@ -73,17 +72,16 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       const vector = unitVector(input.vector);
       const minSimilarity = input.minSimilarity ?? 0.2;
       const rows = await db.q(
-        `SELECT id, hash, distance FROM (
-          SELECT f.id, f.text_hash AS hash, f.created_at, v.fact_hash IS DISTINCT FROM f.text_hash AS unindexed,
+        `SELECT id, updated_at, distance FROM (
+          SELECT f.id, f.updated_at, f.created_at, v.fact_hash IS DISTINCT FROM f.text_hash AS unindexed,
             CASE WHEN v.fact_hash = f.text_hash THEN v.embedding <=> $4::vector ELSE $6::double precision END AS distance
           FROM memory_facts f
           LEFT JOIN memory_fact_vectors v ON v.scope_id = f.scope_id AND v.model = $2 AND v.dimensions = $3
             AND v.fact_id = f.id
-          WHERE f.scope_id = $1 AND f.deleted_at IS NULL AND f.id = ANY($8::bigint[])
+          WHERE f.scope_id = $1 AND f.deleted_at IS NULL AND f.id = ANY($7::bigint[])
         ) ranked
         WHERE unindexed OR distance <= $5
-        ORDER BY distance, created_at DESC, id
-        LIMIT $7`,
+        ORDER BY distance, created_at DESC, id`,
         [
           input.scope,
           input.model,
@@ -91,14 +89,13 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           JSON.stringify(vector),
           1 - minSimilarity,
           1 - Math.min(0.2, minSimilarity),
-          Math.max(1, Math.floor(input.limit)),
           input.ids,
         ],
         { timeoutMs: 5000 },
       );
       return rows.map((row) => ({
         factId: String(row.id),
-        hash: String(row.hash),
+        updatedAt: Number(row.updated_at),
         score: 1 - Number(row.distance),
       }));
     },

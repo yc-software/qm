@@ -35,7 +35,7 @@ test("a 4500-fact scope fully drains 3072-dimensional recall in under one second
   await client.query("ANALYZE memory_facts; ANALYZE memory_fact_vectors");
   const facts = await base.facts!(scope);
   const start = performance.now();
-  const matches = await index.search({ scope, model, vector, ids: facts.map((fact) => fact.id), limit: 4500 });
+  const matches = await index.search({ scope, model, vector, ids: facts.map((fact) => fact.id) });
   const elapsed = performance.now() - start;
   assert.equal(matches.length, 4500);
   assert.ok(matches.slice(0, 4490).every((row) => row.score > 0.99));
