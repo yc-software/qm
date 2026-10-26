@@ -58,7 +58,6 @@ export interface CapabilityClaims {
   egress?: EgressPolicy;
   blob?: BlobGrant;
   drop?: string;
-  memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
   liveActor?: boolean;
   runId?: string;
   sessionId?: string;
@@ -150,7 +149,6 @@ export async function verifyCapabilityToken(
   )
     return null;
   if (claims.keychainMembers !== undefined && !Array.isArray(claims.keychainMembers)) return null;
-  if (claims.memory !== undefined && !Array.isArray(claims.memory?.read)) return null;
   if (claims.liveActor !== undefined && typeof claims.liveActor !== "boolean") return null;
   if (claims.botActor !== undefined && typeof claims.botActor !== "boolean") return null;
   if (claims.liveAuthor !== undefined && typeof claims.liveAuthor !== "boolean") return null;

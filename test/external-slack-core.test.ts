@@ -117,7 +117,6 @@ test("external Slack strips private and org preloads before the prompt, but keep
   assert.ok(provisions.every((scopes) => scopes.every((scope) => scope.startsWith("channel:external-slack:"))));
   assert.equal(seenClaims.at(-1)?.externalSlack, true);
   assert.equal(seenClaims.at(-1)?.ownerConnections, undefined);
-  assert.equal(seenClaims.at(-1)?.memory, undefined);
   const missing = request("!sysprompt");
   delete missing.externalSlack;
   assert.equal((await b.app.turn(missing)).status, "refused");

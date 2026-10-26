@@ -31,7 +31,6 @@ export function createDeploymentMethods(
   | "restoreDeployment"
   | "renameDeployment"
   | "setDeploymentDisplayName"
-  | "setDeploymentAlwaysOn"
   | "setDeploymentEmbedAncestors"
   | "setDeploymentPublic"
   | "maintainDeployments"
@@ -153,9 +152,6 @@ export function createDeploymentMethods(
     },
     setDeploymentDisplayName(id, displayName) {
       return deps.deploy.setDeploymentDisplayName(id, displayName);
-    },
-    setDeploymentAlwaysOn(id, alwaysOn) {
-      return deps.deploy.setDeploymentAlwaysOn(id, alwaysOn);
     },
     setDeploymentEmbedAncestors(id, embedAncestors) {
       return deps.deploy.setDeploymentEmbedAncestors(id, embedAncestors);

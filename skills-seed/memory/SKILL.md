@@ -38,28 +38,15 @@ auto-extracts facts after you reply. This skill is for what the automatic path m
 The notebook you write is this conversation's own (your personal one in a DM, the
 channel's in a channel). Other authorized notebooks can be searched/read, not rewritten here.
 
-The org-admin write path uses the self-API instead, called with
-`$AGENT_API_URL` and `$AGENT_API_TOKEN` (both already in your environment on every turn —
-if they are unset, this instance has no self-API; say so rather than pretending).
-
 ## Org-wide notebook (admins)
 
-When the chatting user is an org admin, the self-API additionally accepts the org-wide
-notebook as a target:
-
-```bash
-curl -fsS -X POST "$AGENT_API_URL/v1/memory/facts" \
-  -H "x-agent-capability: $AGENT_API_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"scope":"org","facts":["..."]}'
-```
-
-(`?scope=org` on `GET /v1/memory/self`; `"scope":"org"` in the body of `PATCH /v1/memory/facts`
-with `{"facts":[{"id","text"}]}` or `DELETE /v1/memory/facts` with `{"ids":[…]}` to curate.)
-Those writes land in the notebook every conversation in the org recalls, so confirm the
-wording with the admin before writing and keep personal facts out of it. A `403 org
-memory writes require an org admin` means the user isn't one — say so rather than
-retrying (`GET $AGENT_API_URL/v1/admin/whoami` answers it definitively).
+When the chatting user is an org admin and asks you to remember something org-wide, use the
+`admin` tool with the org scope ID (find it with `admin` action `scopes`): `add_memory` with
+`value: {"facts": ["…"]}`, `edit_memory` with `value: {"facts": [{"id": "…", "text": "…"}]}`,
+or `delete_memory` with `value: {"ids": ["…"]}`. Those writes land in the notebook every
+conversation in the org recalls, so confirm the wording with the admin before writing and keep
+personal facts out of it. If `admin` action `whoami` says the user isn't an admin, say so
+rather than retrying.
 
 ## Failure modes
 
@@ -67,5 +54,3 @@ retrying (`GET $AGENT_API_URL/v1/admin/whoami` answers it definitively).
   forbids it; don't retry, just say memory is off here.
 - On a read-only wake (a heartbeat glance), memory can be searched and read but not
   written — save the fact on a normal turn instead.
-- `401 unauthorized` from the self-API — your token expired mid-turn; this resolves on
-  the next turn.

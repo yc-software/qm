@@ -78,7 +78,6 @@ export async function resolveTurnContext(input: ContextInput) {
   return {
     sharingSources,
     memoryScopeId,
-    baseRecallScopes,
     memoryAccess,
     memory,
     memoryLabels,

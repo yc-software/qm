@@ -344,13 +344,13 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/reach",
         summary:
-          "send a teammate a DM, post to a channel, or post to a group DM RIGHT NOW — `text` plus `recipient`, `channel`, or `participants` (the group DM's other members — the group is opened for you if it doesn't exist yet, so never ask someone to create one), optionally with `files` (workspace paths or {file_id: \"stored Files ID\"}, sent all-or-nothing); `sandbox_id` selects the sandbox for paths, omitted means default, ignored for stored IDs. EXTREMELY IMPORTANT: a `channel` post broadcasts to everyone there — pick the narrowest audience that can act; a question or errand for one person goes to their DM (`recipient`), NEVER a public channel, unless the person you're helping explicitly named that channel as the destination or the message genuinely concerns the whole room; pass `threadTs` (the parent message's ts) with a `recipient`/`channel`/`participants` post to reply inside that thread instead of top-level; or react to a message instead of posting with `react:{ts,emoji}` plus a `channel`/`participants`; or retract one of your own messages with `delete:{ts}` (no target = this conversation, or name a `channel`/`participants` to delete elsewhere) — find a message's `ts` via /v1/surface-context; pass `unfurlLinks:false` to suppress Slack previews (no schedule; for later/recurring use /v1/crons)",
+          "send a teammate a DM, post to a channel, or post to a group DM RIGHT NOW — `text` plus `recipient`, `channel`, or `participants` (the group DM's other members — the group is opened for you if it doesn't exist yet, so never ask someone to create one), optionally with `files` (workspace paths or {file_id: \"stored Files ID\"}, sent all-or-nothing); `sandbox_id` selects the sandbox for paths, omitted means default, ignored for stored IDs. EXTREMELY IMPORTANT: a `channel` post broadcasts to everyone there — pick the narrowest audience that can act; a question or errand for one person goes to their DM (`recipient`), NEVER a public channel, unless the person you're helping explicitly named that channel as the destination or the message genuinely concerns the whole room; pass `threadTs` (the parent message's ts) with a `recipient`/`channel`/`participants` post to reply inside that thread instead of top-level; or react to a message instead of posting with `react:{ts,emoji}` plus a `channel`/`participants`; or retract one of your own messages with `delete:{ts}` (no target = this conversation, or name a `channel`/`participants` to delete elsewhere) — find a message's `ts` via /v1/surface-context; pass `unfurlLinks:false` to suppress Slack previews (no schedule; for later/recurring use the cron tool)",
       },
     ],
   },
   {
     guidance:
-      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, restore, or change always-on behavior, use the corresponding endpoint.',
+      'To see the published apps you can reach across scopes, GET /v1/deployments (each row carries your permission and a clone/push gitUrl). Read what an app renders as the asking person with GET /v1/deployments/:id/fetch. A published app (`apps` action `publish`) is reachable only by its owner plus whoever the owner shares it with. For authenticated access, POST /v1/deployments/:id/share with `scope:"org"`, `recipient:"<name>"`, or an exact `email:"person@example.com"` with `access:"view"`; email grants to people outside the organization are view-only, send an invitation with the app link, and are refused unless an org admin has enabled external app sharing (off by default). Check `invitation.emailSent` and surface `emailProblem` if delivery fails. This does not make the recipient an instance member. To make the app reachable without sign-in, POST the same endpoint with `{public:true}`; `{public:false}` restricts it again. Public access is never the default, only the owner may change it, and it is refused (and existing public links require sign-in) unless an org admin has enabled external app sharing. POST /v1/deployments/:id/embed-ancestors with `{embedAncestors:["https://tools.example.com", ...]}` lets those sites embed the app; pass `[]` to forbid embedding again. To rename, archive, or restore, use the corresponding endpoint.',
     routes: [
       {
         method: "GET",
@@ -405,12 +405,6 @@ const FAMILIES: AgentApiFamily[] = [
       },
       {
         method: "POST",
-        path: "/v1/deployments/:id/always-on",
-        summary:
-          "keep an app you manage permanently warm — body {alwaysOn:true} exempts it from idle sleep so visitors never hit a cold start; {alwaysOn:false} returns it to the default sleep-when-idle",
-      },
-      {
-        method: "POST",
         path: "/v1/deployments/:id/embed-ancestors",
         summary:
           "let named sites show an app you manage inside their page (iframe) — body {embedAncestors:[https origins, optionally https://*.example.com]}; list every frame between the app and the browser tab; [] forbids embedding again",
@@ -424,35 +418,6 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/deployments/:id/restore",
         summary: "restore an archived app you manage by reapplying its current saved version",
-      },
-    ],
-  },
-  {
-    when: (v) => !!v.claims.memory,
-    guidance: "Memory bodies and curation rules are documented in the memory skill.",
-    routes: [
-      {
-        method: "POST",
-        path: "/v1/memory/search",
-        summary: "search authorized notebooks; optional scope selects one notebook",
-      },
-      { method: "POST", path: "/v1/memory/facts", summary: "append durable facts to this conversation's notebook now" },
-      { method: "GET", path: "/v1/memory/self", summary: "list this conversation's notebook facts with their ids" },
-      {
-        method: "PATCH|DELETE",
-        path: "/v1/memory/facts",
-        summary: "edit facts ({facts:[{id,text}]}) or forget them ({ids}); any unknown id fails the whole call",
-      },
-    ],
-  },
-  {
-    when: (v) => !!v.claims.memory?.orgWrite,
-    routes: [
-      {
-        method: "POST|PATCH|DELETE",
-        path: "/v1/memory/facts",
-        summary:
-          'add "scope":"org" (?scope=org on GET) to target the org-wide notebook every conversation recalls — admin only, confirm wording first',
       },
     ],
   },

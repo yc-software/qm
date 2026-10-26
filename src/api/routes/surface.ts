@@ -1,9 +1,7 @@
-import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import { memoryForRequest } from "./memory-access.ts";
+import { disclosedMemory } from "../../memory/disclosure.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
-import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
 import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
@@ -34,13 +32,7 @@ import {
 } from "../../surfaces/ui-state.ts";
 import { redactWebhook } from "./webhooks.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
-import {
-  ARTIFACT_TYPES,
-  isArtifactType,
-  livePersonCapability,
-  splitToScope,
-  SHARED_SKILL_TRIGGER_REFUSAL,
-} from "../artifact-share.ts";
+import { livePersonCapability, SHARED_SKILL_TRIGGER_REFUSAL } from "../artifact-share.ts";
 
 function isGrant(b: unknown): b is Grant {
   return (
@@ -649,9 +641,21 @@ async function selfMemory(ctx: ApiCtx): Promise<void> {
     method === "GET" ? url.searchParams.get("principalId") : (body as { principalId?: unknown }).principalId;
   if (typeof principalId !== "string" || !principalId)
     return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
-  const memory = memoryForRequest(ctx, principalId);
-  if (!memory) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.memory) return sendJson(res, 404, { error: "not_found" });
   const scope = makeScopeId("personal", principalId);
+  const viewerId = ctx.actor?.p ?? principalId;
+  const actor = deps.identity?.classify(viewerId) ?? { id: viewerId, type: "internal" as const };
+  const viewerScope = makeScopeId("personal", viewerId);
+  const memory = disclosedMemory(deps.memory, {
+    actor,
+    targetScope: viewerScope,
+    nativeScopes: [viewerScope],
+    audience: [actor],
+    open: true,
+    config: deps.config,
+    isCurrentSharedScopeMember: (person, target) => ctx.app.isCurrentSharedScopeMember(person, target),
+    currentScopeMembers: (target) => ctx.app.currentScopeMembers(target),
+  });
   if (method === "PATCH") {
     const edits = parseEdits(body);
     if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
@@ -711,138 +715,6 @@ export function parseFacts(body: unknown): string[] | string {
   if (facts.length > 20) return "at most 20 facts per call";
   return facts;
 }
-
-type AgentMemoryHandler = (
-  ctx: ApiCtx,
-  memory: NonNullable<ReturnType<typeof memoryForRequest>>,
-  capability: CapabilityClaims,
-) => Promise<void>;
-
-const agentMemory =
-  (handle: AgentMemoryHandler) =>
-  async (ctx: ApiCtx): Promise<void> => {
-    const memory = memoryForRequest(ctx);
-    const { res, body, capability } = ctx;
-    if (!capability) return sendJson(res, 401, { error: "unauthorized", message: "agent capability token required" });
-    if (!memory) return sendJson(res, 404, { error: "not_found" });
-    if (isObj(body) && ["recipient", "channel", "participants"].some((key) => key in body)) {
-      return sendJson(res, 400, {
-        error: "bad_request",
-        message: "memory can only be changed from its own conversation",
-      });
-    }
-    return handle(ctx, memory, capability);
-  };
-
-const searchMemory = agentMemory(async (ctx, memory, capability) => {
-  const { res, deps, body } = ctx;
-  const b = body as { query?: unknown; limit?: unknown; scope?: unknown };
-  if (typeof b.query !== "string" || !b.query.trim()) {
-    return sendJson(res, 400, { error: "bad_request", message: "query (string) required" });
-  }
-  const allowed = capability.memory?.read ?? [];
-  if (b.scope !== undefined && typeof b.scope !== "string")
-    return sendJson(res, 400, { error: "bad_request", message: "scope must be a string" });
-  if (typeof b.scope === "string" && !allowed.includes(b.scope))
-    return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
-  const scopes = typeof b.scope === "string" ? [b.scope] : allowed;
-  if (scopes.length === 0) {
-    return sendJson(res, 403, { error: "forbidden", message: "memory recall is not enabled for this conversation" });
-  }
-  const results = await searchAcrossScopes(memory, scopes, b.query, typeof b.limit === "number" ? b.limit : 20, {
-    actorId: capability.actorId,
-  });
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.search",
-    resource: "memory",
-    scopeLabel: scopes.join(","),
-  });
-  return sendJson(res, 200, { results });
-});
-
-const readOwnNotebook = agentMemory(async (ctx, memory, capability) => {
-  const { res, deps } = ctx;
-  const requested = ctx.url.searchParams.get("scope");
-  const read = capability.memory?.read ?? [];
-  const target =
-    requested === "org"
-      ? (capability.memory?.orgWrite ?? read.find((scope) => scope.startsWith("org:")))
-      : (requested ?? capability.memory?.write ?? capability.scopeId);
-  if (!target || !canReadNotebook({ ...capability.memory, read }, target)) {
-    return sendJson(res, 403, { error: "forbidden", message: "notebook is not readable here" });
-  }
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.read",
-    resource: "memory",
-    scopeLabel: target,
-  });
-  return sendJson(res, 200, { scopeId: target, facts: await memoryFacts(memory, target) });
-});
-
-const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write: string]) => Promise<void>) =>
-  agentMemory(async (ctx, memory, capability) => {
-    const requestedScope = (ctx.body as { scope?: unknown } | undefined)?.scope;
-    if (requestedScope !== undefined && requestedScope !== "org") {
-      return sendJson(ctx.res, 400, { error: "bad_request", message: 'scope must be "org" when present' });
-    }
-    const write = requestedScope === "org" ? capability.memory?.orgWrite : capability.memory?.write;
-    if (!write) {
-      return sendJson(ctx.res, 403, {
-        error: "forbidden",
-        message:
-          requestedScope === "org"
-            ? "org memory writes require an org admin"
-            : "memory capture is not enabled for this conversation",
-      });
-    }
-    return handle(ctx, memory, capability, write);
-  });
-
-const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
-  const facts = parseFacts(body);
-  if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-  const added = await memory.capture(write, facts, Date.now(), capability.actorId, {
-    mode: "explicit",
-    actorId: capability.actorId,
-    conversationScopeId: capability.scopeId,
-    ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
-  });
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.capture",
-    resource: "memory",
-    scopeLabel: write,
-  });
-  return sendJson(res, 200, { ok: true, added, scopeId: write });
-});
-
-const editFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
-  const edits = parseEdits(body);
-  if (typeof edits === "string") return sendJson(res, 400, { error: "bad_request", message: edits });
-  await memory.edit?.(write, edits, capability.actorId, { conversationScopeId: capability.scopeId });
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.edit",
-    resource: "memory",
-    scopeLabel: write,
-  });
-  return sendJson(res, 200, { ok: true, scopeId: write });
-});
-
-const deleteFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
-  const ids = parseIds(body);
-  if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-  await memory.delete?.(write, ids, capability.actorId);
-  audit(deps, {
-    principalId: capability.actorId,
-    action: "memory.agent.delete",
-    resource: "memory",
-    scopeLabel: write,
-  });
-  return sendJson(res, 200, { ok: true, scopeId: write });
-});
 
 async function listSkills(ctx: ApiCtx): Promise<void> {
   const { res, app, url } = ctx;
@@ -1092,78 +964,6 @@ async function revokeGrant(ctx: ApiCtx): Promise<void> {
   }
 }
 
-const SHARE_ERROR_STATUS: Record<string, number> = {
-  bad_request: 400,
-  not_found: 404,
-  forbidden: 403,
-  recipient_not_found: 404,
-  ambiguous_recipient: 409,
-  share_failed: 400,
-};
-
-export async function shareArtifact(ctx: ApiCtx): Promise<void> {
-  const { res, deps, body, capability } = ctx;
-  if (!capability)
-    return sendJson(res, 403, { error: "forbidden", message: "sharing requires an agent capability token" });
-  const b = (isObj(body) ? body : {}) as {
-    type?: unknown;
-    id?: unknown;
-    toScope?: unknown;
-    email?: unknown;
-    permission?: unknown;
-    move?: unknown;
-  };
-  if (typeof b.type !== "string" || !isArtifactType(b.type)) {
-    return sendJson(res, 400, { error: "bad_request", message: `type must be one of: ${ARTIFACT_TYPES.join(", ")}` });
-  }
-  if (typeof b.id !== "string" || !b.id.trim())
-    return sendJson(res, 400, { error: "bad_request", message: "id required" });
-  if (
-    b.email !== undefined &&
-    (typeof b.email !== "string" || b.toScope !== undefined || b.type !== "deploy" || b.move === true)
-  )
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "email is only supported for app sharing, instead of toScope",
-    });
-  if (b.email === undefined && (typeof b.toScope !== "string" || !b.toScope.trim())) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: 'toScope required ("org", a scope id, or a teammate\'s name)',
-    });
-  }
-  if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write") {
-    return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read" or "write"' });
-  }
-  const result = await deps.control.shareArtifact(
-    {
-      type: b.type,
-      id: b.id,
-      ...(typeof b.toScope === "string" ? splitToScope(b.toScope) : {}),
-      ...(typeof b.email === "string" ? { email: b.email } : {}),
-      ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
-      ...(b.move === true ? { move: true } : {}),
-    },
-    capability,
-  );
-  if (!result.ok) {
-    return sendJson(res, SHARE_ERROR_STATUS[result.code] ?? 400, {
-      error: result.code,
-      message: result.message,
-      ...(result.candidates ? { candidates: result.candidates } : {}),
-    });
-  }
-  return sendJson(res, 200, {
-    ok: true,
-    verb: result.verb,
-    type: result.type,
-    id: result.id,
-    target: result.target,
-    permission: result.permission,
-    ...(result.invitation ? { invitation: result.invitation } : {}),
-  });
-}
-
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   await ctx.deps.refreshModels?.();
   const { res, deps } = ctx;
@@ -1249,8 +1049,6 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
   if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !livePersonCapability(ctx.capability))
-    return sendJson(ctx.res, 403, { error: "live_actor_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   await ctx.deps.refreshModels?.();
@@ -1397,17 +1195,11 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "GET", path: "/v1/ui-state", auth: "source", handle: getUiState },
   { method: "PUT", path: "/v1/ui-state", auth: "source", handle: putUiState },
   { method: "GET", path: "/v1/apis", auth: "either", handle: listAgentApis },
-  { method: "GET", path: "/v1/memory/self", auth: "either", handle: readOwnNotebook },
-  { method: "POST", path: "/v1/memory/facts", auth: "either", handle: captureFacts },
-  { method: "PATCH", path: "/v1/memory/facts", auth: "either", handle: editFacts },
-  { method: "DELETE", path: "/v1/memory/facts", auth: "either", handle: deleteFacts },
-  { method: "POST", path: "/v1/memory/search", auth: "either", allowedInStrict: true, handle: searchMemory },
   { method: "POST", path: "/v1/grants", actor: "system", auth: "source", handle: createGrant },
   { method: "POST", path: "/v1/grants/revoke", actor: "system", auth: "source", handle: revokeGrant },
-  { method: "POST", path: "/v1/share", auth: "either", handle: shareArtifact },
   { method: "GET", path: "/v1/surface-config", auth: "source", handle: getSurfaceConfig },
-  { method: "GET", path: "/v1/runtime-config", auth: "either", handle: getRuntimeConfig },
-  { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
+  { method: "GET", path: "/v1/runtime-config", auth: "source", handle: getRuntimeConfig },
+  { method: "PUT", path: "/v1/runtime-config", auth: "source", handle: putRuntimeConfig },
   { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
   { method: "PUT", path: "/v1/channel-header-pin", auth: "either", handle: putChannelHeaderPin },
   { method: "GET", path: "/v1/soul", auth: "either", handle: getSoul },

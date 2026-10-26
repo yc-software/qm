@@ -1545,22 +1545,6 @@ async function setDeploymentEmbedAncestors(ctx: ApiCtx): Promise<void> {
   }
 }
 
-async function setDeploymentAlwaysOn(ctx: ApiCtx): Promise<void> {
-  const { res, app, params, body } = ctx;
-  const id = await deploymentId(app, params.id!);
-  if (!id) return sendJson(res, 404, { error: "not_found" });
-  if (!(await callerMayManageDeployment(ctx, id)))
-    return sendJson(res, 403, { error: "forbidden", message: "only someone who manages this app can change this" });
-  const b = body as { alwaysOn?: unknown };
-  if (typeof b.alwaysOn !== "boolean")
-    return sendJson(res, 400, { error: "bad_request", message: "alwaysOn (boolean) required" });
-  try {
-    return sendJson(res, 200, { deployment: deploymentView(await app.setDeploymentAlwaysOn(id, b.alwaysOn)) });
-  } catch (e) {
-    return sendJson(res, 400, { error: "always_on_failed", message: errMessage(e) });
-  }
-}
-
 type ShareTarget =
   | { kind: "ok"; scope: string; label: string }
   | { kind: "none" }
@@ -1722,6 +1706,5 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments/:id/restore", auth: "either", handle: restoreDeployment },
   { method: "POST", path: "/v1/deployments/:id/name", auth: "either", handle: renameDeployment },
   { method: "POST", path: "/v1/deployments/:id/display-name", auth: "either", handle: setDeploymentDisplayName },
-  { method: "POST", path: "/v1/deployments/:id/always-on", auth: "either", handle: setDeploymentAlwaysOn },
   { method: "POST", path: "/v1/deployments/:id/embed-ancestors", auth: "either", handle: setDeploymentEmbedAncestors },
 ];

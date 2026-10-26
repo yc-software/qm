@@ -94,7 +94,6 @@ test("one context recalls capped, source-labelled memory and shares authority wi
     /^\[channel:eng\] #\d+ \(\d{4}-\d\d-\d\d\) LAST_FACT$/,
   );
   assert.deepEqual(context.memoryAccess?.read, ["personal:alice", "org:test", "channel:eng"]);
-  assert.deepEqual(context.baseRecallScopes, ["personal:alice", "org:test"], "reusable tokens exclude carried sources");
   assert.equal(context.memoryAccess?.write, "personal:alice");
   const handle = context.listFiles().find((h) => h.ownerScopeId === "channel:eng")!;
   const result = await context.readFile(handle.handlePath);

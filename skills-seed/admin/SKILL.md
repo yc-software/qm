@@ -187,8 +187,8 @@ GET /v1/admin/memory?scope=<scopeId>          → that scope's whole notebook
 PUT /v1/admin/memory?scope=<scopeId>          {"content":"…full replacement…"}
 ```
 
-(For "remember this org-wide" you don't need the admin plane at all — `"scope":"org"`
-on the memory self-API is the lighter path; see the memory skill.)
+(For "remember this org-wide", use the `admin` tool's `add_memory` with the org scope; the
+`memory` tool writes only this conversation's notebook.)
 
 ## Inspect activity & content
 

@@ -28,7 +28,7 @@ vector-width change is detected even when its model identifier stays the same.
 
 New or edited facts may wait for a background tick before becoming semantic matches.
 Unindexed facts participate at the recency fallback score alongside indexed semantic
-matches. If the provider/database fails, recall falls back to newest-first. Text search (`memory` search, `POST /v1/memory/search`) remains
+matches. If the provider/database fails, recall falls back to newest-first. Text search (`memory` search) remains
 immediate and does not use embeddings.
 
 ## External routing

@@ -86,7 +86,5 @@ export async function readNotebook(memory: MemoryService, scope: ScopeId): Promi
   return facts ? facts.map(factLine).join("\n") : memory.read(scope);
 }
 
-export const canReadNotebook = (
-  access: { read: readonly string[]; write?: string; orgWrite?: string },
-  scope: string,
-): boolean => access.read.includes(scope) || scope === access.write || scope === access.orgWrite;
+export const canReadNotebook = (access: { read: readonly string[]; write?: string }, scope: string): boolean =>
+  access.read.includes(scope) || scope === access.write;

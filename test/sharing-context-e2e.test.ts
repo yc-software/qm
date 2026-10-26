@@ -425,28 +425,6 @@ test("sharing e2e: a newly blocked skill asset removes previously materialized c
   assert.ok((await b.auditLog.events()).some((e) => e.action === "sharing.skill_screen_blocked"));
 });
 
-test("sharing e2e: the execution capability excludes carried memories in both directions", async (t) => {
-  const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
-  let token: string | undefined;
-  const provision = b.sandbox.provision.bind(b.sandbox);
-  b.sandbox.provision = async (layers, opts) => {
-    token = opts?.env?.AGENT_API_TOKEN;
-    return provision(layers, opts);
-  };
-  assert.equal(await b.turn("!run echo ROOM", true), "ROOM");
-  assert.ok(token);
-  const roomClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
-  assert.ok(roomClaims?.memory);
-  assert.ok(roomClaims.memory.read.includes("channel:C1"));
-  assert.equal(roomClaims.memory.read.includes("personal:U1"), false);
-  assert.equal(await b.turn("!run echo DM"), "DM");
-  assert.ok(token);
-  const dmClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
-  assert.ok(dmClaims?.memory);
-  assert.ok(dmClaims.memory.read.includes("personal:U1"));
-  assert.equal(dmClaims.memory.read.includes("channel:C1"), false);
-});
-
 test("sharing e2e: local notebooks retain late facts while unclassified carried memory stays private", async (t) => {
   const b = await fixture(t);
   await b.memory.capture(

@@ -760,6 +760,12 @@ test("cron get honors read-only visibility: a delivery-targeted viewer reads, ne
 
 test("webhook create surfaces the inbound url + the secret verbatim; list elides; disable is owner-gated", async () => {
   const { control } = setup();
+  const unattended = await control.createWebhook(
+    { action: "handle the event", verification: { scheme: "github", secret: "shh-secret" } },
+    claims("U1"),
+    "https://portal.example",
+  );
+  assert.equal(unattended.ok ? "" : unattended.code, "forbidden");
   const r = await control.createWebhook(
     {
       action: "handle the event",
@@ -1094,4 +1100,26 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     }),
     /runtime is no longer available/,
   );
+});
+
+test("retarget moves a cron to another menu destination, is owner-gated, and refuses keys outside the turn's menu", async () => {
+  const { control } = setup();
+  const created = await control.createCron({ schedule: { everyMs: 3_600_000 }, action: "move me" }, claims("U1"));
+  assert.ok(created.ok);
+  assert.equal(created.cron.destination?.target, "D1");
+
+  const moved = await control.retargetCron(created.cron.id, ROOM.key, claims("U1"));
+  assert.ok(moved.ok);
+  assert.equal(moved.cron.destination?.target, "C9");
+  assert.equal(moved.cron.destination?.audienceScopeId, scopeId("channel", "C9"));
+
+  const foreign = await control.retargetCron(created.cron.id, D1.key, claims("U2"));
+  assert.equal(foreign.ok ? "" : foreign.code, "forbidden");
+
+  const unknown = await control.retargetCron(created.cron.id, "nope", claims("U1"));
+  assert.equal(unknown.ok ? "" : unknown.code, "unknown_destination");
+
+  const { destinations: _destinations, defaultDestinationKey: _key, ...menuless } = claims("U1");
+  const contained = await control.retargetCron(created.cron.id, ROOM.key, menuless);
+  assert.equal(contained.ok, false);
 });

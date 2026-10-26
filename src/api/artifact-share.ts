@@ -2,7 +2,6 @@ import type { DeploymentInvitation } from "../deploy/email-access.ts";
 import { validEmail } from "../identity/external-members.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { isSharedScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
-import type { ResourceKind } from "../acl/resource-ref.ts";
 import type { RecipientResolution } from "../directory/directory-store.ts";
 
 export const SHARED_SKILL_TRIGGER_REFUSAL =
@@ -20,12 +19,7 @@ export function livePersonCapability(c: { liveActor?: boolean; liveAuthor?: bool
   return c?.liveAuthor === true || c?.liveActor === true;
 }
 
-export const ARTIFACT_TYPES = ["file", "skill", "deploy", "cron"] as const;
-export type ArtifactType = (typeof ARTIFACT_TYPES)[number] & ResourceKind;
-
-export function isArtifactType(s: string): s is ArtifactType {
-  return (ARTIFACT_TYPES as readonly string[]).includes(s);
-}
+export type ArtifactType = "file" | "skill" | "deploy" | "cron";
 
 export type ResolvedShareTarget =
   | { kind: "ok"; scope: ScopeId; label: string }

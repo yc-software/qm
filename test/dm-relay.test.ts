@@ -13,12 +13,13 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "dm-relay-secret".repeat(3);
 
-describe("agent → teammate DM: the cron recipient route (§10)", () => {
+describe("agent → teammate DM: cron recipients and the reach route (§10)", () => {
   let server: Server;
   let base: string;
   let built: BuiltApp;
@@ -26,11 +27,6 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
   const capDm = async (actorId: string) =>
     await mintCapabilityToken(
       { actorId, scopeId: scopeId("personal", actorId), exp: Date.now() + CAPABILITY_TTL_MS },
-      SECRET,
-    );
-  const capChannel = async (actorId: string) =>
-    await mintCapabilityToken(
-      { actorId, scopeId: scopeId("channel", "C"), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
     );
   const capGroup = async (actorId: string, groupId: string) =>
@@ -86,233 +82,184 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
+  const claimsDm = (actorId: string): CapabilityClaims => ({
+    actorId,
+    scopeId: scopeId("personal", actorId),
+    exp: Date.now() + CAPABILITY_TTL_MS,
+  });
+  const claimsChannel = (actorId: string): CapabilityClaims => ({
+    actorId,
+    scopeId: scopeId("channel", "C"),
+    exp: Date.now() + CAPABILITY_TTL_MS,
+  });
+  const createCron = (input: Parameters<ControlService["createCron"]>[0], claims: CapabilityClaims) =>
+    createControlService(built.app).createCron(input, claims);
+  const failure = (result: Awaited<ReturnType<typeof createCron>>) => {
+    assert.equal(result.ok, false);
+    return result.ok ? assert.fail("expected a refusal") : result;
+  };
+
   it("builds a core-resolved principal destination the agent never authored", async () => {
-    const res = await post(
-      "/v1/crons",
+    const result = await createCron(
       { schedule: { firstFireAt: Date.now() }, action: "let Alice know the deploy is done", recipient: "Alice" },
-      { "x-agent-capability": await capDm("U-carol") },
+      claimsDm("U-carol"),
     );
-    assert.equal(res.status, 200);
-    const { cron } = (await res.json()) as any;
-    assert.equal(cron.destination.type, "principal");
-    assert.equal(cron.destination.target, "U-alice");
-    assert.equal(cron.destination.onBehalfOf, "U-carol");
-    assert.equal(cron.destination.audienceScopeId, "personal:U-alice");
+    assert.ok(result.ok);
+    const { cron } = result;
+    assert.equal(cron.destination?.type, "principal");
+    assert.equal(cron.destination?.target, "U-alice");
+    assert.equal(cron.destination?.onBehalfOf, "U-carol");
+    assert.equal(cron.destination?.audienceScopeId, "personal:U-alice");
     assert.equal(cron.owner, "U-carol");
   });
 
   it("sends a verbatim message and echoes the resolved recipient (findings #1 + #2)", async () => {
-    const res = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() + 3_600_000 }, message: "ship it 🚀", recipient: "Alice" },
-      { "x-agent-capability": await capDm("U-carol") },
+    const result = await createCron(
+      { schedule: { firstFireAt: Date.now() + 3_600_000 }, text: "ship it 🚀", recipient: "Alice" },
+      claimsDm("U-carol"),
     );
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as any;
-    assert.equal(body.cron.message, "ship it 🚀");
-    assert.equal(body.cron.action, undefined);
-    assert.equal(body.cron.destination.type, "principal");
-    assert.equal(body.recipient.principalId, "U-alice");
-    assert.equal(body.recipient.displayName, "Alice");
-  });
-
-  it("accepts task/text aliases so user-facing cron creation doesn't expose internal modes", async () => {
-    const taskRes = await post(
-      "/v1/crons",
-      {
-        schedule: { cron: "* * * * *" },
-        task: "check mail; call finish_silently if nothing changed",
-        recipient: "Alice",
-      },
-      { "x-agent-capability": await capDm("U-carol") },
-    );
-    assert.equal(taskRes.status, 200);
-    const taskBody = (await taskRes.json()) as any;
-    assert.equal(taskBody.cron.action, "check mail; call finish_silently if nothing changed");
-    assert.equal(taskBody.cron.message, undefined);
-
-    const textRes = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() + 3_600_000 }, text: "ship it", recipient: "Alice" },
-      { "x-agent-capability": await capDm("U-carol") },
-    );
-    assert.equal(textRes.status, 200);
-    const textBody = (await textRes.json()) as any;
-    assert.equal(textBody.cron.message, "ship it");
-    assert.equal(textBody.cron.action, undefined);
-  });
-
-  it("404s when no internal teammate matches the name", async () => {
-    const res = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, action: "ping", recipient: "Nobody McMissing" },
-      { "x-agent-capability": await capDm("U-carol") },
-    );
-    assert.equal(res.status, 404);
-    assert.equal(((await res.json()) as any).error, "recipient_not_found");
-  });
-
-  it("409s with candidates on an ambiguous name (the model must disambiguate)", async () => {
-    const res = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, action: "ping", recipient: "Sam" },
-      { "x-agent-capability": await capDm("U-carol") },
-    );
-    assert.equal(res.status, 409);
-    const body = (await res.json()) as any;
-    assert.equal(body.error, "ambiguous_recipient");
-    assert.equal(body.candidates.length, 2);
+    assert.ok(result.ok);
+    assert.equal(result.cron.message, "ship it 🚀");
+    assert.equal(result.cron.action, undefined);
+    assert.equal(result.cron.destination?.type, "principal");
+    assert.equal(result.recipient?.principalId, "U-alice");
+    assert.equal(result.recipient?.displayName, "Alice");
   });
 
   it("messages a teammate from a channel scope, reading the channel (§10 parity gate)", async () => {
-    const res = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, message: "ping", recipient: "Alice" },
-      { "x-agent-capability": await capChannel("U-carol") },
+    const result = await createCron(
+      { schedule: { firstFireAt: Date.now() }, text: "ping", recipient: "Alice" },
+      claimsChannel("U-carol"),
     );
-    assert.equal(res.status, 200);
-    const { cron } = (await res.json()) as any;
-    assert.equal(cron.destination.type, "principal");
-    assert.equal(cron.destination.target, "U-alice");
-    assert.equal(cron.destination.onBehalfOf, "U-carol");
+    assert.ok(result.ok);
+    const { cron } = result;
+    assert.equal(cron.destination?.type, "principal");
+    assert.equal(cron.destination?.target, "U-alice");
+    assert.equal(cron.destination?.onBehalfOf, "U-carol");
     assert.equal(cron.ownerScopeId, "channel:C");
   });
 
   it("creates a channel cron that runs at the channel scope (named from a DM)", async () => {
-    const res = await post(
-      "/v1/crons",
+    const result = await createCron(
       { schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" }, action: "post the standup", channel: "eng" },
-      { "x-agent-capability": await capDm("U-carol") },
+      claimsDm("U-carol"),
     );
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as any;
-    const cron = body.cron;
+    assert.ok(result.ok);
+    const { cron } = result;
     assert.equal(cron.ownerScopeId, "channel:C-eng");
-    assert.equal(cron.destination.type, "slack");
-    assert.equal(cron.destination.target, "C-eng");
-    assert.equal(cron.destination.audienceScopeId, "channel:C-eng");
+    assert.equal(cron.destination?.type, "slack");
+    assert.equal(cron.destination?.target, "C-eng");
+    assert.equal(cron.destination?.audienceScopeId, "channel:C-eng");
     assert.equal(cron.owner, "U-carol");
-    assert.equal(body.channel.channelId, "C-eng");
-    assert.equal(body.channel.name, "eng");
+    assert.equal(result.channel?.channelId, "C-eng");
+    assert.equal(result.channel?.name, "eng");
   });
 
-  it("404s on an unknown channel and 409s on an ambiguous one", async () => {
-    const miss = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, action: "x", channel: "nope" },
-      { "x-agent-capability": await capDm("U-carol") },
+  it("refuses an unknown channel and returns candidates for an ambiguous one", async () => {
+    const miss = failure(
+      await createCron({ schedule: { firstFireAt: Date.now() }, action: "x", channel: "nope" }, claimsDm("U-carol")),
     );
-    assert.equal(miss.status, 404);
-    assert.equal(((await miss.json()) as any).error, "channel_not_found");
-    const amb = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, action: "x", channel: "design" },
-      { "x-agent-capability": await capDm("U-carol") },
+    assert.equal(miss.code, "channel_not_found");
+    const amb = failure(
+      await createCron({ schedule: { firstFireAt: Date.now() }, action: "x", channel: "design" }, claimsDm("U-carol")),
     );
-    assert.equal(amb.status, 409);
-    assert.equal(((await amb.json()) as any).candidates.length, 2);
+    assert.equal(amb.code, "ambiguous_channel");
+    assert.equal(amb.candidates?.length, 2);
   });
 
-  it("authorizes a private-channel send by membership: member → ok, non-member → 403", async () => {
-    const ok = await post(
-      "/v1/crons",
+  it("authorizes a private-channel send by membership: member → ok, non-member → refused", async () => {
+    const ok = await createCron(
       { schedule: { firstFireAt: Date.now() }, action: "x", channel: "secret" },
-      { "x-agent-capability": await capDm("U-carol") },
+      claimsDm("U-carol"),
     );
-    assert.equal(ok.status, 200);
-    const okBody = (await ok.json()) as any;
-    assert.equal(okBody.cron.ownerScopeId, "channel:C-secret");
-    assert.equal(okBody.channel.channelId, "C-secret");
+    assert.ok(ok.ok);
+    assert.equal(ok.cron.ownerScopeId, "channel:C-secret");
+    assert.equal(ok.channel?.channelId, "C-secret");
 
-    const denied = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, action: "x", channel: "secret" },
-      { "x-agent-capability": await capDm("U-alice") },
+    const denied = failure(
+      await createCron({ schedule: { firstFireAt: Date.now() }, action: "x", channel: "secret" }, claimsDm("U-alice")),
     );
-    assert.equal(denied.status, 403);
-    assert.equal(((await denied.json()) as any).error, "not_a_member");
+    assert.equal(denied.code, "not_a_member");
   });
 
   it("rejects specifying both a recipient and a channel", async () => {
-    const res = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, action: "x", recipient: "Alice", channel: "eng" },
-      { "x-agent-capability": await capDm("U-carol") },
+    const result = failure(
+      await createCron(
+        { schedule: { firstFireAt: Date.now() }, action: "x", recipient: "Alice", channel: "eng" },
+        claimsDm("U-carol"),
+      ),
     );
-    assert.equal(res.status, 400);
+    assert.equal(result.code, "bad_request");
   });
 
   it("creates a group-DM cron addressed by participant set, running at the group scope (§10)", async () => {
-    const res = await post(
-      "/v1/crons",
+    const result = await createCron(
       {
         schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
-        message: "standup in 5",
+        text: "standup in 5",
         participants: ["U-alice", "U-sam1"],
       },
-      { "x-agent-capability": await capDm("U-carol") },
+      claimsDm("U-carol"),
     );
-    assert.equal(res.status, 200);
-    const body = (await res.json()) as any;
-    const cron = body.cron;
+    assert.ok(result.ok);
+    const { cron } = result;
     assert.equal(cron.ownerScopeId, "group:G-jrs");
-    assert.equal(cron.destination.type, "group");
-    assert.equal(cron.destination.target, "G-jrs");
-    assert.equal(cron.destination.audienceScopeId, "group:G-jrs");
+    assert.equal(cron.destination?.type, "group");
+    assert.equal(cron.destination?.target, "G-jrs");
+    assert.equal(cron.destination?.audienceScopeId, "group:G-jrs");
     assert.equal(cron.owner, "U-carol");
     assert.equal(cron.message, "standup in 5");
-    assert.equal(body.group.groupId, "G-jrs");
+    assert.equal(result.group?.groupId, "G-jrs");
   });
 
   it("resolves the participant set order- and duplicate-insensitively, incl. the sender named explicitly", async () => {
-    const res = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, message: "hi", participants: ["U-sam1", "U-carol", "U-alice"] },
-      { "x-agent-capability": await capDm("U-carol") },
+    const result = await createCron(
+      { schedule: { firstFireAt: Date.now() }, text: "hi", participants: ["U-sam1", "U-carol", "U-alice"] },
+      claimsDm("U-carol"),
     );
-    assert.equal(res.status, 200);
-    assert.equal(((await res.json()) as any).cron.destination.target, "G-jrs");
+    assert.ok(result.ok);
+    assert.equal(result.cron.destination?.target, "G-jrs");
   });
 
-  it("404s when no group DM has exactly those participants", async () => {
-    const res = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, message: "hi", participants: ["U-alice", "U-sam2"] },
-      { "x-agent-capability": await capDm("U-carol") },
+  it("refuses when no group DM has exactly those participants", async () => {
+    const result = failure(
+      await createCron(
+        { schedule: { firstFireAt: Date.now() }, text: "hi", participants: ["U-alice", "U-sam2"] },
+        claimsDm("U-carol"),
+      ),
     );
-    assert.equal(res.status, 404);
-    assert.equal(((await res.json()) as any).error, "group_not_found");
+    assert.equal(result.code, "group_not_found");
   });
 
   it("refuses a group DM the sender isn't a member of (human parity)", async () => {
-    const res = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, message: "hi", participants: ["U-carol", "U-alice"] },
-      { "x-agent-capability": await capDm("U-sam2") },
+    const result = failure(
+      await createCron(
+        { schedule: { firstFireAt: Date.now() }, text: "hi", participants: ["U-carol", "U-alice"] },
+        claimsDm("U-sam2"),
+      ),
     );
-    assert.equal(res.status, 404);
-    assert.equal(((await res.json()) as any).error, "group_not_found");
+    assert.equal(result.code, "group_not_found");
   });
 
   it("rejects specifying participants together with a recipient or channel", async () => {
-    const r1 = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, message: "x", participants: ["U-alice"], recipient: "Alice" },
-      { "x-agent-capability": await capDm("U-carol") },
+    const r1 = failure(
+      await createCron(
+        { schedule: { firstFireAt: Date.now() }, text: "x", participants: ["U-alice"], recipient: "Alice" },
+        claimsDm("U-carol"),
+      ),
     );
-    assert.equal(r1.status, 400);
-    const r2 = await post(
-      "/v1/crons",
-      { schedule: { firstFireAt: Date.now() }, message: "x", participants: ["U-alice"], channel: "eng" },
-      { "x-agent-capability": await capDm("U-carol") },
+    assert.equal(r1.code, "bad_request");
+    const r2 = failure(
+      await createCron(
+        { schedule: { firstFireAt: Date.now() }, text: "x", participants: ["U-alice"], channel: "eng" },
+        claimsDm("U-carol"),
+      ),
     );
-    assert.equal(r2.status, 400);
+    assert.equal(r2.code, "bad_request");
   });
 
   it("POST /v1/reach sends a teammate DM immediately and creates NO cron row", async () => {
-    const before = (await (
-      await fetch(`${base}/v1/crons`, { headers: { "x-agent-capability": await capDm("U-carol") } })
-    ).json()) as any;
+    const before = await built.app.listCrons();
     const res = await post(
       "/v1/reach",
       { text: "ship it 🚀", recipient: "Alice" },
@@ -323,10 +270,7 @@ describe("agent → teammate DM: the cron recipient route (§10)", () => {
     assert.ok(body.deliveryId, "returns the enqueued delivery id");
     assert.equal(body.recipient.principalId, "U-alice");
     assert.equal(body.recipient.displayName, "Alice");
-    const after = (await (
-      await fetch(`${base}/v1/crons`, { headers: { "x-agent-capability": await capDm("U-carol") } })
-    ).json()) as any;
-    assert.equal((after.crons ?? []).length, (before.crons ?? []).length);
+    assert.equal((await built.app.listCrons()).length, before.length);
     const pending = await built.app.pendingDeliveries("principal");
     const d = pending.find((x) => x.id === body.deliveryId);
     assert.ok(d, "delivery is in the principal queue");

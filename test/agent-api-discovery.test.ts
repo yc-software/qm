@@ -8,12 +8,11 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const SECRET = "discovery-test-secret".repeat(3);
-const ORG = scopeId("org", "default-org");
 
 async function start(swarmsEnabled = true) {
   const built = buildApp(
@@ -37,7 +36,6 @@ async function start(swarmsEnabled = true) {
 const capFor = (
   actorId: string,
   opts: {
-    memory?: { write?: ScopeId; orgWrite?: ScopeId; read: ScopeId[] };
     liveActor?: boolean;
     liveAuthor?: boolean;
     grants?: string[];
@@ -48,7 +46,6 @@ const capFor = (
       actorId,
       scopeId: scopeId("personal", actorId),
       exp: Date.now() + CAPABILITY_TTL_MS,
-      ...(opts.memory ? { memory: opts.memory } : {}),
       ...(opts.liveActor ? { liveActor: true } : {}),
       ...(opts.liveAuthor ? { liveAuthor: true } : {}),
       ...(opts.grants ? { grants: opts.grants } : {}),
@@ -62,7 +59,7 @@ const listApis = async (base: string, cap: string) => {
 };
 const paths = (body: any): string[] => body.endpoints.map((e: any) => e.path);
 
-test("discovery for a regular user: base surface + whoami, no admin rows, no memory rows without claims", async () => {
+test("discovery for a regular user: base surface + whoami, no admin rows, no memory rows", async () => {
   const s = await start();
   try {
     const { status, body } = await listApis(s.base, await capFor("U1"));
@@ -77,7 +74,7 @@ test("discovery for a regular user: base surface + whoami, no admin rows, no mem
     assert.ok(p.includes("/v1/keychain/overview"), "the keychain overview gate is represented in discovery");
     assert.ok(p.includes("/v1/admin/whoami"), "everyone can ask whether the user is an admin");
     assert.ok(!p.includes("/v1/admin/scopes"), "admin rows must not render for a non-admin");
-    assert.ok(!p.some((x: string) => x.startsWith("/v1/memory")), "no memory rows without memory claims");
+    assert.ok(!p.some((x: string) => x.startsWith("/v1/memory")), "memory is a typed tool, not a discovery row");
     assert.doesNotMatch(JSON.stringify(body), /auto-grant/i);
     assert.match(
       body.endpoints.find((endpoint: any) => endpoint.path === "/v1/connectors/oauth/consent/mint")?.summary ?? "",
@@ -87,27 +84,6 @@ test("discovery for a regular user: base surface + whoami, no admin rows, no mem
       body.endpoints.find((endpoint: any) => endpoint.path === "/v1/loops")?.summary ?? "",
       /governor.*staleFireMs/,
     );
-  } finally {
-    await s.close();
-  }
-});
-
-test("discovery follows the token's memory claims, including the org selector", async () => {
-  const s = await start();
-  try {
-    const U1 = scopeId("personal", "U1");
-    const hasOrgSelector = (body: any) => body.endpoints.some((e: any) => e.summary.includes('"scope":"org"'));
-    const plain = await listApis(s.base, await capFor("U1", { memory: { write: U1, read: [U1] } }));
-    assert.ok(paths(plain.body).includes("/v1/memory/self"));
-    assert.ok(!hasOrgSelector(plain.body), "no org selector without orgWrite");
-
-    const org = await listApis(
-      s.base,
-      await capFor("admin-alice", {
-        memory: { write: scopeId("personal", "admin-alice"), orgWrite: ORG, read: [ORG] },
-      }),
-    );
-    assert.ok(hasOrgSelector(org.body), "orgWrite tokens see the org selector row");
   } finally {
     await s.close();
   }

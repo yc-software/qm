@@ -8,8 +8,6 @@ import type { Grant, ScopeId } from "../src/types.ts";
 import { parseScopeId, scopeId } from "../src/types.ts";
 import type { ArtifactHome, ArtifactType } from "../src/api/artifact-share.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
-import { shareArtifact as shareRoute } from "../src/api/routes/surface.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { splitToScope, triggerBlocksSharedSkill } from "../src/api/artifact-share.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -623,50 +621,7 @@ test("a trigger (no liveActor) cannot MOVE a personal skill INTO a shared scope 
   assert.equal(state.moves[0]!.toScope, scopeId("channel", "C1"));
 });
 
-function callShareRoute(state: FakeState, capability: CapabilityClaims | null, body: unknown) {
-  const out: { status?: number; body?: any } = {};
-  const res = {
-    getHeader() {},
-    writeHead(s: number) {
-      out.status = s;
-    },
-    end(d?: string) {
-      out.body = d ? JSON.parse(d) : undefined;
-    },
-  };
-  const ctx = { res, deps: { control: createControlService(fakeApp(state)) }, body, capability } as unknown as ApiCtx;
-  return shareRoute(ctx).then(() => out);
-}
-
-test("POST /v1/share: a single toScope (scope id) → 200 grant; a name → directory-resolved", async () => {
-  const byScope = await callShareRoute(await ownerState(), cap("U1"), {
-    type: "file",
-    id: "F1",
-    toScope: scopeId("channel", "C1"),
-  });
-  assert.equal(byScope.status, 200);
-  assert.equal(byScope.body.verb, "share");
-  assert.equal(byScope.body.target.scope, scopeId("channel", "C1"));
-
-  const byName = await callShareRoute(await ownerState(), cap("U1"), { type: "file", id: "F1", toScope: "carol" });
-  assert.equal(byName.status, 200);
-  assert.equal(byName.body.target.label, "Carol");
-});
-
-test("POST /v1/share: no capability → 403; bad type/missing fields → 400; non-admin org cede → 403", async () => {
-  const state = await ownerState();
-  assert.equal((await callShareRoute(state, null, { type: "file", id: "F1", toScope: "org" })).status, 403);
-  assert.equal((await callShareRoute(state, cap("U1"), { type: "bogus", id: "F1", toScope: "org" })).status, 400);
-  assert.equal((await callShareRoute(state, cap("U1"), { type: "file", toScope: "org" })).status, 400);
-  assert.equal((await callShareRoute(state, cap("U1"), { type: "file", id: "F1" })).status, 400);
-  assert.equal(
-    (await callShareRoute(state, cap("U1"), { type: "skill", id: "S1", toScope: "org" })).status,
-    403,
-    "non-admin org skill cede → forbidden (403)",
-  );
-});
-
-test("splitToScope: tool and route classify identically — a real scope id vs a name (incl. a colon name)", () => {
+test("splitToScope classifies a real scope id vs a name (incl. a colon name)", () => {
   assert.deepEqual(splitToScope("org"), { scope: "org" });
   assert.deepEqual(splitToScope("channel:C1"), { scope: "channel:C1" });
   assert.deepEqual(splitToScope("personal:U7"), { scope: "personal:U7" });

@@ -5,7 +5,8 @@ import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
 import { createMockHarness } from "./support/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
+import type { CapabilityClaims } from "../src/auth/capability-token.ts";
+import { createControlService } from "../src/api/control-service.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -83,38 +84,29 @@ async function fixture(t: TestContext) {
     b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
-  const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room") =>
-    mintCapabilityToken(
-      {
-        actorId,
-        scopeId,
-        members,
-        liveActor: true,
-        exp: Date.now() + 600_000,
-        destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
-      },
-      SECRET,
-    );
-  const request = async (method: string, path: string, token: string, body?: unknown) => {
-    const response = await fetch(base + path, {
-      method,
-      headers: { "x-agent-capability": token, "content-type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
-    return {
-      status: response.status,
-      body: (await response.json()) as { cron: { id: string; runAs?: string }; runs?: Array<{ status: string }> },
-    };
+  const control = createControlService(b.app, b.scheduler, b.admin);
+  const cap = (actorId: string, scopeId: CapabilityClaims["scopeId"] = "channel:public-room"): CapabilityClaims => ({
+    actorId,
+    scopeId,
+    members,
+    liveActor: true,
+    exp: Date.now() + 600_000,
+    destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
+  });
+  const createCron = async (claims: CapabilityClaims, title: string, task: string) => {
+    const created = await control.createCron({ title, schedule: { everyMs: 3600000 }, action: task }, claims);
+    assert.ok(created.ok, JSON.stringify(created));
+    return created.cron.id;
   };
-  const awaitFire = async (id: string, token: string) => {
+  const awaitFire = async (id: string, claims: CapabilityClaims) => {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
-      const response = await request("GET", `/v1/crons/${id}/runs`, token);
-      assert.equal(response.status, 200, JSON.stringify(response.body));
-      if (response.body.runs?.some((f) => f.status !== "running")) return response.body.runs;
+      const response = await control.getCronRuns(id, {}, claims);
+      assert.ok(response.ok, JSON.stringify(response));
+      if (response.runs.some((f) => f.status !== "running")) return response.runs;
       await new Promise((r) => setTimeout(r, 20));
     }
-    assert.fail("HTTP scheduler fire did not finish within 10s");
+    assert.fail("scheduler fire did not finish within 10s");
   };
   const turn = async (
     text: string,
@@ -146,7 +138,7 @@ async function fixture(t: TestContext) {
     const result = (await response.json()) as { status: string; reply?: string; reason?: string };
     return { ...result, http: response.status };
   };
-  return { ...b, cap, request, turn, roster, awaitFire };
+  return { ...b, control, cap, createCron, turn, roster, awaitFire };
 }
 
 test("HTTP Open continuity: personal sandbox follows owner into shared channel and back, never another member", async (t) => {
@@ -176,47 +168,31 @@ test("HTTP Open continuity: only the owner or a write grantee edits; grantee edi
   const b = await fixture(t);
   const resource = await b.sandboxResources.create("alice", "personal:alice", "sprites", "cron-proof");
   const action = `!proof ${JSON.stringify({ id: resource.id, command: "printf cron-owner-resource" })}`;
-  const owner = await b.cap("alice");
-  const member = await b.cap("bob");
-  const created = await b.request("POST", "/v1/crons", owner, {
-    title: "Continuity proof",
-    schedule: { everyMs: 3600000 },
-    task: action,
-  });
-  assert.equal(created.status, 200, JSON.stringify(created.body));
-  const id = created.body.cron.id as string;
-  assert.equal((await b.request("PATCH", `/v1/crons/${id}`, member, { title: "Unshared edit" })).status, 403);
-  const shared = await b.request("POST", "/v1/share", owner, {
-    type: "cron",
-    id,
-    toScope: "personal:bob",
-    permission: "write",
-  });
-  assert.equal(shared.status, 200, JSON.stringify(shared.body));
-  const edit = await b.request("PATCH", `/v1/crons/${id}`, member, { title: "Member edited proof" });
-  assert.equal(edit.status, 200, JSON.stringify(edit.body));
+  const owner = b.cap("alice");
+  const member = b.cap("bob");
+  const id = await b.createCron(owner, "Continuity proof", action);
+  const unshared = await b.control.patchCron(id, { title: "Unshared edit" }, member);
+  assert.equal(unshared.ok ? "" : unshared.code, "forbidden");
+  const shared = await b.control.shareArtifact({ type: "cron", id, scope: "personal:bob", permission: "write" }, owner);
+  assert.ok(shared.ok, JSON.stringify(shared));
+  const edit = await b.control.patchCron(id, { title: "Member edited proof" }, member);
+  assert.ok(edit.ok, JSON.stringify(edit));
   assert.equal((await b.crons.get(id))?.owner, "alice");
   const notices = await b.deliveries.pending("principal");
   assert.equal(notices.length, 1);
   assert.equal(notices[0]!.destination.target, "alice");
   assert.match(notices[0]!.text, /bob.*renamed/);
-  assert.equal(
-    (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("stranger"), { title: "hijacked" })).status,
-    403,
-  );
-  const fired = await b.request("POST", `/v1/crons/${id}/run`, owner, {});
-  assert.equal(fired.status, 200, JSON.stringify(fired.body));
+  const hijack = await b.control.patchCron(id, { title: "hijacked" }, b.cap("stranger"));
+  assert.equal(hijack.ok ? "" : hijack.code, "forbidden");
+  const fired = await b.control.runCron(id, owner);
+  assert.ok(fired.ok, JSON.stringify(fired));
   const log = await b.awaitFire(id, owner);
-  assert.ok(log?.length, "HTTP scheduler created a fire log");
+  assert.ok(log?.length, "the scheduler created a fire log");
   assert.ok(
     (await b.deliveries.pending("slack")).some((d) => d.text.includes("cron-owner-resource")),
     JSON.stringify(log),
   );
-  assert.equal(
-    (await b.request("PATCH", `/v1/crons/${id}`, await b.cap("alice", "personal:alice"), { title: "Back in personal" }))
-      .status,
-    200,
-  );
+  assert.ok((await b.control.patchCron(id, { title: "Back in personal" }, b.cap("alice", "personal:alice"))).ok);
   assert.equal((await b.deliveries.pending("principal")).length, 1, "owner edits do not notify themselves");
 });
 
@@ -229,15 +205,13 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
     envKey: "CONTINUITY_PROOF_TOKEN",
     secret: "synthetic-owner-sentinel",
   });
-  const owner = await b.cap("alice");
-  const created = await b.request("POST", "/v1/crons", owner, {
-    title: "Owner keychain proof",
-    schedule: { everyMs: 3600000 },
-    task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
-  });
-  assert.equal(created.status, 200, JSON.stringify(created.body));
-  const id = created.body.cron.id;
-  assert.equal((await b.request("POST", `/v1/crons/${id}/run`, owner, {})).status, 200);
+  const owner = b.cap("alice");
+  const id = await b.createCron(
+    owner,
+    "Owner keychain proof",
+    `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
+  );
+  assert.ok((await b.control.runCron(id, owner)).ok);
   const log = await b.awaitFire(id, owner);
   assert.ok(
     (await b.deliveries.pending("slack")).some((d) => d.text.includes("owner-credential-present")),
@@ -273,13 +247,11 @@ for (const isPrivate of [false, true]) {
         envKey: "CONTINUITY_VETO_TOKEN",
         secret: "synthetic-veto-sentinel",
       });
-      const response = await b.request("POST", "/v1/crons", await b.cap("alice"), {
-        title: "Opt-out proof",
-        schedule: { everyMs: 3600000 },
-        task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
-      });
-      assert.equal(response.status, 200, JSON.stringify(response.body));
-      const id = response.body.cron.id;
+      const id = await b.createCron(
+        b.cap("alice"),
+        "Opt-out proof",
+        `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
+      );
       const initial = await b.scheduler.runNow(id);
       assert.equal(initial.started, true);
       if (initial.started) await initial.settled;

@@ -12,7 +12,7 @@ import { createServer as httpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { searchAcrossScopes } from "../src/memory/cross-scope.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 
 const fact = "Prefers validating changes with before-and-after browser tests.";
@@ -163,22 +163,10 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   assert.ok(!result.reply.includes(otherFact));
   const memoryBlock = result.reply.split("## What you remember")[1] ?? "";
   assert.ok(memoryBlock.indexOf(fact) < memoryBlock.indexOf("warehouse") || !memoryBlock.includes("warehouse"));
-  const cap = await mintCapabilityToken(
-    {
-      actorId: "U1",
-      scopeId: "personal:U1",
-      exp: Date.now() + CAPABILITY_TTL_MS,
-      memory: { write: "personal:U1", read: ["personal:U1"] },
-    },
-    TEST_CAPABILITY_SECRET,
-  );
-  const grep = await post("/v1/memory/search", { query: "shipment 119" }, { "x-agent-capability": cap });
-  assert.equal(grep.status, 200);
-  const matches = (await grep.json()) as { results: Array<{ fact: string }> };
-  assert.equal(matches.results.length, 1);
-  assert.match(matches.results[0]!.fact, /Release 119/);
-  const forbidden = await post("/v1/memory/search", { query: "confidential" }, { "x-agent-capability": cap });
-  assert.deepEqual(((await forbidden.json()) as { results: unknown[] }).results, []);
+  const matches = await searchAcrossScopes(built.memory, ["personal:U1"], "shipment 119", 20, { actorId: "U1" });
+  assert.equal(matches.length, 1);
+  assert.match(matches[0]!.fact, /Release 119/);
+  assert.deepEqual(await searchAcrossScopes(built.memory, ["personal:U1"], "confidential", 20, { actorId: "U1" }), []);
   assert.ok(inputs.every((batch) => batch.every((text) => !text.includes(otherFact))));
 
   const personalFact = (await built.memory.facts!("personal:U1")).find((row) => row.text === fact)!;
