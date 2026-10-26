@@ -19,7 +19,6 @@ struct Lease {
     thief: i32,
     victim: i32,
     released: bool,
-    returned: bool,
 }
 
 pub struct Scope {
@@ -35,6 +34,14 @@ pub struct Scope {
 impl Scope {
     pub fn new(owner: i32, foreground: i32, keyboard_owner: i32, target: i32) -> Self {
         Self { owner, foreground, keyboard_owner, targets: HashSet::from([target]), leases: Vec::new(), yielded: false, activation: None }
+    }
+
+    pub fn refresh(&mut self, foreground: i32, keyboard_owner: i32) -> i32 {
+        if self.activation.is_none() && self.leases.iter().all(|lease| lease.thief != foreground && lease.thief != keyboard_owner) {
+            self.foreground = foreground;
+            self.keyboard_owner = keyboard_owner;
+        }
+        self.foreground
     }
 
     pub fn begin_activation(&mut self, target: i32) -> bool {
@@ -85,7 +92,7 @@ impl Scope {
                     && self.targets.contains(&subject)
                     && (destination == self.keyboard_owner || self.leases.last().is_some_and(|lease| lease.thief == destination)) =>
             {
-                self.leases.push(Lease { thief: subject, victim: destination, released: false, returned: false });
+                self.leases.push(Lease { thief: subject, victim: destination, released: false });
                 Decision::Suppress
             }
             KEY_FOCUS_CHANGED => {
@@ -101,7 +108,7 @@ impl Scope {
                 Decision::Pass
             }
             KEY_FOCUS_RETURNED => {
-                if self.leases.last().is_some_and(|lease| destination == lease.victim && lease.released && !lease.returned) {
+                if self.leases.last().is_some_and(|lease| destination == lease.victim && lease.released) {
                     self.leases.pop();
                     Decision::Suppress
                 } else {
@@ -139,6 +146,29 @@ impl Scope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_switch_updates_the_victim_without_rewriting_live_leases() {
+        let mut scope = Scope::new(100, 200, 200, 300);
+        assert_eq!(scope.refresh(400, 400), 400);
+        assert!(scope.begin_activation(300));
+        assert_eq!(scope.keyboard(0, 300), Decision::Redirect(400));
+        scope.end_activation();
+        assert_eq!(scope.notification(400, KEY_FOCUS_TAKEN, 300, 0), Decision::Suppress);
+        assert_eq!(scope.refresh(300, 300), 400);
+        assert_eq!(scope.keyboard(0, 300), Decision::Redirect(400));
+        assert_eq!(scope.refresh(500, 500), 500);
+        assert_eq!(scope.notification(500, KEY_FOCUS_TAKEN, 300, 0), Decision::Suppress);
+        assert_eq!(scope.notification(300, KEY_FOCUS_CHANGED, 300, 8), Decision::Release(8));
+        scope.released(true);
+        assert_eq!(scope.notification(500, KEY_FOCUS_RETURNED, 0, 0), Decision::Suppress);
+        assert_eq!(scope.notification(300, KEY_FOCUS_CHANGED, 300, 7), Decision::Release(7));
+        scope.released(true);
+        assert_eq!(scope.notification(400, KEY_FOCUS_RETURNED, 0, 0), Decision::Suppress);
+        assert_eq!(scope.refresh(500, 500), 500);
+        assert!(scope.begin_activation(300));
+        assert_eq!(scope.keyboard(0, 300), Decision::Redirect(500));
+    }
 
     #[test]
     fn foreground_and_human_input_continue() {

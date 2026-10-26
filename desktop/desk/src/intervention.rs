@@ -197,17 +197,13 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
         let source = CGEvent::integer_value_field(Some(value), CGEventField::EventSourceUnixProcessID) as i32;
         if source != std::process::id() as i32 && matches!(kind.0, 1 | 3 | 25 | 22 | 10) {
             let destination = CGEvent::integer_value_field(Some(value), CGEventField::EventTargetUnixProcessID) as i32;
-            let pid = if matches!(kind.0, 1 | 3 | 25 | 22) {
-                let window = CGEvent::integer_value_field(Some(value), CGEventField(51));
-                u32::try_from(window)
-                    .ok()
-                    .filter(|id| *id != 0)
-                    .and_then(crate::mac::input_window_geometry)
-                    .map(|(owner, _)| owner)
-                    .unwrap_or(destination)
-            } else {
-                destination
-            };
+            let window = CGEvent::integer_value_field(Some(value), CGEventField(51));
+            let pid = u32::try_from(window)
+                .ok()
+                .filter(|id| *id != 0)
+                .and_then(crate::mac::input_window_geometry)
+                .map(|(owner, _)| owner)
+                .unwrap_or(destination);
             activity.record(pid, Instant::now());
         }
         return event.as_ptr();
@@ -287,6 +283,17 @@ pub fn include_target(pid: i32) {
         Ok(Err(error)) => context.fail(error),
         Err(_) => context.fail("Focus protection target registration did not complete within 350 ms"),
     }
+}
+
+pub fn refresh_focus(foreground: i32) -> Result<i32, Failure> {
+    let keyboard_owner = keyboard_focus_pid()?;
+    let context = ACTIVE
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
+        .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Focus protection is unavailable"))?;
+    let mut scope = context.scope.lock().map_err(|_| Failure::new(ErrorCode::ActionFailed, "Focus protection state is unavailable"))?;
+    Ok(scope.refresh(foreground, keyboard_owner))
 }
 
 pub struct ActivationTransition {

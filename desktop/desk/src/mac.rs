@@ -1614,7 +1614,9 @@ impl Desk {
 
     fn observe(&mut self, app: &App, shot: bool, diff: bool) -> Result<Observation, Failure> {
         self.sync_app(app);
-        self.wait_for_user(app)?;
+        self.activity.session(app.pid, true);
+        self.wait_for_user(app, true)?;
+        let observed_at = Instant::now();
         if let Some(at) = self.touched.remove(&app.pid) {
             let (_, w) = window(app)?;
             settle(&w, at, self.observers.get(&app.pid).map(|o| &*o.notices));
@@ -1726,12 +1728,11 @@ impl Desk {
                 ids: walk.ids.carry(),
             },
         );
-        self.activity.session(app.pid, true);
-        self.activity.clear(app.pid);
+        self.activity.clear(app.pid, observed_at);
         Ok(obs)
     }
 
-    fn wait_for_user(&self, app: &App) -> Result<(), Failure> {
+    fn wait_for_user(&self, app: &App, observing: bool) -> Result<(), Failure> {
         let start = Instant::now();
         loop {
             if cancellation::cancelled() {
@@ -1742,6 +1743,17 @@ impl Desk {
             }
             match self.activity.gate(app.pid, start, Instant::now()) {
                 crate::activity::Gate::Ready => return Ok(()),
+                crate::activity::Gate::Changed if observing => return Ok(()),
+                crate::activity::Gate::Busy(left) => {
+                    return Err(fail(
+                        ErrorCode::ActionFailed,
+                        format!(
+                            "The user is still interacting with '{}'; wait {} seconds and retry.",
+                            app.name,
+                            left.as_secs_f64().ceil() as u64
+                        ),
+                    ))
+                }
                 crate::activity::Gate::Wait(duration) => cancellation::wait(duration),
                 crate::activity::Gate::Changed => {
                     return Err(fail(
@@ -1802,7 +1814,7 @@ impl Desk {
                 }
             }
             let paced = self
-                .wait_for_user(&app)
+                .wait_for_user(&app, false)
                 .and_then(|_| {
                     focus
                         .as_ref()
@@ -1824,6 +1836,11 @@ impl Desk {
                 break;
             }
             completed += 1;
+            if let Err(mut error) = focus.as_ref().map_or(Ok(()), |f| f.check()) {
+                error.action = Some(completed);
+                failure = Some(error);
+                break;
+            }
             previous = Instant::now();
         }
         if let Some(mut guard) = focus.take() {
@@ -2266,6 +2283,20 @@ pub(crate) fn menu_observer(pid: i32, state: std::sync::Arc<crate::intervention:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn observation_gate_recovers_after_target_activity_but_actions_require_observation() {
+        use super::*;
+        let desk = Desk::default();
+        let app = App { name: "Test target".into(), bundle: None, pid: 12345, active: false, launched: None, path: None };
+        desk.activity.session(app.pid, true);
+        desk.activity.record(app.pid, Instant::now() - Duration::from_secs(6));
+        assert!(desk.wait_for_user(&app, false).is_err());
+        assert!(desk.wait_for_user(&app, true).is_ok());
+        assert!(desk.wait_for_user(&app, false).is_err());
+        desk.activity.clear(app.pid, Instant::now());
+        assert!(desk.wait_for_user(&app, false).is_ok());
+    }
+
     #[test]
     fn web_readiness_waits_for_missing_electron_content_and_stops_at_limits() {
         use super::web_ready;
