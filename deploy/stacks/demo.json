@@ -2,18 +2,8 @@
   "contract": 1,
   "orgId": "demo",
   "publicUrl": "https://demo-agent.example.com",
-  "target": "fly",
-  "appPrefix": "demo-agent",
-  "region": "sjc",
-  "flyOrg": "personal",
-  "imageFrom": "qm",
-  "sandbox": {
-    "app": "demo-agent-sandboxes"
-  },
+  "target": "docker",
   "services": ["core", "admin", "web-ui", "portal"],
-  "vms": {
-    "core": { "size": "shared-cpu-2x", "memory": "4gb" }
-  },
   "env": {
     "core": {
       "WEB_UI_PUBLIC_URL": "https://demo-agent.example.com/web-ui",

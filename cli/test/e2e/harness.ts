@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,7 +70,7 @@ export function rmDir(path: string): void {
 
 export function writeConfig(
   dir: string,
-  config: Partial<QmConfig> & { orgId: string; target: "docker" | "fly" | "aws" },
+  config: Partial<QmConfig> & { orgId: string; target: "docker" | "aws" },
 ): string {
   const full = {
     contract: 1,
@@ -203,65 +203,4 @@ export function removeStandInImages(services: readonly string[], orgId: string):
       void 0;
     }
   }
-}
-
-export interface FakeFlyOpts {
-  secrets?: string[];
-  apps?: string[];
-  appOwners?: Record<string, string>;
-  failStatusApps?: string[];
-  fail?: string;
-  logPath?: string;
-}
-
-export function fakeFly(dir: string, opts: FakeFlyOpts = {}): string {
-  const secrets = JSON.stringify(opts.secrets ?? []);
-  const apps = JSON.stringify((opts.apps ?? []).map((n) => ({ Name: n })));
-  const appOwners = JSON.stringify(opts.appOwners ?? {});
-  const failStatusApps = JSON.stringify(opts.failStatusApps ?? []);
-  const fail = JSON.stringify(opts.fail ?? "");
-  const binPath = join(dir, "fake-fly.cjs");
-  writeFileSync(
-    binPath,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-if (process.env.FAKE_FLY_LOG) fs.appendFileSync(process.env.FAKE_FLY_LOG, JSON.stringify(args) + "\\n");
-if (args[0] === "status" && ${failStatusApps}.includes(args[args.indexOf("-a") + 1])) { console.error("status: fake fly failure (app not found)"); process.exit(1); }
-if (${fail} && args[0] === ${fail}) { console.error(args[0] + ": fake fly failure (app not found)"); process.exit(1); }
-const has = (a, b) => args[0] === a && args[1] === b;
-if (has("apps", "create")) { console.log("created"); }
-else if (has("apps", "list")) { console.log(JSON.stringify(${apps})); }
-else if (has("secrets", "list")) { for (const s of ${secrets}) console.log(s); }
-else if (has("mpg", "list")) { console.log("pg-1 test-pg"); }
-else if (args[0] === "status") {
-  const app = args[args.indexOf("-a") + 1];
-  const owner = ${appOwners}[app];
-  if (args.includes("--json")) console.log(JSON.stringify({ Machines: [{ config: { image: "registry.fly.io/fake:latest", env: owner ? { QM_DEPLOYMENT_ID: owner } : {} } }] }));
-  else console.log("App status: running");
-}
-else if (args[0] === "logs") { console.log("log line from fake fly"); }
-else if (args[0] === "scale") { console.log("scaled"); }
-else if (args[0] === "deploy") { console.log("deployed"); }
-else if (args[0] === "ips") { console.log("allocated"); }
-else { console.log("ok"); }
-`,
-  );
-  chmodSync(binPath, 0o755);
-  return binPath;
-}
-
-export function fakeFlyEnv(opts: FakeFlyOpts = {}): { env: Record<string, string>; logPath: string; dir: string } {
-  const dir = tmp("fly");
-  const logPath = join(dir, "fly.log");
-  const flyBin = fakeFly(dir, { ...opts, logPath });
-  return { env: { FLY_BIN: flyBin, FAKE_FLY_LOG: logPath }, logPath, dir };
-}
-
-export function fakeFlyCommands(logPath: string): string[][] {
-  if (!existsSync(logPath)) return [];
-  return readFileSync(logPath, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((l) => JSON.parse(l) as string[]);
 }

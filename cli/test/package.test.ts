@@ -103,7 +103,7 @@ test(
       await new Promise<void>((resolve, reject) => registry!.once("error", reject).listen(0, "127.0.0.1", resolve));
       const registryUrl = `http://127.0.0.1:${(registry.address() as AddressInfo).port}/`;
       const consumers = [
-        { dir: deployment, org: "acme", target: "fly" },
+        { dir: deployment, org: "acme", target: "docker" },
         { dir: awsDeployment, org: "acme-aws", target: "aws" },
       ] as const;
       for (const consumer of consumers) {
@@ -165,7 +165,7 @@ test(
 
       assert.ok(existsSync(join(deployment, "deployment.md")));
       assert.ok(existsSync(join(deployment, ".codex", "skills", "deploy-qm", "SKILL.md")));
-      for (const provider of ["fly", "aws", "slack"]) {
+      for (const provider of ["aws", "slack"]) {
         assert.ok(existsSync(join(deployment, ".codex", "skills", "deploy-qm", "references", `${provider}.md`)));
       }
       assert.equal(statSync(join(deployment, ".env")).mode & 0o777, 0o600);
@@ -193,38 +193,22 @@ test(
       });
       assert.match(dockerPlan, /Plan only/);
       assert.doesNotMatch(dockerPlan, /\bPI_(?:MODEL|DETECT_MODEL)\b/);
-      const fakeFly = join(dir, "fly");
-      writeFileSync(fakeFly, '#!/bin/sh\ncase "$1 $2" in\n"secrets list") exit 0;;\n*) printf "{}";;\nesac\n');
-      chmodSync(fakeFly, 0o755);
-      const flyPlan = execFileSync(bin, ["plan"], {
-        cwd: deployment,
-        encoding: "utf8",
-        env: { ...env, FLY_BIN: fakeFly },
-      });
-      assert.match(flyPlan, /Plan only/);
-      assert.doesNotMatch(flyPlan, /source checkout|deploy\/core\/Dockerfile/);
-      const generatedCore = join(deployment, ".generated", "fly", "acme", "core.fly.toml");
-      assert.ok(existsSync(generatedCore));
-      const generatedCoreToml = readFileSync(generatedCore, "utf8");
-      assert.doesNotMatch(generatedCoreToml, /^\s*PI_(?:MODEL|DETECT_MODEL)\s*=/m);
-      assert.match(generatedCoreToml, /\[\[restart\]\]\n\s*policy = "always"/);
-      assert.match(generatedCoreToml, /\[\[vm\]\]\n\s*size = "performance-2x"\n\s*memory = "4gb"/);
       assert.match(
         execFileSync(bin, ["sandbox", "build", "--dry-run"], { cwd: deployment, encoding: "utf8", env }),
         /qm-sandbox-base@sha256:a{64}/,
       );
-      const outputs = JSON.parse(
-        execFileSync(bin, ["outputs", "--json"], { cwd: deployment, encoding: "utf8", env }),
-      ) as {
-        webUiUrl?: string;
-        adminOnboardingUrl?: string;
-      };
-      assert.equal(outputs.webUiUrl, "https://acme-portal.fly.dev");
-      assert.equal(outputs.adminOnboardingUrl, "https://acme-portal.fly.dev/admin/onboarding");
       execFileSync(bin, ["slack", "render"], { cwd: deployment, stdio: "pipe", env });
       execFileSync(bin, ["conformance", "--static"], { cwd: deployment, stdio: "pipe", env });
       assert.match(execFileSync(awsBin, ["check"], { cwd: awsDeployment, encoding: "utf8", env }), /check passed/);
       execFileSync(awsBin, ["infra", "render"], { cwd: awsDeployment, stdio: "pipe", env });
+      const outputs = JSON.parse(
+        execFileSync(awsBin, ["outputs", "--json"], { cwd: awsDeployment, encoding: "utf8", env }),
+      ) as {
+        webUiUrl?: string;
+        adminOnboardingUrl?: string;
+      };
+      assert.equal(outputs.webUiUrl, "https://acme-aws.example.com");
+      assert.equal(outputs.adminOnboardingUrl, "https://acme-aws.example.com/admin/onboarding");
       const awsConfigPath = join(awsDeployment, "qm.config.jsonc");
       writeFileSync(
         awsConfigPath,
@@ -298,9 +282,8 @@ else if (command === "secretsmanager get-secret-value") {
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/aws/microvm-agent/Dockerfile"));
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/aws/microvm-agent/agent.mjs"));
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/deployment.md"));
-      assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/references/fly.md"));
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/references/porter.md"));
-      assert.ok(packed[0]!.files.some(({ path }) => path === "templates/fly/core.toml"));
+      assert.ok(!packed[0]!.files.some(({ path }) => path.startsWith("templates/fly/")));
       assert.ok(!packed[0]!.files.some(({ path }) => path === "src/contract.ts" || path === "bin/qm.ts"));
     } finally {
       if (registry) await new Promise<void>((resolve) => registry!.close(() => resolve()));

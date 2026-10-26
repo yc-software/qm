@@ -1,9 +1,8 @@
 # Portal — the public SSO front door
 
-The portal is the **one** publicly-reachable app in the stack. It replaces the per-surface
-`fly proxy` tunnels (one per app, each on its own local port) with a single signed-in URL that
+The portal is the **one** publicly-reachable app in the stack: a single signed-in URL that
 fronts every surface. It does provider-neutral **OIDC** sign-in (Google Workspace
-is the email-first deployment default) and reverse-proxies — over Fly's private 6PN — to the
+is the email-first deployment default) and reverse-proxies — over the private network — to the
 surfaces, which all stay **private** (no public `[http_service]` of their own):
 
 | Path        | → upstream        | Notes                                                                         |
@@ -194,8 +193,7 @@ most 64 — the core grants at most 64 claim slots per request) per
 claim horizon); the portal refuses to boot outside those ranges rather than
 silently serving 429 to everyone. IPv6 clients are bucketed per /64, not per
 address, so a visitor with a routed prefix can't rotate through fresh budgets.
-The client address comes from `clientIpOf` — on Fly that's `fly-client-ip`;
-elsewhere set `PORTAL_XFF_TRUSTED_HOPS` when a reverse proxy fronts the portal,
+The client address comes from `clientIpOf` — set `PORTAL_XFF_TRUSTED_HOPS` when a reverse proxy fronts the portal,
 or every visitor (and every crawler that accepts HTML) shares the socket
 address's one bucket.
 
@@ -293,7 +291,7 @@ npm test
 ```
 
 See **`deploy/README.md` → Portal** for the public bring-up (IPs + cert, DNS, the Slack OIDC
-app, and secrets) and `cli/templates/fly/portal.toml`.
+app, and secrets).
 
 With embedded auth, trusted OIDC, and `PORTAL_TRUSTED_OIDC_LABEL` explicitly set,
 all email sign-in pages offer a link

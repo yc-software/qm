@@ -546,7 +546,6 @@ const config: QmConfig = {
   imageOverrides: {},
   sandbox: {
     backend: "sprites",
-    app: "acme-sandboxes",
     secretEnv: ["ACME_API_KEY"],
   },
   env: {
@@ -612,7 +611,7 @@ test("AWS environment derives identity, public URLs, private wiring, and MicroVM
 
 test("AWS hosting preserves an explicit publishing provider independently of sandbox selection", () => {
   for (const sandbox of [config.sandbox, undefined]) {
-    for (const provider of ["fly", "porter"]) {
+    for (const provider of ["porter", "e2b"]) {
       const selected: QmConfig = {
         ...config,
         sandbox,

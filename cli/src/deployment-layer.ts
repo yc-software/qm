@@ -151,7 +151,7 @@ function defaultCoreUrl(config: QmConfig): URL {
 
 export class CoreUnreachableError extends CliError {}
 
-export const CONNECTIVITY_CODES = new Set([
+const CONNECTIVITY_CODES = new Set([
   "ECONNREFUSED",
   "ECONNRESET",
   "ENOTFOUND",

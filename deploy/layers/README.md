@@ -12,7 +12,7 @@ upstream; `upstream-pr` checks that boundary when a contribution is requested.
 ## Creating a layer
 
 ```bash
-node cli/bin/qm.ts init deploy/layers/<org> --org <slug> --target <fly-or-aws>
+node cli/bin/qm.ts init deploy/layers/<org> --org <slug> --target aws
 ```
 
 `qm init` writes the deployment config, the secret-name example, the sandbox and provider
@@ -48,8 +48,8 @@ because the workspace symlink points at `cli/`, which is unbuilt.
 
 ## Nearby directories
 
-`deploy/stacks/` holds account-neutral contract fixtures used to test the Fly backend, and
-`deploy/<service>/` holds the service image and Fly templates the CLI renders from. Neither
+`deploy/stacks/` holds account-neutral contract fixtures used to test the CLI, and
+`deploy/<service>/` holds the service images the CLI builds. Neither
 is a place for organization material.
 
 ## The rule

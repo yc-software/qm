@@ -112,26 +112,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     generate: MINT_LOCALLY,
   },
   {
-    name: "FLY_DEPLOY_API_TOKEN",
-    service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "fly" } },
-    description: "Fly publisher token: app-scoped for FLY_DEPLOY_SHARED_APP_NAME, organization-scoped otherwise.",
-  },
-  {
-    name: "FLY_DEPLOY_WIREGUARD_PEERS",
-    service: "core",
-    required: {
-      when: {
-        kind: "all",
-        conditions: [
-          { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "fly" },
-          { kind: "env-present", service: "core", name: "FLY_DEPLOY_SHARED_APP_NAME" },
-        ],
-      },
-    },
-    description: "JSON array of distinct private ingress WireGuard peer configurations for shared Fly publishing.",
-  },
-  {
     name: "PORTER_DEPLOY_API_TOKEN",
     service: "core",
     required: {
@@ -798,7 +778,6 @@ function conditionClause(condition: SecretCondition): string {
 }
 
 export function renderEnvExample(config: QmConfig): string {
-  const generate = (command: string): string => command.replace("<fly-org>", config.flyOrg ?? "<fly-org>");
   const lines = [
     "# Secret values for this deployment. This file holds names only; copy it to .env and fill in",
     "# the values. .env is gitignored. `qm secrets push` transfers values without persisting",
@@ -811,7 +790,7 @@ export function renderEnvExample(config: QmConfig): string {
       ...new Set([...secret.services, ...(secret.aliases ?? []).map((alias) => alias.service)]),
     ].sort();
     lines.push(`# ${secret.description} (${consumers.join(", ")})`);
-    if (secret.generate) lines.push(`# Generate with: ${generate(secret.generate)}`);
+    if (secret.generate) lines.push(`# Generate with: ${secret.generate}`);
     if (secret.managedBy === "terraform") lines.push(`# ${secret.name}=  # populated by Terraform`);
     else if (secret.required) lines.push(`${secret.name}=`);
     else lines.push(`# ${secret.name}=  # optional`);
@@ -831,7 +810,7 @@ export function renderEnvExample(config: QmConfig): string {
     ];
     lines.push(`# ${spec.description} (${spec.service})`);
     lines.push(`# Needed when ${clauses.join(" and ")}${spec.required === false ? " (optional even then)" : ""}.`);
-    if (spec.generate) lines.push(`# Generate with: ${generate(spec.generate)}`);
+    if (spec.generate) lines.push(`# Generate with: ${spec.generate}`);
     lines.push(spec.managedBy === "terraform" ? `# ${spec.name}=  # populated by Terraform` : `# ${spec.name}=`);
     lines.push("");
   }

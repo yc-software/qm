@@ -80,7 +80,6 @@ test("layer sync exposes deployment-layer reconciliation", async () => {
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -138,7 +137,6 @@ test("check --json reserves exit 2 for an unsupported live invocation", async ()
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -161,7 +159,6 @@ test("check flag typos are invocation errors and never print a success first", a
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -190,7 +187,6 @@ test("non-JSON check --live fails when the target has no live drift implementati
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -224,7 +220,7 @@ else console.log("{}");
     services: ["core"],
     env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app", AWS_DEPLOY_IMAGE_VERSION: "1" } },
     imageOverrides: { core: `ghcr.io/acme/core@sha256:${"a".repeat(64)}` },
-    sandbox: { backend: "sprites", app: "acme-sandboxes" },
+    sandbox: { backend: "sprites" },
     aws: {
       accountId: "123456789012",
       region: "us-west-2",
@@ -266,7 +262,7 @@ test("successful check --json --live reports the live-drift clause", async (t) =
     services: ["core"],
     env: { core: { AWS_DEPLOY_IMAGE: "acme-microvm-app", AWS_DEPLOY_IMAGE_VERSION: "1" } },
     imageOverrides: { core: `ghcr.io/acme/core@${digest}` },
-    sandbox: { backend: "sprites", app: "acme-sandboxes" },
+    sandbox: { backend: "sprites" },
     aws: {
       accountId: "123456789012",
       region: "us-west-2",
@@ -393,7 +389,6 @@ test("--tail must be a non-negative integer", async () => {
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
     }),
   );
   try {
@@ -415,7 +410,6 @@ test("--env-file that does not exist is an error", async () => {
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
     }),
   );
   const xdg = mkdtempSync(join(tmpdir(), "qm-xdg-"));
@@ -547,7 +541,6 @@ test("conformance honors the deploy-wide --config and --sandbox-dir flags", asyn
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
     }),
   );
   mkdirSync(join(sandboxDir, "skills", "greet"), { recursive: true });
@@ -580,7 +573,7 @@ test("conformance honors the deploy-wide --config and --sandbox-dir flags", asyn
   }
 });
 
-test("config get prints raw scalars and JSON objects, honors --target, and fails loudly on unset paths", async () => {
+test("config get prints raw scalars and JSON objects, and fails loudly on unset paths", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-dispatch-cfg-"));
   writeFileSync(
     join(dir, CONFIG_FILENAME),
@@ -590,7 +583,7 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
+      sandbox: { backend: "sprites" },
     }),
   );
   try {
@@ -598,14 +591,11 @@ test("config get prints raw scalars and JSON objects, honors --target, and fails
     assert.equal(scalar.exitCode, null, scalar.out);
     assert.equal(scalar.out, "acme", "scalars print raw, with no quotes");
 
-    const nested = await run(["config", "get", "sandbox.app"], dir);
-    assert.equal(nested.out, "acme-sandboxes");
+    const nested = await run(["config", "get", "sandbox.backend"], dir);
+    assert.equal(nested.out, "sprites");
 
     const object = await run(["config", "get", "sandbox"], dir);
-    assert.deepEqual(JSON.parse(object.out), { app: "acme-sandboxes" }, "objects print as JSON");
-
-    const overridden = await run(["config", "get", "target", "--target", "fly"], dir);
-    assert.equal(overridden.out, "fly", "--target overrides the config's durable value, same as every deploy command");
+    assert.deepEqual(JSON.parse(object.out), { backend: "sprites" }, "objects print as JSON");
 
     const missing = await run(["config", "get", "aws.deployRoleArn"], dir);
     assert.equal(missing.exitCode, 1);
@@ -629,7 +619,7 @@ test("--target revalidates the effective provider config", async () => {
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { backend: "sprites", app: "acme-sandboxes" },
+      sandbox: { backend: "sprites" },
     }),
   );
   try {
@@ -648,7 +638,6 @@ test("check --json routes failures on structured clause data, not message sniffi
     publicUrl: "http://localhost:8080",
     target: "docker",
     services: ["core"],
-    sandbox: { app: "acme-sandboxes" },
   };
   const sandboxDir = mkdtempSync(join(tmpdir(), "qm-dispatch-"));
   writeFileSync(join(sandboxDir, CONFIG_FILENAME), JSON.stringify(base));
@@ -660,7 +649,7 @@ test("check --json routes failures on structured clause data, not message sniffi
     JSON.stringify({
       ...base,
       target: "aws",
-      sandbox: { backend: "sprites", app: "acme-sandboxes" },
+      sandbox: { backend: "sprites" },
       aws: {
         accountId: "123456789012",
         region: "us-west-2",
@@ -704,7 +693,6 @@ test("check --json groups a multi-clause failure under each error's own clause, 
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: { app: "acme-sandboxes" },
       env: { core: { MY_API_KEY: "x" } },
     }),
   );

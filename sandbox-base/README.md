@@ -1,10 +1,8 @@
 # Sandbox base image
 
-`fly/Dockerfile` builds the shared sandbox **base image**: a minimal generic toolset
+`sandbox-base/Dockerfile` builds the shared sandbox **base image**: a minimal generic toolset
 (the coding-agent CLIs, AWS CLI v2, the baked Python venv at `/opt/agent-venv`, and the
-optional agentic browser engine behind the `INSTALL_BROWSER_ENGINE` build arg). The
-directory name is historical — it predates the retirement of the Fly Machines sandbox
-backend — and stays because the Dockerfile is consumed by paths that pin it by name.
+optional agentic browser engine behind the `INSTALL_BROWSER_ENGINE` build arg).
 
 Where the image is used:
 
@@ -26,6 +24,6 @@ template named by `E2B_TEMPLATE_ID` (build and publish it from
 arrive through the deployment-layer sync.
 
 Deployment-specific tools are NOT baked here — a deployment stacks them via its
-sandbox layer (`qm sandbox build` over `<deploy dir>/sandbox/`). `fly/tools/x-api` is
+sandbox layer (`qm sandbox build` over `<deploy dir>/sandbox/`). `sandbox-base/tools/x-api` is
 copied into the image by the Dockerfile and its file list feeds the local sandbox
 image fingerprint (`src/sandbox/local-sandbox.ts`).

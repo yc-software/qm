@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { assertNodeEngine, emailTransportPreflight, flySandboxTokenPreflight } from "../preflight.ts";
+import { assertNodeEngine, emailTransportPreflight } from "../preflight.ts";
 import { readEnvFile } from "../util.ts";
 import { CliError, errMessage, header, note, ok, step, warn } from "../log.ts";
 import { validateSandboxLayer, type SandboxValidation } from "../sandbox-layer.ts";
@@ -171,7 +171,6 @@ export async function runCheckCommand(
   assertNodeEngine(configDir);
   const result = runChecks(config, configDir, sandboxDir, { report });
   const secrets = readEnvFile(envFile ?? join(configDir, ".env"));
-  await flySandboxTokenPreflight(config, secrets, fetch, report);
   await emailTransportPreflight(config, secrets, report);
   if (report) {
     note("");

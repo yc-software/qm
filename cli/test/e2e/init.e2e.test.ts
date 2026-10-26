@@ -37,19 +37,6 @@ test("init --org scaffolds config + generated .env + a runnable sandbox/, which 
   }
 });
 
-test("init --target fly writes a fly-target config", () => {
-  const dir = tmp("init-fly");
-  try {
-    const r = runCli(["init", dir, "--org", "qm", "--target", "fly"]);
-    assert.equal(r.code, 0, r.out);
-    const cfg = loadConfigAt(join(dir, CONFIG_FILENAME)).config;
-    assert.equal(cfg.target, "fly");
-    assert.equal(cfg.orgId, "qm");
-  } finally {
-    rmDir(dir);
-  }
-});
-
 test("init --target aws vendors infrastructure and passes check", () => {
   const dir = tmp("init-aws");
   try {
@@ -101,7 +88,7 @@ test("an invalid --target is rejected before anything is written", () => {
   try {
     const r = runCli(["init", dir, "--target", "kubernetes"]);
     assert.equal(r.code, 1);
-    assert.match(r.out, /--target must be docker, fly, or aws/);
+    assert.match(r.out, /--target must be docker or aws/);
     assert.ok(!existsSync(join(dir, CONFIG_FILENAME)), "no config on a rejected target");
   } finally {
     rmDir(dir);

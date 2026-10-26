@@ -24,7 +24,7 @@ if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" && -n "${ACTIONS_CACHE_URL:-}${ACTIONS_RES
   cache_args=(--cache-from type=gha,scope=qm-local-base --cache-to type=gha,scope=qm-local-base,mode=max)
 fi
 platform="${LOCAL_SANDBOX_PLATFORM:-linux/arm64}"
-docker buildx build --load --platform "$platform" "${cache_args[@]}" -f fly/Dockerfile -t "$base_tag" .
+docker buildx build --load --platform "$platform" "${cache_args[@]}" -f sandbox-base/Dockerfile -t "$base_tag" .
 fingerprint="$(node --input-type=module -e 'import { computeSandboxImageFingerprint } from "./src/sandbox/local-sandbox.ts"; const value = await computeSandboxImageFingerprint(process.cwd()); if (!value) throw new Error("missing sandbox sources"); console.log(value);')"
 docker build --builder "$(docker context show)" --platform "$platform" -f local/Dockerfile --build-arg "BASE=$base_tag" --label "qm.sandbox-fingerprint=$fingerprint" -t "$local_tag" .
 local_image="$(docker image inspect --format '{{.Id}}' "$local_tag")"

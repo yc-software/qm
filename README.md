@@ -142,7 +142,7 @@ Create an organization-owned deployment repository that depends on `@yc-software
 
 ```bash
 npm exec --yes --package=@yc-software/qm@latest -- \
-  qm init . --org <slug> --target <fly-or-aws>
+  qm init . --org <slug> --target aws
 npm install
 ```
 

@@ -9,7 +9,7 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
-import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
+import { deploymentSecretValue, isInvalidSecret, readEnvFile } from "../util.ts";
 import { computedSecrets, serviceSecretValue } from "../secrets.ts";
 import { emailTransportConfigured, smtpTlsMode, smtpTransport } from "../preflight.ts";
 
@@ -127,19 +127,6 @@ export function localDoctorSecrets(configDir: string, envFile?: string): Map<str
   return existsSync(path) ? readEnvFile(path) : new Map();
 }
 
-export function requireFlyAuth(): void {
-  if (!which(flyBin())) {
-    throw new CliError(
-      `flyctl not found on PATH — install it (https://fly.io/docs/flyctl/install/) and run \`fly auth login\``,
-    );
-  }
-  try {
-    capture(flyBin(), ["auth", "whoami"]);
-  } catch (e) {
-    throw new CliError(`fly auth whoami failed: ${errMessage(e)} — run \`fly auth login\``);
-  }
-}
-
 export async function doctorCommon(
   config: QmConfig,
   secrets: Map<string, string>,
@@ -185,21 +172,13 @@ export async function doctorCommon(
       await slackCheck(bot, httpEvents ? undefined : app, opts.configDir, botApiUrl);
       if (opts.requiredSecretValues) {
         step("Slack tokens and manifest scopes: ok");
-      } else if (config.target === "aws") {
-        step("Slack tokens and manifest scopes: ok (verified the stored AWS secret values)");
       } else {
-        step(
-          "Slack tokens and manifest scopes: ok (verified the local .env values — Fly's staged secrets are write-only and may differ)",
-        );
+        step("Slack tokens and manifest scopes: ok (verified the stored AWS secret values)");
       }
     } else if (opts.requiredSecretValues) {
       step("Slack setup: deferred to the admin connector page");
     } else {
-      warn(
-        config.target === "aws"
-          ? "SLACK_BOT_TOKEN/SLACK_APP_TOKEN are not in the AWS secret store yet — skipping the live Slack check"
-          : "SLACK_BOT_TOKEN/SLACK_APP_TOKEN values are not available locally — skipping the live Slack check (secret names were verified on the Fly apps)",
-      );
+      warn("SLACK_BOT_TOKEN/SLACK_APP_TOKEN are not in the AWS secret store yet — skipping the live Slack check");
     }
   }
   if (config.services.includes("portal")) {

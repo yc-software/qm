@@ -48,8 +48,7 @@ function renderConfig(orgId: string, values: ConfigValues): string {
   // "botName": "straylight",
   // "orgName": "Acme Corp",
 
-  // Where to deploy: "docker" runs local containers, "fly" deploys Fly apps,
-  // and "aws" runs the control plane on ECS and agent computers on Lambda MicroVMs.
+  // Where to deploy: "docker" runs local containers, and "aws" runs the control plane on ECS and agent computers on Lambda MicroVMs.
   "target": ${JSON.stringify(values.target)},
 
   // The vendor supplying the base model: "anthropic", "openai", or "openrouter"
@@ -172,36 +171,6 @@ export const dockerScaffold: ProviderScaffold = {
   agentsAppendix: "",
   files: noFiles,
   configurationHint: "docker: confirm the local public port before setup",
-  finalCommand: "npm exec qm -- up",
-  finalWhy: "pull images, start services, print URLs",
-};
-
-export const flyScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider, emailTransport) =>
-    renderConfig(orgId, {
-      target: "fly",
-      modelProvider,
-      publicUrl: `https://${orgId}-portal.fly.dev`,
-      providerFields: `
-  // Globally unique prefix for every Fly app in this deployment.
-  "appPrefix": ${JSON.stringify(orgId)},
-
-  // Fly region and org to deploy into ("personal" is every Fly account's default org).
-  "region": "sjc",
-  "flyOrg": "personal",
-`,
-      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
-      env: `{ "core": { "HARNESS": "pi", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3", "S3_BUCKET": ${JSON.stringify(`${orgId}-data`)}, "S3_REGION": "auto" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
-      secretEnv: `,
-
-  // The initial admin seed is kept in the provider secret store, never in config.
-  "secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`,
-      sandbox: "",
-    }),
-  ignores: [".env", "node_modules/", ".generated/"],
-  agentsAppendix: "",
-  files: noFiles,
-  configurationHint: "fly: confirm flyOrg, region, app names, public URL, and identity gate before setup",
   finalCommand: "npm exec qm -- up",
   finalWhy: "pull images, start services, print URLs",
 };

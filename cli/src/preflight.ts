@@ -67,42 +67,6 @@ export function assertNodeEngine(deploymentDir?: string): void {
   }
 }
 
-export async function flySandboxTokenPreflight(
-  config: QmConfig,
-  secrets: ReadonlyMap<string, string>,
-  fetchImpl: typeof fetch = fetch,
-  report = true,
-): Promise<void> {
-  const app = config.sandbox?.app?.trim();
-  if (!app) return;
-  const token = deploymentSecretValue("FLY_SANDBOX_API_TOKEN", secrets.get("FLY_SANDBOX_API_TOKEN"))?.trim();
-  if (!token) return;
-  let response: Response;
-  try {
-    response = await fetchImpl(`https://api.machines.dev/v1/apps/${encodeURIComponent(app)}`, {
-      headers: { authorization: token.startsWith("FlyV1") ? token : `Bearer ${token}` },
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-  } catch (e) {
-    warn(`could not verify FLY_SANDBOX_API_TOKEN against Fly app ${app}: ${errMessage(e)} — continuing`);
-    return;
-  }
-  if (response.status === 401 || response.status === 403 || response.status === 404) {
-    throw new CliError(
-      `FLY_SANDBOX_API_TOKEN cannot access the Fly app ${app} (HTTP ${response.status}) — the app may not exist ` +
-        `or the token is scoped elsewhere. Create the app and mint an app-scoped deploy token:\n` +
-        `  fly apps create ${app}${config.flyOrg ? ` --org ${config.flyOrg}` : ""}\n` +
-        `  fly tokens create deploy -a ${app} -x 8760h`,
-      { clause: "sandbox.fly-token" },
-    );
-  }
-  if (!response.ok) {
-    warn(`the Fly API returned HTTP ${response.status} while verifying FLY_SANDBOX_API_TOKEN — continuing`);
-    return;
-  }
-  if (report) step(`Fly sandbox app ${app}: FLY_SANDBOX_API_TOKEN ok`);
-}
-
 type SmtpTlsMode = "starttls" | "implicit" | "none";
 
 export interface SmtpVerifyOptions {

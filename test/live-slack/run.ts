@@ -58,10 +58,7 @@ async function buildEnv(): Promise<Env> {
     teamId: qaAuth.teamId,
     judge: judgeEndpoint(process.env, process.env.LIVE_E2E_JUDGE_MODEL ?? "claude-haiku-5-5"),
     ...(process.env.LIVE_E2E_TARGET_CHANNEL ? { targetChannel: process.env.LIVE_E2E_TARGET_CHANNEL } : {}),
-    sandbox:
-      process.env.LIVE_E2E_SANDBOX_AVAILABLE === "1" ||
-      Boolean(process.env.SPRITES_TOKEN) ||
-      Boolean(process.env.FLY_API_TOKEN),
+    sandbox: process.env.LIVE_E2E_SANDBOX_AVAILABLE === "1" || Boolean(process.env.SPRITES_TOKEN),
     actors: await resolveActors(),
     ...(twin ? { twin } : {}),
   };

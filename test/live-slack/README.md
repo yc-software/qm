@@ -101,7 +101,7 @@ published entrypoint as a host process is enough (the scenarios publish a one-fi
 
 - **Tiers via tags.** `@core` is the fast high-signal subset run on every push to main;
   the full catalog (`all`) runs on PR-label + on-demand. `@multiuser` = the multi-user
-  channel scenarios; `@sandbox` = needs Fly; `@smoke` = the tiny two-scenario subset.
+  channel scenarios; `@sandbox` = needs a real sandbox; `@smoke` = the tiny two-scenario subset.
   Capability tags gate _where_ a scenario can run: `twin` needs a twin backend, and
   `no-twin` is its inverse — a capability the twin cannot serve, skipped on twin runs
   (with the reason) so it can't produce a red that says nothing about the product.
@@ -141,7 +141,7 @@ im:history, im:write, reactions:write, files:read, files:write, users:read` and 
    bot; repo var `LIVE_E2E_ALERT_CHANNEL` = its id). Failures on main post there.
 4. **Remaining secrets** — `LIVE_E2E_ANTHROPIC_API_KEY`, `LIVE_E2E_CORE_SIGNING_SECRET`
    (any random string; the runner instance is loopback-only), and the existing
-   `SPRITES_TOKEN` (sandbox turns) and `FLY_API_TOKEN` (the cloudflared self-API tunnel).
+   `SPRITES_TOKEN` (sandbox turns).
 
 Runs are serialized per Slack app by the workflow's concurrency group — that _is_ the
 lease; there is no poolN.env machinery in CI.

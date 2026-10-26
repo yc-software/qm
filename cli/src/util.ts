@@ -350,8 +350,6 @@ export function which(bin: string): boolean {
   }
 }
 
-export const flyBin = (): string => process.env.FLY_BIN ?? (which("flyctl") ? "flyctl" : "fly");
-
 const git = (args: string[]): string => execFileSync("git", args, { encoding: "utf8" }).trim();
 
 export function gitTopLevel(): string {

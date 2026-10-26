@@ -8,8 +8,6 @@ export interface BackendUpOptions {
   imageLabel?: string;
   only?: string[];
   restart?: string[];
-  imageFrom?: string;
-  imageRepoPrefix?: string;
   buildOnly?: boolean;
   buildConcurrency?: number;
   candidate?: string;

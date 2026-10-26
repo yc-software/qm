@@ -17,7 +17,6 @@ function makeConfig(plugins: QmConfig["plugins"]): QmConfig {
     skills: [],
     env: {},
     imageOverrides: {},
-    sandbox: { app: "acme-sandboxes" },
   };
 }
 

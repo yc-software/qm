@@ -5,7 +5,7 @@ import { syncDeploymentLayer, type DeploymentLayerTransport } from "../deploymen
 import { TARGET_ENV_DEFAULTS, type TargetEnvDefaults } from "../target-env-defaults.ts";
 import { renderTerraformVars } from "../terraform.ts";
 import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "../commands/infra.ts";
-import { awsScaffold, dockerScaffold, flyScaffold, type ProviderScaffold } from "../provider-scaffold.ts";
+import { awsScaffold, dockerScaffold, type ProviderScaffold } from "../provider-scaffold.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
 import { runnableServices, serviceHost } from "../services.ts";
 import {
@@ -22,17 +22,6 @@ import {
 } from "./aws.ts";
 import { dockerDeploymentLayerTransport, dockerDown, dockerLogs, dockerStatus, dockerUp } from "./docker.ts";
 import { doctorCommon, localDoctorSecrets } from "./doctor.ts";
-import {
-  flyCheckLive,
-  flyDoctor,
-  flyDown,
-  flyLogs,
-  flyRollback,
-  flySecretsPush,
-  flyStatus,
-  flyUp,
-  flyDeploymentLayerTransport,
-} from "./fly.ts";
 import type { Backend, BackendUpOptions } from "./types.ts";
 
 export interface DeployContext {
@@ -143,87 +132,6 @@ const docker: HostingProvider = {
   }),
   coordinates: () => ({}),
   validateConfig: () => [],
-};
-
-const fly: HostingProvider = {
-  id: "fly",
-  deploymentLayerTransport: flyDeploymentLayerTransport,
-  envDefaults: TARGET_ENV_DEFAULTS.fly,
-  scaffold: flyScaffold,
-  upFlags: ["build-from", "only", "image-label", "image-from", "image-repo-prefix", "build-only"],
-  upOptions: (_ctx, flags, dryRun) => {
-    const only = workloadOptions(flags);
-    const imageFrom = stringFlag(flags, "image-from");
-    const imageLabel = stringFlag(flags, "image-label");
-    const imageRepoPrefix = stringFlag(flags, "image-repo-prefix");
-    return {
-      dryRun,
-      buildOnly: flags["build-only"] === true,
-      ...buildFromOptions(flags),
-      ...(only ? { only } : {}),
-      ...(imageFrom ? { imageFrom } : {}),
-      ...(imageLabel ? { imageLabel } : {}),
-      ...(imageRepoPrefix ? { imageRepoPrefix } : {}),
-    };
-  },
-  createBackend: (ctx) => ({
-    up: async (opts) => {
-      await flyUp(ctx.config, ctx.configDir, {
-        dryRun: opts.dryRun,
-        configPath: ctx.configPath,
-        ...(opts.buildFrom !== undefined ? { buildFrom: opts.buildFrom } : {}),
-        ...(opts.buildFromPath ? { buildFromPath: opts.buildFromPath } : {}),
-        ...(opts.only ? { only: opts.only } : {}),
-        ...(opts.imageFrom ? { imageFrom: opts.imageFrom } : {}),
-        ...(opts.imageLabel ? { imageLabel: opts.imageLabel } : {}),
-        ...(opts.imageRepoPrefix ? { imageRepoPrefix: opts.imageRepoPrefix } : {}),
-        ...(opts.buildOnly ? { buildOnly: true } : {}),
-      });
-      if (!opts.dryRun && !opts.buildOnly && (!opts.only || opts.only.includes("core"))) {
-        await syncDeploymentLayer({
-          config: ctx.config,
-          transport: hostingProvider(ctx.target).deploymentLayerTransport,
-          configDir: ctx.configDir,
-          sandboxDir: ctx.sandboxDir,
-          ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
-          allowUnavailable: true,
-        });
-      }
-    },
-    status: () => flyStatus(ctx.config, ctx.configDir),
-    logs: (service, opts) => flyLogs(ctx.config, ctx.configDir, service, opts),
-    down: () => flyDown(ctx.config, ctx.configDir),
-    rollback: () => flyRollback(),
-    doctor: () => flyDoctor(ctx.config, ctx.configDir, ctx.envFile),
-    secretsPush: (envFile) => flySecretsPush(ctx.config, ctx.configDir, envFile),
-    checkLive: (opts) => flyCheckLive(ctx.config, ctx.configDir, opts),
-  }),
-  coordinates: (config) => ({
-    ...(config.flyOrg ? { accountOrOrganization: config.flyOrg } : {}),
-    ...(config.region ? { region: config.region } : {}),
-  }),
-  validateConfig: (config) => {
-    const errors: Array<{ clause: string; message: string }> = [];
-    if (!config.region?.trim())
-      errors.push({ clause: "config.v1", message: 'contract config.fly.region: target "fly" requires "region"' });
-    if (!config.flyOrg?.trim())
-      errors.push({ clause: "config.v1", message: 'contract config.fly.flyOrg: target "fly" requires "flyOrg"' });
-    const core = config.env.core ?? {};
-    if (core.SNAPSHOT_STORE !== "s3" || core.TRANSFER_STORE !== "s3") {
-      errors.push({
-        clause: "config.v1",
-        message:
-          'contract config.fly.durability: a Fly deployment requires env.core.SNAPSHOT_STORE and TRANSFER_STORE to be "s3"',
-      });
-    }
-    if (!core.S3_BUCKET?.trim() || !core.S3_REGION?.trim()) {
-      errors.push({
-        clause: "config.v1",
-        message: "contract config.fly.durability: a Fly deployment requires env.core.S3_BUCKET and S3_REGION",
-      });
-    }
-    return errors;
-  },
 };
 
 const aws: HostingProvider = {
@@ -340,7 +248,7 @@ const aws: HostingProvider = {
   },
 };
 
-export const HOSTING_PROVIDERS = { docker, fly, aws } satisfies Record<Target, HostingProvider>;
+export const HOSTING_PROVIDERS = { docker, aws } satisfies Record<Target, HostingProvider>;
 
 export const hostingProvider = (target: Target): HostingProvider => HOSTING_PROVIDERS[target];
 

@@ -11,7 +11,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
   const root = read("cli/templates/deployment/deployment.md");
   for (const phrase of [
     "Before cloud mutation",
-    "Fly.io, AWS, or Porter",
+    "AWS or Porter",
     "deployment repository",
     "npm ci",
     "slack render",
@@ -34,7 +34,6 @@ test("package-consumer deployment skill covers both self-owned providers and the
   for (const path of [
     ".codex/skills/deploy-qm/SKILL.md",
     ".codex/skills/deploy-qm/agents/openai.yaml",
-    ".codex/skills/deploy-qm/references/fly.md",
     ".codex/skills/deploy-qm/references/aws.md",
     ".codex/skills/deploy-qm/references/porter.md",
     ".codex/skills/deploy-qm/references/slack.md",
@@ -46,7 +45,6 @@ test("package-consumer deployment skill covers both self-owned providers and the
   for (const path of [
     "cli/templates/deployment/deployment.md",
     "cli/templates/deployment/SKILL.md",
-    "cli/templates/deployment/references/fly.md",
     "cli/templates/deployment/references/aws.md",
     "cli/templates/deployment/references/porter.md",
     "cli/templates/deployment/references/slack.md",
@@ -141,13 +139,9 @@ test("Slack distribution stays private and deployment-owned", () => {
 
 test("each provider has an independent agent-computer proof", () => {
   const root = read("cli/templates/deployment/deployment.md");
-  const fly = read("cli/templates/deployment/references/fly.md");
   const aws = read("cli/templates/deployment/references/aws.md");
 
   assert.match(root, /\/root\/workspace\/qm-computer-proof\.txt/);
-  assert.match(fly, /## Agent-computer proof/);
-  assert.match(fly, /agent_scope/);
-  assert.match(fly, /fly machine exec/);
   assert.match(aws, /## Agent-computer proof/);
   assert.match(aws, /deployment-owned S3 home\s+snapshot/);
   assert.match(aws, /workspace\/qm-computer-proof\.txt/);

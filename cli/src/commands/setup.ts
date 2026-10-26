@@ -109,13 +109,8 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
   ],
   PUBLIC_API_URL: [
     "The public URL agent sandboxes use to reach core's self-API. For docker this",
-    "is usually a tunnel or LAN address; for fly/aws it matches your apiUrl when",
+    "is usually a tunnel or LAN address; for aws it matches your apiUrl when",
     "configured (split-hostname stacks), otherwise your publicUrl.",
-  ],
-  FLY_DEPLOY_API_TOKEN: [
-    "Required only when env.core.DEPLOY_PROVIDER is explicitly set to fly.",
-    "A separate Fly organization token for qm's per-deployment apps.",
-    "Scope it to the configured organization <fly-org>; do not reuse a personal token.",
   ],
   GOOGLE_OAUTH_CLIENT_SECRET: ["From your Google Cloud OAuth client (APIs & Services -> Credentials)."],
   DROPBOX_OAUTH_CLIENT_SECRET: ["From your Dropbox app console (https://www.dropbox.com/developers/apps)."],
@@ -133,10 +128,8 @@ const FORMAT_HINTS: Readonly<Record<string, { prefix: string; label: string }>> 
 export function playbookFor(name: string, config: QmConfig): string[] {
   const lines = PLAYBOOKS[name];
   if (!lines) return [];
-  const flyOrg = config.flyOrg ?? "<fly-org>";
   return lines.map((line) =>
     line
-      .replaceAll("<fly-org>", flyOrg)
       .replaceAll("<public-url>", config.publicUrl.replace(/\/$/, ""))
       .replaceAll("<manifest>", "slack-app-manifest.yml"),
   );

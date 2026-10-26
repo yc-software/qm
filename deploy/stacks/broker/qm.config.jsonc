@@ -1,4 +1,4 @@
-// The reference Fly deployment that signs people in with qm's own broker: the
+// The reference deployment that signs people in with qm's own broker: the
 // portal still speaks plain OIDC, but the identity provider is the "auth" service
 // qm deploys, and the CLI generates its keys and the portal's client credentials.
 // deploy/stacks/acme is the same stack wired to an external identity provider.
@@ -6,14 +6,7 @@
   "contract": 1,
   "orgId": "acme",
   "publicUrl": "https://agent.example.com",
-  "target": "fly",
-  "appPrefix": "qm",
-  "region": "sjc",
-  "flyOrg": "personal",
-  "deployAppPrefix": "qm-d",
-  "sandbox": {
-    "app": "acme-sandboxes",
-  },
+  "target": "docker",
   "services": ["core", "slack", "admin", "web-ui", "portal", "auth"],
   "env": {
     "admin": {

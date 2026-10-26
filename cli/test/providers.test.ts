@@ -5,8 +5,9 @@ import { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget } from "../src/p
 
 test("the hosting provider registry owns target discovery and lifecycle capabilities", () => {
   assert.deepEqual(Object.keys(HOSTING_PROVIDERS), [...HOSTING_PROVIDER_IDS]);
-  assert.equal(hostingProviderChoices(), "docker, fly, or aws");
-  assert.equal(isTarget("fly"), true);
+  assert.equal(hostingProviderChoices(), "docker or aws");
+  assert.equal(isTarget("aws"), true);
+  assert.equal(isTarget("fly"), false);
   assert.equal(isTarget("kubernetes"), false);
   for (const id of HOSTING_PROVIDER_IDS) {
     const provider = hostingProvider(id);
@@ -15,16 +16,13 @@ test("the hosting provider registry owns target discovery and lifecycle capabili
     assert.equal(typeof provider.validateConfig, "function");
   }
   assert.deepEqual(hostingProvider("docker").upFlags, ["build-from", "only"]);
-  assert.ok(hostingProvider("fly").upFlags.includes("image-from"));
   assert.ok(hostingProvider("aws").upFlags.includes("yes"));
   assert.deepEqual(hostingProviderUpFlags(), [
     "build-from",
     "only",
-    "image-label",
-    "image-from",
-    "image-repo-prefix",
-    "build-only",
     "yes",
+    "image-label",
+    "build-only",
     "candidate",
     "candidate-out",
     "inactive",
@@ -45,15 +43,6 @@ test("provider output coordinates stay behind the registry", () => {
     imageOverrides: {},
   };
   assert.deepEqual(hostingProvider("docker").coordinates({ ...common, target: "docker" }), {});
-  assert.deepEqual(
-    hostingProvider("fly").coordinates({
-      ...common,
-      target: "fly",
-      flyOrg: "acme-org",
-      region: "iad",
-    }),
-    { accountOrOrganization: "acme-org", region: "iad" },
-  );
   assert.deepEqual(
     hostingProvider("aws").coordinates({
       ...common,

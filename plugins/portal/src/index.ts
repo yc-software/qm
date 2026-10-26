@@ -193,14 +193,9 @@ export function brokerRouteFor(method: string, pathname: string): string | null 
 }
 
 const XFF_TRUSTED_HOPS = Math.max(0, Math.trunc(Number(process.env.PORTAL_XFF_TRUSTED_HOPS ?? 0)) || 0);
-const ON_FLY = Boolean(process.env.FLY_APP_NAME?.trim());
 
 export function clientIpOf(req: IncomingMessage): string {
   const socket = req.socket.remoteAddress || "unknown";
-  if (ON_FLY) {
-    const fly = req.headers["fly-client-ip"];
-    return typeof fly === "string" && fly.trim() ? fly.trim() : socket;
-  }
   if (XFF_TRUSTED_HOPS === 0) return socket;
   const forwarded = req.headers["x-forwarded-for"];
   const hops = (typeof forwarded === "string" ? forwarded : "")
@@ -423,7 +418,7 @@ export function isPrivateNetworkUrl(raw: string): boolean {
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost")) return true;
-  if (host.endsWith(".internal") || host.endsWith(".flycast") || host.endsWith(".local")) return true;
+  if (host.endsWith(".internal") || host.endsWith(".local")) return true;
   if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
   if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
@@ -1935,7 +1930,7 @@ export async function startServer(): Promise<void> {
         console.warn(
           `[portal] PORTAL_PLAYGROUND=1 -- unauthenticated visitors get anonymous browser-pinned sessions (${PLAYGROUND_MINTS_PER_IP} mints per IP per ${PLAYGROUND_MINT_WINDOW_S}s); admin sign-in stays on /auth/login`,
         );
-      if (PLAYGROUND && !ON_FLY && XFF_TRUSTED_HOPS === 0)
+      if (PLAYGROUND && XFF_TRUSTED_HOPS === 0)
         console.warn(
           "[portal] playground mint limits key on the socket address — set PORTAL_XFF_TRUSTED_HOPS when behind a reverse proxy, or every visitor shares one bucket",
         );

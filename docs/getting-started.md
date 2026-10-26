@@ -6,11 +6,11 @@ private repository:
 
 ```bash
 npm exec --yes --package=@yc-software/qm@latest -- \
-  qm init . --org <slug> --target <fly-or-aws>
+  qm init . --org <slug> --target aws
 npm install
 ```
 
-Choose Fly.io or AWS before initialization; the slug is a local name derived from the
+Choose AWS before initialization; the slug is a local name derived from the
 organization, not globally unique. Customize config, tools, skills, and services in this
 directory. To change QM itself, use a public or private source fork and explicitly
 build its source, as described in [the README](../README.md#customize-your-instance).
@@ -31,7 +31,7 @@ everything else. Drop `"auth"` from `services` to use an external identity
 provider instead; that provider must then register the exact
 `<publicUrl>/auth/callback` redirect.
 
-The installed package carries Fly and AWS provider templates and dispatches
+The installed package carries Docker and AWS provider templates and dispatches
 their common lifecycle through the hosting-provider registry. Initialization
 does not create deployment CI, and the QM source repository has no production
 deployment workflow.

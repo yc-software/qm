@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson } from "../src/canonical-json.ts";
-import { capture, runInheritAsync, flyBin, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
+import { capture, runInheritAsync, isInvalidSecret, readEnvFile, writeEnvValue } from "../src/util.ts";
 
 test("capture accepts CLI output larger than Node's one-megabyte default", () => {
   const output = capture(process.execPath, ["-e", 'process.stdout.write("x".repeat(2 * 1024 * 1024))']);
@@ -14,27 +14,6 @@ test("capture accepts CLI output larger than Node's one-megabyte default", () =>
 test("managed credential encryption keys require strong material", () => {
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "short"), true);
   assert.equal(isInvalidSecret("CONNECTOR_SECRET_KEY", "x".repeat(32)), false);
-});
-
-test("flyBin honors $FLY_BIN verbatim", () => {
-  const saved = process.env.FLY_BIN;
-  try {
-    process.env.FLY_BIN = "/opt/fly/bin/flyctl";
-    assert.equal(flyBin(), "/opt/fly/bin/flyctl");
-  } finally {
-    if (saved === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = saved;
-  }
-});
-
-test("flyBin falls back to an auto-detected binary name when $FLY_BIN is unset", () => {
-  const saved = process.env.FLY_BIN;
-  try {
-    delete process.env.FLY_BIN;
-    assert.ok(["flyctl", "fly"].includes(flyBin()));
-  } finally {
-    if (saved !== undefined) process.env.FLY_BIN = saved;
-  }
 });
 
 test("canonicalJson sorts keys and matches JSON.stringify's undefined semantics", () => {

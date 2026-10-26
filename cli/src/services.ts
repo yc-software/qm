@@ -53,7 +53,7 @@ export const isReservedContainerName = (name: string): boolean => RESERVED_CONTA
 
 export function pluginNameError(name: string): string | null {
   if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name)) {
-    return "must be a lowercase DNS label (a-z, 0-9, and hyphens between) — the fly target uses it as the app name <appPrefix>-<name>";
+    return "must be a lowercase DNS label (a-z, 0-9, and hyphens between)";
   }
   if (isReservedContainerName(name)) {
     return `collides with a built-in container (reserved: ${RESERVED_CONTAINER_NAMES.join(", ")}) — choose another name`;
@@ -64,29 +64,6 @@ export function pluginNameError(name: string): string | null {
 export interface LogOpts {
   follow?: boolean;
   tail?: number;
-}
-
-export interface ServiceCtx {
-  appPrefix: string;
-  orgId: string;
-  deployAppPrefix: string;
-  publicUrl: string;
-  hasPortal: boolean;
-  hasAuth: boolean;
-  authAllowedEmailDomain?: string;
-  brand?: BrandEnv;
-  /** Provider-supplied internal URL other services use to reach core. */
-  coreUrl: string;
-  /** Provider-supplied internal base URL of the auth service. */
-  authUrl: string;
-}
-
-interface FlyServiceSpec {
-  managed: (s: ServiceCtx) => Record<string, string>;
-  stackKeys: string[];
-  deployFlags: string[];
-  flycast?: boolean;
-  publicIngress?: boolean;
 }
 
 export interface ServiceDef {
@@ -105,7 +82,6 @@ export interface ServiceDef {
     portEnv: "PORT";
     hostPortOffset?: number;
   };
-  fly?: FlyServiceSpec;
   tcpIngress?: { healthCheck: string[] };
 }
 
@@ -199,21 +175,6 @@ export function brokerWiring(
   return {};
 }
 
-const brokerEnv = (service: string, s: ServiceCtx): Record<string, string> =>
-  s.hasAuth
-    ? brokerWiring(service, {
-        publicUrl: s.publicUrl,
-        authBaseUrl: s.authUrl,
-        ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
-      })
-    : {};
-
-const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
-  CORE_API_URL: s.coreUrl,
-  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal, s.brand),
-  ...brokerEnv(service, s),
-});
-
 const CATALOG: Record<ServiceName, ServiceDef> = {
   core: {
     name: "core",
@@ -221,23 +182,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     order: 0,
     dev: { cwd: ".", entry: ["--env-file-if-exists=.env", "src/index.ts"], portEnv: "PORT", portSlotOffset: 0 },
     docker: { image: "core", internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
-    fly: {
-      managed: (s) => ({
-        ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal, s.brand),
-        ...brokerEnv("core", s),
-        FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
-      }),
-      stackKeys: [
-        "SNAPSHOT_STORE",
-        "TRANSFER_STORE",
-        "S3_BUCKET",
-        "S3_REGION",
-        "PUBLIC_WEB_URL",
-        "FLY_ORG",
-        "PI_DETECT_MODEL",
-      ],
-      deployFlags: ["--ha=false"],
-    },
   },
   "web-ui": {
     name: "web-ui",
@@ -250,12 +194,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
       portSlotOffset: 16,
     },
     docker: { image: "web-ui", internalPort: 8080, portEnv: "PORT", hostPortOffset: 2 },
-    fly: {
-      managed: (s) => pluginWiring("web-ui", s),
-      stackKeys: ["WEB_UI_PUBLIC_URL"],
-      deployFlags: ["--ha=false", "--flycast", "--no-public-ips"],
-      flycast: true,
-    },
   },
   admin: {
     name: "admin",
@@ -263,11 +201,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     order: 30,
     dev: { cwd: "plugins/admin", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 32 },
     docker: { image: "admin", internalPort: 8080, portEnv: "PORT", hostPortOffset: 3 },
-    fly: {
-      managed: (s) => pluginWiring("admin", s),
-      stackKeys: ["ADMIN_BASE_PATH"],
-      deployFlags: ["--ha=false"],
-    },
   },
   portal: {
     name: "portal",
@@ -275,31 +208,6 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     order: 40,
     dev: { cwd: "plugins/portal", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 48 },
     docker: { image: "portal", internalPort: 8080, portEnv: "PORT", hostPortOffset: 1 },
-    fly: {
-      managed: (s) => ({
-        ...pluginWiring("portal", s),
-        WEB_UI_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast`,
-        ADMIN_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast/admin`,
-      }),
-      stackKeys: [
-        "PORTAL_PUBLIC_URL",
-        "OIDC_CLIENT_ID",
-        "OIDC_ALLOWED_EMAILS",
-        "OIDC_ALLOWED_EMAIL_DOMAIN",
-        "PORTAL_EXPECTED_TEAM_ID",
-        "OIDC_AUTH_ENDPOINT",
-        "OIDC_TOKEN_ENDPOINT",
-        "OIDC_USERINFO_ENDPOINT",
-        "OIDC_ISSUER",
-        "OIDC_JWKS_URI",
-        "OIDC_SCOPES",
-        "OIDC_PRINCIPAL_CLAIM",
-        "OIDC_PROMPT",
-        "AUTH_BROKER_UPSTREAM",
-        "AUTH_BROKER_PREFIX",
-      ],
-      deployFlags: ["--ha=false"],
-    },
   },
   auth: {
     name: "auth",
@@ -307,33 +215,12 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     order: 35,
     dev: { cwd: "plugins/auth", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 64 },
     docker: { image: "auth", internalPort: 8080, portEnv: "PORT" },
-    fly: {
-      managed: (s) => pluginWiring("auth", s),
-      stackKeys: [
-        "AUTH_ISSUER",
-        "AUTH_CLIENT_ID",
-        "AUTH_REDIRECT_URI",
-        "AUTH_EMAIL_TRANSPORT",
-        "AUTH_BRAND_NAME",
-        "AUTH_ALLOWED_EMAIL_DOMAIN",
-        "SMTP_PORT",
-        "SMTP_TLS",
-      ],
-      deployFlags: ["--ha=false", "--flycast", "--no-public-ips"],
-      flycast: true,
-    },
   },
   "egress-proxy": {
     name: "egress-proxy",
     readiness: /starting main dispatch loop/,
     order: 50,
     docker: { image: "egress-proxy", internalPort: 48080, portEnv: "PORT", hostPortOffset: 4 },
-    fly: {
-      managed: (s) => pluginWiring("egress-proxy", s),
-      stackKeys: [],
-      deployFlags: ["--ha=false"],
-      publicIngress: true,
-    },
     tcpIngress: {
       healthCheck: [
         "CMD",

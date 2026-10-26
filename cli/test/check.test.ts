@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runChecks, runCheckCommand } from "../src/commands/check.ts";
+import { runChecks } from "../src/commands/check.ts";
 import type { QmConfig } from "../src/config.ts";
 import { computedSecrets, renderEnvExample } from "../src/secrets.ts";
 
@@ -17,7 +17,6 @@ const CONFIG: QmConfig = {
   skills: [],
   env: {},
   imageOverrides: {},
-  sandbox: { app: "acme-sandboxes" },
 };
 
 function deployment(setup: (dir: string) => void, config: Partial<QmConfig> = {}): { dir: string; config: QmConfig } {
@@ -61,27 +60,6 @@ test("a valid sandbox layer passes and returns the parsed tools + skills", () =>
     assert.deepEqual(plugins, []);
   } finally {
     rmSync(d.dir, { recursive: true, force: true });
-  }
-});
-
-test("every Fly deployment requires durable S3-compatible stores", () => {
-  const base = {
-    target: "fly" as const,
-    region: "sjc",
-    flyOrg: "personal",
-    services: ["core", "portal"] as QmConfig["services"],
-  };
-  const ephemeral = deployment(() => {}, base);
-  const durable = deployment(() => {}, {
-    ...base,
-    env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
-  });
-  try {
-    assert.throws(() => check(ephemeral), /Fly deployment requires env\.core\.SNAPSHOT_STORE/);
-    assert.doesNotThrow(() => check(durable));
-  } finally {
-    rmSync(ephemeral.dir, { recursive: true, force: true });
-    rmSync(durable.dir, { recursive: true, force: true });
   }
 });
 
@@ -176,7 +154,7 @@ test("a bare deployment (no sandbox/, no plugins) passes", () => {
   }
 });
 
-test("docker with sandbox.backend local passes without a Fly sandbox app", () => {
+test("docker with sandbox.backend local passes", () => {
   const d = deployment(() => {}, { sandbox: { backend: "local", image: "qm-sandbox-local:latest" } });
   try {
     assert.doesNotThrow(() => check(d));
@@ -302,18 +280,16 @@ test("secret-looking literals in plugin and sandbox env fail config.no-secret-va
     plugins: [{ name: "linear", image: "ghcr.io/x:1", env: { LINEAR_API_KEY: "lin_x" } }],
   });
   const viaSandbox = deployment(() => {}, {
-    sandbox: { app: "acme-sandboxes", env: { GH_TOKEN: "ghp_x" } },
+    sandbox: { env: { GH_TOKEN: "ghp_x" } },
   });
   const viaKey = deployment(() => {}, { env: { core: { AWS_SECRET_ACCESS_KEY: "aws_x" } } });
   const viaCred = deployment(() => {}, {
     sandbox: {
-      app: "acme-sandboxes",
       env: { PGPASSWORD: "pg_x", GOOGLE_CREDENTIALS: "{}" },
     },
   });
   const benign = deployment(() => {}, {
     sandbox: {
-      app: "acme-sandboxes",
       env: { JWT_PUBLIC_KEY: "MFkw...", GOOGLE_APPLICATION_CREDENTIALS: "/run/secrets/gcp.json" },
     },
   });
@@ -507,22 +483,6 @@ test("a delivered secret name shadowing renderer-derived env fails config.secret
     rmSync(overridden.dir, { recursive: true, force: true });
     rmSync(benign.dir, { recursive: true, force: true });
     rmSync(dockerTarget.dir, { recursive: true, force: true });
-  }
-});
-
-test("quiet checks reject invalid supplied sandbox credentials just like human checks", async (t) => {
-  const { dir, config } = deployment(() => {});
-  writeFileSync(join(dir, ".env"), "FLY_SANDBOX_API_TOKEN=fm2_invalid\n");
-  t.mock.method(globalThis, "fetch", async () => new Response("", { status: 403 }));
-  try {
-    for (const report of [false, true]) {
-      await assert.rejects(
-        runCheckCommand(config, dir, join(dir, "sandbox"), undefined, report),
-        /cannot access the Fly app/,
-      );
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 

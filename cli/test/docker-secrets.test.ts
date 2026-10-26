@@ -87,7 +87,6 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
           { name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false },
         ],
         sandbox: {
-          app: "sekrit-sandboxes",
           env: { TZ: "UTC" },
           secretEnv: ["SB_TOKEN", "SLACK_BOT_TOKEN"],
         },

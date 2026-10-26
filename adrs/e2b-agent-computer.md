@@ -6,7 +6,7 @@ Core already has the E2B backend (`SANDBOX_BACKEND=e2b`). The CLI was the missin
 
 So E2B now publishes two public templates in all three regions (US, EU, APAC), by bare name:
 
-- `qm-sandbox`, the per-scope agent computer. Same tools as your sandbox base image (`fly/Dockerfile`), 8 vCPU and 8 GiB, runs as `user` in `/home/user/workspace`.
+- `qm-sandbox`, the per-scope agent computer. Same tools as your sandbox base image (`sandbox-base/Dockerfile`), 8 vCPU and 8 GiB, runs as `user` in `/home/user/workspace`.
 - `qm-core`, core on E2B for small teams and trials. `e2b sandbox create qm` starts it with a setup page. It does not replace the Fly or AWS targets.
 
 What the PR adds

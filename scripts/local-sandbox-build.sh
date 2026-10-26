@@ -13,18 +13,8 @@ if (!fp) { console.error("cannot compute sandbox image fingerprint (missing sour
 console.log(fp);
 ')"
 
-if [[ -n "${FLY_SANDBOX_APP_NAME:-}" ]] && command -v flyctl >/dev/null 2>&1; then
-  BASE_REF="registry.fly.io/${FLY_SANDBOX_APP_NAME}:dev"
-  echo "==> building ${BASE_REF} from fly/Dockerfile on Fly's remote amd64 builder"
-  flyctl deploy --build-only --push --remote-only --image-label dev \
-    --app "${FLY_SANDBOX_APP_NAME}" -c fly/fly.toml --dockerfile fly/Dockerfile . --yes
-  flyctl auth docker
-  docker pull --platform "${PLATFORM}" "${BASE_REF}"
-  docker tag "${BASE_REF}" "${BASE_TAG}"
-else
-  echo "==> building ${BASE_TAG} from fly/Dockerfile (${PLATFORM})"
-  docker build --platform "${PLATFORM}" -f fly/Dockerfile -t "${BASE_TAG}" .
-fi
+echo "==> building ${BASE_TAG} from sandbox-base/Dockerfile (${PLATFORM})"
+docker build --platform "${PLATFORM}" -f sandbox-base/Dockerfile -t "${BASE_TAG}" .
 
 echo "==> building ${LOCAL_TAG} from local/Dockerfile (fingerprint ${FINGERPRINT})"
 docker build --platform "${PLATFORM}" -f local/Dockerfile --build-arg "BASE=${BASE_TAG}" \

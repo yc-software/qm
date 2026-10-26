@@ -171,8 +171,8 @@ ${bold("DEVELOP (contributor)")} ${dim("— runs in the QM repo")}
 
   help · version
 
-${dim("target is set in the config: docker runs local containers, fly deploys Fly apps, and aws deploys ECS.")}
-${dim("status/logs/down act on the configured target. Fly uses Fly Machines; AWS uses Lambda MicroVMs.")}
+${dim("target is set in the config: docker runs local containers, and aws deploys ECS.")}
+${dim("status/logs/down act on the configured target. AWS uses Lambda MicroVMs.")}
 `;
 
 const deploymentBackend = (ctx: DeployContext) => hostingProvider(ctx.target).createBackend(ctx);
@@ -350,7 +350,7 @@ async function dispatch(argv: string[]): Promise<void> {
                 "secrets.computed-set": { status: "pass", names: result.secrets.map((secret) => secret.name) },
                 ...(live
                   ? {
-                      [ctx.target === "fly" ? "fly.live-readiness" : `${ctx.target}.live-drift`]: { status: "pass" },
+                      [`${ctx.target}.live-drift`]: { status: "pass" },
                     }
                   : {}),
               },

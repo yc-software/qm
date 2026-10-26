@@ -15,7 +15,7 @@ Before cloud mutation, read `qm.config.jsonc` when it exists. Its `target` is
 the selected provider; confirm it with the operator and do not offer to change
 it in place. If the repository has not been initialized, collect:
 
-- hosting target: a cloud provider — Fly.io, AWS, or Porter. Recommend Fly.io
+- hosting target: a cloud provider — AWS or Porter. Recommend AWS
   when the operator has no preference. Porter deploys onto a Kubernetes
   cluster in the operator's own cloud account and has no `qm` CLI target:
   choosing it switches this workflow to `references/porter.md`, which drives
@@ -44,10 +44,7 @@ it in place. If the repository has not been initialized, collect:
 The deployment slug is a local name for this deployment — it appears in the
 package name, resource names, and Slack branding. Derive it from the
 organization's name (a lowercase DNS label) and confirm it in passing; do not
-make the operator decide it as a standalone question. On Fly.io the slug is
-the default `appPrefix`, and app names like `<prefix>-core` must be free on
-fly.dev; on a collision set a distinctive `appPrefix` rather than renaming
-the organization.
+make the operator decide it as a standalone question.
 
 Explain the selected provider's billable resources and confirm the provider
 identity, region, resource list, and expected billing.
@@ -65,7 +62,7 @@ and the derived slug, then initialize its root with the current CLI:
 
 ```bash
 npm exec --yes --package=@yc-software/qm@latest -- \
-  qm init . --org <slug> --target <fly-or-aws> --model-provider <provider>
+  qm init . --org <slug> --target aws --model-provider <provider>
 npm install
 ```
 
@@ -209,7 +206,6 @@ leave a deployment modelless without saying so.
 Read exactly one provider reference now and follow its provider-specific
 preflight and setup order:
 
-- Fly.io: `.codex/skills/deploy-qm/references/fly.md`
 - AWS: `.codex/skills/deploy-qm/references/aws.md`
 
 ## 4. Deploy and prove the web surface
@@ -227,7 +223,7 @@ health, and a private end-to-end web session. The session canary runs one real
 agent turn plus auxiliary title generation, verifies the exact reply and
 persisted transcript, requires a generated title, checks the session-scoped
 error log, and archives itself. It does not recall or capture administrator
-memory. Fly runs it inside the core machine; AWS runs it as a one-off task on
+memory. AWS runs it as a one-off task on
 the core service's private network. It does not add a public session endpoint.
 
 Open `adminOnboardingUrl` from the JSON output and confirm Model provider

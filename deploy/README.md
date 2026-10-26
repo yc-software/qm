@@ -1,6 +1,6 @@
 # Deployment templates
 
-The files under `deploy/` are service-image and Fly configuration templates used
+The files under `deploy/` are service-image templates used
 by the `qm` CLI. They are not a production deployment and contain no cloud
 account, workspace, or organization credentials.
 
@@ -11,7 +11,7 @@ never travels back upstream.
 For a new hosted instance, follow the repository-root
 [`deployment.md`](../deployment.md) workflow. It:
 
-- asks whether to deploy into the operator's Fly.io organization or AWS account;
+- asks for the operator's AWS account;
 - creates the organization's deployment directory under [`layers/`](./layers/) with its
   `qm.config.jsonc`;
 - configures verified-email web onboarding before optional Slack;
@@ -51,15 +51,10 @@ the authenticated admin connector URL returned by `qm outputs`. Secrets are
 encrypted in durable storage and are never committed to a deployment directory.
 The agent advertises only connectors whose admin configuration is enabled.
 
-`cli/templates/fly/auth.toml` declares an `[http_service]` like every other surface, but the
-CLI always deploys it `--flycast --no-public-ips`; on AWS the ALB assertions refuse to
-attach it to a load balancer. Never `fly launch` that file by hand — a broker with a
-public IP exposes its token endpoint and lets a caller forge the rate-limit client
-address.
+The `auth` broker is never public: on AWS the ALB assertions refuse to attach it to a
+load balancer. A broker with a public IP exposes its token endpoint and lets a caller
+forge the rate-limit client address.
 
 ## Fixtures
 
-[`stacks/`](./stacks/) contains account-neutral contract fixtures. The checked-in
-`cli/templates/fly/<service>.toml` files are templates from which the CLI derives
-deployment-specific copies under the ignored `deploy/stacks/.generated/`
-directory.
+[`stacks/`](./stacks/) contains account-neutral contract fixtures.

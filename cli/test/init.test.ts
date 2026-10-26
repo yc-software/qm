@@ -124,59 +124,10 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
   }
 });
 
-test("init --target fly scaffolds the full hosted topology and both Slack apps", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-init-fly-"));
-  try {
-    quiet(() => runInit({ dir, org: "acme", target: "fly" }));
-    const { config } = loadConfigInDir(dir);
-    assert.equal(config.target, "fly");
-    assert.deepEqual(config.services, ["core", "slack", "web-ui", "admin", "portal", "auth"]);
-    assert.equal(config.publicUrl, "https://acme-portal.fly.dev");
-    assert.equal(config.flyOrg, "personal");
-    assert.ok(config.region, "region is scaffolded");
-    assert.equal(config.appPrefix, "acme");
-    assert.deepEqual(
-      {
-        SNAPSHOT_STORE: config.env.core?.SNAPSHOT_STORE,
-        TRANSFER_STORE: config.env.core?.TRANSFER_STORE,
-        S3_BUCKET: config.env.core?.S3_BUCKET,
-        S3_REGION: config.env.core?.S3_REGION,
-      },
-      { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" },
-    );
-    assert.deepEqual(config.secretEnv?.core, { ADMIN_GRANTS: "ADMIN_GRANTS" });
-    assert.equal(config.env.slack?.SLACK_IDENTITY_EMAIL, "1");
-    assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "resend");
-    assert.equal(config.env.portal?.OIDC_PRINCIPAL_CLAIM, undefined, "the broker derives every OIDC_* value");
-    const env = readFileSync(join(dir, ".env.example"), "utf8");
-    for (const line of ["ADMIN_GRANTS=", "AUTH_ALLOWED_EMAILS=", "PORTAL_SESSION_SECRET=", "ANTHROPIC_API_KEY="]) {
-      assert.ok(env.split("\n").includes(line), `.env.example should require ${line} for the fly scaffold`);
-    }
-    for (const line of [
-      "# OPENROUTER_API_KEY=  # optional",
-      "# SLACK_APP_TOKEN=  # optional",
-      "# SLACK_BOT_TOKEN=  # optional",
-      "# AUTH_EMAIL_FROM=  # optional",
-      "# RESEND_API_KEY=  # optional",
-    ]) {
-      assert.ok(env.split("\n").includes(line), `.env.example should offer ${line}`);
-    }
-    assert.ok(existsSync(join(dir, "slack-app-manifest.yml")), "Slack manifest is scaffolded on fly too");
-    assert.equal(existsSync(join(dir, "slack-sso-manifest.yml")), false);
-    for (const line of ["# OIDC_CLIENT_ID=", "# OIDC_CLIENT_SECRET=", "# PORTAL_EXPECTED_TEAM_ID="]) {
-      assert.ok(env.split("\n").includes(line), `external-IdP secret ${line} stays documented but unrequired`);
-    }
-    assert.ok(!env.includes("SMTP_"), "the unselected smtp transport's keys stay out of .env.example");
-    assert.ok(!readFileSync(join(dir, ".env"), "utf8").includes("SMTP_"), "and out of .env");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("init --email-transport smtp scaffolds smtp keys only and a matching config", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-init-smtp-"));
   try {
-    quiet(() => runInit({ dir, org: "acme", target: "fly", emailTransport: "smtp" }));
+    quiet(() => runInit({ dir, org: "acme", target: "aws", emailTransport: "smtp" }));
     const { config } = loadConfigInDir(dir);
     assert.equal(config.env.auth?.AUTH_EMAIL_TRANSPORT, "smtp");
     const env = readFileSync(join(dir, ".env.example"), "utf8");
@@ -463,7 +414,7 @@ test("init preserves an installed local package artifact", () => {
       }),
     );
 
-    quiet(() => runInit({ dir, org: "acme", target: "fly" }));
+    quiet(() => runInit({ dir, org: "acme", target: "docker" }));
 
     const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
@@ -532,7 +483,7 @@ test("the scaffold is an npm-backed deployment repository with no CI coupling an
     assert.equal(packageJson.scripts?.check, "qm check");
     assert.ok(existsSync(join(dir, "deployment.md")));
     assert.ok(existsSync(join(dir, ".codex", "skills", "deploy-qm", "SKILL.md")));
-    for (const provider of ["fly", "aws", "slack", "email"]) {
+    for (const provider of ["aws", "slack", "email"]) {
       assert.ok(existsSync(join(dir, ".codex", "skills", "deploy-qm", "references", `${provider}.md`)));
     }
     assert.match(readFileSync(join(dir, ".gitignore"), "utf8"), /^node_modules\/$/m);

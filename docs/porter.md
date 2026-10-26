@@ -121,8 +121,8 @@ latest environment with provided name`, because `porter env create` makes a
   the app's `env:` block and pass secrets with `--secrets KEY=value` (note that pflag
   splits those on commas, so a JSON value like `AUTH_SIGNING_JWK` has to go in `env:`).
 
-Nothing generates the inter-service wiring for you — `cli/src/services.ts` has `fly` and
-`docker` targets but no Porter one — so set it by hand on each app:
+Nothing generates the inter-service wiring for you — `cli/src/services.ts` has `docker` and
+`aws` targets but no Porter one — so set it by hand on each app:
 
 | Service      | Wiring                                                                                                                                                                                                                                                                                                                                            |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

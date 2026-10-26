@@ -212,29 +212,22 @@ test("portal-mounted admin uses the portal's fixed /admin route", () => {
   });
 });
 
-test("model, skills, and the fly keys parse onto the config", () => {
+test("model and skills parse onto the config", () => {
   withConfig({ model: "claude-opus-4-8", skills: ["./skills/support"] }, ({ path }) => {
     const { config } = loadConfigAt(path);
     assert.equal(config.model, "claude-opus-4-8");
     assert.deepEqual(config.skills, ["./skills/support"]);
   });
-  withConfig(
-    { target: "fly", appPrefix: "qm", region: "sjc", flyOrg: "personal", imageFrom: "qm", deployAppPrefix: "qm-d" },
-    ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.equal(config.appPrefix, "qm");
-      assert.equal(config.region, "sjc");
-      assert.equal(config.flyOrg, "personal");
-      assert.equal(config.imageFrom, "qm");
-      assert.equal(config.deployAppPrefix, "qm-d");
-    },
-  );
+  for (const key of ["flyOrg", "appPrefix", "region", "imageFrom", "deployAppPrefix", "vms"]) {
+    withConfig({ [key]: "x" }, ({ path }) => {
+      assert.throws(() => loadConfigAt(path), new RegExp(`unknown top-level field "${key}"`));
+    });
+  }
 });
 
-test("custom portal issuers require an HTTPS JWKS URI on Fly", () => {
+test("custom portal issuers require an HTTPS JWKS URI", () => {
   withConfig(
     {
-      target: "fly",
       services: ["core", "portal"],
       env: { portal: { OIDC_ISSUER: "https://auth.example.com" } },
     },
@@ -615,7 +608,7 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
         aws,
         env: {
           core: {
-            DEPLOY_PROVIDER: "fly",
+            DEPLOY_PROVIDER: "e2b",
             SANDBOX_BACKEND: "sprites",
             AWS_DEPLOY_IMAGE: "",
             SANDBOX_SCOPE_BACKENDS: JSON.stringify({ personal: scopeBackend }),
@@ -623,7 +616,7 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
         },
       },
       ({ path }) => {
-        assert.equal(loadConfigAt(path).config.env.core?.DEPLOY_PROVIDER, "fly");
+        assert.equal(loadConfigAt(path).config.env.core?.DEPLOY_PROVIDER, "e2b");
       },
     );
   }
@@ -856,7 +849,6 @@ test("sandbox.env (literals) + sandbox.secretEnv (resolved) become FLY_RESIDENT_
   withConfig(
     {
       sandbox: {
-        app: "acme-sandboxes",
         env: { TZ: "America/Los_Angeles" },
         secretEnv: ["COMPANY_API_TOKEN"],
       },
@@ -883,26 +875,20 @@ test("no sandbox block → no injected env, lenient undefined app", () => {
   });
 });
 
-test("sandbox shape errors: object, app non-empty string, env string-map, secretEnv valid names", () => {
+test("sandbox shape errors: object, env string-map, secretEnv valid names", () => {
   const cases: Array<{ sandbox: unknown; rx: RegExp }> = [
     { sandbox: "x", rx: /"sandbox" must be an object/ },
     { sandbox: ["x"], rx: /"sandbox" must be an object/ },
-    { sandbox: { app: "" }, rx: /"sandbox.app" must be a non-empty string/ },
-    { sandbox: { app: 5 }, rx: /"sandbox.app" must be a non-empty string/ },
     { sandbox: { env: { TZ: 5 } }, rx: /"sandbox.env.TZ" must be a string/ },
     { sandbox: { env: { "1BAD": "x" } }, rx: /"sandbox.env" key .* is not a valid env var name/ },
     { sandbox: { secretEnv: "X" }, rx: /"sandbox.secretEnv" must be an array of strings/ },
     { sandbox: { secretEnv: ["1BAD"] }, rx: /not a valid env var name/ },
     {
-      sandbox: { backend: "k8s", app: "acme-sandboxes" },
+      sandbox: { backend: "k8s" },
       rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "e2b"/,
     },
     {
-      sandbox: { backend: "fly", app: "acme-sandboxes" },
-      rx: /"sandbox.backend" must be "local".*"sprites".*"aws".*"agent37".*"superserve".*or "e2b"/,
-    },
-    {
-      sandbox: { backend: "aws", app: "acme-sandboxes" },
+      sandbox: { backend: "aws" },
       rx: /"sandbox.backend": "aws" \(Lambda MicroVM sandboxes\) requires target "aws"/,
     },
   ];
@@ -913,7 +899,7 @@ test("sandbox shape errors: object, app non-empty string, env string-map, secret
   }
 });
 
-test("docker accepts an explicit local sandbox image without Fly coordinates", () => {
+test("docker accepts an explicit local sandbox image ", () => {
   withConfig({ sandbox: { backend: "local", image: "qm-sandbox-local:latest" } }, ({ path }) => {
     const { config } = loadConfigAt(path);
     assert.deepEqual(sandboxCoreEnv(config), {
@@ -923,42 +909,38 @@ test("docker accepts an explicit local sandbox image without Fly coordinates", (
   });
 });
 
-test("local sandbox config is docker-only and rejects unused Fly settings", () => {
-  withConfig({ target: "fly", sandbox: { backend: "local" } }, ({ path }) => {
+test("local sandbox config is docker-only and rejects unused sandbox settings", () => {
+  withConfig({ target: "aws", sandbox: { backend: "local" } }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /"sandbox.backend": "local" requires target "docker"/);
   });
-  withConfig({ sandbox: { backend: "local", app: "acme-sandboxes" } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "local" ignores "sandbox.app"/);
+  withConfig({ sandbox: { backend: "local", env: { TZ: "UTC" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "local" ignores "sandbox.env"/);
   });
 });
 
-test("agent37 is a deployment backend on every target and rejects unused Fly settings", () => {
-  for (const target of ["docker", "fly"] as const) {
-    withConfig({ target, sandbox: { backend: "agent37" } }, ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), {
-        env: { SANDBOX_BACKEND: "agent37" },
-        missingSecrets: [],
-      });
+test("agent37 is a deployment backend and rejects unused sandbox settings", () => {
+  withConfig({ sandbox: { backend: "agent37" } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.deepEqual(sandboxCoreEnv(config), {
+      env: { SANDBOX_BACKEND: "agent37" },
+      missingSecrets: [],
     });
-  }
-  withConfig({ sandbox: { backend: "agent37", app: "unused" } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "agent37" ignores "sandbox.app"/);
+  });
+  withConfig({ sandbox: { backend: "agent37", env: { TZ: "UTC" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "agent37" ignores "sandbox.env"/);
   });
 });
 
-test("e2b is a deployment backend on every target and rejects unused Fly settings", () => {
-  for (const target of ["docker", "fly"] as const) {
-    withConfig({ target, sandbox: { backend: "e2b" } }, ({ path }) => {
-      const { config } = loadConfigAt(path);
-      assert.deepEqual(sandboxCoreEnv(config), {
-        env: { SANDBOX_BACKEND: "e2b" },
-        missingSecrets: [],
-      });
+test("e2b is a deployment backend and rejects unused sandbox settings", () => {
+  withConfig({ sandbox: { backend: "e2b" } }, ({ path }) => {
+    const { config } = loadConfigAt(path);
+    assert.deepEqual(sandboxCoreEnv(config), {
+      env: { SANDBOX_BACKEND: "e2b" },
+      missingSecrets: [],
     });
-  }
-  withConfig({ sandbox: { backend: "e2b", app: "unused" } }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "e2b" ignores "sandbox.app"/);
+  });
+  withConfig({ sandbox: { backend: "e2b", env: { TZ: "UTC" } } }, ({ path }) => {
+    assert.throws(() => loadConfigAt(path), /"sandbox.backend": "e2b" ignores "sandbox.env"/);
   });
 });
 
@@ -1004,8 +986,7 @@ test("Superserve selection honors env.core.SANDBOX_BACKEND overrides", () => {
   });
   withConfig(
     {
-      target: "fly",
-      sandbox: { backend: "sprites", app: "acme-sandboxes", secretEnv: ["COMPANY_API_TOKEN"] },
+      sandbox: { backend: "sprites", secretEnv: ["COMPANY_API_TOKEN"] },
       env: { core: { SANDBOX_BACKEND: "superserve", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } },
     },
     ({ path }) => {
@@ -1065,19 +1046,17 @@ test("Superserve configuration preserves existing backend selection and validati
   }
 });
 
-test("sandbox.backend alone makes the backend's credential a required secret on every target", () => {
-  for (const target of ["docker", "fly"] as const) {
-    withConfig(
-      { target, sandbox: { backend: "superserve" }, env: { core: { SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } } },
-      ({ path }) => {
-        const secret = computedSecrets(loadConfigAt(path).config).find((s) => s.name === "SUPERSERVE_API_KEY");
-        assert.ok(secret?.required, `${target} requires the key without duplicating SANDBOX_BACKEND under env.core`);
-      },
-    );
-  }
+test("sandbox.backend alone makes the backend's credential a required secret", () => {
+  withConfig(
+    { sandbox: { backend: "superserve" }, env: { core: { SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } } },
+    ({ path }) => {
+      const secret = computedSecrets(loadConfigAt(path).config).find((s) => s.name === "SUPERSERVE_API_KEY");
+      assert.ok(secret?.required, "requires the key without duplicating SANDBOX_BACKEND under env.core");
+    },
+  );
 });
 
-test("aws target makes the sandbox substrate explicit: backend required with a sandbox block, aws forbids fly sandbox settings", () => {
+test("aws target makes the sandbox substrate explicit: backend required with a sandbox block, aws forbids unused sandbox settings", () => {
   const aws = {
     accountId: "123456789012",
     region: "us-west-2",
@@ -1088,16 +1067,11 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
     networking: { cloudMapNamespace: "acme.internal" },
     services: { core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 } },
   };
-  withConfig({ target: "aws", aws, sandbox: { app: "acme-sandboxes" } }, ({ path }) => {
+  withConfig({ target: "aws", aws, sandbox: {} }, ({ path }) => {
     assert.throws(() => loadConfigAt(path), /target "aws" requires an explicit "sandbox.backend"/);
   });
-  withConfig({ target: "aws", aws, sandbox: { backend: "sprites", app: "acme-sandboxes" } }, ({ path }) => {
-    assert.equal(loadConfigAt(path).config.sandbox?.backend, "sprites");
-  });
   withConfig({ target: "aws", aws, sandbox: { backend: "sprites" } }, ({ path }) => {
-    const { config } = loadConfigAt(path);
-    assert.equal(config.sandbox?.backend, "sprites");
-    assert.equal(config.sandbox?.app, undefined);
+    assert.equal(loadConfigAt(path).config.sandbox?.backend, "sprites");
   });
   withConfig({ target: "aws", aws, sandbox: { backend: "aws" } }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.sandbox?.backend, "aws");
@@ -1107,28 +1081,12 @@ test("aws target makes the sandbox substrate explicit: backend required with a s
     assert.equal(config.sandbox?.backend, "agent37");
     assert.equal(sandboxCoreEnv(config).env.SANDBOX_BACKEND, "agent37");
   });
-  withConfig({ target: "aws", aws, sandbox: { backend: "sprites", app: "acme-sandboxes" } }, ({ path }) => {
-    assert.equal(loadConfigAt(path).config.sandbox?.backend, "sprites");
-  });
-  withConfig({ target: "aws", aws, sandbox: { backend: "aws", app: "acme-sandboxes" } }, ({ path }) => {
+  withConfig({ target: "aws", aws, sandbox: { backend: "aws", env: { TZ: "UTC" } } }, ({ path }) => {
     assert.throws(
       () => loadConfigAt(path),
-      /"sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore "sandbox.app"/,
+      /"sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore "sandbox.env"/,
     );
   });
-  withConfig(
-    {
-      target: "aws",
-      aws,
-      sandbox: { backend: "aws", app: "acme-sandboxes" },
-    },
-    ({ path }) => {
-      assert.throws(
-        () => loadConfigAt(path),
-        /"sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore "sandbox.app"/,
-      );
-    },
-  );
   withConfig({ target: "aws", aws }, ({ path }) => {
     assert.equal(loadConfigAt(path).config.sandbox, undefined);
   });

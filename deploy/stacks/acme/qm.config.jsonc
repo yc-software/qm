@@ -2,14 +2,7 @@
   "contract": 1,
   "orgId": "acme",
   "publicUrl": "https://agent.example.com",
-  "target": "fly",
-  "appPrefix": "qm",
-  "region": "sjc",
-  "flyOrg": "personal",
-  "deployAppPrefix": "qm-d",
-  "sandbox": {
-    "app": "acme-sandboxes",
-  },
+  "target": "docker",
   "services": ["core", "slack", "admin", "web-ui", "portal", "egress-proxy"],
   "env": {
     "admin": {

@@ -37,7 +37,7 @@ RUN python3 -m venv /opt/agent-venv \
 ENV PATH="/opt/agent-venv/bin:${PATH}"
 ENV VIRTUAL_ENV=/opt/agent-venv
 
-COPY fly/tools/x-api /usr/local/bin/x-api
+COPY sandbox-base/tools/x-api /usr/local/bin/x-api
 RUN chmod +x /usr/local/bin/x-api
 
 RUN id -u user >/dev/null 2>&1 || useradd --create-home --user-group --shell /bin/bash user

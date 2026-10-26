@@ -55,7 +55,7 @@ function sh(lines: string[]): string {
 }
 
 function buildSteps(): BuildStep[] {
-  const xApi = readFileSync(join(REPO_ROOT, "fly", "tools", "x-api"), "utf8");
+  const xApi = readFileSync(join(REPO_ROOT, "sandbox-base", "tools", "x-api"), "utf8");
   if (xApi.includes("\nQM_X_API_EOF\n")) throw new Error("x-api contains the heredoc delimiter");
   return [
     { env: { key: "DEBIAN_FRONTEND", value: "noninteractive" } },

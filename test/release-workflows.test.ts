@@ -19,7 +19,7 @@ test("the release is the sole sandbox-base publisher and bakes in the browser en
 
   assert.match(
     workflow,
-    /- name: sandbox-base\n\s+dockerfile: fly\/Dockerfile\n\s+build-args: INSTALL_BROWSER_ENGINE=1\n/,
+    /- name: sandbox-base\n\s+dockerfile: sandbox-base\/Dockerfile\n\s+build-args: INSTALL_BROWSER_ENGINE=1\n/,
   );
   assert.match(workflow, /build-args: \|\n\s+\$\{\{ matrix\.build-args \}\}\n\s+GIT_SHA=\$\{\{ github\.sha \}\}/);
   assert.equal(existsSync(".github/workflows/publish-sandbox-base.yml"), false);

@@ -120,13 +120,6 @@ test("the portal stamps the client address and refuses to relay a spoofed one", 
   const relayed = seen.at(-1)!.headers["x-qm-client-ip"];
   assert.notEqual(relayed, "9.9.9.9", "a client-supplied address must never become the rate-limit key");
   assert.equal(typeof relayed, "string");
-
-  await fetch(`${base}/idp/authorize?x=2`, { headers: { "fly-client-ip": "203.0.113.7" } });
-  assert.notEqual(
-    seen.at(-1)!.headers["x-qm-client-ip"],
-    "203.0.113.7",
-    "this portal is not on Fly, so the Fly edge header is just another client-settable header",
-  );
 });
 
 test("only the browser-facing broker routes are exposed", async () => {
@@ -172,14 +165,9 @@ test("brokerRouteFor matches only the exact public routes", () => {
   assert.equal(brokerRouteFor("DELETE", "/idp/authorize"), null);
 });
 
-test("clientIpOf ignores a Fly edge header when the portal is not running on Fly", () => {
+test("clientIpOf uses the socket address when no trusted proxy is configured", () => {
   const fake = (headers: Record<string, string>): IncomingMessage =>
     ({ headers, socket: { remoteAddress: "10.0.0.1" } }) as unknown as IncomingMessage;
-  assert.equal(
-    clientIpOf(fake({ "fly-client-ip": "1.2.3.4" })),
-    "10.0.0.1",
-    "off Fly, fly-client-ip is just a header any client can set",
-  );
   assert.equal(
     clientIpOf(fake({ "x-forwarded-for": "9.9.9.9" })),
     "10.0.0.1",
@@ -191,7 +179,6 @@ test("clientIpOf ignores a Fly edge header when the portal is not running on Fly
 test("isPrivateNetworkUrl admits only unroutable hosts", () => {
   for (const url of [
     "http://qm-auth.internal:8080",
-    "http://qm-web-ui.flycast",
     "http://localhost:8099",
     "http://127.0.0.1:8099",
     "http://10.1.2.3:8080",

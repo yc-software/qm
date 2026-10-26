@@ -33,7 +33,7 @@ test("every checked-in stack config passes loadConfigAt", () => {
   }
 });
 
-test("the reference Fly deployment declares the in-process Slack surface", () => {
+test("the reference deployment declares the in-process Slack surface", () => {
   const { config } = loadConfigAt(join(stacksDir, "acme", "qm.config.jsonc"));
   assert.ok(config.services.includes("slack"));
   const secrets = new Set(computedSecrets(config).map((secret) => secret.name));

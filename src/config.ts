@@ -82,7 +82,7 @@ export interface Config {
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   sandboxBackend: SandboxBackendName;
   sandboxSecondaryBackend?: SandboxBackendName;
-  deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b";
+  deployProvider: "docker" | "aws" | "porter" | "e2b";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
@@ -147,7 +147,6 @@ export interface Config {
   publicUrl?: string;
   gmailPubSub?: { topic: string; audience: string; serviceAccount: string };
   publicWebUrl?: string;
-  flyAppName?: string;
   slack?: SlackPluginConfig;
   externalSlackPolicies?: ExternalSlackPolicies;
   runStore: "memory" | "postgres";
@@ -213,7 +212,6 @@ export interface Config {
   porterDeploy: PorterDeployEnv;
   awsDeploy: AwsDeployEnv;
   deployAppsDomain?: string;
-  flyDeploy: FlyDeployEnv;
 }
 
 export function configuredModelForHarness(config: Config, harness: string): string | undefined {
@@ -906,34 +904,6 @@ function awsDeployEnv(env: NodeJS.ProcessEnv): AwsDeployEnv {
   };
 }
 
-interface FlyDeployEnv {
-  token: string;
-  appPrefix: string;
-  sharedAppName?: string;
-  wireguardPeers?: string;
-  metadataUri?: string;
-  baseImage: string;
-  org: string;
-  region?: string;
-  dataVolumeSizeGb?: number;
-}
-
-function flyDeployEnv(env: NodeJS.ProcessEnv): FlyDeployEnv {
-  return {
-    token: env.FLY_DEPLOY_API_TOKEN ?? "",
-    appPrefix: env.FLY_DEPLOY_APP_PREFIX ?? "",
-    ...(env.FLY_DEPLOY_SHARED_APP_NAME ? { sharedAppName: env.FLY_DEPLOY_SHARED_APP_NAME } : {}),
-    ...(env.FLY_DEPLOY_WIREGUARD_PEERS ? { wireguardPeers: env.FLY_DEPLOY_WIREGUARD_PEERS } : {}),
-    ...(env.ECS_CONTAINER_METADATA_URI_V4 ? { metadataUri: env.ECS_CONTAINER_METADATA_URI_V4 } : {}),
-    baseImage: env.FLY_DEPLOY_BASE_IMAGE ?? "",
-    org: env.FLY_ORG ?? "",
-    ...(env.FLY_REGION ? { region: env.FLY_REGION } : {}),
-    ...(env.FLY_DEPLOY_DATA_VOLUME_SIZE_GB !== undefined
-      ? { dataVolumeSizeGb: Number(env.FLY_DEPLOY_DATA_VOLUME_SIZE_GB) }
-      : {}),
-  };
-}
-
 const DEFAULT_ORG_ID = "default-org";
 
 export function orgId(): string {
@@ -1422,12 +1392,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (
     deployProvider !== "aws" &&
     deployProvider !== "docker" &&
-    deployProvider !== "fly" &&
     deployProvider !== "porter" &&
     deployProvider !== "e2b"
   ) {
     throw new Error(
-      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, fly, porter, or e2b)`,
+      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, porter, or e2b)`,
     );
   }
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
@@ -1620,7 +1589,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         }
       : {}),
     ...(env.PUBLIC_WEB_URL ? { publicWebUrl: env.PUBLIC_WEB_URL } : {}),
-    ...(env.FLY_APP_NAME ? { flyAppName: env.FLY_APP_NAME } : {}),
     ...(slack ? { slack } : {}),
     externalSlackPolicies,
     slackContextSource: parseSlackContextSource(env.SLACK_CONTEXT_SOURCE),
@@ -1696,6 +1664,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         : {}),
     },
     ...(deployAppsDomain ? { deployAppsDomain } : {}),
-    flyDeploy: flyDeployEnv(env),
   };
 }

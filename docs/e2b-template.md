@@ -3,7 +3,7 @@
 ## Public template
 
 E2B publishes a ready agent-computer template, `qm-sandbox`. It has the same tools as
-the sandbox base image (`fly/Dockerfile`): Claude Code, Codex, GitHub CLI, AWS CLI v2, the
+the sandbox base image (`sandbox-base/Dockerfile`): Claude Code, Codex, GitHub CLI, AWS CLI v2, the
 Python venv at `/opt/agent-venv` and `x-api`. Each sandbox gets 8 vCPU and 8 GiB where the
 plan allows.
 

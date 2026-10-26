@@ -1,10 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { type QmConfig } from "../src/config.ts";
-import { ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
   computedSecrets,
   serviceSecretValue,
@@ -40,14 +36,14 @@ function secretByName(config: QmConfig, name: string): ComputedSecret {
 test("a dual-role secret (sandbox.secretEnv + virtual service) needs BOTH names on core", () => {
   const config = makeConfig({
     services: ["core", "slack"],
-    sandbox: { app: "acme-sb", secretEnv: ["SLACK_BOT_TOKEN"] },
+    sandbox: { secretEnv: ["SLACK_BOT_TOKEN"] },
   });
   const names = runtimeSecretNames("core", secretByName(config, "SLACK_BOT_TOKEN"));
   assert.deepEqual(names.sort(), ["FLY_RESIDENT_ENV_SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN"]);
 });
 
 test("a sandbox-only secret lands on core ONLY as FLY_RESIDENT_ENV_<NAME>", () => {
-  const config = makeConfig({ sandbox: { app: "acme-sb", secretEnv: ["COMPANY_TOKEN"] } });
+  const config = makeConfig({ sandbox: { secretEnv: ["COMPANY_TOKEN"] } });
   const secret = secretByName(config, "COMPANY_TOKEN");
   assert.deepEqual(runtimeSecretNames("core", secret), ["FLY_RESIDENT_ENV_COMPANY_TOKEN"]);
   assert.deepEqual([...secretDestinations(secret).keys()], ["core"]);
@@ -56,7 +52,7 @@ test("a sandbox-only secret lands on core ONLY as FLY_RESIDENT_ENV_<NAME>", () =
 test("a core + sandbox secret needs both the plain and renamed forms on core", () => {
   const config = makeConfig({
     env: { core: { HARNESS: "pi" } },
-    sandbox: { app: "acme-sb", secretEnv: ["ANTHROPIC_API_KEY"] },
+    sandbox: { secretEnv: ["ANTHROPIC_API_KEY"] },
   });
   const names = runtimeSecretNames("core", secretByName(config, "ANTHROPIC_API_KEY"));
   assert.deepEqual(names.sort(), ["ANTHROPIC_API_KEY", "FLY_RESIDENT_ENV_ANTHROPIC_API_KEY"]);
@@ -152,29 +148,12 @@ test('"sandbox" is a reserved name — a plugin may not shadow the sandbox pseud
 });
 
 test("model credentials are optional at deploy time because Admin onboarding can configure them", () => {
-  const fly = makeConfig({ target: "fly" });
-  assert.equal(secretByName(fly, "ANTHROPIC_API_KEY").required, false);
   const docker = makeConfig();
   assert.equal(secretByName(docker, "ANTHROPIC_API_KEY").required, false);
 });
 
-test("the Fly publisher token belongs only to a Fly deploy provider", () => {
-  assert.ok(!computedSecrets(makeConfig({ target: "fly" })).some((secret) => secret.name === "FLY_DEPLOY_API_TOKEN"));
-  assert.ok(
-    secretByName(makeConfig({ target: "fly", env: { core: { DEPLOY_PROVIDER: "fly" } } }), "FLY_DEPLOY_API_TOKEN")
-      .required,
-  );
-  for (const config of [makeConfig(), makeConfig({ sandbox: { app: "acme-sb" } }), makeConfig({ target: "aws" })]) {
-    assert.ok(!computedSecrets(config).some((secret) => secret.name === "FLY_SANDBOX_API_TOKEN"));
-    assert.ok(!computedSecrets(config).some((secret) => secret.name === "FLY_DEPLOY_API_TOKEN"));
-  }
-});
-
 test("the sprites token is a catalog secret when the sandbox backend is sprites", () => {
-  assert.ok(
-    secretByName(makeConfig({ target: "aws", sandbox: { backend: "sprites", app: "acme-sb" } }), "SPRITES_TOKEN")
-      .required,
-  );
+  assert.ok(secretByName(makeConfig({ target: "aws", sandbox: { backend: "sprites" } }), "SPRITES_TOKEN").required);
   assert.ok(
     !computedSecrets(makeConfig({ target: "aws", sandbox: { backend: "aws" } })).some(
       (secret) => secret.name === "SPRITES_TOKEN",
@@ -246,19 +225,6 @@ test("the default harness requires and routes the sandbox-reachable PUBLIC_API_U
   assert.equal(publicApi.required, true);
   assert.deepEqual(runtimeSecretNames("core", publicApi), ["PUBLIC_API_URL"]);
   assert.ok(renderEnvExample(real).includes("PUBLIC_API_URL="));
-});
-
-test("ENV_DEFAULTS stays in sync with the packaged core fly template", () => {
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const toml = readFileSync(join(root, "cli", "templates", "fly", "core.toml"), "utf8");
-  for (const [name, value] of Object.entries(ENV_DEFAULTS.core ?? {})) {
-    assert.match(
-      toml,
-      new RegExp(`^\\s*${name}\\s*=\\s*"${value}"`, "m"),
-      `cli/templates/fly/core.toml sets ${name}="${value}"`,
-    );
-  }
-  assert.doesNotMatch(toml, /^\s*DEPLOY_PROVIDER\s*=/m);
 });
 
 test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto core", () => {
@@ -398,25 +364,6 @@ test("the retired SANDBOX_SCOPE_BACKENDS map no longer requires provider credent
   for (const name of ["MODAL_TOKEN_ID", "SUPERSERVE_API_KEY"]) assert.ok(!required.includes(name), name);
 });
 
-test("shared Fly publishing requires private peers only when selected", () => {
-  for (const provider of ["fly", "aws"]) {
-    for (const shared of [false, true]) {
-      const config = makeConfig({
-        target: "aws",
-        env: {
-          core: {
-            DEPLOY_PROVIDER: provider,
-            ...(shared ? { FLY_DEPLOY_SHARED_APP_NAME: "acme-apps" } : {}),
-          },
-        },
-      });
-      const peer = computedSecrets(config).find((secret) => secret.name === "FLY_DEPLOY_WIREGUARD_PEERS");
-      assert.equal(Boolean(peer?.required), provider === "fly" && shared);
-      if (provider === "fly" && shared) assert.doesNotMatch(renderEnvExample(config), /tokens create org/);
-    }
-  }
-});
-
 test("deployment control credentials are conditional and cannot be delivered to plugins or sandboxes", () => {
   assert.equal(
     computedSecrets(makeConfig()).some((secret) => secret.name === "DEPLOYMENT_CONTROL_SECRET"),
@@ -436,7 +383,7 @@ test("deployment control credentials are conditional and cannot be delivered to 
     /only to core/,
   );
   assert.throws(
-    () => computedSecrets({ ...config, sandbox: { app: "sandbox", secretEnv: ["DEPLOYMENT_CONTROL_SECRET"] } }),
+    () => computedSecrets({ ...config, sandbox: { secretEnv: ["DEPLOYMENT_CONTROL_SECRET"] } }),
     /only to core/,
   );
   assert.throws(

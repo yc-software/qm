@@ -20,8 +20,6 @@ import {
   type BackgroundOwnership,
 } from "./runs/background-ownership.ts";
 import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
-import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
-import type { FlyPeerClaim } from "./deploy/fly-peer-claims.ts";
 import { createMemoryEventBus } from "./util/event-bus.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
@@ -169,7 +167,6 @@ import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
 import { createAwsDeployProvider, type StoredDeployBody } from "./deploy/aws-deploy-provider.ts";
-import { createFlyDeployProvider, type FlyMachineConfig } from "./deploy/fly-deploy-provider.ts";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "./deploy/porter-deploy-provider.ts";
 import {
   createE2bDeployProvider,
@@ -1698,29 +1695,9 @@ export function buildApp(
       store: artifactMap<StoredDeployBody>("aws_deploy_bodies"),
       onError: sandboxOnError,
     });
-  if (config.deployProvider === "fly" && config.flyDeploy.sharedAppName && !config.flyDeploy.wireguardPeers)
-    throw new Error("Fly shared apps require FLY_DEPLOY_WIREGUARD_PEERS for private connectivity");
-  const flyTunnel =
-    config.deployProvider === "fly" && config.flyDeploy.wireguardPeers
-      ? createFlyTunnelManager({
-          peers: parseFlyWireguardPeers(config.flyDeploy.wireguardPeers),
-          claims: artifactMap<FlyPeerClaim>("fly_peer_claims"),
-          metadataUri: config.flyDeploy.metadataUri ?? "",
-          executable: "wireproxy",
-          port: 18096,
-        })
-      : undefined;
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
     aws: buildAwsDeploy,
     docker: () => createDockerDeployProvider({ onError: sandboxOnError }),
-    fly: () =>
-      createFlyDeployProvider({
-        ...config.flyDeploy,
-        ...(flyTunnel ? { privateTransport: flyTunnel } : {}),
-        configStore: artifactMap<FlyMachineConfig>("fly_deploy_configs"),
-        portStore: artifactMap<string>("fly_deploy_ports"),
-        onError: sandboxOnError,
-      }),
     porter: () =>
       createPorterDeployProvider({
         ...config.porterDeploy,
@@ -1739,13 +1716,6 @@ export function buildApp(
       });
     },
   };
-  if (
-    config.deployProvider === "fly" &&
-    (config.flyDeploy.dataVolumeSizeGb || config.flyDeploy.sharedAppName || config.flyDeploy.wireguardPeers) &&
-    !config.databaseUrl
-  ) {
-    throw new Error("Fly durable application storage requires DATABASE_URL for persistent rollback configuration");
-  }
   const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
   if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
     console.warn(
@@ -2913,7 +2883,6 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
-      flyTunnel?.monitor();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
@@ -2955,7 +2924,6 @@ export function buildApp(
       );
       await harness.turns.close?.();
       await semanticMemory.close();
-      await flyTunnel?.stop();
       await errors.flush();
     },
   };

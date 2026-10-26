@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,7 +9,6 @@ import {
   requiredSlackScopes,
   slackManifestBotScopes,
 } from "../src/backends/doctor.ts";
-import { flyDoctor, verifyLocalFlyTokens } from "../src/backends/fly.ts";
 import { validatePortalTrust, type QmConfig } from "../src/config.ts";
 
 const config: QmConfig = {
@@ -22,7 +21,6 @@ const config: QmConfig = {
   skills: [],
   env: { core: { HARNESS: "pi" } },
   imageOverrides: {},
-  sandbox: { app: "acme-sandboxes" },
 };
 
 test("Docker doctor rejects missing and placeholder required secrets before external probes", async () => {
@@ -146,144 +144,6 @@ test("remote doctor keeps missing local email values distinct from disabled emai
     else process.env.RESEND_API_KEY = priorKey;
     if (priorSender === undefined) delete process.env.AUTH_EMAIL_FROM;
     else process.env.AUTH_EMAIL_FROM = priorSender;
-  }
-});
-
-test("Fly doctor requires the signing secret for source plugins absent from config", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-"));
-  const bin = join(dir, "fake-fly.cjs");
-  const prior = process.env.FLY_BIN;
-  mkdirSync(join(dir, "plugins", "linear"), { recursive: true });
-  writeFileSync(join(dir, "plugins", "linear", "Dockerfile"), "FROM scratch\n");
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\n");
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.FLY_BIN = bin;
-  try {
-    await assert.rejects(
-      flyDoctor({ ...config, target: "fly", appPrefix: "acme", region: "sjc", flyOrg: "personal" }, dir),
-      /acme-linear: missing CORE_SIGNING_SECRET/,
-    );
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("Fly doctor rejects persisted core access on coreless plugins", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-coreless-"));
-  const bin = join(dir, "fake-fly.cjs");
-  const prior = process.env.FLY_BIN;
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\n");
-if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SECRET\\n");
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.FLY_BIN = bin;
-  try {
-    await assert.rejects(
-      flyDoctor(
-        {
-          ...config,
-          target: "fly",
-          appPrefix: "acme",
-          region: "sjc",
-          flyOrg: "personal",
-          plugins: [{ name: "signer", image: "ghcr.io/acme/signer:1", coreAccess: false }],
-        },
-        dir,
-      ),
-      /unexpected CORE_API_URL[\s\S]*unexpected CORE_SIGNING_SECRET/,
-    );
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("Fly doctor demands the plain name too for a dual-role (core + sandbox) secret", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-dual-"));
-  const bin = join(dir, "fake-fly.cjs");
-  const prior = process.env.FLY_BIN;
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\nFLY_RESIDENT_ENV_ANTHROPIC_API_KEY\\n");
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.FLY_BIN = bin;
-  try {
-    await assert.rejects(
-      flyDoctor(
-        {
-          ...config,
-          target: "fly",
-          appPrefix: "acme",
-          region: "sjc",
-          flyOrg: "personal",
-          sandbox: { app: "acme-sandboxes", secretEnv: ["ANTHROPIC_API_KEY"] },
-        },
-        dir,
-      ),
-      /acme-core: missing ANTHROPIC_API_KEY/,
-    );
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("Fly doctor reports apps that are not created yet as pending, not missing secrets", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-predeploy-"));
-  const bin = join(dir, "fake-fly.cjs");
-  const prior = process.env.FLY_BIN;
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-if (args[0] === "secrets" && args[1] === "list") {
-  process.stderr.write("Error: app not found");
-  process.exit(1);
-}
-process.exit(0);
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.FLY_BIN = bin;
-  const log = console.log;
-  const lines: string[] = [];
-  console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
-  try {
-    await assert.doesNotReject(
-      flyDoctor({ ...config, target: "fly", appPrefix: "acme", region: "sjc", flyOrg: "personal" }, dir),
-    );
-    assert.ok(
-      lines.some((line) => line.includes("acme-core: not created yet")),
-      `printed: ${lines.join(" | ")}`,
-    );
-    assert.ok(!lines.some((line) => line.includes("missing")), `printed: ${lines.join(" | ")}`);
-  } finally {
-    console.log = log;
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -567,12 +427,10 @@ test("slackCheck rejects a bad Socket Mode app token even when the bot token pas
   }
 });
 
-test("doctor treats a missing sandbox block as info (no Fly checks), not a failure", async () => {
+test("doctor treats a missing sandbox block as info, not a failure", async () => {
   const { sandbox: _sandbox, ...rest } = config;
   void _sandbox;
   const noSandbox: QmConfig = { ...rest, env: {} };
-  const priorFly = process.env.FLY_BIN;
-  process.env.FLY_BIN = "/nonexistent/fly-should-never-run";
   const log = console.log;
   const lines: string[] = [];
   console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
@@ -595,8 +453,6 @@ test("doctor treats a missing sandbox block as info (no Fly checks), not a failu
     );
   } finally {
     console.log = log;
-    if (priorFly === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = priorFly;
   }
 });
 
@@ -606,104 +462,6 @@ test("an explicitly named --env-file that does not exist is a bad-path error, no
     assert.throws(() => localDoctorSecrets(dir, join(dir, "nope.env")), /--env-file not found/);
     assert.deepEqual(localDoctorSecrets(dir), new Map(), "a missing default ./.env is still fine");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("fly doctor reports a missing flyctl before trying `fly secrets list`", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-nofly-"));
-  const prior = process.env.FLY_BIN;
-  process.env.FLY_BIN = "/nonexistent/flyctl";
-  try {
-    await assert.rejects(
-      flyDoctor({ ...config, target: "fly", appPrefix: "acme", region: "sjc", flyOrg: "personal" }, dir),
-      /flyctl not found/,
-    );
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("Fly doctor token probes reject expired scoped tokens without exposing them", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-fly-token-"));
-  const bin = join(dir, "fake-fly.cjs");
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-if (process.env.FLY_API_TOKEN === "FlyV1-good") process.exit(0);
-process.stderr.write("unauthorized FlyV1-expired");
-process.exit(1);
-`,
-  );
-  chmodSync(bin, 0o755);
-  const prior = process.env.FLY_BIN;
-  process.env.FLY_BIN = bin;
-  const flyConfig: QmConfig = {
-    ...config,
-    target: "fly",
-    appPrefix: "acme",
-    region: "sjc",
-    flyOrg: "personal",
-  };
-  try {
-    assert.doesNotThrow(() => verifyLocalFlyTokens(flyConfig, new Map([["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"]])));
-    assert.throws(
-      () =>
-        verifyLocalFlyTokens(
-          {
-            ...flyConfig,
-            env: { ...flyConfig.env, core: { ...flyConfig.env.core, DEPLOY_PROVIDER: "fly" } },
-          },
-          new Map([["FLY_DEPLOY_API_TOKEN", "FlyV1-expired"]]),
-        ),
-      (error: unknown) => {
-        assert.match((error as Error).message, /FLY_DEPLOY_API_TOKEN was rejected/);
-        assert.doesNotMatch((error as Error).message, /FlyV1-expired/);
-        return true;
-      },
-    );
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("doctor without required local values warns-and-skips the live Slack check (fly path)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-skip-"));
-  const bin = join(dir, "fake-fly.cjs");
-  writeFileSync(bin, "#!/usr/bin/env node\nprocess.exit(0);\n");
-  chmodSync(bin, 0o755);
-  const priorFly = process.env.FLY_BIN;
-  const priorBot = process.env.SLACK_BOT_TOKEN;
-  const priorApp = process.env.SLACK_APP_TOKEN;
-  process.env.FLY_BIN = bin;
-  delete process.env.SLACK_BOT_TOKEN;
-  delete process.env.SLACK_APP_TOKEN;
-  const warnLog = console.warn;
-  const warned: string[] = [];
-  console.warn = (...parts: unknown[]): void => void warned.push(parts.join(" "));
-  try {
-    await doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), { configDir: dir });
-    assert.ok(
-      warned.some((line) => line.includes("skipping the live Slack check")),
-      `warned: ${warned.join(" | ")}`,
-    );
-    await assert.rejects(
-      doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), {
-        requiredSecretValues: true,
-        configDir: dir,
-      }),
-      /required secrets are missing/,
-    );
-  } finally {
-    console.warn = warnLog;
-    if (priorFly === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = priorFly;
-    if (priorBot !== undefined) process.env.SLACK_BOT_TOKEN = priorBot;
-    if (priorApp !== undefined) process.env.SLACK_APP_TOKEN = priorApp;
     rmSync(dir, { recursive: true, force: true });
   }
 });

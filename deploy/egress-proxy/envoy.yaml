@@ -27,7 +27,7 @@ static_resources:
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: egress_proxy
-                # One line per connection, on stdout (`fly logs`). %RESPONSE_FLAGS% and
+                # One line per connection, on stdout (the service log). %RESPONSE_FLAGS% and
                 # %RESPONSE_CODE_DETAILS% are the point: they name WHY a request failed
                 # (lua_response, upstream_reset_before_response_started{…}), which the
                 # 503's body carries but a failed CONNECT throws away.

@@ -7,7 +7,6 @@ import { CliError } from "../src/log.ts";
 import {
   emailTransportConfigured,
   emailTransportPreflight,
-  flySandboxTokenPreflight,
   nodeEngineProblem,
   smtpVerify,
   SmtpRejectedError,
@@ -23,7 +22,6 @@ const CONFIG: QmConfig = {
   skills: [],
   env: {},
   imageOverrides: {},
-  sandbox: { app: "acme-sandboxes" },
 };
 
 async function quietAsync(fn: () => Promise<void>): Promise<string[]> {
@@ -48,44 +46,6 @@ test("nodeEngineProblem accepts a satisfying version and rejects an older one", 
   assert.ok(problem?.includes("v24.13.0"));
   assert.ok(problem?.includes(">=24.15.0"));
   assert.ok(problem?.includes("the repo package.json"));
-});
-
-test("fly sandbox preflight fails with the exact fix when the token cannot reach the app", async () => {
-  const secrets = new Map([["FLY_SANDBOX_API_TOKEN", "fm2_dead"]]);
-  const fetchImpl = (async () => new Response("not found", { status: 404 })) as typeof fetch;
-  await assert.rejects(
-    () => flySandboxTokenPreflight({ ...CONFIG, flyOrg: "personal" }, secrets, fetchImpl),
-    (e: unknown) => {
-      assert.ok(e instanceof CliError);
-      assert.ok(e.message.includes("fly apps create acme-sandboxes --org personal"));
-      assert.ok(e.message.includes("fly tokens create deploy -a acme-sandboxes"));
-      return true;
-    },
-  );
-});
-
-test("fly sandbox preflight passes a live token and skips when no token is present", async () => {
-  const fetchImpl = (async () => new Response("{}", { status: 200 })) as typeof fetch;
-  const lines = await quietAsync(() =>
-    flySandboxTokenPreflight(CONFIG, new Map([["FLY_SANDBOX_API_TOKEN", "fm2_ok"]]), fetchImpl),
-  );
-  assert.ok(lines.some((line) => line.includes("FLY_SANDBOX_API_TOKEN ok")));
-  const skipped = await quietAsync(() =>
-    flySandboxTokenPreflight(CONFIG, new Map(), (async () => {
-      throw new Error("must not be called");
-    }) as typeof fetch),
-  );
-  assert.deepEqual(skipped, []);
-});
-
-test("fly sandbox preflight warns instead of failing when the Fly API is unreachable", async () => {
-  const fetchImpl = (async () => {
-    throw new Error("network is down");
-  }) as typeof fetch;
-  const lines = await quietAsync(() =>
-    flySandboxTokenPreflight(CONFIG, new Map([["FLY_SANDBOX_API_TOKEN", "fm2_x"]]), fetchImpl),
-  );
-  assert.ok(lines.some((line) => line.includes("could not verify FLY_SANDBOX_API_TOKEN")));
 });
 
 interface FakeSmtp {

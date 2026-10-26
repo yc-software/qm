@@ -16,9 +16,7 @@ function makeDeployment(config: Record<string, unknown>, setup: (dir: string) =>
       publicUrl: "http://localhost:8080",
       target: "docker",
       services: ["core"],
-      sandbox: {
-        app: "wiretest-sandboxes",
-      },
+      sandbox: {},
       ...config,
     }),
   );
@@ -112,7 +110,6 @@ test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env
   const dir = makeDeployment(
     {
       sandbox: {
-        app: "wire-sandboxes",
         env: { TZ: "UTC" },
         secretEnv: ["COMPANY_API_TOKEN"],
       },
@@ -131,7 +128,6 @@ test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env
 test("a missing secretEnv value is warned, not invented", async () => {
   const dir = makeDeployment({
     sandbox: {
-      app: "s",
       secretEnv: ["NOPE_TOKEN"],
     },
   });

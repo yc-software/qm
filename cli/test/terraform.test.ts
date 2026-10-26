@@ -24,7 +24,6 @@ const config: QmConfig = {
   skills: [],
   env: { core: { AWS_DEPLOY_IMAGE: DEPLOY_IMAGE } },
   imageOverrides: {},
-  sandbox: { app: "acme-sandboxes" },
   aws: {
     accountId: "123456789012",
     region: "us-west-2",

@@ -17,7 +17,7 @@ terraform version
 docker buildx version
 ```
 
-If Lambda MicroVMs are unavailable, stop before mutation and offer Fly.io. Set
+If Lambda MicroVMs are unavailable, stop before mutation. Set
 the account, region, service coordinates, and an operator-owned GitHub
 repository and exact branch in the generated config and Terraform variables.
 Never trust the upstream QM repository.

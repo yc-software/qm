@@ -79,7 +79,6 @@ function privateMcpUrl(value: unknown, at: string): string {
     (url.hostname === "localhost" ||
       url.hostname === "127.0.0.1" ||
       url.hostname.endsWith(".internal") ||
-      url.hostname.endsWith(".flycast") ||
       url.hostname.endsWith(".local"));
   if ((url.protocol !== "https:" && !privateHttp) || url.username || url.password || url.hash)
     throw new Error(`${at} must use HTTPS or a recognized private HTTP host`);

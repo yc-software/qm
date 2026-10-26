@@ -10,7 +10,7 @@ function scaffold(label: string): string {
   return dir;
 }
 
-test("sandbox build --dry-run generates the COPY-tools Dockerfile + the fly push command", () => {
+test("sandbox build --dry-run generates the COPY-tools Dockerfile and the local build command", () => {
   const dir = scaffold("sb-default");
   try {
     const r = runCli(["sandbox", "build", "--dry-run"], { cwd: dir });

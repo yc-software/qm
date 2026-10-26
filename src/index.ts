@@ -76,7 +76,7 @@ if (config.deployProvider === "docker") {
   void dockerDaemonFailure().then((failure) => {
     if (failure)
       console.warn(
-        `[qm] publishing is unavailable: the docker deploy provider is selected but no Docker daemon is reachable from core (${failure}) — make a daemon reachable, or set DEPLOY_PROVIDER to fly or aws`,
+        `[qm] publishing is unavailable: the docker deploy provider is selected but no Docker daemon is reachable from core (${failure}) — make a daemon reachable, or set DEPLOY_PROVIDER to aws`,
       );
   });
 }

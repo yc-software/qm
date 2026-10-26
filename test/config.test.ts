@@ -90,7 +90,7 @@ test("store kinds default to memory and accept postgres", () => {
 
 test("deploy provider defaults to docker and rejects unknown values", () => {
   assert.equal(loadConfig({}).deployProvider, "docker");
-  assert.equal(loadConfig({ DEPLOY_PROVIDER: "fly", FLY_DEPLOY_API_TOKEN: "test-token" }).deployProvider, "fly");
+  assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "fly" }), /DEPLOY_PROVIDER="fly" is not recognized/);
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "flly" }), /DEPLOY_PROVIDER="flly" is not recognized/);
 });
 
@@ -520,14 +520,12 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
   assert.ok(!("sandboxSecondaryBackend" in config));
 });
 
-test("Fly identity and Slack runtime settings are parsed once into Config", () => {
+test("Slack runtime settings are parsed once into Config", () => {
   const config = loadConfig({
-    FLY_APP_NAME: "qm-core",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_APP_TOKEN: "xapp-test",
     SLACK_API_URL: "https://slack.example/api",
   });
-  assert.equal(config.flyAppName, "qm-core");
   assert.deepEqual(config.slack, {
     botToken: "xoxb-test",
     appToken: "xapp-test",
@@ -922,18 +920,6 @@ test("legacy sandbox scope defaults are parsed for upgrade", () => {
     '{"personal":""}',
   ])
     assert.throws(() => loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: value }));
-});
-
-test("Fly shared application name is passed to the deployment provider", () => {
-  const config = loadConfig({
-    DEPLOY_PROVIDER: "fly",
-    FLY_DEPLOY_SHARED_APP_NAME: "qm-example-apps",
-    FLY_DEPLOY_WIREGUARD_PEERS: "[]",
-    FLY_DEPLOY_API_TOKEN: "test-token",
-    FLY_DEPLOY_DATA_VOLUME_SIZE_GB: "1",
-  });
-  assert.equal(config.flyDeploy.sharedAppName, "qm-example-apps");
-  assert.equal(config.flyDeploy.dataVolumeSizeGb, 1);
 });
 
 test("background ownership requires durable storage and an independent deployment authority", () => {
