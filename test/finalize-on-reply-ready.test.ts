@@ -232,7 +232,7 @@ test("background: a turn that never used its eagerly provisioned box returns bef
 
 test("background: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
   const g = gatedSandbox();
-  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), true);
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7", background: true });
   assert.equal(first.status, "ok");
