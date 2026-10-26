@@ -1284,7 +1284,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       );
       screenSession.id = session.id;
       const swarmGoalTurn =
-        !!swarmBinding && (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
+        !!swarmBinding &&
+        swarmBinding.rootSessionId !== session.id &&
+        (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
 
