@@ -20,15 +20,17 @@ const shownOf = ({ scope, id, text }: RecalledFact): Shown => ({
   hash: factHash(text).slice(0, 16),
 });
 
-export const shownFacts = (facts: readonly MemoryFact[]) =>
-  new Map(facts.map((fact) => [fact.id, shownOf({ scope: "", id: fact.id, text: renderFacts([fact]) }).hash]));
+export const shownFacts = (facts: readonly MemoryFact[]) => new Map(facts.map((fact) => [fact.id, fact]));
+
+const stillHeld = (fact: MemoryFact | undefined, shown: Shown) =>
+  !!fact && shownOf({ scope: "", id: fact.id, text: renderFacts([fact]) }).hash === shown.hash;
 
 const keyOf = ({ scope, id, hash }: Shown) => JSON.stringify([scope, id ?? null, hash]);
 
 export function memoryRecallDelta(
   recalled: readonly RecalledFact[],
   history: readonly SessionEntry[],
-  held: ReadonlyMap<string, ReadonlyMap<string, string>>,
+  held: ReadonlyMap<string, ReadonlyMap<string, MemoryFact>>,
   labels: ReadonlyMap<string, string> = new Map(),
 ): { text: string; record: RecallRecord } {
   const { previous, anchorSeq } = retainedSnapshot(history, (entry) => {
@@ -44,7 +46,7 @@ export function memoryRecallDelta(
   const removed = new Map<string, number>();
   for (const [key, shown] of before) {
     if (now.has(key)) continue;
-    if (shown.id !== undefined && held.get(shown.scope)?.get(shown.id) === shown.hash) record.shown.push(shown);
+    if (shown.id !== undefined && stillHeld(held.get(shown.scope)?.get(shown.id), shown)) record.shown.push(shown);
     else removed.set(shown.scope, (removed.get(shown.scope) ?? 0) + 1);
   }
   const withdrawn = [...removed].filter(([scope]) => held.has(scope));

@@ -1,5 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { unitVector } from "../model/embeddings.ts";
+import { MEMORY_FACTS_MIGRATIONS } from "./postgres-memory-service.ts";
 
 export interface MemoryVector {
   scope: string;
@@ -11,6 +12,7 @@ export interface MemoryVector {
 
 interface MemoryVectorMatch {
   factId: string;
+  hash: string;
   score: number;
 }
 
@@ -18,7 +20,8 @@ interface MemoryVectorSearch {
   scope: string;
   model: string;
   vector: number[];
-  facts: readonly { id: string; hash: string; at: number }[];
+  ids: readonly string[];
+  limit: number;
   minSimilarity?: number;
 }
 
@@ -49,7 +52,6 @@ const SCHEMA = [
   )`,
 ];
 
-const FACT_HASH = "encode(sha256(convert_to(f.text, 'UTF8')), 'hex')";
 const batchSize = (limit: number) => Math.max(1, Math.min(256, Math.floor(limit) || 1));
 
 function vectorWidth(dimensions: number | undefined): number | null {
@@ -61,43 +63,42 @@ function vectorWidth(dimensions: number | undefined): number | null {
 
 export function createPostgresVectorStore(connectionString: string): MemoryVectorStore {
   const db = createPgPool(connectionString, [
+    ...MEMORY_FACTS_MIGRATIONS,
     { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
     { id: "memory/vectors/0002", statements: SCHEMA },
   ]);
   return {
     async search(input) {
-      if (!input.facts.length) return [];
+      if (!input.ids.length) return [];
       const vector = unitVector(input.vector);
       const minSimilarity = input.minSimilarity ?? 0.2;
       const rows = await db.q(
-        `WITH scoped AS MATERIALIZED (
-          SELECT wanted.id, wanted.hash, wanted.at, ${FACT_HASH} AS live_hash, v.fact_hash, v.embedding
-          FROM unnest($4::bigint[], $5::text[], $6::bigint[]) AS wanted(id, hash, at)
-          JOIN memory_facts f ON f.scope_id = $1 AND f.id = wanted.id AND f.deleted_at IS NULL
-          LEFT JOIN memory_fact_vectors v ON v.scope_id = $1 AND v.model = $2 AND v.dimensions = $3
-            AND v.fact_id = wanted.id
-        ),
-        ranked AS MATERIALIZED (
-          SELECT id, hash, at, fact_hash IS DISTINCT FROM hash AS unindexed,
-            CASE WHEN fact_hash = hash THEN embedding <=> $7::vector ELSE $9::double precision END AS distance
-          FROM scoped WHERE hash = live_hash
-        )
-        SELECT id, distance FROM ranked WHERE unindexed OR distance <= $8 ORDER BY distance, at DESC, id`,
+        `SELECT id, hash, distance FROM (
+          SELECT f.id, f.text_hash AS hash, f.created_at, v.fact_hash IS DISTINCT FROM f.text_hash AS unindexed,
+            CASE WHEN v.fact_hash = f.text_hash THEN v.embedding <=> $4::vector ELSE $6::double precision END AS distance
+          FROM memory_facts f
+          LEFT JOIN memory_fact_vectors v ON v.scope_id = f.scope_id AND v.model = $2 AND v.dimensions = $3
+            AND v.fact_id = f.id
+          WHERE f.scope_id = $1 AND f.deleted_at IS NULL AND f.id = ANY($8::bigint[])
+        ) ranked
+        WHERE unindexed OR distance <= $5
+        ORDER BY distance, created_at DESC, id
+        LIMIT $7`,
         [
           input.scope,
           input.model,
           vector.length,
-          input.facts.map((fact) => fact.id),
-          input.facts.map((fact) => fact.hash),
-          input.facts.map((fact) => fact.at),
           JSON.stringify(vector),
           1 - minSimilarity,
           1 - Math.min(0.2, minSimilarity),
+          Math.max(1, Math.floor(input.limit)),
+          input.ids,
         ],
         { timeoutMs: 5000 },
       );
       return rows.map((row) => ({
         factId: String(row.id),
+        hash: String(row.hash),
         score: 1 - Number(row.distance),
       }));
     },
@@ -116,7 +117,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
         live AS MATERIALIZED (
           SELECT x.scope, x.model, x."factId", x.hash, x.vector
           FROM input x JOIN memory_facts f ON f.scope_id = x.scope AND f.id = x."factId"
-            AND f.deleted_at IS NULL AND ${FACT_HASH} = x.hash
+            AND f.deleted_at IS NULL AND f.text_hash = x.hash
           ORDER BY f.id FOR SHARE OF f
         )
         INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
@@ -129,10 +130,10 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     },
     async missing(model, limit, dimensions, signal, afterId) {
       const rows = await db.q(
-        `SELECT f.scope_id, f.id, f.text, ${FACT_HASH} AS hash
+        `SELECT f.scope_id, f.id, f.text, f.text_hash AS hash
          FROM memory_facts f LEFT JOIN memory_fact_vectors v
            ON v.scope_id = f.scope_id AND v.fact_id = f.id AND v.model = $1
-           AND v.fact_hash = ${FACT_HASH}
+           AND v.fact_hash = f.text_hash
            AND ($3::integer IS NULL OR v.dimensions = $3)
          WHERE f.deleted_at IS NULL AND v.fact_id IS NULL AND ($4::bigint IS NULL OR f.id > $4)
          ORDER BY f.id LIMIT $2`,
@@ -153,7 +154,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           WHERE s.model <> $1 OR ($3::integer IS NOT NULL AND s.dimensions <> $3) OR NOT EXISTS (
             SELECT 1 FROM memory_facts f
             WHERE f.scope_id = s.scope_id AND f.id = s.fact_id
-              AND f.deleted_at IS NULL AND ${FACT_HASH} = s.fact_hash
+              AND f.deleted_at IS NULL AND f.text_hash = s.fact_hash
           )
           LIMIT $2 FOR UPDATE OF s SKIP LOCKED
         ) stale

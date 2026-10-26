@@ -5,6 +5,8 @@ import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 import { disclosedMemory } from "./disclosure.ts";
 
+const RECALL_CANDIDATES = 200;
+
 export function memoryRecallQuery(message: string, visibleEntries: readonly SessionEntry[]): string {
   const recent = visibleEntries
     .filter((entry) => entry.type === "user" || entry.type === "assistant")
@@ -55,12 +57,13 @@ export function createSemanticMemoryService(
             const matches = await index.search({
               scope,
               ...query,
-              facts: facts.map((fact) => ({ id: fact.id, hash: factHash(fact.text), at: fact.createdAt })),
+              ids: facts.map((fact) => fact.id),
+              limit: RECALL_CANDIDATES,
               minSimilarity: opts.minSimilarity,
             });
             return matches.flatMap((match) => {
               const fact = byId.get(match.factId);
-              return fact ? [factCandidate(fact, match.score)] : [];
+              return fact && factHash(fact.text) === match.hash ? [factCandidate(fact, match.score)] : [];
             });
           }
           return recentCandidates(facts);

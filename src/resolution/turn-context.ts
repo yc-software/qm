@@ -82,9 +82,9 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     memory,
     memoryLabels,
-    memorySnapshot: async (auditReads = true) => {
+    memorySnapshot: async () => {
       const notebooks = await Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) })));
-      if (auditReads) for (const { scope } of notebooks) recordRead(scope, "memory");
+      for (const { scope } of notebooks) recordRead(scope, "memory");
       return {
         held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
         facts: notebooks.flatMap(({ facts }) => facts ?? []),

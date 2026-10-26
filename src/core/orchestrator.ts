@@ -1053,7 +1053,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       });
       const { sharingSources, memoryScopeId, baseRecallScopes, memoryAccess } = context;
       resolution.grantedHandles = context.listFiles();
-      let memoryView = await context.memorySnapshot(false);
       const isWeb = input.surface === "web";
       const isSlack = input.surface === "slack";
       const surfaceTool = input.surface ?? "slack";
@@ -1984,7 +1983,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const memoryWindow = await deps.sessions.getContextWindow(session.id);
 
-        memoryView = await context.memorySnapshot();
+        const memoryView = await context.memorySnapshot();
         const captureDependencies = () => [
           ...memoryView.facts,
           ...(!memoryView.complete ||

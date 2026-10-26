@@ -4,7 +4,7 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { disclosedMemory, MemoryDisclosureDenied, type MemoryDisclosure } from "../src/memory/disclosure.ts";
-import { MemoryFactsMissing, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
+import { MemoryFactsMissing, factHash, renderFacts, type MemoryFact } from "../src/memory/facts.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { recallText } from "./support/recall-text.ts";
@@ -323,8 +323,11 @@ test("semantic recall ranks only currently disclosed facts and rechecks membersh
   const queries: string[][] = [];
   const semantic = createSemanticMemoryService(f.raw, async () => ({ id: "test", embed: async () => [[1, 0]] }), {
     async search(input) {
-      queries.push(input.facts.map((fact) => fact.id));
-      return input.facts.map((fact) => ({ factId: fact.id, hash: fact.hash, score: 1 }));
+      queries.push([...input.ids]);
+      const facts = f.notebooks.get(input.scope) ?? [];
+      return facts
+        .filter((fact) => input.ids.includes(fact.id))
+        .map((fact) => ({ factId: fact.id, hash: factHash(fact.text), score: 1 }));
     },
   });
   const view = disclosedMemory(semantic, f.access);
@@ -333,4 +336,31 @@ test("semantic recall ranks only currently disclosed facts and rechecks membersh
   f.access.currentScopeMembers = async () => [];
   assert.deepEqual(await view.recall("personal:alice", { query: "recall" }), []);
   assert.deepEqual(queries, [["2"]]);
+});
+
+test("one disclosure loads a notebook once but re-applies the policy on every read", async () => {
+  const f = fixture();
+  f.put("personal:alice", "ordinary fact", "ordinary");
+  let loads = 0;
+  const raw: MemoryService = {
+    ...f.raw,
+    facts: async (scope) => {
+      loads++;
+      return [...(f.notebooks.get(scope) ?? [])];
+    },
+  };
+  const view = disclosedMemory(raw, f.access);
+  assert.equal((await view.facts!("personal:alice")).length, 1);
+  assert.equal((await view.facts!("personal:alice")).length, 1);
+  assert.equal(loads, 1);
+  f.access.currentScopeMembers = async () => [];
+  assert.deepEqual(await view.facts!("personal:alice"), []);
+  assert.equal(loads, 1);
+  f.access.currentScopeMembers = async () => [...f.access.audience];
+  f.put("personal:alice", "written elsewhere", "ordinary");
+  await view.capture("personal:alice", ["ignored by the stub"], 1);
+  assert.equal((await view.facts!("personal:alice")).length, 2);
+  assert.equal(loads, 2);
+  await disclosedMemory(raw, { ...f.access }).facts!("personal:alice");
+  assert.equal(loads, 3, "another disclosure does not share this one's facts");
 });

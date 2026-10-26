@@ -105,10 +105,20 @@ export class MemoryDisclosureDenied extends Error {
   }
 }
 
+const loaded = new WeakMap<MemoryDisclosure, WeakMap<MemoryService, Map<ScopeId, Promise<MemoryFact[]>>>>();
+
+async function afterWrite<T>(access: MemoryDisclosure, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } finally {
+    loaded.delete(access);
+  }
+}
+
 export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure): MemoryService {
   if (memory.withDisclosure) {
     const view = memory.withDisclosure(access);
-    return { ...view, capture: (...args) => memory.capture(...args) };
+    return { ...view, capture: (...args) => afterWrite(access, () => memory.capture(...args)) };
   }
   const listed = memory.facts?.bind(memory);
   if (!listed) {
@@ -121,11 +131,29 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       read: async (scope) => ((await narrow(scope)) ? memory.read(scope) : ""),
     };
   }
+  function listedOnce(scope: ScopeId): Promise<MemoryFact[]> {
+    const byMemory = loaded.get(access) ?? new WeakMap<MemoryService, Map<ScopeId, Promise<MemoryFact[]>>>();
+    loaded.set(access, byMemory);
+    const byScope = byMemory.get(memory) ?? new Map<ScopeId, Promise<MemoryFact[]>>();
+    byMemory.set(memory, byScope);
+    const cached = byScope.get(scope);
+    if (cached) return cached;
+    const pending = listed!(scope);
+    byScope.set(scope, pending);
+    pending.catch(() => {
+      if (byScope.get(scope) === pending) byScope.delete(scope);
+    });
+    return pending;
+  }
   async function visible(scope: ScopeId): Promise<MemoryFact[]> {
-    const facts = await listed!(scope);
+    const facts = await listedOnce(scope);
     const policy = memoryDisclosurePolicy(access);
-    const allowed = await Promise.all(facts.map((fact) => policy.allows(scope, fact)));
-    return facts.filter((_, index) => allowed[index]);
+    const keys = facts.map((fact) => JSON.stringify([fact.sensitivity, fact.sourceUnknown, fact.sources]));
+    const kinds = new Map(keys.map((key, index) => [key, facts[index]!]));
+    const allowed = new Map(
+      await Promise.all([...kinds].map(async ([key, fact]) => [key, await policy.allows(scope, fact)] as const)),
+    );
+    return facts.filter((_, index) => allowed.get(keys[index]!));
   }
   async function editable(scope: ScopeId, ids: readonly string[]): Promise<void> {
     if (!(await memoryDisclosurePolicy(access).narrow(scope))) throw new MemoryDisclosureDenied();
@@ -136,16 +164,17 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
   return {
     ...memory,
     facts: visible,
+    capture: (...args) => afterWrite(access, () => memory.capture(...args)),
     async edit(scope, edits, author, context) {
       await editable(
         scope,
         edits.map((edit) => edit.id),
       );
-      await memory.edit!(scope, edits, author, context);
+      await afterWrite(access, () => memory.edit!(scope, edits, author, context));
     },
     async delete(scope, ids, author) {
       await editable(scope, ids);
-      await memory.delete!(scope, ids, author);
+      await afterWrite(access, () => memory.delete!(scope, ids, author));
     },
     read: async (scope) => renderFacts(await visible(scope)),
     async recall(scope, context) {

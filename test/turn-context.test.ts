@@ -246,3 +246,31 @@ test("source selection precedes name shadowing and preserves skill-level grants"
   await context.listSkills(["personal:stranger"]);
   assert.deepEqual(seen[2], { scopes: [], grants: [] });
 });
+
+test("a turn loads each notebook once for its snapshot and recall, and memory writes are seen afterwards", async () => {
+  const { input, memory } = await fixture();
+  const loads: string[] = [];
+  input.memory = {
+    ...memory,
+    facts: async (scope) => {
+      loads.push(scope);
+      return memory.facts!(scope);
+    },
+  };
+  const context = await resolveTurnContext(input);
+  await context.memorySnapshot();
+  await context.recallMemory("anything");
+  await context.searchMemory("SHARED_FACT");
+  assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
+  await context.memory.capture("personal:alice", ["ADDED_MID_TURN"], Date.now());
+  assert.match((await context.searchMemory("ADDED_MID_TURN"))!.join(), /ADDED_MID_TURN/);
+  const added = (await context.memorySnapshot()).facts.find((fact) => fact.text === "ADDED_MID_TURN")!;
+  await context.memory.edit!("personal:alice", [{ id: added.id, text: "EDITED_MID_TURN" }]);
+  assert.match(renderRecall(await context.recallMemory("anything"), new Map()), /EDITED_MID_TURN/);
+  await context.memory.delete!("personal:alice", [added.id]);
+  assert.deepEqual(await context.searchMemory("EDITED_MID_TURN"), []);
+  const next = await resolveTurnContext(input);
+  loads.length = 0;
+  await next.memorySnapshot();
+  assert.equal(loads.length, 3, "a new turn reloads rather than reusing the previous turn's facts");
+});
