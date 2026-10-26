@@ -175,22 +175,32 @@ test("a proxy that swallows core's 400 hides which surfaceBriefing field is malf
   assert.match(((await response.json()) as { error: string }).error, /surfaceBriefing\.name/);
 });
 
-test("a shared thread that carried a briefing would put one person's page into everyone's history", async () => {
-  const response = await fetch(`${base}/api/turn`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      text: "hello",
-      threadRef: "web:bob:app-edit:sample-app",
-      clientTools: [{ name: "ui__scroll", description: "Scroll", inputSchema: { type: "object" } }],
-      surfaceBriefing: { name: "Panel", state: "URL: /inbox" },
-    }),
-  });
+// newChat names every thread web:<user>:<uuid> whatever scope it was started in, so an own-prefix
+// name is not evidence the conversation is private.
+for (const shared of [
+  { label: "someone else's app thread", body: { threadRef: "web:bob:app-edit:sample-app" } },
+  {
+    label: "the caller's own thread mounted in a channel",
+    body: { threadRef: "web:alice:embed", scopeId: "channel:shared" },
+  },
+]) {
+  test(`a briefing on ${shared.label} would put one person's page into everyone's history`, async () => {
+    const response = await fetch(`${base}/api/turn`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        text: "hello",
+        clientTools: [{ name: "ui__scroll", description: "Scroll", inputSchema: { type: "object" } }],
+        surfaceBriefing: { name: "Panel", state: "URL: /inbox" },
+        ...shared.body,
+      }),
+    });
 
-  assert.equal(response.status, 202);
-  assert.equal(turns.at(-1)?.surfaceBriefing, undefined);
-  assert.equal(turns.at(-1)?.clientTools, undefined);
-});
+    assert.equal(response.status, 202);
+    assert.equal(turns.at(-1)?.surfaceBriefing, undefined);
+    assert.equal(turns.at(-1)?.clientTools, undefined);
+  });
+}
 
 test("a turn that skips an empty clientTools array makes the embedder's declaration vanish", async () => {
   assert.equal((await postTurn({ clientTools: [] })).status, 202);

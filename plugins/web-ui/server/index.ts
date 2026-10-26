@@ -2681,9 +2681,11 @@ const apiRoutes: readonly WebRoute[] = [
       if ("error" in resolved) return json(res, 403, resolved);
 
       // Core folds surfaceBriefing into conversationHeader, which this route strips from browser
-      // bodies on purpose. On a shared thread that would put one person's page state into history
-      // every member reads, so both fields ride only the caller's own thread.
-      const ownThread = threadRef.startsWith(ownPrefix);
+      // bodies on purpose. In anything but the caller's own one-to-one chat that would put their
+      // page state into history other people read. Both halves are load-bearing: a channel scope
+      // keeps an own-prefix name (newChat names every thread web:<user>:<uuid> whatever scope it
+      // was started in), and someone else's thread reports kind "dm" when it carries no scope.
+      const privateConversation = threadRef.startsWith(ownPrefix) && resolved.conversation.kind === "dm";
 
       const turn = {
         ...(await webTurnBase(req, user, resolved.conversation, threadRef, text)),
@@ -2692,8 +2694,8 @@ const apiRoutes: readonly WebRoute[] = [
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         ...(timezone ? { timezone } : {}),
-        ...(ownThread && clientTools ? { clientTools } : {}),
-        ...(ownThread && surfaceBriefing !== undefined ? { surfaceBriefing } : {}),
+        ...(privateConversation && clientTools ? { clientTools } : {}),
+        ...(privateConversation && surfaceBriefing !== undefined ? { surfaceBriefing } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(approval ? { approval } : {}),
         ...(proactiveOpener ? { proactiveOpener: true } : {}),
