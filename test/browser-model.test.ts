@@ -40,7 +40,7 @@ test("browser inference uses the company gateway with scoped model authorization
   const routes: Record<string, string> = { [model]: "anthropic/claude-opus-5" };
   const server = createServer(built.app, {
     ...serverDeps(config, built),
-    browserModelGateway: {
+    modelGatewayTransport: {
       url: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`,
       apiKey: `Bearer ${key}`,
       apiKeyHeader: "Authorization",

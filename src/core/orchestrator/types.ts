@@ -154,6 +154,7 @@ export interface OrchestratorDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
+  sandboxModels?: boolean;
   publicWebUrl?: string;
   /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
    *  tool hands the user to point the sender at; matches the HTTP webhook route's base exactly. */
