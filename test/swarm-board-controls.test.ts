@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
+import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
 test("a swarm provisions one shared board computer that the root and every worker share", async () => {
@@ -98,3 +99,48 @@ test("pausing and stopping the root's direct children cascades across a 120-work
   assert.ok(workers.every((w) => swarm.messages[0]!.notifications[w.id]?.state !== "queued"));
   assert.equal((await fixture.service.inspect(fixture.caller)).peers.length, 121);
 });
+
+for (const inherited of [false, true]) {
+  test(`stopping ${inherited ? "an ancestor" : "a worker"} cancels ordinary worker turns without touching other sessions`, async () => {
+    const fixture = await swarmFixture();
+    const signals = createMemoryRunSignalStore();
+    const service = createSwarmService({ ...fixture.serviceOptions, signals });
+    const [parent, sibling] = await service.spawn(fixture.caller, {
+      requestId: "pool",
+      text: "Work",
+      count: 2,
+    });
+    await service.sweep();
+    let worker = parent!;
+    if (inherited) {
+      const caller = await fixture.workerCaller(parent!.id);
+      const children = await service.spawn(caller, { requestId: "child", text: "Nested work" });
+      worker = children[0]!;
+      await service.sweep();
+    }
+    const caller = await fixture.workerCaller(worker.id);
+    assert.equal(caller.kind, "agent");
+    if (caller.kind !== "agent") throw new Error("expected an agent");
+    await fixture.runs.complete(caller.claims.runId!, caller.claims.runLeaseToken!, { status: "silent" });
+    const request = {
+      ...fixture.template,
+      surface: "web" as const,
+      conversation: { ...fixture.template.conversation, threadRef: worker.threadRef },
+    };
+    const active = await fixture.runs.enqueue({ sessionId: worker.threadRef, request });
+    const claimed = await fixture.runs.claimById(active.run.id, "ordinary-turn", 60_000);
+    assert.ok(claimed);
+    const pending = await fixture.runs.enqueue({ sessionId: worker.threadRef, request });
+    assert.equal((await service.binding({ ...request, runId: claimed.id }))?.member.id, worker.id);
+    await service.control(fixture.caller, { memberId: parent!.id, state: "stopped" });
+    assert.equal(await fixture.runs.get(pending.run.id), null);
+    assert.deepEqual(
+      (await signals.pending(claimed.id)).map(({ signal }) => signal.kind),
+      ["abort"],
+    );
+    assert.ok((await fixture.runs.inFlightForThread(sibling!.threadRef)).length);
+    if (fixture.caller.kind !== "agent") throw new Error("expected a root agent");
+    assert.deepEqual(await signals.pending(fixture.caller.claims.runId!), []);
+    await assert.rejects(service.binding({ ...request, runId: claimed.id }), /worker stopped/);
+  });
+}
