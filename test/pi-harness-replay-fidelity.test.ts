@@ -228,6 +228,55 @@ test("a turn on a later day is prompted under that day's marker and replays it b
   }
 });
 
+test("connector tool_search and mcp_call calls replay byte-for-byte on the next turn", async () => {
+  const calls: Array<[string, unknown]> = [];
+  const overrides: Partial<HarnessTurnInput> = {
+    tools: {
+      async callMcpTool(name: string, args: unknown) {
+        calls.push([name, args]);
+        return '{"stores":["Burrito Barn"]}';
+      },
+    } as unknown as ToolContext,
+    mcpTools: [
+      {
+        name: "shop_find_stores",
+        serverId: "shop",
+        serverName: "Shop",
+        remoteName: "find_stores",
+        description: "Find nearby stores.",
+        inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        readOnly: true,
+        needsApproval: false,
+      },
+    ],
+  };
+  const step1: Reply = [
+    { type: "tool_use", id: "toolu_1", name: "tool_search", input: { query: "stores" } },
+    {
+      type: "tool_use",
+      id: "toolu_2",
+      name: "mcp_call",
+      input: { tool: "shop_find_stores", args: { query: "burrito" } },
+    },
+  ];
+  const first = await runTurn(
+    "find a burrito place",
+    [],
+    [() => anthropicSse(step1, "tool_use"), () => anthropicSse([{ type: "text", text: "Burrito Barn." }], "end_turn")],
+    overrides,
+  );
+  assert.deepEqual(calls, [["shop_find_stores", { query: "burrito" }]]);
+  const second = await runTurn(
+    "thanks",
+    forModelContext(first.emitted),
+    [() => anthropicSse([{ type: "text", text: "Enjoy." }], "end_turn")],
+    overrides,
+  );
+  const before = withoutCacheControl(first.bodies[1]!.messages) as unknown[];
+  const after = withoutCacheControl(second.bodies[0]!.messages) as unknown[];
+  assert.equal(JSON.stringify(after.slice(0, before.length)), JSON.stringify(before));
+});
+
 test("the next turn's OpenAI Responses request replays the previous turn's reasoning items, messages and calls exactly", async () => {
   const reasoning = (id: string, text: string) => ({
     type: "reasoning",
