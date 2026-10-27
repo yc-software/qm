@@ -7,6 +7,7 @@ import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/h
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
+import { createGoalRecord } from "../src/harness/goal.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
@@ -686,6 +687,35 @@ for (const surfaceTools of [false, true]) {
     assert.ok(entries.some((entry) => entry.type === "tool_result" && (entry.payload as { silent?: boolean }).silent));
   });
 }
+
+test("a Claude worker the swarm holds ends its goal turn quietly instead of as a stopped turn", async () => {
+  currentScript = async function* (prompts) {
+    await prompts[Symbol.asyncIterator]().next();
+    yield assistantMessage("held", "Starting step 3.", {});
+    await toolHandlers.get("goal")!({ action: "get" });
+    yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
+  };
+  const harness = createClaudeHarness({});
+  const { turn, entries } = harnessTurn({
+    readOnly: false,
+    goal: createGoalRecord({ objective: "lane A" }),
+    goalInbox: { receive: async () => [], acknowledge: async () => {}, held: async () => true },
+    saveGoal: async () => {},
+  });
+  const result = await harness.turns.runTurn(turn);
+  assert.equal(result.stopped, undefined);
+  assert.equal(result.reply, "");
+  assert.equal(
+    entries.some((entry) => entry.type === "assistant"),
+    false,
+  );
+  assert.ok(
+    entries.some(
+      (entry) =>
+        entry.type === "tool_result" && JSON.stringify(entry.payload).includes("The swarm paused or stopped you"),
+    ),
+  );
+});
 
 test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
   const signals = createMemoryRunSignalStore();

@@ -715,7 +715,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           await recordStep(message);
           await flushThinking();
           if (interrupted) break;
-          const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
+          const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld;
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
             await turn.emit({ type: "assistant", payload: { text }, scopeLabel: turn.scopeLabel });
@@ -747,13 +747,13 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       }
       const finalResult = result as SDKResultMessage | null;
       const stoppedPartial = async (): Promise<HarnessTurnResult> => {
-        const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
+        const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld;
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
         if (!terminal) await recordStoppedTurn(turn, reply, stopped ? stopReason : "because the run was cancelled");
         return {
           reply,
-          ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),
+          ...(!(ref.runtimeHandoff || ref.swarmHeld) || stopped ? { stopped: true as const } : {}),
           ...(stopped ? { stoppedByUser: true as const } : {}),
           ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
@@ -768,7 +768,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         throw new Error("Claude Agent SDK ended without a result");
       }
       if (finalResult.subtype !== "success") {
-        if (stopped || ref.runtimeHandoff) return stoppedPartial();
+        if (stopped || ref.runtimeHandoff || ref.swarmHeld) return stoppedPartial();
         throw new Error(finalResult.errors.join("; ") || `Claude Agent SDK failed: ${finalResult.subtype}`);
       }
       if (
@@ -777,7 +777,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       ) {
         throw new Error(`Claude utility response did not complete (${finalResult.stop_reason ?? "error"})`);
       }
-      const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
+      const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld;
       const reply = terminal ? "" : finalResult.result.trim();
       const usageTotals = [...callUsage.values()].reduce(
         (acc, usage) => {
