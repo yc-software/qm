@@ -1714,7 +1714,11 @@ export function buildApp(
       : undefined;
   const buildDeployProvider: Record<Config["deployProvider"], () => DeployProvider> = {
     aws: buildAwsDeploy,
-    docker: () => createDockerDeployProvider({ onError: sandboxOnError }),
+    docker: () =>
+      createDockerDeployProvider({
+        onError: sandboxOnError,
+        ...(config.dockerDeployImage ? { image: config.dockerDeployImage } : {}),
+      }),
     fly: () =>
       createFlyDeployProvider({
         ...config.flyDeploy,
