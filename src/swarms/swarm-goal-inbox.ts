@@ -5,7 +5,7 @@ import { swarmMessageText, type SwarmService } from "./swarm-service.ts";
 import type { SwarmMessage } from "./swarm-store.ts";
 
 export function createSwarmGoalInbox(deps: {
-  swarms: Pick<SwarmService, "queuedMessages" | "handOver">;
+  swarms: Pick<SwarmService, "queuedMessages" | "handOver" | "held">;
   input: OrchestratorInput;
   screen(text: string): Promise<string | null>;
   saveGoal(goal: GoalRecord): Promise<void>;
@@ -39,6 +39,7 @@ export function createSwarmGoalInbox(deps: {
         }
         return out;
       },
+      ...(deps.input.swarm ? { held: () => deps.swarms.held(deps.input) } : {}),
       async acknowledge(ids, goal) {
         const messages = ids.flatMap((id) => shown.get(id) ?? []);
         for (const message of messages)

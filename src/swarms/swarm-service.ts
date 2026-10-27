@@ -90,6 +90,7 @@ export interface SwarmService {
     options?: { skipRuns?: ReadonlySet<string>; mailboxOnly?: boolean },
   ): Promise<SwarmMessage[]>;
   handOver(input: OrchestratorInput, messageIds: readonly string[]): Promise<SwarmMessage[]>;
+  held(input: OrchestratorInput): Promise<boolean>;
 }
 
 export function swarmMessageText(message: SwarmMessage): string {
@@ -842,6 +843,31 @@ export function createSwarmService(deps: {
         if (input.state === "active") delete member.control;
         else member.control = input.state;
       });
+      if (input.state === "paused") {
+        const paused = new Set(
+          updated.members.filter((m) => controlState(updated, m.id) === "paused").map((m) => m.id),
+        );
+        const queued = updated.messages.flatMap((message) =>
+          Object.entries(message.notifications).flatMap(([id, n]) =>
+            paused.has(id) && n.state === "queued" && n.runId ? [{ messageId: message.id, id, runId: n.runId }] : [],
+          ),
+        );
+        const withdrawn = (
+          await Promise.all(
+            queued.map(async (item) =>
+              (await runs.withdraw(item.runId, { unstartedOnly: true }).catch(() => false)) ? [item] : [],
+            ),
+          )
+        ).flat();
+        if (withdrawn.length)
+          await store.update(updated.id, (current) => {
+            for (const item of withdrawn) {
+              const message = current.messages.find((m) => m.id === item.messageId);
+              if (message?.notifications[item.id]?.runId === item.runId)
+                message.notifications[item.id] = { state: "pending" };
+            }
+          });
+      }
       if (input.state === "stopped") {
         const stopped = new Set(
           updated.members.filter((m) => controlState(updated, m.id) === "stopped").map((m) => m.id),
@@ -897,6 +923,11 @@ export function createSwarmService(deps: {
           return notification.state === "mailbox" || unstarted.has(notification.runId!);
         })
         .sort((a, b) => a.seq - b.seq);
+    },
+    async held(input) {
+      if (!input.swarm) return false;
+      const swarm = await store.get(input.swarm.swarmId);
+      return !!swarm && controlState(swarm, input.swarm.recipientId) !== "active";
     },
     async handOver(input, messageIds) {
       if (!input.runId || !input.runLeaseToken || !messageIds.length) return [];

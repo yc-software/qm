@@ -81,6 +81,14 @@ export const GOAL_INBOX_POLL_MS = 5_000;
 export interface GoalInbox {
   receive(goal: GoalRecord): Promise<Array<{ id: string; text: string }>>;
   acknowledge(ids: readonly string[], goal: GoalRecord): Promise<void>;
+  held?(): Promise<boolean>;
+}
+
+export const GOAL_SWARM_HELD_NOTE =
+  "The swarm paused or stopped you. End your reply now and start nothing new; your goal stays open.";
+
+export async function goalInboxHeld(inbox: GoalInbox | undefined): Promise<boolean> {
+  return (await inbox?.held?.().catch(swallowAs("goal: read the swarm control state", false))) ?? false;
 }
 const GOAL_MAX_OBJECTIVE_CHARS = 4000;
 
@@ -232,7 +240,8 @@ export async function waitForGoalMessages(
   try {
     while (goal.status === "paused" && !arrived && !interrupted() && Date.now() < until) {
       await pause(Math.min(GOAL_INBOX_POLL_MS, until - Date.now()));
-      if (!interrupted()) arrived = await takeGoalMessages(inbox, goal, meter);
+      if (interrupted() || (await goalInboxHeld(inbox))) break;
+      arrived = await takeGoalMessages(inbox, goal, meter);
     }
   } finally {
     if (goal.status === "paused") resumeGoal(goal);
@@ -597,6 +606,7 @@ export async function enforceGoal<T>(opts: {
   const floorUnmet = (): boolean => goalFloorUnmet(opts.goal, opts.meter);
   let enforcedAssignment = opts.goal.createdAt;
   while (outcome === opts.ok && !opts.blocked()) {
+    if (await goalInboxHeld(opts.inbox)) break;
     const arrived = opts.inbox
       ? await takeGoalMessages(opts.inbox, opts.goal, opts.meter, () => !opts.blocked()).catch(
           swallowAs("goal: read the inbox", undefined),

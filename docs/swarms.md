@@ -276,7 +276,11 @@ query settles, even when a sweep reports a selection timeout.
 `active`, or `stopped`. Humans in the swarm may control any worker; an agent may
 control only itself or its descendants. The root session cannot be controlled.
 Controls apply to descendants too. Pausing holds new notifications as pending
-until the worker is resumed; runs already queued continue. Stopping is terminal:
+until the worker is resumed and returns unstarted queued runs to pending. A goal
+turn the swarm dispatched ends at the worker's next tool result or reply instead
+of drawing keep-going prompts, and a goal wait returns; the goal stays open.
+Resuming delivers the held notifications; a worker with none waits for its next
+message. A person's own turn in the worker's thread is never held. Stopping is terminal:
 pending notifications fail, unstarted queued runs are withdrawn, running turns are
 aborted, and later turns in that worker session are refused. `inspect` reports each
 peer's `control`. The web UI shows a Swarm strip on swarm sessions: a collapsed summary of

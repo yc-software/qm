@@ -44,6 +44,8 @@ import {
   type GoalGovernor,
   GOAL_INBOX_POLL_MS,
   type GoalInbox,
+  goalInboxHeld,
+  GOAL_SWARM_HELD_NOTE,
   type GoalRecord,
   type GovernorVerdict,
   GovernorUndecided,
@@ -547,10 +549,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const goalInbox =
         goal?.status === "active" && Date.now() - goalInboxCheckedAt >= GOAL_INBOX_POLL_MS ? ref.goalInbox : undefined;
       if (goalInbox) goalInboxCheckedAt = Date.now();
+      const held = !!goalInbox && (await goalInboxHeld(goalInbox));
       const arrived =
-        goal && goalInbox
+        goal && goalInbox && !held
           ? await takeGoalMessages(goalInbox, goal, ref.goalMeter).catch(swallowAs("goal: read the inbox", undefined))
           : undefined;
+      if (held) {
+        (ret as { terminate?: boolean }).terminate = true;
+        ret.content.push({ type: "text", text: GOAL_SWARM_HELD_NOTE });
+        result += `\n\n${GOAL_SWARM_HELD_NOTE}`;
+      }
       if (arrived) {
         ret.content.push({ type: "text", text: arrived });
         result += `\n\n${arrived}`;
@@ -3754,6 +3762,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const signal = ref.abortSignal;
         const interrupted = () => !!signal?.aborted || !!ref.shutdown?.aborted;
         let arrived: string | undefined;
+        const waitStarted = Date.now();
         try {
           arrived = await waitForGoalMessages(
             ref.goalInbox,
@@ -3776,6 +3785,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         await ref.saveGoal?.(goal).catch(swallowAs("goal: save after a wait", undefined));
         let outcome = `No swarm message reached you in ${GOAL_WAIT_MAX_MS / 60_000} minutes, so the goal is active again. Check on what you were waiting for, work around it if you can, or wait again.`;
         if (interrupted()) outcome = "The wait was interrupted; the goal is active again.";
+        else if (!arrived && Date.now() - waitStarted < GOAL_WAIT_MAX_MS)
+          outcome = "The wait ended early; the goal is active again.";
         if (arrived) outcome = `The goal is active again; this reached you while you waited:\n\n${arrived}`;
         return recordCoreAuthoredResult(callId, { tool: "goal", action: "update", goal }, text(outcome));
       }

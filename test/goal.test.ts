@@ -668,3 +668,25 @@ test("a goal turn keeps going when its inbox cannot be read", async () => {
   assert.equal(notes.length, 2);
   assert.match(notes[0]!, /Continue working toward it/);
 });
+
+test("a swarm-paused worker's goal turn ends instead of drawing keep-going prompts", async () => {
+  const goal = createGoalRecord({ objective: "lane A" });
+  let paused = false;
+  const notes: string[] = [];
+  await enforceGoal({
+    goal,
+    meter: createGrindMeter(),
+    outcome: "ok",
+    ok: "ok",
+    blocked: () => notes.length >= 5,
+    beforePrompt: () => {},
+    prompt: async (note) => {
+      notes.push(note);
+      paused = true;
+      return "ok";
+    },
+    inbox: { receive: async () => [], acknowledge: async () => {}, held: async () => paused },
+  });
+  assert.equal(notes.length, 1);
+  assert.equal(goal.status, "active");
+});
