@@ -23,6 +23,7 @@ const getModel = getBuiltinModel as unknown as (provider: string, id: string) =>
 
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-6.1-sol";
+const PROVIDER_DEFAULT_MODEL_IDS = [DEFAULT_AGENT_MODEL_ID, DEFAULT_CODEX_MODEL_ID, "openrouter/auto"];
 /**
  * pi-ai's ChatGPT-subscription provider: the same model ids as "openai",
  * served from the Codex backend and authenticated with a ChatGPT OAuth
@@ -729,12 +730,11 @@ export function defaultModelForHarness(
 ): string {
   if (configured && (modelUnavailableReason(configured) || modelSupportedByHarness(configured, harness)))
     return configured;
-  const preferred = DEFAULT_AGENT_MODEL_ID;
-  if (!providers || modelServiceable(preferred, providers)) return preferred;
-  const servable = [DEFAULT_CODEX_MODEL_ID, ...selectableBaseModels(true).map((model) => model.id)].find(
+  if (!providers) return DEFAULT_AGENT_MODEL_ID;
+  const servable = [...PROVIDER_DEFAULT_MODEL_IDS, ...selectableBaseModels(true).map((model) => model.id)].find(
     (id) => modelSupportedByHarness(id, harness) && modelServiceable(id, providers),
   );
-  return servable ?? preferred;
+  return servable ?? DEFAULT_AGENT_MODEL_ID;
 }
 
 export interface ModelProviderAvailability {
