@@ -18,7 +18,7 @@ import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../to
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
-import { mcpToolDescription, searchMcpTools, visibleMcpTools } from "./deferred-tools.ts";
+import { deferredMcpTools, mcpToolDescription, searchMcpTools, visibleMcpTools } from "./deferred-tools.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
@@ -3981,7 +3981,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ),
     }),
     async execute(callId, params, ...rest) {
-      const target = deferredTools.get(params.tool);
+      const target = callableTools.get(params.tool);
       if (target) return target.execute(callId, params.args ?? {}, ...rest);
       await recordCall(callId, { tool: "mcp_call", target: params.tool, args: params.args });
       return recordResult(
@@ -4171,16 +4171,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     context,
     ...clientTools,
   ];
+  const searchable = deferredMcpTools(opts?.mcpTools, opts?.readOnly);
+  const deferredNames = new Set(searchable.map((d) => d.name));
   const nativeNames = new Set(tools.map((t) => t.name));
-  const inline = new Set(mcpDefs.filter((d) => d.catalog && !nativeNames.has(d.name)).map((d) => d.name));
-  const searchable = mcpDefs.filter((d) => !inline.has(d.name));
-  const inlineTools = mcpCandidates.filter((t) => inline.has(t.name));
-  const deferredTools = new Map(
+  const inlineTools = mcpCandidates.filter((t) => {
+    if (deferredNames.has(t.name)) return false;
+    if (!nativeNames.has(t.name)) return true;
+    console.warn(`[mcp] ${t.name} is hidden because a built-in tool has the same name`);
+    return false;
+  });
+  const inline = new Set(inlineTools.map((t) => t.name));
+  const callableTools = new Map(
     mcpCandidates
-      .filter((t) => !inline.has(t.name))
+      .filter((t) => deferredNames.has(t.name) || inline.has(t.name))
       .map((t) => [t.name, withToolApprovalGate(t, ref, { recordCall, recordResult })]),
   );
-  const connectorTools: ToolDefinition[] = deferredTools.size ? [toolSearch, mcpCall] : [];
+  const connectorTools: ToolDefinition[] = searchable.length ? [toolSearch, mcpCall] : [];
   tools.push(...inlineTools, ...connectorTools);
   const operationFields: Record<string, Record<string, string[]>> = {
     sandbox: {

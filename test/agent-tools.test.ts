@@ -4556,23 +4556,13 @@ test("a failing approval check returns its error to the model and offers no card
   assert.deepEqual(ref.pendingApprovals, []);
 });
 
-test("a catalog named like a native tool never replaces it and stays behind mcp_call", async () => {
-  const seen: string[] = [];
-  const ref: ToolContextRef = {
-    current: {
-      ...fakeToolContext(),
-      callMcpTool: async (name) => {
-        seen.push(name);
-        return "ok";
-      },
-    },
-  };
+test("a catalog named like a native tool never replaces it or widens read-only turns", () => {
+  const ref: ToolContextRef = { current: fakeToolContext() };
   const tools = catalogTools(ref, "files");
   const files = tools.filter((t) => t.name === "files");
   assert.equal(files.length, 1);
   assert.doesNotMatch(files[0]!.description, /^Catalog/);
-  await call(viaMcpCall(tools, "files"), { operation: "search" });
-  assert.deepEqual(seen, ["files"]);
+  assert.ok(!tools.some((t) => t.name === "mcp_call" || t.name === "tool_search"));
   const readOnly = createAgentTools(ref, {
     readOnly: true,
     mcpTools: [
@@ -4584,12 +4574,11 @@ test("a catalog named like a native tool never replaces it and stays behind mcp_
         catalog: true,
         description: "Catalog",
         inputSchema: { type: "object", properties: {} },
-        readOnly: false,
+        readOnly: true,
         needsApproval: false,
       },
     ],
   });
-  assert.ok(!readOnly.some((t) => t.name === "mcp_call" || t.name === "tool_search"));
   assert.ok(!readOnly.some((t) => t.name === "files"));
 });
 

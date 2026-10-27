@@ -75,10 +75,6 @@ function aboutPhrase(about: string): string {
   return `${space > 0 ? cut.slice(0, space) : cut}…`;
 }
 
-function bare(text: string): string {
-  return [...text.toLowerCase()].filter((char) => char.toUpperCase() !== char || (char >= "0" && char <= "9")).join("");
-}
-
 function purpose(tools: readonly McpToolDescriptor[]): string {
   const about = tools[0]!.serverAbout && aboutPhrase(tools[0]!.serverAbout);
   if (about) return about;
@@ -91,7 +87,8 @@ function purpose(tools: readonly McpToolDescriptor[]): string {
     out = next;
   }
   const server = tools[0]!;
-  return [server.serverId, server.serverName].some((name) => bare(name) === bare(out)) ? "" : out;
+  const own = [server.serverId.replaceAll("_", " "), server.serverName].map((name) => name.toLowerCase());
+  return own.includes(out.toLowerCase()) ? "" : out;
 }
 
 export function connectorToolsNote(tools: readonly McpToolDescriptor[]): string {
