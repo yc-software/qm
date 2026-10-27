@@ -302,3 +302,24 @@ test("a message handed over while its run is being withdrawn by a pause stays ha
     undefined,
   );
 });
+
+test("a pause that loses its process mid-withdraw still delivers the message on resume", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A" });
+  await f.service.sweep();
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  await f.service.sweep();
+  const runFor = async () => (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id);
+  assert.ok(await runFor());
+  const withdraw = f.runs.withdraw.bind(f.runs);
+  f.runs.withdraw = async (runId, options) => {
+    await withdraw(runId, options);
+    throw new Error("process lost after the withdraw");
+  };
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  f.runs.withdraw = withdraw;
+  assert.equal(await runFor(), undefined);
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  await f.service.sweep();
+  assert.ok(await runFor(), "the message is delivered once resumed");
+});

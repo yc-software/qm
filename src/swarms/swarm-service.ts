@@ -844,34 +844,21 @@ export function createSwarmService(deps: {
         else member.control = input.state;
       });
       if (input.state === "paused") {
-        const paused = new Set(
-          updated.members.filter((m) => controlState(updated, m.id) === "paused").map((m) => m.id),
-        );
-        const queued = updated.messages.flatMap((message) =>
-          Object.entries(message.notifications).flatMap(([id, n]) =>
-            paused.has(id) && n.state === "queued" && n.runId ? [{ messageId: message.id, id, runId: n.runId }] : [],
+        let withdrawing: string[] = [];
+        await store.update(updated.id, (current) => {
+          withdrawing = [];
+          for (const message of current.messages)
+            for (const [id, notification] of Object.entries(message.notifications))
+              if (notification.state === "queued" && notification.runId && controlState(current, id) === "paused") {
+                message.notifications[id] = { state: "pending", runId: notification.runId };
+                withdrawing.push(notification.runId);
+              }
+        });
+        await Promise.all(
+          withdrawing.map((runId) =>
+            runs.withdraw(runId, { unstartedOnly: true }).catch(swallowAs("swarm: withdraw a paused run", false)),
           ),
         );
-        const withdrawn = (
-          await Promise.all(
-            queued.map(async (item) =>
-              (await runs
-                .withdraw(item.runId, { unstartedOnly: true })
-                .catch(swallowAs("swarm: withdraw a paused run", false)))
-                ? [item]
-                : [],
-            ),
-          )
-        ).flat();
-        if (withdrawn.length)
-          await store.update(updated.id, (current) => {
-            for (const item of withdrawn) {
-              const message = current.messages.find((m) => m.id === item.messageId);
-              const notification = message?.notifications[item.id];
-              if (notification?.state === "queued" && notification.runId === item.runId)
-                message!.notifications[item.id] = { state: "pending", runId: item.runId };
-            }
-          });
       }
       if (input.state === "stopped") {
         const stopped = new Set(
