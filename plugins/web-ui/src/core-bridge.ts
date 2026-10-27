@@ -2131,6 +2131,11 @@ function deliveredSilence(a: ToolActivity): boolean {
   return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
 }
 
+function isAgentEcho(payload: unknown): boolean {
+  const p = payload as { overheard?: unknown; sourceRole?: unknown } | null;
+  return p?.overheard === true && p?.sourceRole === "agent";
+}
+
 function isFinishedReplyEntry(entry: SessionEntry): boolean {
   if (entry.type !== "text") return false;
   const step = (entry.payload as { step?: { stopReason?: unknown } } | null)?.step;
@@ -2316,6 +2321,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
+      if (isAgentEcho(e.payload)) continue;
       if (!payload?.steered) {
         stoppedShown = false;
         hiddenPrompt = payload?.hidden === true;
