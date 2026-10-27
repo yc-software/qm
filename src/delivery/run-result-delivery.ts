@@ -38,7 +38,8 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   const failed = run.status === "failed";
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination = {
-    type: surface,
+    type: run.request.deliveryWebhook ? "webhook" : surface,
+    ...(run.request.deliveryWebhook ? { webhook: run.request.deliveryWebhook } : {}),
     target,
     ...(run.request.slackSource
       ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
@@ -62,6 +63,8 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
       : {}),
   });
+  if (run.request.deliveryWebhook && run.dedupKey && !run.request.approval && origin.kind === "human")
+    provenance.sourceRequestId = run.dedupKey;
   if (
     surface === "slack" &&
     run.result?.status === "refused" &&

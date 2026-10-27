@@ -928,3 +928,23 @@ test("The Render sandbox backend needs the Postgres workspace store", () => {
   assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
   assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
 });
+
+test("delivery webhooks require a fixed HTTPS endpoint and a separate strong secret", () => {
+  assert.equal(loadConfig({}).deliveryWebhook, undefined);
+  const config = {
+    DELIVERY_WEBHOOK_URL: "https://receiver.example.test/deliveries",
+    DELIVERY_WEBHOOK_SECRET: "delivery-secret-at-least-32-characters",
+  };
+  assert.deepEqual(loadConfig(config).deliveryWebhook, {
+    url: config.DELIVERY_WEBHOOK_URL,
+    secret: config.DELIVERY_WEBHOOK_SECRET,
+  });
+  for (const patch of [
+    { DELIVERY_WEBHOOK_SECRET: "" },
+    { DELIVERY_WEBHOOK_URL: "" },
+    { DELIVERY_WEBHOOK_URL: "http://receiver.example.test" },
+    { DELIVERY_WEBHOOK_URL: "https://user:pass@receiver.example.test" },
+    { CORE_SIGNING_SECRET: config.DELIVERY_WEBHOOK_SECRET },
+  ])
+    assert.throws(() => loadConfig({ ...config, ...patch }), /DELIVERY_WEBHOOK/);
+});

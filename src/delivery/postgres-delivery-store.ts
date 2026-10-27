@@ -15,6 +15,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     idempotencyKey: r.idempotency_key as string,
     createdAt: Number(r.created_at),
     deliveredAt: r.delivered_at === null ? null : Number(r.delivered_at),
+    ...(r.rejected_at != null ? { rejectedAt: Number(r.rejected_at) } : {}),
     ...(r.expired_at != null ? { expiredAt: Number(r.expired_at) } : {}),
     ...(r.failed_reason != null ? { failedReason: r.failed_reason as string } : {}),
     ...(r.shadow === true ? { shadow: true } : {}),
@@ -82,6 +83,13 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
       ],
     },
+    {
+      id: "delivery/webhook/0001",
+      statements: [
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS rejected_at BIGINT`,
+        `CREATE INDEX IF NOT EXISTS idx_deliveries_pending_target ON deliveries ((destination->>'type'), (destination->>'target'), created_at, id) WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow`,
+      ],
+    },
   ]);
 
   const enqueueListeners = new Set<() => void>();
@@ -123,7 +131,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                expired_at = NULL,
                claim_expires_at = NULL
            WHERE deliveries.delivered_at IS NULL AND deliveries.expired_at IS NOT NULL
-             AND deliveries.failed_reason IS NULL
+             AND deliveries.failed_reason IS NULL AND deliveries.rejected_at IS NULL
          RETURNING *`,
         [
           randomUUID(),
@@ -153,21 +161,29 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       );
       return rows.map(rowToDelivery);
     },
-    async claimPending(type, ttlMs) {
+    async claimPending(type, ttlMs, orderedTargetLimit) {
       await expireOveraged();
       const rows = await q(
         `UPDATE deliveries
             SET claim_expires_at = ${NOW_MS_SQL} + $2
           WHERE id IN (
-            SELECT id FROM deliveries
+            SELECT candidate.id FROM deliveries candidate
              WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
                AND (claim_expires_at IS NULL
                  OR claim_expires_at <= ${NOW_MS_SQL})
-             ORDER BY created_at
+               AND ($3::integer IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM deliveries earlier
+                 WHERE earlier.delivered_at IS NULL AND earlier.expired_at IS NULL AND NOT earlier.shadow
+                   AND earlier.destination->>'type' = $1
+                   AND earlier.destination->>'target' = candidate.destination->>'target'
+                   AND (earlier.created_at, earlier.id) < (candidate.created_at, candidate.id)
+               ))
+             ORDER BY created_at, id
+             LIMIT $3
                FOR UPDATE SKIP LOCKED
           )
           RETURNING *`,
-        [type, ttlMs],
+        [type, ttlMs, orderedTargetLimit ?? null],
       );
       return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
     },
@@ -178,6 +194,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         [limit],
       );
       return rows.map(rowToDelivery);
+    },
+    async reject(id) {
+      const rows = await q(
+        `UPDATE deliveries SET expired_at = ${NOW_MS_SQL}, rejected_at = ${NOW_MS_SQL} WHERE id = $1 AND delivered_at IS NULL AND expired_at IS NULL RETURNING *`,
+        [id],
+      );
+      for (const row of rows) {
+        const delivery = rowToDelivery(row);
+        logDeliveryExpiry(delivery, delivery.expiredAt!, "recipient rejected delivery");
+      }
     },
     async ack(id, at, slackApiMs) {
       await query(

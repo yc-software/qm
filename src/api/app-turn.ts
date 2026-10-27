@@ -352,6 +352,7 @@ export function createTurnMethods(
           ? { delegatingRunId: approvedRequest.delegatingRunId }
           : {}),
         ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
+        ...(req.deliveryWebhook ? { deliveryWebhook: req.deliveryWebhook } : {}),
         ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),
         actor,
         conversation,

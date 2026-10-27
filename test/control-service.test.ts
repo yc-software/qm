@@ -1087,3 +1087,30 @@ test("queued cron rechecks its runtime after admission and preserves the overrid
     /runtime is no longer available/,
   );
 });
+
+test("a cron created and retargeted through capabilities preserves webhook routing when fired", async () => {
+  const { built, control } = setup();
+  const candidate = {
+    key: "webhook",
+    label: "this conversation",
+    type: "webhook",
+    target: "web:U1:conversation",
+    audienceScopeId: scopeId("personal", "U1"),
+    webhook: { binding: "00000000-0000-4000-8000-000000000001" },
+  };
+  const capability = claims("U1", scopeId("personal", "U1"), {
+    destinations: [candidate],
+    defaultDestinationKey: candidate.key,
+  });
+  const created = await control.createCron({ schedule: { everyMs: 300_000 }, text: "five-minute update" }, capability);
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.deepEqual(created.cron.destination?.webhook, candidate.webhook);
+  const retargeted = await control.retargetCron(created.cron.id, candidate.key, capability);
+  assert.ok(retargeted.ok, JSON.stringify(retargeted));
+  await runNowSettled(built.scheduler, created.cron.id);
+  const delivery = (await built.deliveries.pending("webhook"))[0]!;
+  assert.ok(delivery);
+  assert.equal(delivery.text, "five-minute update");
+  assert.deepEqual(delivery.destination.webhook, candidate.webhook);
+  assert.equal(delivery.destination.target, candidate.target);
+});

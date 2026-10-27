@@ -176,6 +176,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     ...(input.scopeVersion ? { scopeVersion: input.scopeVersion } : {}),
     ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+    ...(input.deliveryWebhook ? { deliveryWebhook: input.deliveryWebhook } : {}),
     ...(input.deliveryCandidates?.length ? { deliveryCandidates: input.deliveryCandidates } : {}),
     actor: principalAssertion(input.actor),
     conversation: {
@@ -283,6 +284,7 @@ export function deliveryCandidatesFor(
   deliveryTarget: string | undefined,
   surfaceCandidates: { target: string; label: string }[] | undefined,
   sessionScopeId: ScopeId,
+  deliveryWebhook?: { binding: string },
 ): { candidates: CandidateDestination[]; defaultKey?: string } {
   if (!surface) return { candidates: [] };
   let raw: { target: string; label: string }[] = [];
@@ -294,7 +296,14 @@ export function deliveryCandidatesFor(
     const key = candidateKey(c.target, sessionScopeId);
     if (seen.has(key)) continue;
     seen.add(key);
-    candidates.push({ type: surface, target: c.target, audienceScopeId: sessionScopeId, key, label: c.label });
+    candidates.push({
+      type: deliveryWebhook ? "webhook" : surface,
+      target: c.target,
+      audienceScopeId: sessionScopeId,
+      key,
+      label: c.label,
+      ...(deliveryWebhook ? { webhook: deliveryWebhook } : {}),
+    });
   }
   const defaultKey = candidates.find((c) => c.target === deliveryTarget)?.key ?? candidates[0]?.key;
   return { candidates, ...(defaultKey ? { defaultKey } : {}) };

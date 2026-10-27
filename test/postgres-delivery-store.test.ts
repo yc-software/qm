@@ -100,3 +100,25 @@ test("pg delivery store: once-ever keys revive after a TTL drop instead of deadl
 test("pg delivery store: a permanently refused row fails once and never revives", { skip }, async () => {
   await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
 });
+
+test("pg delivery store: rejection stays terminal and FIFO survives separate workers", { skip }, async () => {
+  const writer = createPostgresDeliveryStore(URL!);
+  const reader = createPostgresDeliveryStore(URL!);
+  const destination = { type: "webhook", target: "web:alice:ordered", webhook: { binding: "binding" } };
+  const first = await writer.enqueue({ destination, text: "first", idempotencyKey: "ordered-first" });
+  assert.deepEqual(
+    (await writer.claimPending("webhook", 30_000, 16)).map((row) => row.id),
+    [first.id],
+  );
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const second = await reader.enqueue({ destination, text: "second", idempotencyKey: "ordered-second" });
+  assert.deepEqual(await reader.claimPending("webhook", 30_000, 16), []);
+  await writer.reject(first.id);
+  assert.deepEqual(
+    (await reader.claimPending("webhook", 30_000, 16)).map((row) => row.id),
+    [second.id],
+  );
+  await reader.enqueue({ destination, text: "first again", idempotencyKey: first.idempotencyKey });
+  assert.ok((await writer.get(first.id))?.rejectedAt);
+  assert.equal((await writer.get(first.id))?.deliveredAt, null);
+});

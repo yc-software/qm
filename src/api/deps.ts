@@ -85,6 +85,7 @@ import { type ProviderKeys } from "../model/model-runtime.ts";
 
 export interface ServerDeps {
   requestBodyDeadlineMs?: number;
+  deliveryWebhookEnabled?: boolean;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   modelGatewayTransport?: ModelGatewayTransportConfig;

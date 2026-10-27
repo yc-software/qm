@@ -122,7 +122,23 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
   return { origin: resolveTurnOrigin({ ...body, ...(typed ? { origin: typed } : { origin: undefined }) }) };
 }
 
-function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
+function sanitizedTurnRequest(
+  body: TurnRequest,
+  deliveryWebhookEnabled = false,
+): { request: TurnRequest } | { error: string } {
+  if (body.deliveryWebhook !== undefined) {
+    if (!deliveryWebhookEnabled) return { error: "delivery webhook is not configured" };
+    const parsed = z.object({ binding: z.uuid() }).strict().safeParse(body.deliveryWebhook);
+    if (
+      !parsed.success ||
+      body.surfaceTools ||
+      body.surface !== "web" ||
+      body.conversation.kind !== "dm" ||
+      body.deliveryCandidates?.length ||
+      body.deliveryTarget !== body.conversation.threadRef
+    )
+      return { error: "invalid delivery webhook" };
+  }
   const {
     slackSource: _slackSource,
     externalSlack: _externalSlack,
@@ -168,7 +184,7 @@ async function postTurn(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "expected a TurnRequest" });
   }
   const wantAsync = url.searchParams.get("async") === "1" || body.async === true;
-  const sanitized = sanitizedTurnRequest(body);
+  const sanitized = sanitizedTurnRequest(body, ctx.deps.deliveryWebhookEnabled);
   if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
   const result = await app.turn({ ...sanitized.request, async: wantAsync });
   if (result.status === "queued") return sendJson(res, 202, result);
@@ -231,7 +247,7 @@ async function postRunSignal(ctx: ApiCtx): Promise<void> {
     if (actor && !samePerson(body.request.actor.externalId, actor.p)) {
       return sendJson(res, 403, { error: "forbidden", message: "portal identity does not match the requested actor" });
     }
-    const sanitized = sanitizedTurnRequest(body.request);
+    const sanitized = sanitizedTurnRequest(body.request, ctx.deps.deliveryWebhookEnabled);
     if ("error" in sanitized) return sendJson(res, 400, { error: "bad_request", message: sanitized.error });
     request = sanitized.request;
   }

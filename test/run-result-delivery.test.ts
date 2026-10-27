@@ -498,3 +498,16 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("webhook run delivery correlates with the original caller request", () => {
+  const request = {
+    ...turn("hi", "web:alice:conversation"),
+    surface: "web",
+    origin: { kind: "human" as const },
+    deliveryWebhook: { binding: "binding" },
+  };
+  const delivery = runResultDelivery(run({ request, dedupKey: "external-request-123" }));
+  assert.equal(delivery?.destination.type, "webhook");
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding" });
+  assert.equal(delivery?.provenance.sourceRequestId, "external-request-123");
+});
