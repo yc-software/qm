@@ -2332,6 +2332,7 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
     }
     if (e.type === "user") {
       if (isAgentEcho(e.payload)) {
+        posted = false;
         spillHeldPosts();
         flushWork("", e.createdAt);
         continue;
