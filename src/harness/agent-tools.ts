@@ -3973,21 +3973,31 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const mcpCall = defineTool({
     name: "mcp_call",
     label: "mcp_call",
-    description: "Run a connector tool found with tool_search.",
+    description: "Run a connector tool listed under ## Connectors or found with tool_search.",
     parameters: Type.Object({
-      tool: Type.String({ description: "Exact tool name from tool_search." }),
+      server: Type.Optional(Type.String({ description: "Server id, as shown in brackets or by tool_search." })),
+      tool: Type.String({ description: "Tool name on that server." }),
       args: Type.Optional(
         Type.Object({}, { additionalProperties: true, description: "Arguments matching that tool's input schema." }),
       ),
     }),
     async execute(callId, params, ...rest) {
-      const target = callableTools.get(params.tool);
+      const target =
+        params.server === undefined
+          ? callableTools.get(params.tool)
+          : toolsByServer.get(params.server)?.get(params.tool);
       if (target) return target.execute(callId, params.args ?? {}, ...rest);
-      await recordCall(callId, { tool: "mcp_call", target: params.tool, args: params.args });
+      const named = params.server === undefined ? `"${params.tool}"` : `"${params.tool}" on server "${params.server}"`;
+      await recordCall(callId, {
+        tool: "mcp_call",
+        server: params.server,
+        target: params.tool,
+        args: params.args,
+      });
       return recordResult(
         callId,
         { tool: "mcp_call", failed: true },
-        text(`[error] unknown tool "${params.tool}"; use tool_search to find connector tools.`),
+        text(`[error] unknown tool ${named}; use tool_search to find connector tools.`),
         true,
       );
     },
@@ -4186,6 +4196,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       .filter((t) => deferredNames.has(t.name) || inline.has(t.name))
       .map((t) => [t.name, withToolApprovalGate(t, ref, { recordCall, recordResult })]),
   );
+  const toolsByServer = new Map<string, Map<string, ToolDefinition>>();
+  for (const d of searchable)
+    toolsByServer.set(
+      d.serverId,
+      (toolsByServer.get(d.serverId) ?? new Map()).set(d.remoteName, callableTools.get(d.name)!),
+    );
   const connectorTools: ToolDefinition[] = searchable.length ? [toolSearch, mcpCall] : [];
   tools.push(...inlineTools, ...connectorTools);
   const operationFields: Record<string, Record<string, string[]>> = {

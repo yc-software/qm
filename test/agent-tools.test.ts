@@ -4659,8 +4659,11 @@ test("connector tools reach the model as exactly tool_search and mcp_call, leavi
     (t) => t.name === "mcp_call",
   )!;
   const claudeShape = (fromJSONSchema(mcpCall.parameters as Parameters<typeof fromJSONSchema>[0]) as ZodObject).shape;
-  const input = { tool: "shop_add_to_cart", args: { id: "x", items: [{ qty: 2 }] } };
-  assert.deepEqual(z.object(claudeShape).parse(input), input);
+  for (const input of [
+    { server: "shop", tool: "add_to_cart", args: { id: "x", items: [{ qty: 2 }] } },
+    { tool: "shop_add_to_cart", args: { id: "x" } },
+  ])
+    assert.deepEqual(z.object(claudeShape).parse(input), input);
 });
 
 test("tool_search ranks name matches first, lists every tool for an empty query or *, and caps full results", async () => {
@@ -4668,19 +4671,24 @@ test("tool_search ranks name matches first, lists every tool for an empty query 
     (t) => t.name === "tool_search",
   );
   const found = textOut(await call(search, { query: "cart" }));
-  const results = found.split("\n\n").map((chunk) => JSON.parse(chunk) as { name: string; parameters: unknown });
+  const results = found
+    .split("\n\n")
+    .map((chunk) => JSON.parse(chunk) as { server: string; tool: string; parameters: unknown });
   assert.deepEqual(
-    results.map((r) => r.name),
-    ["shop_add_to_cart", "shop_get_cart"],
+    results.map((r) => [r.server, r.tool]),
+    [
+      ["shop", "add_to_cart"],
+      ["shop", "get_cart"],
+    ],
   );
   assert.deepEqual(results[0]!.parameters, shopTools[1]!.inputSchema);
   for (const query of ["", " * "])
     assert.equal(
       textOut(await call(search, { query })),
       [
-        "- shop_find_stores: Find nearby stores.",
-        "- shop_add_to_cart: Add items to the cart.",
-        "- shop_get_cart: Show the cart contents.",
+        "- shop find_stores: Find nearby stores.",
+        "- shop add_to_cart: Add items to the cart.",
+        "- shop get_cart: Show the cart contents.",
       ].join("\n"),
     );
   assert.match(textOut(await call(search, { query: "refund" })), /No connector tools match "refund"/);
@@ -4694,10 +4702,10 @@ test("tool_search ranks name matches first, lists every tool for an empty query 
   const readOnlySearch = createAgentTools({ current: fakeToolContext() }, { readOnly: true, mcpTools: shopTools }).find(
     (t) => t.name === "tool_search",
   );
-  assert.equal(textOut(await call(readOnlySearch, { query: "*" })), "- shop_get_cart: Show the cart contents.");
+  assert.equal(textOut(await call(readOnlySearch, { query: "*" })), "- shop get_cart: Show the cart contents.");
 });
 
-test("mcp_call runs the named connector tool and records it under that tool's own name", async () => {
+test("mcp_call runs a connector tool named by server and tool, still takes the old single name, and records both alike", async () => {
   const emitted: Emitted[] = [];
   const calls: Array<[string, Record<string, unknown>]> = [];
   const ref: ToolContextRef = {
@@ -4714,17 +4722,76 @@ test("mcp_call runs the named connector tool and records it under that tool's ow
     scopeLabel: "personal:U1",
   };
   const mcpCall = createAgentTools(ref, { mcpTools: shopTools }).find((t) => t.name === "mcp_call");
-  const out = await callWith(mcpCall, "c1", { tool: "shop_add_to_cart", args: { id: "x" }, retrySafe: false });
-  assert.match(textOut(out), /added/);
-  assert.deepEqual(calls, [["shop_add_to_cart", { id: "x" }]]);
-  const recorded = emitted.find((e) => e.type === "tool_call" && e.payload.callId === "c1")!.payload;
-  assert.equal(recorded.tool, "shop_add_to_cart");
-  assert.equal(recorded.mcpServer, "shop");
-  assert.deepEqual(recorded.args, { id: "x" });
-  assert.equal(recorded.retrySafe, false);
-  const missing = await callWith(mcpCall, "c2", { tool: "shop_refund", args: {} });
-  assert.equal(textOut(missing), '[error] unknown tool "shop_refund"; use tool_search to find connector tools.');
-  assert.equal(calls.length, 1);
+  const paired = await callWith(mcpCall, "c1", {
+    server: "shop",
+    tool: "add_to_cart",
+    args: { id: "x" },
+    retrySafe: false,
+  });
+  assert.match(textOut(paired), /added/);
+  assert.match(textOut(await callWith(mcpCall, "c2", { tool: "shop_add_to_cart", args: { id: "y" } })), /added/);
+  assert.deepEqual(calls, [
+    ["shop_add_to_cart", { id: "x" }],
+    ["shop_add_to_cart", { id: "y" }],
+  ]);
+  for (const [callId, args] of [
+    ["c1", { id: "x" }],
+    ["c2", { id: "y" }],
+  ] as const) {
+    const recorded = emitted.find((e) => e.type === "tool_call" && e.payload.callId === callId)!.payload;
+    assert.equal(recorded.tool, "shop_add_to_cart");
+    assert.equal(recorded.mcpServer, "shop");
+    assert.deepEqual(recorded.args, args);
+  }
+  assert.equal(emitted.find((e) => e.type === "tool_call" && e.payload.callId === "c1")!.payload.retrySafe, false);
+  assert.equal(
+    textOut(await callWith(mcpCall, "c3", { server: "shop", tool: "refund", args: {} })),
+    '[error] unknown tool "refund" on server "shop"; use tool_search to find connector tools.',
+  );
+  assert.match(textOut(await callWith(mcpCall, "c4", { server: "shop", tool: "shop_add_to_cart" })), /unknown tool/);
+  assert.match(textOut(await callWith(mcpCall, "c5", { server: "mall", tool: "add_to_cart" })), /unknown tool/);
+  assert.equal(
+    textOut(await callWith(mcpCall, "c6", { tool: "shop_refund", args: {} })),
+    '[error] unknown tool "shop_refund"; use tool_search to find connector tools.',
+  );
+  assert.equal(calls.length, 2);
+});
+
+test("an approval asked through either mcp_call form shows the same card and lets either form run the approved call", async () => {
+  const calls: Array<[Record<string, unknown>, string | undefined]> = [];
+  const approved = new Set<string>();
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      callMcpTool: async (_name, args, approval) => {
+        calls.push([args, approval]);
+        return "deleted";
+      },
+    },
+    pendingApprovals: [],
+    toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
+  };
+  const mcpCall = createAgentTools(ref, {
+    mcpTools: [connectorTool("delete", "Delete an item.", { needsApproval: true })],
+  }).find((t) => t.name === "mcp_call");
+  const paired = { server: "shop", tool: "delete", args: { id: 1 } };
+  const legacy = { tool: "shop_delete", args: { id: 1 } };
+  for (const [ask, run] of [
+    [paired, legacy],
+    [legacy, paired],
+  ]) {
+    approved.clear();
+    ref.pausedOnApproval = false;
+    assert.match(textOut(await call(mcpCall, ask)), /blocked: needs human approval/);
+    const card = ref.pendingApprovals!.at(-1)!;
+    assert.equal(card.command, 'shop_delete {"id":1}');
+    approved.add(card.approvalKey!);
+    ref.pausedOnApproval = false;
+    assert.match(textOut(await call(mcpCall, run)), /deleted/);
+    assert.deepEqual(calls.at(-1), [{ id: 1 }, card.approvalKey]);
+  }
+  assert.equal(calls.length, 2);
+  assert.equal(ref.pendingApprovals![0]!.approvalKey, ref.pendingApprovals![1]!.approvalKey);
 });
 
 test("a catalog server's one tool stays in the tools array as its own definition and out of the connectors section", async () => {
@@ -4776,7 +4843,7 @@ test("a catalog server's one tool stays in the tools array as its own definition
     /records/,
   );
   assert.doesNotMatch(textOut(await call(viaMcpCall(mixed, "records"), { operation: "search" })), /unknown tool/);
-  assert.match(connectorToolsNote(deferredMcpTools([catalog, ...shopTools], false)), /\n- Shop \(/);
+  assert.match(connectorToolsNote(deferredMcpTools([catalog, ...shopTools], false)), /\n- Shop \[shop\] \(/);
   assert.doesNotMatch(connectorToolsNote(deferredMcpTools([catalog, ...shopTools], false)), /Records/);
 });
 
@@ -4800,16 +4867,16 @@ test("connector note lists servers by name with their own description and each t
     connectorToolsNote([mail, ...shopTools, ...crm]),
     [
       "## Connectors",
-      "Run these with mcp_call; tool_search shows a tool's parameters. This list is complete.",
-      "- CRM (2 tools) // Search and update customer records.",
-      "  - crm_query // Run a query.",
-      `  - crm_update // ${"x".repeat(117)}...`,
-      "- Mail (1 tool)",
-      "  - mail_sign_in // Connect your own Mail account and load its tools.",
-      "- Shop (3 tools)",
-      "  - shop_add_to_cart // Add items to the cart.",
-      "  - shop_find_stores // Find nearby stores. Returns store ids.",
-      "  - shop_get_cart // Show the cart contents.",
+      "Run these with mcp_call, passing the server id in brackets and the tool name; tool_search shows a tool's parameters. This list is complete.",
+      "- CRM [crm] (2 tools) // Search and update customer records.",
+      "  - query // Run a query.",
+      `  - update // ${"x".repeat(117)}...`,
+      "- Mail [mail] (1 tool)",
+      "  - sign_in // Connect your own Mail account and load its tools.",
+      "- Shop [shop] (3 tools)",
+      "  - add_to_cart // Add items to the cart.",
+      "  - find_stores // Find nearby stores. Returns store ids.",
+      "  - get_cart // Show the cart contents.",
     ].join("\n"),
   );
 });
@@ -4828,13 +4895,13 @@ test("a connector note over its budget shows every server, fills shorter tool li
   const lines = note.split("\n");
   assert.equal(
     lines[1],
-    "Run these with mcp_call; tool_search shows a tool's parameters and finds the ones not shown. This list is partial.",
+    "Run these with mcp_call, passing the server id in brackets and the tool name; tool_search shows a tool's parameters and finds the ones not shown. This list is partial.",
   );
   const shopLine = lines.find((line) => line.startsWith("- Shop "))!;
-  const shown = lines.filter((line) => line.startsWith("  - shop_")).length;
+  const shown = lines.filter((line) => line.startsWith("  - item_")).length;
   assert.ok(shown > 0 && shown < 300);
-  assert.equal(shopLine, `- Shop (300 tools, ${shown} shown)`);
-  assert.deepEqual(lines.slice(-3), ["- Tiny (2 tools)", "  - tiny_a // Do it.", "  - tiny_b // Do it."]);
+  assert.equal(shopLine, `- Shop [shop] (300 tools, ${shown} shown)`);
+  assert.deepEqual(lines.slice(-3), ["- Tiny [tiny] (2 tools)", "  - a // Do it.", "  - b // Do it."]);
   assert.ok(note.length <= 2_000 * 4 + 400);
   assert.equal(connectorToolsNote([...small, ...big]), note);
 });

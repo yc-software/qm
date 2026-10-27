@@ -35,12 +35,13 @@ function summary(description: string): string {
 
 export function searchMcpTools(tools: readonly McpToolDescriptor[], query: string): string {
   const wanted = query.trim().toLowerCase();
-  if (!wanted || wanted === "*") return tools.map((tool) => `- ${tool.name}: ${summary(tool.description)}`).join("\n");
+  if (!wanted || wanted === "*")
+    return tools.map((tool) => `- ${tool.serverId} ${tool.remoteName}: ${summary(tool.description)}`).join("\n");
   const words = wanted.split(/\s+/);
   const ranked = tools
     .map((tool, index) => {
-      const name = tool.name.toLowerCase();
-      const text = `${tool.serverId} ${tool.description}`.toLowerCase();
+      const name = tool.remoteName.toLowerCase();
+      const text = `${tool.serverId} ${tool.serverName} ${tool.description}`.toLowerCase();
       const score =
         name === wanted
           ? Number.MAX_SAFE_INTEGER
@@ -50,11 +51,14 @@ export function searchMcpTools(tools: readonly McpToolDescriptor[], query: strin
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score || a.index - b.index);
   if (!ranked.length) return `No connector tools match "${query}". Search with an empty query to list them all.`;
-  const shown = ranked
-    .slice(0, SEARCH_LIMIT)
-    .map(({ tool }) =>
-      JSON.stringify({ name: tool.name, description: mcpToolDescription(tool), parameters: tool.inputSchema }),
-    );
+  const shown = ranked.slice(0, SEARCH_LIMIT).map(({ tool }) =>
+    JSON.stringify({
+      server: tool.serverId,
+      tool: tool.remoteName,
+      description: mcpToolDescription(tool),
+      parameters: tool.inputSchema,
+    }),
+  );
   if (ranked.length > SEARCH_LIMIT) shown.push(`${ranked.length - SEARCH_LIMIT} more match; narrow the query.`);
   return shown.join("\n\n");
 }
@@ -68,8 +72,8 @@ function firstLine(text: string): string {
   return line.length > LINE_DESCRIPTION_CHARS ? `${line.slice(0, LINE_DESCRIPTION_CHARS - 3)}...` : line;
 }
 
-function tokens(text: string): number {
-  return Math.round(text.length / CHARS_PER_TOKEN);
+function lineTokens(line: string): number {
+  return Math.ceil((line.length + 1) / CHARS_PER_TOKEN);
 }
 
 function byText(a: string, b: string): number {
@@ -81,7 +85,7 @@ function serverLine(server: McpToolDescriptor, count: number, shown: number): st
   if (shown === 0) label += ", none shown";
   else if (shown < count) label += `, ${shown} shown`;
   const about = server.serverAbout ? firstLine(server.serverAbout) : "";
-  return `- ${server.serverName} (${label})${about ? ` // ${about}` : ""}`;
+  return `- ${server.serverName} [${server.serverId}] (${label})${about ? ` // ${about}` : ""}`;
 }
 
 export function connectorToolsNote(tools: readonly McpToolDescriptor[]): string {
@@ -94,32 +98,32 @@ export function connectorToolsNote(tools: readonly McpToolDescriptor[]): string 
       const listings = group
         .map((tool) => {
           const description = firstLine(tool.description);
-          return { name: tool.name, line: `  - ${tool.name}${description ? ` // ${description}` : ""}` };
+          return { name: tool.remoteName, line: `  - ${tool.remoteName}${description ? ` // ${description}` : ""}` };
         })
         .sort((a, b) => byText(a.name, b.name));
-      const order = [...listings].sort((a, b) => tokens(a.line) - tokens(b.line) || byText(a.name, b.name));
+      const order = [...listings].sort((a, b) => lineTokens(a.line) - lineTokens(b.line) || byText(a.name, b.name));
       return { server: group[0]!, listings, order, shown: new Set<(typeof listings)[number]>() };
     });
   let remaining =
-    CONNECTORS_TOKENS - servers.reduce((sum, s) => sum + tokens(serverLine(s.server, s.listings.length, 0)), 0);
+    CONNECTORS_TOKENS - servers.reduce((sum, s) => sum + lineTokens(serverLine(s.server, s.listings.length, 0)), 0);
   const active = new Set(servers);
   while (active.size) {
     for (const s of active) {
       const next = s.order[s.shown.size];
-      if (!next || tokens(next.line) > remaining) {
+      if (!next || lineTokens(next.line) > remaining) {
         active.delete(s);
         continue;
       }
       s.shown.add(next);
-      remaining -= tokens(next.line);
+      remaining -= lineTokens(next.line);
     }
   }
   const complete = servers.every((s) => s.shown.size === s.listings.length);
   return [
     "## Connectors",
     complete
-      ? "Run these with mcp_call; tool_search shows a tool's parameters. This list is complete."
-      : "Run these with mcp_call; tool_search shows a tool's parameters and finds the ones not shown. This list is partial.",
+      ? "Run these with mcp_call, passing the server id in brackets and the tool name; tool_search shows a tool's parameters. This list is complete."
+      : "Run these with mcp_call, passing the server id in brackets and the tool name; tool_search shows a tool's parameters and finds the ones not shown. This list is partial.",
     ...servers.flatMap((s) => [
       serverLine(s.server, s.listings.length, s.shown.size),
       ...s.listings.filter((listing) => s.shown.has(listing)).map((listing) => listing.line),

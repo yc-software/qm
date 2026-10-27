@@ -401,7 +401,7 @@ export function createMcpToolService(opts: {
           if (current) await opts.servers.put({ ...current, tools, about: about ?? current.about });
           await refresh();
           record("call", `${def.serverId}/sign_in`, `ok tools=${tools.length}`, principalId);
-          return `Signed in to ${server.name}. Tools now available: ${tools.map((t) => `${server.id}_${t.name}`).join(", ")}`;
+          return `Signed in to ${server.name}. Tools now available on server "${server.id}": ${tools.map((t) => t.name).join(", ")}`;
         }
         const result = await client.callTool(def.remoteName, args, headersFor(server, principalId, approval));
         record("call", `${def.serverId}/${def.remoteName}`, approval ? "ok approved" : "ok", principalId);
