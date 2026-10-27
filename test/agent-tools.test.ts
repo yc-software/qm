@@ -4775,6 +4775,7 @@ test("a catalog server's one tool stays in the tools array as its own definition
     ),
     /records/,
   );
+  assert.doesNotMatch(textOut(await call(viaMcpCall(mixed, "records"), { operation: "search" })), /unknown tool/);
   assert.match(connectorToolsNote(deferredMcpTools([catalog, ...shopTools], false)), /\n- Shop \(/);
   assert.doesNotMatch(connectorToolsNote(deferredMcpTools([catalog, ...shopTools], false)), /Records/);
 });
