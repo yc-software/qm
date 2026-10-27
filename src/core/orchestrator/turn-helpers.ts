@@ -53,26 +53,13 @@ export function headLooksLikeText(head: Buffer): boolean {
   return suspicious / head.length < 0.1;
 }
 
-const CONNECTOR_SKILL_PROVIDERS: Readonly<Record<string, string>> = {
-  dropbox: "dropbox",
-  "email-draft-in-voice": "google",
-  "email-voice-profile": "google",
-  "google-drive-sheets": "google",
-  "google-workspace": "google",
-  linear: "linear",
-  "morning-digest": "x",
-  "slack-drafts": "slack",
-  x: "x",
-  zoom: "zoom",
-};
-
 export function filterConnectorSkills(
   resolved: SkillResolution[],
   availableProviders: readonly string[],
 ): SkillResolution[] {
   const available = new Set(availableProviders);
   return resolved.filter((entry) => {
-    const provider = entry.skill ? CONNECTOR_SKILL_PROVIDERS[entry.skill.manifest.name] : undefined;
+    const provider = entry.skill?.manifest.connector;
     return !provider || available.has(provider);
   });
 }

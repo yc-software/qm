@@ -1,6 +1,7 @@
 ---
 name: slack-drafts
 description: Create Slack message drafts in the user's own composer, as the user, through their per-user Slack OAuth. Drafting only — the user reviews and sends from Slack.
+connector: slack
 requiredCapabilities:
   - egress:slack.com
 ---

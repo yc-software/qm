@@ -18,6 +18,7 @@ export interface SkillManifest {
   name: string;
   description: string;
   requiredCapabilities: string[];
+  connector?: string;
   body: string;
   files?: SkillFile[];
 }
@@ -180,6 +181,7 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
       name: manifest.name,
       description: manifest.description,
       requiredCapabilities: [...manifest.requiredCapabilities].sort(),
+      ...(manifest.connector ? { connector: manifest.connector } : {}),
       body: manifest.body,
       ...(files.length ? { files } : {}),
     });
