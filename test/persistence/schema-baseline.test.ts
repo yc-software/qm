@@ -44,7 +44,7 @@ const RETIRED_INDEXES = [
   "idx_runs_fair_key",
 ];
 // Columns a StyleUp build added and this line stopped using without dropping (the per-owner turn cap's fair_key).
-const RETIRED_COLUMNS = ["public.runs.fair_key "];
+const RETIRED_COLUMNS = ["public.runs.fair_key ", "public.tenants.env ", "public.tenants.secret_env "];
 
 const FINGERPRINT = `
 WITH ns AS (

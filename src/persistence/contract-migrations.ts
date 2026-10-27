@@ -52,6 +52,10 @@ export const CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     id: "contract/0008-drop-sandbox-routing",
     statements: ["DROP TABLE IF EXISTS sandbox_routing", "DROP TABLE IF EXISTS sandbox_resource_rollout"],
   },
+  {
+    id: "contract/0011-drop-tenant-env-bags",
+    statements: ["ALTER TABLE IF EXISTS tenants DROP COLUMN IF EXISTS env, DROP COLUMN IF EXISTS secret_env"],
+  },
 ];
 
 export const contractMigrations = (): PgMigrationDefinition[] => [

@@ -9,27 +9,26 @@ import {
 } from "../../plugins/chassis/src/tenant-hosts.ts";
 import {
   appsDomainOf,
-  homeHosts,
   relocateEmbeddedAuth,
   startTenantWorker,
   tenantServiceEnv,
-  type RegistryTenant,
   type TenantWorker,
 } from "../../plugins/chassis/src/tenant-workers.ts";
 import type { Config } from "../config.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { tenant, tenantFor, withTenant, type Tenant } from "../tenant.ts";
+import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
+import { registerTenantSettings, tenant, tenantFor, withTenant, type Tenant } from "../tenant.ts";
 import { reportFailure } from "../util/errors.ts";
 import { bootTenant, type BootedTenant } from "./boot.ts";
 import {
   assertRowSecurityEnforced,
   homeTenantId,
+  homeTenantSettings,
   listTenants,
   tenantSecretsKey,
   type TenantRecord,
+  type TenantSettings,
 } from "./registry.ts";
-
-const REGISTRY_RELOAD_MS = 30_000;
 
 interface Running {
   tenant: Tenant;
@@ -39,6 +38,7 @@ interface Running {
   edge?: HostRoute<HostTarget>;
   workers: TenantWorker[];
   servers: Server[];
+  version: string;
 }
 
 function drop<T>(list: T[], item: T | undefined): void {
@@ -53,10 +53,6 @@ export function tenantTarget(t: Tenant, server: Server): HostTarget {
     request: (req, res) => withTenant(t, () => void server.emit("request", req, res)),
     upgrade: (req, socket, head) => withTenant(t, () => void server.emit("upgrade", req, socket, head)),
   };
-}
-
-export function tenantCoreEnv(base: NodeJS.ProcessEnv, rec: TenantRecord): NodeJS.ProcessEnv {
-  return { ...tenantServiceEnv(base, rec, "core"), ORG_ID: rec.orgId };
 }
 
 function configHosts(config: Config): string[] {
@@ -87,8 +83,8 @@ interface HostState {
 async function startEdge(
   state: HostState,
   t: Tenant,
-  tenantEnv: NodeJS.ProcessEnv,
-  rec: RegistryTenant,
+  deploymentEnv: NodeJS.ProcessEnv,
+  rec: TenantSettings,
   target: HostTarget,
   own: Running,
 ): Promise<void> {
@@ -99,14 +95,14 @@ async function startEdge(
   state.servers.push(loopback);
   const core = { CORE_API_URL: `http://127.0.0.1:${(loopback.address() as AddressInfo).port}`, CORE_ORG_ID: t.orgId };
   const web = await startTenantWorker(new URL("../../plugins/web-ui/server/index.ts", import.meta.url), {
-    ...tenantServiceEnv(tenantEnv, rec, "web-ui"),
+    ...tenantServiceEnv(deploymentEnv, rec, "web-ui"),
     ...core,
   });
   own.workers.push(web);
   state.workers.push(web);
   const webUrl = `http://127.0.0.1:${web.port}`;
   const portalBase = {
-    ...tenantServiceEnv(tenantEnv, rec, "portal"),
+    ...tenantServiceEnv(deploymentEnv, rec, "portal"),
     ...core,
     WEB_UI_UPSTREAM: webUrl,
     ADMIN_UPSTREAM: `${webUrl}/admin`,
@@ -158,8 +154,8 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
   const { tenants, servers, workers, coreRoutes, edgeRoutes, running } = state;
   const failed = new Map<string, string>();
 
-  async function add(t: Tenant, tenantEnv: NodeJS.ProcessEnv, rec: RegistryTenant): Promise<void> {
-    const own: Running = { tenant: t, workers: [], servers: [], hosts: rec.hosts };
+  async function add(t: Tenant, tenantEnv: NodeJS.ProcessEnv, rec: TenantSettings): Promise<void> {
+    const own: Running = { tenant: t, workers: [], servers: [], hosts: rec.hosts, version: JSON.stringify(rec) };
     own.booted = await withTenant(t, () =>
       boot(tenantEnv, async (server, config) => {
         const target = tenantTarget(t, server);
@@ -174,7 +170,7 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
           target,
         };
         coreRoutes.push(own.core);
-        if (state.publicPort) await startEdge(state, t, tenantEnv, { ...rec, hosts: own.hosts }, target, own);
+        if (state.publicPort) await startEdge(state, t, env, { ...rec, hosts: own.hosts }, target, own);
       }),
     );
     tenants.push(own.booted);
@@ -183,6 +179,7 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
   }
 
   async function reconcile(records: TenantRecord[], homeId: string): Promise<void> {
+    registerTenantSettings(records.filter((rec) => rec.id !== homeId));
     const active = records.filter((rec) => rec.id !== homeId && rec.status === "active");
     const wanted = new Set(active.map((rec) => rec.id));
     for (const id of [...running.keys()]) {
@@ -195,9 +192,10 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
     }
     for (const rec of active) {
       const version = JSON.stringify(rec);
-      if (running.has(rec.id) || failed.get(rec.id) === version) continue;
+      if (running.get(rec.id)?.version === version || failed.get(rec.id) === version) continue;
       try {
-        await add(tenantFor(rec.orgId, rec.id, rec.slug), tenantCoreEnv(env, rec), rec);
+        if (running.has(rec.id)) await retire(state, rec.id);
+        await add(tenantFor(rec.orgId, rec.id, rec.slug), tenantServiceEnv(env, rec, "core"), rec);
         failed.delete(rec.id);
       } catch (error) {
         failed.set(rec.id, version);
@@ -208,7 +206,7 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
 
   await assertRowSecurityEnforced(registry);
   const home = tenant();
-  await add(home, env, { id: "", slug: "home", orgId: home.orgId, hosts: homeHosts(env), env: {}, secretEnv: {} });
+  await add(home, env, homeTenantSettings(env, home));
   const homeId = await homeTenantId(registry);
   await reconcile(await listTenants(registry, key), homeId);
 
@@ -235,23 +233,29 @@ export async function startMultitenant(env: NodeJS.ProcessEnv, boot: Boot = boot
     console.log(`[qm] multitenant public edge listening on :${state.publicPort} for ${tenants.length} tenant(s)`);
   }
 
-  let reconciling: Promise<void> | null = null;
+  let settled: Promise<void> = Promise.resolve();
+  let pending: Promise<void> | null = null;
   const refresh = (): Promise<void> =>
-    (reconciling ??= listTenants(registry, key)
-      .then((latest) => reconcile(latest, homeId))
-      .catch((error: unknown) => reportFailure("tenant registry reload failed", error))
-      .finally(() => {
-        reconciling = null;
+    (pending ??= settled =
+      settled.then(() => {
+        pending = null;
+        return listTenants(registry, key)
+          .then((latest) => reconcile(latest, homeId))
+          .catch((error: unknown) => reportFailure("tenant registry reload failed", error));
       }));
-  const reload = setInterval(() => void refresh(), REGISTRY_RELOAD_MS);
-  reload.unref();
+  const unsubscribe = subscribePostgresChannel(
+    env.DATABASE_URL,
+    "qm_tenants",
+    () => void refresh(),
+    () => void refresh(),
+  );
 
   return {
     tenants,
     servers,
     refresh,
     async stopWorkers() {
-      clearInterval(reload);
+      await unsubscribe();
       await Promise.all(workers.map((worker) => worker.stop()));
     },
   };

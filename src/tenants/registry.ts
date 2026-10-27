@@ -1,80 +1,48 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import {
+  sealTenantSecrets,
+  TENANT_COLUMNS,
+  TENANT_TEXT_SETTINGS,
+  tenantFromRow,
+  type TenantEnvSettings,
+  type TenantSettings,
+} from "../../plugins/chassis/src/tenant-settings.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 
-type ServiceEnv = Record<string, Record<string, string>>;
+export type { TenantSecrets, TenantSettings } from "../../plugins/chassis/src/tenant-settings.ts";
+export { homeTenantSettings, tenantSecretsKey } from "../../plugins/chassis/src/tenant-settings.ts";
 
-export interface TenantRecord {
-  id: string;
-  slug: string;
-  orgId: string;
-  hosts: string[];
-  status: "active" | "suspended";
-  env: ServiceEnv;
-  secretEnv: ServiceEnv;
-}
-
-export function tenantSecretsKey(env: NodeJS.ProcessEnv): Buffer | undefined {
-  const raw = env.QM_TENANT_SECRETS_KEY?.trim();
-  if (!raw) return undefined;
-  const key = Buffer.from(raw, "base64");
-  if (key.length !== 32) throw new Error("QM_TENANT_SECRETS_KEY must be 32 bytes, base64-encoded");
-  return key;
-}
-
-function encryptSecretEnv(value: ServiceEnv, key: Buffer): Buffer {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const body = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
-  return Buffer.concat([Buffer.from([1]), iv, cipher.getAuthTag(), body]);
-}
-
-function decryptSecretEnv(blob: Buffer, key: Buffer): ServiceEnv {
-  if (blob[0] !== 1) throw new Error("tenant secret_env: unknown format");
-  const iv = blob.subarray(1, 13);
-  const tag = blob.subarray(13, 29);
-  const decipher = createDecipheriv("aes-256-gcm", key, iv);
-  decipher.setAuthTag(tag);
-  const text = Buffer.concat([decipher.update(blob.subarray(29)), decipher.final()]).toString("utf8");
-  return JSON.parse(text) as ServiceEnv;
-}
-
-function rowToRecord(row: Record<string, unknown>, key: Buffer | undefined): TenantRecord {
-  const blob = row.secret_env as Buffer | null;
-  let secretEnv: ServiceEnv = {};
-  if (blob && blob.length) {
-    if (!key) throw new Error(`tenant ${String(row.slug)} has secrets but QM_TENANT_SECRETS_KEY is unset`);
-    secretEnv = decryptSecretEnv(blob, key);
-  }
-  return {
-    id: String(row.id),
-    slug: String(row.slug),
-    orgId: String(row.org_id),
-    hosts: (row.hosts as string[] | null) ?? [],
-    status: row.status === "suspended" ? "suspended" : "active",
-    env: (row.env as ServiceEnv | null) ?? {},
-    secretEnv,
-  };
-}
+export type TenantRecord = TenantSettings & { id: string };
 
 export async function listTenants(pool: PgPool, key: Buffer | undefined): Promise<TenantRecord[]> {
-  const rows = await pool.q("SELECT * FROM tenants ORDER BY created_at, slug");
-  return rows.map((row) => rowToRecord(row, key));
+  const rows = await pool.q(`SELECT ${TENANT_COLUMNS} FROM tenants ORDER BY created_at, slug`);
+  return rows.map((row) => tenantFromRow(row, key));
 }
 
 export interface SqlRunner {
   query(text: string, params?: unknown[]): Promise<unknown>;
 }
 
+const settingValues = (rec: TenantEnvSettings) => TENANT_TEXT_SETTINGS.map(([field]) => rec[field] ?? null);
+
 export async function upsertTenant(pool: SqlRunner, rec: TenantRecord, key: Buffer | undefined): Promise<void> {
-  const hasSecrets = Object.values(rec.secretEnv).some((vars) => Object.keys(vars).length > 0);
-  if (hasSecrets && !key) throw new Error("QM_TENANT_SECRETS_KEY is required to store tenant secrets");
-  const secret = hasSecrets && key ? encryptSecretEnv(rec.secretEnv, key) : null;
+  const columns = TENANT_TEXT_SETTINGS.map(([, column]) => column);
+  const at = (i: number) => `$${i + 8}`;
   await pool.query(
-    `INSERT INTO tenants(id, slug, org_id, hosts, status, env, secret_env)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+    `INSERT INTO tenants(id, slug, org_id, hosts, status, oidc_admin, secrets, ${columns.join(", ")})
+     VALUES ($1, $2, $3, $4, $5, $6, $7, ${columns.map((_, i) => at(i)).join(", ")})
      ON CONFLICT (id) DO UPDATE SET slug = EXCLUDED.slug, org_id = EXCLUDED.org_id, hosts = EXCLUDED.hosts,
-       status = EXCLUDED.status, env = EXCLUDED.env, secret_env = EXCLUDED.secret_env, updated_at = now()`,
-    [rec.id, rec.slug, rec.orgId, rec.hosts, rec.status, JSON.stringify(rec.env), secret],
+       status = EXCLUDED.status, oidc_admin = EXCLUDED.oidc_admin, secrets = EXCLUDED.secrets,
+       ${columns.map((column) => `${column} = EXCLUDED.${column}`).join(", ")}, updated_at = now()`,
+    [
+      rec.id,
+      rec.slug,
+      rec.orgId,
+      rec.hosts,
+      rec.status,
+      rec.oidcAdmin,
+      sealTenantSecrets(rec.secrets, key),
+      ...settingValues(rec),
+    ],
   );
 }
 

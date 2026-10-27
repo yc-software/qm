@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -104,8 +105,8 @@ test(
                 orgId: name,
                 hosts: [`${name}.example.test`],
                 status: "active",
-                env: {},
-                secretEnv: {},
+                oidcAdmin: false,
+                secrets: {},
               },
               key,
             ),
@@ -189,3 +190,35 @@ test(
     }
   },
 );
+
+test("the import CLI takes the slim tenant spec and refuses an env-bag spec", () => {
+  const run = (spec: object) =>
+    spawnSync(
+      process.execPath,
+      [
+        "src/tenant-import-main.ts",
+        "--spec-env",
+        "TENANT_SPEC",
+        "--source-url",
+        "postgres://127.0.0.1:1/source",
+        "--staging-url",
+        "postgres://127.0.0.1:1/source",
+        "--target-url",
+        "postgres://127.0.0.1:1/source",
+      ],
+      { env: { ...process.env, TENANT_SPEC: JSON.stringify(spec) }, encoding: "utf8" },
+    );
+  const bagged = run({ slug: "acme", orgId: "acme", env: { core: {} }, secretEnv: { core: {} } });
+  assert.notEqual(bagged.status, 0);
+  assert.match(bagged.stderr, /unknown field\(s\) env, secretEnv/);
+  const straySecret = run({ slug: "acme", orgId: "acme", secrets: { coreSigningSecret: "x" } });
+  assert.match(straySecret.stderr, /secrets: unknown field\(s\) coreSigningSecret/);
+  const slim = run({
+    slug: "acme",
+    orgId: "acme",
+    s3Bucket: "b",
+    oidcAdmin: true,
+    secrets: { adminGrants: "a:org_admin" },
+  });
+  assert.match(slim.stderr, /must be three different databases/);
+});

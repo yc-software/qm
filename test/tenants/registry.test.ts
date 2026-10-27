@@ -110,8 +110,9 @@ test("tenancy: tenant_id leads every key, RLS separates tenants, legacy rows sta
         orgId: "org-a",
         hosts: ["a.example.com"],
         status: "active",
-        env: { core: { X: "1" } },
-        secretEnv: { core: { SECRET: "s" } },
+        s3Bucket: "bucket-a",
+        oidcAdmin: false,
+        secrets: { slackServiceToken: "slack-a" },
       } satisfies TenantRecord,
       randomBytes(32),
     ).catch((error: unknown) => assert.fail(String(error)));

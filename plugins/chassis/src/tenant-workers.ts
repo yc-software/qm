@@ -1,54 +1,29 @@
-import { createDecipheriv } from "node:crypto";
 import { createServer as createNetServer, type AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { Worker } from "node:worker_threads";
 import { errMessage } from "./errors.ts";
-import { createHostFront, hostOfUrl, proxyTarget, type HostRoute, type HostTarget } from "./tenant-hosts.ts";
+import { createHostFront, proxyTarget, type HostRoute, type HostTarget } from "./tenant-hosts.ts";
+import {
+  deriveTenantSecret,
+  homeHosts,
+  homeTenantSettings,
+  TENANT_COLUMNS,
+  tenantFromRow,
+  tenantSecretsKey,
+  type TenantSettings,
+} from "./tenant-settings.ts";
 
 export type TenantService = "core" | "portal" | "web-ui";
 
-export interface RegistryTenant {
-  id: string;
-  slug: string;
-  orgId: string;
-  hosts: string[];
-  env: Partial<Record<TenantService, Record<string, string>>>;
-  secretEnv: Partial<Record<TenantService, Record<string, string>>>;
-}
-
 interface TenantRegistrySnapshot {
   homeId: string;
-  tenants: RegistryTenant[];
+  tenants: TenantSettings[];
 }
 
 type Env = Record<string, string | undefined>;
 
 export function multitenant(env: Env): boolean {
   return env.QM_MULTITENANT === "1";
-}
-
-export function homeHosts(env: Env): string[] {
-  return [env.PORTAL_PUBLIC_URL, env.PUBLIC_WEB_URL, env.PUBLIC_API_URL, env.AGENT_API_URL]
-    .map(hostOfUrl)
-    .filter((host): host is string => Boolean(host));
-}
-
-function secretsKey(env: Env): Buffer | undefined {
-  const raw = env.QM_TENANT_SECRETS_KEY?.trim();
-  if (!raw) return undefined;
-  const key = Buffer.from(raw, "base64");
-  if (key.length !== 32) throw new Error("QM_TENANT_SECRETS_KEY must be 32 bytes, base64-encoded");
-  return key;
-}
-
-function openSecretEnv(sealed: Buffer | null, key: Buffer | undefined): RegistryTenant["secretEnv"] {
-  if (!sealed?.length) return {};
-  if (!key) throw new Error("tenant secret env is set but QM_TENANT_SECRETS_KEY is not");
-  if (sealed[0] !== 1) throw new Error("tenant secret env: unknown format");
-  const decipher = createDecipheriv("aes-256-gcm", key, sealed.subarray(1, 13));
-  decipher.setAuthTag(sealed.subarray(13, 29));
-  const plain = Buffer.concat([decipher.update(sealed.subarray(29)), decipher.final()]);
-  return JSON.parse(plain.toString("utf8")) as RegistryTenant["secretEnv"];
 }
 
 interface PgClient {
@@ -59,42 +34,134 @@ interface PgClient {
 
 async function readTenantRegistry(env: Env): Promise<TenantRegistrySnapshot> {
   if (!env.DATABASE_URL) throw new Error("QM_MULTITENANT=1 needs DATABASE_URL to read the tenant registry");
-  // The plugins don't depend on pg; multitenant mode runs from the core image, where it resolves from the root.
   const pgModule = "pg";
-  const { default: pg } = (await import(pgModule)) as { default: { Client: new (config: { connectionString: string }) => PgClient } };
+  const { default: pg } = (await import(pgModule)) as {
+    default: { Client: new (config: { connectionString: string }) => PgClient };
+  };
   const client = new pg.Client({ connectionString: env.DATABASE_URL });
   await client.connect();
   try {
-    const key = secretsKey(env);
+    const key = tenantSecretsKey(env);
     const home = await client.query<{ id: string }>("SELECT id::text AS id FROM qm_tenant LIMIT 1");
-    const { rows } = await client.query<{
-      id: string;
-      slug: string;
-      org_id: string;
-      hosts: string[] | null;
-      env: RegistryTenant["env"] | null;
-      secret_env: Buffer | null;
-    }>(
-      "SELECT id::text AS id, slug, org_id, hosts, env, secret_env FROM tenants WHERE status = 'active' ORDER BY created_at",
+    const { rows } = await client.query<Record<string, unknown>>(
+      `SELECT ${TENANT_COLUMNS} FROM tenants WHERE status = 'active' ORDER BY created_at`,
     );
-    return {
-      homeId: home.rows[0]?.id ?? "",
-      tenants: rows.map((row) => ({
-        id: row.id,
-        slug: row.slug,
-        orgId: row.org_id,
-        hosts: row.hosts ?? [],
-        env: row.env ?? {},
-        secretEnv: openSecretEnv(row.secret_env, key),
-      })),
-    };
+    return { homeId: home.rows[0]?.id ?? "", tenants: rows.map((row) => tenantFromRow(row, key)) };
   } finally {
     await client.end();
   }
 }
 
-export function tenantServiceEnv(base: Env, tenant: RegistryTenant, service: TenantService): Record<string, string> {
-  const merged: Env = { ...base, ...tenant.env[service], ...tenant.secretEnv[service] };
+const DERIVED_SECRETS = [
+  "CORE_SIGNING_SECRET",
+  "CAPABILITY_SECRET",
+  "PORTAL_IDENTITY_SECRET",
+  "PORTAL_SESSION_SECRET",
+  "AUTH_TOKEN_SECRET",
+];
+
+const EMBEDDED_AUTH_SECRETS = ["AUTH_CLIENT_SECRET", "OIDC_CLIENT_SECRET"];
+
+const PUBLIC_URLS = [
+  "PUBLIC_WEB_URL",
+  "PUBLIC_API_URL",
+  "WEB_UI_PUBLIC_URL",
+  "PORTAL_PUBLIC_URL",
+  "AWS_PUBLIC_ORIGIN_URL",
+];
+
+const HOST_URLS = [
+  "AGENT_API_URL",
+  "DEPLOY_APPS_LOGIN_URL",
+  "AUTH_ISSUER",
+  "AUTH_REDIRECT_URI",
+  "OIDC_ISSUER",
+  "OIDC_AUTH_ENDPOINT",
+  "OIDC_TOKEN_ENDPOINT",
+  "OIDC_USERINFO_ENDPOINT",
+  "OIDC_JWKS_URI",
+];
+
+const HOME_ONLY = [
+  "ADMIN_GRANTS",
+  "QM_SLACK_SERVICE_TOKEN",
+  "QM_SLACK_SERVICE_URL",
+  "SENTRY_DEPLOYMENT",
+  "PORTAL_APPS_DOMAIN",
+  "DEPLOY_APPS_DOMAIN",
+  "S3_PREFIX",
+  "PORTAL_API_ALLOWED_ORIGINS",
+  "PORTAL_TRUSTED_OIDC",
+  "PORTAL_TRUSTED_OIDC_CLIENT_SECRET",
+  "PORTAL_TRUSTED_OIDC_LABEL",
+  "PORTAL_TRUSTED_OIDC_ADMIN",
+];
+
+function hostUrls(base: Env, url: string): Env {
+  const origins = homeHosts(base).map((host) => `https://${host}`);
+  const rebased: Env = Object.fromEntries(PUBLIC_URLS.map((name) => [name, url]));
+  for (const name of HOST_URLS) {
+    const value = base[name];
+    const origin = value && origins.find((o) => value === o || value.startsWith(`${o}/`));
+    if (origin) rebased[name] = url + value.slice(origin.length);
+  }
+  return rebased;
+}
+
+function trustedOidc(base: Env, tenant: TenantSettings): Env {
+  if (!tenant.oidcClientId) return {};
+  const shared = base.PORTAL_TRUSTED_OIDC?.trim() ? (JSON.parse(base.PORTAL_TRUSTED_OIDC) as object) : {};
+  return {
+    PORTAL_TRUSTED_OIDC: JSON.stringify({ ...shared, clientId: tenant.oidcClientId }),
+    PORTAL_TRUSTED_OIDC_CLIENT_SECRET: tenant.secrets.oidcClientSecret,
+    PORTAL_TRUSTED_OIDC_LABEL: tenant.oidcLabel,
+    PORTAL_TRUSTED_OIDC_ADMIN: tenant.oidcAdmin ? "1" : undefined,
+  };
+}
+
+function derivedSecrets(base: Env, tenantId: string): Env {
+  const names = base.AUTH_EMBEDDED === "1" ? [...DERIVED_SECRETS, ...EMBEDDED_AUTH_SECRETS] : DERIVED_SECRETS;
+  return Object.fromEntries(
+    names.filter((name) => base[name]).map((name) => [name, deriveTenantSecret(base[name]!, tenantId)]),
+  );
+}
+
+function registeredTenantEnv(base: Env, tenant: TenantSettings & { id: string }): Env {
+  const env: Env = { ...base };
+  for (const name of HOME_ONLY) delete env[name];
+  const favicon = tenant.faviconSvg;
+  const own = tenant.secrets;
+  return Object.assign(
+    env,
+    tenant.hosts[0] ? hostUrls(base, `https://${tenant.hosts[0]}`) : {},
+    derivedSecrets(base, tenant.id),
+    trustedOidc(base, tenant),
+    {
+      ORG_ID: tenant.orgId,
+      S3_BUCKET: tenant.s3Bucket ?? base.S3_BUCKET,
+      S3_PREFIX: tenant.s3Bucket ? undefined : `tenants/${tenant.slug}/`,
+      SANDBOX_NAME_PREFIX: tenant.sandboxNamePrefix ?? `qm-${tenant.slug}`,
+      MODAL_APP_NAME: tenant.modalAppName ?? base.MODAL_APP_NAME,
+      MODAL_ENVIRONMENT: tenant.modalEnvironment ?? base.MODAL_ENVIRONMENT,
+      MODAL_SNAPSHOT_S3_BUCKET: tenant.modalSnapshotBucket ?? base.MODAL_SNAPSHOT_S3_BUCKET,
+      AWS_SANDBOX_S3_BUCKET: tenant.awsSandboxBucket ?? base.AWS_SANDBOX_S3_BUCKET,
+      SENTRY_DEPLOYMENT: tenant.sentryDeployment,
+      WEB_UI_FAVICON_SVG: favicon ?? base.WEB_UI_FAVICON_SVG,
+      PORTAL_FAVICON_SVG: favicon ?? base.PORTAL_FAVICON_SVG,
+      AUTH_FAVICON_SVG: favicon ?? base.AUTH_FAVICON_SVG,
+      PORTAL_APPS_DOMAIN: tenant.appsDomain,
+      DEPLOY_APPS_DOMAIN: tenant.appsDomain,
+      MODEL_GATEWAY_API_KEY: own.modelGatewayApiKey ?? base.MODEL_GATEWAY_API_KEY,
+      QM_SLACK_SERVICE_TOKEN: own.slackServiceToken,
+      QM_SLACK_SERVICE_URL: own.slackServiceToken ? base.QM_SLACK_SERVICE_URL : undefined,
+      ADMIN_GRANTS: own.adminGrants,
+      CONNECTOR_SECRET_KEY: own.connectorSecretKey ?? base.CONNECTOR_SECRET_KEY,
+    },
+  );
+}
+
+export function tenantServiceEnv(base: Env, tenant: TenantSettings, service: TenantService): Record<string, string> {
+  const merged: Env = tenant.id ? registeredTenantEnv(base, { ...tenant, id: tenant.id }) : { ...base };
   if (service !== "core") {
     merged.CORE_ORG_ID = tenant.orgId;
     if (tenant.hosts[0]) merged.CORE_TENANT_HOST = tenant.hosts[0];
@@ -163,14 +230,7 @@ export async function serveTenantsByHost(opts: {
   env: Env;
 }): Promise<TenantFront> {
   const registry = await readTenantRegistry(opts.env);
-  const home: RegistryTenant = {
-    id: registry.homeId,
-    slug: "home",
-    orgId: opts.env.CORE_ORG_ID ?? "",
-    hosts: homeHosts(opts.env),
-    env: {},
-    secretEnv: {},
-  };
+  const home = homeTenantSettings(opts.env, { orgId: opts.env.CORE_ORG_ID ?? "" });
   const workers: TenantWorker[] = [];
   const routes: HostRoute<HostTarget>[] = [];
   let homeTarget: HostTarget | undefined;

@@ -20,6 +20,7 @@ interface PgPoolingConfig {
   sessionMax?: number;
   /** Row-level tenancy (QM_MULTITENANT): tenant_id-led keys, RLS, per-connection tenant setting. */
   tenancy?: boolean;
+  tenantSecretsKey?: Buffer;
 }
 
 let poolingConfig: PgPoolingConfig = {};
@@ -90,18 +91,20 @@ export function configurePgPooling(config: PgPoolingConfig): void {
     }
   }
   poolingConfig = { ...config };
-  if (config.tenancy !== undefined) tenancyEnabled = config.tenancy;
+  if (config.tenancy !== undefined) configurePgTenancy(config.tenancy, config.tenantSecretsKey);
 }
 
 // Off by default: a single-tenant database keeps its original keys and needs no tenant setting.
 let tenancyEnabled = false;
+let tenantSecretsKey: Buffer | undefined;
 
 export function pgTenancyEnabled(): boolean {
   return tenancyEnabled;
 }
 
-export function configurePgTenancy(enabled: boolean): void {
+export function configurePgTenancy(enabled: boolean, secretsKey?: Buffer): void {
   tenancyEnabled = enabled;
+  tenantSecretsKey = secretsKey;
 }
 
 /** Conflict-target / key column list, led by tenant_id when row-level tenancy is on. */
@@ -129,7 +132,7 @@ function markSettled(connectionString: string, migrations: readonly PgMigration[
 // not run it on the database yet.
 async function applyTenancyIfEnabled(pool: Pool, connectionString: string, changed: boolean): Promise<void> {
   if (!tenancyEnabled || (!changed && tenantized.has(connectionString))) return;
-  await applyTenancy(pool);
+  await applyTenancy(pool, tenantSecretsKey);
   tenantized.add(connectionString);
 }
 

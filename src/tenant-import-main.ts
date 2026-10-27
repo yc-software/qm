@@ -1,72 +1,66 @@
-import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { configurePgCaTrust, configurePgTenancy } from "./persistence/pg-pool.ts";
 import { importTenant, migrateWithBuild } from "./tenants/import.ts";
-import { tenantSecretsKey, upsertTenant } from "./tenants/registry.ts";
+import { TENANT_SECRET_NAMES, TENANT_TEXT_SETTINGS } from "../plugins/chassis/src/tenant-settings.ts";
+import { tenantSecretsKey, upsertTenant, type TenantSettings } from "./tenants/registry.ts";
 
 const USAGE = `usage: node src/tenant-import-main.ts [source] [staging] [target] [tenant] [options]
   source:   --source-url <url> | --admin-url-env <NAME> --source-db <name>
   staging:  --staging-url <url> | --admin-url-env <NAME> --staging-db <name>
   target:   --target-url <url> | --target-url-env <NAME> (default DATABASE_URL)
-  tenant:   --spec-env <NAME> (JSON {slug, orgId, hosts, env, secretEnv})
-            | --slug <slug> --org-id <id> [--hosts a,b] [--env-file <json>] [--secret-env-file <json>]
+  tenant:   --spec-env <NAME> (JSON {slug, orgId, hosts, ...settings, secrets})
+            | --slug <slug> --org-id <id> [--hosts a,b]
   options:  [--tenant-id <uuid>] [--create-staging] [--batch-size <n>]
             [--replace] [--allow-extra-columns] [--dry-run]`;
 
-type ServiceEnv = Record<string, Record<string, string>>;
+type TenantSpec = Omit<TenantSettings, "id" | "status">;
 
-interface TenantSpec {
-  slug: string;
-  orgId: string;
-  hosts: string[];
-  env: ServiceEnv;
-  secretEnv: ServiceEnv;
+const TEXT_SETTINGS = TENANT_TEXT_SETTINGS.map(([field]) => field);
+
+function strings<K extends string>(source: Record<string, unknown>, names: readonly K[], label: string) {
+  const known = new Set<string>(names);
+  const unknown = Object.keys(source).filter((name) => !known.has(name));
+  if (unknown.length) throw new Error(`${label}: unknown field(s) ${unknown.join(", ")}`);
+  const out: Partial<Record<K, string>> = {};
+  for (const name of names) {
+    const value = source[name];
+    if (value === undefined || value === null || value === "") continue;
+    if (typeof value !== "string") throw new Error(`${label}.${name} must be a string`);
+    out[name] = value;
+  }
+  return out;
 }
 
-function serviceEnv(parsed: unknown, label: string): ServiceEnv {
-  if (parsed === undefined) return {};
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`${label} must be a JSON object keyed by service`);
-  }
-  const env: ServiceEnv = {};
-  for (const [service, values] of Object.entries(parsed)) {
-    if (typeof values !== "object" || values === null || Array.isArray(values)) {
-      throw new Error(`${label}: ${service} must map variable names to strings`);
-    }
-    env[service] = {};
-    for (const [name, value] of Object.entries(values)) {
-      if (typeof value !== "string") throw new Error(`${label}: ${service}.${name} must be a string`);
-      env[service][name] = value;
-    }
-  }
-  return env;
-}
-
-function readServiceEnv(path: string | undefined, flag: string): ServiceEnv {
-  return path ? serviceEnv(JSON.parse(readFileSync(path, "utf8")), flag) : {};
+function objectOf(value: unknown, label: string): Record<string, unknown> {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error(`${label} must be an object`);
+  return value as Record<string, unknown>;
 }
 
 function specFromEnv(name: string): TenantSpec {
   const raw = process.env[name];
   if (!raw) throw new Error(`--spec-env: ${name} is not set`);
-  let parsed: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed = JSON.parse(raw);
   } catch {
     throw new Error(`${name} does not hold valid JSON`);
   }
-  if (typeof parsed.slug !== "string" || !parsed.slug) throw new Error(`${name}: slug must be a non-empty string`);
-  if (typeof parsed.orgId !== "string" || !parsed.orgId) throw new Error(`${name}: orgId must be a non-empty string`);
-  const hosts = parsed.hosts ?? [];
+  const { slug, orgId, hosts = [], oidcAdmin = false, secrets, ...settings } = objectOf(parsed, name);
+  if (typeof slug !== "string" || !slug) throw new Error(`${name}: slug must be a non-empty string`);
+  if (typeof orgId !== "string" || !orgId) throw new Error(`${name}: orgId must be a non-empty string`);
   if (!Array.isArray(hosts) || hosts.some((host) => typeof host !== "string")) {
     throw new Error(`${name}: hosts must be an array of strings`);
   }
+  if (typeof oidcAdmin !== "boolean") throw new Error(`${name}: oidcAdmin must be a boolean`);
   return {
-    slug: parsed.slug,
-    orgId: parsed.orgId,
+    slug,
+    orgId,
     hosts: hosts as string[],
-    env: serviceEnv(parsed.env, `${name}.env`),
-    secretEnv: serviceEnv(parsed.secretEnv, `${name}.secretEnv`),
+    ...strings(settings, TEXT_SETTINGS, name),
+    oidcAdmin,
+    secrets: strings(objectOf(secrets, `${name}.secrets`), TENANT_SECRET_NAMES, `${name}.secrets`),
   };
 }
 
@@ -91,9 +85,9 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
-function describeEnv(env: ServiceEnv): string {
-  const services = Object.entries(env).map(([service, vars]) => `${service}(${Object.keys(vars).sort().join(", ")})`);
-  return services.length ? services.join(" ") : "none";
+function describeSpec(spec: TenantSpec): string {
+  const settings = TEXT_SETTINGS.filter((name) => spec[name] !== undefined);
+  return `settings: ${[...settings, ...(spec.oidcAdmin ? ["oidcAdmin"] : [])].join(", ") || "none"}; secrets: ${Object.keys(spec.secrets).join(", ") || "none"}`;
 }
 
 const { values } = parseArgs({
@@ -109,8 +103,6 @@ const { values } = parseArgs({
     slug: { type: "string" },
     "org-id": { type: "string" },
     hosts: { type: "string" },
-    "env-file": { type: "string" },
-    "secret-env-file": { type: "string" },
     "tenant-id": { type: "string" },
     "create-staging": { type: "boolean", default: false },
     "batch-size": { type: "string", default: "500" },
@@ -136,14 +128,11 @@ async function main(): Promise<void> {
   const adminUrlEnv = values["admin-url-env"];
   const adminUrl = adminUrlEnv ? urlFromEnv(adminUrlEnv, "--admin-url-env") : undefined;
   const sourceUrl =
-    (values["source-url"] && values["source-url"]) ??
-    (adminUrl && values["source-db"] ? withDatabase(adminUrl, values["source-db"]) : undefined);
+    values["source-url"] || (adminUrl && values["source-db"] ? withDatabase(adminUrl, values["source-db"]) : undefined);
   const stagingUrl =
-    (values["staging-url"] && values["staging-url"]) ??
+    values["staging-url"] ||
     (adminUrl && values["staging-db"] ? withDatabase(adminUrl, values["staging-db"]) : undefined);
-  const targetUrl =
-    (values["target-url"] && values["target-url"]) ??
-    urlFromEnv(values["target-url-env"] ?? "DATABASE_URL", "--target-url-env");
+  const targetUrl = values["target-url"] || urlFromEnv(values["target-url-env"] ?? "DATABASE_URL", "--target-url-env");
   if (!sourceUrl) usageError("no source database");
   if (!stagingUrl) usageError("no staging database");
   const spec: TenantSpec = values["spec-env"]
@@ -155,8 +144,8 @@ async function main(): Promise<void> {
           .split(",")
           .map((host) => host.trim())
           .filter(Boolean),
-        env: readServiceEnv(values["env-file"], "--env-file"),
-        secretEnv: readServiceEnv(values["secret-env-file"], "--secret-env-file"),
+        oidcAdmin: false,
+        secrets: {},
       };
   if (new Set([sourceUrl, stagingUrl, targetUrl]).size !== 3) {
     usageError("the source, staging and target databases must be three different databases");
@@ -164,10 +153,10 @@ async function main(): Promise<void> {
   const batchSize = Number(values["batch-size"]);
   if (!Number.isInteger(batchSize) || batchSize < 1) usageError("--batch-size must be a positive integer");
 
-  configurePgTenancy(true);
+  configurePgTenancy(true, tenantSecretsKey(process.env));
   const log = (line: string) => console.log(`[qm:tenant-import] ${line}`);
   log(`tenant ${spec.slug} (org ${spec.orgId}); hosts: ${spec.hosts.join(", ") || "none"}`);
-  log(`env: ${describeEnv(spec.env)}; secret env: ${describeEnv(spec.secretEnv)}`);
+  log(describeSpec(spec));
 
   const result = await importTenant({
     sourceUrl,
