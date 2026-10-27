@@ -99,7 +99,7 @@ export async function openSubagent(ctx: TurnContext, input: SessionOpenInput): P
       if (live >= cap) {
         return {
           ok: false,
-          message: `all ${cap} subagent run slots for this conversation are in use — wait for one to finish, read their sessions, or interrupt one you no longer need.`,
+          message: `all ${cap} subagent run slots for this conversation are in use — read their sessions, interrupt one you no longer need, or end this turn; a finishing subagent wakes you.`,
         };
       }
       const child = await deps.sessions.getOrCreateByThread(
