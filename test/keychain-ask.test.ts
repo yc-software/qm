@@ -509,7 +509,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
   assert.deepEqual(await texts(ok), ["done"], "just the turn's reply, no fallback");
 });
 
-test("an ask's resolution is one event line, shown only to the first turn after it resolved", () => {
+test("an ask's resolution is one event line, shown only to the first turn after it resolved", async () => {
   const now = Date.now();
   const pending: KeychainAsk = {
     id: "a1b2c3d4e5f6",
@@ -529,9 +529,24 @@ test("an ask's resolution is one event line, shown only to the first turn after 
     note: "not for prod",
     resolvedAt: now - 60_000,
   };
-  const asks = [pending, declined].map((ask) => ({ ask, ownerName: "alice", service: "github" }));
-  assert.equal(askResolutionEvents(asks, now - 120_000), "Access request to alice for `github` was declined.");
-  assert.equal(askResolutionEvents(asks, now - 60_000), "");
+  const events = (since: number) =>
+    askResolutionEvents(
+      [pending, declined],
+      since,
+      () => "alice",
+      async () => ({ service: "github" }) as never,
+    );
+  assert.equal(await events(now - 120_000), "Access request to alice for `github` was declined.");
+  assert.equal(await events(now - 60_000), "");
+  assert.equal(
+    await askResolutionEvents(
+      [declined],
+      0,
+      () => "alice",
+      async () => null,
+    ),
+    "Access request to alice for deleted credential `cred1` was declined.",
+  );
 });
 
 describe("/v1/keychain/asks — card approval end to end", async () => {

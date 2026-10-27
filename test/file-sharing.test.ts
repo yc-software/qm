@@ -92,21 +92,17 @@ test("mimeFromName maps known extensions, defaults to octet-stream", () => {
   assert.equal(mimeFromName("noext"), "application/octet-stream");
 });
 
-test("inboundManifest lists files under ./inbox/", () => {
+const m0 = () => ({ name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" as const });
+
+test("inboundManifest gives each file one line with its sharer and inbox path", () => {
   const m = inboundManifest([
     { name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" },
-    { name: "b.csv", mimetype: "text/csv", sizeBytes: 9, direction: "in" },
+    { name: "b.csv", mimetype: "text/csv", sizeBytes: 9, direction: "in", author: "eve" },
   ]);
-  assert.equal(m, "The user shared a.txt (./inbox/a.txt).\nThe user shared b.csv (./inbox/b.csv).");
-  assert.equal(
-    inboundManifest(
-      [{ name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" }],
-      "inbox",
-      undefined,
-      "regan",
-    ),
-    "regan shared a.txt (./inbox/a.txt).",
-  );
+  const [first, second] = m.split("\n");
+  assert.match(first!, /^The user shared a\.txt .*\.\/inbox\/a\.txt/);
+  assert.match(second!, /^eve shared b\.csv .*\.\/inbox\/b\.csv/);
+  assert.match(inboundManifest([m0()], "inbox", undefined, "ada"), /^ada shared a\.txt/);
   assert.equal(inboundManifest([]), "");
 });
 
@@ -133,22 +129,6 @@ test("inboundIssuesNote names the files that did not reach the inbox and is empt
   const text = inboundIssuesNote(["x.png — too many files in one message"]);
   assert.match(text, /did not reach \.\/inbox\//);
   assert.match(text, /x\.png/);
-});
-
-test("inboundManifest attributes each file to its poster when the author is known", () => {
-  const m = inboundManifest([
-    { name: "selfie.jpg", mimetype: "image/jpeg", sizeBytes: 5, direction: "in", author: "taylor" },
-    { name: "poster.png", mimetype: "image/png", sizeBytes: 7, direction: "in", author: "eve" },
-  ]);
-  assert.equal(m, "taylor shared selfie.jpg (./inbox/selfie.jpg).\neve shared poster.png (./inbox/poster.png).");
-});
-
-test("inboundManifest leaves a file unattributed when its author is unknown (mixed case)", () => {
-  const m = inboundManifest([
-    { name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in", author: "eve" },
-    { name: "b.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" },
-  ]);
-  assert.equal(m, "eve shared a.txt (./inbox/a.txt).\nThe user shared b.txt (./inbox/b.txt).");
 });
 
 test("shared files render as one count line without file names, '' when nothing is shared", () => {

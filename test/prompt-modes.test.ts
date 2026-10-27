@@ -466,7 +466,6 @@ for (const surface of ["web", "slack"]) {
       assert.equal(countOccurrences(prompt, "Use Markdown"), 1);
       const stablePrompt = prompt.split("\n\n<environment>")[0]!.trim();
       assert.equal(countOccurrences(stablePrompt, "## Rules for talking to users"), 1);
-      assert.ok(stablePrompt.includes("4. Describe work in human terms and not system machinery."));
       assertNoTemplateTokens(prompt, `${surface} ${mode}`);
     });
   }

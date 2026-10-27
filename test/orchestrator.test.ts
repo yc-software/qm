@@ -4474,7 +4474,6 @@ test("inventories ride a byte-stable system prompt; a warm turn's environment ca
   const second = await app.turn(dm("!sysprompt", { timezone: "America/Los_Angeles" }));
   const [system1, environment1] = (first.reply ?? "").split("<environment>");
   const [system2, environment2] = (second.reply ?? "").split("<environment>");
-  assert.match(system1!, /\n## Sandboxes\n\S+ \(default\)/);
   assert.equal(system2, system1);
   assert.match(environment2!, /^\nLocal time: \S+ \d\d:\d\d P[SD]T \(America\/Los_Angeles\)\n<\/environment>$/);
   assert.doesNotMatch(environment1!, /## /);

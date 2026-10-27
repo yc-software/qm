@@ -16,7 +16,7 @@ import { readContextFile } from "../resolution/context-files.ts";
 import { type TurnContext } from "../resolution/turn-context.ts";
 import { canReadNotebook, readNotebook, searchNotebooks } from "../memory/cross-scope.ts";
 import type { SandboxAccessPlan, SandboxResource, SandboxResources } from "../sandbox/sandbox-resources.ts";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { workspacePathOf } from "../sandbox/exec-file-ops.ts";
 import { DROPPED_PROXY_ENV } from "../sandbox/sandbox-env.ts";
 import { interpolateSplitEnv } from "../deployment/deployment-layer.ts";
@@ -977,7 +977,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const content = await withAbort(() => memory.read(deps.memoryScopeId!), signal);
         return { content, sourceScopeId: deps.memoryScopeId };
       }
-      if (path.replace(/\/+$/, "") === "shared") {
+      if (posix.normalize(`${path}/`) === "shared/") {
         const names = [...new Set(deps.grantedHandles.map((handle) => handle.handlePath))].sort();
         return { content: names.length ? names.join("\n") : "[no files are shared with you]", sourceScopeId: null };
       }

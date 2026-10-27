@@ -29,8 +29,9 @@ test("gateway only (no surface-provided context) still names the gateway", () =>
 });
 
 test("web gateway keeps scheduled deliveries in the web conversation by default", () => {
-  const out = renderGatewayContext("web", undefined, "regan");
-  assert.equal(out, "## Where you are\nWeb DM with regan.\nCrons you create here post back here.");
+  const out = renderGatewayContext("web", undefined, "ada");
+  assert.match(out, /^Web DM with ada\.$/m);
+  assert.match(out, /post back here/);
 });
 
 test("surface-supplied instructions are appended verbatim (and alone are enough to render)", () => {

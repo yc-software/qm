@@ -1,13 +1,16 @@
 import { retainedSnapshot } from "../harness/context-snapshot.ts";
 import type { SessionEntry } from "../types.ts";
 
-export function renderSandboxProviders(names: readonly string[], defaultName?: string): string {
+export const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
+  `${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`;
+
+export function renderSandboxProviders(names: readonly string[], defaultName?: string, listable = true): string {
   if (!names.length) return "";
   const listed = [
     ...names.filter((name) => name === defaultName).map((name) => `${name} (default)`),
     ...names.filter((name) => name !== defaultName).toSorted(),
   ];
-  return `## Sandboxes\n${listed.join(", ")}. \`sandbox list\` for details.`;
+  return `## Sandboxes\n${listed.join(", ")}.${listable ? " `sandbox list` for details." : ""}`;
 }
 
 interface RosterSnapshot {
@@ -26,12 +29,12 @@ export function membershipEvent(
     .sort((a, b) => a.id.localeCompare(b.id));
   const { previous } = retainedSnapshot(history, rosterOf);
   if (!previous) return { text: "", record: { roster, sessionId } };
-  const isNew = (list: RosterSnapshot["roster"]) => (m: { id: string }) => !list.some((o) => o.id === m.id);
+  const absentFrom = (list: RosterSnapshot["roster"], id: string) => !list.some((o) => o.id === id);
   const joined = current
-    .filter((m) => isNew(previous.roster)({ id: m.principalId }))
+    .filter((m) => absentFrom(previous.roster, m.principalId))
     .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
-    .map((m) => `${m.displayName} (${m.slackId ?? m.principalId})`);
-  const left = previous.roster.filter(isNew(roster)).map((m) => m.name);
+    .map(memberLabel);
+  const left = previous.roster.filter((m) => absentFrom(roster, m.id)).map((m) => m.name);
   const parts = [
     joined.length ? `Joined: ${joined.join(", ")}.` : "",
     left.length ? `Left: ${left.join(", ")}.` : "",

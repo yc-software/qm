@@ -1,4 +1,6 @@
 import cronstrue from "cronstrue";
+import { CronPattern } from "croner";
+import { memberLabel } from "../environment-facts.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import type { CandidateDestination, Cron, Monitor, SurfaceBriefing, Webhook } from "../../types.ts";
 import { promptText } from "../../util/text.ts";
@@ -33,36 +35,34 @@ export function renderProjectHomeChannel(channelName: string): string {
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const EVERY_WEEKDAY_OCCURRENCE = 63;
 
-function clockTime(hour: number, minute: number): string {
-  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour < 12 ? "AM" : "PM"}`;
-}
+const clockTime = (hour: number, minute: number): string =>
+  new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(
+    Date.UTC(2000, 0, 1, hour, minute),
+  );
 
-function wholeNumbers(field: string, max: number): number[] | undefined {
-  const values = field.split(",").map(Number);
-  return values.every((v) => Number.isInteger(v) && v >= 0 && v <= max) ? values : undefined;
-}
-
-function weekdays(field: string): string | undefined {
-  if (field === "*") return "daily";
-  const range = field.split("-");
-  if (range.length === 2) {
-    const [from, to] = range.map((d) => wholeNumbers(d, 7)?.[0]);
-    return from !== undefined && to !== undefined ? `${WEEKDAYS[from % 7]}–${WEEKDAYS[to % 7]}` : undefined;
-  }
-  return wholeNumbers(field, 7)
-    ?.map((d) => WEEKDAYS[d % 7])
-    .join("/");
-}
+const setIndexes = (field: number[]): number[] => field.flatMap((value, index) => (value ? [index] : []));
 
 function shortCron(expression: string): string {
-  const [minute, hour, dayOfMonth, month, dayOfWeek, ...rest] = expression.trim().split(/\s+/);
-  const minutes = minute !== undefined ? wholeNumbers(minute, 59) : undefined;
-  const hours = hour !== undefined ? wholeNumbers(hour, 23) : undefined;
-  const days = dayOfWeek !== undefined ? weekdays(dayOfWeek) : undefined;
-  if (minutes?.length === 1 && hours && days && dayOfMonth === "*" && month === "*" && !rest.length)
-    return `${hours.map((h) => clockTime(h, minutes[0]!)).join(", ")} ${days}`;
-  return cronstrue.toString(expression.replaceAll("#L", "L"));
+  const pattern = new CronPattern(expression);
+  const [minute, ...moreMinutes] = setIndexes(pattern.minute);
+  const weekdays = setIndexes(pattern.dayOfWeek);
+  const plain =
+    minute !== undefined &&
+    !moreMinutes.length &&
+    setIndexes(pattern.second).join() === "0" &&
+    pattern.starDOM &&
+    pattern.starYear &&
+    pattern.month.every(Boolean) &&
+    !pattern.lastDayOfMonth &&
+    !pattern.lastWeekday &&
+    weekdays.every((day) => pattern.dayOfWeek[day] === EVERY_WEEKDAY_OCCURRENCE);
+  if (!plain) return cronstrue.toString(expression.replaceAll("#L", "L"));
+  const days = pattern.starDOW ? "daily" : weekdays.map((day) => WEEKDAYS[day]).join("/");
+  return `${setIndexes(pattern.hour)
+    .map((hour) => clockTime(hour, minute))
+    .join(", ")} ${days}`;
 }
 
 function shortInterval(everyMs: number): string {
@@ -144,7 +144,7 @@ const ROSTER_CAP = 20;
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
   const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
-  const lines = shown.map((m) => `- ${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`);
+  const lines = shown.map((m) => `- ${memberLabel(m)}`);
   const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
   return (
     [
@@ -169,4 +169,26 @@ export function renderSurfaceBriefing(surface: SurfaceBriefing): string {
       ? ["### Current state (reference data)", "```untrusted-data", promptText(surface.state), "```"]
       : []),
   ].join("\n");
+}
+
+const SYSTEM_CONTEXT_ORDER = [
+  "Where you are",
+  "Project home channel",
+  "Where scheduled tasks post",
+  "Who's in this conversation",
+  "Other computers you can reach",
+  "Files",
+  "Sandboxes",
+  "Model access",
+  "Scheduled here",
+  "Credentials",
+  "Skills",
+] as const;
+
+export type SystemContextBlocks = Partial<Record<(typeof SYSTEM_CONTEXT_ORDER)[number], string>>;
+
+export function renderSystemContext(blocks: SystemContextBlocks): string {
+  return SYSTEM_CONTEXT_ORDER.map((key) => blocks[key] ?? "")
+    .filter((block) => block.trim())
+    .join("\n\n");
 }

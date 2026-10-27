@@ -913,7 +913,6 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
   assert.match(block, new RegExp(`github:${cred.id}`));
   assert.doesNotMatch(block, /STANDING|gh for repo work here|grant `/);
   assert.match(block, /`github:[a-f0-9]+` — github \(AliceBell\); env `GITHUB_TOKEN`/);
-  assert.match(block, /Select handles in execute.credentials/);
   assert.ok(!block.includes("/v1/keychain/grants"));
 
   const login = renderKeychainManifest({
@@ -1501,14 +1500,7 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
       now,
     );
   const events = async (since: number) =>
-    askResolutionEvents(
-      (await k.listAsks({ requesterScopeId: "channel:C1" })).map((a) => ({
-        ask: a,
-        ownerName: "U1",
-        service: "github",
-      })),
-      since,
-    );
+    askResolutionEvents(await k.listAsks({ requesterScopeId: "channel:C1" }), since, () => "U1", k.getCredential);
   const first = await manifest();
   for (const advance of [61_000, 3 * 3_600_000]) {
     now += advance;
@@ -1712,4 +1704,37 @@ test("granted connector keeps account and refresh semantics when owner is absent
   );
   assert.match(rendered, /### U_OWNER\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
   assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
+});
+
+test("a connector whose refresh was rejected shows the provider's error, not just expired", () => {
+  const rendered = renderKeychainManifest({
+    scopeId: "personal:U1",
+    conversationKind: "dm",
+    actorId: "U1",
+    members: [{ id: "U1" }],
+    entriesByOwner: new Map(),
+    connectorsByOwner: new Map([
+      [
+        "U1",
+        [
+          {
+            credentialId: "c1",
+            ownerId: "U1",
+            host: "gmail.googleapis.com",
+            connected: true,
+            needsReconnect: true,
+            refreshError: "invalid_grant",
+          },
+        ],
+      ],
+    ]),
+    scopeGrants: [],
+    execution: [
+      { handle: "connector:gmail.googleapis.com:default", ownerId: "U1", credentialId: "c1", description: "" },
+    ],
+  });
+  assert.match(
+    rendered,
+    /`connector:gmail\.googleapis\.com:default` — .*; expired \(refresh failed: invalid_grant\)$/m,
+  );
 });

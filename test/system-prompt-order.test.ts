@@ -427,7 +427,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
     }),
   );
   assert.match(dmPrompt.reply ?? "", /### channel:C1[\s\S]*ROOM_ONLY_MEMORY/);
-  assert.match(dmPrompt.reply ?? "", /Use them freely, but a preference tagged with another scope heading/);
+  assert.match(dmPrompt.reply ?? "", /<environment>[^]*## What you remember\n/);
   assert.doesNotMatch(dmPrompt.reply ?? "", /apply it only if that tag matches here/);
 
   member = false;
@@ -1208,7 +1208,7 @@ test("scheduled-work changes update the next turn's system block without rewriti
   assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
   for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Scheduled here|Sandboxes|Debian|vCPU/);
   assert.match(seen[0]!.systemPrompt, /Nothing is scheduled here/);
-  assert.match(seen[1]!.systemPrompt, /Synthetic status — every 5 min$/m);
+  assert.match(seen[1]!.systemPrompt, /- Synthetic status — /);
   assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);

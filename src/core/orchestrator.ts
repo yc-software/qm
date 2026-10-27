@@ -68,6 +68,7 @@ import {
   credentialLineText,
   askResolutionEvents,
   renderKeychainManifest,
+  type KeychainAsk,
   type PublicServiceCredential,
   type KeychainManifestInput,
 } from "../credentials/keychain.ts";
@@ -200,6 +201,8 @@ import {
   renderProjectHomeChannel,
   renderReachRoster,
   renderStandingObligations,
+  renderSystemContext,
+  type SystemContextBlocks,
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
@@ -210,20 +213,6 @@ import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
 import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
-
-const SYSTEM_CONTEXT_ORDER = [
-  "Where you are",
-  "Project home channel",
-  "Where scheduled tasks post",
-  "Who's in this conversation",
-  "Other computers you can reach",
-  "Files",
-  "Sandboxes",
-  "Model access",
-  "Scheduled here",
-  "Credentials",
-  "Skills",
-] as const;
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -1123,10 +1112,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (external)
         systemPrompt +=
           "\n\nThis conversation has an external Slack audience. Answer and run code here using only the explicitly provided shared service credentials. Personal memory, files, keychains, connected apps, organization data and administrative tools are unavailable. When personal access is needed, say briefly that you are continuing privately, and include [[continue-private: task]] in your final answer. The continuation goes only to the authenticated requester; never put private results in this channel.";
-      const turnContextBlocks: Partial<Record<(typeof SYSTEM_CONTEXT_ORDER)[number], string>> = {};
+      const turnContextBlocks: SystemContextBlocks = {};
       const turnEvents: string[] = [];
       let rosterMembers: DirectoryMember[] | undefined;
-      let resolvedAsks: Parameters<typeof askResolutionEvents>[0] = [];
+      let scopeAskList: KeychainAsk[] = [];
+      const nameOf = (id: string): string | undefined =>
+        conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
+        rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
       if (input.privateSessionMessage)
         turnEvents.push(
           "This is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.",
@@ -1931,7 +1923,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             turnSandboxResources.profiles().map((profile) => profile.name),
             turnSandboxResources.defaultBackend(),
           )
-        : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend);
+        : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
       const {
         provision,
@@ -2337,18 +2329,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             execution: credentialDescriptions,
           });
           if (keychainBlock) turnContextBlocks["Credentials"] = keychainBlock;
-          resolvedAsks = await Promise.all(
-            scopeAsks
-              .filter((ask) => ask.status !== "pending")
-              .map(async (ask) => ({
-                ask,
-                ownerName:
-                  members.find((m) => samePerson(m.id, ask.ownerId))?.displayName ??
-                  rosterMembers?.find((m) => samePerson(m.principalId, ask.ownerId))?.displayName ??
-                  ask.ownerId,
-                service: (await deps.keychain?.getCredential(ask.credentialId))?.service ?? "a credential",
-              })),
-          );
+          scopeAskList = scopeAsks;
         }
         systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
         if (swarmBinding)
@@ -2356,9 +2337,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (swarmGoalTurn)
           systemPrompt += ` The agent that sent you this goal stands in for the user on it: when you need a decision or the goal is paused, send that question to that agent with notify:true instead of only ending your reply (if you sent it to yourself, decide yourself). Swarm messages sent to you while you work are handed to you with your tool results and when you end a reply, and a goal in one of them replaces your current goal. When you are blocked on another agent, ask it, then call goal action update "wait": it returns with the next swarm message that reaches you.`;
         if (onboardingBlock) systemPrompt += `\n\n${onboardingBlock}`;
-        systemPrompt = [systemPrompt, ...SYSTEM_CONTEXT_ORDER.map((key) => turnContextBlocks[key] ?? "")]
-          .filter((s) => s.trim())
-          .join("\n\n");
+        systemPrompt = [systemPrompt, renderSystemContext(turnContextBlocks)].filter((s) => s.trim()).join("\n\n");
 
         if (
           ambientTurn &&
@@ -2967,11 +2946,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef, lastUserAt);
         const sender =
           !automatedTurn && !sessionTurn && conversation.kind !== "dm" && input.text.trim()
-            ? senderNote(
-                actor.displayName ??
-                  rosterMembers?.find((m) => samePerson(m.principalId, actor.id))?.displayName ??
-                  actor.id,
-              )
+            ? senderNote(actor.displayName ?? nameOf(actor.id) ?? actor.id)
             : "";
         const unscreenedNote =
           inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentsUnscreened
@@ -3000,7 +2975,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           unscreenedNote,
           input.conversationHeader?.trim(),
           ...turnEvents,
-          askResolutionEvents(resolvedAsks, lastUserAt ?? session.createdAt),
+          deps.keychain
+            ? await askResolutionEvents(
+                scopeAskList,
+                lastUserAt ?? session.createdAt,
+                (ownerId) => nameOf(ownerId) ?? ownerId,
+                deps.keychain.getCredential,
+              )
+            : "",
         ]
           .filter((s) => s && s.trim())
           .join("\n\n");

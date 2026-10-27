@@ -349,6 +349,7 @@ interface ConnectorMeta {
   expiresAt?: number;
   connected: boolean;
   needsReconnect?: boolean;
+  refreshError?: string;
 }
 
 export interface ConnectorTokenStore {
@@ -1673,23 +1674,36 @@ interface CredentialLine {
   label: string;
   use: string;
   expired: boolean;
+  refreshError?: string;
 }
 
-export const credentialLineText = (line: CredentialLine): string =>
-  `${line.label}; ${line.expired ? "expired" : line.use}`;
+export const credentialLineText = (line: CredentialLine): string => {
+  if (!line.expired) return `${line.label}; ${line.use}`;
+  return `${line.label}; expired${line.refreshError ? ` (refresh failed: ${line.refreshError})` : ""}`;
+};
 
 export const connectorHandle = (host: string, accountType?: string): string =>
   `connector:${host}:${accountType ?? "default"}`;
 
-export function connectorLine(host: string, accountType?: string, expired = false): CredentialLine {
+export function connectorLine(
+  host: string,
+  accountType?: string,
+  expired = false,
+  refreshError?: string,
+): CredentialLine {
   const account = accountType && accountType !== "default" ? ` (${accountType})` : "";
-  return { label: `${connectorHostLabel(host)}${account}`, use: `env \`${envKey(host)}\``, expired };
+  return {
+    label: `${connectorHostLabel(host)}${account}`,
+    use: `env \`${envKey(host)}\``,
+    expired,
+    ...(expired && refreshError ? { refreshError } : {}),
+  };
 }
 
 function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine {
   if (c.managed === "connector") {
     const meta = connectorMeta(c, now);
-    return connectorLine(meta.host, meta.accountType, meta.needsReconnect);
+    return connectorLine(meta.host, meta.accountType, meta.needsReconnect, meta.refreshError);
   }
   if (isBackendCredential(c))
     return { label: "Composio backend access", use: "use the composio skill", expired: false };
@@ -1723,6 +1737,7 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
     ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
     connected: true,
     ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
+    ...(tokenExpired && refreshFailed && rec.refresh?.refreshError ? { refreshError: rec.refresh.refreshError } : {}),
   };
 }
 
@@ -1774,7 +1789,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     for (const connector of input.connectorsByOwner?.get(member.id) ?? [])
       rows.set(connector.credentialId, {
         ownerId: member.id,
-        line: connectorLine(connector.host, connector.accountType, connector.needsReconnect),
+        line: connectorLine(connector.host, connector.accountType, connector.needsReconnect, connector.refreshError),
         connector: connectorHandle(connector.host, connector.accountType),
       });
     const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service.toLowerCase()));
@@ -1802,13 +1817,21 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   return lines.join("\n");
 }
 
-export function askResolutionEvents(
-  asks: ReadonlyArray<{ ask: KeychainAsk; ownerName: string; service: string }>,
+export async function askResolutionEvents(
+  asks: readonly KeychainAsk[],
   since: number,
-): string {
-  return asks
-    .filter(({ ask }) => ask.status !== "pending" && ask.resolvedAt !== undefined && ask.resolvedAt > since)
-    .toSorted((a, b) => a.ask.resolvedAt! - b.ask.resolvedAt!)
-    .map(({ ask, ownerName, service }) => `Access request to ${ownerName} for \`${service}\` was ${ask.status}.`)
-    .join("\n");
+  ownerName: (ownerId: string) => string,
+  credential: (id: string) => Promise<KeychainCredentialMeta | null>,
+): Promise<string> {
+  const resolved = asks
+    .filter((ask) => ask.status !== "pending" && ask.resolvedAt !== undefined && ask.resolvedAt > since)
+    .toSorted((a, b) => a.resolvedAt! - b.resolvedAt!);
+  const lines = await Promise.all(
+    resolved.map(async (ask) => {
+      const service = (await credential(ask.credentialId))?.service;
+      const what = service ? `\`${service}\`` : `deleted credential \`${ask.credentialId}\``;
+      return `Access request to ${ownerName(ask.ownerId)} for ${what} was ${ask.status}.`;
+    }),
+  );
+  return lines.join("\n");
 }

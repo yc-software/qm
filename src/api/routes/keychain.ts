@@ -1,4 +1,6 @@
 import {
+  connectorHandle,
+  credentialHandle,
   KeychainError,
   renderAskNotice,
   type CredentialFieldInput,
@@ -16,6 +18,7 @@ import { audit, resolveCapabilityDestination } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
+import type { DirectoryMember } from "../../directory/directory-store.ts";
 
 async function resolveScopeNames(
   app: ApiCtx["app"],
@@ -209,20 +212,20 @@ type KeychainStore = NonNullable<ApiCtx["deps"]["keychain"]>;
 async function askableCredentials(
   kc: KeychainStore,
   ownerId: string,
-): Promise<Array<{ credential: string; service: string; account?: string; names: string[] }>> {
+): Promise<Array<{ credential: string; service: string; account?: string; handle: string }>> {
   const [entries, connectors] = await Promise.all([kc.listByOwners([ownerId]), kc.listConnectorsByOwners([ownerId])]);
   return [
     ...(entries.get(ownerId) ?? []).map((c) => ({
       credential: c.id,
       service: c.service,
       ...(c.accountLabel ? { account: c.accountLabel } : {}),
-      names: [c.service, `${c.service}:${c.id}`],
+      handle: credentialHandle(c),
     })),
     ...(connectors.get(ownerId) ?? []).map((c) => ({
       credential: c.credentialId,
       service: connectorHostLabel(c.host),
       ...(c.accountType ? { account: c.accountType } : {}),
-      names: [c.host, connectorHostLabel(c.host), `connector:${c.host}:${c.accountType ?? "default"}`],
+      handle: connectorHandle(c.host, c.accountType),
     })),
   ];
 }
@@ -234,13 +237,12 @@ async function resolveAskTarget(
   owner: string,
   service: string,
 ): Promise<{ credentialId: string } | { status: number; body: Record<string, unknown> }> {
-  const wanted = owner.trim().toLowerCase();
-  const byId = await ctx.app.directoryMember(owner.trim());
-  const people = byId
-    ? [byId]
-    : (await ctx.app.directoryMembers()).filter((m) => m.displayName.trim().toLowerCase() === wanted);
-  const present = [];
-  for (const person of people) if (await ctx.app.belongsToScope(person.principalId, scopeId)) present.push(person);
+  const found = await ctx.app.resolveRecipient(owner);
+  let people: DirectoryMember[] = [];
+  if (found.kind === "one") people = [found.member];
+  else if (found.kind === "ambiguous") people = found.candidates;
+  const inScope = await Promise.all(people.map((person) => ctx.app.belongsToScope(person.principalId, scopeId)));
+  const present = people.filter((_, i) => inScope[i]);
   if (present.length !== 1)
     return {
       status: present.length ? 409 : 404,
@@ -255,8 +257,8 @@ async function resolveAskTarget(
       },
     };
   const candidates = await askableCredentials(kc, present[0]!.principalId);
-  const key = service.trim().toLowerCase();
-  const matches = candidates.filter((c) => c.names.some((name) => name.toLowerCase() === key));
+  const wanted = service.trim().toLowerCase();
+  const matches = candidates.filter((c) => [c.service, c.handle].some((name) => name.toLowerCase() === wanted));
   if (matches.length === 1) return { credentialId: matches[0]!.credential };
   return {
     status: matches.length ? 409 : 404,
@@ -265,7 +267,7 @@ async function resolveAskTarget(
       message: matches.length
         ? "Several of their credentials match; retry with the chosen candidate's credential id."
         : "None of their credentials matches that service; pick one of the candidates.",
-      candidates: (matches.length ? matches : candidates).map(({ names: _names, ...candidate }) => candidate),
+      candidates: matches.length ? matches : candidates,
     },
   };
 }
