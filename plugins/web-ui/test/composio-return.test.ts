@@ -46,7 +46,7 @@ test("return context is bound to the user, nonce, path and expiry", () => {
     path: "/s/chat",
     service: { id: "gmail", name: "Gmail" },
     accountId: "ca_test",
-    widget: "welcome",
+    widget: "settings",
     expiresAt: Date.now() + 60000,
     picker: { query: "gmail", expanded: true },
     scrollTop: 180,

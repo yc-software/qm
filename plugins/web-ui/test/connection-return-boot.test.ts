@@ -9,8 +9,8 @@ async function waitForText(h: Harness, text: RegExp): Promise<void> {
 
 test("real connection return survives router normalization and retires after verification", async () => {
   const h = await harness({
-    path: "/s/sess-deep?composioReturn=return-nonce&status=success&connectedAccountId=ca_test",
-    welcome: true,
+    path: "/settings?composioReturn=return-nonce&status=success&connectedAccountId=ca_test",
+    returnPath: "/settings",
     connectionReturn: true,
   });
   try {
@@ -18,17 +18,16 @@ test("real connection return survives router normalization and retires after ver
     await waitForText(h, /Gmail connected/);
     assert.equal(new URLSearchParams(location.search).has("composioReturn"), false);
     assert.equal(sessionStorage.getItem("qm-connection-return:test:tester"), null);
-    assert.equal(document.querySelector("qm-onboarding-welcome.welcome-rolling"), null);
     assert.equal((document.querySelector('input[type="search"]') as HTMLInputElement)?.value, "mail");
-    const original = document.querySelector("qm-onboarding-welcome")!;
-    const replacement = document.createElement("qm-onboarding-welcome");
-    Object.assign(replacement, { me: { org: "test", user: "tester" }, base: "/", animateWelcome: true });
+    const original = document.querySelector("qm-connect-apps")!;
+    const replacement = document.createElement("qm-connect-apps");
+    Object.assign(replacement, { me: { org: "test", user: "tester" }, base: "/" });
     original.replaceWith(replacement);
     await waitForText(h, /Gmail connected/);
     assert.equal((document.querySelector('input[type="search"]') as HTMLInputElement)?.value, "mail");
     h.setConnections([]);
-    const remounted = document.createElement("qm-onboarding-welcome");
-    Object.assign(remounted, { me: { org: "test", user: "tester" }, base: "/", animateWelcome: true });
+    const remounted = document.createElement("qm-connect-apps");
+    Object.assign(remounted, { me: { org: "test", user: "tester" }, base: "/" });
     replacement.replaceWith(remounted);
     window.dispatchEvent(new Event("focus"));
     for (let i = 0; i < 100 && /Gmail connected/.test(h.mainText()); i++)

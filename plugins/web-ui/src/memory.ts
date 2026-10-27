@@ -1,10 +1,10 @@
-import { html, nothing, render } from "lit";
-import { Pencil, Search, Trash2 } from "lucide";
+import { html } from "lit";
+import { Pencil, Trash2 } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
-import { appState, replacePanePreservingFocus } from "./shell";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
+import { appState } from "./shell";
+import { artifactPage, listPageTpl } from "./list-page";
 import { tip } from "./tooltip";
 
 interface Fact {
@@ -16,14 +16,14 @@ interface Fact {
 let facts: Fact[] = [];
 let notice = "";
 let busy = false;
-let search = "";
 let editing: { id: string; text: string } | null = null;
+const page = artifactPage("memory", "memory-page", "memory");
 
 export function resetMemoryState(): void {
   facts = [];
   notice = "";
   busy = false;
-  search = "";
+  page.query = "";
   editing = null;
 }
 
@@ -46,7 +46,7 @@ async function change(method: "PATCH" | "DELETE", body: object, done: string): P
 function factRow(fact: Fact) {
   const { text } = fact;
   if (editing?.id === fact.id)
-    return html`<div class="memory-fact editing">
+    return html`<div class="list-row memory-fact editing">
       <textarea
         class="memory-text"
         data-focus-key="memory-edit"
@@ -75,7 +75,7 @@ function factRow(fact: Fact) {
         </button>
       </div>
     </div>`;
-  return html`<div class="memory-fact">
+  return html`<div class="list-row memory-fact">
     <div>
       <div>${text}</div>
       <div class="card-meta">Captured ${new Date(fact.createdAt).toISOString().slice(0, 10)}</div>
@@ -106,46 +106,23 @@ function factRow(fact: Fact) {
 }
 
 function drawMemory(loading = false): void {
-  if (appState.currentView !== "memory" || !appState.mainEl) return;
-  const visible = facts.filter((fact) => !search || fact.text.toLowerCase().includes(search.toLowerCase()));
-  const host = document.createElement("div");
-  host.className = scopedSession.active ? "pane scoped-view" : "pane";
-  render(
-    html`
-      ${scopedViewTopbar("memory", () => drawMemory())}
-      <div class="list-page-head">
-        <div>
-          <h1 class="pane-title">Memory</h1>
-        </div>
-        <label class="list-search"
-          >${icon(Search, 16)}<input
-            data-focus-key="memory-search"
-            aria-label="Search memory"
-            type="search"
-            placeholder="Search remembered facts"
-            .value=${search}
-            @input=${(e: Event) => {
-              search = (e.target as HTMLInputElement).value;
-              drawMemory();
-            }}
-        /></label>
-      </div>
-      ${notice || loading ? html`<div class="status">${notice || "Loading…"}</div>` : nothing}
-      <div class="memory-editor">
-        <div class="memory-facts">
-          ${
-            visible.length
-              ? visible.map(factRow)
-              : html`<div class="empty-state">
-                  ${search ? "No remembered facts match this search." : "The agent hasn’t noted any facts yet."}
-                </div>`
-          }
-        </div>
-      </div>
-    `,
-    host,
+  page.paint(
+    listPageTpl({
+      title: "Memory",
+      search: {
+        value: page.query,
+        placeholder: "Search remembered facts",
+        onInput: (value) => {
+          page.query = value;
+          drawMemory();
+        },
+      },
+      notice: notice || (loading ? "Loading…" : ""),
+      rows: facts.filter((fact) => page.matches(fact.text)).map(factRow),
+      empty: page.query ? "No remembered facts match this search." : "The agent hasn’t noted any facts yet.",
+    }),
+    () => drawMemory(),
   );
-  replacePanePreservingFocus(host);
 }
 
 export async function renderMemory(): Promise<void> {

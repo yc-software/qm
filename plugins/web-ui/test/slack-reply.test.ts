@@ -28,7 +28,7 @@ test("Slack chats show a compact account link until the viewer can reply", async
     await h.boot();
     h.releaseTranscript();
     await h.openSession(session);
-    await until(() => !!document.querySelector("qm-slack-reply .welcome-slack"));
+    await until(() => !!document.querySelector("qm-slack-reply .slack-connect"));
     assert.equal(document.querySelector("qm-slack-reply textarea"), null);
     assert.match(document.querySelector("qm-slack-reply")!.textContent!, /Send replies here as yourself/);
     linked = true;

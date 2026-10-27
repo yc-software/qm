@@ -5,9 +5,11 @@ import { harness } from "./deep-link-boot-fixture.ts";
 export function slackReturnTest(outcome: "success" | "expired" | "cancelled" | "wrong-account", session = false) {
   test(`Slack callback survives real router boot: ${outcome}`, async () => {
     const h = await harness({
-      welcome: session,
       path: `${session ? "/s/sess-deep?" : "/settings?"}slackReturn=qa-slack-nonce${outcome === "cancelled" ? "&error=access_denied" : ""}`,
       slackReturn: outcome,
+      ...(session
+        ? { entries: [{ seq: 1, type: "assistant", createdAt: 1, payload: { text: "::link-slack-account{}" } }] }
+        : {}),
     });
     try {
       h.releaseSessions();

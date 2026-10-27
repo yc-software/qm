@@ -140,7 +140,7 @@ export class OnboardingSlack extends LitElement {
       this.connected
         ? html`<div class="slack-connected" role="status">${icon(Check, 14)} QM added to Slack</div>`
         : html`<button
-            class="welcome-slack"
+            class="slack-connect"
             type="button"
             ?disabled=${this.busy || this.installAvailable === undefined}
             @click=${() => void this.install()}

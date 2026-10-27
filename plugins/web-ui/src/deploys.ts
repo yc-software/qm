@@ -6,11 +6,10 @@ import { api, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { copyText, relTime } from "./ui";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
-import { contextsState, ensureContexts, scopeChip } from "./contexts";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
+import { artifactPage, confirmDialogTpl, listBackLink, listPageTpl, listTabs } from "./list-page";
+import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
-import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
+import { focusDialogCancel, restoreDialogFocus } from "./dialog-focus";
 import {
   withDeploymentDetailNotice,
   withDeploymentListNotice,
@@ -37,7 +36,6 @@ import {
   type DeploymentView,
 } from "./deploy-view";
 import { tip } from "./tooltip";
-import { deepLinkPath, UI_BASE } from "./deep-link";
 
 const DEPLOY_TABS: Array<{ value: DeploymentTab; label: string }> = [
   { value: "yours", label: "Yours" },
@@ -56,10 +54,8 @@ const DEPLOY_EDIT_FIELDS: Record<DeployEditField, { endpoint: string; savedValue
 let deployList: DeploymentView[] = [];
 let deployNotices: DeploymentNotices = { list: "", detail: null };
 let deployLoading = false;
-let deployScope: string | null = null;
-let deployQuery = "";
 let deployTab: DeploymentTab = "yours";
-let deployPageHost: HTMLElement | null = null;
+const page = artifactPage("deploys", "deploys-page", "apps");
 let activeDeploy: DeploymentView | null = null;
 let visibleVersionCount = 10;
 let editingDeploy: { id: string; field: DeployEditField } | null = null;
@@ -116,32 +112,22 @@ function ownerLabel(d: DeploymentView): string {
 }
 
 function deployTabs(): TemplateResult {
-  const inContext = deployList.filter((d) => deploymentInScope(d, deployScope));
+  const inContext = deployList.filter((d) => deploymentInScope(d, page.scope));
   const viewer = appState.me?.user;
   const counts = Object.fromEntries(
     DEPLOY_TABS.map((tab) => [tab.value, inContext.filter((d) => deploymentTab(d, viewer) === tab.value).length]),
   ) as Record<DeploymentTab, number>;
-  const tabs = DEPLOY_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || deployTab === tab.value);
-  return html`
-    <div class="cron-list-controls" role="tablist" aria-label="App view">
-      ${tabs.map(
-        (tab) => html`
-          <button
-            type="button"
-            role="tab"
-            aria-selected=${deployTab === tab.value}
-            class="cron-filter-chip ${deployTab === tab.value ? "active" : ""}"
-            @click=${() => {
-              deployTab = tab.value;
-              drawDeploysPage();
-            }}
-          >
-            <span>${tab.label}</span><span class="cron-filter-count">${counts[tab.value]}</span>
-          </button>
-        `,
-      )}
-    </div>
-  `;
+  return listTabs(
+    "App view",
+    DEPLOY_TABS.filter((tab) => tab.value === "yours" || counts[tab.value] > 0 || deployTab === tab.value).map(
+      (tab) => ({ ...tab, count: counts[tab.value] }),
+    ),
+    deployTab,
+    (tab) => {
+      deployTab = tab;
+      drawDeploysPage();
+    },
+  );
 }
 
 function deploymentRow(d: DeploymentView): TemplateResult {
@@ -183,27 +169,22 @@ function deploymentRow(d: DeploymentView): TemplateResult {
 function drawDeploysPage(): void {
   if (appState.currentView !== "deploys" || !appState.mainEl) return;
   activeDeploy = null;
-  if (!deployPageHost || deployPageHost.parentElement !== appState.mainEl) {
-    deployPageHost = document.createElement("div");
-    deployPageHost.className = "pane deploys-page";
-    appState.mainEl.replaceChildren(deployPageHost);
-  }
   const viewer = appState.me?.user;
   const rows = filterDeployments(deployList, {
     tab: deployTab,
-    scope: deployScope,
-    query: deployQuery,
+    scope: page.scope,
+    query: page.query,
     viewer,
     sort: "newest",
   });
   const allForTab = deployList.filter(
-    (d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, deployScope),
+    (d) => deploymentTab(d, viewer) === deployTab && deploymentInScope(d, page.scope),
   );
   let empty = deploymentTabEmptyMessage(deployTab);
   if (!deployList.length && deployNotices.list) empty = deployNotices.list;
   else if (deployLoading && deployList.length === 0) empty = "Loading apps…";
-  else if (deployQuery && allForTab.length) empty = "No apps match your search.";
-  else if (deployScope) empty = "No apps in this context.";
+  else if (page.query && allForTab.length) empty = "No apps match your search.";
+  else if (page.scope) empty = "No apps in this context.";
   const content = deployList.length
     ? [
         deployTabs(),
@@ -215,18 +196,15 @@ function drawDeploysPage(): void {
           : [html`<div class="empty compact cron-filter-empty">${empty}</div>`]),
       ]
     : [];
-  const scoped = Boolean(scopedSession.active);
-  deployPageHost.classList.toggle("scoped-view", scoped);
-  render(
+  page.paint(
     html`
-      ${scopedViewTopbar("apps", drawDeploysPage)}
       ${listPageTpl({
         title: "Apps",
         search: {
-          value: deployQuery,
+          value: page.query,
           placeholder: "Search apps",
           onInput: (value) => {
-            deployQuery = value;
+            page.query = value;
             drawDeploysPage();
           },
         },
@@ -235,7 +213,7 @@ function drawDeploysPage(): void {
       })}
       ${archiveCandidate ? archiveDialog(archiveCandidate) : nothing} ${deployToast ? undoToast(deployToast) : nothing}
     `,
-    deployPageHost,
+    drawDeploysPage,
   );
 }
 
@@ -251,7 +229,7 @@ async function openDeploy(d: DeploymentView): Promise<void> {
   deployDraft = "";
   deployNotices = withoutDeploymentDetailNotice(deployNotices);
   activeDeploy = d;
-  history.replaceState(null, "", deepLinkPath(UI_BASE, "deploys", null, null, d.id));
+  page.syncUrl(d.id);
   drawDeployDetail(d, true);
   try {
     const response = await api<{ deployment?: DeploymentView }>(`/api/deployments/${encodeURIComponent(d.id)}`);
@@ -409,7 +387,7 @@ function returnToDeploysList(): void {
   deployDraft = "";
   deployNotices = withoutDeploymentDetailNotice(deployNotices);
   activeDeploy = null;
-  history.replaceState(null, "", deepLinkPath(UI_BASE, "deploys", null));
+  page.syncUrl(null);
   drawDeploysPage();
 }
 
@@ -654,7 +632,7 @@ function closeArchiveDialog(): void {
 function setDeployBackgroundInert(inert: boolean): void {
   if (inert && appState.currentView !== "deploys") return;
   const roots = new Set<HTMLElement>();
-  if (deployPageHost) roots.add(deployPageHost);
+  if (page.host) roots.add(page.host);
   if (appState.currentView === "deploys" && appState.mainEl) roots.add(appState.mainEl);
   roots.forEach((root) =>
     root
@@ -676,41 +654,15 @@ function currentDeployActionView(targetId: string): ReturnType<typeof deployment
 }
 
 function archiveDialog(d: DeploymentView): TemplateResult {
-  return html`
-    <div
-      class="project-dialog-backdrop"
-      @click=${(event: MouseEvent) => event.target === event.currentTarget && closeArchiveDialog()}
-    >
-      <div
-        class="project-dialog deploy-archive-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="deploy-archive-title"
-        @keydown=${(event: KeyboardEvent) => trapDialogFocus(event, closeArchiveDialog)}
-      >
-        <div class="project-dialog-head">
-          <div>
-            <h2 id="deploy-archive-title">Archive <bdi>${deploymentTitle(d)}</bdi>?</h2>
-          </div>
-        </div>
-        <p>
-          This takes the app offline immediately, so its current URL will stop working. Its source and version history
-          are kept, and you can restore it later.
-        </p>
-        <div class="project-dialog-actions actions">
-          <button class="btn" type="button" data-dialog-cancel @click=${closeArchiveDialog}>Cancel</button>
-          <button
-            class="btn danger deploy-archive-confirm"
-            type="button"
-            ?disabled=${deploySaving}
-            @click=${() => void archiveDeploy(d)}
-          >
-            Archive and take offline
-          </button>
-        </div>
-      </div>
-    </div>
-  `;
+  return confirmDialogTpl({
+    id: "deploy-archive",
+    title: html`Archive <bdi>${deploymentTitle(d)}</bdi>?`,
+    body: "This takes the app offline immediately, so its current URL will stop working. Its source and version history are kept, and you can restore it later.",
+    confirm: "Archive and take offline",
+    busy: deploySaving,
+    onCancel: closeArchiveDialog,
+    onConfirm: () => void archiveDeploy(d),
+  });
 }
 
 async function archiveDeploy(d: DeploymentView): Promise<void> {
@@ -841,15 +793,7 @@ export async function renderDeploys(): Promise<void> {
   archiveCandidate = null;
   restoreArchiveFocus = false;
   setDeployBackgroundInert(false);
-  if (scopedSession.active) {
-    deployScope = scopedSession.active.scopeId;
-    contextsState.selected = null;
-  } else if (contextsState.selected) {
-    deployScope = contextsState.selected;
-    contextsState.selected = null;
-  } else {
-    deployScope = null;
-  }
+  page.adoptScope();
   const seq = appState.viewRenderSeq;
   await ensureContexts();
   deployLoading = deployList.length === 0;

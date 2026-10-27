@@ -86,9 +86,9 @@ import {
   startNewChatInLastScope,
   startNewChat,
 } from "./sessions";
-import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
+import { openCronById, renderCronsPage, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
-import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
+import { openWebhookById, renderWebhooksPage, routeWebhooksHistory } from "./webhooks";
 import { renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
@@ -106,7 +106,7 @@ import {
   resetInboxState,
   routeInboxHistory,
 } from "./inbox";
-import { openSkillById, renderSkills, resetActiveSkill, routeSkillsHistory } from "./skills";
+import { openSkillById, renderSkills, routeSkillsHistory } from "./skills";
 import { watchAppAnnotations } from "./app-annotations";
 import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from "./settings";
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
@@ -769,17 +769,8 @@ function resetActiveDetail(v: View): void {
     case "inbox":
       resetActiveInboxItem();
       break;
-    case "webhooks":
-      resetActiveWebhook();
-      break;
-    case "crons":
-      resetActiveCron();
-      break;
     case "loops":
       resetActiveLoop();
-      break;
-    case "skills":
-      resetActiveSkill();
       break;
   }
 }
@@ -1184,7 +1175,7 @@ export async function boot(): Promise<void> {
       const status = params.get("status");
       if (provider && status) noteConnectorResult(provider, status);
     }
-    if (wanted === "contexts" || wanted === "files" || wanted === "deploys") {
+    if (["contexts", "files", "deploys", "crons", "webhooks", "skills"].includes(wanted)) {
       const scope =
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;

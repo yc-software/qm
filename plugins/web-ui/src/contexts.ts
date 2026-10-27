@@ -1,4 +1,3 @@
-import { previewFile } from "./file-open.ts";
 import { peopleResults, type DirectoryMatch } from "./people-results";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -16,60 +15,29 @@ import {
   X,
   type IconNode,
 } from "lucide";
-import {
-  api,
-  sharedContextLabel,
-  type CoreContext,
-  type CoreProject,
-  type CoreSession,
-  fileContentUrl,
-} from "./core-bridge";
+import { api, sharedContextLabel, type CoreContext, type CoreProject, type CoreSession } from "./core-bridge";
 import { UI_BASE } from "./deep-link";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
-import { actionSnippet, avatarTpl, fieldSelect, formatBytes, menuSelect, relTime } from "./ui";
+import { avatarTpl, menuSelect, relTime } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import { appState, replacePanePreservingFocus, switchView, syncUrlFromState } from "./shell";
 import { startNewChat } from "./sessions";
 import { groupDmTitle, loadScopeSessions, openSession, refreshSessions, sessionsState } from "./sessions";
 import { activityOf, sidebarSessions, surfaceOf } from "./session-list";
-import type { WebhookView } from "./webhooks";
-import type { CronView } from "./crons";
-import { cronRunSummary, cronRunSummaryTitle, cronScheduleSummary } from "./cron-format";
 import { restoreDialogFocus } from "./dialog-focus";
+import { listPageTpl, listSelect } from "./list-page";
 import { ambientPolicySection, loadAmbientPolicy, resetAmbientPolicy } from "./ambient-policy";
 import { contextModelSection, loadContextModel, resetContextModel } from "./context-model";
 import { channelHeaderSection, loadChannelHeader, resetChannelHeader } from "./channel-header";
 import { tip } from "./tooltip";
 
-interface ScopeFile {
-  id: string;
-  name: string;
-  mimetype: string;
-  sizeBytes: number;
-  createdAt: number;
-  openable: boolean;
-}
-interface ScopeDeployment {
-  id: string;
-  name: string;
-  status: string;
-  permission: "read" | "write";
-  currentVersion: number;
-}
-interface ScopeSkill {
-  id: string;
-  name: string;
-  description: string;
-  status: string;
-}
 interface ScopeResourcesView {
-  files: ScopeFile[];
-  webhooks: WebhookView[];
-  crons: CronView[];
-  deployments: ScopeDeployment[];
-  skills: ScopeSkill[];
-  manageable: boolean;
+  files: unknown[];
+  webhooks: unknown[];
+  crons: unknown[];
+  deployments: unknown[];
+  skills: unknown[];
 }
 
 export const contextsState = {
@@ -310,7 +278,6 @@ function drawContexts(): void {
 }
 
 function gridTpl(): TemplateResult {
-  const status = contextsNotice || (contextsLoading && contextsState.list.length === 0 ? "Loading projects…" : "");
   const q = contextsQuery.trim().toLowerCase();
   const matches = (context: CoreContext) => {
     const meta = contextMeta(context);
@@ -323,6 +290,8 @@ function gridTpl(): TemplateResult {
     );
   };
   const projects = contextsState.list.filter(matches);
+  let empty = q ? "No projects match your search." : "No projects yet.";
+  if (contextsLoading && contextsState.list.length === 0) empty = "Loading projects…";
   const groupOf = (context: CoreContext) => {
     if (context.kind === "personal") return "personal";
     return context.project ? "web" : "slack";
@@ -334,67 +303,38 @@ function gridTpl(): TemplateResult {
   ]
     .map((g) => ({ ...g, items: projects.filter((context) => groupOf(context) === g.key) }))
     .filter((g) => g.items.length > 0);
-  const projectsFiltered = Boolean(q);
-  let projectList: TemplateResult | typeof nothing = nothing;
-  if (projects.length)
-    projectList = html`<div class="project-list">
-      ${groups.map(
-        (g) =>
-          html`<section class="project-group">
-            <div class="project-group-head">
-              ${g.label} <span class="project-group-count">· ${g.items.length}</span>
-            </div>
-            ${g.items.map(contextRow)}
-          </section>`,
-      )}
-    </div>`;
-  else if (!contextsLoading) {
-    projectList = html`<div class="empty compact project-empty">
-      ${projectsFiltered ? "No projects match your search." : "No projects yet."}
-    </div>`;
-  }
   return html`
     <div class="project-grid-content">
-      <div class="list-page-head">
-        <h1 class="pane-title">Projects</h1>
-        <div class="list-page-actions">
-          <button
-            class="btn primary project-create-button"
-            type="button"
-            aria-label="New project"
-            @click=${openCreateProject}
-          >
-            ${icon(FolderPlus, 15)}<span>New project</span>
-          </button>
-        </div>
-        <label class="list-search"
-          >${icon(Search, 16)}<span class="sr-only">Search projects</span
-          ><input
-            data-focus-key="contexts-search"
-            type="search"
-            aria-label="Search projects"
-            placeholder="Search projects…"
-            .value=${contextsQuery}
-            @input=${(event: InputEvent) => {
-              contextsQuery = (event.currentTarget as HTMLInputElement).value;
-              drawContexts();
-            }}
-        /></label>
-      </div>
-      <div class="list-toolbar">
-        <label class="list-select"
-          ><span>Show</span>${fieldSelect({
-            compact: true,
-            value: contextsWorkspaceFilter,
-            onChange: (value) => {
+      ${listPageTpl({
+        title: "Projects",
+        action: { label: "New project", onClick: openCreateProject },
+        search: {
+          value: contextsQuery,
+          placeholder: "Search projects…",
+          onInput: (value) => {
+            contextsQuery = value;
+            drawContexts();
+          },
+        },
+        filters: html`<div class="list-toolbar">
+          ${listSelect(
+            "Show",
+            contextsWorkspaceFilter,
+            [
+              ["active", "Active only"],
+              ["all", "Everything"],
+            ],
+            (value) => {
               contextsWorkspaceFilter = value as typeof contextsWorkspaceFilter;
               drawContexts();
             },
-            options: [html`<option value="active">Active only</option>`, html`<option value="all">Everything</option>`],
-          })}</label
-        >
-      </div>
-      ${status ? html`<div class="status">${status}</div>` : nothing} ${projectList}
+          )}
+        </div>`,
+        notice: contextsNotice,
+        rows: [],
+        groups: groups.map((g) => ({ title: `${g.label} · ${g.items.length}`, rows: g.items.map(contextRow) })),
+        empty,
+      })}
     </div>
     ${createProjectDialog()}
   `;
@@ -808,208 +748,31 @@ function resourceSections(scopeId: string): TemplateResult | typeof nothing {
       ? html`<div class="empty compact">Loading this context's files, webhooks, crons, apps and skills…</div>`
       : html``;
   }
-  if (
-    r.files.length === 0 &&
-    r.webhooks.length === 0 &&
-    r.crons.length === 0 &&
-    r.deployments.length === 0 &&
-    r.skills.length === 0
-  ) {
-    return nothing;
-  }
-  const manage = r.manageable;
-  return html`
-    ${r.files.length ? resourceGroup("Files", r.files.map(fileRow)) : nothing}
-    ${
-      r.skills.length
-        ? resourceGroup(
-            "Skills",
-            r.skills.map((s) => skillRow(s, manage)),
-          )
-        : nothing
-    }
-    ${
-      r.crons.length
-        ? resourceGroup(
-            "Crons",
-            r.crons.map((c) => cronRow(c, manage)),
-          )
-        : nothing
-    }
-    ${r.webhooks.length ? resourceGroup("Webhooks", r.webhooks.map(webhookRow)) : nothing}
-    ${r.deployments.length ? resourceGroup("Apps", r.deployments.map(deploymentRow)) : nothing}
-  `;
-}
-
-const resourceBusy = new Set<string>();
-
-async function manageCron(id: string, action: "enable" | "disable" | "delete"): Promise<void> {
-  const key = `cron:${id}`;
-  if (resourceBusy.has(key)) return;
-  if (action === "delete" && !confirm("Delete this cron? This can't be undone.")) return;
-  resourceBusy.add(key);
-  drawContexts();
-  try {
-    if (action === "delete") await api(`/api/crons/${encodeURIComponent(id)}`, { method: "DELETE" });
-    else await api(`/api/crons/${encodeURIComponent(id)}/${action}`, { method: "POST" });
-    const scope = contextsState.resourcesScope;
-    if (scope) await loadScopeResources(scope);
-  } catch (e) {
-    contextsState.resourcesNotice = errMessage(e, "Couldn't update that cron.");
-  } finally {
-    resourceBusy.delete(key);
-    drawContexts();
-  }
-}
-
-async function deleteScopeSkill(id: string): Promise<void> {
-  const key = `skill:${id}`;
-  if (resourceBusy.has(key)) return;
-  if (!confirm("Delete this skill? This can't be undone.")) return;
-  resourceBusy.add(key);
-  drawContexts();
-  try {
-    await api(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
-    const scope = contextsState.resourcesScope;
-    if (scope) await loadScopeResources(scope);
-  } catch (e) {
-    contextsState.resourcesNotice = errMessage(e, "Couldn't delete that skill.");
-  } finally {
-    resourceBusy.delete(key);
-    drawContexts();
-  }
-}
-
-function resourceGroup(label: string, rows: TemplateResult[]): TemplateResult {
-  const view = label === "Apps" ? "deploys" : label.toLowerCase();
-  const scope = contextsState.resourcesScope;
-  const supportsScopeLink = view === "files" || view === "deploys";
-  const href = `${UI_BASE}/${encodeURIComponent(view)}${scope && supportsScopeLink ? `?scope=${encodeURIComponent(scope)}` : ""}`;
+  const groups = (
+    [
+      ["Files", "files", r.files.length],
+      ["Skills", "skills", r.skills.length],
+      ["Crons", "crons", r.crons.length],
+      ["Webhooks", "webhooks", r.webhooks.length],
+      ["Apps", "apps", r.deployments.length],
+    ] as const
+  ).filter(([, , count]) => count > 0);
+  if (!groups.length) return nothing;
   return html`
     <section class="context-panel context-resource-group">
-      <div class="context-panel-heading context-resource-heading">
-        <h2 class="context-panel-title">${label}</h2>
-        <a href=${href}>View all</a>
+      <div class="context-panel-heading">
+        <h2 class="context-panel-title">Resources</h2>
       </div>
-      <div class="context-session-list">${rows}</div>
+      <div class="context-session-list">
+        ${groups.map(
+          ([label, path, count]) =>
+            html`<a class="context-session-row" href=${`${UI_BASE}/${path}?scope=${encodeURIComponent(scopeId)}`}>
+              <span class="context-session-title">${label}</span>
+              <span class="context-session-meta"><span class="badge">${count}</span></span>
+            </a>`,
+        )}
+      </div>
     </section>
-  `;
-}
-
-function fileRow(f: ScopeFile): TemplateResult {
-  return html`
-    <div class="context-session-row context-resource-row">
-      <span class="context-session-title" dir="auto">${f.name}</span>
-      <span class="context-session-meta">
-        <span>${formatBytes(f.sizeBytes)}</span>
-        <span>${relTime(f.createdAt)}</span>
-        ${
-          f.openable
-            ? html`<a
-                class="context-resource-link"
-                href=${fileContentUrl(f.id, f.name)}
-                @click=${(event: MouseEvent) => previewFile(event, f.name, fileContentUrl(f.id, f.name), f.mimetype)}
-                target="_blank"
-                rel="noreferrer"
-                >Open</a
-              >`
-            : nothing
-        }
-      </span>
-    </div>
-  `;
-}
-
-function webhookRow(w: WebhookView): TemplateResult {
-  let lastRun = "never fired";
-  if (w.lastError) lastRun = "error";
-  else if (w.lastFiredAt) lastRun = relTime(w.lastFiredAt);
-  return html`
-    <div class="context-session-row context-resource-row">
-      <span class="context-session-title">${actionSnippet(w.action)}</span>
-      <span class="context-session-meta">
-        <span class="badge">${w.verification.scheme}</span>
-        <span class="badge">${w.enabled ? "enabled" : "disabled"}</span>
-        <span>${lastRun}</span>
-      </span>
-    </div>
-  `;
-}
-
-function cronRow(c: CronView, manage = false): TemplateResult {
-  let status = "disabled";
-  if (c.archived) status = "archived";
-  else if (c.enabled) status = "enabled";
-  const busy = resourceBusy.has(`cron:${c.id}`);
-  return html`
-    <div class="context-session-row context-resource-row">
-      <span class="context-session-title" dir="auto">${c.title ?? actionSnippet(c.message ?? c.action ?? "")}</span>
-      <span class="context-session-meta">
-        <span class="badge">${cronScheduleSummary(c)}</span>
-        <span class="badge">${status}</span>
-        <span ${tip(cronRunSummaryTitle(c))}>${cronRunSummary(c)}</span>
-        ${
-          manage && !c.archived
-            ? html`
-                <button
-                  class="context-resource-action"
-                  type="button"
-                  ?disabled=${busy}
-                  @click=${() => void manageCron(c.id, c.enabled ? "disable" : "enable")}
-                >
-                  ${c.enabled ? "Disable" : "Enable"}
-                </button>
-                <button
-                  class="context-resource-action danger"
-                  type="button"
-                  ?disabled=${busy}
-                  @click=${() => void manageCron(c.id, "delete")}
-                >
-                  Delete
-                </button>
-              `
-            : nothing
-        }
-      </span>
-    </div>
-  `;
-}
-
-function skillRow(s: ScopeSkill, manage = false): TemplateResult {
-  const busy = resourceBusy.has(`skill:${s.id}`);
-  return html`
-    <div class="context-session-row context-resource-row">
-      <span class="context-session-title" dir="auto">${s.name}</span>
-      <span class="context-session-meta">
-        ${s.description ? html`<span class="context-resource-desc">${s.description}</span>` : nothing}
-        <span class="badge">${s.status}</span>
-        ${
-          manage
-            ? html`<button
-                class="context-resource-action danger"
-                type="button"
-                ?disabled=${busy}
-                @click=${() => void deleteScopeSkill(s.id)}
-              >
-                Delete
-              </button>`
-            : nothing
-        }
-      </span>
-    </div>
-  `;
-}
-
-function deploymentRow(d: ScopeDeployment): TemplateResult {
-  return html`
-    <div class="context-session-row context-resource-row">
-      <span class="context-session-title" dir="auto">${d.name}</span>
-      <span class="context-session-meta">
-        <span class="badge">v${d.currentVersion}</span>
-        <span class="badge">${d.status}</span>
-        <span class="badge">${d.permission === "write" ? "manage" : "read"}</span>
-      </span>
-    </div>
   `;
 }
 
@@ -1032,7 +795,7 @@ function closeCreateProject(): void {
   queueMicrotask(() => {
     const target = createProjectOpener;
     createProjectOpener = null;
-    restoreDialogFocus(target, () => document.querySelector<HTMLElement>(".project-create-button"));
+    restoreDialogFocus(target, () => document.querySelector<HTMLElement>(".list-page-action"));
   });
 }
 
@@ -1372,7 +1135,6 @@ async function loadScopeResources(scopeId: string): Promise<void> {
       crons: r.crons ?? [],
       deployments: r.deployments ?? [],
       skills: r.skills ?? [],
-      manageable: r.manageable === true,
     };
   } catch (e) {
     if (stale()) return;

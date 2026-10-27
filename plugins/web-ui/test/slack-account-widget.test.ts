@@ -3,7 +3,7 @@ import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
 
 test("recalled personal Slack widget renders independently and respects installation", async () => {
-  const h = await harness({ path: "/", welcome: true });
+  const h = await harness({ path: "/" });
   const previousFetch = globalThis.fetch;
   let installed = true;
   globalThis.fetch = async (input, init) =>
@@ -13,18 +13,16 @@ test("recalled personal Slack widget renders independently and respects installa
   try {
     h.releaseSessions();
     await h.boot();
-    const widget = Object.assign(document.createElement("qm-onboarding-welcome"), {
+    const widget = Object.assign(document.createElement("qm-connect-apps"), {
       me: { org: "test", user: "tester", permissions: ["admin"] },
       widget: "slack-account",
-      setupOnly: true,
-      animateWelcome: false,
     });
     document.body.append(widget);
     for (let i = 0; i < 100 && !widget.querySelector("qm-slack-account"); i++)
       await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(widget.querySelector("qm-slack-account"));
     assert.equal(widget.querySelector("qm-onboarding-slack"), null);
-    assert.equal(widget.querySelector(".welcome-picker"), null);
+    assert.equal(widget.querySelector(".connect-apps-picker"), null);
     installed = false;
     window.dispatchEvent(new window.Event("focus"));
     for (let i = 0; i < 100 && widget.querySelector("qm-slack-account"); i++)

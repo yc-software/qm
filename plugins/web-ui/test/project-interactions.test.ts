@@ -91,15 +91,15 @@ test("project interactions preserve focus and successful local mutations", async
     contextsState.loadedAt = 0;
 
     const rendering = renderContexts();
-    const opener = document.querySelector<HTMLButtonElement>(".project-create-button")!;
+    const opener = document.querySelector<HTMLButtonElement>(".list-page-action")!;
     opener.focus();
     opener.click();
     await Promise.resolve();
     document.querySelector<HTMLButtonElement>(".project-dialog-actions .btn")!.click();
     await Promise.resolve();
-    const focusRestored = document.activeElement?.classList.contains("project-create-button") === true;
+    const focusRestored = document.activeElement?.classList.contains("list-page-action") === true;
 
-    document.querySelector<HTMLButtonElement>(".project-create-button")!.click();
+    document.querySelector<HTMLButtonElement>(".list-page-action")!.click();
     await Promise.resolve();
     document
       .querySelector<HTMLFormElement>(".project-dialog form")!

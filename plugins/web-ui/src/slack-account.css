@@ -3,7 +3,7 @@ qm-onboarding-slack {
   display: block;
 }
 
-.welcome-slack {
+.slack-connect {
   width: 100%;
   text-align: left;
   font: inherit;
@@ -20,24 +20,24 @@ qm-onboarding-slack {
   margin-bottom: 16px;
   background: var(--background);
 }
-.welcome-slack > span {
+.slack-connect > span {
   flex: 1;
 }
-.welcome-slack strong {
+.slack-connect strong {
   display: block;
   font-size: 14px;
   font-weight: 600;
 }
-.welcome-slack small {
+.slack-connect small {
   display: block;
   font-size: 12px;
   color: var(--muted-foreground);
   margin-top: 4px;
 }
-.welcome-slack:hover {
+.slack-connect:hover {
   background: var(--secondary);
 }
-.welcome-slack:focus-visible {
+.slack-connect:focus-visible {
   outline: 2px solid var(--foreground);
   outline-offset: 3px;
 }

@@ -38,7 +38,7 @@ test("unavailable Slack linking shows one explanation and recovers when configur
     assert.match(reply.textContent!, /Slack linking isn’t configured/);
     configured = true;
     (reply.querySelector("button") as HTMLButtonElement).click();
-    await until(() => !!reply.querySelector(".welcome-slack"));
+    await until(() => !!reply.querySelector(".slack-connect"));
     assert.equal(reply.querySelector("[role=alert]"), null);
   } finally {
     await h.close();

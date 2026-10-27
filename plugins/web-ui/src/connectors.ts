@@ -1,15 +1,14 @@
-import { html, render, type TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import { KeyRound, Link } from "lucide";
 import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { connectorLogo } from "./connector-logo";
 import { CONNECTOR_LABELS } from "./connector-link";
-import { appState, replacePanePreservingFocus } from "./shell";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
+import { appState } from "./shell";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keychain-state";
-import { listPageTpl } from "./list-page";
+import { artifactPage, listPageTpl } from "./list-page";
 
 interface ConnectorProvider {
   mcpLabel?: string;
@@ -363,6 +362,8 @@ function loadingPlaceholder(label: string): TemplateResult {
   return html`<div class="kc-loading"><span class="spinner"></span>${label}</div>`;
 }
 
+const page = artifactPage("keychain", "keychain-page", "keychain");
+
 function drawConnectors(): void {
   if (appState.currentView !== "keychain") return;
   const accountsLoading = connectorsLoading && !connectorsEverLoaded;
@@ -494,11 +495,8 @@ function drawConnectors(): void {
       keysLoadingFresh,
     ),
   );
-  const host = document.createElement("div");
-  host.className = scopedSession.active ? "pane keychain-page scoped-view" : "pane keychain-page";
-  render(
+  const host = page.paint(
     html`
-      ${scopedViewTopbar("keychain", () => drawConnectors())}
       <div class="kc-page-content" ?inert=${Boolean(confirmation)}>
         ${listPageTpl({
           title: "Keychain",
@@ -516,10 +514,9 @@ function drawConnectors(): void {
       </div>
       ${confirmation ? confirmationCard() : ""}
     `,
-    host,
+    () => drawConnectors(),
   );
-  replacePanePreservingFocus(host);
-  if (confirmation) focusDialogCancel(host);
+  if (confirmation && host) focusDialogCancel(host);
 }
 
 export async function renderConnectors(): Promise<void> {

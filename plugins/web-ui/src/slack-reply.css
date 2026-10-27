@@ -8,7 +8,7 @@ qm-slack-reply {
   margin: 0 auto;
   padding: 12px var(--composer-inset) 20px;
 }
-.slack-reply-box .welcome-slack {
+.slack-reply-box .slack-connect {
   max-width: none;
   margin-bottom: 0;
 }

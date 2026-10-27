@@ -1,4 +1,7 @@
-import type { PickerState } from "./connection-preview";
+export interface PickerState {
+  query: string;
+  expanded: boolean;
+}
 
 export interface ConnectionAttempt {
   state: string;
@@ -77,12 +80,12 @@ export function takeConnectionReturn(
 ): { url: URL; attempt: ConnectionAttempt | null; verified: boolean } | null {
   if (!isConnectionReturn()) return null;
   if (capturedReturn) return capturedReturn.user === user && capturedReturn.widget === widget ? capturedReturn : null;
-  let owner = "welcome";
+  let owner = "settings";
   try {
     const attempt = JSON.parse(sessionStorage.getItem(key(user)) ?? "null") as ConnectionAttempt | null;
     if (typeof attempt?.widget === "string") owner = attempt.widget;
   } catch {
-    owner = "welcome";
+    owner = "settings";
   }
   if (owner !== widget) return null;
   const url = new URL(initialReturnUrl!.href);

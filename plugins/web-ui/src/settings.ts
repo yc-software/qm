@@ -1,4 +1,4 @@
-import "./onboarding-welcome";
+import "./connect-apps";
 import "./slack-account";
 import { openModelConnectManager, type StatusResponse } from "./model-connect";
 import {
@@ -17,14 +17,10 @@ import { icon } from "./icons";
 import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
 import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
-import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
 
-type ThemeChoice = "light" | "dark" | "system" | "custom";
+type ThemeChoice = "light" | "dark" | "system";
 
 const THEME_KEY = "theme";
-const CUSTOM_THEME_KEY = "theme:custom";
-const CUSTOM_THEME_STYLE_ID = "custom-theme";
-const THEME_FILE_ACCEPT = ".itermcolors,.plist,.json,.jsonc,application/json,text/xml,application/xml";
 
 const QM_MAC_DOWNLOAD_URL = "https://github.com/yc-software/qm/releases/download/desktop-v0.1.0/QM-mac-arm64.zip";
 
@@ -35,35 +31,15 @@ const THEME_OPTIONS: Array<{ value: ThemeChoice; label: string; glyph: IconNode 
 ];
 
 let settingsHost: HTMLElement | null = null;
-let themeImportError: string | null = null;
 
 function storedTheme(): ThemeChoice {
   try {
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === "light" || stored === "dark") return stored;
-    if (stored === "custom" && storedCustomTheme()) return stored;
   } catch {
     void 0;
   }
   return "system";
-}
-
-function storedCustomTheme(): Palette | null {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(CUSTOM_THEME_KEY) ?? "null");
-    return isPalette(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function storeCustomTheme(palette: Palette | null): void {
-  try {
-    if (palette) localStorage.setItem(CUSTOM_THEME_KEY, JSON.stringify(palette));
-    else localStorage.removeItem(CUSTOM_THEME_KEY);
-  } catch {
-    void 0;
-  }
 }
 
 let themeParentOrigin: string | null = null;
@@ -83,29 +59,13 @@ function publishTheme(): void {
 
 export function applyTheme(): void {
   const choice = storedTheme();
-  const custom = choice === "custom" ? storedCustomTheme() : null;
   const root = document.documentElement;
-  let styleEl = document.getElementById(CUSTOM_THEME_STYLE_ID);
-  if (custom) {
-    const tokens = themeTokens(custom);
-    if (!styleEl) {
-      styleEl = document.createElement("style");
-      styleEl.id = CUSTOM_THEME_STYLE_ID;
-      document.head.appendChild(styleEl);
-    }
-    styleEl.textContent = themeCss(tokens);
-    root.classList.toggle("dark", tokens.dark);
-    publishTheme();
-    return;
-  }
-  styleEl?.remove();
   const dark = choice === "system" ? window.matchMedia("(prefers-color-scheme: dark)").matches : choice === "dark";
   root.classList.toggle("dark", dark);
   publishTheme();
 }
 
 function setTheme(choice: ThemeChoice): void {
-  themeImportError = null;
   try {
     if (choice === "system") localStorage.removeItem(THEME_KEY);
     else localStorage.setItem(THEME_KEY, choice);
@@ -116,30 +76,6 @@ function setTheme(choice: ThemeChoice): void {
   drawSettings();
 }
 
-function installCustomTheme(palette: Palette): void {
-  storeCustomTheme(palette);
-  setTheme("custom");
-}
-
-function removeCustomTheme(): void {
-  const wasActive = storedTheme() === "custom";
-  storeCustomTheme(null);
-  setTheme(wasActive ? "system" : storedTheme());
-}
-
-async function onThemeFileChosen(e: Event): Promise<void> {
-  const input = e.currentTarget as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  try {
-    installCustomTheme(importTheme(file.name, await file.text()));
-  } catch (err) {
-    themeImportError = errMessage(err, "Couldn't read that theme file.");
-    drawSettings();
-  }
-}
-
 export function watchSystemTheme(): void {
   window.addEventListener("message", (event) => {
     if (window.parent === window || event.source !== window.parent || event.origin === "null") return;
@@ -148,29 +84,14 @@ export function watchSystemTheme(): void {
     publishTheme();
   });
   window.addEventListener("storage", (event) => {
-    if (event.key === null || event.key === THEME_KEY || event.key === CUSTOM_THEME_KEY) applyTheme();
+    if (event.key === null || event.key === THEME_KEY) applyTheme();
   });
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     if (storedTheme() === "system") applyTheme();
   });
 }
 
-function themeSwatches(palette: Palette): TemplateResult {
-  const { vars } = themeTokens(palette);
-  const swatches = [vars["--background"], vars["--syntax-tag"], vars["--syntax-string"], vars["--primary"]];
-  return html`
-    <span class="theme-swatches" aria-hidden="true">
-      ${swatches.map((color) => html`<span class="theme-swatch" style="background:${color}"></span>`)}
-    </span>
-  `;
-}
-
-function themeOption(
-  value: ThemeChoice,
-  current: ThemeChoice,
-  label: string,
-  glyph: TemplateResult | SVGElement,
-): TemplateResult {
+function themeOption(value: ThemeChoice, current: ThemeChoice, label: string, glyph: TemplateResult): TemplateResult {
   return html`
     <button
       class="settings-choice-option ${current === value ? "selected" : ""}"
@@ -186,54 +107,14 @@ function themeOption(
 
 function themeRow(): TemplateResult {
   const current = storedTheme();
-  const custom = storedCustomTheme();
-  const note = themeImportError
-    ? html`<span class="settings-row-error">${themeImportError}</span>`
-    : "System follows your device's light or dark setting. Import an iTerm2 .itermcolors or a VS Code color theme .json to paint the app with its palette.";
   return html`
     <div class="settings-row">
       <div class="settings-row-copy">
         <div class="settings-row-title">Theme</div>
-        <div class="settings-row-note">${note}</div>
+        <div class="settings-row-note">System follows your device's light or dark setting.</div>
       </div>
-      <div class="settings-theme-controls">
-        <div class="settings-choice" role="radiogroup" aria-label="Theme">
-          ${THEME_OPTIONS.map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 15)))}
-          ${custom ? themeOption("custom", current, custom.name, themeSwatches(custom)) : nothing}
-        </div>
-        <div class="settings-theme-import">
-          <input
-            class="theme-file-input"
-            type="file"
-            hidden
-            accept=${THEME_FILE_ACCEPT}
-            @change=${(e: Event) => void onThemeFileChosen(e)}
-          />
-          <button
-            class="settings-theme-link"
-            type="button"
-            @click=${(e: Event) =>
-              (e.currentTarget as HTMLElement).parentElement
-                ?.querySelector<HTMLInputElement>(".theme-file-input")
-                ?.click()}
-          >
-            ${custom ? "Replace theme file" : "Import theme file"}
-          </button>
-          ${
-            custom
-              ? html`
-                  <button
-                    class="settings-theme-link"
-                    type="button"
-                    aria-label="Remove imported theme"
-                    @click=${() => removeCustomTheme()}
-                  >
-                    Remove
-                  </button>
-                `
-              : nothing
-          }
-        </div>
+      <div class="settings-choice" role="radiogroup" aria-label="Theme">
+        ${THEME_OPTIONS.map((option) => themeOption(option.value, current, option.label, icon(option.glyph, 15)))}
       </div>
     </div>
   `;
@@ -567,13 +448,7 @@ function settingsPane(): TemplateResult {
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>
       <div class="settings-row">
-        <qm-onboarding-welcome
-          .me=${appState.me}
-          .setupOnly=${true}
-          .widget=${"apps"}
-          .returnKey=${"settings"}
-          .base=${withBase("")}
-        ></qm-onboarding-welcome>
+        <qm-connect-apps .me=${appState.me} .base=${withBase("")}></qm-connect-apps>
       </div>
     </div>
   `;

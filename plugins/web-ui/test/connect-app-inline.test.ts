@@ -11,26 +11,23 @@ test("an app-scoped picker shows only the requested app and continues the chat a
   try {
     await h.boot();
     const connected: string[] = [];
-    const other = Object.assign(document.createElement("qm-onboarding-welcome"), {
+    const other = Object.assign(document.createElement("qm-connect-apps"), {
       me: { org: "test", user: "tester" },
       widget: "apps",
-      setupOnly: true,
       toolkit: "notion",
       returnKey: "reply:0:0:0",
       onConnected: (name: string) => connected.push(`other:${name}`),
     });
-    const scoped = Object.assign(document.createElement("qm-onboarding-welcome"), {
+    const scoped = Object.assign(document.createElement("qm-connect-apps"), {
       me: { org: "test", user: "tester" },
       widget: "apps",
-      setupOnly: true,
       toolkit: "gmail",
       returnKey: "reply:1:0:0",
       onConnected: (name: string) => connected.push(name),
     });
-    const twin = Object.assign(document.createElement("qm-onboarding-welcome"), {
+    const twin = Object.assign(document.createElement("qm-connect-apps"), {
       me: { org: "test", user: "tester" },
       widget: "apps",
-      setupOnly: true,
       toolkit: "gmail",
       returnKey: "reply:1:0:0",
       onConnected: (name: string) => connected.push(`twin:${name}`),

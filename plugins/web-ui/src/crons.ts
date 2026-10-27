@@ -1,11 +1,19 @@
-import { html, nothing, render, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { Archive, Pause, Pencil, Play, Plus, RotateCcw, Trash2 } from "lucide";
 import { api, userSendMessage } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
-import { contextsState, ensureContexts, scopeChip } from "./contexts";
-import { scopedSession, scopedViewTopbar } from "./session-scope";
+import {
+  artifactPage,
+  confirmDialogTpl,
+  detailTpl,
+  fieldTpl,
+  listBackLink,
+  listPageTpl,
+  listTabs,
+  showPane,
+} from "./list-page";
+import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { startNewChat } from "./sessions";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
@@ -68,67 +76,37 @@ const CRON_TABS: Array<{ value: CronTab; label: string }> = [
 
 let cronList: CronView[] = [];
 let visibleCronList: CronView[] = [];
-let cronsScope: string | null = null;
 let cronTab: CronTab = "yours";
 let showDisabledCrons = false;
-let cronsPageHost: HTMLElement | null = null;
-let cronsLoading = false;
-let cronsNotice = "";
-let cronRefreshSeq = 0;
-let cronActionNotice = "";
 let cronMutationInFlight = false;
-let cronsSearch = "";
 const cronRuns = new Map<string, CronRunView[]>();
 const cronRunsLoading = new Set<string>();
 let cronDialog: { kind: "rename" | "delete"; cron: CronView } | null = null;
 let activeCronId: string | null = null;
-let pendingCronId: string | null = null;
-
-export function resetActiveCron(): void {
-  cronsScope = null;
-}
+const page = artifactPage("crons", "crons-page", "crons");
 
 export function openCronById(id: string): void {
-  pendingCronId = id;
+  page.pending = id;
 }
 
-function syncCronUrl(cronId: string | null, push = false): void {
-  if (appState.currentView !== "crons") return;
-  const next = deepLinkPath(UI_BASE, "crons", null, null, cronId);
-  if (`${location.pathname}${location.search}` === next) return;
-  if (push) history.pushState(null, "", next);
-  else history.replaceState(null, "", next);
+function findCron(id: string): CronView | undefined {
+  return cronList.find((c) => c.id === id) ?? visibleCronList.find((c) => c.id === id);
 }
 
 export function routeCronsHistory(cronId: string | null): void {
-  if (appState.currentView !== "crons") return;
-  const cron = cronId
-    ? (cronList.find((c) => c.id === cronId) ?? visibleCronList.find((c) => c.id === cronId))
-    : undefined;
-  if (cron) openCron(cron);
-  else drawCronsPage();
+  page.route(cronId, findCron, openCron, drawCronsPage);
 }
 
-async function refreshCrons(opts: { showLoading?: boolean } = {}): Promise<boolean> {
-  const seq = ++cronRefreshSeq;
-  if (opts.showLoading) {
-    cronsLoading = true;
-    cronsNotice = "";
-  }
-  try {
-    const r = await api<{ crons: CronView[]; visible?: CronView[] }>("/api/crons");
-    if (seq !== cronRefreshSeq) return false;
-    cronList = r.crons ?? [];
-    visibleCronList = r.visible ?? [];
-    cronsNotice = "";
-    return true;
-  } catch (e) {
-    if (seq !== cronRefreshSeq) return false;
-    cronsNotice = errMessage(e, "Failed to load crons.");
-    return false;
-  } finally {
-    if (seq === cronRefreshSeq) cronsLoading = false;
-  }
+function refreshCrons(showLoading = false): Promise<boolean> {
+  return page.refresh(
+    async () => {
+      const r = await api<{ crons: CronView[]; visible?: CronView[] }>("/api/crons");
+      cronList = r.crons ?? [];
+      visibleCronList = r.visible ?? [];
+    },
+    "Failed to load crons.",
+    showLoading,
+  );
 }
 
 function cronText(c: CronView): string {
@@ -182,43 +160,23 @@ function cronStatusText(c: CronView): string {
 
 export async function renderCronsPage(): Promise<void> {
   if (appState.currentView !== "crons") return;
-  if (scopedSession.active) cronsScope = scopedSession.active.scopeId;
-  else if (contextsState.selected) {
-    cronsScope = contextsState.selected;
-    contextsState.selected = null;
-  } else cronsScope = null;
+  page.adoptScope();
   await ensureContexts();
-  drawCronsPage();
-  const loaded = await refreshCrons({ showLoading: cronList.length === 0 && visibleCronList.length === 0 });
-  const wanted = pendingCronId;
-  pendingCronId = null;
-  if (appState.currentView !== "crons") return;
-  if (!loaded) return drawCronsPage();
-  const cron = wanted
-    ? (cronList.find((c) => c.id === wanted) ?? visibleCronList.find((c) => c.id === wanted))
-    : undefined;
-  if (wanted && !cron) {
-    cronActionNotice = "That cron wasn't found, or you don't have access to it.";
-  }
-  if (cron) openCron(cron);
-  else drawCronsPage();
+  await page.show({
+    load: () => refreshCrons(cronList.length === 0 && visibleCronList.length === 0),
+    find: findCron,
+    open: openCron,
+    draw: drawCronsPage,
+    missing: "That cron wasn't found, or you don't have access to it.",
+  });
 }
 
 function drawCronsPage(): void {
-  if (appState.currentView !== "crons" || !appState.mainEl) return;
   activeCronId = null;
-  syncCronUrl(null);
-  if (!cronsPageHost || cronsPageHost.parentElement !== appState.mainEl) {
-    cronsPageHost = document.createElement("div");
-    cronsPageHost.className = "pane crons-page";
-    appState.mainEl.replaceChildren(cronsPageHost);
-  }
+  page.syncUrl(null);
   const all = [...cronList.map((c) => ({ c, mine: true })), ...visibleCronList.map((c) => ({ c, mine: false }))]
-    .filter(({ c }) => (cronsScope ? c.ownerScopeId === cronsScope : true))
     .filter(
-      ({ c }) =>
-        !cronsSearch.trim() ||
-        `${cronTitle(c)} ${cronText(c)} ${c.scopeName ?? ""}`.toLowerCase().includes(cronsSearch.trim().toLowerCase()),
+      ({ c }) => page.inScope(c.ownerScopeId) && page.matches(`${cronTitle(c)} ${cronText(c)} ${c.scopeName ?? ""}`),
     )
     .sort((a, b) => b.c.createdAt - a.c.createdAt);
   const archived = all.filter(({ c }) => c.archived);
@@ -234,11 +192,23 @@ function drawCronsPage(): void {
   };
 
   const rows: TemplateResult[] = [];
-  if (cronActionNotice) {
-    rows.push(html`<div class="action-notice">${cronActionNotice}</div>`);
-    cronActionNotice = "";
-  }
-  if (all.length) rows.push(cronTabs(counts, shared.length > 0));
+  const flash = page.takeFlash();
+  if (flash) rows.push(html`<div class="action-notice">${flash}</div>`);
+  if (all.length)
+    rows.push(
+      listTabs(
+        "Cron view",
+        CRON_TABS.filter(
+          (t) =>
+            t.value === "yours" ||
+            (t.value === "shared" && shared.length > 0) ||
+            counts[t.value] > 0 ||
+            cronTab === t.value,
+        ).map((t) => ({ ...t, count: counts[t.value] })),
+        cronTab,
+        setCronTab,
+      ),
+    );
   if (cronTab === "yours") {
     rows.push(...yoursEnabled.map(({ c }) => cronPageRow(c, true)));
     if (all.length && !yoursEnabled.length)
@@ -254,28 +224,21 @@ function drawCronsPage(): void {
     rows.push(...archived.map(({ c, mine }) => cronPageRow(c, mine)));
     if (!archived.length) rows.push(cronEmptyRow("Nothing archived."));
   }
-  let empty = "No crons yet.";
-  if (cronsNotice) empty = cronsNotice;
-  else if (cronsLoading && cronList.length === 0 && visibleCronList.length === 0) empty = "Loading crons…";
-  else if (cronsScope) empty = "No crons in this context.";
-  const scoped = Boolean(scopedSession.active);
-  cronsPageHost.classList.toggle("scoped-view", scoped);
-  render(
-    html`${scopedViewTopbar("crons", drawCronsPage)}
-    ${listPageTpl({
+  page.paint(
+    listPageTpl({
       title: "Crons",
       search: {
-        value: cronsSearch,
+        value: page.query,
         placeholder: "Search crons",
         onInput: (value) => {
-          cronsSearch = value;
+          page.query = value;
           drawCronsPage();
         },
       },
       rows,
-      empty,
-    })}`,
-    cronsPageHost,
+      empty: page.emptyText("crons", cronList.length === 0 && visibleCronList.length === 0),
+    }),
+    drawCronsPage,
   );
 }
 
@@ -291,30 +254,6 @@ function toggleDisabledCrons(): void {
 
 function cronEmptyRow(text: string): TemplateResult {
   return html`<div class="empty compact cron-filter-empty">${text}</div>`;
-}
-
-function cronTabs(counts: Record<CronTab, number>, hasShared: boolean): TemplateResult {
-  const tabs = CRON_TABS.filter(
-    (t) => t.value === "yours" || (t.value === "shared" && hasShared) || counts[t.value] > 0 || cronTab === t.value,
-  );
-  return html`
-    <div class="cron-list-controls" role="tablist" aria-label="Cron view">
-      ${tabs.map(
-        (t) => html`
-          <button
-            type="button"
-            role="tab"
-            aria-selected=${cronTab === t.value}
-            class="cron-filter-chip ${cronTab === t.value ? "active" : ""}"
-            @click=${() => setCronTab(t.value)}
-          >
-            <span>${t.label}</span>
-            <span class="cron-filter-count">${counts[t.value]}</span>
-          </button>
-        `,
-      )}
-    </div>
-  `;
 }
 
 function cronDisabledToggle(count: number): TemplateResult {
@@ -426,14 +365,11 @@ function cronRowActions(c: CronView): TemplateResult {
 }
 
 function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } = {}): void {
-  if (!appState.mainEl) return;
   const shouldRefreshRuns = opts.refreshRuns || activeCronId !== c.id;
   activeCronId = c.id;
-  syncCronUrl(c.id, opts.push);
+  page.syncUrl(c.id, opts.push);
   const mine = cronList.some((x) => x.id === c.id);
   const manageable = canManageCron(c, mine);
-  const notice = cronActionNotice;
-  cronActionNotice = "";
   const next = cronNextFire(c);
   let stateActions = html`
     <button class="btn" @click=${() => void setCronEnabled(c.id, true)}>${icon(Play, 15)}<span>Enable</span></button>
@@ -452,82 +388,29 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
       <button class="btn" @click=${() => void archiveCron(c.id, true)}>${icon(Archive, 15)}<span>Archive</span></button>
     `;
   }
-  const host = document.createElement("div");
-  host.className = "resource-pane cron-pane";
-  render(
-    html`
-      <div class="resource-detail">
-        ${listBackLink("Crons", drawCronsPage)}
-        <div class="resource-heading">
-          <h2 dir="auto">${cronTitle(c)}</h2>
-          <button class="btn" @click=${showNewCron}>${icon(Plus, 15)}<span>New cron</span></button>
-        </div>
-        ${notice ? html`<div class="hint">${notice}</div>` : ""}
-        <div class="field">
-          <label>Context</label>
-          <div class="value">${scopeChip(c.ownerScopeId, c.scopeName ?? null)}</div>
-        </div>
-        ${
-          c.title
-            ? html`<div class="field">
-                <label>Title</label>
-                <div class="value" dir="auto">${c.title}</div>
-              </div>`
-            : nothing
-        }
-        <div class="field">
-          <label>${c.message !== undefined ? "Message" : "Task"}</label>
-          <div class="value pre">${cronText(c)}</div>
-        </div>
-        <div class="field">
-          <label>Schedule</label>
-          <div class="value">${cronScheduleDetail(c)}</div>
-        </div>
-        ${
-          mine
-            ? ""
-            : html`<div class="field">
-                <label>Owner</label>
-                <div class="value">${c.owner}</div>
-              </div>`
-        }
-        ${
-          mine
-            ? ""
-            : html`<div class="field">
-                <label>Scope</label>
-                <div class="value">${cronScopeLabel(c)}</div>
-              </div>`
-        }
-        <div class="field">
-          <label>Status</label>
-          <div class="value">${cronStatusText(c)}</div>
-        </div>
-        ${
-          c.destination
-            ? html`<div class="field">
-                <label>Destination</label>
-                <div class="value">${c.destination.type} → ${c.destination.target}</div>
-              </div>`
-            : ""
-        }
-        <div class="field">
-          <label>Next run</label>
-          <div class="value">${next != null ? new Date(next).toLocaleString() : "Never"}</div>
-        </div>
-        <div class="field">
-          <label>Last fired</label>
-          <div class="value">${c.lastFiredAt ? new Date(c.lastFiredAt).toLocaleString() : "Never"}</div>
-        </div>
+  showPane(
+    "cron-pane",
+    detailTpl({
+      back: "Crons",
+      onBack: drawCronsPage,
+      title: cronTitle(c),
+      heading: html`<button class="btn" @click=${showNewCron}>${icon(Plus, 15)}<span>New cron</span></button>`,
+      notice: page.takeFlash(),
+      body: html`
+        ${fieldTpl("Context", scopeChip(c.ownerScopeId, c.scopeName ?? null))}
+        ${c.title ? fieldTpl("Title", c.title) : nothing}
+        ${fieldTpl(c.message !== undefined ? "Message" : "Task", cronText(c), "pre")}
+        ${fieldTpl("Schedule", cronScheduleDetail(c))} ${mine ? nothing : fieldTpl("Owner", c.owner)}
+        ${mine ? nothing : fieldTpl("Scope", cronScopeLabel(c))} ${fieldTpl("Status", cronStatusText(c))}
+        ${c.destination ? fieldTpl("Destination", `${c.destination.type} → ${c.destination.target}`) : nothing}
+        ${fieldTpl("Next run", next != null ? new Date(next).toLocaleString() : "Never")}
+        ${fieldTpl("Last fired", c.lastFiredAt ? new Date(c.lastFiredAt).toLocaleString() : "Never")}
         ${
           c.lastFireNote
-            ? html`<div class="field">
-                <label>
-                  ${c.lastFireNote.by ? `Note left by ${c.lastFireNote.by}` : "Note from last fire"}
-                  (${new Date(c.lastFireNote.at).toLocaleString()})
-                </label>
-                <div class="value" dir="auto">${c.lastFireNote.text}</div>
-              </div>`
+            ? fieldTpl(
+                `${c.lastFireNote.by ? `Note left by ${c.lastFireNote.by}` : "Note from last fire"} (${new Date(c.lastFireNote.at).toLocaleString()})`,
+                c.lastFireNote.text,
+              )
             : nothing
         }
         ${manageable ? cronRunHistory(c) : nothing}
@@ -547,11 +430,9 @@ function openCron(c: CronView, opts: { push?: boolean; refreshRuns?: boolean } =
             : html`<div class="hint">Shared from ${cronScopeLabel(c)}. You can view it, but not change it.</div>`
         }
         ${cronDialog?.cron.id === c.id ? cronDialogTpl(cronDialog) : nothing}
-      </div>
-    `,
-    host,
+      `,
+    }),
   );
-  appState.mainEl.replaceChildren(host);
   if (manageable && (shouldRefreshRuns || !cronRuns.has(c.id)) && !cronRunsLoading.has(c.id)) void loadCronRuns(c.id);
 }
 
@@ -598,20 +479,19 @@ async function loadCronRuns(id: string): Promise<void> {
     const result = await api<{ runs: CronRunView[] }>(`/api/crons/${encodeURIComponent(id)}/runs`);
     cronRuns.set(id, result.runs ?? []);
   } catch (error) {
-    cronActionNotice = errMessage(error, "Couldn't load run history.");
+    page.flash = errMessage(error, "Couldn't load run history.");
     cronRuns.set(id, []);
   } finally {
     cronRunsLoading.delete(id);
   }
   if (activeCronId !== id || appState.currentView !== "crons") return;
-  const current =
-    cronList.find((candidate) => candidate.id === id) ?? visibleCronList.find((candidate) => candidate.id === id);
+  const current = findCron(id);
   if (current) openCron(current);
 }
 
 async function reopenCron(id: string): Promise<void> {
   await refreshCrons();
-  const c = cronList.find((x) => x.id === id) ?? visibleCronList.find((x) => x.id === id);
+  const c = findCron(id);
   if (c) openCron(c, { refreshRuns: true });
   else drawCronsPage();
 }
@@ -630,9 +510,9 @@ function runCronNow(id: string): Promise<void> {
   return cronMutate(async () => {
     try {
       await api(`/api/crons/${encodeURIComponent(id)}/run`, { method: "POST" });
-      cronActionNotice = "Run started. Refresh recent runs after it completes.";
+      page.flash = "Run started. Refresh recent runs after it completes.";
     } catch (e) {
-      cronActionNotice = errMessage(e, "run failed");
+      page.flash = errMessage(e, "run failed");
     }
     await reopenCron(id);
   }, undefined);
@@ -648,7 +528,7 @@ function patchCron(
       await api(`/api/crons/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) });
       return true;
     } catch (e) {
-      cronActionNotice = errMessage(e, errorLabel);
+      page.flash = errMessage(e, errorLabel);
       await reopenCron(id);
       return false;
     }
@@ -668,30 +548,15 @@ function closeCronDialog(c: CronView): void {
 
 function cronDialogTpl(dialog: { kind: "rename" | "delete"; cron: CronView }): TemplateResult {
   const c = dialog.cron;
-  if (dialog.kind === "delete") {
-    return html` <div
-      class="project-dialog-backdrop"
-      @click=${(event: MouseEvent) => event.target === event.currentTarget && closeCronDialog(c)}
-    >
-      <div class="project-dialog cron-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="cron-delete-title">
-        <div class="project-dialog-head">
-          <div>
-            <h2 id="cron-delete-title">Delete <bdi>${cronTitle(c)}</bdi>?</h2>
-          </div>
-        </div>
-        <p>
-          This permanently removes the schedule and its retained run history. Archive it instead if you may need it
-          later.
-        </p>
-        <div class="project-dialog-actions">
-          <button class="btn" type="button" @click=${() => closeCronDialog(c)}>Cancel</button>
-          <button class="btn danger" type="button" @click=${() => void confirmDeleteCron(c.id)}>
-            Delete permanently
-          </button>
-        </div>
-      </div>
-    </div>`;
-  }
+  if (dialog.kind === "delete")
+    return confirmDialogTpl({
+      id: "cron-delete",
+      title: html`Delete <bdi>${cronTitle(c)}</bdi>?`,
+      body: "This permanently removes the schedule and its retained run history. Archive it instead if you may need it later.",
+      confirm: "Delete permanently",
+      onCancel: () => closeCronDialog(c),
+      onConfirm: () => void confirmDeleteCron(c.id),
+    });
   return html` <div
     class="project-dialog-backdrop"
     @click=${(event: MouseEvent) => event.target === event.currentTarget && closeCronDialog(c)}
@@ -744,7 +609,7 @@ async function saveCronEdit(event: SubmitEvent, c: CronView): Promise<void> {
   const ok = await patchCron(c.id, { title, ...(task ? { task } : {}) }, "edit failed");
   if (!ok) return;
   cronDialog = null;
-  cronActionNotice = "Cron updated.";
+  page.flash = "Cron updated.";
   await reopenCron(c.id);
 }
 
@@ -779,7 +644,7 @@ function setCronEnabled(id: string, enabled: boolean): Promise<void> {
       cronTab = "yours";
       if (!enabled) showDisabledCrons = true;
     } catch (e) {
-      cronActionNotice = errMessage(e, enabled ? "enable failed" : "disable failed");
+      page.flash = errMessage(e, enabled ? "enable failed" : "disable failed");
     }
     await reopenCron(id);
   }, undefined);
@@ -791,7 +656,7 @@ async function confirmDeleteCron(id: string): Promise<void> {
     try {
       await api(`/api/crons/${encodeURIComponent(id)}`, { method: "DELETE" });
     } catch (e) {
-      cronActionNotice = errMessage(e, "delete failed");
+      page.flash = errMessage(e, "delete failed");
     }
     await reopenCron(id);
   }, undefined);
@@ -822,12 +687,8 @@ function cronForm() {
 }
 
 function showNewCron(): void {
-  if (!appState.mainEl) return;
   activeCronId = null;
-  const host = document.createElement("div");
-  host.className = "resource-pane cron-pane";
-  render(cronForm(), host);
-  appState.mainEl.replaceChildren(host);
+  showPane("cron-pane", cronForm());
 }
 
 function onCreateCron(e: Event): void {

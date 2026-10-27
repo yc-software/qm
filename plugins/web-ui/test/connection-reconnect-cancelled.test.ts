@@ -18,10 +18,9 @@ test("a cancelled reconnect leaves the existing connection in place", async () =
   });
   try {
     await h.boot();
-    const widget = Object.assign(document.createElement("qm-onboarding-welcome"), {
+    const widget = Object.assign(document.createElement("qm-connect-apps"), {
       me: { org: "test", user: "tester" },
       widget: "apps",
-      setupOnly: true,
       toolkit: "gmail",
       returnKey: "reply:1:0:0",
     });

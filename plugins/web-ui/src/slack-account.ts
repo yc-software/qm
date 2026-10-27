@@ -193,7 +193,7 @@ export class SlackAccount extends LitElement {
           ? html`<div class="slack-connected" role="status">
               ${icon(Check, 14)}<span>Your Slack account is linked${this.label ? ` · ${this.label}` : ""}</span>
             </div>`
-          : html`<button class="welcome-slack" type="button" ?disabled=${this.busy} @click=${() => void this.connect()}>
+          : html`<button class="slack-connect" type="button" ?disabled=${this.busy} @click=${() => void this.connect()}>
               <div class="slack-link-icon" aria-hidden="true">
                 <span class="slack-link-person">${icon(UserRound, 17)}</span>
                 <span class="slack-link-service">${slackMark(18)}</span>

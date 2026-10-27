@@ -79,7 +79,7 @@ import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { copyText, menuSelect, relTime, sheenLabel, workingWave } from "./ui";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
-import { listPageTpl } from "./list-page";
+import { listPageTpl, listTabs } from "./list-page";
 import {
   contextsState,
   ensureContexts,
@@ -695,29 +695,19 @@ export function drawChatsPage(): void {
         },
       },
       filters: html`<div class="chat-filters">
-        <div class="resource-tabs" role="tablist" aria-label="Conversation status">
-          ${(
-            [
-              ["active", "Active"],
-              ["waiting", "Waiting"],
-              ["archived", "Archived"],
-            ] as const
-          ).map(
-            ([value, label]) =>
-              html`<button
-                role="tab"
-                type="button"
-                aria-selected=${chatsPageStatus === value}
-                class=${chatsPageStatus === value ? "active" : ""}
-                @click=${() => {
-                  chatsPageStatus = value;
-                  reloadChatsPage();
-                }}
-              >
-                ${label}
-              </button>`,
-          )}
-        </div>
+        ${listTabs(
+          "Conversation status",
+          [
+            { value: "active" as const, label: "Active" },
+            { value: "waiting" as const, label: "Waiting" },
+            { value: "archived" as const, label: "Archived" },
+          ],
+          chatsPageStatus,
+          (value) => {
+            chatsPageStatus = value;
+            reloadChatsPage();
+          },
+        )}
         <div class="list-select">
           ${menuSelect({
             value: chatsPageSurface,

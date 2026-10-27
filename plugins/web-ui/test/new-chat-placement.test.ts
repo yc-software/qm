@@ -331,7 +331,7 @@ test("app edit chats suppress the general welcome and suggestions", async () => 
     const shell = document.querySelector(".app-edit-chat");
     assert.ok(shell);
     assert.equal(shell.querySelector(".chat-cta"), null);
-    assert.equal(shell.querySelector("qm-onboarding-welcome"), null);
+    assert.equal(shell.querySelector("qm-connect-apps"), null);
     assert.equal(shell.querySelector(".suggested-activities"), null);
     assert.ok(shell.querySelector(".composer-wrap"));
     assert.deepEqual(conv.state.agent.state.messages, []);

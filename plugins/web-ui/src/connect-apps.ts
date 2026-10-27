@@ -1,11 +1,11 @@
 import { openDesktopBrowser } from "../../chassis/src/desktop-browser";
 import {
-  isConnectionReturn,
   takeConnectionReturn,
   completeConnectionReturn,
   saveConnectionAttempt,
   clearConnectionAttempt,
   type ConnectionAttempt,
+  type PickerState,
   ACCOUNT_ID,
 } from "./connection-return";
 import { LitElement, html, nothing } from "lit";
@@ -19,34 +19,16 @@ interface ConnectedAccount {
   missingScopes?: string[];
 }
 import type { Me } from "./shell-state";
-import "./onboarding-welcome.css";
+import "./connect-apps.css";
 import "./onboarding-slack";
 import "./slack-account";
-import {
-  connectionPreviewEnabled,
-  previewParameters,
-  readPreviewAttempt,
-  startPreviewAttempt,
-  finishPreviewAttempt,
-  verifyPreviewAttempt,
-  previewConnections,
-  savePreviewConnection,
-  clearPreviewAttempt,
-  resetPreview,
-  type PreviewAttempt,
-  type PickerState,
-} from "./connection-preview";
 
 const continuedAttempts = new Set<string>();
 
-export class OnboardingWelcome extends LitElement {
+export class ConnectApps extends LitElement {
   static properties = {
     me: { attribute: false },
-    onMoreIdeas: { attribute: false },
     onConnected: { attribute: false },
-    ideasDisabled: { type: Boolean },
-    animateWelcome: { type: Boolean },
-    setupOnly: { type: Boolean },
     widget: {},
     toolkit: {},
     returnKey: {},
@@ -63,12 +45,8 @@ export class OnboardingWelcome extends LitElement {
     workspaceError: { state: true },
   };
   declare me: Me | null;
-  declare onMoreIdeas: (() => void) | undefined;
   declare onConnected: ((name: string) => void) | undefined;
-  declare ideasDisabled: boolean;
-  declare animateWelcome: boolean;
-  declare setupOnly: boolean;
-  declare widget: "all" | "apps" | "slack" | "slack-account";
+  declare widget: "apps" | "slack" | "slack-account";
   declare toolkit: string;
   declare returnKey: string;
   declare base: string;
@@ -89,14 +67,10 @@ export class OnboardingWelcome extends LitElement {
   private returnAccount = "";
   private refreshConnections = () => {
     if (!document.hidden) void this.refreshWorkspace();
-    if (!this.preview && !["slack", "slack-account"].includes(this.widget) && !document.hidden)
-      void this.loadConnections();
+    if (this.widget === "apps" && !document.hidden) void this.loadConnections();
   };
-  private preview = connectionPreviewEnabled();
-  private consent: PreviewAttempt | null = null;
-  private returned: PreviewAttempt | null = null;
   private pickerState: PickerState = { query: "", expanded: false };
-  private retryService: PreviewAttempt["service"] | null = null;
+  private retryService: ConnectionAttempt["service"] | null = null;
   declare connectionOutcome: "" | "checking" | "success" | "cancelled" | "failed" | "expired";
   private controller?: AbortController;
   private services: ConnectionService[] = [];
@@ -104,12 +78,9 @@ export class OnboardingWelcome extends LitElement {
   constructor() {
     super();
     this.me = null;
-    this.ideasDisabled = false;
-    this.animateWelcome = true;
-    this.setupOnly = false;
-    this.widget = "all";
+    this.widget = "apps";
     this.toolkit = "";
-    this.returnKey = "welcome";
+    this.returnKey = "settings";
     this.base = "/";
     this.adminBase = "/admin";
     this.loading = true;
@@ -121,7 +92,7 @@ export class OnboardingWelcome extends LitElement {
   protected createRenderRoot(): HTMLElement {
     return this;
   }
-  private previewUser(): string {
+  private accountUser(): string {
     return `${this.me?.org}:${this.me?.user}`;
   }
   private async refreshWorkspace(): Promise<void> {
@@ -141,83 +112,32 @@ export class OnboardingWelcome extends LitElement {
   }
   protected firstUpdated(): void {
     void this.refreshWorkspace();
-    const params = previewParameters();
-    const returnUrl =
-      !this.preview && !["slack", "slack-account"].includes(this.widget)
-        ? takeConnectionReturn(this.previewUser(), this.returnKey)
-        : null;
-    const realParams = returnUrl?.url.searchParams;
-    const returning = !this.preview && isConnectionReturn();
-    if (realParams) {
-      const attempt = returnUrl!.attempt;
-      this.realReturn = returnUrl!.verified ? null : attempt;
-      this.returnError = realParams.get("error") ?? "";
-      this.returnAccount = realParams.get("connectedAccountId") ?? "";
+    window.addEventListener("focus", this.refreshConnections);
+    document.addEventListener("visibilitychange", this.refreshConnections);
+    if (this.widget !== "apps") return;
+    const returnUrl = takeConnectionReturn(this.accountUser(), this.returnKey);
+    if (returnUrl) {
+      const params = returnUrl.url.searchParams;
+      const attempt = returnUrl.attempt;
+      this.realReturn = returnUrl.verified ? null : attempt;
+      this.returnError = params.get("error") ?? "";
+      this.returnAccount = params.get("connectedAccountId") ?? "";
       if (attempt) {
         this.pickerState = { ...attempt.picker };
         this.restoreScrollTop = attempt.scrollTop;
         this.retryService = attempt.service;
-        this.connectionOutcome = returnUrl!.verified ? "" : "checking";
+        this.connectionOutcome = returnUrl.verified ? "" : "checking";
       } else this.connectionOutcome = "expired";
       const clean = new URL(location.href);
       for (const key of ["composioReturn", "status", "error", "connectedAccountId"]) clean.searchParams.delete(key);
       history.replaceState(history.state, "", clean);
     }
-    if (!this.preview) {
-      window.addEventListener("focus", this.refreshConnections);
-      document.addEventListener("visibilitychange", this.refreshConnections);
-      if (!["slack", "slack-account"].includes(this.widget)) void this.loadConnections();
-    }
-    if (this.preview) {
-      const visible = new URL(location.href);
-      visible.searchParams.set("connectionDemo", "1");
-      if (params.has("connectionConsent"))
-        visible.searchParams.set("connectionConsent", params.get("connectionConsent")!);
-      history.replaceState(history.state, "", visible);
-    }
-    const attempt = this.preview ? readPreviewAttempt(this.previewUser()) : null;
-    if (this.preview && params.has("connectionConsent")) {
-      this.consent = attempt?.state === params.get("connectionConsent") ? attempt : null;
-      this.connectionOutcome = this.consent ? "" : "expired";
-      this.requestUpdate();
-      return;
-    }
-    if (this.preview && params.has("connectionReturn")) {
-      if (attempt?.state === params.get("connectionReturn") && attempt.accountId === params.get("connectedAccountId")) {
-        this.returned = attempt;
-        this.retryService = attempt.service;
-        this.pickerState = attempt.picker;
-        this.connectionOutcome = "checking";
-        window.setTimeout(() => {
-          if (!this.isConnected) return;
-          if (verifyPreviewAttempt(attempt)) {
-            savePreviewConnection(attempt);
-            this.connectionOutcome = "success";
-          } else {
-            this.connectionOutcome = params.get("error") === "access_denied" ? "cancelled" : "failed";
-          }
-          clearPreviewAttempt(attempt);
-          this.drawPicker();
-        }, 1000);
-      } else this.connectionOutcome = "expired";
-      const clean = new URL(location.href);
-      for (const key of ["connectionReturn", "status", "error", "connectedAccountId"]) clean.searchParams.delete(key);
-      history.replaceState(history.state, "", clean);
-    } else if (
-      !returning &&
-      !this.setupOnly &&
-      this.animateWelcome &&
-      globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches === false
-    ) {
-      this.classList.add("welcome-rolling");
-    }
-    if (!["slack", "slack-account"].includes(this.widget)) void this.loadCatalog();
+    void this.loadConnections();
+    void this.loadCatalog();
   }
   private drawPicker(): void {
-    const target = this.querySelector<HTMLElement>(".welcome-picker");
-    const connected = this.preview
-      ? previewConnections(this.previewUser())
-      : this.connections.map((account) => account.toolkit);
+    const target = this.querySelector<HTMLElement>(".connect-apps-picker");
+    const connected = this.connections.map((account) => account.toolkit);
     const stale = this.staleToolkits();
     const services = this.services.map((service) => ({
       ...service,
@@ -242,7 +162,6 @@ export class OnboardingWelcome extends LitElement {
     document.removeEventListener("visibilitychange", this.refreshConnections);
   }
   private staleToolkits(): Set<string> {
-    if (this.preview) return new Set();
     const toolkits = new Set(this.connections.map((account) => account.toolkit));
     return new Set(
       [...toolkits].filter((toolkit) =>
@@ -315,9 +234,9 @@ export class OnboardingWelcome extends LitElement {
         if (verified && (!this.returnAccount || this.returnAccount === attempt.accountId))
           this.connectionOutcome = "success";
         else this.connectionOutcome = this.returnError === "access_denied" ? "cancelled" : "failed";
-        clearConnectionAttempt(this.previewUser());
+        clearConnectionAttempt(this.accountUser());
         if (this.connectionOutcome === "success") {
-          completeConnectionReturn(this.previewUser(), attempt.state);
+          completeConnectionReturn(this.accountUser(), attempt.state);
           this.realReturn = null;
           const replaced = accounts.find(
             (account) => account.id === attempt.replaces && account.id !== attempt.accountId,
@@ -375,7 +294,7 @@ export class OnboardingWelcome extends LitElement {
     this.loading = false;
     await this.updateComplete;
     this.drawPicker();
-    const restoreTop = this.returned?.scrollTop ?? this.restoreScrollTop;
+    const restoreTop = this.restoreScrollTop;
     if (restoreTop !== null && restoreTop !== undefined) {
       await this.updateComplete;
       requestAnimationFrame(() => {
@@ -387,10 +306,6 @@ export class OnboardingWelcome extends LitElement {
   }
   private async authorize(service: ConnectionService, replaces?: string): Promise<void> {
     if (this.authorizing) return;
-    if (this.preview) {
-      startPreviewAttempt(this.previewUser(), service, this.pickerState, this.closest(".chat-scroll")?.scrollTop ?? 0);
-      return;
-    }
     this.authorizing = service.name;
     this.authorizationError = "";
     try {
@@ -398,7 +313,7 @@ export class OnboardingWelcome extends LitElement {
       const state = crypto.randomUUID();
       const attempt: ConnectionAttempt = {
         state,
-        user: this.previewUser(),
+        user: this.accountUser(),
         service: { id: service.id, name: service.name },
         accountId: "",
         ...(replaces ? { replaces } : {}),
@@ -428,43 +343,9 @@ export class OnboardingWelcome extends LitElement {
     }
   }
   protected render() {
-    if (this.preview && previewParameters().has("connectionConsent")) {
-      return html`<section class="connection-consent-preview">
-        <span class="connection-preview-label">Provider simulation · No account access</span>
-        <h1>${this.consent ? `Connect ${this.consent.service.name}` : "This preview has expired"}</h1>
-        <p>
-          This stands in for the provider’s consent page. Choose an outcome to return to QM through the callback URL.
-        </p>
-        ${
-          this.consent
-            ? html`<div class="connection-preview-actions">
-                  <button class="btn" @click=${() => finishPreviewAttempt(this.consent!, "success")}>
-                    Approve connection
-                  </button>
-                  <button class="btn" @click=${() => finishPreviewAttempt(this.consent!, "cancelled")}>Cancel</button>
-                  <button class="btn" @click=${() => finishPreviewAttempt(this.consent!, "failed")}>
-                    Simulate provider error
-                  </button>
-                </div>
-                <details>
-                  <summary>Callback URL</summary>
-                  <code>${this.consent.callbackUrl}</code>
-                </details>`
-            : nothing
-        }
-        <a href="?connectionDemo=1">Back to QM</a>
-      </section>`;
-    }
-    const name = this.me?.displayName?.trim().split(/\s+/)[0];
-    const cohort = this.me?.welcomeCohort;
     const serviceName = this.retryService?.name ?? "App";
-    const connected = this.preview
-      ? previewConnections(this.previewUser())
-      : this.connections.map((account) => account.toolkit);
     const requested = this.requestedToolkit();
-    const connectedAccounts = (
-      this.preview ? connected.map((toolkit) => ({ id: "", toolkit }) as ConnectedAccount) : this.connections
-    ).filter((account) => !requested || account.toolkit === requested);
+    const connectedAccounts = this.connections.filter((account) => !requested || account.toolkit === requested);
     const serviceFor = (id: string) =>
       this.services.find((service) => service.id === id) ?? { id, name: id, description: "", popularity: 0 };
     const outcome = {
@@ -487,56 +368,10 @@ export class OnboardingWelcome extends LitElement {
         detail: "We couldn’t confirm an active connection yet. Try checking again, or restart authorization.",
       },
     }[this.connectionOutcome];
-    return html`<section class="welcome-content">
-      ${this.preview ? html`<div class="connection-preview-label">Connection preview · No accounts are linked <button @click=${() => resetPreview(this.previewUser())}>Reset</button></div>` : nothing}
+    return html`<section class="connect-apps">
       ${
-        this.setupOnly
-          ? nothing
-          : html`<h1 class="welcome-beat" style="--welcome-delay:0ms">${name ? `Hi, ${name}.` : "Hi there."}</h1>
-              ${
-                cohort
-                  ? html`<div class="welcome-cohort welcome-beat" style="--welcome-delay:700ms">
-                      <span class="welcome-cohort-label">Welcome to ${cohort}!</span
-                      ><span class="welcome-champagne" aria-hidden="true">🥂</span>
-                      ${Array.from({ length: 18 }, (_, i) => {
-                        const side = i % 2 ? 1 : -1;
-                        const distance = 35 + ((i * 37) % 85);
-                        const turn = side * (80 + ((i * 47) % 190));
-                        return html`<span
-                          aria-hidden="true"
-                          class="welcome-flutter"
-                          style=${`--flutter-color:${["#f26522", "#f5ad56", "#d5bb88", "#e8c899"][i % 4]};--flutter-delay:${1750 + (i % 6) * 65}ms;--flutter-mid:${side * distance * 0.7}px;--flutter-x:${side * distance}px;--flutter-peak:${-28 - ((i * 19) % 36)}px;--flutter-end:${15 + ((i * 11) % 20)}px;--flutter-turn:${turn}deg;--flutter-turn-end:${turn * 2}deg`}
-                        ></span>`;
-                      })}
-                    </div>`
-                  : nothing
-              }
-              ${
-                cohort
-                  ? html`<p class="welcome-beat" style="--welcome-delay:2400ms">
-                        And welcome to QM, the agent harness we use to run YC.
-                      </p>
-                      <p class="welcome-beat" style="--welcome-delay:2600ms">
-                        Use it to research customers and investors, fundraise, and automate the everyday work of running
-                        ${this.me?.companyName?.trim() || "your company"}.
-                        ${this.onMoreIdeas ? html`<button type="button" class="welcome-more-ideas" ?disabled=${this.ideasDisabled} @click=${this.onMoreIdeas}>More ideas</button>` : nothing}
-                      </p>
-                      <p class="welcome-beat" style="--welcome-delay:2800ms">
-                        Think of it as your YC partner in a box. The more you use QM, the more context we have, the more
-                        we can help.
-                      </p>`
-                  : html`<p class="welcome-beat" style="--welcome-delay:400ms">
-                        Welcome to QM, your agent harness. Use it to research customers, build tools, and automate the
-                        everyday work of running ${this.me?.companyName?.trim() || "your company"}.
-                      </p>
-                      <p class="welcome-beat" style="--welcome-delay:700ms">The easiest way to get up and running:</p>`
-              }`
-      }
-      ${
-        !["apps", "slack-account"].includes(this.widget) && this.me?.permissions?.includes("admin")
+        this.widget === "slack" && this.me?.permissions?.includes("admin")
           ? html`<qm-onboarding-slack
-              class="welcome-beat"
-              style=${`--welcome-delay:${cohort ? 3050 : 900}ms`}
               .adminBase=${this.adminBase}
               @slack-installation-status=${(event: CustomEvent<{ connected: boolean }>) => {
                 this.workspaceConnected = event.detail.connected;
@@ -546,17 +381,15 @@ export class OnboardingWelcome extends LitElement {
       }
       ${this.widget === "slack-account" && this.workspaceError ? html`<p role="status">Could not check Slack setup. <button class="btn" @click=${() => void this.refreshWorkspace()}>Try again</button></p>` : nothing}
       ${this.widget === "slack-account" && this.workspaceConnected === false ? html`<p role="status">QM needs to be added to your company’s Slack workspace before you can link your account. Ask an administrator to finish setup.</p>` : nothing}
-      <div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3250 : 1100}ms`}>
-        ${this.workspaceConnected && this.widget !== "apps" && (["slack", "slack-account"].includes(this.widget) || (!this.loading && !this.error)) ? html`<qm-slack-account .user=${this.previewUser()}></qm-slack-account>` : nothing}
-      </div>
+      ${this.workspaceConnected && this.widget !== "apps" ? html`<qm-slack-account .user=${this.accountUser()}></qm-slack-account>` : nothing}
       ${
-        ["slack", "slack-account"].includes(this.widget)
+        this.widget !== "apps"
           ? nothing
-          : html`<div class="welcome-beat" style=${`--welcome-delay:${cohort ? 3450 : 1300}ms`}>
-              ${this.loading ? html`<div class="welcome-load" role="status">Loading your available apps…</div>` : nothing}
+          : html`<div>
+              ${this.loading ? html`<div class="connect-apps-load" role="status">Loading your available apps…</div>` : nothing}
               ${
                 this.error
-                  ? html`<div class="welcome-load">
+                  ? html`<div class="connect-apps-load">
                       <strong>Connect your apps</strong>
                       <p role="status">${this.error}</p>
                       <button
@@ -587,9 +420,9 @@ export class OnboardingWelcome extends LitElement {
                     </div>`
                   : nothing
               }
-              ${this.connectionError && !this.error && !this.loading ? html`<div class="welcome-connection-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
-              ${!this.preview && this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
-              <div class="welcome-picker" ?inert=${Boolean(this.authorizing)}></div>
+              ${this.connectionError && !this.error && !this.loading ? html`<div class="connect-apps-status" role="status">${this.connectionError} <button class="btn" @click=${() => void this.loadConnections()}>Check again</button></div>` : nothing}
+              ${this.connectionOutcome === "failed" ? html`<button class="btn" @click=${() => void this.loadConnections()}>Check again</button>` : nothing}
+              <div class="connect-apps-picker" ?inert=${Boolean(this.authorizing)}></div>
               ${
                 connectedAccounts.length
                   ? html`<div class="connection-connected" role="status" aria-live="polite">
@@ -623,11 +456,11 @@ export class OnboardingWelcome extends LitElement {
                     </div>`
                   : nothing
               }
-              ${this.authorizing ? html`<p class="welcome-connection-status" role="status">Opening ${this.authorizing}…</p>` : nothing}
-              ${this.authorizationError ? html`<p class="welcome-connection-status" role="alert">${this.authorizationError}</p>` : nothing}
+              ${this.authorizing ? html`<p class="connect-apps-status" role="status">Opening ${this.authorizing}…</p>` : nothing}
+              ${this.authorizationError ? html`<p class="connect-apps-status" role="alert">${this.authorizationError}</p>` : nothing}
             </div>`
       }
     </section>`;
   }
 }
-if (!customElements.get("qm-onboarding-welcome")) customElements.define("qm-onboarding-welcome", OnboardingWelcome);
+if (!customElements.get("qm-connect-apps")) customElements.define("qm-connect-apps", ConnectApps);

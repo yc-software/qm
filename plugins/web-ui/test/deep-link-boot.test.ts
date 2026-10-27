@@ -328,20 +328,8 @@ async function waitForText(h: Harness, text: RegExp): Promise<void> {
   assert.match(h.mainText(), text);
 }
 
-test("saved empty welcome stays an empty chat and doesn't show another starter heading", async () => {
-  const h = await harness({ path: "/s/sess-deep", welcome: true });
-  try {
-    await h.boot();
-    await waitForText(h, /Connect your apps/);
-    assert.ok(document.querySelector(".empty-chat qm-onboarding-welcome"));
-    assert.equal(document.querySelector(".chat-cta"), null);
-  } finally {
-    await h.close();
-  }
-});
-
 test("a failed connection refresh removes previously verified badges", async () => {
-  const h = await harness({ path: "/s/sess-deep", welcome: true });
+  const h = await harness({ path: "/settings" });
   try {
     h.setConnections([{ id: "ca_test", toolkit: "gmail" }]);
     await h.boot();

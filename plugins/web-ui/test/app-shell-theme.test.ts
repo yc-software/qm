@@ -100,18 +100,6 @@ test("embedded chat publishes active colors and tracks theme changes from other 
   frame.localStorage.setItem("theme", "dark");
   frame.dispatchEvent(new frame.StorageEvent("storage", { key: "theme" }));
   assert.equal(messages.at(-1)!.data.dark, true);
-  const palette = {
-    name: "Forest",
-    source: "iterm2",
-    background: { r: 16, g: 40, b: 32 },
-    foreground: { r: 220, g: 252, b: 231 },
-    ansi: Array(16).fill(null),
-  };
-  frame.localStorage.setItem("theme:custom", JSON.stringify(palette));
-  frame.localStorage.setItem("theme", "custom");
-  frame.dispatchEvent(new frame.StorageEvent("storage", { key: "theme" }));
-  assert.equal(messages.at(-1)!.data.dark, true);
-  assert.equal(messages.at(-1)!.data.colors["--background"], "#102820");
   frame.localStorage.clear();
   frame.dispatchEvent(new frame.StorageEvent("storage", { key: null }));
   assert.equal(messages.at(-1)!.data.dark, false);

@@ -3,7 +3,7 @@ import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
 
 test("Slack onboarding launches directly and verifies connection on return", async () => {
-  const h = await harness({ path: "/", welcome: true });
+  const h = await harness({ path: "/" });
   const previousFetch = globalThis.fetch;
   let status: Record<string, unknown> = { configured: false, installAvailable: true };
   let statusCode = 200;
@@ -87,7 +87,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     assert.match(element.textContent ?? "", /QM added to Slack/);
     assert.equal(element.querySelector("button"), null);
     assert.ok(element.querySelector(".slack-connected"));
-    assert.equal(element.querySelector(".welcome-slack"), null);
+    assert.equal(element.querySelector(".slack-connect"), null);
     for (const next of [
       { configured: true, setup: { connected: false } },
       { configured: true, setupUnavailable: true },
@@ -102,16 +102,16 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     await settle();
     assert.match(element.textContent ?? "", /Could not check the Slack installation/);
     window.open = () => null;
-    element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
+    element.querySelector<HTMLButtonElement>(".slack-connect")!.click();
     await settle();
     assert.match(element.textContent ?? "", /Allow a new tab/);
     window.open = () => popup as unknown as Window;
     launchCode = 502;
-    element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
+    element.querySelector<HTMLButtonElement>(".slack-connect")!.click();
     await settle();
     assert.equal(closed, true);
     assert.match(element.textContent ?? "", /Could not start Slack installation/);
-    assert.equal(element.querySelector<HTMLButtonElement>(".welcome-slack")!.disabled, false);
+    assert.equal(element.querySelector<HTMLButtonElement>(".slack-connect")!.disabled, false);
     statusCode = 200;
     status = { configured: false };
     window.dispatchEvent(new window.Event("focus"));
@@ -119,7 +119,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     const fallback = { opener: window, location: { href: "" } };
     window.open = () => fallback as unknown as Window;
     const count = launches.length;
-    element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
+    element.querySelector<HTMLButtonElement>(".slack-connect")!.click();
     await settle();
     assert.equal(fallback.location.href, "/admin/slack-settings?setup=slack");
     assert.equal(launches.length, count);

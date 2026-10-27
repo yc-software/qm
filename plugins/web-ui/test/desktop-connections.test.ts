@@ -3,7 +3,7 @@ import test from "node:test";
 import { harness } from "./deep-link-boot-fixture.ts";
 
 test("desktop connection buttons hand off before creating authorization state", async () => {
-  const h = await harness({ path: "/settings", welcome: true });
+  const h = await harness({ path: "/settings" });
   const fetchBefore = globalThis.fetch;
   const browserUrls: string[] = [];
   const authorized: string[] = [];
@@ -24,7 +24,7 @@ test("desktop connection buttons hand off before creating authorization state", 
     const slack = document.querySelector("qm-slack-account")!;
     assert.ok(slack);
     (slack as unknown as { connect(): Promise<void> }).connect();
-    const apps = document.querySelector("qm-onboarding-welcome")!;
+    const apps = document.querySelector("qm-connect-apps")!;
     assert.ok(apps);
     await (apps as unknown as { authorize(service: { id: string; name: string }): Promise<void> }).authorize({
       id: "gmail",

@@ -48,7 +48,6 @@ import {
 
 const SUBAGENT_THREAD_PREFIX = "agent:main:subagent:";
 const PORT = portFromEnv(8096);
-const welcomeCohort = process.env.WEB_UI_WELCOME_COHORT?.trim().slice(0, 40) || undefined;
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
 const PUBLIC_URL = (process.env.WEB_UI_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
@@ -1473,7 +1472,6 @@ const apiRoutes: readonly WebRoute[] = [
           ) ?? false,
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
-        ...(welcomeCohort ? { welcomeCohort } : {}),
         ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
         ...(suggestedActivities.length && !activityConfig ? { suggestedActivities } : {}),
         permissions,

@@ -4,7 +4,7 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { actionSnippet, closeFormMenus, copyText, relTime, setFormMenuValue, toggleFormMenu } from "./ui";
 import { icon } from "./icons";
-import { listBackLink, listPageTpl } from "./list-page";
+import { artifactPage, detailTpl, fieldTpl, listBackLink, listPageTpl, showPane } from "./list-page";
 import { ensureContexts, scopeChip } from "./contexts";
 import { appState } from "./shell";
 import { deepLinkPath, isPlainLeftClick, UI_BASE } from "./deep-link";
@@ -56,120 +56,71 @@ const WEBHOOK_SCHEMES: Array<{ value: WebhookScheme; label: string; guidance: st
 ];
 
 let webhookList: WebhookView[] = [];
-let webhooksScope: string | null = null;
-let webhooksPageHost: HTMLElement | null = null;
-let webhooksLoading = false;
-let webhooksNotice = "";
-let webhooksSearch = "";
-let webhookRefreshSeq = 0;
-let pendingWebhookId: string | null = null;
-let webhooksNoticeSticky = "";
-
-export function resetActiveWebhook(): void {
-  webhooksScope = null;
-}
+const page = artifactPage("webhooks", "webhooks-page");
 
 export function openWebhookById(id: string): void {
-  pendingWebhookId = id;
-}
-
-function syncWebhookUrl(webhookId: string | null, push = false): void {
-  if (appState.currentView !== "webhooks") return;
-  const next = deepLinkPath(UI_BASE, "webhooks", null, null, webhookId);
-  if (`${location.pathname}${location.search}` === next) return;
-  if (push) history.pushState(null, "", next);
-  else history.replaceState(null, "", next);
+  page.pending = id;
 }
 
 export function routeWebhooksHistory(webhookId: string | null): void {
-  if (appState.currentView !== "webhooks") return;
-  const webhook = webhookId ? webhookList.find((w) => w.id === webhookId) : undefined;
-  if (webhook) openWebhook(webhook);
-  else drawWebhooksPage();
+  page.route(webhookId, findWebhook, openWebhook, drawWebhooksPage);
 }
 
-async function refreshWebhooks(opts: { showLoading?: boolean } = {}): Promise<boolean> {
-  const seq = ++webhookRefreshSeq;
-  if (opts.showLoading) {
-    webhooksLoading = true;
-    webhooksNotice = "";
-  }
-  try {
-    const r = await api<{ webhooks: WebhookView[] }>("/api/webhooks");
-    if (seq !== webhookRefreshSeq) return false;
-    webhookList = r.webhooks ?? [];
-    webhooksNotice = "";
-    return true;
-  } catch (e) {
-    if (seq !== webhookRefreshSeq) return false;
-    webhooksNotice = errMessage(e, "Failed to load webhooks.");
-    return false;
-  } finally {
-    if (seq === webhookRefreshSeq) webhooksLoading = false;
-  }
+function findWebhook(id: string): WebhookView | undefined {
+  return webhookList.find((w) => w.id === id);
+}
+
+function refreshWebhooks(showLoading = false): Promise<boolean> {
+  return page.refresh(
+    async () => {
+      webhookList = (await api<{ webhooks: WebhookView[] }>("/api/webhooks")).webhooks ?? [];
+    },
+    "Failed to load webhooks.",
+    showLoading,
+  );
 }
 
 export async function renderWebhooksPage(): Promise<void> {
   if (appState.currentView !== "webhooks") return;
+  page.adoptScope();
   await ensureContexts();
-  drawWebhooksPage();
-  const loaded = await refreshWebhooks({ showLoading: webhookList.length === 0 });
-  const wanted = pendingWebhookId;
-  pendingWebhookId = null;
-  if (appState.currentView !== "webhooks") return;
-  if (!loaded) return drawWebhooksPage();
-  const webhook = wanted ? webhookList.find((w) => w.id === wanted) : undefined;
-  if (wanted && !webhook) {
-    webhooksNoticeSticky = "That webhook wasn't found, or you don't have access to it.";
-  }
-  if (webhook) openWebhook(webhook);
-  else drawWebhooksPage();
+  await page.show({
+    load: () => refreshWebhooks(webhookList.length === 0),
+    find: findWebhook,
+    open: openWebhook,
+    draw: drawWebhooksPage,
+    missing: "That webhook wasn't found, or you don't have access to it.",
+  });
 }
 
 function drawWebhooksPage(): void {
-  if (appState.currentView !== "webhooks" || !appState.mainEl) return;
-  syncWebhookUrl(null);
-  if (!webhooksPageHost || webhooksPageHost.parentElement !== appState.mainEl) {
-    webhooksPageHost = document.createElement("div");
-    webhooksPageHost.className = "pane webhooks-page";
-    appState.mainEl.replaceChildren(webhooksPageHost);
-  }
-  const rows = [...webhookList]
-    .filter((w) => (webhooksScope ? w.ownerScopeId === webhooksScope : true))
-    .filter(
-      (w) =>
-        !webhooksSearch.trim() ||
-        `${w.action} ${w.verification.scheme}`.toLowerCase().includes(webhooksSearch.trim().toLowerCase()),
-    )
+  page.syncUrl(null);
+  const rows = webhookList
+    .filter((w) => page.inScope(w.ownerScopeId) && page.matches(`${w.action} ${w.verification.scheme}`))
     .sort((a, b) => b.createdAt - a.createdAt)
-    .map((w) => webhookPageRow(w));
-  let empty = "No webhooks yet.";
-  if (webhooksNotice) empty = webhooksNotice;
-  else if (webhooksLoading && webhookList.length === 0) empty = "Loading webhooks…";
-  else if (webhooksScope) empty = "No webhooks in this context.";
-  const noticeRow = webhooksNoticeSticky ? [html`<div class="action-notice">${webhooksNoticeSticky}</div>`] : [];
-  webhooksNoticeSticky = "";
-  render(
+    .map(webhookPageRow);
+  const flash = page.takeFlash();
+  page.paint(
     listPageTpl({
       title: "Webhooks",
-      scope: webhooksScope,
+      scope: page.scope,
       onScope: (s) => {
-        webhooksScope = s;
+        page.scope = s;
         drawWebhooksPage();
       },
       action: { label: "New webhook", onClick: showNewWebhook },
       search: {
-        value: webhooksSearch,
+        value: page.query,
         placeholder: "Search webhooks",
         onInput: (value) => {
-          webhooksSearch = value;
+          page.query = value;
           drawWebhooksPage();
         },
       },
-      rows: [...noticeRow, ...rows],
-      empty,
+      rows: [...(flash ? [html`<div class="action-notice">${flash}</div>`] : []), ...rows],
+      empty: page.emptyText("webhooks", webhookList.length === 0),
     }),
-    webhooksPageHost,
+    drawWebhooksPage,
   );
 }
 
@@ -210,81 +161,31 @@ function copyRow(text: string) {
 }
 
 function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
-  if (!appState.mainEl) return;
-  syncWebhookUrl(w.id, opts.push);
+  page.syncUrl(w.id, opts.push);
   const eventsHost = document.createElement("section");
-  const notice = webhooksNotice || webhooksNoticeSticky;
-  webhooksNotice = "";
-  webhooksNoticeSticky = "";
-  const host = document.createElement("div");
-  host.className = "resource-pane";
-  render(
-    html`
-      <div class="resource-detail">
-        ${listBackLink("Webhooks", drawWebhooksPage)}
-        <div class="resource-heading">
-          <h2>Webhook</h2>
-          <button class="btn" @click=${showNewWebhook}>${icon(Plus, 15)}<span>New webhook</span></button>
-        </div>
-        ${notice ? html`<div class="action-notice">${notice}</div>` : nothing}
-        <div class="field">
-          <label>Context</label>
-          <div class="value">${scopeChip(w.ownerScopeId)}</div>
-        </div>
-        <div class="field">
-          <label>Action</label>
-          <div class="value pre">${w.action}</div>
-        </div>
-        <div class="field">
-          <label>Verification</label>
-          <div class="value">${w.verification.scheme}</div>
-        </div>
-        <div class="field">
-          <label>Status</label>
-          <div class="value">${w.enabled ? "Enabled" : "Disabled"}</div>
-        </div>
+  const notice = page.notice || page.takeFlash();
+  page.notice = "";
+  showPane(
+    "",
+    detailTpl({
+      back: "Webhooks",
+      onBack: drawWebhooksPage,
+      title: "Webhook",
+      heading: html`<button class="btn" @click=${showNewWebhook}>${icon(Plus, 15)}<span>New webhook</span></button>`,
+      notice,
+      body: html`
+        ${fieldTpl("Context", scopeChip(w.ownerScopeId))} ${fieldTpl("Action", w.action, "pre")}
+        ${fieldTpl("Verification", w.verification.scheme)} ${fieldTpl("Status", w.enabled ? "Enabled" : "Disabled")}
         <div class="field">
           <label>Inbound URL</label>
           ${copyRow(w.url)}
           <div class="hint">Configure your sender (GitHub / Stripe / Slack / …) to POST events here.</div>
         </div>
-        ${
-          w.filters?.length
-            ? html`<div class="field">
-                <label>Filters</label>
-                <div class="value pre">${w.filters.map((f) => `${f.path} ∈ [${f.in.join(", ")}]`).join("\n")}</div>
-              </div>`
-            : ""
-        }
-        ${
-          w.destination
-            ? html`<div class="field">
-                <label>Destination</label>
-                <div class="value">${w.destination.type} → ${w.destination.target}</div>
-              </div>`
-            : ""
-        }
-        <div class="field">
-          <label>Last fired</label>
-          <div class="value">${w.lastFiredAt ? new Date(w.lastFiredAt).toLocaleString() : "Never"}</div>
-        </div>
-        ${
-          w.lastDeliveryId
-            ? html`<div class="field">
-                <label>Last delivery ID</label>
-                <div class="value mono">${w.lastDeliveryId}</div>
-              </div>`
-            : nothing
-        }
-        ${
-          w.lastError
-            ? html`<div class="field">
-                <label>Last error</label>
-                <div class="value" style="color:var(--destructive,#c00)">${w.lastError}</div>
-              </div>`
-            : ""
-        }
-        ${eventsHost}
+        ${w.filters?.length ? fieldTpl("Filters", w.filters.map((f) => `${f.path} ∈ [${f.in.join(", ")}]`).join("\n"), "pre") : nothing}
+        ${w.destination ? fieldTpl("Destination", `${w.destination.type} → ${w.destination.target}`) : nothing}
+        ${fieldTpl("Last fired", w.lastFiredAt ? new Date(w.lastFiredAt).toLocaleString() : "Never")}
+        ${w.lastDeliveryId ? fieldTpl("Last delivery ID", w.lastDeliveryId, "mono") : nothing}
+        ${w.lastError ? fieldTpl("Last error", w.lastError, "error") : nothing} ${eventsHost}
         <div class="actions">
           ${
             w.enabled
@@ -292,11 +193,9 @@ function openWebhook(w: WebhookView, opts: { push?: boolean } = {}): void {
               : html`<button class="btn" @click=${() => void setWebhookEnabled(w.id, true)}>Re-enable</button>`
           }
         </div>
-      </div>
-    `,
-    host,
+      `,
+    }),
   );
-  appState.mainEl.replaceChildren(host);
   void loadWebhookEvents(w.id, eventsHost);
 }
 
@@ -364,8 +263,8 @@ async function setWebhookEnabled(id: string, enabled: boolean): Promise<void> {
     notice = errMessage(e, enabled ? "Couldn't re-enable webhook." : "Couldn't disable webhook.");
   }
   await refreshWebhooks();
-  webhooksNotice = notice;
-  const w = webhookList.find((x) => x.id === id);
+  page.notice = notice;
+  const w = findWebhook(id);
   if (w) openWebhook(w);
   else drawWebhooksPage();
 }
@@ -441,11 +340,7 @@ function webhookForm() {
 }
 
 function showNewWebhook(): void {
-  if (!appState.mainEl) return;
-  const host = document.createElement("div");
-  host.className = "resource-pane";
-  render(webhookForm(), host);
-  appState.mainEl.replaceChildren(host);
+  showPane("", webhookForm());
 }
 
 function selectWebhookScheme(e: Event, scheme: WebhookScheme): void {
@@ -526,11 +421,9 @@ async function onCreateWebhook(e: Event): Promise<void> {
 }
 
 function showWebhookCreated(w: WebhookView, url: string): void {
-  if (!appState.mainEl) return;
-  const host = document.createElement("div");
-  host.className = "resource-pane";
   const secret = w.verification.secret;
-  render(
+  showPane(
+    "",
     html`
       <div class="resource-detail">
         ${listBackLink("Webhooks", drawWebhooksPage)}
@@ -555,11 +448,9 @@ function showWebhookCreated(w: WebhookView, url: string): void {
               </div>`
         }
         <div class="actions">
-          <button class="btn" @click=${() => openWebhook(webhookList.find((x) => x.id === w.id) ?? w)}>Done</button>
+          <button class="btn" @click=${() => openWebhook(findWebhook(w.id) ?? w)}>Done</button>
         </div>
       </div>
     `,
-    host,
   );
-  appState.mainEl.replaceChildren(host);
 }

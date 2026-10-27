@@ -1,0 +1,64 @@
+qm-connect-apps {
+  display: block;
+  width: 100%;
+}
+.connect-apps {
+  max-width: 560px;
+  padding: 12px 0;
+}
+.connect-apps-load {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.connect-apps-load p {
+  margin: 0 0 10px;
+}
+.connect-apps-status {
+  font-size: 12px;
+  line-height: 1.5;
+  padding-top: 10px;
+  color: var(--muted-foreground);
+}
+.connection-result {
+  max-width: 480px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.connection-connected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 10px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--muted-foreground);
+}
+.connection-connected span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.connection-connected svg {
+  color: var(--success);
+  flex: none;
+}
+.connection-connected .stale svg,
+.connection-picker-app.stale .connection-picker-trailing {
+  color: var(--warning);
+}
+.connection-connected .kc-text-action {
+  padding: 0 2px;
+  font-size: inherit;
+}
+.connection-result strong {
+  font-weight: 550;
+}
+.connection-result button {
+  margin-top: 10px;
+}
