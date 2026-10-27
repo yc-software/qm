@@ -322,6 +322,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
     const processIdentity = claudeProcessIdentity();
     if (processIdentity) chownSync(jail, processIdentity.uid, processIdentity.gid);
     const ref = harnessToolContext(turn);
+    const endedOnPurpose = () => !!(ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld);
     const controller = new AbortController();
     ref.abortSignal = controller.signal;
     const bridged = toolsEnabled ? bridgedTools(ref, harnessToolOptions(opts, turn)) : [];
@@ -715,7 +716,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           await recordStep(message);
           await flushThinking();
           if (interrupted) break;
-          const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld;
+          const terminal = endedOnPurpose();
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
             await turn.emit({ type: "assistant", payload: { text }, scopeLabel: turn.scopeLabel });
@@ -747,7 +748,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       }
       const finalResult = result as SDKResultMessage | null;
       const stoppedPartial = async (): Promise<HarnessTurnResult> => {
-        const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld;
+        const terminal = endedOnPurpose();
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
         if (!terminal) await recordStoppedTurn(turn, reply, stopped ? stopReason : "because the run was cancelled");
@@ -777,7 +778,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       ) {
         throw new Error(`Claude utility response did not complete (${finalResult.stop_reason ?? "error"})`);
       }
-      const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld;
+      const terminal = endedOnPurpose();
       const reply = terminal ? "" : finalResult.result.trim();
       const usageTotals = [...callUsage.values()].reduce(
         (acc, usage) => {
