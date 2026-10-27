@@ -218,3 +218,7 @@ export function foreignTenant(claimed: string | undefined, credential: string): 
 export function isHomeTenant(t: Tenant): boolean {
   return t.id === undefined;
 }
+
+export async function activeTenant(id: string | undefined): Promise<Tenant | undefined> {
+  return (await activeTenants()).find((t) => t.id === id);
+}

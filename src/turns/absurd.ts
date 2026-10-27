@@ -1,7 +1,8 @@
 import pg from "pg";
 import type { Pool, PoolClient } from "../persistence/pg-pool.ts";
 import { errMessage } from "../util/errors.ts";
-import { ABSURD_QUEUES, tenantQueue, type AbsurdQueue } from "./absurd-schema.ts";
+import { tenant } from "../tenant.ts";
+import { ABSURD_QUEUES, type AbsurdQueue } from "./absurd-schema.ts";
 
 export type AbsurdDb = Pool | PoolClient;
 
@@ -36,6 +37,7 @@ export interface ClaimedRun {
   taskId: string;
   attempt: number;
   taskName: string;
+  tenantId: string | undefined;
   params: unknown;
   maxAttempts: number | null;
   wakeEvent: string | null;
@@ -81,12 +83,12 @@ function json(value: unknown): string {
 
 function runsTable(queue: AbsurdQueue): string {
   if (!ABSURD_QUEUES.includes(queue)) throw new Error(`absurd: unknown queue ${JSON.stringify(queue)}`);
-  return `absurd.${pg.escapeIdentifier(`r_${tenantQueue(queue)}`)}`;
+  return `absurd.${pg.escapeIdentifier(`r_${queue}`)}`;
 }
 
 function tasksTable(queue: AbsurdQueue): string {
   if (!ABSURD_QUEUES.includes(queue)) throw new Error(`absurd: unknown queue ${JSON.stringify(queue)}`);
-  return `absurd.${pg.escapeIdentifier(`t_${tenantQueue(queue)}`)}`;
+  return `absurd.${pg.escapeIdentifier(`t_${queue}`)}`;
 }
 
 function retryStrategyJson(strategy: RetryStrategy): Record<string, unknown> {
@@ -111,11 +113,12 @@ export async function spawnTask(
     idempotency_key: options.idempotencyKey,
     max_attempts: options.maxAttempts,
     retry_strategy: options.retryStrategy && retryStrategyJson(options.retryStrategy),
+    headers: tenant().id ? { tenantId: tenant().id } : undefined,
   };
   const [row] = await call(
     db,
     "SELECT task_id, run_id, attempt, created FROM absurd.spawn_task($1, $2, $3::jsonb, $4::jsonb)",
-    [tenantQueue(queue), name, json(params), JSON.stringify(spawnOptions)],
+    [queue, name, json(params), JSON.stringify(spawnOptions)],
   );
   if (!row) throw new Error(`absurd: spawn_task returned no row for ${name}`);
   return {
@@ -135,15 +138,16 @@ export async function claimTasks(
 ): Promise<ClaimedRun[]> {
   const rows = await call(
     db,
-    `SELECT run_id, task_id, attempt, task_name, params, max_attempts, wake_event, event_payload
-       FROM absurd.claim_task($1, $2, $3, $4)`,
-    [tenantQueue(queue), workerToken, claimTimeoutSec, qty],
+    `SELECT run_id, task_id, attempt, task_name, headers->>'tenantId' AS tenant_id, params, max_attempts, wake_event,
+       event_payload FROM absurd.claim_task($1, $2, $3, $4)`,
+    [queue, workerToken, claimTimeoutSec, qty],
   );
   return rows.map((row) => ({
     runId: String(row.run_id),
     taskId: String(row.task_id),
     attempt: Number(row.attempt),
     taskName: String(row.task_name),
+    tenantId: row.tenant_id === null ? undefined : String(row.tenant_id),
     params: row.params,
     maxAttempts: row.max_attempts === null ? null : Number(row.max_attempts),
     wakeEvent: row.wake_event === null ? null : String(row.wake_event),
@@ -152,16 +156,16 @@ export async function claimTasks(
 }
 
 export async function extendClaim(db: AbsurdDb, queue: AbsurdQueue, runId: string, extendBySec: number): Promise<void> {
-  await call(db, "SELECT absurd.extend_claim($1, $2, $3)", [tenantQueue(queue), runId, extendBySec]);
+  await call(db, "SELECT absurd.extend_claim($1, $2, $3)", [queue, runId, extendBySec]);
 }
 
 export async function scheduleRun(db: AbsurdDb, queue: AbsurdQueue, runId: string, wakeAt: Date): Promise<void> {
-  await call(db, "SELECT absurd.schedule_run($1, $2, $3)", [tenantQueue(queue), runId, wakeAt]);
+  await call(db, "SELECT absurd.schedule_run($1, $2, $3)", [queue, runId, wakeAt]);
 }
 
 export async function completeRun(db: AbsurdDb, queue: AbsurdQueue, runId: string, result?: unknown): Promise<void> {
   await call(db, "SELECT absurd.complete_run($1, $2, $3::jsonb)", [
-    tenantQueue(queue),
+    queue,
     runId,
     result === undefined ? null : json(result),
   ]);
@@ -176,7 +180,7 @@ export async function retryTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string
   if (!task) return false;
   try {
     await call(db, "SELECT 1 FROM absurd.retry_task($1, $2, $3::jsonb)", [
-      tenantQueue(queue),
+      queue,
       taskId,
       JSON.stringify({ max_attempts: Number(task.attempts) + 1 }),
     ]);
@@ -194,12 +198,7 @@ export async function failRun(
   reason: unknown,
   retryAt?: Date,
 ): Promise<void> {
-  await call(db, "SELECT absurd.fail_run($1, $2, $3::jsonb, $4)", [
-    tenantQueue(queue),
-    runId,
-    json(reason),
-    retryAt ?? null,
-  ]);
+  await call(db, "SELECT absurd.fail_run($1, $2, $3::jsonb, $4)", [queue, runId, json(reason), retryAt ?? null]);
 }
 
 export async function awaitEvent(
@@ -214,18 +213,18 @@ export async function awaitEvent(
   const [row] = await call(
     db,
     "SELECT should_suspend, NOT should_suspend AND payload IS NULL AS timed_out, payload FROM absurd.await_event($1, $2, $3, $4, $5, $6)",
-    [tenantQueue(queue), taskId, runId, step, event, timeoutSec ?? null],
+    [queue, taskId, runId, step, event, timeoutSec ?? null],
   );
   if (!row) throw new Error(`absurd: await_event returned no row for ${event}`);
   return { suspended: Boolean(row.should_suspend), timedOut: Boolean(row.timed_out), payload: row.payload };
 }
 
 export async function emitEvent(db: AbsurdDb, queue: AbsurdQueue, event: string, payload?: unknown): Promise<void> {
-  await call(db, "SELECT absurd.emit_event($1, $2, $3::jsonb)", [tenantQueue(queue), event, json(payload)]);
+  await call(db, "SELECT absurd.emit_event($1, $2, $3::jsonb)", [queue, event, json(payload)]);
 }
 
 export async function cancelTask(db: AbsurdDb, queue: AbsurdQueue, taskId: string): Promise<void> {
-  await call(db, "SELECT absurd.cancel_task($1, $2)", [tenantQueue(queue), taskId]);
+  await call(db, "SELECT absurd.cancel_task($1, $2)", [queue, taskId]);
 }
 
 export async function getCheckpoint(
@@ -237,7 +236,7 @@ export async function getCheckpoint(
   const [row] = await call(
     db,
     "SELECT state, status, owner_run_id, updated_at FROM absurd.get_task_checkpoint_state($1, $2, $3)",
-    [tenantQueue(queue), taskId, step],
+    [queue, taskId, step],
   );
   if (!row) return undefined;
   return {
@@ -252,7 +251,7 @@ export async function cleanup(db: AbsurdDb, queue: AbsurdQueue, ttlSec: number, 
   const [row] = await call(
     db,
     "SELECT absurd.cleanup_tasks($1, $2, $3) AS tasks, absurd.cleanup_events($1, $2, $3) AS events",
-    [tenantQueue(queue), ttlSec, limit],
+    [queue, ttlSec, limit],
   );
   return { tasks: Number(row?.tasks ?? 0), events: Number(row?.events ?? 0) };
 }

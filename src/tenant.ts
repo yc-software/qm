@@ -37,6 +37,10 @@ export function withTenant<T>(t: Tenant, fn: () => T): T {
   return current.run(t, fn);
 }
 
+export function withoutTenant<T>(fn: () => T): T {
+  return current.exit(fn);
+}
+
 let registered = new Map<string, TenantSettings>();
 let home: { tenant: Tenant; settings: TenantSettings } | undefined;
 

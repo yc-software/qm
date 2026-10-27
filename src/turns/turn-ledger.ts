@@ -20,8 +20,10 @@ import {
   TaskCancelled,
 } from "./absurd.ts";
 import { noticePayload } from "../persistence/postgres-notify-bus.ts";
-import { TURN_QUEUES, tenantQueue, type TurnQueue } from "./absurd-schema.ts";
+import { TURN_QUEUES, type TurnQueue } from "./absurd-schema.ts";
 import { turnFenceHeld } from "./turn-fence.ts";
+import { withTenant, type Tenant } from "../tenant.ts";
+import { activeTenant } from "../tenants/directory.ts";
 
 const TURN_TASK = "turn";
 export const TURN_READY_CHANNEL = "qm_turn_ready";
@@ -71,28 +73,9 @@ const TURN_LEDGER_MIGRATION = {
   ],
 };
 
-const TURN_TENANT_QUEUES_MIGRATION = {
-  id: "turns/0002-tenant-queues",
-  statements: [
-    `CREATE OR REPLACE FUNCTION qm_turn_fence(p_turn text, p_token text) RETURNS boolean LANGUAGE plpgsql AS $qm_turn_fence$
-     DECLARE
-       v_queue text;
-       v_run uuid;
-       v_ok boolean;
-     BEGIN
-       SELECT absurd_queue, absurd_run_id INTO v_queue, v_run FROM runs
-        WHERE id = p_turn AND engine = 'absurd' AND status = 'running' AND lease_token = p_token
-        FOR SHARE;
-       IF v_queue IS NULL OR v_run IS NULL THEN
-         RETURN false;
-       END IF;
-       EXECUTE format(
-         'SELECT true FROM absurd.%I WHERE run_id = $1 AND ((state = ''running'' AND claimed_by = $2) OR state = ''cancelled'') FOR SHARE',
-         'r_' || v_queue || COALESCE('_t' || left(replace(NULLIF(current_setting('qm.tenant_id', true), ''), '-', ''), 12), ''))
-         INTO v_ok USING v_run, p_token;
-       RETURN COALESCE(v_ok, false);
-     END $qm_turn_fence$`,
-  ],
+const TURN_FENCE_FUNCTION_DROP = {
+  id: "turns/0003-drop-turn-fence-function",
+  statements: ["DROP FUNCTION IF EXISTS qm_turn_fence(text, text)"],
 };
 
 export type TurnOutcome =
@@ -107,10 +90,13 @@ interface RepairCandidate {
 }
 
 const UNKNOWN_TASK_DEFER_MS = 30_000;
+const TENANT_NOT_READY_DEFER_MS = 5_000;
 const BACKGROUND_PRIORITY: RunPriority = 2;
 
+type TurnClaim = { claimed: boolean; run: null } | { claimed: true; run: Run; tenant: Tenant };
+
 export interface TurnLedger {
-  claim(queue: TurnQueue, token: string, workerId: string): Promise<{ claimed: boolean; run: Run | null }>;
+  claim(queue: TurnQueue, token: string, workerId: string): Promise<TurnClaim>;
   admit(input: EnqueueInput & { priority: RunPriority }): Promise<EnqueueResult>;
   extend(run: Run, token: string): Promise<ExtendOutcome>;
   handBack(
@@ -155,7 +141,7 @@ function queueOf(run: Pick<Run, "absurdQueue">): TurnQueue {
 }
 
 function absurdTable(queue: TurnQueue, prefix: "r_" | "t_"): string {
-  return `absurd.${pg.escapeIdentifier(prefix + tenantQueue(queue))}`;
+  return `absurd.${pg.escapeIdentifier(prefix + queue)}`;
 }
 
 function repairReason(row: Record<string, unknown>): string {
@@ -431,22 +417,27 @@ function admission(ctx: LedgerContext): Pick<TurnLedger, "admit" | "claim" | "mu
       const [claimed] = await claimTasks(await db.pool(), queue, token, TURN_CLAIM_TIMEOUT_SEC, 1);
       if (!claimed) return { claimed: false, run: null };
       const params = claimed.params as Partial<TurnTaskParams> | null;
-      if (claimed.taskName !== TURN_TASK || typeof params?.turnId !== "string") {
-        await scheduleRun(await db.pool(), queue, claimed.runId, new Date(Date.now() + UNKNOWN_TASK_DEFER_MS));
+      const owner = await activeTenant(claimed.tenantId);
+      if (claimed.taskName !== TURN_TASK || typeof params?.turnId !== "string" || !owner) {
+        const deferMs = owner || claimed.taskName !== TURN_TASK ? UNKNOWN_TASK_DEFER_MS : TENANT_NOT_READY_DEFER_MS;
+        await scheduleRun(await db.pool(), queue, claimed.runId, new Date(Date.now() + deferMs));
         return { claimed: true, run: null };
       }
-      const run = await begin(ctx, queue, claimed.runId, params.turnId, token, workerId);
-      if (run === "suspended") return { claimed: true, run: null };
-      if (!run) {
-        await completeRun(await db.pool(), queue, claimed.runId, { ok: false, reason: "turn not runnable" });
-        return { claimed: true, run };
-      }
-      await db.query(
-        `DELETE FROM session_leases WHERE holder = 'turn'
-           AND session_id IN (SELECT id FROM sessions WHERE thread_ref = $1)`,
-        [run.sessionId],
-      );
-      return { claimed: true, run };
+      const turnId = params.turnId;
+      return withTenant(owner, async () => {
+        const run = await begin(ctx, queue, claimed.runId, turnId, token, workerId);
+        if (run === "suspended") return { claimed: true, run: null };
+        if (!run) {
+          await completeRun(await db.pool(), queue, claimed.runId, { ok: false, reason: "turn not runnable" });
+          return { claimed: true, run: null };
+        }
+        await db.query(
+          `DELETE FROM session_leases WHERE holder = 'turn'
+             AND session_id IN (SELECT id FROM sessions WHERE thread_ref = $1)`,
+          [run.sessionId],
+        );
+        return { claimed: true as const, run, tenant: owner };
+      });
     },
 
     async mustYield(run) {
@@ -708,7 +699,7 @@ function upkeep(
 }
 
 export function createTurnLedger(connectionString: string, opts: { onTerminal?: (run: Run) => void } = {}): TurnLedger {
-  const db: PgPool = createPgPool(connectionString, [TURN_LEDGER_MIGRATION, TURN_TENANT_QUEUES_MIGRATION]);
+  const db: PgPool = createPgPool(connectionString, [TURN_LEDGER_MIGRATION, TURN_FENCE_FUNCTION_DROP]);
   const ctx: LedgerContext = {
     db,
     tx: async (fn) => withPgTransaction(await db.pool(), fn),

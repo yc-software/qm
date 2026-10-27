@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  type ClaimedRun,
   claimTasks,
   cleanup,
   completeRun,
@@ -13,6 +14,9 @@ import { JOB_QUEUE, registerAbsurdSchema } from "../turns/absurd-schema.ts";
 import { WorkAdmissionClosed } from "../util/admitted-work.ts";
 import { reportFailure } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
+import { tenantLockKey } from "../persistence/pg-pool.ts";
+import { withTenant } from "../tenant.ts";
+import { activeTenant, activeTenants } from "../tenants/directory.ts";
 
 /**
  * What became of a claimed job: `done` finished it; `release` gave it up unfinished (the next
@@ -42,6 +46,7 @@ export interface JobWorker {
 
 const UNHEALTHY_AFTER_ERROR_MS = 30_000;
 const UNKNOWN_JOB_RETRY_MS = 60_000;
+const TENANT_NOT_READY_RETRY_MS = 5_000;
 const BUSY_RETRY_MS = 1000;
 const MAX_CONCURRENCY = 32;
 const POLL_MS = 1000;
@@ -65,7 +70,14 @@ function serializeStart(worker: JobWorker): JobWorker {
 }
 
 type AbsurdDb = ReturnType<typeof registerAbsurdSchema>;
-type JobHandlers = Map<string, { run: JobHandler; concurrency: number; running: number }>;
+type JobHandlers = Map<
+  string,
+  {
+    run: (params: unknown, tenantId: string | undefined) => Promise<JobDisposition>;
+    concurrency: number;
+    running: number;
+  }
+>;
 
 async function settleJob(db: AbsurdDb, runId: string, disposition: JobDisposition): Promise<void> {
   const pool = await db.pool();
@@ -74,13 +86,8 @@ async function settleJob(db: AbsurdDb, runId: string, disposition: JobDispositio
   else await scheduleRun(pool, JOB_QUEUE, runId, new Date(disposition));
 }
 
-async function runJob(
-  db: AbsurdDb,
-  handlers: JobHandlers,
-  name: string,
-  runId: string,
-  params: unknown,
-): Promise<void> {
+async function runJob(db: AbsurdDb, handlers: JobHandlers, task: ClaimedRun): Promise<void> {
+  const { taskName: name, runId } = task;
   const keepAlive = setInterval(() => {
     void db
       .pool()
@@ -96,7 +103,7 @@ async function runJob(
     if (!handler) disposition = Date.now() + UNKNOWN_JOB_RETRY_MS;
     else if (busy) disposition = Date.now() + BUSY_RETRY_MS;
     else
-      disposition = await handler.run(params).catch((e: unknown): JobDisposition => {
+      disposition = await handler.run(task.params, task.tenantId).catch((e: unknown): JobDisposition => {
         reportFailure("jobs: run", e, `job=${name}`);
         return "release";
       });
@@ -135,7 +142,7 @@ export function createJobWorker(databaseUrl: string): JobWorker {
         try {
           for (const task of await claimTasks(await db.pool(), JOB_QUEUE, worker, CLAIM_TIMEOUT_SEC, free)) {
             claimed++;
-            const work = runJob(db, handlers, task.taskName, task.runId, task.params);
+            const work = runJob(db, handlers, task);
             active.add(work);
             mine.add(work);
             void work.finally(() => {
@@ -176,21 +183,40 @@ export function createJobWorker(databaseUrl: string): JobWorker {
 
   const jobWorker = serializeStart({
     handle(name, run, opts = {}) {
-      handlers.set(name, { run, concurrency: clampConcurrency(opts.concurrency ?? MAX_CONCURRENCY), running: 0 });
+      handlers.set(name, {
+        run: async (params, tenantId) => {
+          const owner = await activeTenant(tenantId).catch((e: unknown) => {
+            reportFailure(`jobs: ${name} tenant`, e);
+            return undefined;
+          });
+          return owner ? withTenant(owner, () => run(params)) : Date.now() + TENANT_NOT_READY_RETRY_MS;
+        },
+        concurrency: clampConcurrency(opts.concurrency ?? MAX_CONCURRENCY),
+        running: 0,
+      });
     },
     async spawn(name, params, key) {
-      await spawnKeyed(name, params, key, 1);
+      await spawnKeyed(name, params, tenantLockKey(key), 1);
     },
     every(name, everyMs, fn, opts = {}) {
       const job = `every:${name}`;
       recurring.push({ job, immediate: opts.immediate ?? false });
       handlers.set(job, {
         run: async (params) => {
-          try {
-            await fn();
-          } catch (e) {
-            if (!(e instanceof WorkAdmissionClosed)) reportFailure(`jobs: ${job}`, e);
-          }
+          const owners = await activeTenants().catch((e: unknown) => {
+            reportFailure(`jobs: ${job} tenants`, e);
+            return [];
+          });
+          await Promise.all(
+            owners.map(async (owner) => {
+              try {
+                await withTenant(owner, fn);
+              } catch (e) {
+                if (!(e instanceof WorkAdmissionClosed))
+                  reportFailure(`jobs: ${job}`, e, `tenant=${owner.slug ?? "home"}`);
+              }
+            }),
+          );
           return (params as { once?: boolean } | null)?.once ? "done" : Date.now() + everyMs;
         },
         concurrency: 1,

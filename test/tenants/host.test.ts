@@ -26,7 +26,6 @@ import {
 } from "../../src/tenants/directory.ts";
 import { createTenantFront } from "../../src/tenants/host.ts";
 import { type TenantRecord, upsertTenant } from "../../src/tenants/registry.ts";
-import { tenantQueue } from "../../src/turns/absurd-schema.ts";
 
 const ACME_ID = "0f8e2c4a-1b2c-4d3e-8f90-123456789abc";
 
@@ -215,12 +214,6 @@ test("embedded auth moves to its own loopback port, rewriting endpoints that poi
   assert.equal(env.OIDC_ISSUER, "https://acme.example.test/idp");
   const plain = { AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099" };
   assert.equal(await relocateEmbeddedAuth(plain), plain);
-});
-
-test("Absurd queues are tenant-scoped except for the home tenant", () => {
-  assert.equal(tenantQueue("turns_people", undefined), "turns_people");
-  assert.equal(tenantQueue("turns_background", ACME_ID), "turns_background_t0f8e2c4a1b2c");
-  assert.equal(tenantQueue("turns_people"), "turns_people");
 });
 
 const URL_ADMIN = process.env.DATABASE_URL!;

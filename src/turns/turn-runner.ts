@@ -19,6 +19,7 @@ import {
   type RunStop,
 } from "../runs/run-store.ts";
 import type { TurnQueue } from "./absurd-schema.ts";
+import { withoutTenant, withTenant, type Tenant } from "../tenant.ts";
 import { TURN_EXTEND_INTERVAL_MS, type TurnLedger, type TurnOutcome } from "./turn-ledger.ts";
 
 const CANCEL_GRACE_MS = 10_000;
@@ -93,6 +94,7 @@ export interface TurnRunnerDeps {
 
 interface HeldTurn {
   run: Run;
+  tenant: Tenant;
   token: string;
   cancel: AbortController;
   shutdown: AbortController;
@@ -285,7 +287,7 @@ function parkForCapacity(deps: TurnRunnerDeps, inFlight: ReadonlyMap<string, Hel
     )
     .at(-1);
   if (victim)
-    void yieldHeld(deps, victim, "capacity").catch((error: unknown) =>
+    void withTenant(victim.tenant, () => yieldHeld(deps, victim, "capacity")).catch((error: unknown) =>
       swallow(`turns: capacity parking failed turn=${victim.run.id}`, error),
     );
 }
@@ -296,11 +298,10 @@ async function handBackAll(deps: TurnRunnerDeps, held: readonly HeldTurn[]): Pro
       turn.shutdown.abort();
       turn.cancel.abort();
       const stop: RunStop = { kind: "shutdown" };
-      await deps.ledger
-        .handBack(turn.run, turn.token, { stop })
-        .catch((error: unknown) =>
+      await withTenant(turn.tenant, () => deps.ledger.handBack(turn.run, turn.token, { stop })).catch(
+        (error: unknown) =>
           swallow(`turns: shutdown handback failed turn=${turn.run.id}; the claim will expire`, error),
-        );
+      );
     }),
   );
   await Promise.race([Promise.all(held.map((turn) => turn.done)), sleep(HANDBACK_SETTLE_MS, { unref: true })]);
@@ -338,10 +339,11 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     });
   }
 
-  function launch(run: Run, token: string): void {
+  function launch(run: Run, token: string, tenant: Tenant): void {
     let settle!: () => void;
     const held: HeldTurn = {
       run,
+      tenant,
       token,
       cancel: new AbortController(),
       shutdown: new AbortController(),
@@ -356,7 +358,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     };
     inFlight.set(run.id, held);
     console.log(`[turns] claimed process=${processId} turn=${run.id} thread=${run.sessionId} attempt=${run.attempts}`);
-    void runTurn(deps, held)
+    void withTenant(tenant, () => runTurn(deps, held))
       .catch((error: unknown) => swallow(`turns: turn ${run.id} crashed`, error))
       .finally(() => {
         inFlight.delete(run.id);
@@ -380,14 +382,15 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
             const people = queue === "turns_people";
             if (inFlight.size >= limit + (people ? overcommit : 0)) break;
             const token = `${processId}:${randomUUID()}`;
-            const { claimed, run } = await deps.ledger.claim(queue, token, processId);
-            if (!claimed) break;
-            if (!run) continue;
+            const claim = await deps.ledger.claim(queue, token, processId);
+            if (!claim.claimed) break;
+            if (!claim.run) continue;
+            const { run, tenant } = claim;
             if (!mayClaim()) {
-              await deps.ledger.handBack(run, token, { unstarted: true });
+              await withTenant(tenant, () => deps.ledger.handBack(run, token, { unstarted: true }));
               break;
             }
-            launch(run, token);
+            launch(run, token, tenant);
             if (people && inFlight.size > limit) parkForCapacity(deps, inFlight);
           }
         }
@@ -413,26 +416,28 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   return {
     start() {
       if (loopDone) return;
-      stopped = false;
-      if (deps.ready) unsubscribe.push(deps.ready.subscribe(notify, { onResync: notify }));
-      if (deps.cancels)
-        unsubscribe.push(
-          deps.cancels.subscribe((turnId) => {
-            inFlight.get(turnId)?.onCancel();
-          }),
-        );
-      if (deps.yields)
-        unsubscribe.push(
-          deps.yields.subscribe((turnId) => {
-            const held = inFlight.get(turnId);
-            if (held?.run.priority === 2)
-              void yieldHeld(deps, held, "person").catch((error: unknown) =>
-                swallow(`turns: yield to a person failed turn=${turnId}`, error),
-              );
-          }),
-        );
-      loopDone = loop().finally(() => {
-        loopDone = null;
+      withoutTenant(() => {
+        stopped = false;
+        if (deps.ready) unsubscribe.push(deps.ready.subscribe(notify, { onResync: notify }));
+        if (deps.cancels)
+          unsubscribe.push(
+            deps.cancels.subscribe((turnId) => {
+              inFlight.get(turnId)?.onCancel();
+            }),
+          );
+        if (deps.yields)
+          unsubscribe.push(
+            deps.yields.subscribe((turnId) => {
+              const held = inFlight.get(turnId);
+              if (held?.run.priority === 2)
+                void withTenant(held.tenant, () => yieldHeld(deps, held, "person")).catch((error: unknown) =>
+                  swallow(`turns: yield to a person failed turn=${turnId}`, error),
+                );
+            }),
+          );
+        loopDone = loop().finally(() => {
+          loopDone = null;
+        });
       });
     },
     stopClaims,

@@ -36,7 +36,6 @@ import { createSlackInstallationStore } from "../surfaces/slack-installation.ts"
 import { mkdirSync } from "node:fs";
 import { createJobWorker } from "../jobs/job-worker.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
-import { tenantJobWorkers } from "../tenants/fan-out.ts";
 
 type StoresInputs = Pick<Head, "databaseUrl" | "config" | "connectorSecretKey" | "admittedWork">;
 
@@ -105,7 +104,7 @@ export function buildStores(deps: StoresInputs) {
     databaseUrl,
     () => tenantConfig(config).connectorSecretKey ?? connectorSecretKey,
   );
-  const jobs = tenantJobWorkers(() => createJobWorker(databaseUrl));
+  const jobs = createJobWorker(databaseUrl);
   const every = (name: string, everyMs: number, fn: () => unknown, opts?: { immediate?: boolean }) =>
     jobs.every(name, everyMs, () => admittedWork.run(fn), opts);
   every("spend:refresh", 60_000, () => sessions.refreshSpendRollup(), { immediate: true });
