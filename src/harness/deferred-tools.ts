@@ -17,10 +17,14 @@ export function deferredMcpTools(
   return (tools ?? []).filter((tool) => !readOnly || tool.readOnly);
 }
 
+const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
+
+function firstSentence(line: string): string {
+  return [...sentences.segment(line)][0]?.segment.trim() ?? "";
+}
+
 function summary(description: string): string {
-  const line = description.trim().split("\n")[0]!.trim();
-  const end = line.indexOf(". ");
-  return end < 0 ? line : line.slice(0, end + 1);
+  return firstSentence(description.trim().split("\n")[0]!.trim());
 }
 
 export function searchMcpTools(tools: readonly McpToolDescriptor[], query: string): string {
@@ -49,14 +53,12 @@ export function searchMcpTools(tools: readonly McpToolDescriptor[], query: strin
   return shown.join("\n\n");
 }
 
-const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
-
 function aboutPhrase(about: string): string {
   const line = about
     .split("\n")
     .map((part) => part.trim())
     .find((part) => part && !part.startsWith("#"));
-  let phrase = [...sentences.segment(line ?? "")][0]?.segment.trim() ?? "";
+  let phrase = firstSentence(line ?? "");
   while (phrase && ".!?:;,".includes(phrase.at(-1)!)) phrase = phrase.slice(0, -1).trimEnd();
   const second = phrase.charAt(1);
   if (second && second !== second.toUpperCase()) phrase = phrase.charAt(0).toLowerCase() + phrase.slice(1);
