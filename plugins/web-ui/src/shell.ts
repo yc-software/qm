@@ -2,6 +2,7 @@ import { loadMessageTranscript, messageLinkSeq } from "./message-link.ts";
 import { initializeBrowserErrors, stopBrowserErrors } from "./browser-errors";
 import { initializeAnalytics, capturePageview, stopAnalytics } from "./product-analytics";
 import { captureSlackReturn } from "./slack-account";
+import { clearTranscriptCache } from "./transcript-cache";
 import { captureConnectionReturn } from "./connection-return";
 import { renderModelConnectGate } from "./model-connect";
 import { html, nothing, render, type TemplateResult } from "lit";
@@ -458,6 +459,7 @@ export type AuthGate =
 
 export function renderAuthGate(gate: AuthGate): void {
   stopAnalytics();
+  clearTranscriptCache();
   stopBrowserErrors();
   shellMounted = false;
   const body = (() => {

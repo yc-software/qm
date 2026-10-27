@@ -55,6 +55,15 @@ import {
 } from "./core-bridge";
 import { deepLinkPath, isPlainLeftClick, sessionLink, UI_BASE } from "./deep-link";
 import {
+  cachedTranscript,
+  clearTranscriptCache,
+  dropTranscript,
+  pageAnchor,
+  storeTranscript,
+  transcriptChanged,
+} from "./transcript-cache";
+import { reportHandledError } from "./browser-errors";
+import {
   activityOf,
   automationRunLabel,
   chatBrowseStatusMatches,
@@ -217,6 +226,7 @@ export function resetSessionsState(): void {
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
   sessionsState.openingKey = null;
+  clearTranscriptCache();
   sessionsState.collapsedProjectScopes.clear();
   renameDraft = "";
   refreshingTitleIds.clear();
@@ -1919,6 +1929,28 @@ export async function openSessionInto(
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
 
+  const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
+  if (cached) {
+    if (!isLiveConversation(conv)) return;
+    if (tracked) sessionsState.openingKey = null;
+    conv.mountLoadingPane();
+    const approvals = s.canContinue === true ? fetchSessionApprovals(s.id) : null;
+    mountTranscript(conv, s, cached, approvals);
+    renderList();
+    reportSwitchPainted(started, {
+      fetchedMs: started,
+      loaded: true,
+      prefetched: false,
+      cached: true,
+      tracked,
+      entries: cached.entries?.length ?? 0,
+    });
+    void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
+      reportHandledError("web:transcript_reconcile", error),
+    );
+    return;
+  }
+
   const opening = s.id;
   if (tracked) {
     sessionsState.openingKey = opening;
@@ -1940,21 +1972,15 @@ export async function openSessionInto(
     : fetchEntries());
   if (!isLiveConversation(conv) || !isCurrent()) return;
   const fetched = Date.now();
-  const reportPainted = () => {
-    if (document.visibilityState !== "visible") return;
-    requestAnimationFrame(() =>
-      setTimeout(() =>
-        reportSessionSwitch(started, {
-          fetchedMs: fetched,
-          endMs: Date.now(),
-          loaded: entriesRes !== null,
-          prefetched,
-          tracked,
-          entries: entriesRes?.entries?.length ?? 0,
-        }),
-      ),
-    );
-  };
+  const reportPainted = () =>
+    reportSwitchPainted(started, {
+      fetchedMs: fetched,
+      loaded: entriesRes !== null,
+      prefetched,
+      cached: false,
+      tracked,
+      entries: entriesRes?.entries?.length ?? 0,
+    });
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
@@ -1966,27 +1992,78 @@ export async function openSessionInto(
   }
 
   if (!entriesRes) {
+    dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     reportPainted();
     return;
   }
 
-  const split = inheritedTranscript(s, entriesRes.entries ?? []);
-  const messages = entriesToMessages(split.current, transcriptModel());
-  const inheritedMessages = entriesToMessages(split.inherited, transcriptModel());
-  const earlier = currentEarlierCount(s, entriesRes.earlierEntries ?? 0);
-  const anchorSeq = entriesRes.entries?.[0]?.seq ?? null;
-  if (continuable) {
-    conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
-    conv.setTranscriptWindow(anchorSeq, earlier, (entriesRes.earlierEntries ?? 0) > 0);
-    if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
-  } else {
-    conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);
-  }
-  conv.setPins(entriesRes.pins ?? []);
-  conv.setGoal(entriesRes.goal ?? null);
-  conv.setTurnRuntime(entriesRes.runtime ?? null);
+  storeTranscript(s.id, entriesRes);
+  mountTranscript(conv, s, entriesRes, approvals);
   renderList();
   reportPainted();
+}
+
+function reportSwitchPainted(
+  started: number,
+  result: {
+    fetchedMs: number;
+    loaded: boolean;
+    prefetched: boolean;
+    cached: boolean;
+    tracked: boolean;
+    entries: number;
+  },
+): void {
+  if (document.visibilityState !== "visible") return;
+  requestAnimationFrame(() => setTimeout(() => reportSessionSwitch(started, { ...result, endMs: Date.now() })));
+}
+
+function mountTranscript(
+  conv: Conversation,
+  s: CoreSession,
+  page: TranscriptPage,
+  approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
+): void {
+  if (s.canContinue === true) {
+    const split = inheritedTranscript(s, page.entries ?? []);
+    conv.mountContinuable(
+      s.threadRef,
+      s.id,
+      s.scopeId,
+      entriesToMessages(split.current, transcriptModel()),
+      s.channelName ?? null,
+      s,
+      entriesToMessages(split.inherited, transcriptModel()),
+    );
+    const rawEarlier = page.earlierEntries ?? 0;
+    conv.setTranscriptWindow(pageAnchor(page), currentEarlierCount(s, rawEarlier), rawEarlier > 0);
+    if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
+    conv.setPins(page.pins ?? []);
+  } else {
+    conv.mountReadOnlyPage(s, page);
+  }
+  conv.setGoal(page.goal ?? null);
+  conv.setTurnRuntime(page.runtime ?? null);
+}
+
+async function reconcileCachedTranscript(
+  conv: Conversation,
+  s: CoreSession,
+  cached: TranscriptPage,
+  approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
+  mountedAnchor: number | null,
+): Promise<void> {
+  let page: TranscriptPage;
+  try {
+    page = await fetchTranscript(s.id, { tailTurns: TAIL_TURNS });
+  } catch (error) {
+    dropTranscript(s.id);
+    throw error;
+  }
+  if (!transcriptChanged(cached, page)) return;
+  storeTranscript(s.id, page);
+  if (isLiveConversation(conv) && conv.state.sessionId === s.id)
+    await conv.applyTranscript(s, page, approvals, mountedAnchor);
 }

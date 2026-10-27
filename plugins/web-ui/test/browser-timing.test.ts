@@ -115,6 +115,7 @@ test("real browser SDK preserves page URLs, request data and child spans when sa
       endMs: switched + 90,
       loaded: true,
       prefetched: false,
+      cached: false,
       tracked: true,
       entries: 12,
     });
@@ -123,6 +124,7 @@ test("real browser SDK preserves page URLs, request data and child spans when sa
       endMs: switched + 25,
       loaded: false,
       prefetched: true,
+      cached: false,
       tracked: false,
       entries: 0,
     });
@@ -196,6 +198,7 @@ test("real browser SDK preserves page URLs, request data and child spans when sa
     assert.equal(loaded.contexts.trace.op, "ui.action");
     assert.equal(loaded.contexts.trace.status, "ok");
     assert.equal(loaded.contexts.trace.data.prefetched, "false");
+    assert.equal(loaded.contexts.trace.data.cached, "false");
     assert.equal(loaded.contexts.trace.data.tracked, "true");
     assert.equal(loaded.contexts.trace.data.entries, "12");
     assert.deepEqual(loaded.measurements, {
