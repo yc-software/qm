@@ -181,7 +181,7 @@ test("piHarnessConfigOptions leaves controlTools off unless a self-API (signing 
 
 test("piHarnessConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
   const opts = piHarnessConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
-  assert.equal(opts.defaultModelId, "gpt-5.6-sol");
+  assert.equal(opts.defaultModelId, "gpt-6.1-sol");
   assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
 });
 

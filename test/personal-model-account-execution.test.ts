@@ -301,7 +301,7 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
     assert.equal(finished.status, "done", JSON.stringify(finished.result));
     assert.deepEqual(turns[0]!.providerKeys, { "openai-codex": "personal-oauth" });
     assert.equal(turns[0]!.runtime!.harnessId, "pi");
-    assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-5.6-sol");
+    assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
   } finally {
     await built.runtime.stop();
   }
