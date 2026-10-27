@@ -36,20 +36,32 @@ test("mcp client lists every page of tools and calls one over JSON and SSE respo
   for (const json of [true, false]) {
     const mcp = await startMcpTestServer(t, { tools, pageSize: 1, json });
     const client = createMcpClient({ url: `${mcp.url}/mcp`, auth: { mode: "none" } });
-    assert.deepEqual(await client.listTools(), [
-      { name: "a", description: "tool a", inputSchema: { type: "object" } },
-      { name: "b", description: "tool b", inputSchema: { type: "object" } },
-      { name: "c", description: "tool c", inputSchema: { type: "object" } },
-    ]);
+    assert.deepEqual(await client.listTools(), {
+      tools: [
+        { name: "a", description: "tool a", inputSchema: { type: "object" } },
+        { name: "b", description: "tool b", inputSchema: { type: "object" } },
+        { name: "c", description: "tool c", inputSchema: { type: "object" } },
+      ],
+    });
     assert.equal(mcpResultText(await client.callTool("b", {})), "ran b");
     assert.equal(mcp.openSessions(), 0, "each operation ends its session");
   }
 });
 
+test("mcp client keeps the server's own description, else its instructions", async (t) => {
+  const both = await startMcpTestServer(t, { description: "Track orders.", instructions: "Call search first." });
+  const listed = await createMcpClient({ url: both.url, auth: { mode: "none" } }).listTools();
+  assert.equal(listed.about, "Track orders.");
+  const told = await startMcpTestServer(t, { instructions: `Call search first. ${"x".repeat(600)}` });
+  const about = (await createMcpClient({ url: told.url, auth: { mode: "none" } }).listTools()).about;
+  assert.equal(about?.length, 500);
+  assert.ok(about?.startsWith("Call search first."));
+});
+
 test("mcp client caps a server's tool list", async (t) => {
   const tools = Array.from({ length: 100 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
   const mcp = await startMcpTestServer(t, { tools, pageSize: 40 });
-  const listed = await createMcpClient({ url: mcp.url, auth: { mode: "none" } }).listTools();
+  const listed = (await createMcpClient({ url: mcp.url, auth: { mode: "none" } }).listTools()).tools;
   assert.equal(listed.length, 64);
   assert.equal(listed.at(-1)?.name, "t63");
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2);
@@ -79,7 +91,7 @@ test("mcp client starts a fresh session after the server forgets its sessions", 
 test("mcp client sends bearer auth", async (t) => {
   const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer sekret" });
   const good = createMcpClient({ url: mcp.url, auth: { mode: "bearer", token: "sekret" } });
-  assert.equal((await good.listTools()).length, 2);
+  assert.equal((await good.listTools()).tools.length, 2);
   const bad = createMcpClient({ url: mcp.url, auth: { mode: "none" } });
   await assert.rejects(bad.listTools(), /^Error: mcp tools\/list failed \(HTTP 401\)$/);
 });
@@ -107,7 +119,7 @@ test("mcp client mints client-credentials tokens on the server's origin and reus
     url: `${mcp.url}/mcp`,
     auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
   });
-  assert.equal((await client.listTools()).length, 2);
+  assert.equal((await client.listTools()).tools.length, 2);
   assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
   assert.deepEqual(mcp.tokenRequests, ["id"]);
   mcp.revokeTokens();
@@ -141,14 +153,14 @@ test("server id validation", () => {
 });
 
 test("tool service exposes namespaced tools and calls through", async (t) => {
-  const mcp = await startMcpTestServer(t);
+  const mcp = await startMcpTestServer(t, { description: "CRM records" });
   const store = createMcpServerStore(createMemoryMap<McpServer>());
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
   const defs = service.toolDefs();
   assert.deepEqual(defs.map((d) => d.name).sort(), ["crm_query", "crm_update"]);
-  assert.ok(defs.every((d) => d.readOnly));
+  assert.ok(defs.every((d) => d.readOnly && d.serverAbout === "CRM records"));
   const out = await service.call("crm_query", { q: "hello" }, "internal:U1");
   assert.equal(out, "ran query");
   service.close();
@@ -307,7 +319,10 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     }),
   );
   await service.refresh();
-  assert.deepEqual(await service.probe((await store.get("crm"))!), ["query", "update"]);
+  assert.deepEqual(
+    (await service.probe((await store.get("crm"))!)).tools.map((tool) => tool.name),
+    ["query", "update"],
+  );
   assert.ok(authFor("tools/list").length > 0);
   assert.ok(authFor("tools/list").every((auth) => auth === "Bearer catalog-only"));
   assert.deepEqual(

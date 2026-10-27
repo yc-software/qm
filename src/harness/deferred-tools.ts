@@ -49,7 +49,22 @@ export function searchMcpTools(tools: readonly McpToolDescriptor[], query: strin
   return shown.join("\n\n");
 }
 
+function aboutPhrase(about: string): string {
+  const line = about
+    .split("\n")
+    .map((part) => part.trim())
+    .find((part) => part && !part.startsWith("#"));
+  const sentence = (line ?? "").split(/(?<=[.!?])\s/)[0]!.replace(/[.!?:;,\s]+$/, "");
+  const phrase = /^[A-Z][a-z]/.test(sentence) ? sentence[0]!.toLowerCase() + sentence.slice(1) : sentence;
+  if (phrase.length <= PURPOSE_CHARS) return phrase;
+  const cut = phrase.slice(0, PURPOSE_CHARS);
+  const space = cut.lastIndexOf(" ");
+  return `${space > 0 ? cut.slice(0, space) : cut}…`;
+}
+
 function purpose(tools: readonly McpToolDescriptor[]): string {
+  const about = tools[0]!.serverAbout && aboutPhrase(tools[0]!.serverAbout);
+  if (about) return about;
   let out = "";
   for (const tool of tools) {
     let name = tool.remoteName || tool.name;
@@ -71,5 +86,5 @@ export function connectorToolsNote(tools: readonly McpToolDescriptor[]): string 
     if (signIn) return `- ${server}: not connected; mcp_call ${signIn.name} to connect.`;
     return `- ${server} (${purpose(group)}): ${group.length} ${group.length === 1 ? "tool" : "tools"}`;
   });
-  return ["Connector tools load on demand: tool_search finds them, mcp_call runs one.", ...lines].join("\n");
+  return ["## Connectors", "Load on demand: tool_search finds a tool, mcp_call runs it.", ...lines].join("\n");
 }

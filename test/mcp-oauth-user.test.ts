@@ -91,6 +91,7 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   const mcp = await startMcpTestServer(t, {
     tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }],
     call: (_name, args) => ({ content: [{ type: "text", text: `found ${String(args.q)}` }] }),
+    instructions: "Look up past orders.",
   });
   const auth = () => mcp.requests.filter((r) => r.rpc?.startsWith("tools/")).map((r) => r.authorization ?? "");
   const service = createMcpToolService({
@@ -134,6 +135,8 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
     ["search"],
     "learned tools are stored with the server so every instance and restart sees them",
   );
+  assert.equal((await store.get("orders"))!.about, "Look up past orders.");
+  assert.equal((await service.toolDefsFor("internal:alice"))[0]!.serverAbout, "Look up past orders.");
   assert.equal(await service.call("orders_search", { q: "tacos" }, "internal:alice"), "found tacos");
   assert.match(await service.call("orders_search", { q: "x" }, "internal:bob"), /Connect Orders/);
   assert.deepEqual(auth(), ["Bearer alice-token", "Bearer alice-token"]);

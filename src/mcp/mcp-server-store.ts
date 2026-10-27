@@ -31,6 +31,7 @@ export interface McpServer {
     inputSchema: Record<string, unknown>;
     annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
   }>;
+  about?: string;
   approval?: McpApprovalPolicy;
   catalog?: boolean;
   attestActor?: boolean;

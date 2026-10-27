@@ -4738,13 +4738,24 @@ test("mcp_call runs the named connector tool and records it under that tool's ow
   assert.equal(calls.length, 1);
 });
 
-test("connector note names each server with a purpose from its tool names, or asks to connect", () => {
+test("connector note names each server with its own purpose, else one from its tool names, or asks to connect", () => {
   assert.equal(connectorToolsNote([]), "");
   const lots = Array.from({ length: 12 }, (_, i) => connectorTool(`shop_view_item_${i}`, "View."));
+  const crm = (about: string) =>
+    ["query", "update"].map((name) => ({
+      ...connectorTool(name, "Run."),
+      name: `crm_${name}`,
+      serverId: "crm",
+      serverName: "CRM",
+      serverAbout: about,
+    }));
+  const section = (lines: string[]) =>
+    ["## Connectors", "Load on demand: tool_search finds a tool, mcp_call runs it.", ...lines].join("\n");
   assert.equal(
     connectorToolsNote([
       ...shopTools,
       ...lots,
+      ...crm("# CRM\n\nSearch and update customer records. Always query first."),
       {
         ...connectorTool("sign_in", "Sign in."),
         name: "mail_sign_in",
@@ -4753,10 +4764,18 @@ test("connector note names each server with a purpose from its tool names, or as
         signIn: true,
       },
     ]),
-    [
-      "Connector tools load on demand: tool_search finds them, mcp_call runs one.",
+    section([
       "- Shop (find stores, add to cart, get cart, view item 0, view item 1, view item 2, view item 3, view item 4, …): 15 tools",
+      "- CRM (search and update customer records): 2 tools",
       "- Mail: not connected; mcp_call mail_sign_in to connect.",
-    ].join("\n"),
+    ]),
+  );
+  assert.equal(
+    connectorToolsNote(crm(`Order food delivery, carts, past orders.\n${"More. ".repeat(50)}`)),
+    section(["- CRM (order food delivery, carts, past orders): 2 tools"]),
+  );
+  assert.equal(
+    connectorToolsNote(crm("word ".repeat(40))),
+    section([`- CRM (${"word ".repeat(20).trim()}…): 2 tools`]),
   );
 });

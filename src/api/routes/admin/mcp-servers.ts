@@ -226,7 +226,9 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   let toolNames: string[] | undefined;
   if (b.validate !== false && !oauthUser && ctx.deps.mcpToolService) {
     try {
-      toolNames = await ctx.deps.mcpToolService.probe(server, authorized.id);
+      const listing = await ctx.deps.mcpToolService.probe(server, authorized.id);
+      toolNames = listing.tools.map((t) => t.name);
+      if (listing.about) server.about = listing.about;
     } catch (e) {
       return sendJson(ctx.res, 400, {
         error: "unreachable",
