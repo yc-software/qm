@@ -56,7 +56,7 @@ async function fixture(t: TestContext) {
 test("published skill sources and assets read without a sandbox, respecting scope and archive", async (t) => {
   const b = await fixture(t);
   const skill = await b.publish("personal:U1", "PUBLISHED_BODY");
-  assert.match(await b.turn("!sysprompt"), /\*\*source-helper\*\*/);
+  assert.match(await b.turn("!sysprompt"), /^- source-helper — /m);
   assert.match(
     await b.turn("!skill source-helper"),
     /^\/.+\/\.agent-skills\/\w+\/[a-f0-9]{16}\/source-helper\nPUBLISHED_BODY$/,

@@ -141,18 +141,10 @@ function fitDescriptions(heads: string[], descriptions: string[], budget: number
   return low;
 }
 
-export function skillsIndex(
-  resolved: SkillResolution[],
-  provenanceScopes: readonly ScopeId[] = [],
-  budget = SKILLS_INDEX_BUDGET,
-): string {
-  const provenance = new Set(provenanceScopes);
+export function skillsIndex(resolved: SkillResolution[], budget = SKILLS_INDEX_BUDGET): string {
   const items = rankedSkills(resolved);
   if (!items.length) return "";
-  const heads = items.map((r) => {
-    const source = provenance.has(r.skill!.scopeId) ? ` [from ${r.skill!.scopeId}]` : "";
-    return `- **${r.skill!.manifest.name}**${source}`;
-  });
+  const heads = items.map((r) => `- ${r.skill!.manifest.name}`);
   const descriptions = items.map((r) => r.skill!.manifest.description.trim());
   const cap = fitDescriptions(heads, descriptions, budget);
   let lines: string[];

@@ -1257,7 +1257,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (otherSkillSources.length)
         systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders);
-      turnContextBlocks["Skills"] = skillsIndex(nativeSkills, [scopeId, resolution.orgScopeId]);
+      turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
       const turnSessionDir = `${TURN_FILES_DIR}/${hashId([conversation.threadRef], 24)}`;
       const turnFilesDir = `${turnSessionDir}/${transferId}`;
@@ -2342,7 +2342,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .filter((ask) => ask.status !== "pending")
               .map(async (ask) => ({
                 ask,
-                ownerName: members.find((m) => samePerson(m.id, ask.ownerId))?.displayName ?? ask.ownerId,
+                ownerName:
+                  members.find((m) => samePerson(m.id, ask.ownerId))?.displayName ??
+                  rosterMembers?.find((m) => samePerson(m.principalId, ask.ownerId))?.displayName ??
+                  ask.ownerId,
                 service: (await deps.keychain?.getCredential(ask.credentialId))?.service ?? "a credential",
               })),
           );
@@ -2964,7 +2967,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef, lastUserAt);
         const sender =
           !automatedTurn && !sessionTurn && conversation.kind !== "dm" && input.text.trim()
-            ? senderNote(actor.displayName)
+            ? senderNote(
+                actor.displayName ??
+                  rosterMembers?.find((m) => samePerson(m.principalId, actor.id))?.displayName ??
+                  actor.id,
+              )
             : "";
         const unscreenedNote =
           inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentsUnscreened

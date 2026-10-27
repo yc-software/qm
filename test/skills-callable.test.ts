@@ -159,7 +159,7 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
     text: "!sysprompt",
   };
   const first = await built.app.turn(request);
-  assert.ok((first.reply ?? "").indexOf("**helper-00**") < (first.reply ?? "").indexOf("**helper-19**"));
+  assert.ok((first.reply ?? "").indexOf("- helper-00 — ") < (first.reply ?? "").indexOf("- helper-19 — "));
   const sessionId = first.sessionId!;
   const { lease } = await built.sessions.acquireLease(sessionId, "turn");
   assert.ok(lease);

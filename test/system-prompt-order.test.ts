@@ -507,7 +507,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
   assert.equal(second.status, "ok");
 
   const prefixA = prefixOf(first.reply ?? "");
-  assert.ok(prefixA.includes("**alpha**") && prefixA.includes("**zeta**"), "skills render in the system prompt");
+  assert.ok(prefixA.includes("\n- alpha — ") && prefixA.includes("\n- zeta — "), "skills render in the system prompt");
   assert.equal(
     prefixOf(second.reply ?? ""),
     prefixA,
