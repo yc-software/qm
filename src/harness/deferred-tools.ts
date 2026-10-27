@@ -49,13 +49,17 @@ export function searchMcpTools(tools: readonly McpToolDescriptor[], query: strin
   return shown.join("\n\n");
 }
 
+const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
+
 function aboutPhrase(about: string): string {
   const line = about
     .split("\n")
     .map((part) => part.trim())
     .find((part) => part && !part.startsWith("#"));
-  const sentence = (line ?? "").split(/(?<=[.!?])\s/)[0]!.replace(/[.!?:;,\s]+$/, "");
-  const phrase = /^[A-Z][a-z]/.test(sentence) ? sentence[0]!.toLowerCase() + sentence.slice(1) : sentence;
+  let phrase = [...sentences.segment(line ?? "")][0]?.segment.trim() ?? "";
+  while (phrase && ".!?:;,".includes(phrase.at(-1)!)) phrase = phrase.slice(0, -1).trimEnd();
+  const second = phrase.charAt(1);
+  if (second && second !== second.toUpperCase()) phrase = phrase.charAt(0).toLowerCase() + phrase.slice(1);
   if (phrase.length <= PURPOSE_CHARS) return phrase;
   const cut = phrase.slice(0, PURPOSE_CHARS);
   const space = cut.lastIndexOf(" ");

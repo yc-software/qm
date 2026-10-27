@@ -52,10 +52,9 @@ test("mcp client keeps the server's own description, else its instructions", asy
   const both = await startMcpTestServer(t, { description: "Track orders.", instructions: "Call search first." });
   const listed = await createMcpClient({ url: both.url, auth: { mode: "none" } }).listTools();
   assert.equal(listed.about, "Track orders.");
-  const told = await startMcpTestServer(t, { instructions: `Call search first. ${"x".repeat(600)}` });
+  const told = await startMcpTestServer(t, { instructions: "  Call search first.\nThen update.  " });
   const about = (await createMcpClient({ url: told.url, auth: { mode: "none" } }).listTools()).about;
-  assert.equal(about?.length, 500);
-  assert.ok(about?.startsWith("Call search first."));
+  assert.equal(about, "Call search first.\nThen update.");
 });
 
 test("mcp client caps a server's tool list", async (t) => {

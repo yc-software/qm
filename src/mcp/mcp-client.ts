@@ -6,7 +6,6 @@ import { swallowAs } from "../util/errors.ts";
 
 const MAX_TOOLS = 64;
 const CALL_TIMEOUT_MS = 300_000;
-const ABOUT_CHARS = 500;
 
 export function mcpResultText(result: CallToolResult): string {
   return result.content
@@ -95,7 +94,7 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
           const about = (client.getServerVersion()?.description || client.getInstructions() || "").trim();
           return {
             tools: tools.slice(0, opts?.maxTools ?? MAX_TOOLS),
-            ...(about ? { about: about.slice(0, ABOUT_CHARS) } : {}),
+            ...(about ? { about } : {}),
           };
         },
         opts?.headers,
