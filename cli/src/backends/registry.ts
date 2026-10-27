@@ -250,6 +250,7 @@ const aws: HostingProvider = {
     "inactive",
     "restart",
     "build-concurrency",
+    "prebuilt",
   ],
   upOptions: (ctx, flags, dryRun) => {
     const only = workloadOptions(flags);
@@ -260,6 +261,15 @@ const aws: HostingProvider = {
     const candidateOut = stringFlag(flags, "candidate-out");
     const buildConcurrency = stringFlag(flags, "build-concurrency");
     const restart = workloadOptions(flags, "restart");
+    const prebuilt = workloadOptions(flags, "prebuilt")?.map((entry) => {
+      const split = entry.indexOf("=");
+      if (split <= 0 || split === entry.length - 1) {
+        throw new CliError("--prebuilt expects <workload>=<image>@sha256:<digest>", { clause: "cli.invocation" });
+      }
+      return [entry.slice(0, split), entry.slice(split + 1)] as const;
+    });
+    const repeated = prebuilt?.find(([name], index) => prebuilt.findIndex(([other]) => other === name) !== index);
+    if (repeated) throw new CliError(`--prebuilt lists ${repeated[0]} more than once`, { clause: "cli.invocation" });
     return {
       dryRun,
       yes: flags["yes"] === true,
@@ -271,6 +281,7 @@ const aws: HostingProvider = {
       ...(candidateOut ? { candidateOut } : {}),
       ...(buildConcurrency !== undefined ? { buildConcurrency: Number(buildConcurrency) } : {}),
       ...(restart ? { restart } : {}),
+      ...(prebuilt ? { prebuilt: Object.fromEntries(prebuilt) } : {}),
       ...(only ? { only } : {}),
     };
   },
@@ -281,6 +292,7 @@ const aws: HostingProvider = {
         ...(opts.yes !== undefined ? { yes: opts.yes } : {}),
         ...(opts.buildFrom !== undefined ? { buildFrom: opts.buildFrom } : {}),
         ...(opts.buildFromPath ? { buildFromPath: opts.buildFromPath } : {}),
+        ...(opts.prebuilt ? { prebuilt: opts.prebuilt } : {}),
         ...(opts.imageLabel ? { imageLabel: opts.imageLabel } : {}),
         ...(opts.buildOnly ? { buildOnly: true } : {}),
         ...(opts.candidate ? { candidate: opts.candidate } : {}),

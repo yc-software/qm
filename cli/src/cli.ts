@@ -122,6 +122,7 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
                                            missing secrets with per-provider instructions
   up                                       build images and bring the deployment up
      --build-from[=<qm-repo>]              build from local Dockerfiles instead of pulling
+     --prebuilt <workload>=<image@digest>  with --build-from, reuse an image built from that commit (AWS only)
      --build-only --image-label <label>
        --candidate-out <file>               build immutable AWS images and write their manifest
      --candidate <file>                    snapshot, migrate, and deploy exact AWS candidate images
