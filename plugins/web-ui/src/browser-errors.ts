@@ -85,6 +85,22 @@ export function reportRequestTiming(url: string, method: string, startMs: number
   });
 }
 
+export function reportSessionSwitch(
+  startMs: number,
+  result: { fetchedMs: number; endMs: number; loaded: boolean; prefetched: boolean; tracked: boolean; entries: number },
+): void {
+  timing("ui.action", "session_switch", startMs, {
+    status: result.loaded ? "ok" : "internal_error",
+    endMs: result.endMs,
+    data: {
+      prefetched: String(result.prefetched),
+      tracked: String(result.tracked),
+      entries: String(result.entries),
+    },
+    measurements: { fetch: result.fetchedMs - startMs, render: result.endMs - result.fetchedMs },
+  });
+}
+
 function reportPageLoad(): void {
   try {
     const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;

@@ -109,6 +109,7 @@ import {
   splitState,
 } from "./split";
 import { liveTurnThreadRef } from "./working-dot";
+import { reportSessionSwitch } from "./browser-errors.ts";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 
 export const sessionsState = {
@@ -1913,6 +1914,7 @@ export async function openSessionInto(
     return;
   }
   if (s.id === conv.state.sessionId && !entriesPrefetch) return;
+  const started = Date.now();
 
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
@@ -1929,8 +1931,30 @@ export async function openSessionInto(
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
-  const entriesRes = await (entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries());
+  let prefetched = false;
+  const entriesRes = await (entriesPrefetch
+    ? entriesPrefetch.then((r) => {
+        prefetched = r !== null;
+        return r ?? fetchEntries();
+      })
+    : fetchEntries());
   if (!isLiveConversation(conv) || !isCurrent()) return;
+  const fetched = Date.now();
+  const reportPainted = () => {
+    if (document.visibilityState !== "visible") return;
+    requestAnimationFrame(() =>
+      setTimeout(() =>
+        reportSessionSwitch(started, {
+          fetchedMs: fetched,
+          endMs: Date.now(),
+          loaded: entriesRes !== null,
+          prefetched,
+          tracked,
+          entries: entriesRes?.entries?.length ?? 0,
+        }),
+      ),
+    );
+  };
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
@@ -1944,6 +1968,7 @@ export async function openSessionInto(
   if (!entriesRes) {
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
+    reportPainted();
     return;
   }
 
@@ -1963,4 +1988,5 @@ export async function openSessionInto(
   conv.setGoal(entriesRes.goal ?? null);
   conv.setTurnRuntime(entriesRes.runtime ?? null);
   renderList();
+  reportPainted();
 }
