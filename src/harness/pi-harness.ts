@@ -100,7 +100,13 @@ import {
   type HarnessTurnResult,
   type GapWork,
 } from "./harness.ts";
-import { coreToolOptions, createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "./agent-tools.ts";
+import {
+  coreToolOptions,
+  createAgentTools,
+  endedOnPurpose,
+  pauseStampAfterToolCall,
+  type ToolContextRef,
+} from "./agent-tools.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
   planColdStartSeed,
@@ -1033,14 +1039,7 @@ export function emptyEndingNote(opts: {
   elapsedMs: number;
 }): string | null {
   if (opts.wallClock !== "ok" || opts.userAborted || opts.cancelled || opts.surfaceTools) return null;
-  if (
-    opts.ref.runtimeHandoff ||
-    opts.ref.silentRequested ||
-    opts.ref.swarmHeld ||
-    opts.ref.pausedOnApproval ||
-    opts.ref.pendingApprovals?.length
-  )
-    return null;
+  if (endedOnPurpose(opts.ref) || opts.ref.pendingApprovals?.length) return null;
   if (opts.pollFire) return null;
   const calls = opts.ref.modelCalls ?? 0;
   if (calls === 0) return null;

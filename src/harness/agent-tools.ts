@@ -366,8 +366,17 @@ const CLIENT_TOOL_TIMEOUT_TEXT = "The page didn't respond in time. It may have b
 
 const READ_ONLY_TOOL_NAMES = new Set(["memory", "history", "finish_silently", "runtime", "sessions", "subagents"]);
 
+export function endedOnPurpose(ref: {
+  runtimeHandoff?: unknown;
+  silentRequested?: boolean;
+  pausedOnApproval?: boolean;
+  swarmHeld?: boolean;
+}): boolean {
+  return !!(ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval || ref.swarmHeld);
+}
+
 export function pauseStampAfterToolCall(
-  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
+  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff" | "swarmHeld">,
   prior?: (
     info: unknown,
     signal?: unknown,
@@ -375,7 +384,7 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async (info, signal) => {
     const upstream = prior ? await prior(info, signal) : undefined;
-    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff) return { ...upstream, terminate: true };
+    if (endedOnPurpose(ref)) return { ...upstream, terminate: true };
     return upstream;
   };
 }
@@ -557,7 +566,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           : undefined;
       if (held) {
         ref.swarmHeld = true;
-        (ret as { terminate?: boolean }).terminate = true;
         ret.content.push({ type: "text", text: GOAL_SWARM_HELD_NOTE });
         result += `\n\n${GOAL_SWARM_HELD_NOTE}`;
       }

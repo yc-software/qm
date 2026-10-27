@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createGrindMeter } from "../src/harness/grind.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import { emptyEndingNote } from "../src/harness/pi-harness.ts";
@@ -742,8 +742,8 @@ test("a swarm-paused worker's next tool result ends its reply", async () => {
   await create.execute("c1", { objective: "lane A" });
   let received = 0;
   ref.goalInbox = { receive: async () => (received++, []), acknowledge: async () => {}, held: async () => true };
-  const result = (await get.execute("g1", {})) as { terminate?: boolean };
-  assert.equal(result.terminate, true);
+  await get.execute("g1", {});
+  assert.deepEqual(await pauseStampAfterToolCall(ref)({}), { terminate: true });
   assert.equal(received, 0, "a held worker's queued messages stay queued for when it resumes");
   const endedEmpty = { getLastAssistantText: () => "", messages: [{ role: "assistant", stopReason: "stop" }] };
   assert.equal(
