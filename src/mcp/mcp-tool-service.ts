@@ -66,6 +66,7 @@ export interface McpToolDescriptor {
   /** Namespaced tool name exposed to the model, e.g. "salesforce_query". */
   name: string;
   serverId: string;
+  serverName: string;
   remoteName: string;
   description: string;
   inputSchema: Record<string, unknown>;
@@ -97,6 +98,7 @@ function catalogDescriptor(server: McpServer): McpToolDescriptor {
   return {
     name: server.id,
     serverId: server.id,
+    serverName: server.name,
     remoteName: "",
     catalog: true,
     description: `${server.name}: a catalog of tools behind one interface. Search for a tool, describe it to see its parameters, then invoke it. Tools marked "needs approval" pause until the person approves that exact call.`,
@@ -296,6 +298,7 @@ export function createMcpToolService(opts: {
           next.push({
             name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
             serverId: server.id,
+            serverName: server.name,
             remoteName: "sign_in",
             signIn: true,
             description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
@@ -310,6 +313,7 @@ export function createMcpToolService(opts: {
           next.push({
             name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
             serverId: server.id,
+            serverName: server.name,
             remoteName: tool.name,
             description: tool.description || `${tool.name} on ${server.name}`,
             inputSchema: modelInputSchema(tool.inputSchema),

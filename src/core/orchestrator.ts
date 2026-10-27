@@ -23,6 +23,7 @@ import { recoveredRuntime } from "../harness/runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { assignedGoal, type GoalRecord, openGoal } from "../harness/goal.ts";
+import { connectorToolsNote, deferredMcpTools } from "../harness/deferred-tools.ts";
 import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
 import type {
   CommandApprovalGrant,
@@ -2342,6 +2343,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
           turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
         }
+        const mcpTools = await mcpToolsReady;
+        const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
+        if (connectorNote) systemPrompt += `\n\n${connectorNote}`;
         systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
         const stableSystemBytes = systemPrompt.length;
         if (swarmBinding)
@@ -3649,7 +3653,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             systemPrompt,
             history: continuation?.history ?? history,
             tools,
-            ...(mcpToolsReady ? { mcpTools: await mcpToolsReady } : {}),
+            ...(mcpTools ? { mcpTools } : {}),
             ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             emit,

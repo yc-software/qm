@@ -45,6 +45,7 @@ type Turn = {
   requestedRuntime?: Partial<RuntimeChoice>;
   options: AgentToolsOptions;
   tools: string[];
+  systemPrompt: string;
   results: Array<{ isError?: unknown }>;
   started: Session[];
 };
@@ -114,6 +115,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
           requestedRuntime: turn.runtime,
           options,
           tools: tools.map((t) => t.name).sort(),
+          systemPrompt: turn.systemPrompt,
           results,
           started: sidebar,
         };
@@ -177,6 +179,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
               {
                 name: "orders_search",
                 serverId: "orders",
+                serverName: "Orders",
                 remoteName: "search",
                 description: "Search orders",
                 inputSchema: { type: "object", properties: {} },
@@ -244,6 +247,11 @@ for (const [surface, flags] of [
       ["orders_search"],
       "the turn's actor gets the MCP tools resolved for them",
     );
+    for (const turn of [parent, child]) {
+      assert.ok(turn.tools.includes("tool_search") && turn.tools.includes("mcp_call"));
+      assert.ok(!turn.tools.includes("orders_search"));
+      assert.ok(turn.systemPrompt.includes("\n- Orders (search): 1 tool\n"));
+    }
     assert.equal(parent.ref.current?.humanTurn, true);
     assert.equal(child.ref.current?.humanTurn, undefined);
     assert.equal(parent.requestedRuntime?.fastMode, true);

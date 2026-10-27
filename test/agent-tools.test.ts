@@ -11,6 +11,8 @@ import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/pri
 import { createMemoryToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
+import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
+import { connectorToolsNote } from "../src/harness/deferred-tools.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -3486,6 +3488,7 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
         {
           name: "example_search",
           serverId: "example",
+          serverName: "Example",
           remoteName: "search",
           description: "Search",
           inputSchema: { type: "object", properties: {} },
@@ -3496,8 +3499,9 @@ test("resource catalog exposes one home per operation and leaves MCP tools intac
     },
   );
   const names = tools.map((tool) => tool.name);
-  for (const name of ["files", "apps", "skills", "subagents", "goal", "cron", "example_search"])
+  for (const name of ["files", "apps", "skills", "subagents", "goal", "cron", "tool_search", "mcp_call"])
     assert.ok(names.includes(name));
+  assert.ok(!names.includes("example_search"));
   for (const name of [
     "read",
     "write",
@@ -4433,6 +4437,7 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
   };
   const descriptor = {
     serverId: "example",
+    serverName: "Example",
     description: "Example",
     inputSchema: { type: "object", properties: {} },
     readOnly: false,
@@ -4443,8 +4448,8 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
       { ...descriptor, name: "example_get", remoteName: "get", needsApproval: false },
     ],
   });
-  const del = tools.find((t) => t.name === "example_delete")!;
-  const get = tools.find((t) => t.name === "example_get")!;
+  const del = viaMcpCall(tools, "example_delete");
+  const get = viaMcpCall(tools, "example_get");
   assert.match(textOut(await call(get, { id: 1 })), /deleted/);
   assert.match(textOut(await call(del, { id: 1 })), /blocked: needs human approval/);
   assert.deepEqual(calls, [{ id: 1 }]);
@@ -4465,12 +4470,22 @@ test("an MCP tool that needs approval is not called until its exact arguments ar
   );
 });
 
+function viaMcpCall(tools: ReturnType<typeof createAgentTools>, name: string) {
+  const mcpCall = tools.find((t) => t.name === "mcp_call")!;
+  return {
+    ...mcpCall,
+    execute: (id: string, args: unknown) =>
+      (mcpCall.execute as unknown as (i: string, p: unknown) => Promise<unknown>)(id, { tool: name, args }),
+  } as unknown as ReturnType<typeof createAgentTools>[number];
+}
+
 function catalogTools(ref: ToolContextRef, name = "records") {
   return createAgentTools(ref, {
     mcpTools: [
       {
         name,
         serverId: name,
+        serverName: "Records",
         remoteName: "",
         catalog: true,
         description: "Catalog",
@@ -4498,7 +4513,7 @@ test("a catalog tool asks per call and forwards the approval only on the approve
     scopeLabel: "personal:U1",
     toolApprovalGate: (_tool, callKey) => !callKey || approved.has(callKey),
   };
-  const catalog = catalogTools(ref).find((t) => t.name === "records")!;
+  const catalog = viaMcpCall(catalogTools(ref), "records");
   const send = { operation: "invoke", tool: "send-message", arguments: { to: "x" } };
   await call(catalog, { operation: "invoke", tool: "find", arguments: {} });
   await call(catalog, send);
@@ -4532,7 +4547,7 @@ test("a failing approval check returns its error to the model and offers no card
     pendingApprovals: [],
     toolApprovalGate: () => true,
   };
-  const catalog = catalogTools(ref).find((t) => t.name === "records")!;
+  const catalog = viaMcpCall(catalogTools(ref), "records");
   assert.match(
     textOut(await call(catalog, { operation: "invoke", tool: "nope" })),
     /could not check whether this call needs approval: Unknown Records tool: nope/,
@@ -4541,26 +4556,40 @@ test("a failing approval check returns its error to the model and offers no card
   assert.deepEqual(ref.pendingApprovals, []);
 });
 
-test("a catalog named like a native tool never replaces it or widens read-only turns", () => {
-  const ref: ToolContextRef = { current: fakeToolContext() };
-  const files = catalogTools(ref, "files").filter((t) => t.name === "files");
+test("a catalog named like a native tool never replaces it and stays behind mcp_call", async () => {
+  const seen: string[] = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      callMcpTool: async (name) => {
+        seen.push(name);
+        return "ok";
+      },
+    },
+  };
+  const tools = catalogTools(ref, "files");
+  const files = tools.filter((t) => t.name === "files");
   assert.equal(files.length, 1);
   assert.doesNotMatch(files[0]!.description, /^Catalog/);
+  await call(viaMcpCall(tools, "files"), { operation: "search" });
+  assert.deepEqual(seen, ["files"]);
   const readOnly = createAgentTools(ref, {
     readOnly: true,
     mcpTools: [
       {
         name: "files",
         serverId: "files",
+        serverName: "Files",
         remoteName: "",
         catalog: true,
         description: "Catalog",
         inputSchema: { type: "object", properties: {} },
-        readOnly: true,
+        readOnly: false,
         needsApproval: false,
       },
     ],
   });
+  assert.ok(!readOnly.some((t) => t.name === "mcp_call" || t.name === "tool_search"));
   assert.ok(!readOnly.some((t) => t.name === "files"));
 });
 
@@ -4575,19 +4604,159 @@ test("a tool that needs approval fails closed without an approval gate", async (
       },
     },
   };
-  const [tool] = createAgentTools(ref, {
-    mcpTools: [
-      {
-        name: "example_delete",
-        serverId: "example",
-        remoteName: "delete",
-        description: "Delete",
-        inputSchema: { type: "object", properties: {} },
-        readOnly: false,
-        needsApproval: true,
-      },
-    ],
-  }).filter((t) => t.name === "example_delete");
-  assert.match(textOut(await call(tool!, {})), /blocked: needs human approval/);
+  const tool = viaMcpCall(
+    createAgentTools(ref, {
+      mcpTools: [
+        {
+          name: "example_delete",
+          serverId: "example",
+          serverName: "Example",
+          remoteName: "delete",
+          description: "Delete",
+          inputSchema: { type: "object", properties: {} },
+          readOnly: false,
+          needsApproval: true,
+        },
+      ],
+    }),
+    "example_delete",
+  );
+  assert.match(textOut(await call(tool, {})), /blocked: needs human approval/);
   assert.equal(called, false);
+});
+
+function connectorTool(name: string, description: string, extra: Partial<McpToolDescriptor> = {}): McpToolDescriptor {
+  return {
+    name: `shop_${name}`,
+    serverId: "shop",
+    serverName: "Shop",
+    remoteName: name,
+    description,
+    inputSchema: { type: "object", properties: { id: { type: "string" } } },
+    readOnly: false,
+    needsApproval: false,
+    ...extra,
+  };
+}
+
+const shopTools = [
+  connectorTool("find_stores", "Find nearby stores. Returns store ids."),
+  connectorTool("add_to_cart", "Add items to the cart.\nMore detail."),
+  connectorTool("get_cart", "Show the cart contents.", { readOnly: true }),
+];
+
+const modelView = (tools: ReturnType<typeof createAgentTools>) =>
+  tools.map((t) => JSON.stringify({ name: t.name, description: t.description, parameters: t.parameters }));
+
+test("connector tools reach the model as exactly tool_search and mcp_call, leaving native definitions unchanged", () => {
+  for (const readOnly of [false, true]) {
+    const without = modelView(createAgentTools({ current: fakeToolContext() }, { controlTools: true, readOnly }));
+    const withTools = createAgentTools(
+      { current: fakeToolContext() },
+      { controlTools: true, readOnly, mcpTools: shopTools },
+    );
+    assert.deepEqual(modelView(withTools).slice(0, without.length), without);
+    assert.deepEqual(
+      withTools.slice(without.length).map((t) => t.name),
+      ["tool_search", "mcp_call"],
+    );
+  }
+  const readOnlyOnlyWrites = createAgentTools(
+    { current: fakeToolContext() },
+    { readOnly: true, mcpTools: shopTools.filter((t) => !t.readOnly) },
+  );
+  assert.ok(!readOnlyOnlyWrites.some((t) => t.name === "tool_search" || t.name === "mcp_call"));
+  const mcpCall = createAgentTools({ current: fakeToolContext() }, { mcpTools: shopTools }).find(
+    (t) => t.name === "mcp_call",
+  )!;
+  const claudeShape = (fromJSONSchema(mcpCall.parameters as Parameters<typeof fromJSONSchema>[0]) as ZodObject).shape;
+  const input = { tool: "shop_add_to_cart", args: { id: "x", items: [{ qty: 2 }] } };
+  assert.deepEqual(z.object(claudeShape).parse(input), input);
+});
+
+test("tool_search ranks name matches first, lists every tool for an empty query or *, and caps full results", async () => {
+  const search = createAgentTools({ current: fakeToolContext() }, { mcpTools: shopTools }).find(
+    (t) => t.name === "tool_search",
+  );
+  const found = textOut(await call(search, { query: "cart" }));
+  const results = found.split("\n\n").map((chunk) => JSON.parse(chunk) as { name: string; parameters: unknown });
+  assert.deepEqual(
+    results.map((r) => r.name),
+    ["shop_add_to_cart", "shop_get_cart"],
+  );
+  assert.deepEqual(results[0]!.parameters, shopTools[1]!.inputSchema);
+  for (const query of ["", " * "])
+    assert.equal(
+      textOut(await call(search, { query })),
+      [
+        "- shop_find_stores: Find nearby stores.",
+        "- shop_add_to_cart: Add items to the cart.",
+        "- shop_get_cart: Show the cart contents.",
+      ].join("\n"),
+    );
+  assert.match(textOut(await call(search, { query: "refund" })), /No connector tools match "refund"/);
+  const many = Array.from({ length: 7 }, (_, i) => connectorTool(`list_${i}`, "List things."));
+  const wide = createAgentTools({ current: fakeToolContext() }, { mcpTools: many }).find(
+    (t) => t.name === "tool_search",
+  );
+  const listed = textOut(await call(wide, { query: "list" })).split("\n\n");
+  assert.equal(listed.length, 6);
+  assert.equal(listed.at(-1), "2 more match; narrow the query.");
+  const readOnlySearch = createAgentTools({ current: fakeToolContext() }, { readOnly: true, mcpTools: shopTools }).find(
+    (t) => t.name === "tool_search",
+  );
+  assert.equal(textOut(await call(readOnlySearch, { query: "*" })), "- shop_get_cart: Show the cart contents.");
+});
+
+test("mcp_call runs the named connector tool and records it under that tool's own name", async () => {
+  const emitted: Emitted[] = [];
+  const calls: Array<[string, Record<string, unknown>]> = [];
+  const ref: ToolContextRef = {
+    current: {
+      ...fakeToolContext(),
+      callMcpTool: async (name, args) => {
+        calls.push([name, args]);
+        return "added";
+      },
+    },
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: "personal:U1",
+  };
+  const mcpCall = createAgentTools(ref, { mcpTools: shopTools }).find((t) => t.name === "mcp_call");
+  const out = await callWith(mcpCall, "c1", { tool: "shop_add_to_cart", args: { id: "x" }, retrySafe: false });
+  assert.match(textOut(out), /added/);
+  assert.deepEqual(calls, [["shop_add_to_cart", { id: "x" }]]);
+  const recorded = emitted.find((e) => e.type === "tool_call" && e.payload.callId === "c1")!.payload;
+  assert.equal(recorded.tool, "shop_add_to_cart");
+  assert.equal(recorded.mcpServer, "shop");
+  assert.deepEqual(recorded.args, { id: "x" });
+  assert.equal(recorded.retrySafe, false);
+  const missing = await callWith(mcpCall, "c2", { tool: "shop_refund", args: {} });
+  assert.equal(textOut(missing), '[error] unknown tool "shop_refund"; use tool_search to find connector tools.');
+  assert.equal(calls.length, 1);
+});
+
+test("connector note names each server with a purpose from its tool names, or asks to connect", () => {
+  assert.equal(connectorToolsNote([]), "");
+  const lots = Array.from({ length: 12 }, (_, i) => connectorTool(`shop_view_item_${i}`, "View."));
+  assert.equal(
+    connectorToolsNote([
+      ...shopTools,
+      ...lots,
+      {
+        ...connectorTool("sign_in", "Sign in."),
+        name: "mail_sign_in",
+        serverId: "mail",
+        serverName: "Mail",
+        signIn: true,
+      },
+    ]),
+    [
+      "Connector tools load on demand: tool_search finds them, mcp_call runs one.",
+      "- Shop (find stores, add to cart, get cart, view item 0, view item 1, view item 2, view item 3, view item 4, …): 15 tools",
+      "- Mail: not connected; mcp_call mail_sign_in to connect.",
+    ].join("\n"),
+  );
 });
