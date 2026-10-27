@@ -74,14 +74,15 @@ async function fixture() {
   };
 }
 
-test("one context recalls capped, source-labelled memory and shares authority with reads, search, and files", async () => {
-  const { input, auditLog } = await fixture();
+test("one context recalls only its own notebook and org while reads, search, and files keep carried sources", async () => {
+  const { input, auditLog, memory } = await fixture();
+  await memory.capture("org:test", ["ORG_FACT"], Date.now());
   const context = await resolveTurnContext(input);
   const recalled = renderRecall(await context.recallMemory(""), new Map());
   assert.match(recalled, /### personal:alice[\s\S]*LOCAL_FACT/);
-  assert.match(recalled, /### channel:eng[\s\S]*LAST_FACT/);
-  assert.ok(recalled.length <= 6000 && !recalled.includes("long fact"), "prompt memory stays capped");
-  assert.equal((await context.memorySnapshot()).held.get("channel:eng")!.size, 3);
+  assert.match(recalled, /### org:test[\s\S]*ORG_FACT/);
+  assert.doesNotMatch(recalled, /channel:eng|SHARED_FACT|LAST_FACT/);
+  assert.deepEqual([...(await context.memorySnapshot()).held.keys()], ["personal:alice", "org:test"]);
   const full = await context.readMemory("channel:eng");
   assert.match(full ?? "", /SHARED_FACT[\s\S]*LAST_FACT/);
   assert.ok(full!.length > 12000, "explicit reads still return the whole notebook");
@@ -142,12 +143,56 @@ for (const mode of [
 
 test("fresh turn re-resolves membership after an earlier successful read", async () => {
   const { input, removeMember } = await fixture();
-  assert.match(renderRecall(await (await resolveTurnContext(input)).recallMemory(""), new Map()), /LAST_FACT/);
+  assert.match((await (await resolveTurnContext(input)).searchMemory("LAST_FACT"))!.join(), /LAST_FACT/);
   removeMember();
   const next = await resolveTurnContext(input);
-  assert.doesNotMatch(renderRecall(await next.recallMemory(""), new Map()), /LAST_FACT/);
+  assert.deepEqual((await next.searchMemory("LAST_FACT")) ?? [], []);
   assert.equal(await next.readMemory("channel:eng"), null);
   assert.equal(await next.readFile("shared/open-channel-eng/plan.txt"), null);
+});
+
+test("a DM with team layers and open channel sources auto-recalls only its own notebook and org", async () => {
+  const { input, memory } = await fixture();
+  input.resolution.layers.push({ scopeId: "team:core", mode: "ro", mountPath: "team-core" });
+  input.sessions = {
+    listByParticipant: async () =>
+      [
+        { scopeId: "channel:eng", createdAt: 1 },
+        { scopeId: "group:proj", createdAt: 2 },
+      ] as Session[],
+  };
+  input.isCurrentSharedScopeMember = async (actor, scope) =>
+    actor === "alice" && (scope === "channel:eng" || scope === "group:proj");
+  await memory.capture("org:test", ["ORG_FACT"], Date.now());
+  await memory.capture("team:core", ["TEAM_FACT"], Date.now());
+  await memory.capture("group:proj", ["GROUP_FACT"], Date.now());
+  const context = await resolveTurnContext(input);
+  assert.deepEqual(
+    new Set(context.memoryAccess?.read),
+    new Set(["personal:alice", "org:test", "team:core", "channel:eng", "group:proj"]),
+  );
+  const recalled = await context.recallMemory("", (await context.memorySnapshot()).loaded);
+  assert.deepEqual([...new Set(recalled.map((fact) => fact.scope))].sort(), ["org:test", "personal:alice"]);
+  assert.doesNotMatch(renderRecall(recalled, new Map()), /TEAM_FACT|GROUP_FACT|SHARED_FACT|LAST_FACT/);
+  assert.deepEqual([...context.memoryLabels.keys()].sort(), ["org:test", "personal:alice"]);
+  assert.match((await context.searchMemory("GROUP_FACT"))!.join(), /\[group:proj\] .*GROUP_FACT/);
+});
+
+test("a channel conversation auto-recalls only the channel notebook and org, not the speaker's personal notebook", async () => {
+  const { input, memory } = await fixture();
+  input.targetScope = "channel:eng";
+  input.resolution.layers = [
+    { scopeId: "org:test", mode: "ro", mountPath: "global" },
+    { scopeId: "channel:eng", mode: "rw", mountPath: "" },
+  ];
+  await memory.capture("org:test", ["ORG_FACT"], Date.now());
+  const context = await resolveTurnContext(input);
+  assert.deepEqual(context.sharingSources, ["personal:alice"]);
+  const recalled = renderRecall(await context.recallMemory(""), new Map());
+  assert.match(recalled, /### channel:eng[\s\S]*SHARED_FACT/);
+  assert.match(recalled, /### org:test[\s\S]*ORG_FACT/);
+  assert.doesNotMatch(recalled, /LOCAL_FACT|personal:alice/);
+  assert.ok(context.memoryAccess?.read.includes("personal:alice"));
 });
 
 test("skill discovery uses the same included scopes and audience-filtered explicit grants", async () => {
@@ -264,16 +309,16 @@ test("semantic recall reuses the turn's memory snapshot instead of reloading not
   input.memory = createSemanticMemoryService(
     counted,
     async () => embedder,
-    scoredMemoryIndex(memory, (text) => (text === "LAST_FACT" ? 1 : 0)),
+    scoredMemoryIndex(memory, (text) => (text === "LOCAL_FACT" ? 1 : 0)),
   );
   const context = await resolveTurnContext(input);
   const snapshot = await context.memorySnapshot();
-  assert.deepEqual(loads.sort(), ["channel:eng", "org:test", "personal:alice"]);
+  assert.deepEqual(loads.sort(), ["org:test", "personal:alice"]);
   loads.length = 0;
   const recalled = await context.recallMemory("anything", snapshot.loaded);
   assert.deepEqual(
     recalled.map((fact) => fact.text),
-    ["- (" + new Date().toISOString().slice(0, 10) + ") LAST_FACT"],
+    ["- (" + new Date().toISOString().slice(0, 10) + ") LOCAL_FACT"],
   );
   assert.deepEqual(loads, []);
 });

@@ -45,6 +45,7 @@ export async function resolveTurnContext(input: ContextInput) {
     : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
   const memoryScopeId = writableMemoryScope(resolution.layers, input.targetScope);
   const baseRecallScopes = useMemory ? recallMemoryScopes(memoryPolicy, resolution.layers, memoryScopeId) : [];
+  const recallScopes = baseRecallScopes.filter((scope) => scope === memoryScopeId || scope === resolution.orgScopeId);
   const read = [
     ...new Set([...baseRecallScopes, ...(useMemory && memoryPolicy.recall === "visible" ? sharingSources : [])]),
   ];
@@ -75,7 +76,7 @@ export async function resolveTurnContext(input: ContextInput) {
   };
   const memory = disclosedMemory(input.memory, disclosure);
   const handles = [...resolution.grantedHandles, ...(await carriedFileHandles(sharingSources, input.files))];
-  const memoryLabels = await memoryRecallLabels(read, input.directory, input.projects);
+  const memoryLabels = await memoryRecallLabels(recallScopes, input.directory, input.projects);
   return {
     sharingSources,
     memoryScopeId,
@@ -84,8 +85,9 @@ export async function resolveTurnContext(input: ContextInput) {
     memory,
     memoryLabels,
     memorySnapshot: async () => {
-      const notebooks = await Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) })));
-      for (const { scope } of notebooks) recordRead(scope, "memory");
+      const notebooks = await Promise.all(
+        recallScopes.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) })),
+      );
       return {
         held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
         loaded: new Map(notebooks.flatMap(({ scope, facts }) => (facts?.length ? [[scope, facts] as const] : []))),
@@ -96,7 +98,7 @@ export async function resolveTurnContext(input: ContextInput) {
     recallMemory: (query: string, disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>) =>
       recallAcrossScopes(
         memory,
-        read,
+        recallScopes,
         { query, actorId: input.actor.id, maxChars: RECALL_MAX_CHARS, ...(disclosedFacts ? { disclosedFacts } : {}) },
         memoryLabels,
       ),

@@ -374,7 +374,7 @@ test("Open advertises the source and audits a carried skill read without grantin
   assert.deepEqual(await acl.list(), []);
 });
 
-test("Open keeps unclassified personal memory out of rooms, loads room memory in DMs, and capture stays in the room", async () => {
+test("Open keeps unclassified personal memory out of rooms, keeps room memory searchable but unrecalled in DMs, and capture stays in the room", async () => {
   let member = true;
   const { orchestrator, config, memory, files } = buildOrchestrator({
     sandbox: readSandbox(),
@@ -439,7 +439,8 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
       origin: { kind: "human" },
     }),
   );
-  assert.match(dmPrompt.reply ?? "", /### channel:C1[\s\S]*ROOM_ONLY_MEMORY/);
+  assert.doesNotMatch(dmPrompt.reply ?? "", /### channel:C1|ROOM_ONLY_MEMORY/);
+  assert.match(dmPrompt.reply ?? "", /PERSONAL_OPEN_MEMORY/);
   assert.match(dmPrompt.reply ?? "", /use these authorized memories freely/);
   assert.doesNotMatch(dmPrompt.reply ?? "", /apply it only if that tag matches here/);
 
