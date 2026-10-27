@@ -969,7 +969,7 @@ test("sandbox capability TTL is deployment-configurable with a 48-hour default",
 
 test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
   const base = { ...loadConfig({}), harness: "pi" as const };
-  assert.equal(configuredModelForHarness({ ...base, codexAuthCredential: "cred-1" }, "pi"), "gpt-5.6-sol");
+  assert.equal(configuredModelForHarness({ ...base, codexAuthCredential: "cred-1" }, "pi"), "gpt-6.1-sol");
   assert.equal(
     configuredModelForHarness({ ...base, codexAuthCredential: "cred-1", anthropicApiKey: "k" }, "pi"),
     undefined,

@@ -22,7 +22,7 @@ import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
-export const DEFAULT_CODEX_MODEL_ID = "gpt-5.6-sol";
+export const DEFAULT_CODEX_MODEL_ID = "gpt-6.1-sol";
 /**
  * pi-ai's ChatGPT-subscription provider: the same model ids as "openai",
  * served from the Codex backend and authenticated with a ChatGPT OAuth
@@ -731,10 +731,10 @@ export function defaultModelForHarness(
     return configured;
   const preferred = DEFAULT_AGENT_MODEL_ID;
   if (!providers || modelServiceable(preferred, providers)) return preferred;
-  const servable = selectableBaseModels(true).find(
-    (model) => modelSupportedByHarness(model.id, harness) && modelServiceable(model.id, providers),
+  const servable = [DEFAULT_CODEX_MODEL_ID, ...selectableBaseModels(true).map((model) => model.id)].find(
+    (id) => modelSupportedByHarness(id, harness) && modelServiceable(id, providers),
   );
-  return servable?.id ?? preferred;
+  return servable ?? preferred;
 }
 
 export interface ModelProviderAvailability {

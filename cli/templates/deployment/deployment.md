@@ -193,7 +193,7 @@ and get a working one rather than deploying a stack that greets the
 administrator and then fails their first message.
 
 `modelProvider` also picks the model itself, so no model id has to be chosen at
-deploy time: Anthropic serves `claude-opus-5`, OpenAI `gpt-5.6-sol`, OpenRouter
+deploy time: Anthropic serves `claude-opus-5`, OpenAI `gpt-6.1-sol`, OpenRouter
 `openrouter/auto`. Set `model` in `qm.config.jsonc` only to override that, and
 only with a model the chosen provider can bill — a mismatch is refused at
 startup rather than at the first message. The same rule covers the harness:
