@@ -4780,50 +4780,61 @@ test("a catalog server's one tool stays in the tools array as its own definition
   assert.doesNotMatch(connectorToolsNote(deferredMcpTools([catalog, ...shopTools], false)), /Records/);
 });
 
-test("connector note names each server with its own purpose, else one from its tool names, or asks to connect", () => {
+test("connector note lists servers by name with their own description and each tool's first line", () => {
   assert.equal(connectorToolsNote([]), "");
-  const lots = Array.from({ length: 12 }, (_, i) => connectorTool(`shop_view_item_${i}`, "View."));
-  const crm = (about: string) =>
-    ["query", "update"].map((name) => ({
-      ...connectorTool(name, "Run."),
-      name: `crm_${name}`,
-      serverId: "crm",
-      serverName: "CRM",
-      serverAbout: about,
-    }));
-  const section = (lines: string[]) =>
-    ["## Connectors", "Load on demand: tool_search finds a tool, mcp_call runs it.", ...lines].join("\n");
+  const crm = ["update", "query"].map((name) => ({
+    ...connectorTool(name, `\n    ${name === "query" ? "Run a query." : "x".repeat(130)}\n    More detail.`),
+    name: `crm_${name}`,
+    serverId: "crm",
+    serverName: "CRM",
+    serverAbout: "Search and update customer records.\nAlways query first.",
+  }));
+  const mail = {
+    ...connectorTool("sign_in", "Connect your own Mail account and load its tools."),
+    name: "mail_sign_in",
+    serverId: "mail",
+    serverName: "Mail",
+    signIn: true as const,
+  };
   assert.equal(
-    connectorToolsNote([
-      ...shopTools,
-      ...lots,
-      ...crm("# CRM\n\nSearch and update customer records. Always query first."),
-      {
-        ...connectorTool("sign_in", "Sign in."),
-        name: "mail_sign_in",
-        serverId: "mail",
-        serverName: "Mail",
-        signIn: true,
-      },
-    ]),
-    section([
-      "- Shop (find stores, add to cart, get cart, view item 0, view item 1, view item 2, view item 3, view item 4, …): 15 tools",
-      "- CRM (search and update customer records): 2 tools",
-      "- Mail: not connected; mcp_call mail_sign_in to connect.",
-    ]),
+    connectorToolsNote([mail, ...shopTools, ...crm]),
+    [
+      "## Connectors",
+      "Run these with mcp_call; tool_search shows a tool's parameters. This list is complete.",
+      "- CRM (2 tools) // Search and update customer records.",
+      "  - crm_query // Run a query.",
+      `  - crm_update // ${"x".repeat(117)}...`,
+      "- Mail (1 tool)",
+      "  - mail_sign_in // Connect your own Mail account and load its tools.",
+      "- Shop (3 tools)",
+      "  - shop_add_to_cart // Add items to the cart.",
+      "  - shop_find_stores // Find nearby stores. Returns store ids.",
+      "  - shop_get_cart // Show the cart contents.",
+    ].join("\n"),
   );
+});
+
+test("a connector note over its budget shows every server, fills shorter tool lines first in turns, and says it is partial", () => {
+  const big = Array.from({ length: 300 }, (_, i) =>
+    connectorTool(`item_${String(i).padStart(3, "0")}`, "View an item."),
+  );
+  const small = ["a", "b"].map((name) => ({
+    ...connectorTool(name, "Do it."),
+    name: `tiny_${name}`,
+    serverId: "tiny",
+    serverName: "Tiny",
+  }));
+  const note = connectorToolsNote([...big, ...small]);
+  const lines = note.split("\n");
   assert.equal(
-    connectorToolsNote(crm(`Order food delivery, carts, past orders.\n${"More. ".repeat(50)}`)),
-    section(["- CRM (order food delivery, carts, past orders): 2 tools"]),
+    lines[1],
+    "Run these with mcp_call; tool_search shows a tool's parameters and finds the ones not shown. This list is partial.",
   );
-  assert.equal(
-    connectorToolsNote([
-      { ...connectorTool("search", "Search."), name: "search_search", serverId: "search", serverName: "Search" },
-    ]),
-    section(["- Search: 1 tool"]),
-  );
-  assert.equal(
-    connectorToolsNote(crm("word ".repeat(40))),
-    section([`- CRM (${"word ".repeat(20).trim()}…): 2 tools`]),
-  );
+  const shopLine = lines.find((line) => line.startsWith("- Shop "))!;
+  const shown = lines.filter((line) => line.startsWith("  - shop_")).length;
+  assert.ok(shown > 0 && shown < 300);
+  assert.equal(shopLine, `- Shop (300 tools, ${shown} shown)`);
+  assert.deepEqual(lines.slice(-3), ["- Tiny (2 tools)", "  - tiny_a // Do it.", "  - tiny_b // Do it."]);
+  assert.ok(note.length <= 2_000 * 4 + 400);
+  assert.equal(connectorToolsNote([...small, ...big]), note);
 });

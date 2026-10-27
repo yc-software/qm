@@ -250,7 +250,7 @@ for (const [surface, flags] of [
     for (const turn of [parent, child]) {
       assert.ok(turn.tools.includes("tool_search") && turn.tools.includes("mcp_call"));
       assert.ok(!turn.tools.includes("orders_search"));
-      assert.ok(turn.systemPrompt.endsWith("\n- Orders (search): 1 tool"));
+      assert.ok(turn.systemPrompt.endsWith("\n- Orders (1 tool)\n  - orders_search // Search orders"));
     }
     assert.equal(parent.ref.current?.humanTurn, true);
     assert.equal(child.ref.current?.humanTurn, undefined);
