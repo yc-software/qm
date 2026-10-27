@@ -101,7 +101,8 @@ test("pg delivery store: a permanently refused row fails once and never revives"
   await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
 });
 
-test("pg delivery store: rejection stays terminal and FIFO survives separate workers", { skip }, async () => {
+test("pg delivery store: rejection stays terminal and FIFO survives separate workers", { skip }, async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const writer = createPostgresDeliveryStore(URL!);
   const reader = createPostgresDeliveryStore(URL!);
   const destination = { type: "webhook", target: "web:alice:ordered", webhook: { binding: "binding" } };
@@ -110,8 +111,8 @@ test("pg delivery store: rejection stays terminal and FIFO survives separate wor
     (await writer.claimPending("webhook", 30_000, 16)).map((row) => row.id),
     [first.id],
   );
-  await new Promise((resolve) => setTimeout(resolve, 2));
   const second = await reader.enqueue({ destination, text: "second", idempotencyKey: "ordered-second" });
+  assert.equal(second.createdAt, first.createdAt);
   assert.deepEqual(await reader.claimPending("webhook", 30_000, 16), []);
   await writer.reject(first.id);
   assert.deepEqual(
@@ -121,4 +122,35 @@ test("pg delivery store: rejection stays terminal and FIFO survives separate wor
   await reader.enqueue({ destination, text: "first again", idempotencyKey: first.idempotencyKey });
   assert.ok((await writer.get(first.id))?.rejectedAt);
   assert.equal((await writer.get(first.id))?.deliveredAt, null);
+});
+
+test("pg delivery store: a late commit cannot bypass a target's active claim", { skip }, async () => {
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL! });
+  const transaction = await pool.connect();
+  const store = createPostgresDeliveryStore(URL!);
+  const destination = { type: "webhook", target: "web:late-commit", webhook: { binding: "binding" } };
+  try {
+    await transaction.query("BEGIN");
+    await transaction.query(
+      "INSERT INTO deliveries(id, idempotency_key, destination, text, created_at) VALUES($1,$1,$2,'late commit',$3)",
+      ["late-commit", JSON.stringify(destination), Date.now()],
+    );
+    const visible = await store.enqueue({ destination, text: "visible first", idempotencyKey: "visible-first" });
+    assert.deepEqual(
+      (await store.claimPending("webhook", 30_000, 16)).map((row) => row.id),
+      [visible.id],
+    );
+    await transaction.query("COMMIT");
+    assert.deepEqual(await store.claimPending("webhook", 30_000, 16), []);
+    await store.ack(visible.id, Date.now());
+    assert.deepEqual(
+      (await store.claimPending("webhook", 30_000, 16)).map((row) => row.id),
+      ["late-commit"],
+    );
+  } finally {
+    await transaction.query("ROLLBACK");
+    transaction.release();
+    await pool.end();
+  }
 });

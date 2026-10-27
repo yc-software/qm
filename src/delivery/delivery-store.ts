@@ -95,6 +95,8 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           else delete existing.provenance;
           existing.createdAt = Date.now();
           delete existing.expiredAt;
+          deliveries.delete(existing.id);
+          deliveries.set(existing.id, existing);
           claimedUntil.delete(existing.id);
           if (input.shadow) existing.shadow = true;
           else delete existing.shadow;
@@ -138,15 +140,8 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         const pending = [...deliveries.values()].filter(
           (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
         );
-        const ordered = (a: Delivery, b: Delivery) => a.createdAt - b.createdAt || a.id.localeCompare(b.id);
         rows = rows
-          .filter(
-            (d) =>
-              !pending.some(
-                (earlier) => earlier.destination.target === d.destination.target && ordered(earlier, d) < 0,
-              ),
-          )
-          .sort(ordered)
+          .filter((d) => pending.find((earlier) => earlier.destination.target === d.destination.target)?.id === d.id)
           .slice(0, orderedTargetLimit);
       }
       for (const d of rows) claimedUntil.set(d.id, now + ttlMs);

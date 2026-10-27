@@ -230,3 +230,20 @@ test("a response body cleanup failure does not hide a terminal receiver rejectio
   ).drain();
   assert.ok((await deliveries.get(delivery.id))?.rejectedAt);
 });
+
+test("same-timestamp enqueues cannot overtake an active delivery", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const deliveries = createDeliveryStore();
+  const first = await deliveries.enqueue({ destination, text: "first", idempotencyKey: "first" });
+  assert.deepEqual(
+    (await deliveries.claimPending("webhook", 30_000, 16)).map((row) => row.id),
+    [first.id],
+  );
+  for (let index = 0; index < 32; index++) {
+    const next = await deliveries.enqueue({ destination, text: "next", idempotencyKey: `next:${index}` });
+    assert.equal(next.createdAt, first.createdAt);
+    assert.deepEqual(await deliveries.claimPending("webhook", 30_000, 16), []);
+  }
+  await deliveries.ack(first.id, Date.now());
+  assert.equal((await deliveries.claimPending("webhook", 30_000, 16))[0]?.idempotencyKey, "next:0");
+});

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -27,7 +27,7 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
 
 export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
-  const { q, query } = createPgPool(connectionString, [
+  const { q, query, pool } = createPgPool(connectionString, [
     {
       id: "delivery/store/0001",
       statements: [
@@ -86,8 +86,17 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     {
       id: "delivery/webhook/0001",
       statements: [
+        `SET LOCAL lock_timeout = '3s'`,
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS rejected_at BIGINT`,
-        `CREATE INDEX IF NOT EXISTS idx_deliveries_pending_target ON deliveries ((destination->>'type'), (destination->>'target'), created_at, id) WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow`,
+        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivery_sequence BIGINT`,
+        `CREATE SEQUENCE IF NOT EXISTS deliveries_delivery_sequence OWNED BY deliveries.delivery_sequence`,
+        `ALTER TABLE deliveries ALTER COLUMN delivery_sequence SET DEFAULT nextval('deliveries_delivery_sequence')`,
+      ],
+    },
+    {
+      id: "delivery/store/0008",
+      statements: [
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_deliveries_pending_target ON deliveries ((destination->>'type'), (destination->>'target'), delivery_sequence) WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow`,
       ],
     },
   ]);
@@ -127,6 +136,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                attachments = EXCLUDED.attachments,
                provenance = EXCLUDED.provenance,
                created_at = EXCLUDED.created_at,
+               delivery_sequence = EXCLUDED.delivery_sequence,
                shadow = EXCLUDED.shadow,
                expired_at = NULL,
                claim_expires_at = NULL
@@ -163,8 +173,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     },
     async claimPending(type, ttlMs, orderedTargetLimit) {
       await expireOveraged();
-      const rows = await q(
-        `UPDATE deliveries
+      const statement = `UPDATE deliveries
             SET claim_expires_at = ${NOW_MS_SQL} + $2
           WHERE id IN (
             SELECT candidate.id FROM deliveries candidate
@@ -176,15 +185,22 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                  WHERE earlier.delivered_at IS NULL AND earlier.expired_at IS NULL AND NOT earlier.shadow
                    AND earlier.destination->>'type' = $1
                    AND earlier.destination->>'target' = candidate.destination->>'target'
-                   AND (earlier.created_at, earlier.id) < (candidate.created_at, candidate.id)
+                   AND (earlier.delivery_sequence < candidate.delivery_sequence
+                     OR (earlier.id <> candidate.id AND earlier.claim_expires_at > ${NOW_MS_SQL}))
                ))
-             ORDER BY created_at, id
+             ORDER BY delivery_sequence
              LIMIT $3
                FOR UPDATE SKIP LOCKED
           )
-          RETURNING *`,
-        [type, ttlMs, orderedTargetLimit ?? null],
-      );
+          RETURNING *`;
+      const parameters = [type, ttlMs, orderedTargetLimit ?? null];
+      const rows =
+        orderedTargetLimit === undefined
+          ? await q(statement, parameters)
+          : await withPgTransaction(await pool(), async (client) => {
+              await client.query("SELECT pg_advisory_xact_lock(hashtextextended('delivery:ordered-claims', 0))");
+              return (await client.query(statement, parameters)).rows;
+            });
       return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
     },
     async listShadow(opts) {
