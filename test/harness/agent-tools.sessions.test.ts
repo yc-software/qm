@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
-import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 import type { ClientToolDeclaration } from "../../src/types.ts";
 import { itemFields, type Item } from "../../src/sessions/items.ts";
@@ -18,7 +19,7 @@ import {
 } from "../support/agent-tools.ts";
 
 test("surface messages use Markdown and only Slack tools teach Slack mentions", () => {
-  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const ref: TurnToolStateInit = { current: fakeToolContext(), scopeLabel: "channel:C1" };
   for (const name of ["web", "slack", "telegram"]) {
     const tool = surfaceTool(ref, name);
     const text = (tool.parameters as { properties: { text: { description: string } } }).properties.text.description;
@@ -40,13 +41,15 @@ test("read passes turn cancellation through and cannot record a late success", a
     started.resolve();
     return pending.promise;
   };
-  const read = createAgentTools({
-    current: context,
-    abortSignal: controller.signal,
-    emit: (e) => {
-      emitted.push(emittedItem(e));
-    },
-  }).find((t) => t.name === "files");
+  const read = createAgentTools(
+    createTurnToolState({
+      current: context,
+      abortSignal: controller.signal,
+      emit: (e) => {
+        emitted.push(emittedItem(e));
+      },
+    }),
+  ).find((t) => t.name === "files");
   const result = call(read, { action: "read", path: "notes.md" });
   await started.promise;
   controller.abort();
@@ -58,7 +61,7 @@ test("read passes turn cancellation through and cannot record a late success", a
 
 test("session tools are omitted when the actor feature is disabled", () => {
   assert.equal(
-    createAgentTools({ current: fakeToolContext() }, { sessionTools: false }).some((tool) =>
+    createAgentTools(createTurnToolState({ current: fakeToolContext() }), { sessionTools: false }).some((tool) =>
       ["sessions", "subagents"].includes(tool.name),
     ),
     false,
@@ -89,10 +92,9 @@ test("agent mail is screened separately, logged privately, and delivered once ac
     },
   };
   tc.read = async () => ({ content: "workspace data", sourceScopeId: "org:default-org" });
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: tc,
     scopeLabel: "personal:U1",
-    orgScopeId: "org:default-org",
     emit: (entry) => {
       emitted.push(emittedItem(entry));
     },
@@ -100,7 +102,7 @@ test("agent mail is screened separately, logged privately, and delivered once ac
       screens.push(input);
     },
   };
-  const read = createAgentTools(ref).find((tool) => tool.name === "files");
+  const read = createAgentTools(createTurnToolState(ref)).find((tool) => tool.name === "files");
   const results = await Promise.all([
     call(read, { action: "read", path: "a.txt" }),
     call(read, { action: "read", path: "b.txt" }),
@@ -117,8 +119,8 @@ test("agent mail is screened separately, logged privately, and delivered once ac
 test("conversation coordinators cannot execute commands through any command tool", async () => {
   {
     for (const options of [{ surfaceTools: true, delegateWork: true }, { delegateWork: true }]) {
-      const ref: ToolContextRef = { current: fakeToolContext() };
-      const tools = createAgentTools(ref, options);
+      const ref: TurnToolStateInit = { current: fakeToolContext() };
+      const tools = createAgentTools(createTurnToolState(ref), options);
       for (const name of ["execute", "background"]) assert.ok(!tools.some((tool) => tool.name === name));
       const sandbox = tools.find((tool) => tool.name === "sandbox")!;
       assert.match(
@@ -135,7 +137,9 @@ test("conversation coordinators cannot execute commands through any command tool
     }
   }
   assert.ok(
-    createAgentTools({ current: fakeToolContext() }, { delegateWork: false }).some((tool) => tool.name === "execute"),
+    createAgentTools(createTurnToolState({ current: fakeToolContext() }), { delegateWork: false }).some(
+      (tool) => tool.name === "execute",
+    ),
   );
 });
 
@@ -150,7 +154,7 @@ test("subagents open exposes noComputer and preserves the internal restriction",
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
   };
-  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
+  const session = createAgentTools(createTurnToolState({ current: tc })).find((tool) => tool.name === "subagents")!;
   const properties = (session.parameters as { properties: Record<string, { description?: string }> }).properties;
   assert.ok(properties.noComputer);
   assert.equal(properties.readOnly, undefined);
@@ -175,7 +179,7 @@ test("subagents open schema and dispatch preserve an explicit false fast mode", 
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
   };
-  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
+  const session = createAgentTools(createTurnToolState({ current: tc })).find((tool) => tool.name === "subagents")!;
   assert.ok(Check(session.parameters, { action: "open", task: "test", fastMode: false }));
   assert.ok(!Check(session.parameters, { action: "open", task: "test", fastMode: "false" }));
   assert.match(textOut(await call(session, { action: "open", task: "test", fastMode: false })), /child/);
@@ -197,7 +201,7 @@ test("subagents followup_task takes its instruction in task, like open", async (
     },
     read: async () => ({ ok: false, message: "unused" }),
   };
-  const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
+  const session = createAgentTools(createTurnToolState({ current: tc })).find((tool) => tool.name === "subagents")!;
   assert.ok(!Check(session.parameters, { action: "write", target: "child", text: "hi" }));
   assert.match(
     textOut(await call(session, { action: "followup_task", target: "child", task: "next task" })),
@@ -234,30 +238,29 @@ test("conversation coordinator mailbox checks never block on children", async ()
     write: async () => ({ ok: false, message: "unused" }),
     read: async () => ({ ok: false, message: "unused" }),
   };
-  const session = createAgentTools({ current: tc }, { delegateWork: true }).find((tool) => tool.name === "subagents")!;
+  const session = createAgentTools(createTurnToolState({ current: tc }), { delegateWork: true }).find(
+    (tool) => tool.name === "subagents",
+  )!;
   await call(session, { action: "wait", timeoutMs: 60000 });
   assert.ok(waits.length > 0);
   assert.ok(waits.every((timeout) => timeout === 0));
 });
 
 test("resource catalog exposes one home per operation and leaves MCP tools intact", async () => {
-  const tools = createAgentTools(
-    { current: fakeToolContext() },
-    {
-      controlTools: true,
-      mcpTools: [
-        {
-          name: "example_search",
-          serverId: "example",
-          remoteName: "search",
-          description: "Search",
-          inputSchema: { type: "object", properties: {} },
-          readOnly: true,
-          needsApproval: false,
-        },
-      ],
-    },
-  );
+  const tools = createAgentTools(createTurnToolState({ current: fakeToolContext() }), {
+    controlTools: true,
+    mcpTools: [
+      {
+        name: "example_search",
+        serverId: "example",
+        remoteName: "search",
+        description: "Search",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: true,
+        needsApproval: false,
+      },
+    ],
+  });
   const names = tools.map((tool) => tool.name);
   for (const name of ["files", "apps", "skills", "subagents", "goal", "cron", "example_search"])
     assert.ok(names.includes(name));
@@ -319,7 +322,7 @@ test("resource actions preserve sharing targets, transfer semantics and file con
       return { ok: false as const, code: "forbidden" as const, message: "not the owner" };
     },
   };
-  const tools = createAgentTools({ current: tc }, { controlTools: true });
+  const tools = createAgentTools(createTurnToolState({ current: tc }), { controlTools: true });
   const files = tools.find((tool) => tool.name === "files")!;
   await call(files, { action: "write", path: "notes", data: "" });
   const pathShare = { action: "share", path: "notes", scope: "org", sandbox_id: "sb1" };
@@ -387,7 +390,7 @@ test("apps publish schema no longer advertises audience and rejects it as an unk
       return { id: "app", version: 1, url: "https://app.example" };
     },
   };
-  const apps = createAgentTools({ current: tc }).find((tool) => tool.name === "apps")!;
+  const apps = createAgentTools(createTurnToolState({ current: tc })).find((tool) => tool.name === "apps")!;
   assert.equal("audience" in (apps.parameters as { properties: Record<string, unknown> }).properties, false);
   assert.match(textOut(await call(apps, { action: "publish", name: "private", audience: [] })), /Invalid arguments/);
   assert.equal(inputs.length, 0);
@@ -404,7 +407,9 @@ test("files share preserves artifact IDs, recipient resolution and authorization
       return { ok: false as const, code: "forbidden" as const, message: "not the owner" };
     },
   };
-  const files = createAgentTools({ current: tc }, { controlTools: true }).find((tool) => tool.name === "files")!;
+  const files = createAgentTools(createTurnToolState({ current: tc }), { controlTools: true }).find(
+    (tool) => tool.name === "files",
+  )!;
   assert.match(
     textOut(await call(files, { action: "share", id: "file-artifact", toScope: "Bob", permission: "write" })),
     /not the owner/,
@@ -419,7 +424,7 @@ test("files share preserves artifact IDs, recipient resolution and authorization
 });
 
 test("the retired credential tool is absent and execute accepts credential handles", () => {
-  const tools = createAgentTools({ current: fakeToolContext() });
+  const tools = createAgentTools(createTurnToolState({ current: fakeToolContext() }));
   assert.equal(
     tools.some((tool) => tool.name === "credential_exec"),
     false,
@@ -429,14 +434,14 @@ test("the retired credential tool is absent and execute accepts credential handl
 
 test("command and management call traces preserve purpose", async () => {
   const calls: Record<string, unknown>[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     scopeLabel: "personal:U1",
     emit: (event) => {
       if (event.kind === "ToolCall") calls.push(itemFields(event as Item));
     },
   };
-  const tools = createAgentTools(ref);
+  const tools = createAgentTools(createTurnToolState(ref));
   for (const [name, params] of [
     ["execute", { command: "pwd" }],
     ["sandbox", { action: "status" }],
@@ -453,9 +458,9 @@ test("command and management call traces preserve purpose", async () => {
 });
 
 test("declared client tools follow qm's own tools, in name order whatever the declaration order", () => {
-  const core = createAgentTools({ current: fakeToolContext() }).map((t) => t.name);
+  const core = createAgentTools(createTurnToolState({ current: fakeToolContext() })).map((t) => t.name);
   const names = (declared: ClientToolDeclaration[]) =>
-    createAgentTools({ current: fakeToolContext() }, { clientTools: declared }).map((t) => t.name);
+    createAgentTools(createTurnToolState({ current: fakeToolContext() }), { clientTools: declared }).map((t) => t.name);
   const forward = names([clientTool("ui__get_selection"), clientTool("ui__highlight_rows")]);
   const reversed = names([clientTool("ui__highlight_rows"), clientTool("ui__get_selection")]);
   assert.deepEqual(forward, [...core, "ui__get_selection", "ui__highlight_rows"]);
@@ -468,7 +473,7 @@ test("a client tool records the call, waits for the page, and returns its answer
   ref.observeToolResult = ({ tool, provenance, source }) => {
     screened.push({ tool, provenance, ...(source ? { source } : {}) });
   };
-  const tool = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection")] }).find(
+  const tool = createAgentTools(createTurnToolState(ref), { clientTools: [clientTool("ui__get_selection")] }).find(
     (t) => t.name === "ui__get_selection",
   );
   const pending = call(tool, { note: "hi" }) as Promise<{ content: Array<{ text: string }>; details: unknown }>;
@@ -496,7 +501,9 @@ test("a client tool passes the page's isError through to the model", async () =>
     callId: "t",
     result: { content: "no rows match", isError: true },
   });
-  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__highlight_rows")] }).slice(-1);
+  const [tool] = createAgentTools(createTurnToolState(ref), { clientTools: [clientTool("ui__highlight_rows")] }).slice(
+    -1,
+  );
   const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
   assert.equal(ret.content[0]?.text, "no rows match");
   assert.equal(emitted.find((e) => e.kind === "ToolResult")!.fields.isError, true);
@@ -504,7 +511,9 @@ test("a client tool passes the page's isError through to the model", async () =>
 
 test("a client tool times out with an error the model can act on", async () => {
   const { emitted, ref } = clientToolRef();
-  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 30)] }).slice(-1);
+  const [tool] = createAgentTools(createTurnToolState(ref), {
+    clientTools: [clientTool("ui__get_selection", 30)],
+  }).slice(-1);
   const ret = (await call(tool, {})) as { content: Array<{ text: string }> };
   assert.equal(ret.content[0]?.text, "The page didn't respond in time. It may have been closed or navigated away.");
   const toolResult = emitted.find((e) => e.kind === "ToolResult")!.fields;
@@ -514,7 +523,9 @@ test("a client tool times out with an error the model can act on", async () => {
 
 test("a client tool stops waiting when the turn is cancelled", async () => {
   const { emitted, cancel, ref } = clientToolRef();
-  const [tool] = createAgentTools(ref, { clientTools: [clientTool("ui__get_selection", 60_000)] }).slice(-1);
+  const [tool] = createAgentTools(createTurnToolState(ref), {
+    clientTools: [clientTool("ui__get_selection", 60_000)],
+  }).slice(-1);
   const pending = call(tool, {}) as Promise<{ content: Array<{ text: string }> }>;
   cancel.abort();
   const ret = await pending;

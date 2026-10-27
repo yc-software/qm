@@ -122,7 +122,12 @@ test("burst capture joins dependencies and preserves missing provenance from any
     });
     await strategy.onTurnEnd!({ ...turn, inheritedFacts: dependency });
     await strategy.onTurnEnd!({ ...turn, inheritedFacts: complete ? [] : undefined });
-    const fact = (await facts(scope))[0]!;
+    let captured = await facts(scope);
+    for (let attempt = 0; attempt < 300 && !captured.length; attempt++) {
+      await new Promise((r) => setTimeout(r, 10));
+      captured = await facts(scope);
+    }
+    const fact = captured[0]!;
     assert.equal(fact.sensitivity, "sensitive");
     assert.ok(fact.sources.includes("group:private"));
     assert.equal(fact.sourceUnknown, !complete);

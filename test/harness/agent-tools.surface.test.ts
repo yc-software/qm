@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 import { fakeToolContext, type Emitted, emittedItem, call, surfaceTool } from "../support/agent-tools.ts";
 
 test("the surface tool registers only when surfaceTools is on, and post/read_thread delegate to the tool context", async () => {
-  const refOff: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
-  const off = createAgentTools(refOff).map((t) => t.name);
+  const refOff: TurnToolStateInit = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const off = createAgentTools(createTurnToolState(refOff)).map((t) => t.name);
   assert.ok(!off.includes("slack"), "off by default (overheard path unchanged)");
   for (const n of [
     "post",
@@ -23,7 +24,7 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   }
 
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
@@ -32,7 +33,7 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
   };
   const slack = surfaceTool(ref);
   assert.equal(
-    createAgentTools(ref, { surfaceTools: true }).filter((t) => t.name === "slack").length,
+    createAgentTools(createTurnToolState(ref), { surfaceTools: true }).filter((t) => t.name === "slack").length,
     1,
     "exactly one surface tool",
   );
@@ -50,7 +51,7 @@ test("the surface tool registers only when surfaceTools is on, and post/read_thr
 
 test("the surface tool's react/edit/delete actions delegate to the tool context", async () => {
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
@@ -108,7 +109,7 @@ test("post replies HERE only (placement via ts/broadcast, cross-targets rejected
       return { ok: true, matched: "x" };
     },
   };
-  const ref: ToolContextRef = { current: capturing, scopeLabel: "channel:C1" };
+  const ref: TurnToolStateInit = { current: capturing, scopeLabel: "channel:C1" };
   const slack = surfaceTool(ref);
   await call(slack, { action: "post", text: "hi" });
   await call(slack, { action: "post", text: "hi", ts: "1.2" });
@@ -136,7 +137,7 @@ test("edit/delete surface an own-messages-only failure as a tool_result, not a t
       return { ok: false, message: "you can only delete your own messages" };
     },
   };
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: notOurs,
     emit: (e) => {
       emitted.push(emittedItem(e));
@@ -165,7 +166,7 @@ test("post reports a clean sentinel when the surface isn't wired this turn", asy
       return { ok: false, message: "no conversation here" };
     },
   };
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: noSurface,
     emit: (e) => {
       emitted.push(emittedItem(e));
@@ -182,7 +183,7 @@ test("post reports a clean sentinel when the surface isn't wired this turn", asy
 test("the surface tool's pull-query actions return pointers/data (not raw bytes)", async () => {
   const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
@@ -226,7 +227,7 @@ test("the surface tool's pull-query actions return pointers/data (not raw bytes)
 });
 
 test("an unknown action returns a crisp error text, not a throw", async () => {
-  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const ref: TurnToolStateInit = { current: fakeToolContext(), scopeLabel: "channel:C1" };
   const slack = surfaceTool(ref);
   const out = (await call(slack, { action: "frobnicate" })) as { content: Array<{ text: string }> };
   assert.match(out.content[0]!.text, /unknown action "frobnicate"/);
@@ -234,7 +235,7 @@ test("an unknown action returns a crisp error text, not a throw", async () => {
 });
 
 test("a missing required field for an action returns a crisp error, not a throw", async () => {
-  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "channel:C1" };
+  const ref: TurnToolStateInit = { current: fakeToolContext(), scopeLabel: "channel:C1" };
   const slack = surfaceTool(ref);
   const noText = (await call(slack, { action: "post" })) as { content: Array<{ text: string }> };
   assert.match(noText.content[0]!.text, /the "post" action requires `text`/);
@@ -293,10 +294,10 @@ test("each action dispatches to exactly its matching tool-context method", async
 });
 
 test("the surface tool is NAMED after its surface — a telegram surface produces a `telegram` tool", async () => {
-  const names = createAgentTools(
-    { current: fakeToolContext(), scopeLabel: "channel:C1" },
-    { surfaceTools: true, surfaceName: "telegram" },
-  ).map((t) => t.name);
+  const names = createAgentTools(createTurnToolState({ current: fakeToolContext(), scopeLabel: "channel:C1" }), {
+    surfaceTools: true,
+    surfaceName: "telegram",
+  }).map((t) => t.name);
   assert.ok(names.includes("telegram"), "the tool is named after the surface");
   assert.ok(!names.includes("slack"), "no `slack` tool when the surface is telegram");
   const emitted: Emitted[] = [];
@@ -317,9 +318,9 @@ test("the surface tool is NAMED after its surface — a telegram surface produce
 });
 
 test("readOnly exposes observation and constrained session coordination without execution tools", () => {
-  const ref: ToolContextRef = { current: fakeToolContext(), scopeLabel: "personal:U1" };
-  const full = createAgentTools(ref, { controlTools: true, reachExec: true });
-  const readOnly = createAgentTools(ref, { controlTools: true, reachExec: true, readOnly: true });
+  const ref: TurnToolStateInit = { current: fakeToolContext(), scopeLabel: "personal:U1" };
+  const full = createAgentTools(createTurnToolState(ref), { controlTools: true, reachExec: true });
+  const readOnly = createAgentTools(createTurnToolState(ref), { controlTools: true, reachExec: true, readOnly: true });
 
   const names = (ts: ReturnType<typeof createAgentTools>) => new Set(ts.map((t) => t.name));
   for (const t of ["execute", "background", "files", "apps", "cron", "webhook", "instructions"]) {
@@ -340,7 +341,7 @@ test("readOnly exposes observation and constrained session coordination without 
 
 test("finish_silently on a poll fire terminates the turn at the tool contract; off one it no-ops", async () => {
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
@@ -348,10 +349,11 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
     scopeLabel: "personal:U1",
     pollFire: true,
   };
-  const finish = createAgentTools(ref).find((t) => t.name === "finish_silently");
+  const state = createTurnToolState(ref);
+  const finish = createAgentTools(state).find((t) => t.name === "finish_silently");
   const res = (await call(finish, { reason: "nothing new" })) as { terminate?: boolean };
   assert.equal(res.terminate, true);
-  assert.equal(ref.silentRequested, true);
+  assert.equal(state.halt.silent(), true);
   assert.equal(
     emitted.filter(
       (e) => e.kind === "ToolCall" && e.fields.tool === "finish_silently" && e.fields.reason === "nothing new",
@@ -364,29 +366,33 @@ test("finish_silently on a poll fire terminates the turn at the tool contract; o
     1,
   );
 
-  ref.pollFire = false;
-  ref.silentRequested = false;
-  const noop = (await call(finish, { reason: "n/a" })) as { terminate?: boolean; content: Array<{ text?: string }> };
+  const offFire = createTurnToolState({ ...ref, pollFire: false });
+  const finishOff = createAgentTools(offFire).find((t) => t.name === "finish_silently");
+  const noop = (await call(finishOff, { reason: "n/a" })) as {
+    terminate?: boolean;
+    content: Array<{ text?: string }>;
+  };
   assert.notEqual(noop.terminate, true, "a person is waiting — the tool must not end the turn");
-  assert.equal(ref.silentRequested, false);
+  assert.equal(offFire.halt.silent(), false);
   assert.match(noop.content[0]?.text ?? "", /no-op/);
 });
 
 test("finish_silently ends surface turns and replaces stay_silent", async () => {
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
-  const tools = createAgentTools(ref, { surfaceTools: true });
+  const state = createTurnToolState(ref);
+  const tools = createAgentTools(state, { surfaceTools: true });
   assert.ok(!tools.some((t) => t.name === "stay_silent"));
   const finish = tools.find((t) => t.name === "finish_silently");
   const result = (await call(finish, { reason: "nothing new since the last check" })) as { terminate?: boolean };
   assert.equal(result.terminate, true);
-  assert.equal(ref.silentRequested, true);
+  assert.equal(state.halt.silent(), true);
   assert.equal(
     emitted.filter(
       (e) =>
@@ -399,9 +405,9 @@ test("finish_silently ends surface turns and replaces stay_silent", async () => 
 });
 
 test("pauseStampAfterToolCall stamps terminate onto sibling results once silence is requested", async () => {
-  const ref: { pausedOnApproval?: boolean; silentRequested?: boolean } = { silentRequested: true };
-  const stamped = await pauseStampAfterToolCall(ref)({});
+  const { halt } = createTurnToolState({ current: null, silentRequested: true });
+  const stamped = await pauseStampAfterToolCall(halt)({});
   assert.equal(stamped?.terminate, true);
-  ref.silentRequested = false;
-  assert.equal(await pauseStampAfterToolCall(ref)({}), undefined);
+  halt.setSilent(false);
+  assert.equal(await pauseStampAfterToolCall(halt)({}), undefined);
 });

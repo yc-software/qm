@@ -12,18 +12,21 @@ import {
 import { json, readBody as readBodyCapped, sendBuffered } from "../../chassis/src/http.ts";
 import { PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache } from "../../chassis/src/branding.ts";
+import { perEdgeTenant } from "../../chassis/src/tenant-hosts.ts";
 
-import { CORE_API_URL as CORE, CORE_SIGNING_SECRET } from "../../chassis/src/env.ts";
+import { CORE_API_URL as CORE, coreSigningSecret } from "../../chassis/src/env.ts";
 
 export const enc = encodeURIComponent;
 
-export const brandingCache = createBrandingCache(async () => {
-  const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
-  if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
-  const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
-  const keys = ["orgName", "accent", "mark", "markUrl", "selfLabel"];
-  return Object.fromEntries(keys.flatMap((key) => (typeof b?.[key] === "string" ? [[key, b[key]]] : [])));
-});
+export const brandingCache = perEdgeTenant(() =>
+  createBrandingCache(async () => {
+    const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
+    if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
+    const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
+    const keys = ["orgName", "accent", "mark", "markUrl", "selfLabel"];
+    return Object.fromEntries(keys.flatMap((key) => (typeof b?.[key] === "string" ? [[key, b[key]]] : [])));
+  }),
+);
 
 export const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 
@@ -33,10 +36,10 @@ export const portalHeaders = (): Record<string, string> => {
 };
 
 export function fetchCoreGet(path: string, init: RequestInit = {}, extra = portalHeaders()): Promise<Response> {
-  const signed = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
+  const signed = withSourceAuthNonce(path, coreSigningSecret());
   return fetch(`${CORE}${signed}`, {
     ...init,
-    headers: { ...signedHeaders(CORE_SIGNING_SECRET, "GET", signed, ""), ...extra },
+    headers: { ...signedHeaders(coreSigningSecret(), "GET", signed, ""), ...extra },
   });
 }
 
@@ -76,7 +79,7 @@ export async function coreJson<T>(res: ServerResponse, path: string): Promise<T 
   return data ?? undefined;
 }
 
-export const MAX_BODY_BYTES = 1_000_000;
+const MAX_BODY_BYTES = 1_000_000;
 
 export const readBody = (req: IncomingMessage): Promise<string> => readBodyCapped(req, MAX_BODY_BYTES);
 
@@ -89,7 +92,7 @@ export async function coreFetch(
 ): Promise<{ status: number; text: string }> {
   return fetchCoreText({
     origin: CORE,
-    secret: CORE_SIGNING_SECRET,
+    secret: coreSigningSecret(),
     method,
     path: pathWithQuery,
     body: rawBody,
@@ -114,7 +117,7 @@ export async function relayCore(
   body = "",
   headers = portalHeaders(),
 ): Promise<void> {
-  return relayCoreStream(res, { origin: CORE, secret: CORE_SIGNING_SECRET, method, path, body, headers });
+  return relayCoreStream(res, { origin: CORE, secret: coreSigningSecret(), method, path, body, headers });
 }
 
 export async function relayCap(
@@ -179,7 +182,7 @@ export interface Relay {
   gate?: (c: WebCtx) => Promise<boolean>;
 }
 
-export async function relayBody(c: WebCtx, o: Relay): Promise<string | null> {
+async function relayBody(c: WebCtx, o: Relay): Promise<string | null> {
   if (o.raw) return readBody(c.req);
   if (o.body) return JSON.stringify(o.body);
   const head = o.principal ? { principalId: c.user } : {};

@@ -199,7 +199,7 @@ export async function changeScopeRuntime(
   }
 }
 
-export function activeLoadoutEntry(c: Composer, selected: ModelOption): LoadoutEntry {
+function activeLoadoutEntry(c: Composer, selected: ModelOption): LoadoutEntry {
   return {
     value: selected.value,
     effort: c.state.effortLevel,
@@ -215,7 +215,7 @@ function normalizeLoadoutEntry(c: Composer, entry: LoadoutEntry, option: ModelOp
   };
 }
 
-export function seededLoadout(c: Composer, selected: ModelOption): LoadoutEntry[] {
+function seededLoadout(c: Composer, selected: ModelOption): LoadoutEntry[] {
   const latest = loadLoadout(c.loadoutKey);
   if (latest.length) c.loadout = latest;
   const active = activeLoadoutEntry(c, selected);
@@ -236,7 +236,7 @@ function rememberActiveTweaks(c: Composer, selected: ModelOption): void {
   saveLoadout(c.loadout, c.loadoutKey);
 }
 
-export function applyLoadout(c: Composer, entry: LoadoutEntry, agent: Agent): void {
+function applyLoadout(c: Composer, entry: LoadoutEntry, agent: Agent): void {
   const option = modelOptionFor(entry.value, c.scopeKey());
   if (!option) return;
   const previous = c.currentModelOption();
@@ -254,7 +254,7 @@ export function applyLoadout(c: Composer, entry: LoadoutEntry, agent: Agent): vo
   c.modelPicker.place();
 }
 
-export function addLoadoutEntry(c: Composer, option: ModelOption, agent: Agent): void {
+function addLoadoutEntry(c: Composer, option: ModelOption, agent: Agent): void {
   const current = c.currentModelOption();
   if (!current || seededLoadout(c, current).length >= LOADOUT_CAP) return;
   applyLoadout(c, { value: option.value, effort: defaultEffortForModel(option.model), fast: false }, agent);
@@ -275,7 +275,7 @@ export function selectModel(c: Composer, value: string, agent: Agent): void {
   c.ctx.chat.drawActiveChat(agent);
 }
 
-export function selectEffort(c: Composer, level: EffortLevel, agent: Agent): void {
+function selectEffort(c: Composer, level: EffortLevel, agent: Agent): void {
   const selected = c.currentModelOption();
   if (!selected || !effortLevelsForModel(selected.model).some((option) => option.value === level)) return;
   c.state.effortLevel = level;

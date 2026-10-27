@@ -4,7 +4,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createToolContext } from "../../src/tools/tool-context.ts";
-import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
@@ -109,14 +110,14 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   await memory.capture(personal, ["Owns the billing service"], at);
 
   const emitted: NewItem[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: ctxFor({ scope: personal, workspace, memory }),
     emit: (e) => {
       emitted.push(e);
     },
     scopeLabel: personal,
   };
-  const tools = createAgentTools(ref);
+  const tools = createAgentTools(createTurnToolState(ref));
   assert.equal(
     tools.some((t) => t.name === "recall"),
     false,
@@ -143,12 +144,12 @@ test("the `memory` tool adds, reads with ids, edits and deletes, all-or-nothing"
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-pi-")));
   const memory = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: ctxFor({ scope: personal, workspace, memory }),
     emit: () => {},
     scopeLabel: personal,
   };
-  const memoryTool = createAgentTools(ref).find((t) => t.name === "memory");
+  const memoryTool = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "memory");
   const run = async (params: unknown) => textOf(await call(memoryTool, params));
 
   assert.match(
@@ -186,12 +187,12 @@ test("a read-only wake keeps `memory` but refuses its write actions", async () =
   const personal = scopeId("personal", "U1");
   await workspace.ensureScope(personal);
   await memory.capture(personal, ["Owns the billing service"], at);
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: ctxFor({ scope: personal, workspace, memory }),
     emit: () => {},
     scopeLabel: personal,
   };
-  const memoryTool = createAgentTools(ref, { readOnly: true }).find((t) => t.name === "memory");
+  const memoryTool = createAgentTools(createTurnToolState(ref), { readOnly: true }).find((t) => t.name === "memory");
 
   assert.match(textOf(await call(memoryTool, { action: "search", query: "billing" })), /billing service/);
   assert.match(textOf(await call(memoryTool, { action: "read" })), /billing service/);
@@ -201,7 +202,7 @@ test("a read-only wake keeps `memory` but refuses its write actions", async () =
 });
 
 test("the `memory` tool exposes a scope selector for authorized reads", () => {
-  const memoryTool = createAgentTools({ current: null }).find((t) => t.name === "memory");
+  const memoryTool = createAgentTools(createTurnToolState({ current: null })).find((t) => t.name === "memory");
   assert.ok(memoryTool);
   const props = (memoryTool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
   assert.deepEqual(Object.keys(props).sort(), ["action", "facts", "ids", "limit", "query", "retrySafe", "scope"]);
@@ -272,7 +273,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   assert.deepEqual(await ctx.memorySearch("deploys", 20, org), [
     `[${org}] #2 (2026-05-31) deploys are frozen in December`,
   ]);
-  const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
+  const tool = createAgentTools(createTurnToolState({ current: ctx, emit: () => {}, scopeLabel: personal })).find(
     (t) => t.name === "memory",
   );
   assert.match(textOf(await call(tool, { action: "read", scope: org })), /December/);

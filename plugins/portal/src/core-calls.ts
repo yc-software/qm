@@ -3,32 +3,33 @@ import { fetchCoreText, type HttpMethod } from "../../chassis/src/core-client.ts
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { errMessage, swallow } from "../../chassis/src/errors.ts";
 import { reportFailure } from "../../chassis/src/error-reporting.ts";
-import {
-  CORE_API_URL as CORE,
-  CORE_ORG_ID as ORG,
-  CORE_SIGNING_SECRET,
-  PORTAL_IDENTITY_SECRET,
-} from "../../chassis/src/env.ts";
+import { CORE_API_URL as CORE, coreOrgId, coreSigningSecret, portalIdentitySecret } from "../../chassis/src/env.ts";
+import { perEdgeTenant } from "../../chassis/src/tenant-hosts.ts";
 
-export let modelProviderConfigured: boolean | undefined;
-export let brandLabel = "QM";
-let surfaceConfigNextAt = 0;
-let surfaceConfigInflight: Promise<void> | null = null;
+const surfaceConfig = perEdgeTenant(() => ({
+  modelProviderConfigured: undefined as boolean | undefined,
+  brandLabel: "QM",
+  nextAt: 0,
+  inflight: null as Promise<void> | null,
+}));
+export const modelProviderConfigured = (): boolean | undefined => surfaceConfig().modelProviderConfigured;
+export const brandLabel = (): string => surfaceConfig().brandLabel;
 export function refreshSurfaceConfig(): Promise<void> {
-  if (Date.now() >= surfaceConfigNextAt) {
-    surfaceConfigNextAt = Date.now() + 5_000;
-    surfaceConfigInflight = fetchSurfaceConfig().finally(() => {
-      surfaceConfigInflight = null;
+  const state = surfaceConfig();
+  if (Date.now() >= state.nextAt) {
+    state.nextAt = Date.now() + 5_000;
+    state.inflight = fetchSurfaceConfig().finally(() => {
+      state.inflight = null;
     });
   }
-  return surfaceConfigInflight ?? Promise.resolve();
+  return state.inflight ?? Promise.resolve();
 }
 export async function coreCall<T extends object>(
   method: HttpMethod,
   path: string,
   o: { body?: string; headers?: Record<string, string>; signal?: AbortSignal } = {},
 ): Promise<{ ok: boolean; status: number; body: Partial<T> }> {
-  const r = await fetchCoreText({ origin: CORE, secret: CORE_SIGNING_SECRET, method, path, ...o });
+  const r = await fetchCoreText({ origin: CORE, secret: coreSigningSecret(), method, path, ...o });
   let body: unknown;
   try {
     body = JSON.parse(r.text);
@@ -53,11 +54,12 @@ async function fetchSurfaceConfig(): Promise<void> {
     );
     if (r.ok) {
       const body = r.body;
-      modelProviderConfigured =
+      const state = surfaceConfig();
+      state.modelProviderConfigured =
         typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
       const label = body.branding?.selfLabel;
-      brandLabel = typeof label === "string" && label.trim() ? label.trim() : "QM";
-      surfaceConfigNextAt = Date.now() + (modelProviderConfigured === false ? 5_000 : 30_000);
+      state.brandLabel = typeof label === "string" && label.trim() ? label.trim() : "QM";
+      state.nextAt = Date.now() + (state.modelProviderConfigured === false ? 5_000 : 30_000);
     } else console.warn(`[portal] surface-config returned HTTP ${r.status}`);
   } catch (error) {
     swallow("portal: surface-config fetch (retrying)", error);
@@ -68,12 +70,11 @@ const ADMIN_TTL_MS = 60_000;
 const ADMIN_PROBE_TIMEOUT_MS = 6_500;
 const ADMIN_PROBE_ATTEMPTS = 2;
 const ADMIN_PROBE_RETRY_DELAY_MS = 250;
-export const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_MS });
+export const adminCache = perEdgeTenant(() => new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_MS }));
 
 export function portalIdentityHeaders(sub: string): Record<string, string> {
-  return PORTAL_IDENTITY_SECRET
-    ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: sub, exp: Date.now() + 60_000 }, PORTAL_IDENTITY_SECRET) }
-    : {};
+  const secret = portalIdentitySecret();
+  return secret ? { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: sub, exp: Date.now() + 60_000 }, secret) } : {};
 }
 
 export async function adminProbeAttempt(sub: string): Promise<boolean | null> {
@@ -81,7 +82,7 @@ export async function adminProbeAttempt(sub: string): Promise<boolean | null> {
   const timer = setTimeout(() => ctrl.abort(), ADMIN_PROBE_TIMEOUT_MS);
   try {
     const r = await coreCall<{ isAdmin: unknown }>("GET", "/v1/admin/whoami", {
-      headers: { "x-admin-actor": `${sub}@${ORG}`, ...portalIdentityHeaders(sub) },
+      headers: { "x-admin-actor": `${sub}@${coreOrgId()}`, ...portalIdentityHeaders(sub) },
       signal: ctrl.signal,
     });
     if (!r.ok) {
@@ -103,7 +104,7 @@ export async function adminProbeAttempt(sub: string): Promise<boolean | null> {
 }
 
 export async function isAdmin(sub: string): Promise<boolean> {
-  const hit = adminCache.get(sub);
+  const hit = adminCache().get(sub);
   if (hit !== undefined) return hit;
   for (let attempt = 0; attempt < ADMIN_PROBE_ATTEMPTS; attempt++) {
     const isAdmin = await adminProbeAttempt(sub);
@@ -112,7 +113,7 @@ export async function isAdmin(sub: string): Promise<boolean> {
         await new Promise((resolve) => setTimeout(resolve, ADMIN_PROBE_RETRY_DELAY_MS));
       continue;
     }
-    adminCache.set(sub, isAdmin);
+    adminCache().set(sub, isAdmin);
     return isAdmin;
   }
   return false;
@@ -120,10 +121,10 @@ export async function isAdmin(sub: string): Promise<boolean> {
 
 const CANONICAL_TTL_MS = 60_000;
 const CANONICAL_TIMEOUT_MS = 4_000;
-const canonicalCache = new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS });
+const canonicalCache = perEdgeTenant(() => new LRUCache<string, string>({ max: 10_000, ttl: CANONICAL_TTL_MS }));
 
 export async function canonicalPrincipal(sub: string): Promise<string | null> {
-  const hit = canonicalCache.get(sub);
+  const hit = canonicalCache().get(sub);
   if (hit !== undefined) return hit;
   try {
     const r = await coreCall<{ canonicalId: unknown }>("GET", `/v1/principals/${encodeURIComponent(sub)}/canonical`, {
@@ -135,7 +136,7 @@ export async function canonicalPrincipal(sub: string): Promise<string | null> {
     }
     const body = r.body;
     const canonical = typeof body.canonicalId === "string" && body.canonicalId ? body.canonicalId : sub;
-    canonicalCache.set(sub, canonical);
+    canonicalCache().set(sub, canonical);
     return canonical;
   } catch (error) {
     reportFailure("portal: canonical principal lookup", error);
@@ -154,7 +155,7 @@ export async function coreImpersonate(
       `/v1/admin/impersonate${action === "stop" ? "/stop" : ""}`,
       {
         body: JSON.stringify({ target }),
-        headers: { "x-admin-actor": `${admin}@${ORG}`, ...portalIdentityHeaders(admin) },
+        headers: { "x-admin-actor": `${admin}@${coreOrgId()}`, ...portalIdentityHeaders(admin) },
       },
     );
     return { ok: r.ok, status: r.status, displayName: r.body.displayName, message: r.body.message };

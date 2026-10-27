@@ -1,12 +1,12 @@
-import { type Api, type Model } from "@earendil-works/pi-ai";
 import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
-import { auxiliaryModelFor, defaultModel, getRequiredModel } from "../model/pi-models.ts";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import { auxiliaryModelFor, defaultModel } from "../model/pi-models.ts";
+import { type ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import { defineHarness, type Harness } from "./harness.ts";
 import { coreToolOptions, type CoreToolOptions } from "./agent-tools.ts";
 import { type RunSignalStore } from "../runs/run-signal-store.ts";
 import { type ProviderKeys, resolveConfiguredModelId } from "./pi-model-runtime.ts";
-import { runPiTurn } from "./pi-run-turn.ts";
+import { runPiTurn, type PiTurnOptions } from "./pi-run-turn.ts";
+import { createPiModelAccess } from "./pi-model-access.ts";
 import {
   piShouldRespond,
   piCompactHistory,
@@ -57,66 +57,36 @@ export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
 
 export { modelSupportsFastMode } from "../model/pi-models.ts";
 
-/** What one Pi harness's turns and side calls share: its options and how it resolves models and provider keys. */
-export type PiHarnessContext = ReturnType<typeof piHarnessContext>;
-
-function piHarnessContext(opts?: PiHarnessOptions) {
-  const resolveModelId = (): string => resolveConfiguredModelId(undefined, opts?.defaultModelId);
+export function createPiHarness(opts?: PiHarnessOptions): Harness {
+  const access = createPiModelAccess(opts);
+  const primaryModelId = (): string => resolveConfiguredModelId(undefined, opts?.defaultModelId);
   const auxiliaryModelId = (): string =>
     auxiliaryModelFor(resolveConfiguredModelId(opts?.resolveBaseModelId?.(), opts?.defaultModelId));
   const detectModelId = (): string => opts?.detectModelId ?? auxiliaryModelId();
   const titleModelId = (): string => opts?.titleModelId ?? auxiliaryModelId();
   const judgeModelId = (): string => opts?.judgeModelId ?? auxiliaryModelId();
-  const tempDirPrefix = opts?.tempDirPrefix ?? "pi";
-  const configuredProviderKeys: ProviderKeys = opts?.resolveProviderKeys
-    ? {}
-    : {
-        ...(opts?.apiKey ? { anthropic: opts.apiKey } : {}),
-        ...(opts?.openaiApiKey ? { openai: opts.openaiApiKey } : {}),
-        ...(opts?.openrouterApiKey ? { openrouter: opts.openrouterApiKey } : {}),
-      };
-  const resolveProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...configuredProviderKeys,
-    ...(await opts?.resolveProviderKeys?.()),
-  });
-  const modelGateway = opts?.modelGateway;
-  const companyServedId = (id: string) => (opts?.companyModelId ? opts.companyModelId(id) : id);
-  const requiredModel = (id: string, company = true) => getRequiredModel(company ? companyServedId(id) : id);
-  const keyForModel = (keys: ProviderKeys, model: Model<Api>): string | undefined =>
-    modelGatewayRequest(modelGateway, model)?.apiKey ?? keys[String(model.provider)];
-  const captureRequests = opts?.captureRequests ?? true;
-  const defaultTurnWallClockMs = opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000;
-  const signals = opts?.signals;
-  return {
-    resolveModelId,
-    detectModelId,
-    titleModelId,
-    judgeModelId,
-    tempDirPrefix,
-    resolveProviderKeys,
-    modelGateway,
-    companyServedId,
-    requiredModel,
-    keyForModel,
-    captureRequests,
-    defaultTurnWallClockMs,
-    signals,
-    opts,
+  const resolveFallbackRuntime = () => opts?.resolveFallbackRuntime?.();
+  const turnOptions: PiTurnOptions = {
+    access,
+    primaryModelId,
+    toolOptions: opts,
+    tempDirPrefix: opts?.tempDirPrefix ?? "pi",
+    captureRequests: opts?.captureRequests ?? true,
+    turnWallClockMs: opts?.turnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000,
+    signals: opts?.signals,
+    resolveFallbackRuntime,
   };
-}
-
-export function createPiHarness(opts?: PiHarnessOptions): Harness {
-  const ctx = piHarnessContext(opts);
   return defineHarness({
-    runTurn: (turn) => runPiTurn(ctx, turn),
-    shouldRespond: (detect) => piShouldRespond(ctx, detect),
-    compactHistory: (input) => piCompactHistory(ctx, input),
-    contextTokenBudget: (scopeLabel, model) => piContextTokenBudget(ctx, scopeLabel, model),
-    oneShot: (systemPrompt, prompt) => piOneShot(ctx, systemPrompt, prompt),
-    judge: (systemPrompt, prompt, signal) => piJudge(ctx, systemPrompt, prompt, signal),
-    screenSecurity: (input) => piScreenSecurity(ctx, input),
-    pickAckEmoji: (text, candidates) => piPickAckEmoji(ctx, text, candidates),
-    generateTitle: (transcript) => piGenerateTitle(ctx, transcript),
-    summarizeApproval: (command, reason, purpose) => piSummarizeApproval(ctx, command, reason, purpose),
+    runTurn: (turn) => runPiTurn(turnOptions, turn),
+    shouldRespond: (detect) => piShouldRespond(access, detectModelId, detect),
+    compactHistory: (input) => piCompactHistory(access, primaryModelId, () => resolveFallbackRuntime()?.modelId, input),
+    contextTokenBudget: (_scopeLabel, model) => piContextTokenBudget(primaryModelId, model),
+    oneShot: (systemPrompt, prompt) => piOneShot(access, primaryModelId, systemPrompt, prompt),
+    judge: (systemPrompt, prompt, signal) => piJudge(access, judgeModelId, systemPrompt, prompt, signal),
+    screenSecurity: (input) => piScreenSecurity(access, detectModelId, input),
+    pickAckEmoji: (text, candidates) => piPickAckEmoji(access, text, candidates),
+    generateTitle: (transcript) => piGenerateTitle(access, titleModelId, transcript),
+    summarizeApproval: (command, reason, purpose) =>
+      piSummarizeApproval(access, titleModelId, command, reason, purpose),
   });
 }

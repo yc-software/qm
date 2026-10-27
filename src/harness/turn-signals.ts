@@ -1,37 +1,32 @@
-// How a running pi turn listens for being stopped or steered: the run's cancel signal (a lost
-// lease), and the run-signal poll that delivers user steers and user aborts.
-
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
-import type { ToolContextRef } from "./agent-tools.ts";
+import type { TurnHalt } from "./turn-tool-state.ts";
+import type { TurnRequestSettings } from "./turn-request.ts";
 import type { HarnessTurnInput } from "./harness.ts";
 import type { SteerIntake } from "./harness-shared.ts";
 import { recordedMessageTimestamps } from "./replay.ts";
 
-/** Whether the user stopped this turn, and why. */
 export interface TurnStop {
   userAborted: boolean;
   abortReason?: string;
 }
 
-/**
- * Abort the turn when its cancel signal fires, and poll the run's signals for steers (queued into
- * the live session) and user aborts (recorded on `stop`). `release` detaches both.
- */
 export function watchTurnSignals(o: {
   turn: HarnessTurnInput;
-  entry: { agentSession: AgentSession; ref: ToolContextRef };
+  session: AgentSession;
+  settings: Pick<TurnRequestSettings, "addDocuments">;
+  halt: Pick<TurnHalt, "setSilent">;
   signals: RunSignalStore | undefined;
   toolAbort: AbortController;
   pendingSteers: Array<SteerIntake & { prompt: string }>;
   stop: TurnStop;
 }): { release: () => Promise<void> } {
-  const { turn, entry, signals, toolAbort, pendingSteers, stop } = o;
+  const { turn, session, settings, halt, signals, toolAbort, pendingSteers, stop } = o;
   const onCancel = (): void => {
     toolAbort.abort();
-    entry.agentSession.clearQueue();
-    void entry.agentSession.abort().catch(swallowAs("pi: lease-lost abort", undefined));
+    session.clearQueue();
+    void session.abort().catch(swallowAs("pi: lease-lost abort", undefined));
   };
   if (turn.cancel) {
     if (turn.cancel.aborted) onCancel();
@@ -48,7 +43,7 @@ export function watchTurnSignals(o: {
               if (ts && steeredSeen.has(ts)) return;
               const prepared = await turn.prepareSteer?.(text, request);
               const prompt = prepared?.text ?? text;
-              if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
+              if (!session.isStreaming || toolAbort.signal.aborted) return false;
               const steer = {
                 text,
                 prompt,
@@ -60,11 +55,10 @@ export function watchTurnSignals(o: {
               };
               pendingSteers.push(steer);
               if (ts) steeredSeen.add(ts);
-              if (prepared?.documents?.length)
-                entry.ref.documents = [...(entry.ref.documents ?? []), ...prepared.documents];
-              entry.ref.silentRequested = false;
+              if (prepared?.documents?.length) settings.addDocuments(prepared.documents);
+              halt.setSilent(false);
               try {
-                await entry.agentSession.steer(
+                await session.steer(
                   prompt,
                   prepared?.images?.map((image) => ({
                     type: "image" as const,
@@ -84,8 +78,8 @@ export function watchTurnSignals(o: {
               stop.userAborted = true;
               stop.abortReason ??= reason;
               toolAbort.abort();
-              entry.agentSession.clearQueue();
-              await entry.agentSession.abort();
+              session.clearQueue();
+              await session.abort();
             },
           },
           { onError: (e) => swallow("pi: run signal poll", e) },

@@ -1,6 +1,5 @@
 import { Check } from "typebox/value";
 import { isObj } from "../../util/objects.ts";
-// The execute, sandbox and background tools: one command path for scoped, scratch and reached computers.
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static, type TSchema } from "typebox";
@@ -10,6 +9,7 @@ import { MaskedExecutionError } from "../../security/secret-masking.ts";
 import { CommandDenied, NeedsApproval } from "../../tools/primitives.ts";
 import { errMessage } from "../../util/errors.ts";
 import { type ToolKit } from "./kit.ts";
+import type { TurnHalt } from "../turn-tool-state.ts";
 import {
   FILE_SEND_GUIDANCE,
   PRESSURE_WARN_FULL60,
@@ -19,8 +19,8 @@ import {
   text,
 } from "./shared.ts";
 
-export function computerTools(kit: ToolKit) {
-  const { EXECUTE_TIMEOUT_GUIDANCE, executeBaseParams, blockOnApproval } = executeShared(kit);
+export function computerTools(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
+  const { EXECUTE_TIMEOUT_GUIDANCE, executeBaseParams, blockOnApproval } = executeShared(kit, halt);
   const { runExecute, invalidExecute } = executeRunner(kit, { blockOnApproval });
   const { sandboxManagement } = sandboxTool(kit, { blockOnApproval });
   const { execute } = executeTool(kit, {
@@ -35,9 +35,8 @@ export function computerTools(kit: ToolKit) {
   return { execute, sandboxManagement, background, validateSandboxTool };
 }
 
-/** The execute tool's shared timeout guidance, base parameters and approval pause. */
-function executeShared(kit: ToolKit) {
-  const { ref, execTimeoutSec, execCeilingSec, bgTtlSec, bgTtlMaxSec, recordResult } = kit;
+function executeShared(kit: ToolKit, halt: Pick<TurnHalt, "pauseForApproval">) {
+  const { execTimeoutSec, execCeilingSec, bgTtlSec, bgTtlMaxSec, recordResult } = kit;
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
     `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
@@ -79,7 +78,7 @@ function executeShared(kit: ToolKit) {
     tool = "execute",
     extra: Record<string, unknown> = {},
   ) => {
-    ref.pendingApprovals?.push({
+    halt.pauseForApproval({
       command: e.command,
       reason: e.approvalReason,
       kind: e.kind,
@@ -88,7 +87,6 @@ function executeShared(kit: ToolKit) {
       ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
       ...(e.grantModes ? { grantModes: e.grantModes } : {}),
     });
-    ref.pausedOnApproval = true;
     return recordResult(
       callId,
       { tool, ...extra, blocked: "needs_approval", reason: e.approvalReason },
@@ -99,7 +97,6 @@ function executeShared(kit: ToolKit) {
   return { EXECUTE_TIMEOUT_GUIDANCE, executeBaseParams, blockOnApproval };
 }
 
-/** Runs one foreground command and records its call and result. */
 function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
   const { ref, log, recordCall, recordResult, recordFail } = kit;
   const runExecute = async (
@@ -193,7 +190,6 @@ function executeRunner(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof
   return { runExecute, invalidExecute };
 }
 
-/** The sandbox tool: inventory, defaults, status and restart. */
 function sandboxTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
   const { ref, recordCall, recordText, recordFail } = kit;
   const sandboxActions = Object.keys(SANDBOX_TOOL_ARGS.sandbox!);
@@ -292,7 +288,6 @@ function sandboxTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof e
   return { sandboxManagement };
 }
 
-/** The execute tool: scope routing, descriptions, and background starts. */
 function executeTool(
   kit: ToolKit,
   {
@@ -426,7 +421,6 @@ function executeTool(
   return { execute };
 }
 
-/** The background tool: poll, input, stop, list and watch detached jobs. */
 function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeof executeShared>, "blockOnApproval">) {
   const { execCeilingSec, bgTtlMin, bgTtlMaxMin, capabilityExpiry } = kit;
   const background = defineTool({
@@ -486,7 +480,6 @@ function backgroundParams() {
   });
 }
 
-/** Runs one background-tool action against the turn's tool context. */
 async function runBackgroundAction(
   kit: ToolKit,
   blockOnApproval: ReturnType<typeof executeShared>["blockOnApproval"],
@@ -628,7 +621,6 @@ async function runBackgroundAction(
   }
 }
 
-/** Rejects sandbox-targeting tool calls whose sandbox_id is malformed. */
 function sandboxValidation(kit: ToolKit) {
   const { recordCall, recordFail } = kit;
   const validateSandboxTool = (tool: ToolDefinition): ToolDefinition => {
@@ -674,12 +666,6 @@ function sandboxValidation(kit: ToolKit) {
   return { validateSandboxTool };
 }
 
-/**
- * Argument rules for execute, sandbox and background, keyed by tool then action ("" = the tool has no
- * action). `required` fields must be present and non-blank; `fields` (with `required`, `action` and
- * `purpose`) are the only ones an action accepts, and omitting it skips that check; `nullable` fields
- * may be null. A call breaking a rule is refused before the tool runs, so handlers can rely on them.
- */
 const SANDBOX_TOOL_ARGS: Record<
   string,
   Record<string, { required: string[]; fields?: string[]; nullable?: string[] }>

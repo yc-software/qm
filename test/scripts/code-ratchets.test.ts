@@ -4,9 +4,12 @@ import { blobTables, featureFlags, NAME_RULES, names } from "../../scripts/code-
 
 const [legacy, mode, kv, flag] = NAME_RULES;
 
-test("legacy identifiers count, legacy inside string literals does not", () => {
-  const code = `const legacyRuns = db.where("engine = 'legacy'");\nif (run.engine === 'legacy-runner') LEGACY_SLOTS++;`;
-  assert.deepEqual([...names(code, legacy!)], ["legacyRuns", "LEGACY_SLOTS"]);
+test("legacy names count in code, string literals and SQL alike", () => {
+  const code = `const legacyRuns = db.where("engine = 'legacy'");\nif (run.engine === 'legacy-runner') LEGACY_SLOTS++;\nALTER TABLE runs ADD legacy_engine text;`;
+  assert.deepEqual(
+    [...names(code, legacy!)],
+    ["legacyRuns", "legacy", "legacy-runner", "LEGACY_SLOTS", "legacy_engine"],
+  );
 });
 
 test("mode and flag env names count wherever they appear", () => {

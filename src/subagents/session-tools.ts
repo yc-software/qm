@@ -44,7 +44,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 session,
                 actor: caller.actor,
                 audience: caller.conversation.audience,
-                open: (member) => syscalls.open(member),
+                open: (member) => openSubagent(ctx, member, { swarm: true }),
               },
               input,
             );

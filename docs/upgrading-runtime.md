@@ -41,14 +41,17 @@ release registers them, once rollback to the images that need those objects is n
 longer possible.
 
 The schema starts from `src/persistence/schema-baseline.sql`, which folds every
-migration released up to qm main 9be16d35 (the list is in
-`src/persistence/schema-baseline.ts`). A new database gets the baseline, then the later
-migrations. An existing database must already have applied every folded migration, as
-any deployment that has booted qm main 9be16d35 or later has: it records
-`baseline/0001` without changing anything and runs only the later migrations. Startup
-refuses an older database and names the migrations it lacks; boot it once on a release
-from 9be16d35 up to the one before the baseline, then upgrade. Startup also refuses a
-database that has QM tables but no `qm_schema_migrations` ledger.
+migration released up to qm main 9be16d35. A new database gets the baseline, then the
+later migrations. A database that already applied every folded migration, as any
+deployment that has booted qm main 9be16d35 or later has, records `baseline/0001`
+without changing anything and runs only the later migrations. An older database, from
+any earlier release including those before the `qm_schema_migrations` ledger, first
+runs the folded migrations it lacks, exactly as qm main 9be16d35 defined them
+(`src/persistence/schema-baseline-chain.json`, in the order that release applied
+them), then records `baseline/0001` and continues with the later migrations. On a
+database from before qm main moved session history into `items`, that first boot copies
+the whole history in one transaction and holds the migration lock until it finishes, so
+expect it to take a while on a large database.
 
 Rolling back the runtime restores code and configuration, not database contents.
 Older binaries do not display cron history written only to the new journal; those

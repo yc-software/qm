@@ -7,9 +7,6 @@ export function tenantSecretKey(derive: () => SecretKey): SecretKey {
     get current() {
       return key().current;
     },
-    get v1() {
-      return key().v1;
-    },
     get fallbacks() {
       return key().fallbacks;
     },

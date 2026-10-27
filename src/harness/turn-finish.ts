@@ -1,9 +1,6 @@
-// How a pi turn ends once its rounds are done: bank the goal's turn, then return a runtime
-// handoff, a stopped turn (with whatever partial reply streamed), or the closing reply plus any
-// pending approvals.
-
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ToolContextRef } from "./agent-tools.ts";
+import type { TurnGoal, TurnHalt } from "./turn-tool-state.ts";
+import type { ModelCallLog } from "./model-call-log.ts";
 import type { HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
 import type { StepRecorder } from "./pi-step-recorder.ts";
 import type { GrindMeter } from "./grind.ts";
@@ -14,13 +11,12 @@ import { recordStoppedTurn } from "./harness-shared.ts";
 import { textFromContent } from "./pi-payload.ts";
 import { piLastAssistantTextOrThrow } from "./turn-recovery.ts";
 
-/**
- * Build the turn result after the last round. `settled` waits for queued step writes and rethrows a
- * persistence failure.
- */
 export async function finishTurn(o: {
   turn: HarnessTurnInput;
-  entry: { agentSession: AgentSession; ref: ToolContextRef };
+  session: AgentSession;
+  goal: Pick<TurnGoal, "current" | "set">;
+  halt: Pick<TurnHalt, "handoff" | "silent" | "approvals" | "pausedOnApproval">;
+  calls: Pick<ModelCallLog, "count">;
   steps: StepRecorder;
   grindMeter: GrindMeter;
   stop: TurnStop;
@@ -29,15 +25,28 @@ export async function finishTurn(o: {
   recoveryDead: boolean;
   settled: () => Promise<void>;
 }): Promise<HarnessTurnResult> {
-  const { turn, entry, steps, grindMeter, stop, callStats, messagesBefore, recoveryDead, settled } = o;
+  const {
+    turn,
+    session,
+    goal,
+    halt,
+    calls,
+    steps,
+    grindMeter,
+    stop,
+    callStats,
+    messagesBefore,
+    recoveryDead,
+    settled,
+  } = o;
   const freshAssistantStopReason = (): string | undefined => {
-    const fresh = entry.agentSession.messages.slice(messagesBefore);
+    const fresh = session.messages.slice(messagesBefore);
     const last = [...fresh].reverse().find((m) => (m as { role?: string }).role === "assistant") as
       { stopReason?: string } | undefined;
     return last?.stopReason;
   };
   const settleGoal = async (pause = false): Promise<void> => {
-    const g = entry.ref.goal;
+    const g = goal.current();
     if (!g) return;
     bankGoalTurn(g, grindMeter.startedAt);
     if (pause && g.status === "active") {
@@ -45,16 +54,17 @@ export async function finishTurn(o: {
       g.updatedAt = Date.now();
     }
     await turn.saveGoal?.(g);
-    if (g.status === "complete") entry.ref.goal = null;
+    if (g.status === "complete") goal.set(null);
   };
-  if (entry.ref.runtimeHandoff && !stop.userAborted && !turn.cancel?.aborted) {
+  const handoff = halt.handoff();
+  if (handoff && !stop.userAborted && !turn.cancel?.aborted) {
     steps.flush();
     await settled();
     await settleGoal();
     return {
       reply: "",
-      runtimeHandoff: entry.ref.runtimeHandoff,
-      modelCalls: entry.ref.modelCalls ?? 0,
+      runtimeHandoff: halt.handoff(),
+      modelCalls: calls.count(),
       cacheUsage: sumCacheUsage(callStats) ?? undefined,
     };
   }
@@ -62,7 +72,7 @@ export async function finishTurn(o: {
   const cancelStoppedCleanly =
     turn.cancel?.aborted === true && (freshStopReason === "aborted" || freshStopReason === undefined);
   if (stop.userAborted || cancelStoppedCleanly) {
-    const freshMessages = entry.agentSession.messages.slice(messagesBefore);
+    const freshMessages = session.messages.slice(messagesBefore);
     const lastFreshAssistant = [...freshMessages].reverse().find((m) => (m as { role?: string }).role === "assistant");
     const partial = lastFreshAssistant ? textFromContent((lastFreshAssistant as { content?: unknown }).content) : "";
     const reply = partial.trim() ? partial : "(stopped)";
@@ -77,15 +87,14 @@ export async function finishTurn(o: {
     const base = {
       reply,
       stopped: true as const,
-      modelCalls: entry.ref.modelCalls ?? 0,
+      modelCalls: calls.count(),
     };
     return cacheUsage ? { ...base, cacheUsage } : base;
   }
 
   await settleGoal();
-  const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-  // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
-  const reply = entry.ref.silentRequested ? "" : closingText;
+  const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(session) ?? "");
+  const reply = halt.silent() ? "" : closingText;
   const closing = steps.closing(reply);
   await turn.emit({
     kind: "AgentMessage",
@@ -93,15 +102,15 @@ export async function finishTurn(o: {
     step: closing?.step ?? null,
     body: closing?.body ?? {},
   });
-  const pendingApprovals = entry.ref.pendingApprovals ?? [];
-  const modelCalls = entry.ref.modelCalls ?? 0;
+  const pendingApprovals = halt.approvals();
+  const modelCalls = calls.count();
   const cacheUsage = sumCacheUsage(callStats);
-  const silent = entry.ref.silentRequested ? { silent: true as const } : {};
+  const silent = halt.silent() ? { silent: true as const } : {};
   const base = pendingApprovals.length
     ? {
         reply,
         pendingApprovals,
-        ...(entry.ref.pausedOnApproval ? { pausedOnApproval: true as const } : {}),
+        ...(halt.pausedOnApproval() ? { pausedOnApproval: true as const } : {}),
         modelCalls,
         ...silent,
       }

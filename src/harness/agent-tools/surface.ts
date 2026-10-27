@@ -1,10 +1,9 @@
-// The surface, attach and finish_silently tools: posting, reacting and replying on the conversation's surface.
-
 import { surfaceProfile } from "../../surfaces/surface.ts";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { type OutboundFile } from "../../core/attachments.ts";
 import { type ToolKit } from "./kit.ts";
+import type { TurnHalt } from "../turn-tool-state.ts";
 import {
   capText,
   optionalBoolean,
@@ -17,13 +16,12 @@ import {
 
 type ToolContext = NonNullable<ToolKit["ref"]["current"]>;
 
-export function replyTools(kit: ToolKit) {
+export function replyTools(kit: ToolKit, halt: Pick<TurnHalt, "setSilent">) {
   const { surface } = surfaceTool(kit);
-  const { attach, finishSilently } = attachAndFinishTools(kit);
+  const { attach, finishSilently } = attachAndFinishTools(kit, halt);
   return { surface, attach, finishSilently };
 }
 
-/** The surface tool (named for the surface, e.g. slack): post, read and react in the conversation. */
 function surfaceTool(kit: ToolKit) {
   const { opts } = kit;
   const surfaceName = opts?.surfaceName ?? "slack";
@@ -117,7 +115,6 @@ function surfaceParams(surfaceName: string) {
   });
 }
 
-/** Runs one surface-tool action: post, read, react and the rest. */
 async function runSurfaceAction(
   kit: ToolKit,
   surfaceName: string,
@@ -248,7 +245,6 @@ async function runSurfaceAction(
   }
 }
 
-/** read_thread: this thread's messages. */
 async function surfaceReadThread(
   kit: ToolKit,
   tc: ToolContext,
@@ -284,7 +280,6 @@ async function surfaceReadThread(
   );
 }
 
-/** read_file: fetch a file shared on the surface by its ref. */
 async function surfaceReadFile(
   kit: ToolKit,
   tc: ToolContext,
@@ -340,7 +335,6 @@ async function surfaceReadFile(
   );
 }
 
-/** search: messages matching a query on the surface. */
 async function surfaceSearch(
   kit: ToolKit,
   tc: ToolContext,
@@ -392,7 +386,6 @@ async function surfaceSearch(
   );
 }
 
-/** whats_new: what changed in this conversation since you last looked. */
 async function surfaceWhatsNew(
   kit: ToolKit,
   tc: ToolContext,
@@ -432,7 +425,6 @@ async function surfaceWhatsNew(
   );
 }
 
-/** reach: post to exactly one other destination: a channel, a teammate DM or a group DM. */
 async function surfaceReach(
   kit: ToolKit,
   tc: ToolContext,
@@ -481,8 +473,7 @@ async function surfaceReach(
   );
 }
 
-/** The attach and finish_silently tools. */
-function attachAndFinishTools(kit: ToolKit) {
+function attachAndFinishTools(kit: ToolKit, halt: Pick<TurnHalt, "setSilent">) {
   const { ref, surfaceTools, recordCall, recordResult, recordText, recordFail } = kit;
   const attach = defineTool({
     name: "attach",
@@ -526,7 +517,7 @@ function attachAndFinishTools(kit: ToolKit) {
           "[no-op] finish_silently only applies to surface turns or scheduled background fires; a person is waiting on this turn — just reply.",
         );
       }
-      ref.silentRequested = true;
+      halt.setSilent(true);
       try {
         await recordCall(callId, { tool: "finish_silently", ...(params.reason ? { reason: params.reason } : {}) });
         return await recordResult(
@@ -535,7 +526,7 @@ function attachAndFinishTools(kit: ToolKit) {
           { ...text("Turn ended without a closing reply."), terminate: true },
         );
       } catch (e) {
-        ref.silentRequested = false;
+        halt.setSilent(false);
         throw e;
       }
     },

@@ -41,7 +41,6 @@ export interface MonitorBroker {
 }
 
 const EXPIRY_GRACE_MS = 5 * 60_000;
-const MAX_PATTERN_CHARS = 256;
 const WATCH_COMPLETED_TAIL_BYTES = 4 * 1024;
 
 export async function readBackgroundOutputTail(
@@ -71,8 +70,7 @@ export async function readBackgroundOutputTail(
 }
 
 export function compileMonitorPattern(pattern: string): (line: string) => boolean {
-  if (!pattern || pattern.length > MAX_PATTERN_CHARS)
-    throw new Error(`pattern must be 1-${MAX_PATTERN_CHARS} characters`);
+  if (!pattern) throw new Error("pattern must not be empty");
   if (/[\\[\](){}`*+?]/.test(pattern))
     throw new Error("pattern must use literal alternatives, with optional ^ and $ anchors");
   const alternatives = pattern.split("|").map((raw) => {

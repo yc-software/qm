@@ -1,5 +1,3 @@
-// Connector (MCP) and client-page tools: external tools wrapped with provenance and approval rules.
-
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { errMessage } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
@@ -23,11 +21,7 @@ export function externalTools(kit: ToolKit) {
         if (!tc) return text("[error] no active tool context");
         await recordCall(callId, { tool: d.name, mcpServer: d.serverId, args: params });
         try {
-          const out = await tc.callMcpTool(
-            d.name,
-            (params ?? {}) as Record<string, unknown>,
-            ref.approvedToolCalls?.get(callId),
-          );
+          const out = await tc.callMcpTool(d.name, (params ?? {}) as Record<string, unknown>, ref.approvedCall(callId));
           return recordExternalResult(
             callId,
             { tool: d.name, mcpServer: d.serverId },

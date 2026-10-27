@@ -1,4 +1,3 @@
-/** Prompts and parsers for the Pi harness's side calls: reply detection, titles, ack emoji, approval summaries. */
 import { isReply } from "../sessions/items.ts";
 import { TitleRejected } from "../core/turn-error.ts";
 import { type HarnessDetectInput, type HarnessDetectResult } from "./harness.ts";

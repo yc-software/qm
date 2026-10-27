@@ -520,10 +520,8 @@ function applyRun(live: Live, run: RunPoll): "open" | "terminal" {
   }
   const approvals = res?.pendingApprovals ?? [];
   const paused = approvals.length > 0;
-  const approvalDenied = res?.refusalKind === "approval_denied";
   const quiet = res?.status === "silent" || res?.status === "react";
-  const failed =
-    !paused && !approvalDenied && !quiet && (run.status === "failed" || (res != null && res.status !== "ok"));
+  const failed = !paused && !quiet && (run.status === "failed" || (res != null && res.status !== "ok"));
   if (work) {
     work.finishedAt = typeof run.finishedAt === "number" ? run.finishedAt : Date.now();
     work.status = failed ? "failed" : "complete";
@@ -536,11 +534,6 @@ function applyRun(live: Live, run: RunPoll): "open" | "terminal" {
   }
   if (res?.reply) {
     finish(live, res.reply);
-    return "terminal";
-  }
-  if (approvalDenied) {
-    (partial as AssistantWork & { approvalDecision?: "denied" }).approvalDecision = "denied";
-    finish(live, "Denied.");
     return "terminal";
   }
   if (failed) {

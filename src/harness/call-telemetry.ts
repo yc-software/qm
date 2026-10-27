@@ -1,8 +1,7 @@
-// Per-model-call telemetry for a pi turn: usage conversion, TTFT/duration/step-gap stats and the decomposition of the gap between steps into named phases.
-
 import type { AgentSession, AgentSessionEventListener } from "@earendil-works/pi-coding-agent";
 import type { HarnessTurnInput } from "./harness.ts";
-import type { ToolContextRef } from "./agent-tools.ts";
+import type { ModelCallLog } from "./model-call-log.ts";
+import type { GoalRecord } from "./goal.ts";
 import type { StepRecorder } from "./pi-step-recorder.ts";
 import { meterGrindCall, type GrindMeter } from "./grind.ts";
 import { meterGoalCall } from "./goal.ts";
@@ -231,13 +230,12 @@ export function sumCacheUsage(
   return saw ? { cacheRead, cacheWrite, uncachedInput } : null;
 }
 
-/**
- * Per-turn model-call telemetry: tool wall time per step, gap work, TTFT/duration/step-gap stats
- * from the session's stream events, and the captured request records written when the turn ends.
- */
 export function createCallTelemetry(
   turn: HarnessTurnInput,
-  entry: { agentSession: AgentSession; ref: ToolContextRef },
+  session: AgentSession,
+  calls: Pick<ModelCallLog, "streamStarted" | "takeCaptured" | "takeDispatches">,
+  fast: () => boolean | undefined,
+  goal: () => GoalRecord | null | undefined,
 ) {
   const toolWallByStep: number[][] = [];
   const gapWork: GapWork[] = [];
@@ -262,8 +260,7 @@ export function createCallTelemetry(
         steps.startStreaming();
         curStart = Date.now();
         curFirst = undefined;
-        const last = entry.ref.modelDispatch?.at(-1);
-        if (last && last.first !== undefined && last.streamStart === undefined) last.streamStart = curStart;
+        calls.streamStarted(curStart);
       } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
         turn.onTextBlockStart?.();
       } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
@@ -280,10 +277,10 @@ export function createCallTelemetry(
       } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
         const end = Date.now();
         const u = (event.message as { usage?: Partial<Usage> }).usage;
-        const stepModel = entry.agentSession.model;
-        const usage = piUsageToCallUsage(u, stepModel, entry.ref.fast);
+        const stepModel = session.model;
+        const usage = piUsageToCallUsage(u, stepModel, fast());
         meterGrindCall(grindMeter, usage);
-        const meteredGoal = entry.ref.goal;
+        const meteredGoal = goal();
         if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
         callStats.push({
           ttftMs: curStart !== undefined && curFirst !== undefined ? curFirst - curStart : null,
@@ -302,16 +299,14 @@ export function createCallTelemetry(
       }
     };
   const drainCaptured = async (turnSeq: number | null, effectiveModel: string): Promise<void> => {
-    const captured = entry.ref.llmCapture ?? [];
-    entry.ref.llmCapture = undefined;
+    const captured = calls.takeCaptured();
     if (!turn.recordLlmRequest) return;
     const statsAligned = callStats.length === captured.length;
-    const dispatch = entry.ref.modelDispatch ?? [];
+    const dispatch = calls.takeDispatches();
     const dispatchWork: GapWork[] = dispatch
       .filter((d): d is { start: number; first: number } => d.first !== undefined)
       .map((d) => ({ phase: "model_dispatch" as const, start: d.start, end: d.first }));
     const marksAligned = dispatch.length === captured.length;
-    entry.ref.modelDispatch = undefined;
     const allGapWork = [...gapWork, ...dispatchWork];
     for (let step = 0; step < captured.length; step++) {
       const stat = statsAligned ? callStats[step] : undefined;

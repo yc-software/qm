@@ -162,7 +162,7 @@ test("a channel turn gets no 1:1 identity block", async () => {
 test("a silent cron source run stays out of normal human chat history", async () => {
   const built = freshApp();
   const cron = await built.app.createCron({
-    schedule: { firstFireAt: Date.now() },
+    schedule: { firstFireAt: Date.now() + 3_600_000 },
     action: "!preamble-then-quiet Posted the digest DM",
     owner: "U1",
     createdBy: "U1",
@@ -201,7 +201,7 @@ test("a cron-delivered digest is noted in the recipient's next DM turn, not writ
     { principalId: "U-alice", displayName: "Alice", type: "internal" },
   ]);
   const cron = await built.app.createCron({
-    schedule: { firstFireAt: Date.now() },
+    schedule: { firstFireAt: Date.now() + 3_600_000 },
     action: "deploy digest ready",
     owner: "U-carol",
     createdBy: "U-carol",

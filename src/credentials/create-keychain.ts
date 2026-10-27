@@ -45,7 +45,6 @@ function credentialMethods(c: KeychainCtx, h: KeychainHelpers) {
   const { deps, store, now } = c;
   return {
     save: h.saveCredential,
-    rewriteTargetUsernameCredentials: h.rewriteTargetUsernameCredentials,
 
     async updateFiles(materialized, files) {
       if (materialized.grantId) return;

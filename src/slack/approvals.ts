@@ -271,12 +271,6 @@ async function settleApproval(rt: ApprovalRuntime, click: ApprovalClick): Promis
       return;
     }
 
-    if (selected === "deny") {
-      await decide();
-      ackQuarantine();
-      return;
-    }
-
     if (delegated) {
       await decide([
         result.status === "failed" || result.status === "refused"

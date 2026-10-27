@@ -6,7 +6,7 @@ import { markdown } from "./message-markdown";
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { guard } from "lit/directives/guard.js";
-import { Ban, BookOpen, Search, Brain, ChevronRight, SquareTerminal as Terminal, Wrench } from "lucide";
+import { Ban, BookOpen, Brain, ChevronRight, SquareTerminal as Terminal, Wrench } from "lucide";
 import type { WorkBlock } from "./core-bridge";
 import {
   messageWorkTimeline,
@@ -159,9 +159,7 @@ class LiveWork {
                         if (items.length === 1 || items[0]?.kind === "text")
                           return this.renderTimelineItem(items[0]!, work);
                         const summary = activityGroupSummary(items, work.status);
-                        const groupIcon = { read: BookOpen, search: Search, execute: Terminal, other: Wrench }[
-                          summary.category
-                        ];
+                        const groupIcon = { read: BookOpen, execute: Terminal, other: Wrench }[summary.category];
                         return html`<details
                           class="activity-group work-fold"
                           ?open=${(active && last) || summary.attention}

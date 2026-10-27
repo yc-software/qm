@@ -4,7 +4,7 @@ import { mountTemplate } from "./shared.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { states, patternError, type GovernanceState } from "./governance-state.ts";
-export { owns, collect, capture, commit, status, statusKey, load, updateCatalog, states } from "./governance-state.ts";
+export { collect, capture, commit, status, statusKey, load, updateCatalog, states } from "./governance-state.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
   "card-auto-flagger": (s) =>

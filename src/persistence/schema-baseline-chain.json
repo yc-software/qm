@@ -1,0 +1,1110 @@
+{
+  "release": "9be16d35",
+  "before": [
+    {
+      "id": "runs/maintenance/tool-calls-key",
+      "checksum": "f5ce7925f2c8647894840cac50d54f6913fbd00bd2ee689b74213f34d560d791",
+      "statements": [
+        "DO $$\n      BEGIN\n        IF to_regclass('tool_calls') IS NOT NULL THEN\n          IF NOT EXISTS (SELECT 1 FROM pg_attribute\n                         WHERE attrelid = 'tool_calls'::regclass AND attname = 'attempt' AND NOT attisdropped) THEN\n            ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1;\n          END IF;\n          IF EXISTS (\n            SELECT 1 FROM pg_constraint c\n            WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'\n              AND (SELECT array_agg(a.attname::text ORDER BY k.ord)\n                   FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)\n                   JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum\n                  ) NOT IN (ARRAY['run_id','attempt','call_index'], ARRAY['tenant_id','run_id','attempt','call_index'])\n          ) OR NOT EXISTS (\n            SELECT 1 FROM pg_constraint c\n            WHERE c.conrelid = 'tool_calls'::regclass AND c.contype = 'p'\n          ) THEN\n            DELETE FROM tool_calls t USING (\n              SELECT ctid, row_number() OVER (\n                PARTITION BY run_id, attempt, call_index ORDER BY created_at DESC, ctid DESC\n              ) AS rn FROM tool_calls\n            ) dup WHERE t.ctid = dup.ctid AND dup.rn > 1;\n            ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey;\n            ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index);\n          END IF;\n        END IF;\n      END $$"
+      ]
+    }
+  ],
+  "migrations": [
+    {
+      "id": "acl/grants/0001",
+      "checksum": "11758af3276004ec5ba9f283d35867d074999b2413b1ab6d74a4545e8fba16fa",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS acl_grants(\n        owner_scope_id   TEXT NOT NULL,\n        path             TEXT NOT NULL,\n        grantee_scope_id TEXT NOT NULL,\n        permission       TEXT NOT NULL,\n        granted_by       TEXT NOT NULL,\n        PRIMARY KEY (owner_scope_id, path, grantee_scope_id, permission)\n      )"
+      ]
+    },
+    {
+      "id": "acl/grants/0002",
+      "checksum": "86f3cbd7981ea8e137a31f6e66936ce53654c013c6f20dbb9924692a2263ed0d",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS acl_grants_version(\n        only_row BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (only_row),\n        v        BIGINT NOT NULL\n      )",
+        "INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 0) ON CONFLICT (only_row) DO NOTHING",
+        "CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$\n      BEGIN\n        INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 1)\n        ON CONFLICT (only_row) DO UPDATE SET v = acl_grants_version.v + 1;\n        RETURN NULL;\n      END\n      $fn$",
+        "DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants",
+        "CREATE TRIGGER acl_grants_bump\n      AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON acl_grants\n      FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version()"
+      ]
+    },
+    {
+      "id": "acl/grants/0003-file-ids",
+      "checksum": "2ad7a5a68acb5da6ed801d2b4c1d56391e14bf1eef0356948f661c5a293825de",
+      "statements": [
+        "DO $migrate$\n      BEGIN\n        LOCK TABLE acl_grants IN SHARE ROW EXCLUSIVE MODE;\n        CREATE TEMP TABLE acl_file_grant_ids ON COMMIT DROP AS\n          SELECT g.owner_scope_id, g.path, g.grantee_scope_id, g.permission, g.granted_by, NULL::text AS file_id\n          FROM acl_grants g\n          WHERE g.path NOT LIKE 'skill:%' AND g.path NOT LIKE 'deployment:%'\n            AND g.path NOT LIKE 'cron:%' AND g.path NOT LIKE 'service-cred:%';\n        IF to_regclass('file_artifacts') IS NOT NULL THEN\n          DELETE FROM acl_file_grant_ids t USING file_artifacts f\n          WHERE f.id = t.path AND f.owner_scope_id = t.owner_scope_id AND f.enabled;\n          UPDATE acl_file_grant_ids t SET file_id = (\n            SELECT f.id FROM file_artifacts f\n            WHERE f.owner_scope_id = t.owner_scope_id AND f.path = t.path AND f.enabled\n            ORDER BY f.created_at DESC, f.id DESC LIMIT 1\n          );\n        END IF;\n        DELETE FROM acl_grants g USING acl_file_grant_ids t\n        WHERE g.owner_scope_id = t.owner_scope_id AND g.path = t.path\n          AND g.grantee_scope_id = t.grantee_scope_id AND g.permission = t.permission;\n        INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by)\n          SELECT owner_scope_id, file_id, grantee_scope_id, permission, granted_by\n          FROM acl_file_grant_ids WHERE file_id IS NOT NULL\n          ORDER BY owner_scope_id, path, grantee_scope_id, permission\n          ON CONFLICT (owner_scope_id, path, grantee_scope_id, permission) DO NOTHING;\n      END\n      $migrate$"
+      ]
+    },
+    {
+      "id": "admin/audit-log/0001",
+      "checksum": "542f2a64d2814b329f2c1ad2eb8ed2728e8044b78efa6343eafb5598bc83cb1d",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS audit_log(\n        id BIGSERIAL PRIMARY KEY,\n        at BIGINT NOT NULL,\n        principal_id TEXT NOT NULL,\n        action TEXT NOT NULL,\n        resource TEXT NOT NULL,\n        scope_label TEXT NOT NULL,\n        status TEXT,\n        detail TEXT\n      )",
+        "ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
+        "CREATE INDEX IF NOT EXISTS audit_log_by_at ON audit_log(at DESC)",
+        "CREATE INDEX IF NOT EXISTS audit_log_by_scope_at ON audit_log(scope_label, at DESC)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS audit_log_by_idempotency_key ON audit_log(idempotency_key) WHERE idempotency_key IS NOT NULL",
+        "DO $$\n      BEGIN\n        PERFORM pg_advisory_xact_lock(hashtext('agent-platform:audit-log-migrate'));\n        IF to_regclass('public.audit_events') IS NOT NULL\n           AND NOT EXISTS (SELECT 1 FROM audit_log LIMIT 1) THEN\n          INSERT INTO audit_log (at, principal_id, action, resource, scope_label, status, detail)\n          SELECT (json->>'at')::bigint, json->>'principalId', json->>'action', json->>'resource',\n                 json->>'scopeLabel', json->>'status', json->>'detail'\n          FROM audit_events\n          WHERE json ? 'at'\n          ORDER BY (json->>'at')::bigint ASC;\n        END IF;\n      END $$"
+      ]
+    },
+    {
+      "id": "admin/audit-log/0002",
+      "checksum": "bce8b31764744856dab57f8ced3a2e33b36e5896ff0f915152dc466741be3828",
+      "statements": ["CREATE INDEX IF NOT EXISTS audit_log_by_action ON audit_log(action, at DESC)"]
+    },
+    {
+      "id": "admin/grants/0001",
+      "checksum": "1a92727b41adaa11bf3029a419a8a5ca9213b0fbab91df905b7e58803cc73ce4",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS admin_grants(\n    principal_id TEXT   NOT NULL,\n    scope_id     TEXT   NOT NULL,\n    role         TEXT   NOT NULL,\n    granted_by   TEXT,\n    created_at   BIGINT,\n    PRIMARY KEY (principal_id, scope_id, role)\n  )"
+      ]
+    },
+    {
+      "id": "admin/scoped-events/credential_usage/0001",
+      "checksum": "42188c2f50734398496ddd5a47a9ec3c15a507059c713a4a6ced0b0b81d908eb",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS credential_usage(\n  id BIGSERIAL PRIMARY KEY,\n  ts BIGINT NOT NULL,\n  slug TEXT NOT NULL,\n  host TEXT NOT NULL,\n  status TEXT NOT NULL,\n  upstream_status INT,\n  scope_label TEXT NOT NULL,\n  principal_id TEXT NOT NULL\n)",
+        "CREATE INDEX IF NOT EXISTS credential_usage_by_ts ON credential_usage(ts DESC)",
+        "CREATE INDEX IF NOT EXISTS credential_usage_by_scope_ts ON credential_usage(scope_label, ts DESC)"
+      ]
+    },
+    {
+      "id": "admin/scoped-events/credential_usage/0002",
+      "checksum": "eb3194ec38847b601025c41b99616c4385770930074e808b21e53af9463d7ad0",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS credential_usage_by_slug_ts_id ON credential_usage(slug, ts DESC, id DESC)"
+      ]
+    },
+    {
+      "id": "admin/scoped-events/credential_usage/0003",
+      "checksum": "74b2011593ba178ca8decc6f7c82528f7bd161c4651fc2700a78839dac32fc04",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS credential_daily_calls(slug TEXT NOT NULL, day BIGINT NOT NULL, sent INT NOT NULL, PRIMARY KEY (slug, day))"
+      ]
+    },
+    {
+      "id": "admin/scoped-events/egress_events/0001",
+      "checksum": "cfbf4ab51c2b0a4ac45eaeeb7a7011d7b2a4a4d9c21072473ed27400b03fe054",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS egress_events(\n  id BIGSERIAL PRIMARY KEY,\n  ts BIGINT NOT NULL,\n  source TEXT NOT NULL,\n  host TEXT NOT NULL,\n  allowed BOOLEAN NOT NULL,\n  scope_label TEXT NOT NULL,\n  port INT,\n  verdict TEXT,\n  via TEXT,\n  peer_ip TEXT,\n  principal_id TEXT\n)",
+        "CREATE INDEX IF NOT EXISTS egress_events_by_ts ON egress_events(ts DESC)",
+        "CREATE INDEX IF NOT EXISTS egress_events_by_scope_ts ON egress_events(scope_label, ts DESC)"
+      ]
+    },
+    {
+      "id": "admin/scoped-events/error_events/0001",
+      "checksum": "d5bab01c9f83042aace325e98636b614bcb8a6d77fedaed373f02efde282f5b8",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS error_events(\n  id BIGSERIAL PRIMARY KEY,\n  ts BIGINT NOT NULL,\n  scope_label TEXT NOT NULL,\n  category TEXT NOT NULL,\n  code TEXT NOT NULL,\n  message TEXT NOT NULL,\n  session_id TEXT\n)",
+        "CREATE INDEX IF NOT EXISTS error_events_by_ts ON error_events(ts DESC)",
+        "CREATE INDEX IF NOT EXISTS error_events_by_scope_ts ON error_events(scope_label, ts DESC)",
+        "CREATE INDEX IF NOT EXISTS error_events_by_session_ts ON error_events(session_id, ts DESC)"
+      ]
+    },
+    {
+      "id": "auth/broker-sessions/0001",
+      "checksum": "2f958c4c732f8a8a79cb1d31215236fea9565ee2ce5e62270952b889ec5c1265",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS auth_broker_sessions (\n    token_hash TEXT PRIMARY KEY,\n    email TEXT NOT NULL,\n    authenticated_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n    expires_at TIMESTAMPTZ NOT NULL,\n    absolute_expires_at TIMESTAMPTZ NOT NULL,\n    idle_seconds INTEGER NOT NULL\n  )",
+        "CREATE INDEX IF NOT EXISTS auth_broker_sessions_email ON auth_broker_sessions (email)",
+        "CREATE INDEX IF NOT EXISTS auth_broker_sessions_expiry ON auth_broker_sessions (expires_at)"
+      ]
+    },
+    {
+      "id": "auth/replay-dedupe/0001",
+      "checksum": "8714fae4d626c773edfacf59d807e324955a205abb2be2bc76753cdbbc14adf7",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS source_auth_replay (\n  event_id TEXT PRIMARY KEY,\n  expires_at TIMESTAMPTZ NOT NULL\n)",
+        "CREATE INDEX IF NOT EXISTS source_auth_replay_expires_at ON source_auth_replay (expires_at)"
+      ]
+    },
+    {
+      "id": "cron/fires/0001",
+      "checksum": "462f9f784160d6e31019707b7df3c35ef0a2979fd3c9fb9d4d581fb89de6cad1",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS cron_fires(\n        cron_id TEXT NOT NULL,\n        fire_key TEXT NOT NULL,\n        thread_ref TEXT NOT NULL,\n        session_id TEXT,\n        fired_at BIGINT NOT NULL,\n        scheduled_at BIGINT,\n        ended_at BIGINT,\n        status TEXT,\n        note TEXT,\n        reply TEXT,\n        PRIMARY KEY (cron_id, fire_key)\n      )",
+        "CREATE INDEX IF NOT EXISTS idx_cron_fires_thread_ref ON cron_fires (thread_ref)",
+        "CREATE INDEX IF NOT EXISTS idx_cron_fires_cron_fired_at ON cron_fires (cron_id, fired_at DESC)"
+      ]
+    },
+    {
+      "id": "decisions/0001",
+      "checksum": "5259b744d814f2aae9b056e69f4488b87276b8db7eeb17d140d6e89bab93218a",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS decision_providers(\n    provider_id TEXT   PRIMARY KEY,\n    protocol    TEXT   NOT NULL,\n    base_url    TEXT,\n    credential  TEXT,\n    updated_by  TEXT   NOT NULL,\n    updated_at  BIGINT NOT NULL\n  )",
+        "CREATE TABLE IF NOT EXISTS decision_rules(\n    rule_id     TEXT    PRIMARY KEY,\n    hook        TEXT    NOT NULL,\n    question    TEXT    NOT NULL,\n    options     JSON    NOT NULL,\n    provider_id TEXT    NOT NULL REFERENCES decision_providers(provider_id),\n    model       TEXT    NOT NULL,\n    mode        TEXT    NOT NULL CHECK (mode IN ('off', 'observe', 'enforce')),\n    on_error    TEXT    NOT NULL,\n    updated_by  TEXT    NOT NULL,\n    updated_at  BIGINT  NOT NULL\n  )",
+        "CREATE INDEX IF NOT EXISTS decision_rules_hook ON decision_rules (hook) WHERE mode <> 'off'"
+      ]
+    },
+    {
+      "id": "deploy/access/0001",
+      "checksum": "fa35b86cbdfa9e8766ac5e47ffc926986b87ec5bad3ef1d7070fb8e2a1f3f9c2",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS deployment_access (\n        id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,\n        last_access_at BIGINT NOT NULL\n      )"
+      ]
+    },
+    {
+      "id": "directory/store/0001",
+      "checksum": "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS directory_members(\n    org_id          TEXT NOT NULL,\n    principal_id    TEXT NOT NULL,\n    display_name    TEXT NOT NULL,\n    display_name_lc TEXT NOT NULL,\n    type            TEXT NOT NULL,\n    slack_id        TEXT,\n    PRIMARY KEY (org_id, principal_id)\n  )",
+        "CREATE INDEX IF NOT EXISTS directory_members_name\n    ON directory_members (org_id, display_name_lc)",
+        "CREATE INDEX IF NOT EXISTS directory_members_lower_pid\n    ON directory_members (org_id, lower(principal_id))",
+        "DO $$\n  BEGIN\n    IF NOT EXISTS (\n      SELECT 1 FROM information_schema.columns\n      WHERE table_name = 'directory_members' AND column_name = 'slack_id'\n    ) THEN\n      ALTER TABLE directory_members ADD COLUMN slack_id TEXT;\n    END IF;\n  END $$",
+        "CREATE TABLE IF NOT EXISTS directory_channels(\n    org_id     TEXT NOT NULL,\n    channel_id TEXT NOT NULL,\n    name       TEXT NOT NULL,\n    name_lc    TEXT NOT NULL,\n    is_private BOOLEAN NOT NULL DEFAULT FALSE,\n    PRIMARY KEY (org_id, channel_id)\n  )",
+        "CREATE INDEX IF NOT EXISTS directory_channels_name\n    ON directory_channels (org_id, name_lc)",
+        "CREATE INDEX IF NOT EXISTS directory_channels_lower_cid\n    ON directory_channels (org_id, lower(channel_id))",
+        "CREATE TABLE IF NOT EXISTS directory_channel_members(\n    org_id       TEXT NOT NULL,\n    channel_id   TEXT NOT NULL,\n    principal_id TEXT NOT NULL,\n    PRIMARY KEY (org_id, channel_id, principal_id)\n  )",
+        "CREATE TABLE IF NOT EXISTS directory_group_members(\n    org_id       TEXT NOT NULL,\n    group_id     TEXT NOT NULL,\n    principal_id TEXT NOT NULL,\n    PRIMARY KEY (org_id, group_id, principal_id)\n  )",
+        "CREATE INDEX IF NOT EXISTS directory_group_members_principal\n    ON directory_group_members (org_id, principal_id, group_id)",
+        "CREATE TABLE IF NOT EXISTS directory_sync(\n    org_id        TEXT PRIMARY KEY,\n    members_hash  TEXT,\n    channels_hash TEXT,\n    groups_hash   TEXT,\n    channel_members_synced BOOLEAN NOT NULL DEFAULT FALSE,\n    updated_at    BIGINT NOT NULL\n  )",
+        "DO $$\n  BEGIN\n    IF NOT EXISTS (\n      SELECT 1 FROM information_schema.columns\n      WHERE table_name = 'directory_sync' AND column_name = 'groups_hash'\n    ) THEN\n      ALTER TABLE directory_sync ADD COLUMN groups_hash TEXT;\n    END IF;\n    IF NOT EXISTS (\n      SELECT 1 FROM information_schema.columns\n      WHERE table_name = 'directory_sync' AND column_name = 'channel_members_synced'\n    ) THEN\n      ALTER TABLE directory_sync ADD COLUMN channel_members_synced BOOLEAN NOT NULL DEFAULT FALSE;\n    END IF;\n  END $$",
+        "CREATE TABLE IF NOT EXISTS directory_meta(\n    org_id        TEXT PRIMARY KEY,\n    workspace_url TEXT,\n    updated_at    BIGINT NOT NULL\n  )"
+      ]
+    },
+    {
+      "id": "directory/store/0002",
+      "checksum": "4da6cc4f2496dd53d6381faea3f9f8e16e55394cfe46de516a692ede8157e8b0",
+      "statements": [
+        "ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS members_synced_at BIGINT",
+        "ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS channels_synced_at BIGINT",
+        "ALTER TABLE directory_sync ADD COLUMN IF NOT EXISTS groups_synced_at BIGINT"
+      ]
+    },
+    {
+      "id": "directory/store/0003",
+      "checksum": "1aaf42502793ebc31b253b12903cf192d2d8d6bcc9e4c1d31e834ed385f2a030",
+      "statements": [
+        "ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS is_external BOOLEAN NOT NULL DEFAULT FALSE",
+        "DO $$\n  BEGIN\n    IF NOT EXISTS (\n      SELECT 1 FROM information_schema.columns\n      WHERE table_name = 'directory_channels' AND column_name = 'roster_known'\n    ) THEN\n      ALTER TABLE directory_channels ADD COLUMN roster_known BOOLEAN NOT NULL DEFAULT FALSE;\n      UPDATE directory_channels c SET roster_known = TRUE\n      FROM directory_sync s WHERE c.org_id = s.org_id AND s.channel_members_synced = TRUE;\n    END IF;\n  END $$",
+        "CREATE TABLE IF NOT EXISTS directory_groups(\n    org_id       TEXT NOT NULL,\n    group_id     TEXT NOT NULL,\n    roster_known BOOLEAN NOT NULL DEFAULT FALSE,\n    PRIMARY KEY (org_id, group_id)\n  )",
+        "INSERT INTO directory_groups (org_id, group_id, roster_known)\n    SELECT DISTINCT org_id, group_id, TRUE FROM directory_group_members\n    ON CONFLICT (org_id, group_id) DO NOTHING"
+      ]
+    },
+    {
+      "id": "directory/store/0004",
+      "checksum": "5376eae39ee0e8d99157e30b6edfbe8b35a0a0998bc4766a86529a45c0e83c4d",
+      "statements": ["ALTER TABLE directory_channels ADD COLUMN IF NOT EXISTS observed_at BIGINT"]
+    },
+    {
+      "id": "directory/store/0005",
+      "checksum": "38afbb8d963f48be05d5837f7f06e9f531229316c973c5f87eaa790e2611a8d9",
+      "statements": ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"]
+    },
+    {
+      "id": "durable-map/crons/0001-drop-run-as",
+      "checksum": "95e375cb70abd7dff68cf61a371167695b3e3427c31f38a9722142c244b0f97a",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS loops (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "UPDATE crons SET json = jsonb_set(json, '{owner}', to_jsonb('system:' || (json ->> 'ownerScopeId'))) WHERE json ->> 'runAs' = 'scopeFloor' AND json ->> 'loopId' IS NULL AND json ->> 'ownerScopeId' NOT LIKE 'personal:%'",
+        "UPDATE crons SET json = json - 'runAs' - 'ownerResourcesRequireOpen' - 'members' WHERE json ?| array['runAs', 'ownerResourcesRequireOpen', 'members']",
+        "UPDATE loops SET json = json - 'runAs' WHERE json ? 'runAs'"
+      ]
+    },
+    {
+      "id": "durable-map/internal_member_overrides/0002-drop",
+      "checksum": "bababa8a7b29a956b7b90a33a4981f655b8e397a4a440b1fda639179cf5222d9",
+      "statements": [
+        "DROP TABLE IF EXISTS internal_member_overrides",
+        "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'"
+      ]
+    },
+    {
+      "id": "durable-map/keychain_credentials/0002-delete-auto-captured-logins",
+      "checksum": "e2c3d2c3fb7d240450004a535a8af950db3b6ff35ca284da0f393ec31c0b4fde",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS keychain_credentials (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS keychain_grants (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture')",
+        "DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'"
+      ]
+    },
+    {
+      "id": "durable-map/pinned_skills/0002-drop",
+      "checksum": "182c675b050a7a76d0d4283945e26a6e0449972b27fe104c9aeab0fd0452666a",
+      "statements": [
+        "DROP TABLE IF EXISTS pinned_skills",
+        "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"
+      ]
+    },
+    {
+      "id": "durable-map/suggested_activity_profiles/0001-nightly-on-use",
+      "checksum": "319965364d5048237981818039583f6e2d97e2f69553906fb8311b569867d720",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS suggested_activity_profiles (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "UPDATE crons c SET json = jsonb_set(c.json, '{schedule,cron}', to_jsonb(get_byte(sha256(convert_to(p.id, 'UTF8')), 0) % 60 || ' 2 * * *')) FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND c.json -> 'schedule' = p.json -> 'managedSchedule'",
+        "UPDATE crons c SET json = jsonb_set(c.json, '{enabled}', 'true') FROM suggested_activity_profiles p WHERE p.json ->> 'cronId' = c.id AND (p.json ->> 'autoPaused')::boolean"
+      ]
+    },
+    {
+      "id": "durable-map/triggers/0001-drop-recipient-consent",
+      "checksum": "690a465b166e66765bd18fc38375020f8b9adbc3d503e384e307d2e02c00c320",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "UPDATE crons SET json = json - 'recipientConsent' WHERE json ? 'recipientConsent'",
+        "CREATE TABLE IF NOT EXISTS webhooks (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "UPDATE webhooks SET json = json - 'recipientConsent' WHERE json ? 'recipientConsent'",
+        "CREATE TABLE IF NOT EXISTS loops (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "UPDATE loops SET json = json - 'recipientConsent' WHERE json ? 'recipientConsent'"
+      ]
+    },
+    {
+      "id": "durable-map/turn_wall_clock_configs/0002-drop",
+      "checksum": "4b4ebf24b233ddccbb94d3b562b09e87adfe3e64eb1a4f2792ab192036f6b781",
+      "statements": [
+        "DROP TABLE IF EXISTS turn_wall_clock_configs",
+        "DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'"
+      ]
+    },
+    {
+      "id": "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
+      "checksum": "5049d35f8e432183fed151377a615e25ec6a97677b7a7ec7da57b155c7425db7",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS webhooks (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean"
+      ],
+      "preLedgerId": "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal"
+    },
+    {
+      "id": "environments/store/0001",
+      "checksum": "f6eb00919601e6c50bca7857a93061761d2bd1a31396ed7cf9373f93c8ffcae7",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS environments(\n        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, name TEXT, owner_actor_id TEXT,\n        created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL\n      )",
+        "CREATE TABLE IF NOT EXISTS environment_attachments(\n        scope_id TEXT PRIMARY KEY,\n        environment_id TEXT NOT NULL REFERENCES environments(id),\n        attached_by TEXT NOT NULL, attached_at BIGINT NOT NULL\n      )",
+        "CREATE INDEX IF NOT EXISTS environment_attachments_by_env\n        ON environment_attachments(environment_id)"
+      ]
+    },
+    {
+      "id": "files/artifacts/0001",
+      "checksum": "568d83afca3a8ce6287cbe85ad570612d9bb01ad0a8b7d78aa54e6fdc1dc1b0e",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS file_artifacts(\n    id               TEXT PRIMARY KEY,\n    kind             TEXT NOT NULL DEFAULT 'file',\n    owner_scope_id   TEXT NOT NULL,\n    path             TEXT NOT NULL,\n    name             TEXT NOT NULL,\n    mimetype         TEXT NOT NULL,\n    size_bytes       BIGINT NOT NULL,\n    blob_key         TEXT,\n    sha256           TEXT,\n    direction        TEXT NOT NULL,\n    created_by       TEXT NOT NULL,\n    created_in_scope TEXT,\n    created_at       BIGINT NOT NULL,\n    updated_at       BIGINT NOT NULL,\n    enabled          BOOLEAN NOT NULL DEFAULT TRUE,\n    source           TEXT NOT NULL DEFAULT 'live'\n  )",
+        "CREATE INDEX IF NOT EXISTS file_artifacts_owner_created\n    ON file_artifacts (owner_scope_id, created_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS file_artifacts_owner_path\n    ON file_artifacts (owner_scope_id, path)",
+        "CREATE INDEX IF NOT EXISTS file_artifacts_scope_created\n    ON file_artifacts (created_in_scope, created_at DESC, id DESC) WHERE enabled = TRUE"
+      ]
+    },
+    {
+      "id": "files/artifacts/0002",
+      "checksum": "fc47df852bd24c895b47e97d407eec54a71db90f407c5731627d82b2c63b5819",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)"
+      ]
+    },
+    {
+      "id": "memory/facts/0000-records-column",
+      "checksum": "450e71b07659508640f782635a5019fa31b906cc63fdc97e7236d28b0d4c3aea",
+      "statements": ["ALTER TABLE IF EXISTS memory_revisions ADD COLUMN IF NOT EXISTS records JSONB"]
+    },
+    {
+      "id": "memory/facts/0001",
+      "checksum": "cc560bef4c54ea2007b66eb46bf7258b70c9de98da901348f271c5da38c06597",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS memory_facts(\n    id             BIGSERIAL PRIMARY KEY,\n    scope_id       TEXT    NOT NULL,\n    text           TEXT    NOT NULL,\n    sensitivity    TEXT    NOT NULL,\n    sources        TEXT[]  NOT NULL DEFAULT '{}',\n    source_unknown BOOLEAN NOT NULL,\n    author         TEXT,\n    created_at     BIGINT  NOT NULL,\n    updated_at     BIGINT  NOT NULL,\n    deleted_at     BIGINT\n  )",
+        "CREATE INDEX IF NOT EXISTS memory_facts_live ON memory_facts(scope_id, id) WHERE deleted_at IS NULL",
+        "DO $$\n  BEGIN\n    IF to_regclass('memory_revisions') IS NULL OR EXISTS (SELECT 1 FROM memory_facts) THEN RETURN; END IF;\n    WITH head AS (\n      SELECT DISTINCT ON (scope_id) scope_id, body, records, at\n        FROM memory_revisions ORDER BY scope_id, seq DESC\n    ),\n    snapshot AS (\n      SELECT h.scope_id, h.at, r.ord, r.rec->>'text' AS text,\n             COALESCE(r.rec->>'sensitivity', 'unknown') AS sensitivity,\n             ARRAY(SELECT DISTINCT s->>'scopeId' FROM jsonb_array_elements(COALESCE(r.rec->'sources', '[]')) s) AS sources,\n             COALESCE((r.rec->>'sourceUnknown')::boolean, true) AS source_unknown\n        FROM head h, jsonb_array_elements(h.records->'records') WITH ORDINALITY r(rec, ord)\n       WHERE h.records IS NOT NULL\n    ),\n    lines AS (\n      SELECT h.scope_id, h.at, l.ord, l.line,\n             sum(CASE WHEN l.line ~ '^\\s*$' OR l.line ~ '^([-*] |#{1,6} )' OR l.line ~ '^\\s*<!-- ' THEN 1 ELSE 0 END)\n               OVER (PARTITION BY h.scope_id ORDER BY l.ord) AS block\n        FROM head h, regexp_split_to_table(h.body, E'\\n') WITH ORDINALITY l(line, ord)\n       WHERE h.records IS NULL\n    ),\n    legacy AS (\n      SELECT scope_id, at, min(ord) AS ord, btrim(string_agg(line, E'\\n' ORDER BY ord), E' \\n\\t\\r') AS text,\n             'unknown' AS sensitivity, '{}'::text[] AS sources, true AS source_unknown\n        FROM lines\n       WHERE line !~ '^\\s*<!-- (consolidated: \\d{4}-\\d\\d-\\d\\d|captures-since-promote: \\d+) -->\\s*$'\n       GROUP BY scope_id, at, block\n    )\n    INSERT INTO memory_facts(scope_id, text, sensitivity, sources, source_unknown, created_at, updated_at)\n    SELECT scope_id, fact, sensitivity, sources, source_unknown,\n           COALESCE(CASE WHEN to_char(day, 'YYYY-MM-DD') = d THEN (extract(epoch FROM day) * 1000)::bigint END, at), at\n      FROM (SELECT g.*, regexp_replace(body, '^\\(\\d{4}-\\d\\d-\\d\\d\\)\\s*', '') AS fact,\n                   timestamp '2000-01-01' + make_interval(years => substr(d, 1, 4)::int - 2000,\n                     months => substr(d, 6, 2)::int - 1, days => substr(d, 9, 2)::int - 1) AS day\n              FROM (SELECT f.*, substring(body FROM '^\\((\\d{4}-\\d\\d-\\d\\d)\\)') AS d\n                      FROM (SELECT u.*, regexp_replace(btrim(regexp_replace(btrim(text), '^#{1,6} [^\\n]*\\n?', '')), '^[-*]\\s+', '') AS body\n                              FROM (SELECT * FROM snapshot UNION ALL SELECT * FROM legacy) u\n                             WHERE text !~ '^\\s*<!-- (consolidated|captures-since-promote)') f) g) x\n     WHERE btrim(fact) <> ''\n     ORDER BY scope_id, ord;\n  END $$"
+      ]
+    },
+    {
+      "id": "processes/registry/0001",
+      "checksum": "5ca2d3af76a021c55ec15829f5798347851f3d73df53f36041dc04fbb2253324",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS process_sessions(\n        process_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, kind TEXT NOT NULL,\n        command TEXT NOT NULL, started_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,\n        status TEXT NOT NULL\n      )",
+        "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT",
+        "ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)"
+      ]
+    },
+    {
+      "id": "processes/registry/0002",
+      "checksum": "3677d509807832aecda3cf903f22c42bc3d31a6d9c97b4156f981d376f589999",
+      "statements": ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS sandbox_id TEXT"]
+    },
+    {
+      "id": "processes/registry/0003",
+      "checksum": "d24a770a83eddffda0658e3e650a3c420ffddb6f68c379d5933f720b2e98cb19",
+      "statements": ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS purpose TEXT"]
+    },
+    {
+      "id": "processes/registry/0004",
+      "checksum": "9c17b6f267eb528657ab97b7bf27735d1c8aa5b8eaefdfe9489346839ea89052",
+      "statements": ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"]
+    },
+    {
+      "id": "ratelimit/limiter/0001",
+      "checksum": "27463ccd35e5a63321d9a3abb88d5691a23919ad6a9cee945645ce4e487d9437",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS rate_limit_windows(\n      principal_id TEXT PRIMARY KEY,\n      window_start BIGINT NOT NULL,\n      count INTEGER NOT NULL\n    )"
+      ]
+    },
+    {
+      "id": "resource-search/crons/0001",
+      "checksum": "1e33169a8550366f1651f4a9be634b8c04293f3cc197cbf7f741c45af798b632",
+      "statements": [
+        "SET LOCAL lock_timeout = '2s'",
+        "SET LOCAL statement_timeout = '15s'",
+        "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS crons_resource_search_gin ON crons USING GIN (to_tsvector('simple', coalesce(json->>'title', '') || ' ' || coalesce(json->>'action', '') || ' ' || coalesce(json->>'message', '')))"
+      ]
+    },
+    {
+      "id": "resource-search/deploys/0001",
+      "checksum": "97db7e33f1bd293034b3e1eb24909bb28ac2c31db3c128dc8d378bd18b91929e",
+      "statements": [
+        "SET LOCAL lock_timeout = '2s'",
+        "SET LOCAL statement_timeout = '15s'",
+        "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS deployments_resource_search_gin ON deployments USING GIN (to_tsvector('simple', coalesce(json->>'displayName', json->>'name', '') || ' ' || coalesce(json->>'name', '')))"
+      ]
+    },
+    {
+      "id": "resource-search/skills/0001",
+      "checksum": "77217c6a8da2b9714ede4668b3b52497b83399c65bea3b9c9a311e9565d4d5ef",
+      "statements": [
+        "SET LOCAL lock_timeout = '2s'",
+        "SET LOCAL statement_timeout = '15s'",
+        "CREATE TABLE IF NOT EXISTS skills (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS skills_resource_search_gin ON skills USING GIN (to_tsvector('simple', coalesce(json->'manifest'->>'name', '') || ' ' || coalesce(json->'manifest'->>'description', '')))",
+        "CREATE INDEX IF NOT EXISTS skills_resource_name_idx ON skills ((json->'manifest'->>'name'))"
+      ]
+    },
+    {
+      "id": "resource-search/webhooks/0001",
+      "checksum": "afdb2392eed83a8db7402eececbbdaebbc1563444c21616db1998fd330e40881",
+      "statements": [
+        "SET LOCAL lock_timeout = '2s'",
+        "SET LOCAL statement_timeout = '15s'",
+        "CREATE TABLE IF NOT EXISTS webhooks (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS webhooks_resource_search_gin ON webhooks USING GIN (to_tsvector('simple', coalesce(json->>'action', '') || ' ' || coalesce(json->'verification'->>'scheme', '')))"
+      ]
+    },
+    {
+      "id": "runs/activity/0001",
+      "checksum": "985e4430016c037b986909566aceb68f53870fc50a71158dbaf73c1c5a15c509",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS run_activity(\n    id BIGSERIAL PRIMARY KEY,\n    run_id TEXT NOT NULL,\n    seq BIGINT NOT NULL,\n    parent_seq BIGINT,\n    type TEXT NOT NULL,\n    payload JSONB NOT NULL,\n    created_at BIGINT NOT NULL\n  )",
+        "CREATE INDEX IF NOT EXISTS idx_run_activity_run ON run_activity(run_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_run_activity_created ON run_activity(created_at)"
+      ]
+    },
+    {
+      "id": "runs/signals/0001",
+      "checksum": "f94f67b5c878383af0026a0a44b1f252f83585dec0e12b79b9db6e8de841cacf",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS run_signals(\n        id BIGSERIAL PRIMARY KEY,\n        run_id TEXT NOT NULL,\n        kind TEXT NOT NULL,\n        text TEXT,\n        payload JSONB,\n        created_at BIGINT NOT NULL,\n        consumed_at BIGINT\n      )",
+        "ALTER TABLE run_signals ADD COLUMN IF NOT EXISTS payload JSONB",
+        "CREATE INDEX IF NOT EXISTS idx_run_signals_pending ON run_signals(run_id) WHERE consumed_at IS NULL"
+      ]
+    },
+    {
+      "id": "runs/signals/0002",
+      "checksum": "5eaf490533f72a518bd27d4846b052532a7715976e2e5b3b3432b16d1416bb59",
+      "statements": [
+        "ALTER TABLE run_signals ADD COLUMN IF NOT EXISTS dedupe_key TEXT",
+        "CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL"
+      ]
+    },
+    {
+      "id": "runs/store/0001",
+      "checksum": "07a121d0fa4e8ae4049e0574939dbf938c8615dc39ce29b74805a7e8ccb4ad0f",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS runs(\n        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL,\n        request TEXT NOT NULL, result TEXT, idempotency_key TEXT UNIQUE,\n        attempts INT NOT NULL DEFAULT 0, max_attempts INT NOT NULL DEFAULT 3,\n        lease_token TEXT, lease_expires_at BIGINT, worker_id TEXT,\n        created_at BIGINT NOT NULL, started_at BIGINT, finished_at BIGINT\n      )",
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS delivery_state TEXT",
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS error_attempts INT NOT NULL DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS idx_runs_status_created ON runs(status, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_runs_session_active_created\n        ON runs(session_id, created_at DESC) WHERE status IN ('pending','running')",
+        "DROP INDEX IF EXISTS idx_runs_status_priority_created",
+        "UPDATE runs SET status='pending', lease_token=NULL, lease_expires_at=NULL, worker_id=NULL\n      WHERE status='running' AND id IN (\n        SELECT id FROM (\n          SELECT id, row_number() OVER (PARTITION BY session_id ORDER BY started_at ASC NULLS LAST, id) AS rn\n          FROM runs WHERE status='running'\n        ) dup WHERE dup.rn > 1\n      )",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_running_per_session ON runs(session_id) WHERE status='running'",
+        "CREATE TABLE IF NOT EXISTS tool_calls(\n        run_id TEXT NOT NULL, attempt INT NOT NULL DEFAULT 1, call_index INT NOT NULL,\n        output TEXT NOT NULL, created_at BIGINT NOT NULL,\n        PRIMARY KEY(run_id, attempt, call_index)\n      )",
+        "ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS attempt INT NOT NULL DEFAULT 1",
+        "ALTER TABLE tool_calls DROP CONSTRAINT IF EXISTS tool_calls_pkey",
+        "ALTER TABLE tool_calls ADD PRIMARY KEY (run_id, attempt, call_index)"
+      ]
+    },
+    {
+      "id": "runs/store/0002",
+      "checksum": "c0fc23238fbe0ace56a28278bcb6cadfb100eb2c24ee83ce873588d466930270",
+      "statements": [
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL",
+        "CREATE INDEX IF NOT EXISTS idx_runs_status_created_seq ON runs(status, created_at, seq)"
+      ]
+    },
+    {
+      "id": "runs/store/0003",
+      "checksum": "8594c46c02ee90d43292a4c083fedea6c72d93b5f414f75e9e20d2db51b1b595",
+      "statements": ["SET LOCAL lock_timeout = '3s'", "ALTER TABLE runs ADD COLUMN IF NOT EXISTS turn_user_seq BIGINT"]
+    },
+    {
+      "id": "runs/store/0004",
+      "checksum": "287116e5f86a67157788d505fecb2ea319974509b5ce35df6febfc8b9f059d6b",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS retry_after BIGINT NOT NULL DEFAULT 0"
+      ]
+    },
+    {
+      "id": "runs/store/0004-subagent-returns",
+      "checksum": "390cf57f79622a535c61b02f59c3727d49d7bc51ac7710da184a24352415ad52",
+      "statements": [
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS returned_at BIGINT",
+        "CREATE INDEX IF NOT EXISTS idx_runs_pending_child_returns ON runs(id) WHERE status IN ('done','failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%'"
+      ]
+    },
+    {
+      "id": "runs/store/0005-session-history",
+      "checksum": "98df79620c5dfbedcc8b3b1ea38ada86d7948a0fd2fb6f9f8646c2c826b30612",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_session_created_seq ON runs(session_id, created_at DESC, seq DESC)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_created ON runs(created_at DESC)"
+      ]
+    },
+    {
+      "id": "runs/store/0006-terminal-finished",
+      "checksum": "c1b9fac31ffd7f3e0e19ae28007a3a0870f64ba04c1c6b608153dcc262970920",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done','failed')"
+      ]
+    },
+    {
+      "id": "runs/store/0007-last-stop",
+      "checksum": "3112c3322da219fd1be29ff632b726a529864794f3659846e320cf6ba54cbe56",
+      "statements": ["SET LOCAL lock_timeout = '3s'", "ALTER TABLE runs ADD COLUMN IF NOT EXISTS last_stop TEXT"]
+    },
+    {
+      "id": "runs/store/0008-claim-priority",
+      "checksum": "d67a00e019c5343ea8a03ec0b1e851f714de191cd8f1ba404263665105ba61ad",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS claim_priority SMALLINT NOT NULL DEFAULT 2",
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS preemptions INT NOT NULL DEFAULT 0"
+      ]
+    },
+    {
+      "id": "runs/store/0009-claim-priority-index",
+      "checksum": "9922f90b6cea5da7af6ad0cbff5b718cd741c68260a2420abdb2889f441ef8ef",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_runs_pending_priority ON runs(claim_priority, created_at, seq) WHERE status='pending'"
+      ]
+    },
+    {
+      "id": "runs/store/0010-drop-turn-metrics",
+      "checksum": "cc3fdea1e8cfc3979dab84d9474d09741aee1d882875519eef9f0ebeeacc94b0",
+      "statements": ["SET LOCAL lock_timeout = '60s'", "DROP TABLE IF EXISTS turn_metrics"]
+    },
+    {
+      "id": "sessions/store/0001",
+      "checksum": "cf56c9f6488806677a229698193ef6dd7cb74300c343bdb1930c17702c5ccf2f",
+      "statements": [
+        "CREATE OR REPLACE FUNCTION safe_json(t text) RETURNS json\n        LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $safe_json$\n        BEGIN RETURN t::json; EXCEPTION WHEN others THEN RETURN NULL; END $safe_json$",
+        "DO $safe_jsonb_parallel$\n        BEGIN\n          IF to_regprocedure('safe_jsonb(text)') IS NOT NULL THEN\n            ALTER FUNCTION safe_jsonb(text) PARALLEL UNSAFE;\n          END IF;\n        END $safe_jsonb_parallel$",
+        "CREATE TABLE IF NOT EXISTS sessions(\n        id TEXT PRIMARY KEY, type TEXT NOT NULL, scope_id TEXT NOT NULL,\n        thread_ref TEXT UNIQUE NOT NULL, created_at BIGINT NOT NULL, title TEXT, channel_name TEXT\n      )",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS title TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS channel_name TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS surface TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_activity BIGINT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS messages INT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS turns INT",
+        "CREATE TABLE IF NOT EXISTS session_entries(\n        session_id TEXT NOT NULL, seq INT NOT NULL, parent_seq INT,\n        type TEXT NOT NULL, payload TEXT, scope_label TEXT NOT NULL, created_at BIGINT NOT NULL,\n        PRIMARY KEY(session_id, seq)\n      )",
+        "CREATE TABLE IF NOT EXISTS participants(\n        session_id TEXT NOT NULL, principal_id TEXT NOT NULL,\n        valid_from BIGINT NOT NULL, valid_to BIGINT,\n        valid_from_seq INT, valid_to_seq INT,\n        title TEXT, archived BOOLEAN NOT NULL DEFAULT FALSE,\n        PRIMARY KEY(session_id, principal_id)\n      )",
+        "CREATE TABLE IF NOT EXISTS session_leases(\n        session_id TEXT PRIMARY KEY, token TEXT NOT NULL, expires_at BIGINT NOT NULL\n      )",
+        "ALTER TABLE session_leases ADD COLUMN IF NOT EXISTS holder TEXT",
+        "ALTER TABLE session_leases ADD COLUMN IF NOT EXISTS acquired_at BIGINT",
+        "CREATE TABLE IF NOT EXISTS session_tape(\n        session_id TEXT NOT NULL, seq INT NOT NULL,\n        kind TEXT NOT NULL, harness TEXT, payload TEXT NOT NULL, scope_label TEXT NOT NULL,\n        bare_text TEXT, ts TEXT, change_time TEXT, hidden BOOLEAN, overheard BOOLEAN, author TEXT,\n        entry_seq INT, covers_entry_seq INT, created_at BIGINT NOT NULL,\n        PRIMARY KEY(session_id, seq)\n      )",
+        "ALTER TABLE participants ADD COLUMN IF NOT EXISTS title TEXT",
+        "ALTER TABLE participants ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE participants ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE participants ADD COLUMN IF NOT EXISTS color TEXT",
+        "ALTER TABLE participants ADD COLUMN IF NOT EXISTS valid_from_seq INT",
+        "ALTER TABLE participants ADD COLUMN IF NOT EXISTS valid_to_seq INT",
+        "UPDATE participants p SET valid_from = 0, valid_from_seq = 0\n        FROM sessions s\n       WHERE s.id = p.session_id\n         AND s.scope_id LIKE 'group:web-project-%'\n         AND p.valid_to IS NULL\n         AND (p.valid_from_seq IS DISTINCT FROM 0 OR p.valid_from <> 0)",
+        "UPDATE participants p SET title = NULL\n        FROM sessions s\n       WHERE s.id = p.session_id\n         AND s.scope_id LIKE 'group:web-project-%'\n         AND p.valid_to IS NULL\n         AND p.title = ''",
+        "CREATE TABLE IF NOT EXISTS session_llm_requests(\n        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, turn_seq INT,\n        step INT NOT NULL, model TEXT NOT NULL, scope_label TEXT NOT NULL,\n        request TEXT NOT NULL, truncated BOOLEAN NOT NULL DEFAULT FALSE, created_at BIGINT NOT NULL\n      )",
+        "CREATE INDEX IF NOT EXISTS session_llm_requests_by_session\n        ON session_llm_requests(session_id, created_at, step)",
+        "ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS ttft_ms INT",
+        "ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS duration_ms INT",
+        "ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS step_gap_ms INT",
+        "ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS tool_wall_json TEXT",
+        "ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS usage_json TEXT",
+        "ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS transport_json TEXT",
+        "ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS gap_phases_json TEXT",
+        "CREATE INDEX IF NOT EXISTS sessions_by_scope ON sessions(scope_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS sessions_by_activity ON sessions((COALESCE(last_activity, created_at)) DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS sessions_by_scope_activity\n        ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS session_entries_user_ts ON session_entries(created_at) WHERE type = 'user'",
+        "CREATE INDEX IF NOT EXISTS session_entries_session_created ON session_entries(session_id, created_at DESC)",
+        "DELETE FROM session_entries WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')",
+        "DELETE FROM participants WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')",
+        "DELETE FROM session_leases WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')",
+        "DELETE FROM session_llm_requests WHERE session_id IN (SELECT id FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$')",
+        "DELETE FROM sessions WHERE type IN ('channel','group') AND thread_ref ~ '^[a-z0-9_]+/[^:/]+$'"
+      ]
+    },
+    {
+      "id": "sessions/store/0002",
+      "checksum": "ca9877865861adf81cfb433750327462aedcfa1e60d4e87a7845d1a77f64c2ec",
+      "statements": [
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS forked_from_session_id TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS forked_from_title TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS fork_boundary_seq INT",
+        "DO $$ BEGIN\n        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sessions_fork_provenance_pair') THEN\n          ALTER TABLE sessions ADD CONSTRAINT sessions_fork_provenance_pair\n          CHECK ((forked_from_session_id IS NULL) = (fork_boundary_seq IS NULL)) NOT VALID;\n        END IF;\n      END $$",
+        "ALTER TABLE session_llm_requests ALTER COLUMN request DROP NOT NULL",
+        "ALTER TABLE session_llm_requests ADD COLUMN IF NOT EXISTS prompt_hash TEXT",
+        "CREATE TABLE IF NOT EXISTS llm_prompt_envelopes(\n        hash TEXT PRIMARY KEY, body TEXT NOT NULL, created_at BIGINT NOT NULL\n      )"
+      ]
+    },
+    {
+      "id": "sessions/store/0003",
+      "checksum": "fd77efdccf169dee81da809a54313be30a0aaf92cdea4f6c33e34555bb2396c8",
+      "statements": [
+        "CREATE OR REPLACE FUNCTION entry_search_text(payload text) RETURNS text\n        LANGUAGE plpgsql IMMUTABLE PARALLEL UNSAFE AS $entry_search_text$\n        DECLARE j json;\n        BEGIN\n          j := replace(payload, '\\u0000', '')::json;\n          RETURN CASE WHEN json_typeof(j -> 'text') = 'string' THEN j ->> 'text'\n                      WHEN json_typeof(j) = 'string' THEN j #>> '{}'\n                      ELSE NULL END;\n        EXCEPTION WHEN others THEN RETURN NULL;\n        END $entry_search_text$",
+        "CREATE INDEX IF NOT EXISTS session_entries_search_fts\n        ON session_entries USING GIN (to_tsvector('simple', COALESCE(entry_search_text(payload), '')))\n        WHERE type IN ('user', 'assistant', 'text')"
+      ]
+    },
+    {
+      "id": "sessions/store/0004",
+      "checksum": "856cc6940c934b59e37d511271630f77d72b235c92ab0e2e2085207d15750a75",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS session_pins(\n        id TEXT PRIMARY KEY, session_id TEXT NOT NULL, text TEXT, entry_seq INT,\n        added_by TEXT NOT NULL, created_at BIGINT NOT NULL\n      )",
+        "CREATE INDEX IF NOT EXISTS session_pins_by_session ON session_pins(session_id, created_at)"
+      ]
+    },
+    {
+      "id": "sessions/store/0005",
+      "checksum": "4b0824aa4311df8c66b57b16f331e9dcf3dfc8d11c112a000d83f46b1fba1bd0",
+      "statements": [
+        "CREATE INDEX IF NOT EXISTS session_entries_user_attributed\n        ON session_entries(session_id, created_at, seq)\n        WHERE type = 'user' AND (payload IS NULL OR payload NOT LIKE '%\"overheard\":true%')"
+      ]
+    },
+    {
+      "id": "sessions/store/0006",
+      "checksum": "57037691db0c87e9eeb28927758ae35e426eb8a8b7f7b5b8440bb08817f39203",
+      "statements": [
+        "ALTER FUNCTION entry_search_text(text) PARALLEL SAFE",
+        "ALTER TABLE session_entries ADD COLUMN IF NOT EXISTS search_tsv tsvector\n        GENERATED ALWAYS AS (to_tsvector('simple', COALESCE(entry_search_text(payload), ''))) STORED",
+        "CREATE INDEX IF NOT EXISTS session_entries_search_tsv\n        ON session_entries USING GIN (search_tsv)\n        WHERE type IN ('user', 'assistant', 'text')",
+        "DROP INDEX IF EXISTS session_entries_search_fts"
+      ]
+    },
+    {
+      "id": "sessions/store/0007",
+      "checksum": "8322f0c560da60399baf59f0364e8125e836384cd8b4d9795bd1c114d4d7d514",
+      "statements": ["ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS attachments TEXT"]
+    },
+    {
+      "id": "sessions/store/0008",
+      "checksum": "4b32bec77fa021de97736856a70a45bf1e51e59e574987e0d044fe748ec4cf58",
+      "statements": [
+        "ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS display TEXT",
+        "ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS security_tainted BOOLEAN",
+        "ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS entry_created_at BIGINT"
+      ]
+    },
+    {
+      "id": "sessions/store/0009",
+      "checksum": "40558264e0589a236a8a5a688a42eb49acf8a774371b9e1c6a3e5e0a84065c7d",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS session_entry_search(\n        session_id TEXT NOT NULL, seq INT NOT NULL, type TEXT NOT NULL,\n        author TEXT, text TEXT NOT NULL, created_at BIGINT NOT NULL,\n        search_tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', text)) STORED,\n        PRIMARY KEY(session_id, seq)\n      )",
+        "CREATE INDEX IF NOT EXISTS session_entry_search_tsv\n        ON session_entry_search USING GIN (search_tsv)"
+      ]
+    },
+    {
+      "id": "sessions/store/0010",
+      "checksum": "29832445f9d3bfaf0d97f11b2748a1ca533ff57c6f4bd96c594e83a6ab4f7c9a",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "DROP INDEX IF EXISTS sessions_by_activity",
+        "ALTER TABLE sessions SET (fillfactor = 70)"
+      ]
+    },
+    {
+      "id": "sessions/store/0011",
+      "checksum": "be590472124ab471453cfbbd7d3c1a0c57f792c97704707fba3682f4183f870d",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS origin TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS origin_id TEXT"
+      ]
+    },
+    {
+      "id": "sessions/store/0012",
+      "checksum": "6f52591c733daffdda7aca112ad5a21cfec5c0c36f97838d74b107a79b7100bf",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "CREATE INDEX IF NOT EXISTS session_llm_requests_screens\n        ON session_llm_requests(created_at DESC) WHERE step = -1"
+      ]
+    },
+    {
+      "id": "sessions/store/0013",
+      "checksum": "86c8d0eff24f8f2deab4f33eccff6d0206b3a9a64943a812eec0965203dd5262",
+      "statements": [
+        "CREATE EXTENSION IF NOT EXISTS btree_gin",
+        "CREATE INDEX IF NOT EXISTS session_entries_session_search_tsv\n        ON session_entries USING GIN (session_id, search_tsv)\n        WHERE type IN ('user', 'assistant', 'text')",
+        "CREATE INDEX IF NOT EXISTS session_entry_search_session_tsv\n        ON session_entry_search USING GIN (session_id, search_tsv)"
+      ]
+    },
+    {
+      "id": "sessions/store/0014-search-write-through-v1",
+      "checksum": "e91226e6e5897b86e296c43e75a3f8d00633a1a7752a46c4c9f7cabf44f3b747",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "CREATE OR REPLACE FUNCTION sync_session_entry_search() RETURNS trigger\n           LANGUAGE plpgsql AS $sync_session_entry_search$\n           DECLARE body text;\n           BEGIN\n             IF TG_OP = 'DELETE' THEN\n               DELETE FROM session_entry_search WHERE session_id = OLD.session_id AND seq = OLD.seq;\n               RETURN OLD;\n             END IF;\n             IF TG_OP = 'UPDATE' AND (OLD.session_id, OLD.seq) IS DISTINCT FROM (NEW.session_id, NEW.seq) THEN\n               DELETE FROM session_entry_search WHERE session_id = OLD.session_id AND seq = OLD.seq;\n             END IF;\n             IF NEW.type IN ('user', 'assistant', 'text') THEN\n               body := entry_search_text(NEW.payload);\n             END IF;\n             IF body IS NULL OR btrim(body) = '' THEN\n               DELETE FROM session_entry_search WHERE session_id = NEW.session_id AND seq = NEW.seq;\n             ELSE\n               INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)\n               VALUES (NEW.session_id, NEW.seq, NEW.type,\n                       CASE WHEN NEW.type = 'user' THEN\n                         (SELECT CASE WHEN json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END\n                            FROM (SELECT safe_json(replace(NEW.payload, '\\u0000', '')) AS j) _) END,\n                       body, NEW.created_at)\n               ON CONFLICT (session_id, seq) DO UPDATE\n                 SET type = EXCLUDED.type, author = EXCLUDED.author, text = EXCLUDED.text,\n                     created_at = EXCLUDED.created_at;\n             END IF;\n             RETURN NEW;\n           END $sync_session_entry_search$",
+        "CREATE TRIGGER session_entries_search_write_through\n           AFTER INSERT OR UPDATE OF payload, type, created_at, session_id, seq OR DELETE ON session_entries\n           FOR EACH ROW EXECUTE FUNCTION sync_session_entry_search()"
+      ]
+    },
+    {
+      "id": "sessions/store/0015-search-backfill-v1",
+      "checksum": "3f942dd9aefb26588756cd936f73e08704df8071454b1f3d6fba7fe41f373864",
+      "statements": [
+        "WITH missing AS MATERIALIZED (\n             SELECT e.session_id, e.seq, e.type,\n                    CASE WHEN e.type = 'user' THEN\n                      (SELECT CASE WHEN json_typeof(j -> 'name') = 'string' THEN j ->> 'name' END\n                         FROM (SELECT safe_json(replace(e.payload, '\\u0000', '')) AS j) _) END AS author,\n                    entry_search_text(e.payload) AS text, e.created_at\n               FROM session_entries e\n              WHERE e.type IN ('user', 'assistant', 'text')\n                AND NOT EXISTS (SELECT 1 FROM session_entry_search s WHERE s.session_id = e.session_id AND s.seq = e.seq)\n              FOR SHARE OF e\n           )\n           INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)\n           SELECT session_id, seq, type, author, text, created_at FROM missing\n            WHERE COALESCE(btrim(text), '') <> ''\n           ON CONFLICT (session_id, seq) DO NOTHING"
+      ]
+    },
+    {
+      "id": "sessions/store/0016-status",
+      "checksum": "89fbf5684830326730fdbde5f2de9cea69dcc1661a5f9e17e897232d5d74c9b4",
+      "statements": ["ALTER TABLE sessions ADD COLUMN IF NOT EXISTS status JSONB"]
+    },
+    {
+      "id": "sessions/store/0016-tape-source-role",
+      "checksum": "2725fb5df8e2a82fe5936486e45e7f999bd0606cf3355d6bfbb01296d17374f7",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE session_tape ADD COLUMN IF NOT EXISTS source_role TEXT"
+      ]
+    },
+    {
+      "id": "sessions/store/0017-subagent-parentage",
+      "checksum": "46f54668e4e535b7e891170e85453eaa4ccb4f923f2fc666d0376967efa5295a",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parent_session_id TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS spawn_meta TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_parent_session_id\n             ON sessions(parent_session_id) WHERE parent_session_id IS NOT NULL"
+      ]
+    },
+    {
+      "id": "sessions/store/0017-transcript-entries",
+      "checksum": "828dfba948c6272dd747748c04ad777a0f84f5fde23d0b803fa5bf28872a6ef7",
+      "statements": [
+        "CREATE INDEX IF NOT EXISTS session_tape_transcript_entries\n           ON session_tape(session_id, entry_seq DESC, seq DESC)\n           WHERE kind = 'annotation' AND safe_json(payload)->>'event' = 'transcript_entry'",
+        "CREATE OR REPLACE VIEW session_transcript_entries AS\n           SELECT DISTINCT ON (session_id, entry_seq)\n             session_id, entry_seq AS seq,\n             (safe_json(payload)->'entry'->>'parentSeq')::int AS parent_seq,\n             safe_json(payload)->'entry'->>'type' AS type,\n             (safe_json(payload)->'entry'->'payload')::text AS payload,\n             scope_label,\n             (safe_json(payload)->'entry'->>'at')::bigint AS created_at\n           FROM session_tape t\n           WHERE kind = 'annotation' AND safe_json(payload)->>'event' = 'transcript_entry'\n           ORDER BY t.session_id, t.entry_seq DESC, t.seq DESC"
+      ]
+    },
+    {
+      "id": "sessions/store/0018-llm-requests-created-at",
+      "checksum": "0f550cd1401ea9f6dc7d62c7d154e4a8a4624e8fb27d10e75ed2bc000a54f5e7",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "CREATE INDEX IF NOT EXISTS session_llm_requests_created_at\n        ON session_llm_requests(created_at)"
+      ]
+    },
+    {
+      "id": "sessions/store/0019-participant-activity-indexes",
+      "checksum": "4bd9bfdadffe0d2c4de382feacce65c06987f061df940eecc7991699b1249348",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS participants_by_principal\n             ON participants(principal_id, session_id)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_user_activity\n             ON session_entries(session_id, created_at DESC) WHERE type = 'user'"
+      ]
+    },
+    {
+      "id": "sessions/store/0020-spend-usage-json",
+      "checksum": "febf07cde8b9ffe09a497d44a0e524a5c994f7708a0fab6d245315e4ab1e717a",
+      "statements": [
+        "CREATE OR REPLACE FUNCTION spend_usage_json(t text) RETURNS jsonb\n             LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $spend_usage_json$\n             SELECT CASE WHEN pg_input_is_valid(j ->> 'costUsd', 'double precision') IS NOT FALSE\n                          AND pg_input_is_valid(j ->> 'input', 'bigint') IS NOT FALSE\n                          AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE\n                          AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE\n                          AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN j END\n               FROM (SELECT CASE WHEN pg_input_is_valid(t, 'jsonb') THEN t::jsonb END AS j OFFSET 0) parsed\n             $spend_usage_json$"
+      ]
+    },
+    {
+      "id": "sessions/store/0020-spend-usage-json-size",
+      "checksum": "4f34eed7d24be1ea5e81263d9eb4dafa4a5c54da709332feb38b2f6fab6f7025",
+      "statements": [
+        "CREATE OR REPLACE FUNCTION spend_usage_json(t text) RETURNS jsonb\n             LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $spend_usage_json$\n             SELECT CASE WHEN pg_input_is_valid(j ->> 'costUsd', 'double precision') IS NOT FALSE\n                          AND pg_input_is_valid(j ->> 'input', 'bigint') IS NOT FALSE\n                          AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE\n                          AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE\n                          AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN j END\n               FROM (SELECT CASE WHEN octet_length(t) > 2000 THEN NULL\n                                 WHEN pg_input_is_valid(t, 'jsonb') THEN t::jsonb END AS j OFFSET 0) parsed\n             $spend_usage_json$"
+      ]
+    },
+    {
+      "id": "sessions/store/0020-spend-usage-json-size-plpgsql",
+      "checksum": "1d69838eefe8377d3f8010707c0ce816bafd340b3d9da3c0cc15bb4fad038e16",
+      "statements": [
+        "CREATE OR REPLACE FUNCTION spend_usage_json(t text) RETURNS jsonb\n             LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $spend_usage_json$\n             DECLARE j jsonb;\n             BEGIN\n               IF t IS NULL OR octet_length(t) > 2000 OR NOT pg_input_is_valid(t, 'jsonb') THEN\n                 RETURN NULL;\n               END IF;\n               j := t::jsonb;\n               IF pg_input_is_valid(j ->> 'costUsd', 'double precision') IS NOT FALSE\n                  AND pg_input_is_valid(j ->> 'input', 'bigint') IS NOT FALSE\n                  AND pg_input_is_valid(j ->> 'output', 'bigint') IS NOT FALSE\n                  AND pg_input_is_valid(j ->> 'cacheRead', 'bigint') IS NOT FALSE\n                  AND pg_input_is_valid(j ->> 'cacheWrite', 'bigint') IS NOT FALSE THEN\n                 RETURN j;\n               END IF;\n               RETURN NULL;\n             END\n             $spend_usage_json$"
+      ]
+    },
+    {
+      "id": "sessions/store/0021-spend-covering-index",
+      "checksum": "e11f84353f7637fff2ccb5bf9aa54de9a9fe1494cd8181adf52676edf0bf8f5a",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend\n             ON session_llm_requests(created_at,\n               ((spend_usage_json(usage_json) ->> 'costUsd')::double precision),\n               ((spend_usage_json(usage_json) ->> 'input')::bigint),\n               ((spend_usage_json(usage_json) ->> 'output')::bigint),\n               ((spend_usage_json(usage_json) ->> 'cacheRead')::bigint),\n               ((spend_usage_json(usage_json) ->> 'cacheWrite')::bigint))\n             INCLUDE (session_id, model, usage_json)\n             WHERE usage_json IS NOT NULL AND (spend_usage_json(usage_json) IS NOT NULL\n  AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend_wide\n             ON session_llm_requests(created_at)\n             WHERE usage_json IS NOT NULL AND NOT (spend_usage_json(usage_json) IS NOT NULL\n  AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)"
+      ]
+    },
+    {
+      "id": "sessions/store/0022-spend-days",
+      "checksum": "66bddbc128d3257accf4501d5f2890a9cddf8b9ae5287b38dacabdaa4005bdad",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "CREATE TABLE session_spend_days(day BIGINT PRIMARY KEY, rows JSONB NOT NULL, updated_at BIGINT NOT NULL)",
+        "CREATE TABLE session_spend_dirty(\n             day BIGINT, session_id TEXT, writer xid8 NOT NULL DEFAULT pg_current_xact_id(),\n             UNIQUE(day, writer), CHECK (num_nonnulls(day, session_id) = 1)\n           )",
+        "CREATE OR REPLACE FUNCTION invalidate_request_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_request_spend$\n           BEGIN\n             INSERT INTO session_spend_dirty(day)\n             SELECT DISTINCT floor(at::numeric / 86400000)::bigint\n               FROM (VALUES\n                 (CASE WHEN TG_OP <> 'INSERT' AND OLD.usage_json IS NOT NULL THEN OLD.created_at END),\n                 (CASE WHEN TG_OP <> 'DELETE' AND NEW.usage_json IS NOT NULL THEN NEW.created_at END)\n               ) changed(at) WHERE at IS NOT NULL\n             ON CONFLICT DO NOTHING;\n             RETURN NULL;\n           END $invalidate_request_spend$",
+        "CREATE TRIGGER session_llm_requests_spend_dirty\n           AFTER INSERT OR UPDATE OF created_at, session_id, model, usage_json OR DELETE ON session_llm_requests\n           FOR EACH ROW EXECUTE FUNCTION invalidate_request_spend()",
+        "CREATE OR REPLACE FUNCTION invalidate_session_spend() RETURNS trigger LANGUAGE plpgsql AS $invalidate_session_spend$\n           BEGIN\n             IF TG_OP = 'UPDATE' AND ROW(OLD.id, OLD.scope_id, OLD.origin, OLD.thread_ref, OLD.parent_session_id)\n                  IS NOT DISTINCT FROM ROW(NEW.id, NEW.scope_id, NEW.origin, NEW.thread_ref, NEW.parent_session_id) THEN\n               RETURN NULL;\n             END IF;\n             INSERT INTO session_spend_dirty(session_id)\n             SELECT DISTINCT id FROM (VALUES (OLD.id), (NEW.id)) changed(id) WHERE id IS NOT NULL;\n             RETURN NULL;\n           END $invalidate_session_spend$",
+        "CREATE TRIGGER sessions_spend_dirty\n           AFTER INSERT OR UPDATE OF id, scope_id, origin, thread_ref, parent_session_id OR DELETE ON sessions\n           FOR EACH ROW EXECUTE FUNCTION invalidate_session_spend()"
+      ]
+    },
+    {
+      "id": "sessions/store/0023-spend-days-backfill",
+      "checksum": "8c5baecc5ec81cf33f24c53c58bb6d93f7589458a4bd442ab67a19fa783398ca",
+      "statements": [
+        "INSERT INTO session_spend_dirty(day)\n           SELECT DISTINCT floor(created_at::numeric / 86400000)::bigint\n             FROM session_llm_requests WHERE usage_json IS NOT NULL\n           ON CONFLICT DO NOTHING"
+      ]
+    },
+    {
+      "id": "sessions/store/0024-user-previews",
+      "checksum": "ca1d0192587bdc5d07690988e7767c2d79d0f3ee8a1627fffcac24499d74df47",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS first_user_preview TEXT",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_user_preview TEXT"
+      ]
+    },
+    {
+      "id": "sessions/store/0025-org-activity-index",
+      "checksum": "00366567fac31a93877a9373dd7613084091565a4933372068d9d5fce9d9f4a1",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_by_activity\n             ON sessions((COALESCE(last_activity, created_at)) DESC, id DESC)"
+      ]
+    },
+    {
+      "id": "sessions/store/0026-participant-read-at",
+      "checksum": "a3949603eac7d7fb64dba0852a23b4ee7468717875774144e5d74d852e49418e",
+      "statements": [
+        "ALTER TABLE participants ADD COLUMN IF NOT EXISTS read_at BIGINT",
+        "UPDATE participants SET read_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint WHERE read_at IS NULL",
+        "ALTER TABLE sessions DROP COLUMN IF EXISTS status"
+      ]
+    },
+    {
+      "id": "sessions/store/0027-agent-reply-index",
+      "checksum": "65af103073ef18b66547651fc007e4f1b704a98126e6974eea121ca877f1e090",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS session_entries_agent_reply\n             ON session_entries(session_id, created_at DESC) WHERE type IN ('assistant', 'delivery')"
+      ]
+    },
+    {
+      "id": "sessions/store/0028-drop-run-tasks",
+      "checksum": "5aa0a3c8a071fffcddb859cdab12735dd331c97d3258da4807152b64e503ae22",
+      "statements": ["DROP TABLE IF EXISTS task_events", "DROP TABLE IF EXISTS tasks"]
+    },
+    {
+      "id": "sessions/store/0029-legacy-tape-steps",
+      "checksum": "a103ebb697c0d2cdf4a843791127955ff6c42729ca1ba5880446e02aa24e7235",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS legacy_tape_steps(\n    session_id TEXT NOT NULL,\n    seq INT NOT NULL,\n    step JSONB NOT NULL,\n    wire JSONB,\n    PRIMARY KEY (session_id, seq)\n  )",
+        "CREATE TABLE IF NOT EXISTS legacy_turn_runs(\n    session_id TEXT NOT NULL,\n    seq INT NOT NULL,\n    run_id TEXT NOT NULL,\n    inferred BOOLEAN NOT NULL,\n    PRIMARY KEY (session_id, seq)\n  )",
+        "CREATE TABLE IF NOT EXISTS legacy_tape_steps_progress(\n    singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton),\n    started_at BIGINT,\n    last_session TEXT,\n    done BOOLEAN NOT NULL DEFAULT false,\n    invalid_messages BIGINT NOT NULL DEFAULT 0,\n    keyed_blocks BIGINT NOT NULL DEFAULT 0,\n    copied_steps BIGINT NOT NULL DEFAULT 0,\n    copied_turns BIGINT NOT NULL DEFAULT 0\n  )",
+        "INSERT INTO legacy_tape_steps_progress DEFAULT VALUES ON CONFLICT (singleton) DO NOTHING",
+        "CREATE TABLE IF NOT EXISTS legacy_tape_writes(at BIGINT NOT NULL)",
+        "CREATE OR REPLACE FUNCTION legacy_tape_written() RETURNS trigger LANGUAGE plpgsql AS $written$\nBEGIN\n  INSERT INTO legacy_tape_writes VALUES ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);\n  RETURN NULL;\nEND $written$",
+        "CREATE OR REPLACE PROCEDURE prepare_legacy_tape_steps(batch INT DEFAULT 50)\nLANGUAGE plpgsql AS $prepare$\nDECLARE\n  ids TEXT[];\n  frozen_at BIGINT;\n  n_invalid BIGINT;\n  n_keyed BIGINT;\n  n_steps BIGINT;\n  n_turns BIGINT;\nBEGIN\n  IF NOT pg_try_advisory_lock(hashtext('prepare_legacy_tape_steps')) THEN\n    RAISE EXCEPTION 'prepare_legacy_tape_steps() is already running in another session';\n  END IF;\n  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'legacy_tape_frozen' AND tgrelid = 'session_tape'::regclass) THEN\n    IF EXISTS (SELECT 1 FROM legacy_tape_steps_progress WHERE started_at IS NOT NULL OR last_session IS NOT NULL OR done) THEN\n      RAISE EXCEPTION 'legacy_tape_frozen is gone but a preparation already started: reset legacy_tape_steps_progress, legacy_tape_steps, legacy_turn_runs and legacy_tape_writes before starting again';\n    END IF;\n    PERFORM set_config('lock_timeout', '5s', true);\n    CREATE TRIGGER legacy_tape_frozen AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON session_tape\n      FOR EACH STATEMENT EXECUTE FUNCTION legacy_tape_written();\n    ALTER TABLE session_tape ENABLE ALWAYS TRIGGER legacy_tape_frozen;\n    UPDATE legacy_tape_steps_progress SET started_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;\n    COMMIT;\n  END IF;\n  SELECT started_at INTO frozen_at FROM legacy_tape_steps_progress;\n  IF to_regclass('legacy_prep_runs') IS NULL THEN\n    CREATE TABLE legacy_prep_runs(\n      id TEXT, session_id TEXT, turn_user_seq BIGINT, started_at BIGINT, finished_at BIGINT, prev_max_finished BIGINT\n    );\n    IF to_regclass('runs') IS NOT NULL THEN\n      INSERT INTO legacy_prep_runs\n        SELECT r.id, s.id, r.turn_user_seq, r.started_at, r.finished_at,\n               max(COALESCE(r.finished_at, 9223372036854775807)) OVER (\n                 PARTITION BY s.id ORDER BY r.started_at, r.id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)\n          FROM runs r JOIN sessions s ON s.thread_ref = r.session_id\n         WHERE r.started_at IS NOT NULL;\n    END IF;\n    CREATE INDEX legacy_prep_runs_by_seq ON legacy_prep_runs(session_id, turn_user_seq);\n    CREATE INDEX legacy_prep_runs_by_start ON legacy_prep_runs(session_id, started_at DESC, id DESC);\n    COMMIT;\n  END IF;\n  LOOP\n    SELECT array_agg(id ORDER BY id) INTO ids\n      FROM (SELECT id FROM sessions\n             WHERE id > COALESCE((SELECT last_session FROM legacy_tape_steps_progress), '')\n             ORDER BY id LIMIT batch) next_sessions;\n    EXIT WHEN ids IS NULL;\n    PERFORM set_config('enable_nestloop', 'off', true);\n    CREATE TEMP TABLE legacy_batch_blocks ON COMMIT DROP AS\n      WITH messages AS MATERIALIZED (\n        SELECT t.session_id, t.seq, t.created_at, v.valid, m.*\n          FROM session_tape t\n          CROSS JOIN LATERAL (\n            SELECT pg_input_is_valid(t.payload, 'jsonb') AND left(btrim(t.payload), 1) = '{' AS valid OFFSET 0\n          ) v\n          CROSS JOIN LATERAL (\n            SELECT r.* FROM json_to_record(CASE WHEN v.valid THEN t.payload::json END)\n              AS r(role TEXT, api TEXT, provider TEXT, model TEXT, \"stopReason\" TEXT, content JSON)\n            OFFSET 0\n          ) m\n         WHERE t.session_id = ANY(ids) AND t.kind = 'message' AND COALESCE(t.harness, 'pi') = 'pi'\n           AND (NOT v.valid OR m.role = 'assistant')\n      )\n      SELECT m.session_id, m.seq AS tape_seq, m.created_at, m.valid, m.api, m.provider, m.model,\n             m.\"stopReason\" AS stop_reason, b.blk, (b.ord - 1)::int AS idx,\n             CASE b.blk ->> 'type'\n               WHEN 'toolCall' THEN 'call:' || (b.blk ->> 'id')\n               WHEN 'thinking' THEN CASE WHEN COALESCE(b.blk ->> 'thinkingSignature', '') <> ''\n                                         THEN 'sig:' || (b.blk ->> 'thinkingSignature') END\n               WHEN 'text' THEN 'text:' || (b.blk ->> 'text')\n             END AS key\n        FROM messages m\n        LEFT JOIN LATERAL json_array_elements(\n          CASE WHEN json_typeof(m.content) = 'array' THEN m.content ELSE '[]'::json END\n        ) WITH ORDINALITY AS b(blk, ord) ON true;\n    SELECT count(*) FILTER (WHERE NOT valid), count(*) FILTER (WHERE key IS NOT NULL)\n      INTO n_invalid, n_keyed FROM legacy_batch_blocks;\n    WITH tape_unique AS (\n      SELECT b.* FROM legacy_batch_blocks b\n        JOIN (SELECT session_id, key FROM legacy_batch_blocks WHERE key IS NOT NULL\n               GROUP BY session_id, key HAVING count(*) = 1) u USING (session_id, key)\n    ), entries AS (\n      SELECT e.session_id, e.seq, e.type, e.created_at, p.j,\n             CASE WHEN e.type = 'tool_call' THEN 'call:' || (p.j ->> 'callId')\n                  WHEN e.type = 'thinking' THEN 'sig:' || (p.j ->> 'thinkingSignature')\n                  ELSE 'text:' || (p.j ->> 'text') END AS key\n        FROM session_entries e\n        CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p\n       WHERE e.session_id = ANY(ids)\n         AND e.type IN ('tool_call', 'thinking', 'text', 'assistant') AND e.created_at < frozen_at\n         AND jsonb_typeof(p.j) = 'object' AND NOT p.j ? 'step'\n    ), entries_unique AS (\n      SELECT x.* FROM entries x\n        JOIN (SELECT session_id, key FROM entries WHERE key IS NOT NULL\n               GROUP BY session_id, key HAVING count(*) = 1) u USING (session_id, key)\n    )\n    INSERT INTO legacy_tape_steps(session_id, seq, step, wire)\n    SELECT e.session_id, e.seq,\n           jsonb_strip_nulls(jsonb_build_object('id', 'tape:' || t.tape_seq, 'api', t.api, 'provider', t.provider,\n                                                'model', t.model, 'stopReason', t.stop_reason, 'index', t.idx)),\n           NULLIF(\n             COALESCE((SELECT jsonb_object_agg(f.key, f.value::jsonb) FROM json_each(t.blk) f\n                        WHERE f.key <> ALL (CASE t.blk ->> 'type'\n                                              WHEN 'toolCall' THEN ARRAY['type', 'id', 'name', 'arguments']\n                                              WHEN 'thinking' THEN ARRAY['type', 'thinking', 'thinkingSignature']\n                                              ELSE ARRAY['type', 'text'] END)), '{}'::jsonb)\n             || CASE WHEN e.type = 'tool_call' THEN\n                  jsonb_build_object('argumentsJson', COALESCE((t.blk -> 'arguments')::text, '{}'))\n                  || CASE WHEN (t.blk ->> 'name') IS DISTINCT FROM (e.j ->> 'tool')\n                          THEN jsonb_build_object('name', t.blk ->> 'name') ELSE '{}'::jsonb END\n                ELSE '{}'::jsonb END,\n             '{}'::jsonb)\n      FROM entries_unique e\n      JOIN tape_unique t USING (session_id, key)\n     WHERE e.key NOT LIKE 'text:%' OR abs(e.created_at - t.created_at) <= 600000\n    ON CONFLICT (session_id, seq) DO NOTHING;\n    GET DIAGNOSTICS n_steps = ROW_COUNT;\n    PERFORM set_config('enable_nestloop', 'on', true);\n    INSERT INTO legacy_turn_runs(session_id, seq, run_id, inferred)\n    SELECT e.session_id, e.seq, COALESCE(by_seq.id, by_window.id), by_seq.id IS NULL\n      FROM session_entries e\n      CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p\n      LEFT JOIN LATERAL (\n        SELECT CASE WHEN count(*) = 1 THEN min(r.id) END AS id FROM legacy_prep_runs r\n         WHERE r.session_id = e.session_id AND r.turn_user_seq = e.seq\n      ) by_seq ON true\n      LEFT JOIN LATERAL (\n        SELECT latest.id FROM (\n          SELECT r.id, r.turn_user_seq, r.finished_at, r.prev_max_finished FROM legacy_prep_runs r\n           WHERE r.session_id = e.session_id AND r.started_at <= e.created_at\n           ORDER BY r.started_at DESC, r.id DESC LIMIT 1\n        ) latest\n         WHERE latest.turn_user_seq IS NULL AND e.created_at <= latest.finished_at\n           AND COALESCE(latest.prev_max_finished, -1) < e.created_at\n      ) by_window ON true\n     WHERE e.session_id = ANY(ids) AND e.type = 'user' AND e.created_at < frozen_at AND jsonb_typeof(p.j) = 'object'\n       AND NOT p.j @> '{\"steered\":true}' AND NOT p.j @> '{\"overheard\":true}'\n       AND NOT COALESCE(jsonb_typeof(p.j -> 'runId') = 'string' AND p.j ->> 'runId' <> '', false)\n       AND COALESCE(by_seq.id, by_window.id) IS NOT NULL\n    ON CONFLICT (session_id, seq) DO NOTHING;\n    GET DIAGNOSTICS n_turns = ROW_COUNT;\n    UPDATE legacy_tape_steps_progress\n       SET last_session = ids[array_length(ids, 1)],\n           invalid_messages = invalid_messages + n_invalid, keyed_blocks = keyed_blocks + n_keyed,\n           copied_steps = copied_steps + n_steps, copied_turns = copied_turns + n_turns;\n    COMMIT;\n  END LOOP;\n  DROP TABLE legacy_prep_runs;\n  UPDATE legacy_tape_steps_progress SET done = true;\n  COMMIT;\n  PERFORM pg_advisory_unlock(hashtext('prepare_legacy_tape_steps'));\nEND $prepare$"
+      ]
+    },
+    {
+      "id": "sessions/store/0030-legacy-tape-steps-size-guard",
+      "checksum": "3b7f668e1acedcda4613ba41110f62932b404ba93884c829aa209d744a7a12c8",
+      "statements": [
+        "ALTER TABLE legacy_tape_steps_progress ADD COLUMN IF NOT EXISTS skipped_sessions BIGINT NOT NULL DEFAULT 0",
+        "CREATE TABLE IF NOT EXISTS legacy_tape_skipped(session_id TEXT PRIMARY KEY, error TEXT NOT NULL, at BIGINT NOT NULL)",
+        "CREATE OR REPLACE FUNCTION legacy_tape_steps_batch(\n  ids TEXT[], frozen_at BIGINT, OUT n_invalid BIGINT, OUT n_keyed BIGINT, OUT n_steps BIGINT, OUT n_turns BIGINT\n) LANGUAGE plpgsql AS $batch$\nBEGIN\n  IF to_regclass('pg_temp.legacy_batch_blocks') IS NOT NULL THEN\n    DROP TABLE pg_temp.legacy_batch_blocks;\n  END IF;\n    PERFORM set_config('enable_nestloop', 'off', true);\n    CREATE TEMP TABLE legacy_batch_blocks ON COMMIT DROP AS\n      WITH messages AS MATERIALIZED (\n        SELECT t.session_id, t.seq, t.created_at, v.valid, m.*\n          FROM session_tape t\n          CROSS JOIN LATERAL (\n            SELECT CASE WHEN octet_length(t.payload) > 16777216 THEN false\n                        ELSE pg_input_is_valid(t.payload, 'jsonb') AND left(btrim(t.payload), 1) = '{' END AS valid OFFSET 0\n          ) v\n          CROSS JOIN LATERAL (\n            SELECT r.* FROM json_to_record(CASE WHEN v.valid THEN t.payload::json END)\n              AS r(role TEXT, api TEXT, provider TEXT, model TEXT, \"stopReason\" TEXT, content JSON)\n            OFFSET 0\n          ) m\n         WHERE t.session_id = ANY(ids) AND t.kind = 'message' AND COALESCE(t.harness, 'pi') = 'pi'\n           AND (NOT v.valid OR m.role = 'assistant')\n      )\n      SELECT m.session_id, m.seq AS tape_seq, m.created_at, m.valid, m.api, m.provider, m.model,\n             m.\"stopReason\" AS stop_reason, b.blk, (b.ord - 1)::int AS idx,\n             CASE b.blk ->> 'type'\n               WHEN 'toolCall' THEN 'call:' || (b.blk ->> 'id')\n               WHEN 'thinking' THEN CASE WHEN COALESCE(b.blk ->> 'thinkingSignature', '') <> ''\n                                         THEN 'sig:' || (b.blk ->> 'thinkingSignature') END\n               WHEN 'text' THEN 'text:' || (b.blk ->> 'text')\n             END AS key\n        FROM messages m\n        LEFT JOIN LATERAL json_array_elements(\n          CASE WHEN json_typeof(m.content) = 'array' THEN m.content ELSE '[]'::json END\n        ) WITH ORDINALITY AS b(blk, ord) ON true;\n    SELECT count(*) FILTER (WHERE NOT valid), count(*) FILTER (WHERE key IS NOT NULL)\n      INTO n_invalid, n_keyed FROM legacy_batch_blocks;\n    WITH tape_unique AS (\n      SELECT b.* FROM legacy_batch_blocks b\n        JOIN (SELECT session_id, key FROM legacy_batch_blocks WHERE key IS NOT NULL\n               GROUP BY session_id, key HAVING count(*) = 1) u USING (session_id, key)\n    ), entries AS (\n      SELECT e.session_id, e.seq, e.type, e.created_at, p.j,\n             CASE WHEN e.type = 'tool_call' THEN 'call:' || (p.j ->> 'callId')\n                  WHEN e.type = 'thinking' THEN 'sig:' || (p.j ->> 'thinkingSignature')\n                  ELSE 'text:' || (p.j ->> 'text') END AS key\n        FROM session_entries e\n        CROSS JOIN LATERAL (SELECT CASE WHEN octet_length(e.payload) > 16777216 THEN NULL WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p\n       WHERE e.session_id = ANY(ids)\n         AND e.type IN ('tool_call', 'thinking', 'text', 'assistant') AND e.created_at < frozen_at\n         AND jsonb_typeof(p.j) = 'object' AND NOT p.j ? 'step'\n    ), entries_unique AS (\n      SELECT x.* FROM entries x\n        JOIN (SELECT session_id, key FROM entries WHERE key IS NOT NULL\n               GROUP BY session_id, key HAVING count(*) = 1) u USING (session_id, key)\n    )\n    INSERT INTO legacy_tape_steps(session_id, seq, step, wire)\n    SELECT e.session_id, e.seq,\n           jsonb_strip_nulls(jsonb_build_object('id', 'tape:' || t.tape_seq, 'api', t.api, 'provider', t.provider,\n                                                'model', t.model, 'stopReason', t.stop_reason, 'index', t.idx)),\n           NULLIF(\n             COALESCE((SELECT jsonb_object_agg(f.key, f.value::jsonb) FROM json_each(t.blk) f\n                        WHERE f.key <> ALL (CASE t.blk ->> 'type'\n                                              WHEN 'toolCall' THEN ARRAY['type', 'id', 'name', 'arguments']\n                                              WHEN 'thinking' THEN ARRAY['type', 'thinking', 'thinkingSignature']\n                                              ELSE ARRAY['type', 'text'] END)), '{}'::jsonb)\n             || CASE WHEN e.type = 'tool_call' THEN\n                  jsonb_build_object('argumentsJson', COALESCE((t.blk -> 'arguments')::text, '{}'))\n                  || CASE WHEN (t.blk ->> 'name') IS DISTINCT FROM (e.j ->> 'tool')\n                          THEN jsonb_build_object('name', t.blk ->> 'name') ELSE '{}'::jsonb END\n                ELSE '{}'::jsonb END,\n             '{}'::jsonb)\n      FROM entries_unique e\n      JOIN tape_unique t USING (session_id, key)\n     WHERE e.key NOT LIKE 'text:%' OR abs(e.created_at - t.created_at) <= 600000\n    ON CONFLICT (session_id, seq) DO NOTHING;\n    GET DIAGNOSTICS n_steps = ROW_COUNT;\n    PERFORM set_config('enable_nestloop', 'on', true);\n    INSERT INTO legacy_turn_runs(session_id, seq, run_id, inferred)\n    SELECT e.session_id, e.seq, COALESCE(by_seq.id, by_window.id), by_seq.id IS NULL\n      FROM session_entries e\n      CROSS JOIN LATERAL (SELECT CASE WHEN octet_length(e.payload) > 16777216 THEN NULL WHEN pg_input_is_valid(e.payload, 'jsonb') THEN e.payload::jsonb END AS j) p\n      LEFT JOIN LATERAL (\n        SELECT CASE WHEN count(*) = 1 THEN min(r.id) END AS id FROM legacy_prep_runs r\n         WHERE r.session_id = e.session_id AND r.turn_user_seq = e.seq\n      ) by_seq ON true\n      LEFT JOIN LATERAL (\n        SELECT latest.id FROM (\n          SELECT r.id, r.turn_user_seq, r.finished_at, r.prev_max_finished FROM legacy_prep_runs r\n           WHERE r.session_id = e.session_id AND r.started_at <= e.created_at\n           ORDER BY r.started_at DESC, r.id DESC LIMIT 1\n        ) latest\n         WHERE latest.turn_user_seq IS NULL AND e.created_at <= latest.finished_at\n           AND COALESCE(latest.prev_max_finished, -1) < e.created_at\n      ) by_window ON true\n     WHERE e.session_id = ANY(ids) AND e.type = 'user' AND e.created_at < frozen_at AND jsonb_typeof(p.j) = 'object'\n       AND NOT p.j @> '{\"steered\":true}' AND NOT p.j @> '{\"overheard\":true}'\n       AND NOT COALESCE(jsonb_typeof(p.j -> 'runId') = 'string' AND p.j ->> 'runId' <> '', false)\n       AND COALESCE(by_seq.id, by_window.id) IS NOT NULL\n    ON CONFLICT (session_id, seq) DO NOTHING;\n    GET DIAGNOSTICS n_turns = ROW_COUNT;\n  DROP TABLE pg_temp.legacy_batch_blocks;\nEND $batch$",
+        "CREATE OR REPLACE PROCEDURE prepare_legacy_tape_steps(batch INT DEFAULT 50)\nLANGUAGE plpgsql AS $prepare$\nDECLARE\n  ids TEXT[];\n  frozen_at BIGINT;\n  n_invalid BIGINT;\n  n_keyed BIGINT;\n  n_steps BIGINT;\n  n_turns BIGINT;\n  n_skipped BIGINT;\n  one TEXT;\n  counts RECORD;\n  last_error TEXT;\nBEGIN\n  IF NOT pg_try_advisory_lock(hashtext('prepare_legacy_tape_steps')) THEN\n    RAISE EXCEPTION 'prepare_legacy_tape_steps() is already running in another session';\n  END IF;\n  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'legacy_tape_frozen' AND tgrelid = 'session_tape'::regclass) THEN\n    IF EXISTS (SELECT 1 FROM legacy_tape_steps_progress WHERE started_at IS NOT NULL OR last_session IS NOT NULL OR done) THEN\n      RAISE EXCEPTION 'legacy_tape_frozen is gone but a preparation already started: reset legacy_tape_steps_progress, legacy_tape_steps, legacy_turn_runs, legacy_tape_writes and legacy_tape_skipped before starting again';\n    END IF;\n    PERFORM set_config('lock_timeout', '5s', true);\n    CREATE TRIGGER legacy_tape_frozen AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON session_tape\n      FOR EACH STATEMENT EXECUTE FUNCTION legacy_tape_written();\n    ALTER TABLE session_tape ENABLE ALWAYS TRIGGER legacy_tape_frozen;\n    UPDATE legacy_tape_steps_progress SET started_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;\n    COMMIT;\n  END IF;\n  SELECT started_at INTO frozen_at FROM legacy_tape_steps_progress;\n  IF to_regclass('legacy_prep_runs') IS NULL THEN\n    CREATE TABLE legacy_prep_runs(\n      id TEXT, session_id TEXT, turn_user_seq BIGINT, started_at BIGINT, finished_at BIGINT, prev_max_finished BIGINT\n    );\n    IF to_regclass('runs') IS NOT NULL THEN\n      INSERT INTO legacy_prep_runs\n        SELECT r.id, s.id, r.turn_user_seq, r.started_at, r.finished_at,\n               max(COALESCE(r.finished_at, 9223372036854775807)) OVER (\n                 PARTITION BY s.id ORDER BY r.started_at, r.id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)\n          FROM runs r JOIN sessions s ON s.thread_ref = r.session_id\n         WHERE r.started_at IS NOT NULL;\n    END IF;\n    CREATE INDEX legacy_prep_runs_by_seq ON legacy_prep_runs(session_id, turn_user_seq);\n    CREATE INDEX legacy_prep_runs_by_start ON legacy_prep_runs(session_id, started_at DESC, id DESC);\n    COMMIT;\n  END IF;\n  LOOP\n    SELECT array_agg(id ORDER BY id) INTO ids\n      FROM (SELECT id FROM sessions\n             WHERE id > COALESCE((SELECT last_session FROM legacy_tape_steps_progress), '')\n             ORDER BY id LIMIT batch) next_sessions;\n    EXIT WHEN ids IS NULL;\n    BEGIN\n      SELECT * INTO n_invalid, n_keyed, n_steps, n_turns FROM legacy_tape_steps_batch(ids, frozen_at);\n      n_skipped := 0;\n    EXCEPTION WHEN OTHERS THEN\n      IF left(SQLSTATE, 2) IN ('40', '42', '53', '55', '57', '58') THEN\n        RAISE;\n      END IF;\n      n_invalid := 0; n_keyed := 0; n_steps := 0; n_turns := 0; n_skipped := 0;\n      FOREACH one IN ARRAY ids LOOP\n        BEGIN\n          SELECT * INTO counts FROM legacy_tape_steps_batch(ARRAY[one], frozen_at);\n          n_invalid := n_invalid + counts.n_invalid; n_keyed := n_keyed + counts.n_keyed;\n          n_steps := n_steps + counts.n_steps; n_turns := n_turns + counts.n_turns;\n        EXCEPTION WHEN OTHERS THEN\n          IF left(SQLSTATE, 2) IN ('40', '42', '53', '55', '57', '58') THEN\n            RAISE;\n          END IF;\n          last_error := SQLSTATE || ': ' || SQLERRM;\n          INSERT INTO legacy_tape_skipped VALUES (one, last_error, (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint)\n            ON CONFLICT (session_id) DO UPDATE SET error = EXCLUDED.error, at = EXCLUDED.at;\n          n_skipped := n_skipped + 1;\n        END;\n      END LOOP;\n      IF n_skipped > 0 AND (SELECT skipped_sessions FROM legacy_tape_steps_progress) + n_skipped > 100 THEN\n        RAISE EXCEPTION 'more than 100 sessions could not be prepared, so the failure is unlikely to be in the data: %', last_error;\n      END IF;\n      IF array_length(ids, 1) > 1 AND n_skipped = array_length(ids, 1) THEN\n        RAISE EXCEPTION 'every session in the batch after % failed, so the failure is not in the data: %',\n          COALESCE((SELECT last_session FROM legacy_tape_steps_progress), '(start)'), last_error;\n      END IF;\n    END;\n    UPDATE legacy_tape_steps_progress\n       SET last_session = ids[array_length(ids, 1)],\n           invalid_messages = invalid_messages + n_invalid, keyed_blocks = keyed_blocks + n_keyed,\n           copied_steps = copied_steps + n_steps, copied_turns = copied_turns + n_turns,\n           skipped_sessions = skipped_sessions + n_skipped;\n    COMMIT;\n  END LOOP;\n  DROP TABLE legacy_prep_runs;\n  UPDATE legacy_tape_steps_progress SET done = true;\n  COMMIT;\n  PERFORM pg_advisory_unlock(hashtext('prepare_legacy_tape_steps'));\nEND $prepare$"
+      ]
+    },
+    {
+      "id": "sessions/store/0031-drop-session-tape",
+      "checksum": "3100b33fe1e55d5abe05f50b655f3ff73142e3608af3616ba4954209b5f42e5b",
+      "statements": [
+        "SET LOCAL lock_timeout = '5s'",
+        "DO $tape_drop_gate$\nDECLARE\n  started BIGINT;\n  finished BOOLEAN;\n  cursor_at TEXT;\n  skipped BIGINT;\n  last_tape_session TEXT;\n  writes BIGINT;\n  first_write BIGINT;\n  reset TEXT := 'reset with DROP TRIGGER legacy_tape_frozen ON session_tape; TRUNCATE legacy_tape_steps, legacy_turn_runs, legacy_tape_writes, legacy_tape_skipped; '\n    || 'UPDATE legacy_tape_steps_progress SET started_at = NULL, last_session = NULL, done = false, invalid_messages = 0, '\n    || 'keyed_blocks = 0, copied_steps = 0, copied_turns = 0, skipped_sessions = 0; then CALL prepare_legacy_tape_steps() again';\nBEGIN\n  IF to_regclass('session_tape') IS NULL THEN\n    RETURN;\n  END IF;\n  LOCK TABLE session_tape IN ACCESS EXCLUSIVE MODE;\n  IF to_regclass('legacy_tape_steps_progress') IS NOT NULL THEN\n    SELECT started_at, done, last_session, skipped_sessions INTO started, finished, cursor_at, skipped\n      FROM legacy_tape_steps_progress;\n  END IF;\n  IF started IS NULL OR NOT COALESCE(finished, false) THEN\n    IF NOT EXISTS (SELECT 1 FROM session_tape WHERE kind = 'message') THEN\n      RETURN;\n    END IF;\n    RAISE EXCEPTION 'session_tape still holds model messages: run CALL prepare_legacy_tape_steps() to completion before this migration, or if legacy_tape_frozen already exists, %',\n      reset;\n  END IF;\n  skipped := GREATEST(skipped, (SELECT count(*) FROM legacy_tape_skipped));\n  IF skipped > 100 THEN\n    RAISE EXCEPTION '% sessions were skipped during the preparation, more than 100: review legacy_tape_skipped, then %',\n      skipped, reset;\n  END IF;\n  SELECT max(session_id) INTO last_tape_session FROM session_tape WHERE kind = 'message';\n  IF cursor_at IS NULL OR cursor_at < last_tape_session THEN\n    RAISE EXCEPTION 'the preparation is marked done but its cursor % is before the last tape session %, so not every session was copied: %',\n      COALESCE(cursor_at, '(none)'), last_tape_session, reset;\n  END IF;\n  SELECT count(*), min(at) INTO writes, first_write FROM legacy_tape_writes;\n  IF writes > 0 THEN\n    RAISE EXCEPTION 'session_tape was written % times after prepare_legacy_tape_steps() started, first at % (ms since epoch): stop every writer, %',\n      writes, first_write, reset;\n  END IF;\n  IF NOT EXISTS (\n    SELECT 1 FROM pg_trigger\n     WHERE tgname = 'legacy_tape_frozen' AND tgrelid = 'session_tape'::regclass AND tgenabled = 'A'\n  ) THEN\n    RAISE EXCEPTION 'legacy_tape_frozen is missing or not always enabled, so tape writes since the preparation are unproven: %', reset;\n  END IF;\nEND $tape_drop_gate$",
+        "DROP VIEW IF EXISTS session_transcript_entries",
+        "DROP TABLE IF EXISTS session_tape",
+        "DROP PROCEDURE IF EXISTS prepare_legacy_tape_steps(INT)",
+        "DROP FUNCTION IF EXISTS legacy_tape_written()",
+        "DROP FUNCTION IF EXISTS legacy_tape_steps_batch(TEXT[], BIGINT)",
+        "DROP TABLE IF EXISTS legacy_prep_runs, legacy_tape_writes"
+      ],
+      "prepare": [
+        "DO $prepare_tape_drop$\nBEGIN\n  IF to_regclass('session_tape') IS NULL OR (SELECT done FROM legacy_tape_steps_progress) THEN\n    RETURN;\n  END IF;\n  IF (SELECT started_at FROM legacy_tape_steps_progress) IS NULL THEN\n    DELETE FROM session_tape t WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = t.session_id);\n  END IF;\n  IF EXISTS (SELECT 1 FROM session_tape WHERE kind = 'message') THEN\n    CALL prepare_legacy_tape_steps(50);\n  END IF;\nEND $prepare_tape_drop$"
+      ]
+    },
+    {
+      "id": "sessions/store/0032-session-goals",
+      "checksum": "67b3486e1426f893bfbf64fb5412083ca30a2287038afc358793c5222171dd2c",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "CREATE TABLE IF NOT EXISTS session_goals(\n             session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,\n             objective TEXT NOT NULL,\n             status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'complete', 'cancelled')),\n             floor JSONB,\n             token_cap BIGINT,\n             tokens_used BIGINT NOT NULL DEFAULT 0,\n             active_ms BIGINT,\n             active_since TIMESTAMPTZ,\n             completion_note TEXT,\n             cancel_note TEXT,\n             governor JSONB,\n             pause_reason TEXT,\n             created_at TIMESTAMPTZ NOT NULL,\n             updated_at TIMESTAMPTZ NOT NULL\n           )"
+      ]
+    },
+    {
+      "id": "sessions/store/0033-client-tools",
+      "checksum": "3d46f3d967516132f7f67d0ce5ee46127a9a46761ad9d143aba12db374b293aa",
+      "statements": ["ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_tools JSONB"]
+    },
+    {
+      "id": "sessions/store/0034-session-origin-backfill",
+      "checksum": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "statements": [],
+      "prepare": [
+        "DO $session_origin_backfill$\nDECLARE\n  batch text[];\n  after text;\nBEGIN\n  after := '';\n  LOOP\n    SELECT array_agg(id ORDER BY id) INTO batch\n      FROM (SELECT id FROM sessions WHERE id > after AND origin IS NULL AND thread_ref !~ '^(loop|swarm):[^:]+(:.+)?$' ORDER BY id LIMIT 5000) candidates;\n    EXIT WHEN batch IS NULL;\n    UPDATE sessions SET origin = COALESCE(substring(thread_ref FROM '^agent:main:(cron|webhook|monitor|loop|swarm):[^:]+$'), substring(thread_ref FROM '^(cron|webhook|monitor|loop|swarm):[^:]+(:.+)?$'), 'conversation'), origin_id = COALESCE(substring(thread_ref FROM '^agent:main:cron:([^:]+)$'), substring(thread_ref FROM '^cron:([^:]+)(:.+)?$'))\n     WHERE id = ANY(batch);\n    DELETE FROM session_spend_dirty WHERE writer = pg_current_xact_id();\n    after := batch[cardinality(batch)];\n    COMMIT;\n    PERFORM pg_sleep(0.25);\n  END LOOP;\n  after := '';\n  LOOP\n    SELECT array_agg(id ORDER BY id) INTO batch\n      FROM (SELECT id FROM sessions WHERE id > after AND (origin IS NULL OR origin = 'conversation') AND thread_ref ~ '^(loop|swarm):[^:]+(:.+)?$' ORDER BY id LIMIT 5000) candidates;\n    EXIT WHEN batch IS NULL;\n    UPDATE sessions SET origin = COALESCE(substring(thread_ref FROM '^agent:main:(cron|webhook|monitor|loop|swarm):[^:]+$'), substring(thread_ref FROM '^(cron|webhook|monitor|loop|swarm):[^:]+(:.+)?$'), 'conversation'), origin_id = COALESCE(substring(thread_ref FROM '^agent:main:cron:([^:]+)$'), substring(thread_ref FROM '^cron:([^:]+)(:.+)?$'))\n     WHERE id = ANY(batch);\n    after := batch[cardinality(batch)];\n    COMMIT;\n    PERFORM pg_sleep(0.25);\n  END LOOP;\nEND $session_origin_backfill$"
+      ]
+    },
+    {
+      "id": "sessions/store/0035-items",
+      "checksum": "b3f15f62b55af30d7f6b79f037a09d157ea1e1ad9aad5702742dff01263c016d",
+      "statements": [
+        "DO $operator$ BEGIN\n             IF to_regclass('items_copy_ops.state') IS NOT NULL THEN\n               RAISE EXCEPTION 'An items copy is staged; complete the coordinated cutover before applying this migration';\n             END IF;\n           END $operator$",
+        "CREATE TABLE IF NOT EXISTS qm_tenant(id UUID PRIMARY KEY)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS qm_tenant_singleton ON qm_tenant((true))",
+        "INSERT INTO qm_tenant(id) SELECT gen_random_uuid() WHERE NOT EXISTS (SELECT 1 FROM qm_tenant)",
+        "CREATE TABLE IF NOT EXISTS qm_settings(\n     key TEXT PRIMARY KEY,\n     value JSONB NOT NULL,\n     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()\n   )",
+        "DO $item_kind$ BEGIN\n     CREATE TYPE item_kind AS ENUM ('UserMessage', 'SteeringMessage', 'AgentMessage', 'Reasoning', 'ToolCall', 'ToolResult', 'Elicitation', 'ElicitationResponse', 'Wake', 'Error', 'ContextCompaction', 'Retraction', 'Stop', 'RuntimeChange');\n   EXCEPTION WHEN duplicate_object THEN NULL; END $item_kind$",
+        "DO $wake_cause$ BEGIN\n     CREATE TYPE wake_cause AS ENUM ('cron', 'webhook', 'child_done', 'system');\n   EXCEPTION WHEN duplicate_object THEN NULL; END $wake_cause$",
+        "CREATE TABLE IF NOT EXISTS blobs(\n     tenant_id UUID NOT NULL,\n     sha256 BYTEA NOT NULL CHECK (length(sha256) = 32),\n     size BIGINT NOT NULL CHECK (size >= 0),\n     mime TEXT,\n     storage_key TEXT NOT NULL CHECK (storage_key <> ''),\n     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\n     expires_at TIMESTAMPTZ,\n     PRIMARY KEY (tenant_id, sha256)\n   )",
+        "CREATE TABLE IF NOT EXISTS items(\n     tenant_id UUID NOT NULL,\n     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,\n     seq BIGINT NOT NULL CHECK (seq >= 0),\n     turn_id UUID,\n     kind item_kind NOT NULL,\n     author TEXT CHECK (author <> ''),\n     call_id TEXT CHECK (call_id <> ''),\n     elicit_id TEXT CHECK (elicit_id <> ''),\n     wake_cause wake_cause,\n     error_code TEXT CHECK (error_code <> ''),\n     text TEXT CHECK (text <> ''),\n     tool TEXT CHECK (tool <> ''),\n     step INT CHECK (step >= 0),\n     variant TEXT CHECK (variant IN ('narration', 'files_delivered')),\n     is_error BOOLEAN,\n     hidden BOOLEAN,\n     external_id TEXT CHECK (external_id <> ''),\n     through_seq BIGINT,\n     target_seq BIGINT,\n     approved BOOLEAN,\n     blob_sha BYTEA,\n     search TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(text, ''))) STORED,\n     body JSONB NOT NULL CHECK (jsonb_typeof(body) = 'object'),\n     created_at TIMESTAMPTZ NOT NULL,\n     PRIMARY KEY (tenant_id, session_id, seq),\n     CONSTRAINT items_call_id_kind CHECK (call_id IS NULL OR kind IN ('ToolCall', 'ToolResult')),\n     CONSTRAINT items_elicit_id_kind CHECK ((elicit_id IS NOT NULL) = (kind IN ('Elicitation', 'ElicitationResponse'))),\n     CONSTRAINT items_wake_cause_kind CHECK ((wake_cause IS NOT NULL) = (kind = 'Wake')),\n     CONSTRAINT items_error_code_kind CHECK ((error_code IS NOT NULL) = (kind = 'Error')),\n     CONSTRAINT items_author_kind CHECK (author IS NULL OR kind IN ('UserMessage', 'SteeringMessage', 'ElicitationResponse', 'Stop', 'RuntimeChange')),\n     CONSTRAINT items_text_kind CHECK (text IS NULL OR kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage', 'Reasoning', 'ToolResult', 'Error', 'ContextCompaction')),\n     CONSTRAINT items_tool_kind CHECK (tool IS NULL OR kind IN ('ToolCall', 'ToolResult')),\n     CONSTRAINT items_step_kind CHECK (step IS NULL OR kind IN ('ToolCall', 'ToolResult', 'Reasoning', 'AgentMessage')),\n     CONSTRAINT items_variant_kind CHECK (variant IS NULL OR kind IN ('AgentMessage')),\n     CONSTRAINT items_is_error_kind CHECK (is_error IS NULL OR kind IN ('ToolResult')),\n     CONSTRAINT items_hidden_kind CHECK (hidden IS NULL OR kind IN ('UserMessage')),\n     CONSTRAINT items_external_id_kind CHECK (external_id IS NULL OR kind IN ('UserMessage')),\n     CONSTRAINT items_through_seq_kind CHECK (through_seq IS NULL OR kind IN ('ContextCompaction')),\n     CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind IN ('Retraction')),\n     CONSTRAINT items_approved_kind CHECK (approved IS NULL OR kind IN ('ElicitationResponse')),\n     CONSTRAINT items_blob_sha_kind CHECK (blob_sha IS NULL OR kind IN ('ToolResult')),\n     CONSTRAINT items_blob FOREIGN KEY (tenant_id, blob_sha) REFERENCES blobs(tenant_id, sha256)\n   )",
+        "CREATE OR REPLACE FUNCTION items_copy_payload(t text) RETURNS jsonb\n             LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $items_copy_payload$\n             DECLARE r text;\n             BEGIN\n               IF t IS NULL OR strpos(t, E'\\\\u') = 0 THEN RETURN t::jsonb; END IF;\n               IF pg_input_is_valid(t, 'jsonb') THEN RETURN t::jsonb; END IF;\n               r := regexp_replace(t, '(?<!\\\\)((?:\\\\\\\\)*)\\\\u0000', '\\1', 'g');\n               IF NOT pg_input_is_valid(r, 'jsonb') THEN\n                 r := regexp_replace(regexp_replace(r,\n                   '(?<!\\\\)((?:\\\\\\\\)*)\\\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\\\u[dD][c-fC-F][0-9a-fA-F]{2})', '\\1\\\\ufffd', 'g'),\n                   '(?<!\\\\)((?:\\\\\\\\)*)(?<!\\\\u[dD][89abAB][0-9a-fA-F]{2})\\\\u[dD][c-fC-F][0-9a-fA-F]{2}', '\\1\\\\ufffd', 'g');\n               END IF;\n               RETURN r::jsonb;\n             END $items_copy_payload$",
+        "CREATE OR REPLACE FUNCTION items_copy_payload(j jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE PARALLEL SAFE AS 'SELECT j'",
+        "SET LOCAL statement_timeout = 0",
+        "WITH inserted AS (\n    INSERT INTO items(tenant_id, session_id, seq, turn_id, kind, author, call_id, elicit_id, wake_cause, error_code,\n                   text, tool, step, variant, is_error, hidden, external_id, through_seq, target_seq, approved,\n                   body, created_at) WITH ambiguous_calls AS MATERIALIZED (SELECT DISTINCT session_id, call_id FROM (\n    SELECT e.session_id, e.type, n.body ->> 'callId' AS call_id\n    FROM session_entries e\n      CROSS JOIN LATERAL (SELECT items_copy_payload(e.payload) AS j OFFSET 0) parsed\n  CROSS JOIN LATERAL (\n    SELECT CASE WHEN parsed.j IS NULL OR jsonb_typeof(parsed.j) = 'null' THEN '{}'::jsonb\n                WHEN jsonb_typeof(parsed.j) = 'object' THEN parsed.j\n                WHEN jsonb_typeof(parsed.j) = 'string' THEN jsonb_build_object('text', parsed.j)\n                ELSE jsonb_build_object('value', parsed.j)\n           END AS body\n    OFFSET 0\n  ) n\n\n    WHERE e.type IN ('tool_call', 'tool_result')\n      \n      AND jsonb_typeof(n.body -> 'callId') = 'string'\n      AND octet_length(n.body ->> 'callId') BETWEEN 1 AND 1024\n    GROUP BY e.session_id, e.type, n.body ->> 'callId'\n    HAVING count(*) > 1\n  ) repeated)\nSELECT (SELECT id FROM qm_tenant), e.session_id, e.seq,\n       CASE WHEN t.run_is_uuid THEN (n.body ->> 'runId')::uuid END,\n       k.kind,\n       a.author,\n       CASE WHEN k.kind IN ('ToolCall', 'ToolResult') AND octet_length(CASE WHEN jsonb_typeof(n.body -> 'callId') = 'string' THEN n.body ->> 'callId' END) <= 1024 AND ambiguous.call_id IS NULL\n            THEN NULLIF(CASE WHEN jsonb_typeof(n.body -> 'callId') = 'string' THEN n.body ->> 'callId' END, '') END,\n       CASE WHEN k.kind IN ('Elicitation', 'ElicitationResponse') THEN\n         COALESCE(NULLIF(CASE WHEN jsonb_typeof(n.body -> 'requestId') = 'string' THEN n.body ->> 'requestId' END, ''), 'missing-elicit:' || e.seq) END,\n       CASE WHEN k.kind = 'Wake' THEN\n         CASE WHEN n.body ? 'cause' THEN (n.body ->> 'cause')::wake_cause ELSE 'system'::wake_cause END END,\n       CASE WHEN k.kind = 'Error' THEN 'turn_failure' END,\n       NULLIF(n.body ->> s.text_key, ''),\n       CASE WHEN k.kind IN ('ToolCall', 'ToolResult') THEN NULLIF(CASE WHEN jsonb_typeof(n.body -> 'tool') = 'string' THEN n.body ->> 'tool' END, '') END,\n       s.step,\n       CASE e.type WHEN 'text' THEN 'narration' WHEN 'delivery' THEN 'files_delivered' END,\n       CASE WHEN k.kind = 'ToolResult' AND jsonb_typeof(n.body -> 'isError') = 'boolean' THEN (n.body -> 'isError')::boolean END,\n       CASE WHEN k.kind = 'UserMessage' AND jsonb_typeof(n.body -> 'hidden') = 'boolean' THEN (n.body -> 'hidden')::boolean END,\n       CASE WHEN k.kind = 'UserMessage' THEN NULLIF(CASE WHEN jsonb_typeof(n.body -> 'ts') = 'string' THEN n.body ->> 'ts' END, '') END,\n       CASE WHEN k.kind = 'ContextCompaction' AND jsonb_typeof(n.body -> 'throughSeq') = 'number' THEN (n.body ->> 'throughSeq')::numeric::bigint END,\n       a.target_seq,\n       CASE WHEN k.kind = 'ElicitationResponse' AND jsonb_typeof(n.body -> 'approved') = 'boolean' THEN (n.body -> 'approved')::boolean END,\n       x.body,\n       to_timestamp(e.created_at / 1000.0)\n  FROM sessions sess\n  CROSS JOIN LATERAL (\n    SELECT COALESCE(max(i.seq), -1) AS seq FROM items i WHERE i.tenant_id = (SELECT id FROM qm_tenant) AND i.session_id = sess.id\n  ) copied\n  CROSS JOIN LATERAL (\n    SELECT * FROM session_entries d WHERE d.session_id = sess.id AND d.seq > copied.seq OFFSET 0\n  ) e\n  CROSS JOIN LATERAL (SELECT items_copy_payload(e.payload) AS j OFFSET 0) parsed\n  CROSS JOIN LATERAL (\n    SELECT CASE WHEN parsed.j IS NULL OR jsonb_typeof(parsed.j) = 'null' THEN '{}'::jsonb\n                WHEN jsonb_typeof(parsed.j) = 'object' THEN parsed.j\n                WHEN jsonb_typeof(parsed.j) = 'string' THEN jsonb_build_object('text', parsed.j)\n                ELSE jsonb_build_object('value', parsed.j)\n           END AS body\n    OFFSET 0\n  ) n\n  CROSS JOIN LATERAL (\n    SELECT (CASE e.type\n              WHEN 'user' THEN CASE WHEN n.body @> '{\"steered\":true}' THEN 'SteeringMessage' ELSE 'UserMessage' END\n              WHEN 'assistant' THEN 'AgentMessage'\n              WHEN 'text' THEN 'AgentMessage'\n              WHEN 'delivery' THEN 'AgentMessage'\n              WHEN 'thinking' THEN 'Reasoning'\n              WHEN 'tool_call' THEN 'ToolCall'\n              WHEN 'tool_result' THEN 'ToolResult'\n              WHEN 'approval_request' THEN 'Elicitation'\n              WHEN 'approval_resolved' THEN 'ElicitationResponse'\n              WHEN 'soul' THEN NULL\n              WHEN 'text_start' THEN NULL\n              WHEN 'system' THEN\n                CASE n.body ->> 'kind'\n                  WHEN 'context_summary' THEN 'ContextCompaction'\n                  WHEN 'turn_failure' THEN 'Error'\n                  WHEN 'turn_stopped' THEN 'Stop'\n                  WHEN 'wake' THEN 'Wake'\n                  WHEN 'goal_cancelled' THEN 'Wake'\n                  WHEN 'message_revision' THEN 'Retraction'\n                  WHEN 'goal' THEN NULL\n                  WHEN 'memory_context' THEN NULL\n                  WHEN 'file_event' THEN NULL\n                  ELSE 'unmapped system entry kind=' || COALESCE(n.body ->> 'kind', '(none)') || ' at '\n                       || e.session_id || '/' || e.seq\n                END\n              ELSE 'unmapped entry type=' || e.type || ' at ' || e.session_id || '/' || e.seq\n            END)::item_kind AS kind\n    OFFSET 0\n  ) k\n  LEFT JOIN ambiguous_calls ambiguous\n    ON ambiguous.session_id=e.session_id AND ambiguous.call_id=n.body ->> 'callId'\n  LEFT JOIN legacy_tape_steps l ON l.session_id = e.session_id AND l.seq = e.seq\n  CROSS JOIN LATERAL (\n    SELECT CASE WHEN k.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage', 'ContextCompaction') THEN 'text'\n                WHEN k.kind = 'Reasoning' THEN 'thinking'\n                WHEN k.kind = 'ToolResult' THEN 'result'\n                WHEN k.kind = 'Error' THEN 'message'\n           END AS text_key,\n           CASE WHEN k.kind IN ('ToolCall', 'ToolResult', 'Reasoning', 'AgentMessage') THEN\n             COALESCE(CASE WHEN jsonb_typeof(n.body -> 'step') = 'object' THEN n.body -> 'step' END, l.step) END AS step_obj,\n           pg_input_is_valid(n.body ->> 'runId', 'uuid') AS run_is_uuid\n  ) t\n  CROSS JOIN LATERAL (\n    SELECT CASE WHEN jsonb_typeof(n.body -> t.text_key) = 'string' THEN t.text_key END AS text_key,\n           CASE WHEN jsonb_typeof(t.step_obj -> 'index') = 'number' THEN (t.step_obj ->> 'index')::int END AS step,\n           CASE WHEN t.step_obj IS NOT NULL\n                THEN COALESCE(CASE WHEN jsonb_typeof(n.body -> 'wire') = 'object' THEN n.body -> 'wire' END, l.wire, '{}'::jsonb)\n                     || jsonb_build_object('message', t.step_obj - 'index')\n                WHEN NOT n.body ? 'wire' AND l.wire IS NOT NULL THEN l.wire\n           END AS wire\n  ) s\n  CROSS JOIN LATERAL (\n    SELECT CASE WHEN k.kind IN ('UserMessage', 'SteeringMessage', 'ElicitationResponse', 'Stop') AND n.body ->> 'sourceRole' IS DISTINCT FROM 'agent' THEN\n             COALESCE(\n               CASE WHEN NOT n.body @> '{\"overheard\":true}' THEN\n                 (SELECT min(p.principal_id) FROM participants p\n                   WHERE p.session_id = e.session_id AND p.valid_from <= e.created_at\n                     AND (p.valid_to IS NULL OR p.valid_to > e.created_at)\n                  HAVING count(*) = 1) END,\n               CASE WHEN btrim(CASE WHEN jsonb_typeof(n.body -> 'name') = 'string' THEN n.body ->> 'name' END) <> '' THEN\n                 (SELECT min(p.principal_id) FROM participants p\n                   WHERE p.session_id = e.session_id\n                     AND EXISTS (SELECT 1 FROM directory_members d\n                                  WHERE d.principal_id = p.principal_id\n                                    AND d.display_name_lc = lower(btrim(n.body ->> 'name')))\n                  HAVING count(*) = 1) END)\n           END AS author,\n           CASE WHEN k.kind = 'Retraction' AND jsonb_typeof(n.body -> 'ts') = 'string' THEN\n             (SELECT max(u.seq) FROM session_entries u\n               WHERE u.session_id = e.session_id AND u.seq < e.seq AND u.type = 'user'\n                 AND items_copy_payload(u.payload) ->> 'ts' = n.body ->> 'ts') END AS target_seq\n    OFFSET 0\n  ) a\n  CROSS JOIN LATERAL (\n    SELECT n.body - array_remove(ARRAY[\n             'securityTainted',\n             CASE WHEN e.type = 'assistant' OR k.kind = 'Error' THEN 'deliveryKey' END,\n             s.text_key,\n             CASE WHEN k.kind IN ('ToolCall', 'ToolResult') THEN 'tool' END,\n             CASE WHEN k.kind IN ('ToolCall', 'ToolResult') THEN 'callId' END,\n             CASE WHEN k.kind IN ('Elicitation', 'ElicitationResponse') THEN 'requestId' END,\n             CASE WHEN k.kind = 'ToolResult' AND jsonb_typeof(n.body -> 'isError') = 'boolean' THEN 'isError' END,\n             CASE WHEN k.kind = 'UserMessage' AND jsonb_typeof(n.body -> 'hidden') = 'boolean' THEN 'hidden' END,\n             CASE WHEN k.kind = 'UserMessage' AND jsonb_typeof(n.body -> 'ts') = 'string' THEN 'ts' END,\n             CASE WHEN e.type = 'user' THEN 'steered' END,\n             CASE WHEN k.kind = 'ContextCompaction' AND jsonb_typeof(n.body -> 'throughSeq') = 'number' THEN 'throughSeq' END,\n             CASE WHEN k.kind = 'ElicitationResponse' AND jsonb_typeof(n.body -> 'approved') = 'boolean' THEN 'approved' END,\n             CASE WHEN e.type = 'system' AND n.body ->> 'kind' <> 'goal_cancelled' THEN 'kind' END,\n             CASE WHEN k.kind = 'Wake' THEN 'cause' END,\n             CASE WHEN t.run_is_uuid THEN 'runId' END,\n             CASE WHEN t.step_obj IS NOT NULL THEN 'step' END,\n             CASE WHEN s.wire IS NOT NULL THEN 'wire' END,\n             CASE WHEN s.text_key = 'result' AND jsonb_typeof(n.body -> 'stdout') = 'string'\n                       AND strpos(n.body ->> 'result', n.body ->> 'stdout') > 0 THEN 'stdout' END,\n             CASE WHEN s.text_key = 'result' AND jsonb_typeof(n.body -> 'stderr') = 'string'\n                       AND strpos(n.body ->> 'result', n.body ->> 'stderr') > 0 THEN 'stderr' END\n           ]::text[], NULL)\n           || CASE WHEN s.wire IS NOT NULL THEN jsonb_build_object('wire', s.wire) ELSE '{}'::jsonb END AS body\n  ) x\n WHERE k.kind IS NOT NULL RETURNING kind,author\n  ) SELECT count(*)::int AS rows,\n           count(*) FILTER (WHERE kind IN ('UserMessage', 'SteeringMessage', 'ElicitationResponse', 'Stop'))::int AS author_eligible,\n           count(*) FILTER (WHERE kind IN ('UserMessage', 'SteeringMessage', 'ElicitationResponse', 'Stop') AND author IS NULL)::int AS author_null\n      FROM inserted",
+        "CREATE UNIQUE INDEX IF NOT EXISTS items_one_call_per_kind ON items(tenant_id, session_id, kind, call_id) WHERE call_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS items_by_turn ON items(tenant_id, turn_id, seq) WHERE turn_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS items_by_elicit ON items(tenant_id, session_id, elicit_id) WHERE elicit_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS items_by_external_id ON items(tenant_id, session_id, external_id) WHERE external_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS items_session_kind_created ON items(tenant_id, session_id, kind, created_at)",
+        "CREATE INDEX IF NOT EXISTS items_search ON items USING gin (tenant_id, session_id, search)"
+      ]
+    },
+    {
+      "id": "sessions/store/0035-items-keep-call-ids",
+      "checksum": "cfddc304ecc65adc4dd9eca2fe6ddac6a53eb05bfd8ac9d282e420750d3c8f94",
+      "statements": [
+        "SET LOCAL statement_timeout = 0",
+        "DO $keep_call_ids$\n   BEGIN\n     IF to_regclass('session_entries') IS NULL\n        OR EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'items_append_only' AND tgrelid = 'items'::regclass) THEN\n       RETURN;\n     END IF;\n     UPDATE items i SET body = i.body || jsonb_build_object('callId', p.j ->> 'callId')\n       FROM session_entries e CROSS JOIN LATERAL (SELECT items_copy_payload(e.payload) AS j OFFSET 0) p\n      WHERE i.kind IN ('ToolCall', 'ToolResult') AND i.call_id IS NULL\n        AND e.session_id = i.session_id AND e.seq = i.seq\n        AND jsonb_typeof(p.j -> 'callId') = 'string' AND p.j ->> 'callId' <> '';\n   END $keep_call_ids$"
+      ]
+    },
+    {
+      "id": "sessions/store/0036-items-cutover",
+      "checksum": "43c41a637d03afe4ce8d1314298783a8190c56da4e0d25aa3bf810c13fb6f439",
+      "statements": [
+        "SET LOCAL lock_timeout = '60s'",
+        "DO $index_guard$\n   DECLARE unready text;\n   BEGIN\n     SELECT string_agg(name, ', ') INTO unready\n       FROM unnest(ARRAY['items_one_call_per_kind', 'items_by_turn', 'items_by_elicit', 'items_by_external_id', 'items_session_kind_created', 'items_search']) AS name\n      WHERE NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid\n                         WHERE c.relname = name AND c.relnamespace = current_schema()::regnamespace AND i.indisvalid);\n     IF unready IS NOT NULL AND EXISTS (SELECT 1 FROM items) THEN\n       RAISE EXCEPTION 'items cutover: build the items indexes with scripts/ops/items-copy.ts first; missing or invalid: %', unready;\n     END IF;\n   END $index_guard$",
+        "CREATE UNIQUE INDEX IF NOT EXISTS items_one_call_per_kind ON items(tenant_id, session_id, kind, call_id) WHERE call_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS items_by_turn ON items(tenant_id, turn_id, seq) WHERE turn_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS items_by_elicit ON items(tenant_id, session_id, elicit_id) WHERE elicit_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS items_by_external_id ON items(tenant_id, session_id, external_id) WHERE external_id IS NOT NULL",
+        "CREATE INDEX IF NOT EXISTS items_session_kind_created ON items(tenant_id, session_id, kind, created_at)",
+        "CREATE INDEX IF NOT EXISTS items_search ON items USING gin (tenant_id, session_id, search)",
+        "CREATE OR REPLACE FUNCTION qm_tenant_id() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE\n     AS $qm_tenant_id$ SELECT id FROM qm_tenant $qm_tenant_id$",
+        "CREATE OR REPLACE FUNCTION forbid_mutation() RETURNS trigger LANGUAGE plpgsql AS $forbid_mutation$\n   BEGIN\n     RAISE EXCEPTION '% on % is forbidden', TG_OP, TG_TABLE_NAME USING ERRCODE = 'integrity_constraint_violation';\n   END $forbid_mutation$",
+        "CREATE OR REPLACE FUNCTION forbid_direct_delete() RETURNS trigger LANGUAGE plpgsql AS $forbid_direct_delete$\n   BEGIN\n     IF pg_trigger_depth() > 1 THEN RETURN OLD; END IF;\n     RAISE EXCEPTION 'DELETE on % is only allowed through its session', TG_TABLE_NAME\n       USING ERRCODE = 'integrity_constraint_violation';\n   END $forbid_direct_delete$",
+        "CREATE TRIGGER items_append_only BEFORE UPDATE ON items FOR EACH ROW EXECUTE FUNCTION forbid_mutation()",
+        "CREATE TRIGGER items_no_truncate BEFORE TRUNCATE ON items FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation()",
+        "CREATE TRIGGER items_delete_through_session BEFORE DELETE ON items\n   FOR EACH ROW EXECUTE FUNCTION forbid_direct_delete()",
+        "CREATE TRIGGER blobs_immutable BEFORE UPDATE OR DELETE ON blobs FOR EACH ROW EXECUTE FUNCTION forbid_mutation()",
+        "CREATE TRIGGER blobs_no_truncate BEFORE TRUNCATE ON blobs FOR EACH STATEMENT EXECUTE FUNCTION forbid_mutation()",
+        "CREATE OR REPLACE FUNCTION sync_item_search() RETURNS trigger\n   LANGUAGE plpgsql AS $sync_item_search$\n   BEGIN\n     IF TG_OP = 'DELETE' THEN\n       DELETE FROM session_entry_search WHERE session_id = OLD.session_id AND seq = OLD.seq;\n       RETURN OLD;\n     END IF;\n     IF (NEW.kind IN ('UserMessage','SteeringMessage','AgentMessage') AND NEW.variant IS DISTINCT FROM 'files_delivered' AND NEW.text IS NOT NULL) AND btrim(NEW.text) <> '' THEN\n       INSERT INTO session_entry_search(session_id, seq, type, author, text, created_at)\n       VALUES (NEW.session_id, NEW.seq, CASE WHEN NEW.kind IN ('UserMessage', 'SteeringMessage') THEN 'user' WHEN NEW.variant = 'narration' THEN 'text' ELSE 'assistant' END,\n               CASE WHEN NEW.kind IN ('UserMessage', 'SteeringMessage') AND jsonb_typeof(NEW.body -> 'name') = 'string'\n                    THEN NEW.body ->> 'name' END,\n               NEW.text, (EXTRACT(EPOCH FROM NEW.created_at) * 1000)::bigint)\n       ON CONFLICT (session_id, seq) DO NOTHING;\n     END IF;\n     RETURN NEW;\n   END $sync_item_search$",
+        "CREATE TRIGGER session_entry_search AFTER INSERT OR DELETE ON items\n   FOR EACH ROW EXECUTE FUNCTION sync_item_search()",
+        "DROP TRIGGER IF EXISTS session_entries_search_write_through ON session_entries",
+        "DROP FUNCTION IF EXISTS sync_session_entry_search()",
+        "DROP TRIGGER IF EXISTS participant_activity_boundary_insert_v3 ON participants",
+        "DROP TRIGGER IF EXISTS participant_activity_reopen_v3 ON participants",
+        "DROP TRIGGER IF EXISTS participant_activity_entry_v3 ON session_entries",
+        "DROP TRIGGER IF EXISTS session_entry_boundary_v1 ON session_entries",
+        "DROP FUNCTION IF EXISTS participant_activity_on_insert_v3(), participant_activity_on_reopen_v3(),\n     participant_activity_on_entry_v3(), session_entry_boundary_v1()",
+        "ALTER TABLE session_entries RENAME TO legacy_session_entries"
+      ]
+    },
+    {
+      "id": "sessions/store/0037-drop-legacy-history",
+      "checksum": "9454a05ac35a704ccd7027e7f7f07d4c97acc589009d107ca538028e57d1a7d8",
+      "statements": [
+        "SET LOCAL lock_timeout = '60s'",
+        "DROP TRIGGER IF EXISTS session_entry_search ON items",
+        "DROP FUNCTION IF EXISTS sync_item_search(), sync_session_entry_search()",
+        "DROP VIEW IF EXISTS session_transcript_entries",
+        "DROP TABLE IF EXISTS session_entry_search, legacy_session_entries, session_entries, session_tape,\n             legacy_tape_steps, legacy_turn_runs, legacy_tape_steps_progress, legacy_tape_skipped,\n             legacy_tape_writes, legacy_prep_runs",
+        "DROP PROCEDURE IF EXISTS prepare_legacy_tape_steps(INT)",
+        "DROP FUNCTION IF EXISTS legacy_tape_written(), legacy_tape_steps_batch(TEXT[], BIGINT),\n             entry_search_text(text), items_copy_payload(text), items_copy_payload(jsonb)",
+        "DROP SCHEMA IF EXISTS items_copy_ops CASCADE"
+      ]
+    },
+    {
+      "id": "sessions/store/0038-scoped-origin-pages",
+      "checksum": "7b4a021bdfa47d06b19676f0ab93ba251eff93f69547d1a777e5ff35ba0d6eeb",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_conversations_by_scope_activity\n        ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC) WHERE origin = 'conversation'",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS sessions_other_background_by_scope_activity\n        ON sessions(scope_id, (COALESCE(last_activity, created_at)) DESC, id DESC) WHERE origin NOT IN ('conversation', 'cron')"
+      ]
+    },
+    {
+      "id": "sessions/store/0039-items-call-id-digest-index",
+      "checksum": "cffad89ce3e55cfb9db84abace87cc310ef3f5385520019b6523cb680de3ba4a",
+      "statements": [
+        "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS items_one_call_per_kind_digest\n        ON items(tenant_id, session_id, kind, md5(call_id)) WHERE call_id IS NOT NULL"
+      ]
+    },
+    {
+      "id": "sessions/store/0040-items-call-id-digest-swap",
+      "checksum": "558e686736d1eba1d5fac1866fabe2433b5e0cf420123873e237ea7327409c38",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "DROP INDEX IF EXISTS items_one_call_per_kind",
+        "ALTER INDEX items_one_call_per_kind_digest RENAME TO items_one_call_per_kind"
+      ]
+    },
+    {
+      "id": "sessions/store/0041-drop-inline-llm-request",
+      "checksum": "398ae13963cbb65985f948db602bcf952d396598f7edd10244960a6d398c2894",
+      "statements": ["SET LOCAL lock_timeout = '15s'", "ALTER TABLE session_llm_requests DROP COLUMN IF EXISTS request"]
+    },
+    {
+      "id": "sessions/store/0042-llm-prompt-envelopes-created-at",
+      "checksum": "4dcffa4ab23b943c3fc761c0edb9f2e01cbbb8473d73823721695da765eec3ed",
+      "statements": [
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS llm_prompt_envelopes_created_at\n             ON llm_prompt_envelopes(created_at)"
+      ]
+    },
+    {
+      "id": "sessions/store/0043-last-user-activity",
+      "checksum": "6ac9dd6674c99c00f47b823cadddbbba866db625bb72713fb1b3b32e13a982a1",
+      "statements": [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_user_activity BIGINT"
+      ]
+    },
+    {
+      "id": "sessions/store/0044-last-user-activity-backfill",
+      "checksum": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "statements": [],
+      "prepare": [
+        "DO $last_user_activity_backfill$\nDECLARE\n  batch text[];\n  after text := '';\nBEGIN\n  LOOP\n    SELECT array_agg(id ORDER BY id) INTO batch\n      FROM (SELECT id FROM sessions WHERE id > after ORDER BY id LIMIT 2000) candidates;\n    EXIT WHEN batch IS NULL;\n    WITH latest AS MATERIALIZED (\n      SELECT b.id, (SELECT (EXTRACT(EPOCH FROM MAX(e.created_at)) * 1000)::bigint FROM items e\n                     WHERE e.tenant_id = qm_tenant_id() AND e.session_id = b.id AND e.kind IN ('UserMessage', 'SteeringMessage')) AS at\n        FROM unnest(batch) AS b(id))\n    UPDATE sessions s\n       SET last_user_activity = latest.at\n      FROM latest\n     WHERE s.id = latest.id AND latest.at IS NOT NULL\n       AND (s.last_user_activity IS NULL OR s.last_user_activity < latest.at);\n    after := batch[cardinality(batch)];\n    COMMIT;\n    PERFORM pg_sleep(0.1);\n  END LOOP;\nEND $last_user_activity_backfill$"
+      ]
+    },
+    {
+      "id": "surface-cache/ack-emoji-pick/0001",
+      "checksum": "f810bb939d938048d4852a518c04ee315dc42e415e237a31b35129fe08678228",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS ack_emoji_picks(\n        id BIGSERIAL PRIMARY KEY,\n        org_id TEXT NOT NULL, surface TEXT NOT NULL, channel TEXT NOT NULL, ts TEXT NOT NULL,\n        outcome TEXT NOT NULL, picked TEXT, icon TEXT, message TEXT, candidates TEXT, model TEXT,\n        latency_ms INT, created_at BIGINT NOT NULL\n      )",
+        "CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_channel_created\n        ON ack_emoji_picks(org_id, channel, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_created\n        ON ack_emoji_picks(org_id, created_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_outcome\n        ON ack_emoji_picks(org_id, outcome)"
+      ]
+    },
+    {
+      "id": "surface-cache/ambient-judgment/0001",
+      "checksum": "70c0f2d71fdc4d464b4a9d35fcb078b5efdf4dc4fcf769f8379eaa1afb4ad61e",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS ambient_judgments(\n        id BIGSERIAL PRIMARY KEY,\n        org_id TEXT NOT NULL, surface TEXT NOT NULL, container TEXT NOT NULL,\n        decision TEXT NOT NULL, reason TEXT, asked_by TEXT, prompt TEXT, model TEXT,\n        latency_ms INT, ts_from TEXT, ts_to TEXT, created_at BIGINT NOT NULL\n      )",
+        "ALTER TABLE ambient_judgments ADD COLUMN IF NOT EXISTS asked_by TEXT",
+        "CREATE INDEX IF NOT EXISTS ambient_judgments_org_container_created\n        ON ambient_judgments(org_id, container, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ambient_judgments_org_created\n        ON ambient_judgments(org_id, created_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS ambient_judgments_org_decision\n        ON ambient_judgments(org_id, decision)"
+      ]
+    },
+    {
+      "id": "surface-cache/channel-policy/0001",
+      "checksum": "5be6f79d080af7a40c4c28708c906359fab2e5cdb23ffd24823da12186fa19ef",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS channel_policy(\n        org_id TEXT NOT NULL, container TEXT NOT NULL,\n        orders TEXT NOT NULL DEFAULT '', bots JSONB NOT NULL DEFAULT '{}'::jsonb,\n        set_by TEXT, updated_at BIGINT NOT NULL,\n        PRIMARY KEY(org_id, container)\n      )",
+        "ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS bots JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN",
+        "ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP NOT NULL",
+        "ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP DEFAULT",
+        "CREATE TABLE IF NOT EXISTS channel_policy_history(\n        id BIGSERIAL PRIMARY KEY,\n        org_id TEXT NOT NULL, container TEXT NOT NULL,\n        orders TEXT NOT NULL, set_by TEXT, session_id TEXT,\n        created_at BIGINT NOT NULL\n      )",
+        "ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS bots JSONB",
+        "ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN",
+        "CREATE INDEX IF NOT EXISTS channel_policy_history_container\n        ON channel_policy_history(org_id, container, id DESC)"
+      ]
+    },
+    {
+      "id": "surface-cache/store/0001",
+      "checksum": "d823cafcb1d6fbe0400d4ec7cbf745d768af8d02b492681092b95136b706518d",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS channel_messages(\n        org_id TEXT NOT NULL, container TEXT NOT NULL, ts TEXT NOT NULL,\n        sub TEXT, author_id TEXT, author_name TEXT, text TEXT NOT NULL DEFAULT '', mentions JSONB,\n        self BOOLEAN NOT NULL DEFAULT FALSE, bot BOOLEAN NOT NULL DEFAULT FALSE,\n        mentions_self BOOLEAN NOT NULL DEFAULT FALSE,\n        edited_at BIGINT, deleted BOOLEAN NOT NULL DEFAULT FALSE,\n        created_at BIGINT NOT NULL,\n        PRIMARY KEY(org_id, container, ts)\n      )",
+        "ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS mentions JSONB",
+        "ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS bot BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS mentions_self BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS handled BOOLEAN NOT NULL DEFAULT FALSE",
+        "CREATE INDEX IF NOT EXISTS channel_messages_by_container\n        ON channel_messages(org_id, container, ts)",
+        "CREATE INDEX IF NOT EXISTS channel_messages_live_by_container\n        ON channel_messages(org_id, container) WHERE deleted = FALSE",
+        "CREATE INDEX IF NOT EXISTS channel_messages_by_sub\n        ON channel_messages(org_id, container, sub, ts)",
+        "ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS tsv tsvector\n        GENERATED ALWAYS AS (to_tsvector('english', coalesce(text, ''))) STORED",
+        "CREATE INDEX IF NOT EXISTS channel_messages_tsv ON channel_messages USING GIN(tsv)",
+        "CREATE TABLE IF NOT EXISTS channel_state(\n        org_id TEXT NOT NULL, container TEXT NOT NULL,\n        last_ts TEXT, oldest_ts TEXT, name TEXT, kind TEXT, members JSONB NOT NULL DEFAULT '[]'::jsonb,\n        updated_at BIGINT NOT NULL,\n        PRIMARY KEY(org_id, container)\n      )",
+        "ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS oldest_ts TEXT",
+        "ALTER TABLE channel_state ADD COLUMN IF NOT EXISTS kind TEXT",
+        "CREATE TABLE IF NOT EXISTS channel_files(\n        org_id TEXT NOT NULL, container TEXT NOT NULL, ts TEXT NOT NULL, file_id TEXT NOT NULL,\n        name TEXT, mimetype TEXT, created_at BIGINT NOT NULL,\n        PRIMARY KEY(org_id, container, ts, file_id)\n      )",
+        "CREATE MATERIALIZED VIEW IF NOT EXISTS surface_active_threads AS\n        SELECT org_id, container, sub,\n               MAX(ts) AS last_ts, COUNT(*) AS message_count, MAX(created_at) AS last_activity_at\n          FROM channel_messages\n         WHERE sub IS NOT NULL AND deleted = FALSE\n         GROUP BY org_id, container, sub"
+      ]
+    },
+    {
+      "id": "surface-cache/store/0002",
+      "checksum": "a940914e3f7a04f8508e88b31035c3b4d74438087f716b6d1832f90ed78c9357",
+      "statements": ["DROP MATERIALIZED VIEW IF EXISTS surface_active_threads"]
+    },
+    {
+      "id": "surface-cache/store/0003",
+      "checksum": "b3f05a3e976216b758fd8482c603917505c231787c853b46e8c76a7d80377f08",
+      "statements": [
+        "ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS deleted_at BIGINT",
+        "CREATE INDEX IF NOT EXISTS channel_messages_edited_by_container\n            ON channel_messages(org_id, container, edited_at) WHERE edited_at > 0",
+        "CREATE INDEX IF NOT EXISTS channel_messages_deleted_by_container\n            ON channel_messages(org_id, container, deleted_at) WHERE deleted_at > 0"
+      ]
+    },
+    {
+      "id": "surface-cache/store/0004",
+      "checksum": "e64e42c1db30b3f2fe0cf8de0a274316bba539131c677b8242cb11ab55304eee",
+      "statements": ["ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS broadcast BOOLEAN NOT NULL DEFAULT FALSE"]
+    },
+    {
+      "id": "surface-cache/store/0005",
+      "checksum": "0730c53e72559cdd0eba1830f2e243dd539dabfeceb2702161fc0511dabba8e0",
+      "statements": ["ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS subtype TEXT"]
+    },
+    {
+      "id": "surface-cache/store/0006",
+      "checksum": "17e5f4f46573989bf031b3c79a41f191bc614c53e265829bb7bd5a17cad19208",
+      "statements": [
+        "ALTER TABLE channel_messages ADD COLUMN IF NOT EXISTS bot_id TEXT",
+        "ALTER TABLE channel_files ADD COLUMN IF NOT EXISTS title TEXT",
+        "ALTER TABLE channel_files ADD COLUMN IF NOT EXISTS size BIGINT"
+      ]
+    },
+    {
+      "id": "teams/0001",
+      "checksum": "2b8c0d4f17fb526e042960f55feab31d269a33b644872e2c87266be47429a174",
+      "statements": [
+        "CREATE TABLE IF NOT EXISTS teams(\n    team_id          TEXT    PRIMARY KEY,\n    name             TEXT    NOT NULL,\n    isolated_in_open BOOLEAN NOT NULL DEFAULT FALSE,\n    created_by       TEXT    NOT NULL,\n    created_at       BIGINT  NOT NULL\n  )",
+        "CREATE TABLE IF NOT EXISTS team_members(\n    team_id      TEXT   NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,\n    principal_id TEXT   NOT NULL,\n    role         TEXT   NOT NULL CHECK (role IN ('member', 'admin')),\n    added_by     TEXT   NOT NULL,\n    added_at     BIGINT NOT NULL,\n    PRIMARY KEY (team_id, principal_id)\n  )",
+        "CREATE INDEX IF NOT EXISTS team_members_principal ON team_members (principal_id)",
+        "CREATE TABLE IF NOT EXISTS team_rooms(\n    team_id  TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,\n    scope_id TEXT NOT NULL,\n    PRIMARY KEY (team_id, scope_id)\n  )",
+        "CREATE INDEX IF NOT EXISTS team_rooms_scope ON team_rooms (scope_id)"
+      ]
+    }
+  ],
+  "after": [
+    {
+      "id": "sessions/maintenance/safe-jsonb-parallel",
+      "checksum": "879ecbfda6f835cbf226b69fdaf61421987e8c74aea03598ba1c210e69d34a70",
+      "statements": [
+        "DO $safe_jsonb_parallel$\n        BEGIN\n          IF to_regprocedure('safe_jsonb(text)') IS NOT NULL THEN\n            ALTER FUNCTION safe_jsonb(text) PARALLEL UNSAFE;\n          END IF;\n        END $safe_jsonb_parallel$"
+      ]
+    },
+    {
+      "id": "cron/fires/import-legacy-history",
+      "checksum": "b964ec9ddd81af0cdb8967f2b06f6d71d4d811cbd92dd9c952b7415497dee718",
+      "statements": [
+        "DO $body$ BEGIN\n      IF to_regclass('cron_fire_log') IS NOT NULL THEN\n        LOCK TABLE cron_fire_log IN SHARE ROW EXCLUSIVE MODE;\n        INSERT INTO cron_fires (cron_id, fire_key, thread_ref, session_id, fired_at, scheduled_at, ended_at, status, note, reply)\n        SELECT source.cron_id, source.fire_key, COALESCE(source.json->>'threadRef', 'cron:' || source.cron_id), source.json->>'sessionId', source.fired_at, (source.json->>'scheduledAt')::bigint, COALESCE((source.json->>'endedAt')::bigint, CASE WHEN source.json->>'status' IS DISTINCT FROM 'running' THEN source.fired_at END), source.json->>'status', source.json->>'note', source.json->>'reply' FROM cron_fire_log source\n        ON CONFLICT (cron_id, fire_key) DO UPDATE SET thread_ref = EXCLUDED.thread_ref, session_id = EXCLUDED.session_id, fired_at = EXCLUDED.fired_at, scheduled_at = EXCLUDED.scheduled_at, ended_at = EXCLUDED.ended_at, status = EXCLUDED.status, note = EXCLUDED.note, reply = EXCLUDED.reply\n  WHERE EXCLUDED.fired_at >= cron_fires.fired_at\n    AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)\n    AND (cron_fires.thread_ref, cron_fires.session_id, cron_fires.fired_at, cron_fires.scheduled_at, cron_fires.ended_at, cron_fires.status, cron_fires.note, cron_fires.reply) IS DISTINCT FROM (EXCLUDED.thread_ref, EXCLUDED.session_id, EXCLUDED.fired_at, EXCLUDED.scheduled_at, EXCLUDED.ended_at, EXCLUDED.status, EXCLUDED.note, EXCLUDED.reply);\n      END IF;\n    END $body$",
+        "CREATE OR REPLACE FUNCTION qm_sync_legacy_cron_fire() RETURNS trigger LANGUAGE plpgsql AS $body$\n      BEGIN\n        INSERT INTO cron_fires (cron_id, fire_key, thread_ref, session_id, fired_at, scheduled_at, ended_at, status, note, reply)\n        SELECT source.cron_id, source.fire_key, COALESCE(source.json->>'threadRef', 'cron:' || source.cron_id), source.json->>'sessionId', source.fired_at, (source.json->>'scheduledAt')::bigint, COALESCE((source.json->>'endedAt')::bigint, CASE WHEN source.json->>'status' IS DISTINCT FROM 'running' THEN source.fired_at END), source.json->>'status', source.json->>'note', source.json->>'reply' FROM (SELECT NEW.*) source\n        ON CONFLICT (cron_id, fire_key) DO UPDATE SET thread_ref = EXCLUDED.thread_ref, session_id = EXCLUDED.session_id, fired_at = EXCLUDED.fired_at, scheduled_at = EXCLUDED.scheduled_at, ended_at = EXCLUDED.ended_at, status = EXCLUDED.status, note = EXCLUDED.note, reply = EXCLUDED.reply\n  WHERE EXCLUDED.fired_at >= cron_fires.fired_at\n    AND (cron_fires.ended_at IS NULL OR EXCLUDED.ended_at IS NOT NULL)\n    AND (cron_fires.thread_ref, cron_fires.session_id, cron_fires.fired_at, cron_fires.scheduled_at, cron_fires.ended_at, cron_fires.status, cron_fires.note, cron_fires.reply) IS DISTINCT FROM (EXCLUDED.thread_ref, EXCLUDED.session_id, EXCLUDED.fired_at, EXCLUDED.scheduled_at, EXCLUDED.ended_at, EXCLUDED.status, EXCLUDED.note, EXCLUDED.reply);\n        RETURN NEW;\n      END\n    $body$",
+        "DO $body$ BEGIN\n      IF to_regclass('cron_fire_log') IS NOT NULL THEN\n        DROP TRIGGER IF EXISTS qm_sync_legacy_cron_fire ON cron_fire_log;\n        CREATE TRIGGER qm_sync_legacy_cron_fire AFTER INSERT OR UPDATE ON cron_fire_log\n          FOR EACH ROW EXECUTE FUNCTION qm_sync_legacy_cron_fire();\n      END IF;\n    END $body$"
+      ]
+    }
+  ]
+}

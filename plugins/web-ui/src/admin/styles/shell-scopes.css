@@ -403,17 +403,6 @@
   color: var(--muted);
   margin: 8px 0 0;
 }
-#app-view .obstatus {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-#app-view .obactions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
 #app-view .setup-head {
   margin-bottom: 24px;
 }
@@ -459,10 +448,6 @@
   #app-view .setup-form {
     grid-template-columns: 1fr;
   }
-}
-#app-view .obdivider {
-  border-top: 1px solid var(--border);
-  margin: 14px 0 10px;
 }
 #app-view .danger-link {
   border: none;

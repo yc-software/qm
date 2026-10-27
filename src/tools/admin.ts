@@ -147,11 +147,9 @@ export const adminOperations = {
   revoke_external: operation("Revoke an external member (id = email).", "DELETE", "/external-users/:id", {
     id: string,
   }),
-  onboarding: operation("Set a user's onboarding state.", "PUT", "/users/:id/onboarding", {
+  reset_user: operation("Delete a user's personal DM sessions (destructive).", "POST", "/users/:id/reset", {
     id: string,
-    value: object,
   }),
-  reset_user: operation("Reset a user's onboarding data (destructive).", "POST", "/users/:id/reset", { id: string }),
   sandboxes: operation("List a scope's sandboxes.", "GET", "/sandboxes/:scope", scope),
   create_sandbox: operation("Create a sandbox in a scope.", "POST", "/sandboxes/:scope", {
     ...scope,

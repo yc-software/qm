@@ -6,16 +6,14 @@ async function getToolManifest(ctx: ApiCtx): Promise<RouteResult> {
   const principal = ctx.actor?.p;
   if (!principal) return reply(401, { error: "unauthorized" });
   const { deps } = ctx;
-  const flag = async (name: "responsive_spine" | "persistent_subagents" | "ui_canvas") =>
-    (await deps.featureFlags?.enabled(name, personalScope(principal))) === true;
   const tools = toolManifest({
     controlTools: Boolean(deps.signingSecret && deps.apiBaseUrl),
     surfaceTools: false,
     surfaceName: "web",
     delegateWork: false,
-    sessionTools: (await flag("responsive_spine")) || (await flag("persistent_subagents")),
+    sessionTools: true,
     readOnly: false,
-    canvasInstall: await flag("ui_canvas"),
+    canvasInstall: (await deps.featureFlags?.enabled("ui_canvas", personalScope(principal))) === true,
     adminOperations: (await deps.admin?.adminStatusOf({ id: principal, type: "internal" }))?.isAdmin === true,
     connectorTools: (await deps.mcpToolService?.toolDefsFor(principal)) ?? [],
     clientTools: [],

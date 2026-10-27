@@ -3,8 +3,8 @@ import type { ProcessRegistry, ProcessStatus } from "../processes/process-regist
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { awaitProcessExit } from "../sandbox/await-process-exit.ts";
 import { pollProcess } from "../sandbox/process-poll.ts";
-import { ProcessSessionGoneError, redactCommand } from "../sandbox/exec-process-session.ts";
-import { createExactSecretValueMasker } from "../security/secret-masking.ts";
+import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
+import { createExactSecretValueMasker, createSecretValueMasker } from "../security/secret-masking.ts";
 import { withCleanup } from "../util/errors.ts";
 
 export interface BackgroundExecBrokerDeps {
@@ -158,11 +158,14 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
       const sandboxId = handle.resourceId;
       if (!sandboxId)
         throw new Error("background jobs need a lasting computer; this computer is discarded when the turn ends");
-      purpose = redactCommand(purpose.replace(/\s+/g, " ").trim(), handle.env);
+      const maskEnv = createSecretValueMasker(handle.env);
+      const maskStaged = createExactSecretValueMasker(credentials?.secrets ?? []);
+      const mask = (text: string): string => maskStaged(maskEnv(text));
+      purpose = mask(purpose.replace(/\s+/g, " ").trim());
       const ttl = Math.min(ttlMs ?? defaultTtlMs, maxTtlMs);
 
       const normalized = `bg: ${command.replace(/\s+/g, " ").trim()}`;
-      const redacted = redactCommand(normalized, handle.env);
+      const redacted = mask(normalized);
 
       let processId = await findLiveDuplicate(deps, handle, sandboxId, normalized, redacted, credentials, exited);
 
@@ -184,7 +187,6 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
 
       let launched = false;
       try {
-        const mask = createExactSecretValueMasker(credentials?.secrets ?? []);
         const register = async (id: string): Promise<void> => {
           launched = true;
           await deps.registry.register({
@@ -212,7 +214,7 @@ export function createBackgroundBroker(deps: BackgroundExecBrokerDeps): Backgrou
           deadlineMs: POLL_MS,
         });
         if (status.state === "exited") await exited(handle, processId);
-        return { processId, output: mask(output), cursor, status, reattached: false };
+        return { processId, output: maskStaged(output), cursor, status, reattached: false };
       } catch (error) {
         return withCleanup(
           () => Promise.reject(error),

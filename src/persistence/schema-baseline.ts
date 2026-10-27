@@ -1,9 +1,21 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { definePgMigration, type PgMigration } from "./pg-pool.ts";
 
-// The schema baseline replaces the migrations folded into it: schema-baseline.sql is the schema they produce on an
-// empty database. pg-pool applies it to an empty database and lets a database that already applied every folded
-// migration adopt it; it refuses anything older.
+interface SchemaBaselineStep {
+  id: string;
+  checksum: string;
+  statements: readonly string[];
+  prepare?: readonly string[];
+  preLedgerId?: string;
+}
+
+interface SchemaBaselineChain {
+  before: readonly SchemaBaselineStep[];
+  migrations: readonly SchemaBaselineStep[];
+  after: readonly SchemaBaselineStep[];
+}
+
 const sql = readFileSync(new URL("./schema-baseline.sql", import.meta.url), "utf8").replaceAll("\r\n", "\n");
 const checksum = createHash("sha256").update(sql).digest("hex");
 const EXPECTED_CHECKSUM = "ce6b6272ae4d2f1f5d7737323fe3e9a57feb3f12d0abc3c6f00f7b052f41c2ce";
@@ -13,127 +25,32 @@ if (checksum !== EXPECTED_CHECKSUM) {
   );
 }
 
-export const SCHEMA_BASELINE = {
-  id: "baseline/0001",
-  release: "9be16d35",
-  sql,
-  checksum,
-  folded: [
-    "acl/grants/0001",
-    "acl/grants/0002",
-    "acl/grants/0003-file-ids",
-    "admin/audit-log/0001",
-    "admin/audit-log/0002",
-    "admin/grants/0001",
-    "admin/scoped-events/credential_usage/0001",
-    "admin/scoped-events/credential_usage/0002",
-    "admin/scoped-events/credential_usage/0003",
-    "admin/scoped-events/egress_events/0001",
-    "admin/scoped-events/error_events/0001",
-    "auth/broker-sessions/0001",
-    "auth/replay-dedupe/0001",
-    "cron/fires/0001",
-    "decisions/0001",
-    "deploy/access/0001",
-    "directory/store/0001",
-    "directory/store/0002",
-    "directory/store/0003",
-    "directory/store/0004",
-    "directory/store/0005",
-    "durable-map/crons/0001-drop-run-as",
-    "durable-map/internal_member_overrides/0002-drop",
-    "durable-map/keychain_credentials/0002-delete-auto-captured-logins",
-    "durable-map/pinned_skills/0002-drop",
-    "durable-map/suggested_activity_profiles/0001-nightly-on-use",
-    "durable-map/triggers/0001-drop-recipient-consent",
-    "durable-map/turn_wall_clock_configs/0002-drop",
-    "durable-map/webhooks/0002-disable-rows-orphaned-by-webhook-removal",
-    "environments/store/0001",
-    "files/artifacts/0001",
-    "files/artifacts/0002",
-    "memory/facts/0000-records-column",
-    "memory/facts/0001",
-    "processes/registry/0001",
-    "processes/registry/0002",
-    "processes/registry/0003",
-    "processes/registry/0004",
-    "ratelimit/limiter/0001",
-    "resource-search/crons/0001",
-    "resource-search/deploys/0001",
-    "resource-search/skills/0001",
-    "resource-search/webhooks/0001",
-    "runs/activity/0001",
-    "runs/signals/0001",
-    "runs/signals/0002",
-    "runs/store/0001",
-    "runs/store/0002",
-    "runs/store/0003",
-    "runs/store/0004",
-    "runs/store/0004-subagent-returns",
-    "runs/store/0005-session-history",
-    "runs/store/0006-terminal-finished",
-    "runs/store/0007-last-stop",
-    "runs/store/0008-claim-priority",
-    "runs/store/0009-claim-priority-index",
-    "runs/store/0010-drop-turn-metrics",
-    "sessions/store/0001",
-    "sessions/store/0002",
-    "sessions/store/0003",
-    "sessions/store/0004",
-    "sessions/store/0005",
-    "sessions/store/0006",
-    "sessions/store/0007",
-    "sessions/store/0008",
-    "sessions/store/0009",
-    "sessions/store/0010",
-    "sessions/store/0011",
-    "sessions/store/0012",
-    "sessions/store/0013",
-    "sessions/store/0014-search-write-through-v1",
-    "sessions/store/0015-search-backfill-v1",
-    "sessions/store/0016-status",
-    "sessions/store/0016-tape-source-role",
-    "sessions/store/0017-subagent-parentage",
-    "sessions/store/0017-transcript-entries",
-    "sessions/store/0018-llm-requests-created-at",
-    "sessions/store/0019-participant-activity-indexes",
-    "sessions/store/0020-spend-usage-json",
-    "sessions/store/0020-spend-usage-json-size",
-    "sessions/store/0020-spend-usage-json-size-plpgsql",
-    "sessions/store/0021-spend-covering-index",
-    "sessions/store/0022-spend-days",
-    "sessions/store/0023-spend-days-backfill",
-    "sessions/store/0024-user-previews",
-    "sessions/store/0025-org-activity-index",
-    "sessions/store/0026-participant-read-at",
-    "sessions/store/0027-agent-reply-index",
-    "sessions/store/0028-drop-run-tasks",
-    "sessions/store/0029-legacy-tape-steps",
-    "sessions/store/0030-legacy-tape-steps-size-guard",
-    "sessions/store/0031-drop-session-tape",
-    "sessions/store/0032-session-goals",
-    "sessions/store/0033-client-tools",
-    "sessions/store/0034-session-origin-backfill",
-    "sessions/store/0035-items",
-    "sessions/store/0035-items-keep-call-ids",
-    "sessions/store/0036-items-cutover",
-    "sessions/store/0037-drop-legacy-history",
-    "sessions/store/0038-scoped-origin-pages",
-    "sessions/store/0039-items-call-id-digest-index",
-    "sessions/store/0040-items-call-id-digest-swap",
-    "sessions/store/0041-drop-inline-llm-request",
-    "sessions/store/0042-llm-prompt-envelopes-created-at",
-    "sessions/store/0043-last-user-activity",
-    "sessions/store/0044-last-user-activity-backfill",
-    "surface-cache/ack-emoji-pick/0001",
-    "surface-cache/ambient-judgment/0001",
-    "surface-cache/channel-policy/0001",
-    "surface-cache/store/0001",
-    "surface-cache/store/0002",
-    "surface-cache/store/0003",
-    "surface-cache/store/0004",
-    "surface-cache/store/0005",
-    "surface-cache/store/0006",
-    "teams/0001",
-  ],
-} as const;
+const chain = JSON.parse(
+  readFileSync(new URL("./schema-baseline-chain.json", import.meta.url), "utf8"),
+) as SchemaBaselineChain;
+
+export const SCHEMA_BASELINE = { id: "baseline/0001", sql, checksum, chain } as const;
+
+export interface ChainMigration extends PgMigration {
+  prepare?: readonly string[];
+  preLedgerId?: string;
+}
+
+function chainMigration(step: SchemaBaselineStep): ChainMigration {
+  return {
+    ...definePgMigration(step.id, step.statements, step.checksum),
+    ...(step.prepare ? { prepare: step.prepare } : {}),
+    ...(step.preLedgerId ? { preLedgerId: step.preLedgerId } : {}),
+  };
+}
+
+let preBaselineChain: { before: ChainMigration[]; migrations: ChainMigration[]; after: ChainMigration[] } | undefined;
+
+export function schemaBaselineChain(): NonNullable<typeof preBaselineChain> {
+  const { before, migrations, after } = SCHEMA_BASELINE.chain;
+  return (preBaselineChain ??= {
+    before: before.map(chainMigration),
+    migrations: migrations.map(chainMigration),
+    after: after.map(chainMigration),
+  });
+}

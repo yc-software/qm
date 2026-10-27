@@ -17,12 +17,12 @@ export function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
 }
 
-function redactStructuredDiagnosticsValue(value: unknown, sensitive = false): unknown {
+export function redactSensitiveKeys(value: unknown, sensitive = false): unknown {
   if (sensitive) return "[redacted]";
-  if (Array.isArray(value)) return value.map((item) => redactStructuredDiagnosticsValue(item));
+  if (Array.isArray(value)) return value.map((item) => redactSensitiveKeys(item));
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, redactStructuredDiagnosticsValue(item, isSensitiveKey(key))]),
+    Object.entries(value).map(([key, item]) => [key, redactSensitiveKeys(item, isSensitiveKey(key))]),
   );
 }
 
@@ -30,7 +30,7 @@ function redactStructuredDiagnostics(value: string): string {
   try {
     const parsed: unknown = JSON.parse(value);
     if (!parsed || typeof parsed !== "object") return value;
-    return JSON.stringify(redactStructuredDiagnosticsValue(parsed));
+    return JSON.stringify(redactSensitiveKeys(parsed));
   } catch {
     return value;
   }

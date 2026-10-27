@@ -258,7 +258,7 @@ function sessionListMethods(k: SessionKit) {
     },
 
     async searchSessions(principalId, query, limit = SEARCH_HIT_LIMIT): Promise<SessionSearchHit[]> {
-      const capped = Math.max(1, Math.min(Math.floor(limit), 100));
+      const capped = Math.max(1, Math.floor(limit));
       const [hits, titles] = await Promise.all([
         deps.sessions.searchItems(principalId, query, capped).then((rows) => h.viewableRows(principalId, rows)),
         deps.sessions.searchSessionTitles(principalId, query, capped).then((rows) => h.viewableRows(principalId, rows)),

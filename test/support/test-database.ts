@@ -73,7 +73,11 @@ export function testAdvisoryLock(): AdvisoryLock {
 }
 
 export function testConfigStore(opts: Partial<Parameters<typeof createConfigStore>[0]> = {}) {
-  return createConfigStore({ databaseUrl: opts.databaseUrl ?? testDatabaseUrl(), ...opts });
+  return createConfigStore({
+    databaseUrl: opts.databaseUrl ?? testDatabaseUrl(),
+    connectorSecretKey: "test-connector-secret",
+    ...opts,
+  });
 }
 
 export async function failTableWrites(url: string, table: string): Promise<void> {

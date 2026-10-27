@@ -6,6 +6,7 @@ import { createToolContext, type ToolContextDeps } from "../../src/tools/tool-co
 import { type CommandCredential } from "../../src/tools/primitives.ts";
 import { scopeId, type WorkspaceLayer } from "../../src/types.ts";
 import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState } from "../../src/harness/turn-tool-state.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
 
@@ -410,12 +411,14 @@ test("the model and transcript see when a command moved to the scratch computer"
       return { id: "scratch", rootDir: "/scratch" };
     },
   });
-  const execute = createAgentTools({
-    current: ctx,
-    emit: (entry) =>
-      void entries.push({ ...(entry.body as Record<string, unknown>), ...(entry.isError ? { isError: true } : {}) }),
-    scopeLabel: scopeId("channel", "room"),
-  })[0]!;
+  const execute = createAgentTools(
+    createTurnToolState({
+      current: ctx,
+      emit: (entry) =>
+        void entries.push({ ...(entry.body as Record<string, unknown>), ...(entry.isError ? { isError: true } : {}) }),
+      scopeLabel: scopeId("channel", "room"),
+    }),
+  )[0]!;
   const run = (params: Record<string, unknown>) =>
     (execute.execute as unknown as (id: string, p: unknown) => Promise<{ content: Array<{ text: string }> }>)("call", {
       purpose: "Check login",

@@ -331,14 +331,14 @@ test("a reattached background wake that ended silent is a clean stop, never 'The
   assert.equal(work?.status, "complete");
 });
 
-test("approval denial is rendered as a normal status, not a stream error", async () => {
+test("a run that continued past a denial ends with the agent's reply, not a fixed denial", async () => {
   globalThis.fetch = (async () => {
-    throw new Error("approval denial terminal snapshot should not poll");
+    throw new Error("a terminal snapshot should not poll");
   }) as typeof fetch;
 
   const streamFn = makeRunResumeStreamFn("run-denied", {
     status: "done",
-    result: { status: "refused", refusalKind: "approval_denied", reason: "the approver declined this push" },
+    result: { status: "ok", reply: "Skipped the push and finished the rest." },
     partial: "",
     activity: [
       {
@@ -360,8 +360,7 @@ test("approval denial is rendered as a normal status, not a stream error", async
 
   assert.equal(final.stopReason, "stop");
   assert.equal(final.errorMessage, undefined);
-  assert.equal((final as AssistantWork & { approvalDecision?: string }).approvalDecision, "denied");
-  assert.equal(block?.type === "text" ? block.text : "", "Denied.");
+  assert.equal(block?.type === "text" ? block.text : "", "Skipped the push and finished the rest.");
   assert.equal(work?.status, "complete");
   assert.equal(work?.activity.length, 1);
 });
@@ -376,7 +375,6 @@ test("a refusal that only mentions a denied approval in its reason is a failure,
   });
   const final = await drain(await streamFn(MODEL, { systemPrompt: "", messages: [], tools: [] } as never));
 
-  assert.equal((final as AssistantWork & { approvalDecision?: string }).approvalDecision, undefined);
   assert.equal((final as AssistantWork).work?.status, "failed");
 });
 

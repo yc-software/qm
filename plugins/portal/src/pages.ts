@@ -7,7 +7,7 @@ import { errMessage } from "../../chassis/src/errors.ts";
 import { brandLabel } from "./core-calls.ts";
 
 export const cardPage = (o: Parameters<typeof chassisCardPage>[0]): string =>
-  chassisCardPage({ ...o, brand: brandLabel });
+  chassisCardPage({ ...o, brand: brandLabel() });
 const CARD_SCENE_FILE = fileURLToPath(
   new URL("../../../desktop/assets/becalmed-off-halfway-rock.webp", import.meta.url),
 );

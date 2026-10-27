@@ -118,4 +118,23 @@ export const SESSION_STORE_MIGRATIONS: PgMigrationDefinition[] = [
            $attributed_turns_tenant$`,
     ],
   },
+  {
+    id: "sessions/store/0050-restore-spend-json-indexes",
+    statements: [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend
+             ON session_llm_requests(created_at,
+               ((spend_usage_json(usage_json) ->> 'costUsd')::double precision),
+               ((spend_usage_json(usage_json) ->> 'input')::bigint),
+               ((spend_usage_json(usage_json) ->> 'output')::bigint),
+               ((spend_usage_json(usage_json) ->> 'cacheRead')::bigint),
+               ((spend_usage_json(usage_json) ->> 'cacheWrite')::bigint))
+             INCLUDE (session_id, model, usage_json)
+             WHERE usage_json IS NOT NULL AND (spend_usage_json(usage_json) IS NOT NULL
+             AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`,
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS session_llm_requests_spend_wide
+             ON session_llm_requests(created_at)
+             WHERE usage_json IS NOT NULL AND NOT (spend_usage_json(usage_json) IS NOT NULL
+             AND octet_length(session_id) + octet_length(model) + octet_length(usage_json) <= 2000)`,
+    ],
+  },
 ];

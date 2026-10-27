@@ -128,7 +128,8 @@ test("long Slack conversations show the latest messages and reveal earlier ones 
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   try {
     await vite.ssrLoadModule("/src/shell.ts");
-    const { contextTpl, CONTEXT_TAIL } = await vite.ssrLoadModule("/src/inbox-item-view.ts");
+    const { contextTpl } = await vite.ssrLoadModule("/src/inbox-item-view.ts");
+    const CONTEXT_TAIL = 6;
     const { toInboxItem } = await vite.ssrLoadModule("/src/inbox-model.ts");
     const { render } = await vite.ssrLoadModule("lit");
     const host = dom.window.document.getElementById("main")!;

@@ -1,4 +1,3 @@
-/** Runs one Pi turn end to end: prompt, goal continuation, empty-ending re-prompt and recovery. */
 import { goalWorkDigest } from "./goal.ts";
 import { textFromContent } from "./pi-payload.ts";
 import { finishTurn } from "./turn-finish.ts";
@@ -42,9 +41,16 @@ import {
   createTurnTools,
   createTurnSession,
 } from "./pi-turn-session.ts";
-import type { PiHarnessContext } from "./pi-harness.ts";
+import type { PiModelAccess } from "./pi-model-access.ts";
+import type { CoreToolOptions } from "./agent-tools.ts";
+import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
+import type { RunSignalStore } from "../runs/run-signal-store.ts";
+import { createTurnToolState, type TurnGoal, type TurnHalt, type TurnToolState } from "./turn-tool-state.ts";
+import { createModelCallLog, type ModelCallLog } from "./model-call-log.ts";
+import { createTurnRequestSettings, type TurnRequestSettings } from "./turn-request.ts";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { GrindMeter } from "./grind.ts";
 
-/** The agent's recent pi messages as governor work lines: what it said, called and got back. */
 function piGoalWork(messages: ReadonlyArray<unknown>): string {
   const lines: string[] = [];
   for (const m of messages as ReadonlyArray<{ role?: string; content?: unknown; toolName?: string }>) {
@@ -61,80 +67,86 @@ function piGoalWork(messages: ReadonlyArray<unknown>): string {
   }
   return goalWorkDigest(lines);
 }
-/** The turn's opened agent session plus what the later phases need from opening it. */
 interface OpenedPiTurn {
   turn: HarnessTurnInput;
   entry: TurnSession;
+  state: TurnToolState;
+  request: TurnRequestSettings;
+  calls: ModelCallLog;
   desiredModelId: string;
   wantFast: boolean;
-  turnModelGateway: PiHarnessContext["modelGateway"];
-  /** The step recorder the recording tools report to while a prompt is running. */
+  turnModelGateway: ModelGatewayTransportConfig | undefined;
   active: { steps?: StepRecorder };
 }
 
-/** Builds the turn's tool context and tools, resumes an interrupted tool call, and opens the agent session. */
-async function openPiTurn(ctx: PiHarnessContext, dispatched: HarnessTurnInput): Promise<OpenedPiTurn> {
-  const { resolveModelId, modelGateway, requiredModel } = ctx;
-  const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId();
-  const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
-  const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
+async function openPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Promise<OpenedPiTurn> {
+  const { access } = opts;
+  const desiredModelId = dispatched.runtime?.modelId ?? opts.primaryModelId();
+  const baseModel = access.model(desiredModelId, !dispatched.providerKeys);
+  const turnModelGateway = dispatched.providerKeys ? undefined : access.gateway;
   const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
-  const ref: TurnSession["ref"] = {
+  const state = createTurnToolState({
     current: dispatched.tools,
-    documents: dispatched.documents,
-    runtimeMutationPending: false,
-    runtimeInFlight: new Set(),
     runtimeActorId: dispatched.runtimeActorId,
-    pendingApprovals: [],
-    silentRequested: false,
     pollFire: !!dispatched.pollFire,
     observeToolResult: dispatched.observeToolResult,
     governGoal: dispatched.governGoal,
     saveGoal: dispatched.saveGoal,
     emit: dispatched.emit,
     scopeLabel: dispatched.scopeLabel,
-    orgScopeId: dispatched.orgScopeId,
     toolApprovalGate: dispatched.toolApprovalGate,
     shutdown: dispatched.shutdown,
-  };
+  });
+  const request = createTurnRequestSettings(dispatched.documents);
+  const calls = createModelCallLog();
   const active: OpenedPiTurn["active"] = {};
-  const tools = recordingTools(createTurnTools(ctx, ref, dispatched), () => active.steps);
-  const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
+  const tools = recordingTools(createTurnTools(opts.toolOptions, state, dispatched), () => active.steps);
+  const resumed = await resumeInterruptedToolCall(dispatched, state, tools as unknown as BridgedTool[]);
   const turn = resumed ? { ...dispatched, history: resumed } : dispatched;
-  const entry = await createTurnSession(
-    ctx,
-    withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
-    turn.session.id,
-    turn.systemPrompt,
-    turn.history,
-    turn.priorTurns,
-    turn.providerKeys,
-    ref,
+  const entry = await createTurnSession({
+    model: withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
+    sessionId: turn.session.id,
+    systemPrompt: turn.systemPrompt,
+    history: turn.history,
+    priorTurns: turn.priorTurns,
+    providerKeys: async () => turn.providerKeys ?? (await access.providerKeys()),
+    modelGateway: turnModelGateway,
+    tempDirPrefix: opts.tempDirPrefix,
+    captureRequests: opts.captureRequests,
+    calls,
+    request,
+    halt: state.halt,
+    abortSignal: () => state.tools.abortSignal,
     tools,
-    turn.loadImage,
-  );
-  return { turn, entry, desiredModelId, wantFast, turnModelGateway, active };
+    loadImage: turn.loadImage,
+  });
+  return { turn, entry, state, request, calls, desiredModelId, wantFast, turnModelGateway, active };
 }
 
-/**
- * Sets the turn's effort, telemetry and goal state, records the user message (unless continuing a
- * cut-off reply) and builds the model prompt.
- */
-async function preparePiPrompt(turn: HarnessTurnInput, entry: TurnSession, desiredModelId: string, wantFast: boolean) {
+async function preparePiPrompt({
+  turn,
+  entry,
+  state,
+  request,
+  calls,
+  desiredModelId,
+  wantFast,
+}: Omit<OpenedPiTurn, "turnModelGateway" | "active">) {
+  const { goal } = state;
   const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
-  entry.ref.fast = wantFast;
-  entry.ref.modelHasPrices = () => !entry.agentSession.model || modelHasPrices(entry.agentSession.model);
+  request.setFast(wantFast);
+  goal.setModelHasPrices(() => !entry.agentSession.model || modelHasPrices(entry.agentSession.model));
   const effectiveModel = activeModel?.id ?? desiredModelId;
   const defaultThinkingLevel = entry.agentSession.model
     ? defaultInteractiveThinkingLevel(entry.agentSession.model)
     : "auto";
-  entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultThinkingLevel;
-  applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
+  request.setEffortLevel(turn.runtime?.effortLevel ?? defaultThinkingLevel);
+  applyTurnEffort(entry.agentSession, request.effortLevel());
 
-  const telemetry = createCallTelemetry(turn, entry);
+  const telemetry = createCallTelemetry(turn, entry.agentSession, calls, request.fast, goal.current);
   const { collectGapWork } = telemetry;
   turn.onGapWork?.(collectGapWork);
-  entry.ref.onGapWork = collectGapWork;
+  state.reportGapWorkTo(collectGapWork);
   const continued = turn.continueTurn ? continuableContext(entry.agentSession.agent.state.messages) : null;
   if (continued) entry.agentSession.agent.state.messages = continued;
   else if (turn.continueTurn)
@@ -142,11 +154,12 @@ async function preparePiPrompt(turn: HarnessTurnInput, entry: TurnSession, desir
   const continueTurn = !!continued;
   const grindMeter = createGrindMeter();
 
-  entry.ref.goal = turn.goal ?? null;
-  entry.ref.goalMeter = grindMeter;
-  entry.ref.goalRound = turn.continueTurn ? 1 : 0;
-  const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
-  const pausedGoalAtStart = entry.ref.goal?.status === "paused" ? entry.ref.goal : null;
+  goal.set(turn.goal ?? null);
+  goal.setMeter(grindMeter);
+  goal.setRound(turn.continueTurn ? 1 : 0);
+  const startGoal = goal.current();
+  const activeGoalAtStart = startGoal?.status === "active" ? startGoal : null;
+  const pausedGoalAtStart = startGoal?.status === "paused" ? startGoal : null;
   const goalNote = (() => {
     if (activeGoalAtStart) return goalSteeringNote(activeGoalAtStart);
     if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
@@ -173,11 +186,6 @@ async function preparePiPrompt(turn: HarnessTurnInput, entry: TurnSession, desir
           userEntry,
         )
       : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
-  entry.ref.llmCapture = [];
-  entry.ref.modelCalls = 0;
-  entry.ref.modelDispatch = [];
-  entry.ref.pendingPrepareNextTurn = undefined;
-  entry.ref.pendingTransformContext = undefined;
   turn.recordModelCall({
     model: effectiveModel,
     inputTokens:
@@ -187,10 +195,9 @@ async function preparePiPrompt(turn: HarnessTurnInput, entry: TurnSession, desir
   return { effectiveModel, telemetry, continueTurn, grindMeter, userEntry, modelPrompt };
 }
 
-/** The turn's transcript writes, run one after another; the first failure aborts the turn and is rethrown on settle. */
 type TurnPersistence = ReturnType<typeof createTurnPersistence>;
 
-function createTurnPersistence(entry: TurnSession, toolAbort: AbortController) {
+function createTurnPersistence(session: AgentSession, toolAbort: AbortController) {
   let thinkTail: Promise<unknown> = Promise.resolve();
   let persistError: Error | undefined;
   const persist = (write: () => Promise<unknown>): void => {
@@ -201,7 +208,7 @@ function createTurnPersistence(entry: TurnSession, toolAbort: AbortController) {
       } catch (err) {
         persistError = asError(err);
         toolAbort.abort();
-        void entry.agentSession.abort().catch(swallowAs("pi: persist-failure abort", undefined));
+        void session.abort().catch(swallowAs("pi: persist-failure abort", undefined));
       }
     });
   };
@@ -218,13 +225,9 @@ function createTurnPersistence(entry: TurnSession, toolAbort: AbortController) {
   return { persist, rethrow, drain, settled };
 }
 
-/**
- * Feeds each finished pi message to the step recorder; a later user message is a steer (or a system
- * wake) and is recorded as one. Returns the unsubscribe.
- */
 function subscribeMessageEnds(opts: {
   turn: HarnessTurnInput;
-  entry: TurnSession;
+  session: AgentSession;
   steps: StepRecorder;
   persistence: TurnPersistence;
   pendingSteers: Array<SteerIntake & { prompt: string }>;
@@ -232,7 +235,7 @@ function subscribeMessageEnds(opts: {
   continueTurn: boolean;
   noteDocumentRejection: (message: unknown) => void;
 }): (() => void) | undefined {
-  const { turn, entry, steps, persistence, pendingSteers, toolAbort, noteDocumentRejection } = opts;
+  const { turn, session, steps, persistence, pendingSteers, toolAbort, noteDocumentRejection } = opts;
   const { persist } = persistence;
   let triggerSeen = opts.continueTurn;
   const onMessageEnd = async (message: unknown): Promise<void> => {
@@ -251,9 +254,9 @@ function subscribeMessageEnds(opts: {
     }
     await persistence.settled();
   };
-  return (entry.agentSession as unknown as { agent?: PiAgentWithPayloadHook }).agent?.subscribe?.((event) => {
+  return (session as unknown as { agent?: PiAgentWithPayloadHook }).agent?.subscribe?.((event) => {
     const e = event as { type?: string; message?: unknown };
-    if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
+    if (e.type === "agent_start" && toolAbort.signal.aborted) session.agent.abort();
     if (e.type === "message_end") noteDocumentRejection(e.message);
     return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
   });
@@ -261,28 +264,23 @@ function subscribeMessageEnds(opts: {
 
 type TurnRace = (prompting: Promise<void>, capMs?: number) => Promise<TurnWallClockOutcome>;
 
-/** What the prompt phases share: the session, the wall-clock race and the turn's stop state. */
-interface PromptPhase {
+async function continueGoal(o: {
   turn: HarnessTurnInput;
-  entry: TurnSession;
+  session: AgentSession;
   stop: TurnStop;
-  race: TurnRace;
-  recoverFailedRound: () => Promise<unknown>;
-  persistence: TurnPersistence;
-  turnWallClockMs: number;
-  rawRemainingCapMs: () => number;
-}
-
-/** Keeps prompting an active goal after the first round, until it is met, blocked or out of time. */
-async function continueGoal(
-  phase: PromptPhase,
-  wallClock: TurnWallClockOutcome,
-  grindMeter: ReturnType<typeof createGrindMeter>,
-  messagesBefore: number,
-): Promise<TurnWallClockOutcome> {
-  const { turn, entry, stop, race, recoverFailedRound, persistence, turnWallClockMs, rawRemainingCapMs } = phase;
-  const goalAfterPrompt = entry.ref.goal;
+  goal: TurnGoal;
+  halt: Pick<TurnHalt, "handoff" | "pausedOnApproval" | "approvals" | "setSilent">;
+  drain: () => Promise<void>;
+  grindMeter: GrindMeter;
+  messagesBefore: number;
+  wallClock: TurnWallClockOutcome;
+  promptRound: (note: string) => Promise<TurnWallClockOutcome>;
+}): Promise<TurnWallClockOutcome> {
+  const { turn, session, stop, goal, halt, drain, grindMeter, messagesBefore, promptRound } = o;
+  let { wallClock } = o;
+  const goalAfterPrompt = goal.current();
   if (wallClock === "ok" && goalAfterPrompt && !stop.userAborted && !turn.cancel?.aborted) {
+    const governGoal = goal.governor();
     wallClock = await enforceGoal({
       goal: goalAfterPrompt,
       meter: grindMeter,
@@ -291,46 +289,47 @@ async function continueGoal(
       blocked: () =>
         stop.userAborted ||
         !!turn.cancel?.aborted ||
-        !!entry.ref.runtimeHandoff ||
-        !!entry.ref.pausedOnApproval ||
-        !!entry.ref.pendingApprovals?.length ||
-        piRoundFailed(entry.agentSession, messagesBefore),
-      ...(entry.ref.governGoal
+        !!halt.handoff() ||
+        halt.pausedOnApproval() ||
+        !!halt.approvals().length ||
+        piRoundFailed(session, messagesBefore),
+      ...(governGoal
         ? {
             govern: (previous: GovernorVerdict | undefined) =>
-              entry.ref.governGoal!({
+              governGoal({
                 objective: goalAfterPrompt.objective,
                 trigger: "checkpoint",
-                recentWork: entry.ref.goalRecentWork?.() ?? "",
+                recentWork: goal.recentWork(),
                 ...(previous ? { previous } : {}),
               }),
           }
         : {}),
       beforePrompt: async () => {
-        console.error(`[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`);
-        entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
-        entry.ref.silentRequested = false;
-        await persistence.drain();
+        console.error(`[goal] continuation session=${turn.session.id} round=${goal.round() + 1}`);
+        goal.setRound(goal.round() + 1);
+        halt.setSilent(false);
+        await drain();
       },
-      prompt: async (note) => {
-        if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
-        const outcome = await race(entry.agentSession.prompt(note));
-        if (outcome === "ok") await recoverFailedRound();
-        return outcome;
-      },
+      prompt: promptRound,
     });
   }
   return wallClock;
 }
 
-/** Re-prompts once when the turn ended without a reply. Returns true when that recovery itself died. */
-async function repromptEmptyEnding(
-  phase: PromptPhase,
-  wallClock: TurnWallClockOutcome,
-  promptStart: number,
-  raceCapMs: () => number,
-): Promise<boolean> {
-  const { turn, entry, stop, race, persistence, turnWallClockMs, rawRemainingCapMs } = phase;
+async function repromptEmptyEnding(o: {
+  turn: HarnessTurnInput;
+  session: AgentSession;
+  stop: TurnStop;
+  halt: Pick<TurnHalt, "halted">;
+  calls: Pick<ModelCallLog, "count">;
+  drain: () => Promise<void>;
+  race: TurnRace;
+  wallClock: TurnWallClockOutcome;
+  turnWallClockMs: number;
+  elapsedMs: number;
+  raceCapMs: () => number;
+}): Promise<boolean> {
+  const { turn, session, stop, halt, calls, drain, race, wallClock, turnWallClockMs, elapsedMs, raceCapMs } = o;
   let recoveryDead = false;
   const note = emptyEndingNote({
     wallClock,
@@ -338,23 +337,24 @@ async function repromptEmptyEnding(
     cancelled: !!turn.cancel?.aborted,
     surfaceTools: !!turn.surfaceTools,
     pollFire: !!turn.pollFire,
-    ref: entry.ref,
-    session: entry.agentSession,
+    halted: halt.halted(),
+    modelCalls: calls.count(),
+    session,
     turnWallClockMs,
-    elapsedMs: turnWallClockMs > 0 ? turnWallClockMs - rawRemainingCapMs() : Date.now() - promptStart,
+    elapsedMs,
   });
   if (note) {
     console.error(
-      `[pi] empty final response after ${entry.ref.modelCalls} model calls — re-prompting once session=${turn.session.id}`,
+      `[pi] empty final response after ${calls.count()} model calls — re-prompting once session=${turn.session.id}`,
     );
-    await persistence.drain();
+    await drain();
     const capMs = raceCapMs();
     if (!stop.userAborted && !turn.cancel?.aborted && (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)) {
       try {
-        const outcome = await race(entry.agentSession.prompt(note), capMs);
+        const outcome = await race(session.prompt(note), capMs);
         if (outcome !== "ok" && !stop.userAborted) {
           recoveryDead = true;
-        } else if (outcome === "ok" && !stop.userAborted && !(entry.agentSession.getLastAssistantText() ?? "").trim()) {
+        } else if (outcome === "ok" && !stop.userAborted && !(session.getLastAssistantText() ?? "").trim()) {
           console.error(`[pi] turn still ended empty after re-prompt session=${turn.session.id}`);
         }
       } catch (e) {
@@ -366,23 +366,24 @@ async function repromptEmptyEnding(
   return recoveryDead;
 }
 
-/**
- * Handles a prompt that threw: retry without documents, then on a provider refusal try the fallback
- * model. Rethrows when nothing recovered and the user did not stop the turn.
- */
 async function recoverTurnError(
   err: unknown,
-  phase: PromptPhase,
-  messagesBefore: number,
-  recovery: Pick<ReturnType<typeof createTurnRecovery>, "retryWithoutDocuments" | "attemptRefusalFallback">,
+  o: {
+    turn: HarnessTurnInput;
+    session: AgentSession;
+    stop: TurnStop;
+    rethrowPersistFailure: () => void;
+    messagesBefore: number;
+    recovery: Pick<ReturnType<typeof createTurnRecovery>, "retryWithoutDocuments" | "attemptRefusalFallback">;
+  },
 ): Promise<void> {
-  const { turn, entry, stop, persistence } = phase;
-  const { retryWithoutDocuments, attemptRefusalFallback } = recovery;
-  persistence.rethrow();
+  const { turn, session, stop, rethrowPersistFailure, messagesBefore } = o;
+  const { retryWithoutDocuments, attemptRefusalFallback } = o.recovery;
+  rethrowPersistFailure();
   const cancelAbortRejection =
     turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
   if (!stop.userAborted && !cancelAbortRejection) {
-    const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
+    const turnErr = piTurnError(session, err, messagesBefore);
     let recovered = false;
     try {
       recovered = await retryWithoutDocuments();
@@ -400,27 +401,60 @@ async function recoverTurnError(
   }
 }
 
-export async function runPiTurn(ctx: PiHarnessContext, dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
-  const { companyServedId, defaultTurnWallClockMs, signals, opts } = ctx;
-  const { turn, entry, desiredModelId, wantFast, turnModelGateway, active } = await openPiTurn(ctx, dispatched);
+export interface PiTurnOptions {
+  access: PiModelAccess;
+  primaryModelId: () => string;
+  toolOptions: CoreToolOptions | undefined;
+  tempDirPrefix: string;
+  captureRequests: boolean;
+  turnWallClockMs: number;
+  signals: RunSignalStore | undefined;
+  resolveFallbackRuntime: () => { modelId: string; effortLevel?: string; fastMode?: boolean } | undefined;
+}
+
+function wallClockLimitError(turnWallClockMs: number, wallClock: TurnWallClockOutcome): NonRetryableTurnError {
+  const capLabel =
+    turnWallClockMs % 60_000 === 0
+      ? `${turnWallClockMs / 60_000}-minute`
+      : `${Math.round(turnWallClockMs / 1000)}-second`;
+  return new NonRetryableTurnError(
+    `the turn hit its ${capLabel} wall-clock limit and was stopped` +
+      (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
+  );
+}
+
+function firstPrompt(
+  session: AgentSession,
+  turn: HarnessTurnInput,
+  modelPrompt: string,
+  continueTurn: boolean,
+): Promise<void> {
+  const images = turn.images?.length
+    ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
+    : undefined;
+  return continueTurn ? continueAssistantTurn(session) : session.prompt(modelPrompt, images ? { images } : undefined);
+}
+
+export async function runPiTurn(opts: PiTurnOptions, dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
+  const { access, signals } = opts;
+  const opened = await openPiTurn(opts, dispatched);
+  const { turn, entry, state, request, calls, turnModelGateway, active } = opened;
+  const session = entry.agentSession;
+  const { goal, halt } = state;
   try {
-    const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
-    const { effectiveModel, telemetry, continueTurn, grindMeter, userEntry, modelPrompt } = await preparePiPrompt(
-      turn,
-      entry,
-      desiredModelId,
-      wantFast,
-    );
+    const turnWallClockMs = turn.turnWallClockMs ?? opts.turnWallClockMs;
+    const { effectiveModel, telemetry, continueTurn, grindMeter, userEntry, modelPrompt } =
+      await preparePiPrompt(opened);
     const { callStats } = telemetry;
     const toolAbort = new AbortController();
     const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
-    const persistence = createTurnPersistence(entry, toolAbort);
+    const persistence = createTurnPersistence(session, toolAbort);
     const steps = createStepRecorder(turn, persistence.persist);
     active.steps = steps;
-    entry.ref.emit = steps.emit;
+    state.routeEmit(steps.emit);
     const unsubscribeMessageEnd = subscribeMessageEnds({
       turn,
-      entry,
+      session,
       steps,
       persistence,
       pendingSteers,
@@ -428,93 +462,114 @@ export async function runPiTurn(ctx: PiHarnessContext, dispatched: HarnessTurnIn
       continueTurn,
       noteDocumentRejection: (message) => noteDocumentRejection(message),
     });
-    const unsubscribe = entry.agentSession.subscribe(telemetry.onSessionEvent(steps, grindMeter));
+    const unsubscribe = session.subscribe(telemetry.onSessionEvent(steps, grindMeter));
     let wallClock!: TurnWallClockOutcome;
-    const messagesBefore = entry.agentSession.messages.length;
-    entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
+    const messagesBefore = session.messages.length;
+    goal.setRecentWork(() => piGoalWork(session.messages.slice(-80)));
     const stop: TurnStop = { userAborted: false };
     let recoveryDead = false;
-    entry.ref.abortSignal = toolAbort.signal;
-    const { release: releaseSignals } = watchTurnSignals({ turn, entry, signals, toolAbort, pendingSteers, stop });
-    const promptStart = Date.now();
-    const floorCap = createFloorCapPolicy({
-      goal: () => entry.ref.goal,
-      meter: grindMeter,
-      promptStart,
-      turnWallClockMs,
+    state.bindAbort(toolAbort.signal);
+    const { release: releaseSignals } = watchTurnSignals({
+      turn,
+      session,
+      settings: request,
+      halt,
+      signals,
+      toolAbort,
+      pendingSteers,
+      stop,
     });
+    const promptStart = Date.now();
+    const floorCap = createFloorCapPolicy({ goal: goal.current, meter: grindMeter, promptStart, turnWallClockMs });
     const rawRemainingCapMs = floorCap.remainingCapMs;
     const raceCapMs = floorCap.raceCapMs;
     const extendCapMs = floorCap.extendMs;
     const race: TurnRace = (prompting, capMs = raceCapMs()) =>
-      raceTurnWallClock(prompting, { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() });
+      raceTurnWallClock(prompting, { capMs, extendMs: extendCapMs, abort: () => session.abort() });
     const { noteDocumentRejection, retryWithoutDocuments, attemptRefusalFallback, recoverFailedRound } =
       createTurnRecovery({
         turn,
-        entry,
+        session,
+        request,
+        halt,
         messagesBefore,
         turnWallClockMs,
         raceCapMs,
         race,
         stopped: () => stop.userAborted,
         directModel: (id) => !turnModelGateway?.models[id],
-        servedModelId: (id) => (turn.providerKeys ? id : companyServedId(id)),
-        resolveFallbackRuntime: () => opts?.resolveFallbackRuntime?.(),
+        servedModelId: (id) => (turn.providerKeys ? id : access.servedId(id)),
+        resolveFallbackRuntime: opts.resolveFallbackRuntime,
       });
-    const phase: PromptPhase = {
-      turn,
-      entry,
-      stop,
-      race,
-      recoverFailedRound,
-      persistence,
-      turnWallClockMs,
-      rawRemainingCapMs,
+    const promptRound = async (note: string): Promise<TurnWallClockOutcome> => {
+      if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
+      const outcome = await race(session.prompt(note));
+      if (outcome === "ok") await recoverFailedRound();
+      return outcome;
     };
     try {
-      const images = turn.images?.length
-        ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
-        : undefined;
-      wallClock = await race(
-        continueTurn
-          ? continueAssistantTurn(entry.agentSession)
-          : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
-      );
+      wallClock = await race(firstPrompt(session, turn, modelPrompt, continueTurn));
       if (wallClock === "ok") await recoverFailedRound();
-      wallClock = await continueGoal(phase, wallClock, grindMeter, messagesBefore);
-      recoveryDead = await repromptEmptyEnding(phase, wallClock, promptStart, raceCapMs);
+      const drain = persistence.drain;
+      wallClock = await continueGoal({
+        turn,
+        session,
+        stop,
+        goal,
+        halt,
+        drain,
+        grindMeter,
+        messagesBefore,
+        wallClock,
+        promptRound,
+      });
+      recoveryDead = await repromptEmptyEnding({
+        turn,
+        session,
+        stop,
+        halt,
+        calls,
+        drain,
+        race,
+        wallClock,
+        turnWallClockMs,
+        elapsedMs: turnWallClockMs > 0 ? turnWallClockMs - rawRemainingCapMs() : Date.now() - promptStart,
+        raceCapMs,
+      });
     } catch (err) {
-      await recoverTurnError(err, phase, messagesBefore, { retryWithoutDocuments, attemptRefusalFallback });
+      await recoverTurnError(err, {
+        turn,
+        session,
+        stop,
+        rethrowPersistFailure: persistence.rethrow,
+        messagesBefore,
+        recovery: { retryWithoutDocuments, attemptRefusalFallback },
+      });
       wallClock = "ok";
     } finally {
       await releaseSignals();
-      if (pendingSteers.length) entry.agentSession.clearQueue();
+      if (pendingSteers.length) session.clearQueue();
       unsubscribeMessageEnd?.();
       unsubscribe?.();
       steps.settleResults();
       active.steps = undefined;
-      entry.ref.emit = turn.emit;
+      state.routeEmit(turn.emit);
       await persistence.drain();
       await telemetry.drainCaptured(userEntry?.seq ?? null, effectiveModel);
-      entry.ref.onGapWork = undefined;
+      state.reportGapWorkTo(undefined);
       toolAbort.abort();
-      entry.ref.abortSignal = undefined;
-      entry.ref.observeToolResult = undefined;
+      state.bindAbort(undefined);
+      state.stopObserving();
     }
     persistence.rethrow();
-    if (wallClockTurnFailure(wallClock, stop.userAborted, turn.cancel?.aborted === true)) {
-      const capLabel =
-        turnWallClockMs % 60_000 === 0
-          ? `${turnWallClockMs / 60_000}-minute`
-          : `${Math.round(turnWallClockMs / 1000)}-second`;
-      throw new NonRetryableTurnError(
-        `the turn hit its ${capLabel} wall-clock limit and was stopped` +
-          (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
-      );
-    }
+    if (wallClockTurnFailure(wallClock, stop.userAborted, turn.cancel?.aborted === true))
+      throw wallClockLimitError(turnWallClockMs, wallClock);
     return await finishTurn({
       turn,
-      entry,
+      session,
+      goal,
+      halt,
+      calls,
       steps,
       grindMeter,
       stop,

@@ -13,7 +13,7 @@ import { scopeId, type TurnRequest } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import { idleJobs } from "../support/cron-slots.ts";
+import { manualFireJobs } from "../support/cron-slots.ts";
 
 const activities = ["app", "brief", "deck", "hire", "plan"].map((id) => ({
   id,
@@ -33,7 +33,7 @@ function fixture() {
   const calls: TurnRequest[] = [];
   const settled: Promise<void>[] = [];
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...singleProcessDeps(url),
     now: () => time,
     crons,

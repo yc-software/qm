@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunks, diffSource, fileSource, verifiedFindings } from "../../scripts/zone-review.ts";
-import { inZone, isReviewable } from "../../scripts/zone.ts";
+import { chunks, diffSource, fileSource, inZone, isReviewable, verifiedFindings } from "../../scripts/zone-review.ts";
 
 test("zone entries cover their directory and exact files only", () => {
   const zone = ["src/turns", "src/tenant.ts"];
@@ -33,16 +32,18 @@ test("diff anchors are the added lines with their new line numbers", () => {
 test("findings survive only when their anchor is in the reviewed code", () => {
   const source = fileSource("x.ts", "const a = 1;\ntry { run(); } catch {}\n");
   const finding = (anchor: string) => ({
-    lens: "Discarded error evidence",
+    lens: "Discarded error evidence (3 examples)",
     severity: "low",
     path: "x.ts",
     anchor,
     title: "t",
   });
-  const reply = `Here:\n${JSON.stringify({ findings: [finding("  catch {}"), finding("invented()"), { ...finding("const a"), path: "y.ts" }] })}`;
+  const reply = `Here:\n${JSON.stringify({ findings: [finding("  catch {}"), finding("invented()"), { ...finding("const a"), path: "y.ts" }, { lens: "Regex", severity: "low", path: "x.ts", title: "no anchor" }] })}`;
   assert.deepEqual(verifiedFindings(reply, [source]), {
-    findings: [{ lens: "Discarded error evidence", severity: "low", path: "x.ts", line: 2, title: "t" }],
-    unverified: 2,
+    findings: [
+      { path: "x.ts", line: 2, lens: "Discarded error evidence", severity: "low", title: "t", anchor: "catch {}" },
+    ],
+    unverified: 3,
   });
 });
 

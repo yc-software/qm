@@ -39,7 +39,6 @@ import type { TurnCtx } from "./turn-context.ts";
 import { SANDBOX_MODEL_PREFIX } from "../../api/contract.ts";
 
 interface CatalogTurn {
-  strictReadOnly: boolean;
   sharingSources: Awaited<ReturnType<typeof resolveTurnContext>>["sharingSources"];
   delivery: ReturnType<typeof deliveryCandidatesFor>;
   defaultDestination: Destination | undefined;
@@ -48,8 +47,8 @@ interface CatalogTurn {
 
 export async function buildCredentialCatalog(ctx: TurnCtx, turn: CatalogTurn) {
   const { deps, input, actor, conversation, external, serviceAllowed, allInternal, liveAuthorTurn } = ctx;
-  const { resolution, scopeId } = ctx;
-  const { strictReadOnly, sharingSources } = turn;
+  const { resolution, scopeId, strictReadOnly } = ctx;
+  const { sharingSources } = turn;
   const openSpeakerKeychain =
     liveAuthorTurn && conversation.kind !== "dm" && sharingSources.includes(personalScope(actor.id));
   const openAutomationKeychain =

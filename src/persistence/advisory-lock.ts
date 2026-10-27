@@ -75,11 +75,12 @@ export function createPostgresAdvisoryLock(
     client: PoolClient;
     references: number;
     keys: Map<string, { shared: boolean; count: number }>;
+    unlockFailure?: Error;
   };
   const sessions = new AsyncLocalStorage<{ context: Context; active: boolean }>();
   const withClient = async <T>(action: (context: Context) => Promise<T>): Promise<T> => {
     const parent = sessions.getStore();
-    const context = parent?.active
+    const context: Context = parent?.active
       ? parent.context
       : { client: await (await pg.sessionPool()).connect(), references: 0, keys: new Map() };
     context.references++;
@@ -88,8 +89,35 @@ export function createPostgresAdvisoryLock(
       return await sessions.run(lease, () => action(context));
     } finally {
       lease.active = false;
-      if (--context.references === 0) context.client.release();
+      if (--context.references === 0) context.client.release(context.unlockFailure);
     }
+  };
+  const holding = async <T>(context: Context, key: string, shared: boolean, fn: () => Promise<T>): Promise<T> => {
+    const unlock = async () => {
+      try {
+        await context.client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [
+          tenantLockKey(key),
+        ]);
+        return undefined;
+      } catch (error) {
+        context.unlockFailure = error instanceof Error ? error : new Error(String(error));
+        return context.unlockFailure;
+      }
+    };
+    let value: T;
+    try {
+      value = await fn();
+    } catch (error) {
+      const unlockError = await unlock();
+      if (unlockError)
+        throw new AggregateError([error, unlockError], `advisory lock ${key}: callback failed, then unlock failed`, {
+          cause: error,
+        });
+      throw error;
+    }
+    const unlockError = await unlock();
+    if (unlockError) throw unlockError;
+    return value;
   };
   const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean, wait: boolean): Promise<T | null> => {
     const deadline = Date.now() + timeoutMs;
@@ -107,13 +135,7 @@ export function createPostgresAdvisoryLock(
             [tenantLockKey(key)],
           );
           if (res.rows[0]?.locked !== true) return { acquired: false };
-          try {
-            return { acquired: true, value: await fn() };
-          } finally {
-            await client.query(`SELECT pg_advisory_unlock${shared ? "_shared" : ""}(hashtextextended($1, 0))`, [
-              tenantLockKey(key),
-            ]);
-          }
+          return { acquired: true, value: await holding(context, key, shared, fn) };
         } finally {
           if (--reservation.count === 0) keys.delete(key);
         }

@@ -1,4 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
+import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 import type { Webhook } from "../types.ts";
 import { constantTimeEqual } from "../util/crypto.ts";
 import { isObj } from "../util/objects.ts";
@@ -10,7 +11,7 @@ export interface VerifierInput {
 }
 
 export interface Verifier {
-  verify(input: VerifierInput): boolean;
+  verify(input: VerifierInput): boolean | Promise<boolean>;
   deliveryId(input: VerifierInput): string;
   handshake?(input: VerifierInput, parsedBody: unknown): string | null;
 }
@@ -53,17 +54,19 @@ const github: Verifier = {
   },
 };
 
-const SLACK_TS_TOLERANCE_SECONDS = 60 * 5;
+const SIGNED_TIMESTAMP_TOLERANCE_SECONDS = 60 * 5;
+
+function freshSignedTimestamp(ts: string): boolean {
+  const seconds = Number(ts);
+  return Number.isFinite(seconds) && Math.abs(Date.now() / 1000 - seconds) <= SIGNED_TIMESTAMP_TOLERANCE_SECONDS;
+}
 
 const slack: Verifier = {
   verify({ secret, headers, rawBody }) {
     if (!secret) return false;
     const sig = header(headers, "x-slack-signature");
     const ts = header(headers, "x-slack-request-timestamp");
-    if (!sig || !ts) return false;
-    const tsSeconds = Number(ts);
-    if (!Number.isFinite(tsSeconds)) return false;
-    if (Math.abs(Date.now() / 1000 - tsSeconds) > SLACK_TS_TOLERANCE_SECONDS) return false;
+    if (!sig || !ts || !freshSignedTimestamp(ts)) return false;
     return constantTimeEqual(sig, `v0=${hmacHex(secret, `v0:${ts}:${rawBody}`)}`);
   },
   deliveryId({ rawBody }) {
@@ -85,7 +88,7 @@ const stripe: Verifier = {
     const parts = sig.split(",").map((p) => p.split("=") as [string, string]);
     const t = parts.find(([k]) => k === "t")?.[1];
     const v1s = parts.filter(([k, v]) => k === "v1" && v).map(([, v]) => v);
-    if (!t || v1s.length === 0) return false;
+    if (!t || v1s.length === 0 || !freshSignedTimestamp(t)) return false;
     const expected = hmacHex(secret, `${t}.${rawBody}`);
     return v1s.some((v1) => constantTimeEqual(v1, expected));
   },
@@ -136,7 +139,47 @@ const linear: Verifier = {
   },
 };
 
-const VERIFIERS: Record<WebhookScheme, Verifier> = { github, slack, stripe, linear, "hmac-sha256": hmacSha256 };
+const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
+const GOOGLE_JWKS = createRemoteJWKSet(new URL("https://www.googleapis.com/oauth2/v3/certs"));
+
+export function googlePubsubVerifier(keys: JWTVerifyGetKey = GOOGLE_JWKS): Verifier {
+  return {
+    async verify({ secret, headers }) {
+      const authorization = header(headers, "authorization");
+      if (!secret || !authorization?.startsWith("Bearer ")) return false;
+      try {
+        await jwtVerify(authorization.slice("Bearer ".length), keys, {
+          issuer: GOOGLE_ISSUERS,
+          audience: secret,
+          algorithms: ["RS256"],
+          requiredClaims: ["exp"],
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    deliveryId({ rawBody }) {
+      try {
+        const body: unknown = JSON.parse(rawBody);
+        const id = isObj(body) && isObj(body.message) ? body.message.messageId : undefined;
+        if (typeof id === "string" && id) return id;
+      } catch {
+        return bodyHash(rawBody);
+      }
+      return bodyHash(rawBody);
+    },
+  };
+}
+
+const VERIFIERS: Record<WebhookScheme, Verifier> = {
+  github,
+  slack,
+  stripe,
+  linear,
+  "hmac-sha256": hmacSha256,
+  "google-pubsub": googlePubsubVerifier(),
+};
 
 export type WebhookScheme = Webhook["verification"]["scheme"];
 

@@ -6,7 +6,7 @@ import { canonicalPerson, personIds, personKey, samePerson } from "../directory/
 import { hashId } from "../util/crypto.ts";
 import { homeRelativePath } from "./paths.ts";
 import { tenant } from "../tenant.ts";
-import type { KeychainStore, TargetUsernameCredential } from "./keychain-store.ts";
+import type { KeychainStore } from "./keychain-store.ts";
 import {
   type CreateGrantInput,
   type CredentialFile,
@@ -79,11 +79,6 @@ const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function isPersonalCredentialEnvKey(envKey: string): boolean {
   return ENV_KEY_RE.test(envKey) && !envKey.startsWith("AGENT_");
-}
-
-function usernameEnvKeyFor(passwordEnvKey: string): string {
-  const base = passwordEnvKey.replace(/_(PASSWORD|PASS|TOKEN|SECRET|API_KEY|KEY)$/i, "");
-  return `${base || passwordEnvKey}_USERNAME`;
 }
 
 function consumedGrant(grant: KeychainGrant): boolean {
@@ -451,63 +446,6 @@ type ConnectorTokens = ReturnType<typeof connectorTokens>;
 
 export function credentialWrites(c: KeychainCtx) {
   const { deps, store, now } = c;
-  /** The record a pre-`targets`/pre-`fields` row is rewritten to, or null when it already has the current shape:
-   * a single-file credential saved as `target` + raw content becomes a one-file `targets` bundle, and an env
-   * credential carrying a plaintext `username` becomes a two-field credential (secret + `<BASE>_USERNAME`). */
-  function currentShape(rec: TargetUsernameCredential): KeychainCredential | null {
-    const { target, username, ...rest } = rec;
-    if (target === undefined && username === undefined) return null;
-    if (rec.kind === "file" && !rec.targets && target !== undefined) {
-      const files = [
-        {
-          path: keychainFilePath(target),
-          contentBase64: Buffer.from(decryptSecret(rec.secretEnc, deps.key), "utf8").toString("base64"),
-        },
-      ];
-      const secret = JSON.stringify(files);
-      return {
-        ...rest,
-        targets: [files[0]!.path],
-        secretEnc: encryptSecret(secret, deps.key),
-        fingerprint: fingerprintOf(secret),
-      };
-    }
-    if (rec.kind === "env" && !rec.fields && username) {
-      const { envKey: storedEnvKey, ...withoutEnvKey } = rest;
-      const envKey = storedEnvKey ?? defaultEnvKey(rec.service);
-      const usernameKey = usernameEnvKeyFor(envKey);
-      const secret = JSON.stringify({ [envKey]: decryptSecret(rec.secretEnc, deps.key), [usernameKey]: username });
-      return {
-        ...withoutEnvKey,
-        fields: [
-          { envKey, secret: true },
-          { envKey: usernameKey, secret: false },
-        ],
-        secretEnc: encryptSecret(secret, deps.key),
-        fingerprint: fingerprintOf(secret),
-      };
-    }
-    return rest;
-  }
-
-  async function rewriteTargetUsernameCredentials(): Promise<number> {
-    let rewritten = 0;
-    for (const rec of await store.creds.targetUsernameRows()) {
-      try {
-        let changed = false;
-        await store.creds.update(rec.id, (current) => {
-          const next = currentShape(current);
-          changed = next !== null;
-          return next ?? current;
-        });
-        if (changed) rewritten++;
-      } catch (error) {
-        reportFailure("keychain: target/username credential rewrite", error, rec.id);
-      }
-    }
-    return rewritten;
-  }
-
   async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
     const service = input.service.trim().toLowerCase();
     if (!service) throw new KeychainError(400, "service required");
@@ -578,7 +516,7 @@ export function credentialWrites(c: KeychainCtx) {
     await store.creds.put(rec.id, rec);
     return toMeta(rec);
   }
-  return { rewriteTargetUsernameCredentials, saveCredential };
+  return { saveCredential };
 }
 type CredentialWrites = ReturnType<typeof credentialWrites>;
 

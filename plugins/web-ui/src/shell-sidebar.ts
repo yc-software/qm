@@ -5,7 +5,7 @@ import { appState } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
 import { renderSidebarTop } from "./shell";
 
-export const appEl = document.getElementById("app");
+const appEl = document.getElementById("app");
 if (!appEl) throw new Error("missing #app");
 export const root: HTMLElement = appEl;
 

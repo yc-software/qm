@@ -17,5 +17,6 @@ export function buildApp(config: Config, overrides: Parameters<typeof buildProdu
     { harness: createMockHarness(), ...overrides },
   );
   void app.start().catch(() => {}); // start() reports its own failures
+  void app.jobs.start().catch(() => {}); // on-demand cron fires and sweeps run as background jobs, as in production
   return stopAtEnd(app);
 }

@@ -11,7 +11,7 @@ test("feature flag entries use a compact row that cannot inherit the card grid",
       save: async () => ({ ok: true }),
     })`);
     await dom.window.eval(`settingsUI.loadFlags(
-      { featureFlags: [{ featureName: "persistent_subagents", enabledScopes: ["personal:person-with-a-long-name@example.com"] }] },
+      { featureFlags: [{ featureName: "app_annotations", enabledScopes: ["personal:person-with-a-long-name@example.com"] }] },
       "org:test",
     )`);
     await new Promise((resolve) => dom.window.setTimeout(resolve, 0));
@@ -36,7 +36,7 @@ test("feature flag picker offers every server feature and limits personal-only f
     })`);
     await dom.window.eval(`settingsUI.loadFlags(
       { featureFlags: [
-        { featureName: "persistent_subagents", label: "Persistent subagents", personalOnly: true, hint: "People only.", enabledScopes: [] },
+        { featureName: "app_annotations", label: "App annotations", personalOnly: true, hint: "People only.", enabledScopes: [] },
         { featureName: "ui_canvas", label: "UI canvas", personalOnly: true, enabledScopes: [] },
         { featureName: "team_scopes", label: "Team scopes", enabledScopes: [] },
       ] },
@@ -47,9 +47,9 @@ test("feature flag picker offers every server feature and limits personal-only f
     const select = doc.getElementById("feature-flag-name") as HTMLSelectElement;
     assert.deepEqual(
       [...select.options].map((option) => option.textContent),
-      ["Persistent subagents", "UI canvas", "Team scopes"],
+      ["App annotations", "UI canvas", "Team scopes"],
     );
-    assert.equal(select.value, "persistent_subagents");
+    assert.equal(select.value, "app_annotations");
     assert.equal(doc.getElementById("offered")!.textContent, "personal:ada");
     assert.equal(doc.querySelector("#card-feature-flags .hint:not(#feature-flag-list)")!.textContent, "People only.");
     select.value = "team_scopes";

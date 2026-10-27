@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { parseFrontmatter } from "./frontmatter.ts";
 import type { SkillManifest } from "./skill-store.ts";
 
@@ -29,23 +30,26 @@ const RECOGNIZED = new Set([
   "agent_only",
   "declaredCreds",
 ]);
-const PRIVATE_FLAGS = ["private", "agent_only"];
-
-function isTruthy(v: unknown): boolean {
-  if (v === true) return true;
-  if (typeof v === "string") return ["true", "yes", "1"].includes(v.trim().toLowerCase());
-  return false;
-}
-
-function asStringArray(v: unknown): string[] {
-  if (Array.isArray(v))
-    return v
-      .filter((x): x is string => typeof x === "string")
-      .map((s) => s.trim())
-      .filter(Boolean);
-  if (typeof v === "string" && v.trim()) return [v.trim()];
-  return [];
-}
+const text = z.string().trim().optional().catch(undefined);
+const list = z
+  .preprocess((v) => (typeof v === "string" ? [v] : v), z.array(z.unknown()))
+  .transform((items) => items.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : [])))
+  .catch([]);
+const flag = z
+  .string()
+  .transform((v) => ["true", "yes", "1"].includes(v.trim().toLowerCase()))
+  .catch(false);
+const skillAttrs = z.object({
+  name: text,
+  description: text,
+  requiredCapabilities: list,
+  egress: list,
+  scope: text,
+  visibility: text,
+  private: flag,
+  agent_only: flag,
+  declaredCreds: list,
+});
 
 function dirNameFromPath(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -86,26 +90,17 @@ export function normalizeSkill(raw: string, path: string, cfg?: PackConfig): Nor
     if (attrs[from] !== undefined && attrs[to] === undefined) attrs[to] = attrs[from];
   }
 
+  const fields = skillAttrs.parse(attrs);
   const body = parsed.body;
-  const name = typeof attrs.name === "string" && attrs.name.trim() ? attrs.name.trim() : dirNameFromPath(path);
+  const name = fields.name || dirNameFromPath(path);
   if (!body.trim()) return { skip: true, reason: "malformed" };
-  const fmDescription = typeof attrs.description === "string" ? attrs.description.trim() : "";
-  const description = fmDescription || deriveDescription(body, name);
-
-  let requiredCapabilities = asStringArray(attrs.requiredCapabilities);
-  if (requiredCapabilities.length === 0 && attrs.egress !== undefined) {
-    requiredCapabilities = asStringArray(attrs.egress).map((h) => (h.includes(":") ? h : `egress:${h}`));
-  }
-
-  let scopeRaw: string | undefined;
-  if (typeof attrs.scope === "string") scopeRaw = attrs.scope;
-  else if (typeof attrs.visibility === "string") scopeRaw = attrs.visibility;
-  const scopeHint = scopeRaw?.trim().toLowerCase() || undefined;
-
-  const isPrivate = PRIVATE_FLAGS.some((k) => isTruthy(attrs[k])) || body.includes("THE-AGENT-ONLY");
-
-  let declaredCreds = asStringArray(attrs.declaredCreds);
-  if (declaredCreds.length === 0) declaredCreds = extractEnvRefs(body);
+  const description = fields.description || deriveDescription(body, name);
+  const requiredCapabilities = fields.requiredCapabilities.length
+    ? fields.requiredCapabilities
+    : fields.egress.map((h) => (h.includes(":") ? h : `egress:${h}`));
+  const scopeHint = (fields.scope ?? fields.visibility)?.toLowerCase() || undefined;
+  const isPrivate = fields.private || fields.agent_only || body.includes("THE-AGENT-ONLY");
+  const declaredCreds = fields.declaredCreds.length ? fields.declaredCreds : extractEnvRefs(body);
 
   const meta: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(parsed.attrs)) if (!RECOGNIZED.has(k)) meta[k] = v;

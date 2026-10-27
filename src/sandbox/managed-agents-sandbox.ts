@@ -9,7 +9,8 @@ import {
   type SandboxShared,
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
-import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
+import { sandboxBodiesMigration, withRetiredColumns, type SandboxBodies } from "./sandbox-bodies.ts";
+import { cols } from "../persistence/typed-table.ts";
 import {
   ManagedAgentsCommandLostError,
   ManagedAgentsSandboxGoneError,
@@ -37,9 +38,11 @@ interface SessionFound {
 
 export type StoredManagedAgentsSandbox = StoredSandboxRecord & { sessionId?: string };
 
-export const MANAGED_AGENTS_BODIES = sandboxBodiesMigration("do_managed_agents_sandbox_bodies", {
-  sessionId: { type: "text" },
-});
+export const MANAGED_AGENTS_BODIES = withRetiredColumns(
+  sandboxBodiesMigration("do_managed_agents_sandbox_bodies", { sessionId: { type: "text" } }),
+  cols(`sandboxId text, createdAtMs bigint, preservationState text, preservationError text, checkpointError text,
+    pendingCheckpointDeletes jsonb`),
+);
 
 export interface ManagedAgentsSandboxOptions extends SandboxShared {
   client: ManagedAgentsClient;

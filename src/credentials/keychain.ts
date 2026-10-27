@@ -458,8 +458,6 @@ interface GrantListFilter {
 
 export interface Keychain extends ServiceCredentialStore, ConnectorTokenStore {
   save(input: SaveCredentialInput): Promise<KeychainCredentialMeta>;
-  /** Rewrite rows still in a pre-`targets`/pre-`fields` shape; returns how many changed. Runs once at boot. */
-  rewriteTargetUsernameCredentials(): Promise<number>;
   updateFiles(materialized: Extract<MaterializedCred, { kind: "file" }>, files: CredentialFile[]): Promise<void>;
   writebackBaseline(
     source: FileCredentialSource,

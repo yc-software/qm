@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { Check } from "typebox/value";
 import { createAdminCall } from "../../src/tools/admin.ts";
 import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState } from "../../src/harness/turn-tool-state.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 
 test("admin sends only fixed routes with encoded identifiers and preserves HTTP failures", async () => {
@@ -27,7 +28,7 @@ test("admin sends only fixed routes with encoded identifiers and preserves HTTP 
   try {
     const call = createAdminCall(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, "synthetic-capability");
     const tool = createAgentTools(
-      { current: { admin: { call, operationsAvailable: true } } as unknown as ToolContext },
+      createTurnToolState({ current: { admin: { call, operationsAvailable: true } } as unknown as ToolContext }),
       { controlTools: true },
     ).find((t) => t.name === "admin")!;
     const args = { action: "configure", scope: "channel:test/?evil=1", resource: "soul", value: { content: "hello" } };
@@ -84,9 +85,9 @@ test("admin never forwards a capability through redirects", async () => {
 });
 
 test("ordinary turns only receive the inexpensive admin status action", () => {
-  const tool = createAgentTools({ current: {} as unknown as ToolContext }, { controlTools: true }).find(
-    (t) => t.name === "admin",
-  )!;
+  const tool = createAgentTools(createTurnToolState({ current: {} as unknown as ToolContext }), {
+    controlTools: true,
+  }).find((t) => t.name === "admin")!;
   assert.equal(Check(tool.parameters, { action: "whoami" }), true);
   assert.equal(Check(tool.parameters, { action: "memory", scope: "org:test" }), false);
 });
@@ -97,7 +98,7 @@ test("cancelled admin calls never reach HTTP", async () => {
   await assert.rejects(() => call({ action: "whoami" }, signal), /synthetic stop/);
   let received: AbortSignal | undefined;
   const native = createAgentTools(
-    {
+    createTurnToolState({
       current: {
         admin: {
           operationsAvailable: true,
@@ -108,7 +109,7 @@ test("cancelled admin calls never reach HTTP", async () => {
         },
       } as unknown as ToolContext,
       abortSignal: signal,
-    },
+    }),
     { controlTools: true },
   ).find((t) => t.name === "admin")!;
   await native.execute("stopped", { action: "whoami" }, undefined, undefined, {} as never);
@@ -117,7 +118,7 @@ test("cancelled admin calls never reach HTTP", async () => {
 
 test("admin error diagnostics retain request evidence and redact secrets", async () => {
   const tool = createAgentTools(
-    {
+    createTurnToolState({
       current: {
         admin: {
           operationsAvailable: true,
@@ -128,7 +129,7 @@ test("admin error diagnostics retain request evidence and redact secrets", async
           }),
         },
       } as unknown as ToolContext,
-    },
+    }),
     { controlTools: true },
   ).find((t) => t.name === "admin")!;
   const result = await tool.execute("error", { action: "whoami" }, undefined, undefined, {} as never);

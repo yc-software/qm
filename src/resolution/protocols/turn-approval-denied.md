@@ -1,0 +1,1 @@
+The requesting human denied the pending operation, so it did not run. The request below is the one that paused for approval, replayed; it is not a new ask. Continue the task without that operation; you need not address the denial.

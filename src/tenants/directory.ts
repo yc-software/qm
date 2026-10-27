@@ -10,8 +10,11 @@ const FRESH_MS = 60_000;
 const MISS_RELOAD_MS = 1_000;
 const PREPARE_RETRY_MS = 30_000;
 
+export type HomeHosts = Omit<HostRoute<Tenant>, "target">;
+
 export interface TenantDirectory {
   byHost(host: string | undefined): Promise<Tenant | undefined>;
+  homeHosts(): HomeHosts;
   active(): Promise<Tenant[]>;
   watch(listener: (active: Tenant[]) => void): void;
   close(): Promise<void>;
@@ -19,6 +22,7 @@ export interface TenantDirectory {
 
 interface Snapshot {
   at: number;
+  home: HomeHosts;
   routes: HostRoute<Tenant>[];
   tenants: Tenant[];
 }
@@ -111,17 +115,25 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
       rec,
       t: tenantFor(rec.orgId, rec.id, rec.slug),
     }));
-    const homeRoute: HostRoute<Tenant> = {
-      hosts: [...opts.homeHosts, ...(homeRecord?.hosts ?? [])],
-      ...(opts.homeAppsDomain ? { appsDomain: opts.homeAppsDomain } : {}),
-      target: opts.home,
-    };
+    const home = homeHostsOf(homeRecord?.hosts ?? []);
     const routes = others.map(({ rec, t }) => ({
       hosts: rec.hosts,
       ...(rec.appsDomain ? { appsDomain: rec.appsDomain } : {}),
       target: t,
     }));
-    return { at: now(), routes: [homeRoute, ...routes], tenants: [opts.home, ...others.map(({ t }) => t)] };
+    return {
+      at: now(),
+      home,
+      routes: [{ ...home, target: opts.home }, ...routes],
+      tenants: [opts.home, ...others.map(({ t }) => t)],
+    };
+  }
+
+  function homeHostsOf(registered: readonly string[]): HomeHosts {
+    return {
+      hosts: [...new Set([...opts.homeHosts, ...registered])],
+      ...(opts.homeAppsDomain ? { appsDomain: opts.homeAppsDomain } : {}),
+    };
   }
 
   let attemptedAt = Number.NEGATIVE_INFINITY;
@@ -174,6 +186,9 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
       if (found) await ready(found);
       return found;
     },
+    homeHosts() {
+      return current?.home ?? homeHostsOf([]);
+    },
     async active() {
       await snapshot();
       return readyTenants();
@@ -194,6 +209,10 @@ export function useTenantDirectory(next: TenantDirectory | undefined): void {
 export function tenantByHost(host: string | undefined): Promise<Tenant | undefined> {
   if (!directory) return Promise.reject(new Error("no tenant directory is configured"));
   return directory.byHost(host);
+}
+
+export function homeTenantHosts(): HomeHosts {
+  return directory ? directory.homeHosts() : { hosts: [] };
 }
 
 export function watchActiveTenants(listener: (active: Tenant[]) => void): void {
@@ -217,4 +236,8 @@ export function foreignTenant(claimed: string | undefined, credential: string): 
 
 export function isHomeTenant(t: Tenant): boolean {
   return t.id === undefined;
+}
+
+export async function activeTenant(id: string | undefined): Promise<Tenant | undefined> {
+  return (await activeTenants()).find((t) => t.id === id);
 }

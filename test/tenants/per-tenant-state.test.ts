@@ -64,7 +64,7 @@ test("grant, config and identity caches never show one tenant another tenant's r
     });
     await withTenant(a, async () => assert.deepEqual(await grants.all(), [grant("alice")]));
 
-    const config = createConfigStore({ databaseUrl: url });
+    const config = createConfigStore({ databaseUrl: url, connectorSecretKey: "test-connector-secret" });
     await withTenant(a, async () => {
       await config.hydrate!();
       await config.setSetting("interactiveFastMode", true);

@@ -13,50 +13,50 @@ import {
 import { coreClaimStore, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import { sameOriginRequest as sameOriginFor } from "../../chassis/src/http.ts";
-import { CORE_API_URL as CORE, CORE_ORG_ID as ORG, CORE_SIGNING_SECRET } from "../../chassis/src/env.ts";
+import { CORE_API_URL as CORE, coreOrgId, coreSigningSecret } from "../../chassis/src/env.ts";
 import {
-  SESSION_SECRET,
   SESSION_TTL_S,
   SESSION_MAX_TTL_S,
   SESSION_RENEW_AFTER_S,
-  COOKIE_DOMAIN,
   SECURE_COOKIES,
-  ORIGIN,
   LOCAL_AUTH_BYPASS,
   LOCAL_AUTH_PRINCIPAL,
   PLAYGROUND,
   PLAYGROUND_MINTS_PER_IP,
   PLAYGROUND_MINT_WINDOW_S,
   clientIpOf,
-  DEV_SECRET,
-  sessionKey,
-  trustedOidc,
-  trustedSignInLabel,
   isLoopbackAddress,
+  site,
 } from "./config.ts";
 
 export const LOCAL_LOGOUT_COOKIE = "portal_local_logout";
 
-export const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, ORIGIN);
+export const sameOriginRequest = (req: IncomingMessage) => sameOriginFor(req, site().origin);
 
 export function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout = false): SessionClaims | null {
   if (!LOCAL_AUTH_BYPASS) return null;
   if (!isLoopbackAddress(req.socket.remoteAddress)) return null;
   if (!ignoreLogout && readCookie(req.headers.cookie, LOCAL_LOGOUT_COOKIE) === "1") return null;
   const now = Math.floor(nowMs / 1000);
-  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: ORG, iat: now, exp: now + SESSION_TTL_S };
+  return { k: "session", sub: LOCAL_AUTH_PRINCIPAL, org: coreOrgId(), iat: now, exp: now + SESSION_TTL_S };
 }
 
 export function currentSession(req: IncomingMessage): SessionClaims | null {
   return (
-    openSession(readCookie(req.headers.cookie, "portal_session"), sessionKey, Date.now(), ORG, SESSION_MAX_TTL_S) ??
-    localDevSession(req)
+    openSession(
+      readCookie(req.headers.cookie, "portal_session"),
+      site().sessionKey,
+      Date.now(),
+      coreOrgId(),
+      SESSION_MAX_TTL_S,
+    ) ?? localDevSession(req)
   );
 }
 
 export function loginProviderCookie(sub: string): string[] {
-  if (!trustedOidc || !trustedSignInLabel) return [];
-  const issuerHash = createHash("sha256").update(trustedOidc.issuer).digest("hex");
+  const { trusted, trustedLabel } = site();
+  if (!trusted || !trustedLabel) return [];
+  const issuerHash = createHash("sha256").update(trusted.issuer).digest("hex");
   return [
     sub.startsWith(`oidc:${issuerHash}:`)
       ? setCookie("portal_login_provider", issuerHash, {
@@ -71,11 +71,12 @@ export function loginProviderCookie(sub: string): string[] {
 export const FRAME_SESSION_COOKIE = "portal_session_x";
 
 export function sessionCookieSet(value: string, sub: string): string[] {
+  const { cookieDomain } = site();
   const attrs = {
     path: "/",
     maxAge: SESSION_TTL_S,
     secure: SECURE_COOKIES,
-    ...(COOKIE_DOMAIN ? { domain: COOKIE_DOMAIN } : {}),
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
   };
   return [...sessionCookieHeaders(value, attrs), ...loginProviderCookie(sub)];
 }
@@ -83,8 +84,6 @@ export function sessionCookieSet(value: string, sub: string): string[] {
 export function setSession(res: ServerResponse, headers: string[]): void {
   res.setHeader("set-cookie", headers);
 }
-
-const playgroundClaims = PLAYGROUND ? coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal") : null;
 
 export function mintBucketOf(ip: string): string {
   if (!ip.includes(":")) return ip;
@@ -102,9 +101,9 @@ export function mintBucketOf(ip: string): string {
 }
 
 export async function mintPlaygroundSession(req: IncomingMessage, res: ServerResponse): Promise<SessionClaims | null> {
-  if (!playgroundClaims) return null;
-  const allowed = await withinRateLimit(playgroundClaims, {
-    secret: SESSION_SECRET ?? DEV_SECRET,
+  if (!PLAYGROUND) return null;
+  const allowed = await withinRateLimit(coreClaimStore(CORE, coreSigningSecret(), "portal"), {
+    secret: site().sessionSecret,
     kind: "playground-mint",
     value: mintBucketOf(clientIpOf(req)),
     limit: PLAYGROUND_MINTS_PER_IP,
@@ -120,23 +119,23 @@ export async function mintPlaygroundSession(req: IncomingMessage, res: ServerRes
   const session: SessionClaims = {
     k: "session",
     sub: `playground-${randomToken(8)}`,
-    org: ORG,
+    org: coreOrgId(),
     name: "Guest",
     anon: true,
     auth: now,
     iat: now,
     exp: now + SESSION_TTL_S,
   };
-  setSession(res, sessionCookieSet(seal(session, sessionKey), session.sub));
+  setSession(res, sessionCookieSet(seal(session, site().sessionKey), session.sub));
   return session;
 }
 
 export function renewSessionCookie(req: IncomingMessage, res: ServerResponse): SessionClaims | null {
   const session = openSession(
     readCookie(req.headers.cookie, "portal_session"),
-    sessionKey,
+    site().sessionKey,
     Date.now(),
-    ORG,
+    coreOrgId(),
     SESSION_MAX_TTL_S,
   );
   if (!session) return null;
@@ -150,7 +149,7 @@ export function renewSessionCookie(req: IncomingMessage, res: ServerResponse): S
     iat: now,
     exp: Math.min(now + SESSION_TTL_S, authenticatedAt + SESSION_MAX_TTL_S),
   };
-  setSession(res, sessionCookieSet(seal(renewed, sessionKey), renewed.sub));
+  setSession(res, sessionCookieSet(seal(renewed, site().sessionKey), renewed.sub));
   return renewed;
 }
 
@@ -159,7 +158,7 @@ export function setAuthenticatedSession(res: ServerResponse, sub: string, name =
   const session: SessionClaims = {
     k: "session",
     sub,
-    org: ORG,
+    org: coreOrgId(),
     auth: now,
     iat: now,
     exp: now + SESSION_TTL_S,
@@ -167,7 +166,7 @@ export function setAuthenticatedSession(res: ServerResponse, sub: string, name =
     ...(appOnly ? { appOnly: true } : {}),
   };
   setSession(res, [
-    ...sessionCookieSet(seal(session, sessionKey), session.sub),
+    ...sessionCookieSet(seal(session, site().sessionKey), session.sub),
     clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
     clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
     clearCookie("portal_impersonate", "/", SECURE_COOKIES),

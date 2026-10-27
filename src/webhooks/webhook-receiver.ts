@@ -6,6 +6,7 @@ import { buildWebhookWakeEnvelope, capForEscaping } from "../core/wake-envelope.
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import type { JobWorker } from "../jobs/job-worker.ts";
 import { isObj } from "../util/objects.ts";
+import { MAX_SCREEN_CHARS } from "../security/security-screen.ts";
 
 export type DeliverResult = { status: 202 } | { status: 200; body: string } | { status: 401 } | { status: 404 };
 
@@ -27,7 +28,8 @@ interface WebhookFireJob {
   securityScreenData: string;
 }
 
-const MAX_EVENT_CHARS = 16_000;
+const TRUNCATED_MARK = "\n…[truncated]";
+const MAX_EVENT_CHARS = MAX_SCREEN_CHARS - TRUNCATED_MARK.length;
 
 function parseBody(headers: VerifierInput["headers"], rawBody: string): unknown {
   const ctRaw = headers["content-type"];
@@ -64,7 +66,7 @@ function renderEvent(
 ): { input: string; securityScreenData: string } {
   const pretty = isObj(parsed) || Array.isArray(parsed) ? JSON.stringify(parsed, null, 2) : rawBody;
   const kept = capForEscaping(pretty, MAX_EVENT_CHARS, "head");
-  const capped = kept.length < pretty.length ? `${kept}\n…[truncated]` : kept;
+  const capped = kept.length < pretty.length ? `${kept}${TRUNCATED_MARK}` : kept;
   return {
     input: buildWebhookWakeEnvelope({
       webhookId: wh.id,
@@ -129,7 +131,7 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
         headers: req.headers,
         rawBody: req.rawBody,
       };
-      if (!verifier.verify(input)) return { status: 401 };
+      if (!(await verifier.verify(input))) return { status: 401 };
 
       const parsed = parseBody(req.headers, req.rawBody);
 

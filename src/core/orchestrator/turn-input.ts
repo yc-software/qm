@@ -45,12 +45,10 @@ import { createTurnSandboxes } from "./sandboxes.ts";
 
 interface TurnInputArgs {
   screenTrace: ScreenTrace;
-  strictReadOnly: boolean;
   context: Awaited<ReturnType<typeof resolveTurnContext>>;
   memoryView: Awaited<ReturnType<Awaited<ReturnType<typeof resolveTurnContext>>["memorySnapshot"]>>;
   framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
   session: Session;
-  isRetry: boolean;
   recordedTurn: RecordedTurn | null;
   provision: ReturnType<typeof createTurnSandboxes>["provision"];
   lease: Lease;
@@ -59,15 +57,14 @@ interface TurnInputArgs {
   volatileContext: string;
   turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
   transcripts: ReturnType<typeof createTranscriptSource>;
-  blobTransfer: OrchestratorDeps["blobTransfer"];
   documentTokenBudget: ReturnType<typeof createCompaction>["documentTokenBudget"];
   compactContextIfNeeded: ReturnType<typeof createCompaction>["compactContextIfNeeded"];
   observeSecurityData: SecurityObserver;
 }
 
 export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
-  const { deps, input, automatedTurn } = ctx;
-  const { strictReadOnly, provision } = turn;
+  const { deps, input, automatedTurn, strictReadOnly } = ctx;
+  const { provision } = turn;
   const { memoryScopeId } = turn.context;
   const { spine } = turn.turnTools;
   const { inbound, manifest, inboundIssues } = await stageInbound(ctx, turn);
@@ -84,7 +81,7 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
   const turnEnvironmentContents = await composeTurnEnvironment(ctx, turn, visibleHistory, history, manifest);
   const baseText = input.proactiveOpener && !input.text.trim() ? PROACTIVE_OPENER_PROMPT : input.text;
   const pausedTurnUserEntry = input.approval
-    ? [...visibleHistory].reverse().find((e) => isUserMessage(e) && !isOverheard(e))
+    ? [...visibleHistory].reverse().find((e) => isUserMessage(e) && !isOverheard(e) && e.body?.approvalDenial !== true)
     : undefined;
   const approvalReplay = !!pausedTurnUserEntry && (pausedTurnUserEntry.text ?? "").trim() === input.text.trim();
   if (partial) await noteResume(ctx, turn, partial, resume, resumePlan!);
@@ -129,8 +126,9 @@ export async function prepareTurnInput(ctx: TurnCtx, turn: TurnInputArgs) {
 }
 
 async function stageInbound(ctx: TurnCtx, turn: TurnInputArgs) {
-  const { deps, input, actor, scopeId } = ctx;
-  const { screenTrace, strictReadOnly, session, provision, blobTransfer, observeSecurityData } = turn;
+  const { deps, input, actor, scopeId, strictReadOnly } = ctx;
+  const { blobTransfer } = deps;
+  const { screenTrace, session, provision, observeSecurityData } = turn;
   const { turnInboxDir } = turn.framed;
   const { fileRegistration } = turn.turnTools;
   if (input.attachments?.some((attachment) => attachment.sourceId)) {
@@ -199,8 +197,8 @@ async function importOverheard(ctx: TurnCtx, turn: TurnInputArgs): Promise<Overh
 }
 
 async function loadTurnHistory(ctx: TurnCtx, turn: TurnInputArgs) {
-  const { deps, input, filterHistory, withManagedRosterVersion } = ctx;
-  const { historyWindow, context, memoryView, isRetry, recordedTurn, lease } = turn;
+  const { deps, input, filterHistory, withManagedRosterVersion, isRetry } = ctx;
+  const { historyWindow, context, memoryView, recordedTurn, lease } = turn;
   const rawEntries = (await historyWindow()).items;
   let visibleHistory = filterHistory(forModelContext(rawEntries));
   const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory), memoryView.loaded);
@@ -224,8 +222,8 @@ async function loadTurnDocuments(
   inbound: Awaited<ReturnType<typeof stageInbound>>["inbound"],
   visibleHistory: Item[],
 ) {
-  const { deps, actor, resolution, scopeId, input, withManagedRosterVersion } = ctx;
-  const { strictReadOnly, session, lease, turnAbort, documentTokenBudget, compactContextIfNeeded } = turn;
+  const { deps, actor, resolution, scopeId, input, withManagedRosterVersion, strictReadOnly } = ctx;
+  const { session, lease, turnAbort, documentTokenBudget, compactContextIfNeeded } = turn;
   const { mayReadArtifact } = turn.turnTools;
   const documentBudget = documentTokenBudget(scopeId, input.model);
   const history = await withManagedRosterVersion(() =>

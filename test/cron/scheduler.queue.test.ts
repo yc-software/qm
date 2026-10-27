@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createScheduler, CRON_FIRE_JOB, type Scheduler, type CronFireJob } from "../../src/cron/scheduler.ts";
+import {
+  createScheduler,
+  CRON_FIRE_JOB,
+  CRON_MANUAL_FIRE_JOB,
+  type Scheduler,
+  type CronFireJob,
+} from "../../src/cron/scheduler.ts";
 import { createJobWorker, type JobWorker } from "../../src/jobs/job-worker.ts";
 import { createCronStore, type CronStore } from "../../src/cron/cron-store.ts";
 import { type CronFireStore, createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
@@ -109,6 +115,46 @@ test(
       assert.equal(fires(), at, "a rescheduled cron's stale slot jobs do not fire");
     } finally {
       await Promise.all([a.jobs.stop(), b.jobs.stop()]);
+    }
+  },
+);
+
+test(
+  "cron job queue: a manual fire queued by a process that dies before running it is run by the next worker",
+  { skip, timeout: 120_000 },
+  async () => {
+    const calls: TurnRequest[] = [];
+    const fires = createPostgresCronFireStore(testDatabaseUrl());
+    const dying = instance(calls, 0, fires);
+    const cron = await dying.crons.create({
+      schedule: { everyMs: 60 * 60_000 },
+      action: "run me now",
+      owner: "U4",
+      createdBy: "U4",
+      ownerScopeId: scopeId("personal", "U4"),
+    });
+    const started = await dying.scheduler.runNow(cron.id);
+    assert.ok(started.started, "the fire is accepted before any worker claims it");
+    assert.equal((await dying.crons.listFires(cron.id)).runs[0]?.status, "running");
+    assert.equal(calls.length, 0, "nothing ran in the process that queued the fire");
+
+    const survivor = instance(calls, 0, fires);
+    await survivor.jobs.start();
+    try {
+      await until(() => calls.length >= 1, 30_000);
+      await new Promise((r) => setTimeout(r, 2_000));
+      assert.equal(calls.length, 1, "the queued manual fire runs exactly once");
+      assert.equal(calls[0]?.idempotencyKey, started.fireKey);
+      const { runs } = await survivor.crons.listFires(cron.id);
+      assert.equal(runs.length, 1);
+      assert.equal(runs[0]?.fireKey, started.fireKey);
+      assert.equal(runs[0]?.status, "ok");
+      const again = await survivor.scheduler.runNow(cron.id);
+      assert.ok(again.started, "a finished fire no longer blocks manual runs");
+      await again.settled;
+      assert.equal(calls.length, 2);
+    } finally {
+      await survivor.jobs.stop();
     }
   },
 );
@@ -232,8 +278,8 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
       return { status: "ok", reply: "OUT" };
     },
     jobs: {
-      handle(_name, run) {
-        onFire = run;
+      handle(name, run) {
+        if (name === CRON_FIRE_JOB) onFire = run;
       },
       async spawn(_name, job) {
         enqueued.push(job as CronFireJob);
@@ -272,12 +318,15 @@ for (const queued of [false, true]) {
     const enqueued: CronFireJob[] = [];
     let clock = 1000;
     let onFire: ((job: CronFireJob) => Promise<unknown>) | undefined;
+    let onManualFire: ((job: unknown) => Promise<unknown>) | undefined;
     const jobs: Pick<JobWorker, "handle" | "spawn"> = {
-      handle(_name, run) {
-        onFire = run;
+      handle(name, run) {
+        if (name === CRON_FIRE_JOB) onFire = run;
+        if (name === CRON_MANUAL_FIRE_JOB) onManualFire = run;
       },
-      async spawn(_name, job) {
-        enqueued.push(job as CronFireJob);
+      async spawn(name, job) {
+        if (name === CRON_MANUAL_FIRE_JOB) void onManualFire!(job);
+        else enqueued.push(job as CronFireJob);
       },
     };
     const scheduler = createScheduler({
@@ -396,8 +445,8 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
       return { status: "ok", reply: "done" };
     },
     jobs: {
-      handle(_name, run) {
-        onFire = run;
+      handle(name, run) {
+        if (name === CRON_FIRE_JOB) onFire = run;
       },
       async spawn(_name, job) {
         enqueued.push(job as CronFireJob);
@@ -452,8 +501,8 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
       return { status: "ok", reply: "OUT" };
     },
     jobs: {
-      handle(_name, run) {
-        onFire = run;
+      handle(name, run) {
+        if (name === CRON_FIRE_JOB) onFire = run;
       },
       async spawn() {},
     },
@@ -488,8 +537,8 @@ test("queue mode: a busy fire releases its slot and its job sleeps until the def
     run: busyOnce(calls),
     now: () => clock,
     jobs: {
-      handle(_name, run) {
-        onFire = run;
+      handle(name, run) {
+        if (name === CRON_FIRE_JOB) onFire = run;
       },
       async spawn(_name, job) {
         enqueued.push(job as CronFireJob);

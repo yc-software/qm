@@ -8,7 +8,7 @@ import {
 } from "../../plugins/chassis/src/tenant-settings.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 
-export type { TenantSecrets, TenantSettings } from "../../plugins/chassis/src/tenant-settings.ts";
+export type { TenantSettings } from "../../plugins/chassis/src/tenant-settings.ts";
 export { tenantSecretsKey } from "../../plugins/chassis/src/tenant-settings.ts";
 
 export type TenantRecord = TenantSettings & { id: string };

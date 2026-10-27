@@ -116,7 +116,6 @@ import {
   unreachableGate,
 } from "./shell-gates";
 import {
-  appEl,
   applySavedSidebarWidth,
   closeSidebarOnNarrowView,
   onSidebarKeydown,
@@ -167,7 +166,7 @@ let uiOutdated = false;
 window.addEventListener(UI_OUTDATED_EVENT, () => {
   if (uiOutdated) return;
   uiOutdated = true;
-  if (appEl?.querySelector(".layout")) mountShell();
+  if (root.querySelector(".layout")) mountShell();
 });
 
 export const ADMIN_HOME_URL = `${UI_BASE}/settings/history`;

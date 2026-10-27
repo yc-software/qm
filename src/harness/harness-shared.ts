@@ -1,7 +1,7 @@
 import type { ReplayImageRef } from "./replay.ts";
 import type { StepFields } from "./pi-step-recorder.ts";
-import type { Item } from "../sessions/items.ts";
-import type { ToolContextRef } from "./agent-tools.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
+import type { TurnToolState } from "./turn-tool-state.ts";
 import type { HarnessTurnInput } from "./harness.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
@@ -77,22 +77,23 @@ export async function recordStoppedTurn(
 
 export async function resumeInterruptedToolCall(
   turn: HarnessTurnInput,
-  ref: ToolContextRef,
+  state: Pick<TurnToolState, "tools" | "routeEmit" | "bindAbort">,
   tools: readonly BridgedTool[],
 ): Promise<Item[] | null> {
   const call = turn.resumeToolCall;
   if (!call) return null;
   const tool = tools.find((candidate) => candidate.name === call.tool);
-  const emit = ref.emit;
-  const abortSignal = ref.abortSignal;
+  const emit = state.tools.emit;
+  const abortSignal = state.tools.abortSignal;
   let recorded: Item | undefined;
-  ref.emit = async (item) => {
+  const resumeEmit = async (item: NewItem) => {
     if (item.kind === "ToolCall") return;
     const appended = await emit?.(item);
     if (item.kind === "ToolResult" && !recorded) recorded = appended as Item;
     return appended;
   };
-  ref.abortSignal = turn.cancel;
+  state.routeEmit(resumeEmit);
+  state.bindAbort(turn.cancel);
   let content: NonNullable<Awaited<ReturnType<BridgedTool["execute"]>>["content"]> = [
     { type: "text", text: INTERRUPTED_TOOL_RESULT },
   ];
@@ -107,7 +108,7 @@ export async function resumeInterruptedToolCall(
       );
     }
     if (!recorded) {
-      await ref.emit({
+      await resumeEmit({
         kind: "ToolResult",
         tool: call.tool,
         callId: call.callId,
@@ -120,10 +121,10 @@ export async function resumeInterruptedToolCall(
     isError = recorded ? recorded.isError === true : true;
     content = [{ type: "text", text: recorded ? (recorded.text ?? "") : `[error] ${errMessage(error)}` }];
     if (!recorded)
-      await ref.emit({ kind: "ToolResult", tool: call.tool, callId: call.callId, isError, text: content[0]!.text });
+      await resumeEmit({ kind: "ToolResult", tool: call.tool, callId: call.callId, isError, text: content[0]!.text });
   } finally {
-    ref.emit = emit;
-    ref.abortSignal = abortSignal;
+    state.routeEmit(emit);
+    state.bindAbort(abortSignal);
   }
   if (!recorded) return null;
   if (!isError)

@@ -315,3 +315,85 @@ test("multi-key locks retain unawaited nested work until it finishes", async () 
   await outer;
   assert.equal(await lock.tryWithLock!("nested", async () => true), true);
 });
+
+test("pg mutex: when fn throws and unlock also fails, both errors surface and the connection is destroyed", async () => {
+  const pg = createPgPool(URL);
+  const releases: Array<Error | undefined> = [];
+  let failUnlock = false;
+  const session = await pg.sessionPool();
+  const wrapped = {
+    connect: async () => {
+      const real = await session.connect();
+      return {
+        query: (text: string, params?: unknown[]) =>
+          failUnlock && text.includes("pg_advisory_unlock")
+            ? Promise.reject(new Error("unlock lost"))
+            : real.query(text, params),
+        release: (err?: Error) => {
+          releases.push(err);
+          real.release(err);
+        },
+      };
+    },
+  };
+  const brittle = { ...pg, sessionPool: async () => wrapped as unknown as Awaited<ReturnType<typeof pg.sessionPool>> };
+  try {
+    const lock = createPostgresAdvisoryLock(brittle, { pollMs: 20 });
+    failUnlock = true;
+    await assert.rejects(
+      () =>
+        lock.withLock("deploy:lost", async () => {
+          throw new Error("boom");
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof AggregateError, "both failures are reported together");
+        assert.deepEqual(
+          error.errors.map((e: Error) => e.message),
+          ["boom", "unlock lost"],
+        );
+        assert.match(error.message, /deploy:lost/);
+        return true;
+      },
+    );
+    assert.equal(releases.length, 1);
+    assert.equal(releases[0]?.message, "unlock lost", "the possibly lock-holding connection is destroyed, not pooled");
+    assert.equal(session.totalCount, 0, "the pool no longer holds the destroyed connection");
+    failUnlock = false;
+    let ran = 0;
+    await lock.withLock("deploy:lost", async () => {
+      ran++;
+    });
+    assert.equal(ran, 1, "the key is free again once the dead session is gone");
+    assert.equal(releases[1], undefined, "a clean unlock returns the connection to the pool");
+  } finally {
+    await pg.close();
+  }
+});
+
+test("pg mutex: when fn succeeds but unlock fails, the unlock error surfaces and the connection is destroyed", async () => {
+  const pg = createPgPool(URL);
+  const releases: Array<Error | undefined> = [];
+  const session = await pg.sessionPool();
+  const wrapped = {
+    connect: async () => {
+      const real = await session.connect();
+      return {
+        query: (text: string, params?: unknown[]) =>
+          text.includes("pg_advisory_unlock") ? Promise.reject(new Error("unlock lost")) : real.query(text, params),
+        release: (err?: Error) => {
+          releases.push(err);
+          real.release(err);
+        },
+      };
+    },
+  };
+  const brittle = { ...pg, sessionPool: async () => wrapped as unknown as Awaited<ReturnType<typeof pg.sessionPool>> };
+  try {
+    const lock = createPostgresAdvisoryLock(brittle, { pollMs: 20 });
+    await assert.rejects(() => lock.withLock("deploy:lost-after-success", async () => "done"), /unlock lost/);
+    assert.equal(releases[0]?.message, "unlock lost");
+    assert.equal(session.totalCount, 0);
+  } finally {
+    await pg.close();
+  }
+});

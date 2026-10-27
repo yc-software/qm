@@ -150,7 +150,12 @@ export async function assertMapConversion(conversion: MapConversion): Promise<vo
         [spec.table],
       );
       assert.equal(json.rowCount, columnName(spec.key) === `"id"` ? 1 : 0, `${spec.table} contract drops json`);
-      assert.equal((await pool.query(`SELECT 1 FROM durable_map_versions WHERE tbl = $1`, [spec.table])).rowCount, 0);
+      assert.equal(
+        (await pool.query(`SELECT 1 FROM pg_trigger WHERE tgrelid = $1::regclass AND NOT tgisinternal`, [spec.table]))
+          .rowCount,
+        0,
+        `${spec.table} contract drops the sync and bump triggers`,
+      );
       for (const [tenant, seeded] of seeds)
         assert.deepEqual(
           await typedRows(pool, tenant),

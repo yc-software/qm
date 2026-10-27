@@ -38,7 +38,7 @@ const spendSql = `WITH RECURSIVE ancestry AS (
            UNION ALL
            SELECT a.session_id, p.parent_session_id, p.origin, p.origin_id, a.path || p.id
              FROM ancestry a JOIN sessions p ON p.id = a.parent_session_id
-            WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path) AND cardinality(a.path) < 64
+            WHERE a.origin = 'conversation' AND NOT p.id = ANY(a.path)
          ), origins AS (
            SELECT DISTINCT ON (session_id) session_id, origin, cron_id
              FROM ancestry ORDER BY session_id, cardinality(path) DESC

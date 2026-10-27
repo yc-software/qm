@@ -1,6 +1,7 @@
 import { swallowAs } from "../../../chassis/src/errors";
 import { type Api, scopeUrl, viewUrl } from "./api.ts";
 import * as governanceUI from "./admin.ts";
+import * as settings from "./settings.ts";
 import { initCustomDropdowns } from "./dropdown.ts";
 import { el } from "./dom.ts";
 import { pick, plural } from "./format.ts";
@@ -17,7 +18,7 @@ export interface SettingsContext {
   hasDraft: () => boolean;
 }
 
-export interface Review {
+interface Review {
   title: string;
   subtitle: string;
   facts: [string, string][];
@@ -150,7 +151,6 @@ export function startSettings(context: SettingsContext) {
     },
   };
 }
-const settings = governanceUI.settings;
 function openScDialog() {
   $("sc-dialog-title").textContent = scEditing ? "Edit credential" : "Add credential";
   setStatus("st-service-credentials", "", "");

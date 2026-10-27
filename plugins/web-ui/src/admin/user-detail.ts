@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { card, table, badge, renderer, stacked, subline as muted } from "./shared.ts";
+import { card, table, renderer, stacked, subline as muted } from "./shared.ts";
 import { fmtTime, labelRole, plural, scopeKind } from "./format.ts";
 const USAGE_LIMIT = 2000;
 type Detail = Record<string, any>;
@@ -24,8 +24,8 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
     context: [d.admin?.isAdmin ? labelRole(d.admin.role) : "member", d.scopeId || ""].filter(Boolean).join(" · "),
   });
   const personalScope = d.scopeId || "personal:" + principal;
-  const u: Detail = { s, d, principal, paint, personalScope, onboarding: d.onboarding || "not_started", busy: false };
-  Object.assign(u, { hint: "", resetHint: "", sort: "default", credentialError: "", usageRequest: 0 });
+  const u: Detail = { s, d, principal, paint, personalScope, busy: false };
+  Object.assign(u, { resetHint: "", sort: "default", credentialError: "", usageRequest: 0 });
   draw(u);
   try {
     const result = await s.api("GET", "/api/keychain?principal=" + encodeURIComponent(d.principalId || principal));
@@ -40,28 +40,10 @@ const credName = (u: Detail, id: string) => {
   const c = u.credentials?.credentials?.find((c: any) => c.id === id);
   return c ? c.service + (c.accountLabel ? " - " + c.accountLabel : "") : id;
 };
-async function setOnboarding(u: Detail, status: string) {
-  const { s, principal } = u;
-  [u.busy, u.hint] = [true, "Saving…"];
-  draw(u);
-  try {
-    const result = await s.api("PUT", "/api/users/" + encodeURIComponent(principal) + "/onboarding", { status });
-    if (!result.ok) u.hint = result.data?.message || "Failed (" + result.status + ").";
-    else {
-      u.onboarding = result.data?.status || status;
-      u.hint = status === "not_started" ? "Reset. Onboarding will run on this person's next DM." : "Saved.";
-    }
-  } catch {
-    u.hint = "Network error. Try again.";
-  } finally {
-    u.busy = false;
-    draw(u);
-  }
-}
 async function reset(u: Detail) {
   const { s, principal } = u;
   const warning =
-    "Delete this person's personal DM sessions (transcripts included) and clear their onboarding?\n\nThis is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.";
+    "Delete this person's personal DM sessions (transcripts included)?\n\nThis is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.";
   if (!s.confirm(warning)) return;
   [u.busy, u.resetHint] = [true, "Resetting…"];
   draw(u);
@@ -204,13 +186,12 @@ function keychain(u: Detail) {
   </div>`;
 }
 function draw(u: Detail) {
-  const { s, d, principal, personalScope, onboarding, busy, hint, resetHint } = u;
+  const { s, d, principal, personalScope, busy, resetHint } = u;
   if (!s.current(principal)) return;
   const cfg = d.config;
   const ruleN = cfg?.commandPolicy?.rules?.length || 0,
     allowN = cfg?.egress?.allowedHosts?.length || 0,
     denyN = cfg?.egress?.deniedHosts?.length || 0;
-  const kinds: Record<string, string> = { completed: "ok", dismissed: "muted", pending: "warn", not_started: "info" };
   u.paint(
     html`<div class="detail">
       <div style="margin:0 0 14px">${s.webUiAsButton(d.principalId || principal)}</div>
@@ -262,31 +243,8 @@ function draw(u: Detail) {
           </button>`,
       )}${card(
         "Onboarding",
-        "Personal-DM onboarding state. Reset to re-trigger the flow on this person's next DM, or wipe their DMs to replay the full new-user experience.",
+        "Wipe this person's DMs to replay the full new-user experience.",
         html`<div>
-          <div class="obstatus">
-            Current status:
-            ${badge(onboarding === "not_started" ? "not started" : onboarding, kinds[onboarding] || "muted")}
-          </div>
-          <div class="obactions">
-            ${[
-              ["Reset (re-run on next DM)", "not_started"],
-              ["Mark completed", "completed"],
-              ["Mark dismissed", "dismissed"],
-            ].map(
-              ([label, status], i) =>
-                html`<button
-                  type="button"
-                  class=${i === 0 ? "primary" : ""}
-                  ?disabled=${busy}
-                  @click=${() => setOnboarding(u, status)}
-                >
-                  ${label}
-                </button>`,
-            )}
-          </div>
-          <p class="hint">${hint}</p>
-          <div class="obdivider"></div>
           <button type="button" class="danger-link" ?disabled=${busy} @click=${() => reset(u)}>
             Reset to brand-new (delete this person's DMs) →
           </button>

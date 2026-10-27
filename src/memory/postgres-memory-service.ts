@@ -8,17 +8,19 @@ import { isMemorySensitivity, type MemoryFact } from "./facts.ts";
  * Also registered by the vector store, which reads text_hash: the pool that runs first adds the
  * column either way.
  */
+const TEXT_HASH_FUNCTION = `CREATE OR REPLACE FUNCTION memory_facts_text_hash() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        NEW.text_hash := encode(sha256(convert_to(NEW.text, 'UTF8')), 'hex');
+        RETURN NEW;
+      END $$`;
+
 export const MEMORY_FACTS_MIGRATIONS = [
   {
     // The embedding index keys vectors by this hash; a trigger keeps it in step with text on every write path.
     id: "memory/facts/0002-text-hash",
     statements: [
       "ALTER TABLE memory_facts ADD COLUMN IF NOT EXISTS text_hash TEXT",
-      `CREATE OR REPLACE FUNCTION memory_facts_text_hash() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN
-        NEW.text_hash := encode(sha256(convert_to(NEW.text, 'UTF8')), 'hex');
-        RETURN NEW;
-      END $$`,
+      TEXT_HASH_FUNCTION,
       "DROP TRIGGER IF EXISTS memory_facts_text_hash ON memory_facts",
       `CREATE TRIGGER memory_facts_text_hash BEFORE INSERT OR UPDATE OF text ON memory_facts
         FOR EACH ROW EXECUTE FUNCTION memory_facts_text_hash()`,
@@ -37,6 +39,7 @@ export const MEMORY_FACTS_MIGRATIONS = [
       "ALTER TABLE memory_facts ALTER COLUMN text_hash SET NOT NULL",
     ],
   },
+  { id: "memory/facts/0004-text-hash-function", statements: [TEXT_HASH_FUNCTION] },
 ];
 
 type Row = Record<string, unknown>;

@@ -445,7 +445,6 @@ function settledChatMessage(
     msg.deliveredFiles,
     msg.stopReason,
     msg.errorMessage,
-    msg.approvalDecision,
     msg.sendFailure,
     forkable,
     forking,
@@ -536,7 +535,7 @@ export function chatMessage(
   const work = msg.work;
   const stoppedEarly = msg.stopReason === "error" || msg.stopReason === "aborted";
   const text = c.assistantDisplayText(messageText(msg), msg.stopReason).trim();
-  const showWork = m.approvalDecision !== "denied" && shouldShowWork(work, isStreaming || stoppedEarly ? "" : text);
+  const showWork = shouldShowWork(work, isStreaming || stoppedEarly ? "" : text);
   const steeringOnly = !showWork && work ? messageWorkTimeline(work, text).filter((item) => item.kind === "steer") : [];
   let workView: TemplateResult | typeof nothing =
     work && steeringOnly.length ? html`${steeringOnly.map((item) => c.renderTimelineItem(item, work))}` : nothing;

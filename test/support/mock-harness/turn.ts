@@ -131,8 +131,14 @@ async function closeTurn(open: OpenTurn, scriptedReply: string): Promise<Harness
   return { ...base, ...(t.silent ? { silent: true as const } : {}), cacheUsage };
 }
 
+function resumesAfterDenial(history: HarnessTurnInput["history"]): boolean {
+  const last = [...history].reverse().find((e) => e.kind === "UserMessage" || e.kind === "AgentMessage");
+  return !!last && last.kind === "UserMessage" && !!last.hidden && last.body?.approvalDenial === true;
+}
+
 export async function runMockTurn(input: HarnessTurnInput, state: MockHarnessState): Promise<HarnessTurnResult> {
   const open = await openTurn(input, state);
+  if (resumesAfterDenial(input.history)) return closeTurn(open, "carried on without it");
   const outcome = await dispatchScenario(open.t);
   return typeof outcome === "string" ? closeTurn(open, outcome) : outcome.stop;
 }

@@ -336,6 +336,8 @@ function assertDistinctSecrets(secrets: {
   if (reusedConnectorKey) throw new Error(`CONNECTOR_SECRET_KEY must differ from ${reusedConnectorKey}`);
 }
 
+const DNS_LABEL_MAX_LENGTH = 63;
+
 function checkedDeploymentEnv(env: Env) {
   const token = env.SPEND_EXPORT_TOKEN;
   if (token) {
@@ -346,8 +348,7 @@ function checkedDeploymentEnv(env: Env) {
       );
   }
   if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
-    if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
-      throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
+    if (!env.BACKGROUND_DEPLOYMENT_ID.trim()) throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty");
     if (!env.DATABASE_URL) throw new Error("Background ownership requires DATABASE_URL");
     if (
       !isStrongSigningSecret(env.CORE_SIGNING_SECRET) ||
@@ -408,7 +409,10 @@ function securityScreenProxyEnv(env: Env): Config["securityScreenProxy"] {
       "SECURITY_SCREEN_PROXY_PROVIDER, SECURITY_SCREEN_PROXY_ENDPOINT, and SECURITY_SCREEN_PROXY_TOKEN must be set together",
     );
   }
-  if (proxyProvider && (proxyProvider.length > 63 || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))) {
+  if (
+    proxyProvider &&
+    (proxyProvider.length > DNS_LABEL_MAX_LENGTH || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(proxyProvider))
+  ) {
     throw new Error("SECURITY_SCREEN_PROXY_PROVIDER must be a lowercase DNS label");
   }
   if (proxyProvider === "surface" || proxyProvider === "origin") {
@@ -498,7 +502,7 @@ function loadDeploymentConfig(env: Env): DeploymentConfig {
   });
   return {
     ...defined({
-      suggestedActivitiesContext: e.SUGGESTED_ACTIVITIES_CONTEXT?.slice(0, 8000),
+      suggestedActivitiesContext: e.SUGGESTED_ACTIVITIES_CONTEXT,
       publicPort: e.PUBLIC_PORT,
       productAnalytics: e.POSTHOG_API_KEY ? { apiKey: e.POSTHOG_API_KEY, host: e.POSTHOG_HOST?.trim() } : undefined,
       databaseUrl: e.DATABASE_URL,

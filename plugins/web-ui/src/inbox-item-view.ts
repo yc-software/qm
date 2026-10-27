@@ -69,7 +69,7 @@ function itemImagesTpl(item: InboxItem, urls: string[] | undefined, ctxIndex: nu
   </div>`;
 }
 
-export const CONTEXT_TAIL = 6;
+const CONTEXT_TAIL = 6;
 
 const CONTEXT_PAGE = 20;
 

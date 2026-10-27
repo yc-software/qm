@@ -21,7 +21,7 @@ import { cronNextFire, cronRunSummary, cronScheduleDetail, cronScheduleSummary }
 import { tip } from "./tooltip";
 import { confirmDialogTpl } from "./dialog-focus";
 
-export interface CronView {
+interface CronView {
   id: string;
   ownerScopeId: string;
   owner: string;

@@ -17,6 +17,7 @@ export interface OidcConfig {
   expectedTeamId?: string;
   prompt?: string;
   hostedDomain?: string;
+  headers?: Record<string, string>;
 }
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
@@ -66,6 +67,7 @@ export async function exchangeCode(
   const r = await fetchImpl(cfg.tokenEndpoint, {
     method: "POST",
     headers: {
+      ...cfg.headers,
       "content-type": "application/x-www-form-urlencoded",
       authorization: `Basic ${basic}`,
       accept: "application/json",
@@ -86,7 +88,7 @@ export async function fetchUserinfo(
   fetchImpl: FetchLike = fetch,
 ): Promise<Record<string, unknown>> {
   const r = await fetchImpl(cfg.userinfoEndpoint, {
-    headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
+    headers: { ...cfg.headers, authorization: `Bearer ${accessToken}`, accept: "application/json" },
   });
   const json = await readJson(r, "userinfo");
   if (!r.ok) throw new Error(`userinfo failed: HTTP ${r.status}`);
@@ -103,15 +105,16 @@ export async function verifyIdToken(
   fetchImpl: FetchLike = fetch,
 ): Promise<Record<string, unknown>> {
   if (!idToken) throw new Error("token response missing id_token");
+  const cacheKey = `${cfg.jwksUri}\n${cfg.headers?.["x-forwarded-host"] ?? ""}`;
   const keySet =
     fetchImpl === fetch
-      ? (remoteKeySets.get(cfg.jwksUri) ??
+      ? (remoteKeySets.get(cacheKey) ??
         (() => {
-          const created = createRemoteJWKSet(new URL(cfg.jwksUri));
-          remoteKeySets.set(cfg.jwksUri, created);
+          const created = createRemoteJWKSet(new URL(cfg.jwksUri), { headers: cfg.headers ?? {} });
+          remoteKeySets.set(cacheKey, created);
           return created;
         })())
-      : createRemoteJWKSet(new URL(cfg.jwksUri), { [customFetch]: fetchImpl });
+      : createRemoteJWKSet(new URL(cfg.jwksUri), { headers: cfg.headers ?? {}, [customFetch]: fetchImpl });
   const { payload } = await jwtVerify(idToken, keySet, {
     issuer: cfg.issuer,
     audience: cfg.clientId,

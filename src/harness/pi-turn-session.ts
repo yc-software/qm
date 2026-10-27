@@ -1,4 +1,3 @@
-/** Opens the Pi agent session for one turn: isolated dirs, replay seeding, tools and the request hooks. */
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +8,9 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { reportFailure, swallow } from "../util/errors.ts";
-import { type ToolContextRef } from "./agent-tools.ts";
+import type { TurnHalt, TurnToolState } from "./turn-tool-state.ts";
+import type { ModelCallLog } from "./model-call-log.ts";
+import type { TurnRequestSettings } from "./turn-request.ts";
 import { textAssistant, type PiReplayMessage, type SeededMessage } from "./replay.ts";
 import { documentsDroppedNote } from "./turn-recovery.ts";
 import { gatewayAttemptHeaders } from "./call-telemetry.ts";
@@ -31,11 +32,11 @@ import {
   guardOutputBudget,
 } from "./pi-payload.ts";
 import { type ProviderKeys, buildModelRuntime, applyFastSpeed, applyReasoningMode } from "./pi-model-runtime.ts";
-import type { PiHarnessContext } from "./pi-harness.ts";
+import type { CoreToolOptions } from "./agent-tools.ts";
+import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 
 export interface TurnSession {
   agentSession: AgentSession;
-  ref: ToolContextRef & { effortLevel?: string };
   composedPromptTokens: number;
   cwd: string;
   agentDir: string;
@@ -177,9 +178,12 @@ async function openAgentSession(
     throw err;
   }
 }
-export function createTurnTools(ctx: PiHarnessContext, ref: ToolContextRef, turn: HarnessTurnInput): ToolDefinition[] {
-  const { opts } = ctx;
-  return createAgentTools(ref, {
+export function createTurnTools(
+  opts: CoreToolOptions | undefined,
+  state: TurnToolState,
+  turn: HarnessTurnInput,
+): ToolDefinition[] {
+  return createAgentTools(state, {
     reachExec: opts?.reachExec,
     controlTools: opts?.controlTools,
     execTimeoutMs: opts?.execTimeoutMs,
@@ -196,19 +200,41 @@ export function createTurnTools(ctx: PiHarnessContext, ref: ToolContextRef, turn
   });
 }
 
-export async function createTurnSession(
-  ctx: PiHarnessContext,
-  model: Model<Api>,
-  sessionId: string,
-  systemPrompt: string,
-  history: Item[],
-  priorTurns: ConversationTurn[] | undefined,
-  turnProviderKeys: ProviderKeys | undefined,
-  ref: TurnSession["ref"],
-  tools: ToolDefinition[],
-  loadImage: ReplayImageLoader | undefined,
-): Promise<TurnSession> {
-  const { tempDirPrefix, resolveProviderKeys, modelGateway, captureRequests } = ctx;
+export interface TurnSessionInput {
+  model: Model<Api>;
+  sessionId: string;
+  systemPrompt: string;
+  history: Item[];
+  priorTurns: ConversationTurn[] | undefined;
+  providerKeys: () => Promise<ProviderKeys>;
+  modelGateway: ModelGatewayTransportConfig | undefined;
+  tempDirPrefix: string;
+  captureRequests: boolean;
+  calls: ModelCallLog;
+  request: TurnRequestSettings;
+  halt: Pick<TurnHalt, "stopsTools">;
+  abortSignal: () => AbortSignal | undefined;
+  tools: ToolDefinition[];
+  loadImage: ReplayImageLoader | undefined;
+}
+
+export async function createTurnSession({
+  model,
+  sessionId,
+  systemPrompt,
+  history,
+  priorTurns,
+  providerKeys,
+  modelGateway,
+  tempDirPrefix,
+  captureRequests,
+  calls,
+  request,
+  halt,
+  abortSignal,
+  tools,
+  loadImage,
+}: TurnSessionInput): Promise<TurnSession> {
   let reconstructed: PiReplayMessage[] | null;
   try {
     reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
@@ -219,11 +245,7 @@ export async function createTurnSession(
   const seedPlan = planColdStartSeed(reconstructed, !!priorTurns?.length);
   const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
 
-  const modelRuntime = await buildModelRuntime(
-    turnProviderKeys ?? (await resolveProviderKeys()),
-    turnProviderKeys ? undefined : modelGateway,
-    "long",
-  );
+  const modelRuntime = await buildModelRuntime(await providerKeys(), modelGateway, "long");
   const { session, dirs } = await openAgentSession(tempDirPrefix, composedPrompt, {
     model,
     modelRuntime,
@@ -250,24 +272,17 @@ export async function createTurnSession(
   if (agent) {
     const prior = agent.onPayload;
     agent.onPayload = async (payload, model) => {
-      ref.modelCalls = (ref.modelCalls ?? 0) + 1;
-      (ref.modelDispatch ??= []).push({
-        start: Date.now(),
-        ...(ref.pendingPrepareNextTurn !== undefined ? { prepareNextTurn: ref.pendingPrepareNextTurn } : {}),
-        ...(ref.pendingTransformContext !== undefined ? { transformContext: ref.pendingTransformContext } : {}),
-      });
-      ref.pendingPrepareNextTurn = undefined;
-      ref.pendingTransformContext = undefined;
-      applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
-      applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
+      calls.dispatched();
+      applyFastSpeed(payload, request.fast(), (model as { api?: string } | undefined)?.api);
+      applyReasoningMode(payload, model as Model<Api>, request.effortLevel());
       const result = prior ? await prior(payload, model) : payload;
       const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
       let finalPayload = await withDocumentInputs(
         result ?? payload,
         model as DocumentModel,
-        ref.documents ?? [],
-        ref.abortSignal,
-        ref.documentsStubbed ? documentsDroppedNote(ref.documents ?? []) : undefined,
+        request.documents() ?? [],
+        abortSignal(),
+        request.documentsStubbed() ? documentsDroppedNote(request.documents() ?? []) : undefined,
       );
       const guarded = guardOutputBudget(finalPayload, model);
       if (guarded.kind === "raised") {
@@ -276,40 +291,34 @@ export async function createTurnSession(
         );
       }
       try {
-        const gateway = modelGatewayRequest(turnProviderKeys ? undefined : modelGateway, model as Model<Api>);
+        const gateway = modelGatewayRequest(modelGateway, model as Model<Api>);
         finalPayload = trimPayloadToByteBudget(finalPayload, gateway ? GATEWAY_REQUEST_MAX_BYTES : undefined);
       } catch (e) {
         swallow("pi: request byte budget", e);
       }
-      if (captureRequests) ref.llmCapture?.push(capturedPayload!);
+      if (captureRequests) calls.capture(capturedPayload!);
       return finalPayload;
     };
     const priorResponse = agent.onResponse;
     agent.onResponse = async (response, model) => {
-      const last = ref.modelDispatch?.at(-1);
-      if (last && last.first === undefined) {
-        last.first = Date.now();
-        const gateway = gatewayAttemptHeaders(response.headers);
-        if (gateway) last.gateway = gateway;
-      }
+      calls.responded(() => gatewayAttemptHeaders(response.headers));
       if (priorResponse) await priorResponse(response, model);
     };
     const priorTransform = agent.transformContext;
     agent.transformContext = async (messages, signal) => {
-      ref.pendingTransformContext = Date.now();
+      calls.markTransformContext();
       return priorTransform ? await priorTransform(messages, signal) : messages;
     };
-    agent.afterToolCall = pauseStampAfterToolCall(ref, agent.afterToolCall);
+    agent.afterToolCall = pauseStampAfterToolCall(halt, agent.afterToolCall);
     const priorPrepare = agent.prepareNextTurn;
     agent.prepareNextTurn = async (signal) => {
-      ref.pendingPrepareNextTurn = Date.now();
+      calls.markPrepareNextTurn();
       return priorPrepare ? await priorPrepare(signal) : undefined;
     };
   }
 
   return {
     agentSession: session,
-    ref,
     composedPromptTokens: countTokens(composedPrompt),
     cwd: dirs.cwd,
     agentDir: dirs.agentDir,

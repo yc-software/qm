@@ -77,10 +77,7 @@ export function brokerPathAllowed(pathname: string, prefixes?: string[]): boolea
   );
 }
 
-export function brokerRequestHeaders(
-  rec: DecryptedServiceCredential,
-  caller: Record<string, string>,
-): Record<string, string> {
+function brokerRequestHeaders(rec: DecryptedServiceCredential, caller: Record<string, string>): Record<string, string> {
   const injected = credentialRequestHeaders(rec);
   const owned = new Set(Object.keys(injected).map((name) => name.toLowerCase()));
   const headers: Record<string, string> = {};
@@ -155,7 +152,7 @@ export function upstreamUnreachable(code: string): { error: string; message: str
   return { error: "upstream_unreachable", message: `the credential's host could not be reached (${code})` };
 }
 
-export function brokerMethodAllowed(rec: DecryptedServiceCredential, method: string): boolean {
+function brokerMethodAllowed(rec: DecryptedServiceCredential, method: string): boolean {
   return (rec.allowedMethods?.length ? rec.allowedMethods : ["GET"]).some((m) => m.toUpperCase() === method);
 }
 

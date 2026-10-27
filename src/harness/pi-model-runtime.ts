@@ -1,4 +1,3 @@
-/** Pi model runtime: provider keys, one-shot completions, and per-request headers, fast mode and reasoning effort. */
 import { gatewayModelsJson, gatewayModelsVersion } from "../model/gateway-models.ts";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,7 +61,6 @@ export interface ProviderKeys {
   anthropic?: string;
   openai?: string;
   openrouter?: string;
-  /** Admin-registered custom providers, keyed by provider slug. */
   [provider: string]: string | undefined;
 }
 
@@ -208,14 +206,8 @@ export async function buildModelRuntime(
   return runtime;
 }
 
-/** pi-coding-agent's session retry defaults, kept for one-shot calls that used to run in a session. */
 const ONE_SHOT_RETRY = { enabled: true, maxRetries: 3, baseDelayMs: 2_000 };
 
-/**
- * One stateless completion: a system prompt and one user message, no tools and no session.
- * Transient provider errors retry with backoff unless `retry` is false; a provider failure
- * throws a ProviderTurnError. Returns the trimmed reply text, or undefined when there is none.
- */
 export async function complete(
   model: Model<Api>,
   keys: ProviderKeys,
@@ -316,7 +308,6 @@ export function resolveConfiguredModelId(configured: string | undefined, default
 
 const CLAUDE_SUBSCRIPTION_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
 
-/** The model with `before` and `after` merged around its existing anthropic-beta values, deduplicated. */
 function withAnthropicBetas(model: Model<Api>, before: readonly string[], after: readonly string[] = []): Model<Api> {
   const prior = model.headers?.["anthropic-beta"]?.split(",").map((value) => value.trim()) ?? [];
   const beta = [...new Set([...before, ...prior, ...after])].join(",");
@@ -345,8 +336,6 @@ export function applyTurnEffort(session: AgentSession, level?: string): void {
     level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
   const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
   const providerLevel = normalizedLevel === "ultracode" ? "max" : normalizedLevel;
-  // Normalize UI aliases before Pi clamps to the model's declared capabilities.
-  // Mutating thinkingLevelMap would enable efforts the provider explicitly excludes.
   session.setThinkingLevel(providerLevel as ModelThinkingLevel);
 }
 

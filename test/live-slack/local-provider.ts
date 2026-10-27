@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { buildApp } from "../../src/wiring.ts";
-import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
 async function main(): Promise<void> {
@@ -36,7 +35,6 @@ async function main(): Promise<void> {
   try {
     await built.identity.hydrate();
     await built.start();
-    await setOnboardingStatus(built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), actorId);
     const sandbox = await built.sandboxResources.create(actorId, scopeId, "local", name);
     assert.equal(sandbox.backend, "local");
     await built.sandboxResources.setDefault(actorId, scopeId, sandbox.id);

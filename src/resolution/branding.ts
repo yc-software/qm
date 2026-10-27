@@ -5,16 +5,16 @@ import { swallowAs } from "../util/errors.ts";
 const LABEL_STRIP = /[\u0000-\u001F\u007F-\u009F\u2028\u2029<>{}]/g;
 const ACCENT_RE = /^#([0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const MARK_URL_RE = /^https:\/\/[^\s"'()\\;]+$/;
-const MARK_URL_CAP = 500;
+const MARK_BADGE_GRAPHEMES = 2;
+const graphemes = new Intl.Segmenter();
 
-export function cleanBrandingLabel(value: unknown, cap: number): string | undefined {
-  const cleaned = (typeof value === "string" ? value : "").replace(LABEL_STRIP, "").trim();
-  return [...cleaned].slice(0, cap).join("") || undefined;
+export function cleanBrandingLabel(value: unknown): string | undefined {
+  return (typeof value === "string" ? value : "").replace(LABEL_STRIP, "").trim() || undefined;
 }
 
 function cleanBrandingMarkUrl(value: unknown): string | undefined {
-  const cleaned = (typeof value === "string" ? value : "").replace(LABEL_STRIP, "").trim();
-  return cleaned.length <= MARK_URL_CAP && MARK_URL_RE.test(cleaned) ? cleaned : undefined;
+  const cleaned = cleanBrandingLabel(value);
+  return cleaned && MARK_URL_RE.test(cleaned) ? cleaned : undefined;
 }
 
 export function sanitizeBranding(raw: {
@@ -27,10 +27,14 @@ export function sanitizeBranding(raw: {
   const accentRaw = (typeof raw.accent === "string" ? raw.accent : "").replace(LABEL_STRIP, "").trim();
   const accent = accentRaw && ACCENT_RE.test(accentRaw) ? accentRaw : undefined;
   const markRaw = typeof raw.mark === "string" ? raw.mark.replace(/["\\]/g, "") : undefined;
-  const mark = cleanBrandingLabel(markRaw, 2);
+  const mark =
+    [...graphemes.segment(cleanBrandingLabel(markRaw) ?? "")]
+      .slice(0, MARK_BADGE_GRAPHEMES)
+      .map((g) => g.segment)
+      .join("") || undefined;
   const markUrl = cleanBrandingMarkUrl(raw.markUrl);
-  const selfLabel = cleanBrandingLabel(raw.selfLabel, 40);
-  const orgName = cleanBrandingLabel(raw.orgName, 40);
+  const selfLabel = cleanBrandingLabel(raw.selfLabel);
+  const orgName = cleanBrandingLabel(raw.orgName);
   const branding: OrgBranding = {
     ...(accent ? { accent } : {}),
     ...(mark ? { mark } : {}),

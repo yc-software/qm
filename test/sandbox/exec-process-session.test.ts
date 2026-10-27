@@ -8,7 +8,6 @@ import {
   createExecProcessSessions,
   type ExecProcessIo,
   ProcessSessionGoneError,
-  redactCommand,
 } from "../../src/sandbox/exec-process-session.ts";
 import type { ExecResult, SandboxHandle } from "../../src/sandbox/sandbox.ts";
 
@@ -70,7 +69,7 @@ test("a started process is reattachable: cursor reads stream its output then exi
   assert.equal(final.status.state, "exited");
 });
 
-test("listProcesses reports the live session (command redacted)", async () => {
+test("listProcesses reports the live session", async () => {
   const { proc, handle } = fixture();
   const { processId } = await proc.startProcess(handle, "sleep 2");
   const sessions = await proc.listProcesses(handle);
@@ -145,62 +144,6 @@ test("reading or writing an unknown process id is rejected", async () => {
   const bogus = "00000000-0000-0000-0000-000000000000";
   await assert.rejects(proc.readProcess(handle, bogus), ProcessSessionGoneError);
   await assert.rejects(proc.writeStdin(handle, bogus, "x"), /writeStdin failed/);
-});
-
-test("redactCommand strips secret-bearing flags", () => {
-  assert.match(redactCommand("gh auth login --with-token"), /--with-token/);
-  assert.match(redactCommand("foo --token abcdef123"), /--token <redacted>/);
-  assert.match(redactCommand("svc --client-secret=shh"), /<redacted>/);
-});
-
-test("redactCommand hides a token piped into --with-token", () => {
-  for (const cmd of [
-    "echo ghp_secretvalue12345 | gh auth login --with-token",
-    'echo "ghp_secretvalue12345" | gh auth login --with-token',
-    "printf ghp_secretvalue12345 | gh auth login --with-token",
-    "echo -n ghp_secretvalue12345 | gh auth login --hostname x.test --with-token",
-  ]) {
-    const out = redactCommand(cmd);
-    assert.ok(!out.includes("ghp_secretvalue12345"), `leaked in: ${out}`);
-    assert.match(out, /<redacted>/);
-    assert.match(out, /--with-token/);
-  }
-});
-
-test("redactCommand redacts up to the last pipe whose consumer takes --with-token", () => {
-  assert.equal(redactCommand("echo -a| x --with-token | echo b | y --with-token"), "echo <redacted> | y --with-token");
-  assert.equal(redactCommand("echo --with-token|bar"), "echo --with-token|bar");
-  assert.equal(redactCommand("echo   | gh --with-token"), "echo   | gh --with-token");
-});
-
-test("redactCommand stays fast on flag-flooded and echo-flooded commands", () => {
-  const flags = "-a ".repeat(80);
-  const echoes = "echo ".repeat(20000) + "x".repeat(100000);
-  const started = performance.now();
-  assert.equal(redactCommand(`echo ${flags}&& true`), `echo ${flags}&& true`);
-  assert.equal(
-    redactCommand(`echo ${flags}| gh auth login --with-token`),
-    "echo <redacted> | gh auth login --with-token",
-  );
-  assert.equal(redactCommand(echoes), echoes.slice(0, 500));
-  assert.ok(performance.now() - started < 100);
-});
-
-test("redactCommand masks known injected env values the pattern layer misses", () => {
-  const env = { GITHUB_TOKEN: "ghp_secretvalue12345" };
-  for (const cmd of [
-    'export GITHUB_TOKEN="ghp_secretvalue12345"; gh api user',
-    "curl -u me:ghp_secretvalue12345 https://api.github.com",
-    'curl -H "Authorization: Bearer ghp_secretvalue12345" https://x.test',
-  ]) {
-    const out = redactCommand(cmd, env);
-    assert.ok(!out.includes("ghp_secretvalue12345"), `leaked in: ${out}`);
-    assert.match(out, /<redacted:GITHUB_TOKEN>/);
-  }
-  assert.ok(
-    redactCommand("curl -u me:ghp_secretvalue12345 https://x.test").includes("ghp_secretvalue12345"),
-    "without env the value layer has nothing to mask by",
-  );
 });
 
 const readAll = async (
@@ -311,14 +254,4 @@ test("a session from the current boot keeps running, and one with no boot marker
     { state: "running" },
     "sessions predating this change have no marker and must not be reaped on a guess",
   );
-});
-
-test("redactCommand hides exported secrets and stays fast on a keyword-flooded export", () => {
-  assert.equal(redactCommand("export MY_API_KEY='shh' && run"), "export MY_API_KEY='<redacted>' && run");
-  assert.equal(redactCommand("export REGION='us-east-1'"), "export REGION='us-east-1'");
-  const flooded = `export N${"TKEYP".repeat(20_000)}`;
-  const started = performance.now();
-  assert.equal(redactCommand(flooded), flooded.slice(0, 500));
-  const elapsed = performance.now() - started;
-  assert.ok(elapsed < 1_000, `keyword flood took ${Math.round(elapsed)}ms`);
 });

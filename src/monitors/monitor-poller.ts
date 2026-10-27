@@ -9,19 +9,21 @@ import { supportsProcessSessions, type ProcessSandbox, type Sandbox, type Sandbo
 import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { mapBounded } from "../util/async.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
+import { MAX_SCREEN_CHARS } from "../security/security-screen.ts";
 
-const MAX_EVENT_CHARS = 16_000;
-const MAX_TAIL_CHARS = 4_096;
+const TRUNCATED_MARK = "…[truncated]\n";
+const MAX_EVENT_CHARS = MAX_SCREEN_CHARS - TRUNCATED_MARK.length;
 const MAX_READ_BYTES = 64 * 1024;
 const DEFAULT_HEARTBEAT_MS = 180_000;
 export const MONITOR_POLL_MS = 10_000;
 const DEFAULT_MIN_FIRE_INTERVAL_MS = 60_000;
+const DEFAULT_FIRE_CONCURRENCY = 4;
 
 export interface MonitorPoller {
-  /** Poll every live monitor once; run by the `monitor:poll` background job every MONITOR_POLL_MS. */
   tick(now?: number): Promise<void>;
 }
 
@@ -38,7 +40,7 @@ export interface MonitorPollerDeps {
   currentScopeMembers?: CurrentScopeMembers;
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   now?: () => number;
-  maxFiresPerTick?: number;
+  fireConcurrency?: number;
   onProcessExit?: (handle: SandboxHandle, processId: string) => Promise<void>;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
@@ -98,7 +100,7 @@ function replyGuidance(ev: MonitorEvent): string {
 function renderEvent(m: Monitor, output: string, ev: MonitorEvent): { input: string; securityScreenData: string } {
   const what = describeEvent(ev);
   const kept = capForEscaping(output, MAX_EVENT_CHARS, "tail");
-  const capped = kept.length < output.length ? `…[truncated]\n${kept}` : kept;
+  const capped = kept.length < output.length ? `${TRUNCATED_MARK}${kept}` : kept;
   return {
     input: buildEventWakeEnvelope({
       reason: "monitor",
@@ -133,16 +135,15 @@ interface PollContext {
   reportLost(m: Monitor): Promise<void>;
 }
 
-/** Read one monitor's new output and fire the turn it calls for; true when it fired (or gave up on the process). */
 async function pollMonitor(
   { deps, heartbeatMs, minFireIntervalMs, fire, reportLost }: PollContext,
   sandbox: ProcessSandbox,
   handle: SandboxHandle,
   m: Monitor,
   t: number,
-): Promise<boolean> {
+): Promise<void> {
   const fresh = await deps.monitors.get(m.id);
-  if (!fresh?.enabled) return false;
+  if (!fresh?.enabled) return;
   let read;
   try {
     read = await sandbox.readProcess(handle, m.processId, {
@@ -153,10 +154,10 @@ async function pollMonitor(
   } catch (e) {
     if (e instanceof ProcessSessionGoneError) {
       await reportLost(m);
-      return true;
+      return;
     }
     await deps.monitors.recordError(m.id, errMessage(e));
-    return false;
+    return;
   }
 
   const exited = read.status.state === "exited";
@@ -169,7 +170,7 @@ async function pollMonitor(
       events = filterLines(raw, m.pattern);
     } else {
       const lastNl = raw.lastIndexOf("\n");
-      tail = (lastNl === -1 ? raw : raw.slice(lastNl + 1)).slice(-MAX_TAIL_CHARS) || undefined;
+      tail = (lastNl === -1 ? raw : raw.slice(lastNl + 1)).slice(-MAX_EVENT_CHARS) || undefined;
       events = lastNl === -1 ? "" : filterLines(raw.slice(0, lastNl + 1), m.pattern);
     }
   }
@@ -181,23 +182,23 @@ async function pollMonitor(
       const outcome = await fire(
         m,
         `monitor:${m.id}:quiet:${quietSince}`,
-        renderEvent(m, raw.slice(-MAX_TAIL_CHARS), { kind: "quiet", quietMins }),
+        renderEvent(m, raw, { kind: "quiet", quietMins }),
       );
       if (outcome.authzFailed) {
         await deps.monitors.setEnabled(m.id, false);
-        return true;
+        return;
       }
       if (outcome.note) await deps.monitors.recordError(m.id, outcome.note);
       await deps.monitors.advance(m.id, { cursor: read.cursor, tail, firedAt: t });
-      return true;
+      return;
     }
     if (read.cursor !== m.cursor || tail !== m.tail) await deps.monitors.advance(m.id, { cursor: read.cursor, tail });
-    return false;
+    return;
   }
 
   if (!exited && !expired && minFireIntervalMs > 0) {
     const sinceFire = t - (m.lastFiredAt ?? 0);
-    if (m.lastFiredAt !== undefined && sinceFire < minFireIntervalMs) return false;
+    if (m.lastFiredAt !== undefined && sinceFire < minFireIntervalMs) return;
   }
 
   let ev: MonitorEvent = { kind: "output" };
@@ -212,7 +213,7 @@ async function pollMonitor(
   const outcome = await fire(m, fireKey, renderEvent(m, events, ev), true);
   if (outcome.authzFailed) {
     await deps.monitors.setEnabled(m.id, false);
-    return true;
+    return;
   }
   if (outcome.note) await deps.monitors.recordError(m.id, outcome.note);
   if (await deps.monitors.get(m.id)) {
@@ -223,12 +224,11 @@ async function pollMonitor(
     await deps.processes.markStatus(m.processId, "exited");
     await deps.onProcessExit?.(handle, m.processId).catch((e) => deps.monitors.recordError(m.id, errMessage(e)));
   }
-  return true;
 }
 
 export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
   const now = deps.now ?? (() => Date.now());
-  const maxFiresPerTick = deps.maxFiresPerTick ?? 20;
+  const fireConcurrency = deps.fireConcurrency ?? DEFAULT_FIRE_CONCURRENCY;
   const heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   const minFireIntervalMs = deps.minFireIntervalMs ?? DEFAULT_MIN_FIRE_INTERVAL_MS;
 
@@ -280,43 +280,39 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     const enabled = (await deps.monitors.enabled()).sort((a, b) => a.createdAt - b.createdAt);
     if (enabled.length === 0) return;
 
-    const handles = new Map<string, SandboxHandle>();
-    let fires = 0;
-    try {
-      for (const m of enabled) {
-        if (deps.admittedWork?.paused()) break;
-        if (fires >= maxFiresPerTick) {
-          console.warn(`[monitor] fan-out capped: fired ${fires}/${enabled.length} watched jobs this tick`);
-          break;
-        }
-        const rec = await deps.processes.get(m.processId);
-        if (!rec?.sandboxId) {
-          await reportLost(m);
-          fires++;
-          continue;
-        }
-        const targetKey = rec.sandboxId;
-        let handle = handles.get(targetKey);
-        if (!handle) {
-          try {
-            handle = await sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
-              sandboxId: rec.sandboxId,
-            });
-          } catch (e) {
-            await deps.monitors.recordError(m.id, errMessage(e));
-            continue;
-          }
-          handles.set(targetKey, handle);
-        }
-        try {
-          if (await pollMonitor(ctx, sandbox, handle, m, t)) fires++;
-        } catch (e) {
-          await deps.monitors.recordError(m.id, errMessage(e));
-          console.error("%s", `[monitor] poll failed for ${m.id}:`, errMessage(e));
-        }
+    const handles = new Map<string, Promise<SandboxHandle>>();
+    const handleFor = (rec: { sandboxId: string; scopeId: string }): Promise<SandboxHandle> => {
+      let handle = handles.get(rec.sandboxId);
+      if (!handle) {
+        handle = sandbox.provision([{ scopeId: rec.scopeId, mode: "rw", mountPath: "" }], {
+          sandboxId: rec.sandboxId,
+        });
+        handles.set(rec.sandboxId, handle);
       }
+      return handle;
+    };
+    try {
+      await mapBounded(enabled, fireConcurrency, async (m) => {
+        if (deps.admittedWork?.paused()) return;
+        try {
+          const rec = await deps.processes.get(m.processId);
+          if (!rec?.sandboxId) {
+            await reportLost(m);
+            return;
+          }
+          const handle = await handleFor({ sandboxId: rec.sandboxId, scopeId: rec.scopeId });
+          await pollMonitor(ctx, sandbox, handle, m, t);
+        } catch (e) {
+          console.error("%s", `[monitor] poll failed for ${m.id}:`, errMessage(e));
+          await deps.monitors.recordError(m.id, errMessage(e)).catch((recordFailure: unknown) => {
+            console.error("%s", `[monitor] recording the poll failure for ${m.id} failed:`, errMessage(recordFailure));
+          });
+        }
+      });
     } finally {
-      for (const handle of handles.values()) {
+      for (const pending of handles.values()) {
+        const handle = await pending.catch(() => undefined);
+        if (!handle) continue;
         await sandbox.teardown(handle, { keepWarm: true }).catch((e: unknown) => {
           console.error("[monitor] teardown failed:", errMessage(e));
         });

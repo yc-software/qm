@@ -1,11 +1,7 @@
 import { openDesktopBrowser } from "../../../chassis/src/desktop-browser.ts";
 import { SettingState, settingRegistry } from "./setting-state.ts";
 import { brandName } from "../ui.ts";
-export type Api = (
-  method: string,
-  path: string,
-  body?: unknown,
-) => Promise<{ ok: boolean; status?: number; data?: any }>;
+type Api = (method: string, path: string, body?: unknown) => Promise<{ ok: boolean; status?: number; data?: any }>;
 export type Context = {
   api: Api;
   orgScope: () => string;
@@ -35,7 +31,7 @@ export class SlackSetting extends SettingState {
 export const states = new Map(
   ["external-slack-participants", "channel-header-pin-default", "ack-emoji"].map((key) => [key, new SlackSetting(key)]),
 );
-export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
+export const { collect, commit, status, statusKey } = settingRegistry(states);
 export function loadScope(data: any, scope: string) {
   for (const [key, field] of Object.entries({
     "external-slack-participants": "externalSlackParticipants",

@@ -378,7 +378,7 @@ test("disabling a grant mode suspends existing grants until it is re-enabled", a
       approval: { requestId: suspended.pendingApprovals![0]!.requestId, approved: false },
     }),
   );
-  assert.equal(denied.status, "refused", "clear the parked approval so the next turn isn't waiting on it");
+  assert.equal(denied.status, "ok", "clear the parked approval so the next turn isn't waiting on it");
 
   await config.setApprovalGrantModes(org, { session: true, always: true });
   const restored = await app.turn(dm("!run git push --force origin release"));
@@ -410,7 +410,8 @@ test("a tool that declares approval runs once for the exact approved arguments",
   const denied = await app.turn(
     dm(call, { approval: { requestId: again.pendingApprovals![0]!.requestId, approved: false } }),
   );
-  assert.equal(denied.status, "refused");
+  assert.equal(denied.status, "ok");
+  assert.equal(denied.reply, "carried on without it", "the turn continues past the denial without sending");
   const notes = (await sessions.getItems(denied.sessionId!)).filter((e) => e.kind === "UserMessage" && e.hidden);
   assert.ok(notes.some((e) => /denied this pending operation, so it did not run: example_send/.test(e.text ?? "")));
 });
@@ -752,7 +753,7 @@ test("a recorded denial stays a denial on retry", async () => {
     ],
   );
   const outcome = await h.decide({ requestId: "R1", approved: false }, "run-1");
-  assert.equal(outcome.kind, "settled");
+  assert.equal(outcome.kind, "denied");
   assert.equal(h.pending.size, 0);
   assert.equal(h.ledger.consume("git push --force"), false);
 });

@@ -29,24 +29,9 @@ const call = (tool: string, body: Record<string, unknown>): ToolRowModel => ({
   result: null,
 });
 
-test("simple shell reads and searches get semantic labels, compound commands stay exact", () => {
-  assert.equal(activityLabel(row("cat /workspace/src/main.ts"), "complete"), "main.ts");
-  assert.equal(activityLabel(row("rg -n 'gateway' src/main.ts"), "complete"), "Searched for gateway in main.ts");
-  for (const command of [
-    "cat file; rm file",
-    "rg foo src | head -10",
-    "cat $(find .)",
-    "rg -g '*.ts' foo src",
-    "python3 <<'PY'\nprint(1)\nPY",
-  ]) {
-    assert.equal(activityDescription(call("execute", { command })).category, "execute");
-  }
-  assert.equal(
-    activityLabel(row("rg -n 'gateway|secret' src/main.ts"), "complete"),
-    "Searched for gateway|secret in main.ts",
-  );
-  assert.equal(activityLabel(row("sed -n '1,120p' src/main.ts"), "complete"), "main.ts");
-  assert.equal(activityLabel(row("rg --files src"), "complete"), "Searched for files in src");
+test("commands without a purpose show the command itself, and skill reads stay reads", () => {
+  assert.equal(activityLabel(row("cat /workspace/src/main.ts"), "complete"), "cat /workspace/src/main.ts");
+  assert.equal(activityLabel(row("rg -n 'gateway' src/main.ts"), "complete"), "rg -n 'gateway' src/main.ts");
   assert.deepEqual(activityDescription(call("skill", { name: "publish" })), {
     category: "read",
     target: "publish",
@@ -64,13 +49,13 @@ test("simple shell reads and searches get semantic labels, compound commands sta
 test("status labels never report missing or failed results as successful", () => {
   assert.equal(activityLabel(row("npm test", null), "working"), "Running npm test");
   assert.equal(activityLabel(row("npm test", null), "complete"), "Tried running npm test");
-  assert.equal(activityLabel(row("cat missing", { body: { code: 1 } }), "complete"), "missing · exit 1");
+  assert.equal(activityLabel(row("cat missing", { body: { code: 1 } }), "complete"), "cat missing · exit 1");
   assert.equal(activityLabel(row("npm test", { body: { blocked: "needs_approval" } }), "working"), null);
 });
 
 test("groups describe categories and surface errors and approvals", () => {
   const items: TimelineItem[] = [
-    { kind: "tool", row: row("cat README.md") },
+    { kind: "tool", row: { call: callItem("files", { action: "read", path: "README.md" }), result: resultItem({}) } },
     { kind: "tool", row: row("npm test") },
   ];
   assert.deepEqual(activityGroupSummary(items, "complete"), {
@@ -161,7 +146,7 @@ test("purpose takes precedence over commands while retaining failure and incompl
   tool.result = null;
   assert.equal(activityLabel(tool, "working"), "Start the preview server");
   tool.call = callItem("execute", { command: "cat report.csv", purpose: "  " });
-  assert.equal(activityLabel(tool, "working"), "Reading report.csv");
+  assert.equal(activityLabel(tool, "working"), "Running cat report.csv");
 });
 
 test("ordinary command exits stay neutral while tool errors retain failure labels", () => {
@@ -170,7 +155,7 @@ test("ordinary command exits stay neutral while tool errors retain failure label
     ["sandbox", { action: "exec" }],
   ] as const) {
     for (const [command, label] of [
-      ["grep absent file", "Searched for absent in file"],
+      ["grep absent file", "grep absent file"],
       ["[ -d dir ]", "[ -d dir ]"],
     ]) {
       const tool = row(command!, { isError: false, body: { code: 1 } });

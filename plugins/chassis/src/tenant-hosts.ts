@@ -1,13 +1,6 @@
-import { errMessage } from "./errors.ts";
-import {
-  createServer,
-  request,
-  type IncomingHttpHeaders,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { Duplex } from "node:stream";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { TenantSettings } from "./tenant-settings.ts";
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 
 const HEALTH_PATHS: ReadonlySet<string> = new Set(["/healthz", "/readyz"]);
 
@@ -17,13 +10,62 @@ export interface HostRoute<T> {
   target: T;
 }
 
-export interface HostTarget {
-  request(req: IncomingMessage, res: ServerResponse): void;
-  upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void;
+export function tenantPublicUrl(tenant: TenantSettings): string {
+  return `https://${tenant.hosts[0] ?? ""}`;
+}
+
+const servingTenant = new AsyncLocalStorage<TenantSettings>();
+let edgeTenants: readonly TenantSettings[] = [];
+let edgeRoutes: HostRoute<TenantSettings>[] = [];
+const edgeTenantListeners = new Set<(tenants: readonly TenantSettings[]) => void>();
+
+export function setEdgeTenants(tenants: readonly TenantSettings[]): void {
+  edgeTenants = tenants;
+  edgeRoutes = tenants.map((t) => ({
+    hosts: t.hosts,
+    ...(t.appsDomain ? { appsDomain: t.appsDomain } : {}),
+    target: t,
+  }));
+  for (const listener of edgeTenantListeners) listener(tenants);
+}
+
+export function onEdgeTenants(listener: (tenants: readonly TenantSettings[]) => void): void {
+  edgeTenantListeners.add(listener);
+  listener(edgeTenants);
+}
+
+export function edgeTenant(): TenantSettings | undefined {
+  return servingTenant.getStore();
+}
+
+export function withEdgeTenant<T>(tenant: TenantSettings | undefined, fn: () => T): T {
+  return tenant ? servingTenant.run(tenant, fn) : fn();
+}
+
+export function perEdgeTenant<T>(create: () => T): () => T {
+  const states = new Map<string, T>([["", create()]]);
+  return () => {
+    const key = edgeTenant()?.id ?? "";
+    let state = states.get(key);
+    if (state === undefined) {
+      state = create();
+      states.set(key, state);
+    }
+    return state;
+  };
+}
+
+export function serveForHost(req: IncomingMessage, res: ServerResponse, handle: () => void): void {
+  if (!edgeTenants.length) return handle();
+  const tenant =
+    routeForHost(edgeRoutes, requestHost(req.headers)) ??
+    (HEALTH_PATHS.has(pathOf(req)) ? edgeTenants.find((t) => !t.id) : undefined);
+  if (!tenant) return void res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("unknown host\n");
+  servingTenant.run(tenant, handle);
 }
 
 export function coreTenantHost(): Record<string, string> {
-  const host = process.env.CORE_TENANT_HOST?.trim();
+  const host = edgeTenant()?.hosts[0];
   return host ? { "x-forwarded-host": host } : {};
 }
 
@@ -62,71 +104,4 @@ function pathOf(req: IncomingMessage): string {
   const url = req.url ?? "/";
   const q = url.indexOf("?");
   return q < 0 ? url : url.slice(0, q);
-}
-
-export function createHostFront(
-  routes: () => readonly HostRoute<HostTarget>[],
-  fallback: () => HostTarget | undefined,
-): Server {
-  const resolve = (req: IncomingMessage): HostTarget | undefined =>
-    routeForHost(routes(), requestHost(req.headers)) ?? (HEALTH_PATHS.has(pathOf(req)) ? fallback() : undefined);
-  const server = createServer((req, res) => {
-    const target = resolve(req);
-    if (target) return target.request(req, res);
-    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("unknown host\n");
-  });
-  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const target = resolve(req);
-    if (target) return target.upgrade(req, socket, head);
-    socket.end("HTTP/1.1 404 Not Found\r\nconnection: close\r\n\r\n");
-  });
-  return server;
-}
-
-export function proxyTarget(port: number): HostTarget {
-  return {
-    request(req, res) {
-      const up = request(
-        { host: "127.0.0.1", port, method: req.method, path: req.url, headers: req.headers },
-        (upRes) => {
-          res.writeHead(upRes.statusCode ?? 502, upRes.statusMessage, upRes.rawHeaders);
-          upRes.pipe(res);
-        },
-      );
-      let clientGone = false;
-      up.on("error", (error) => {
-        if (!clientGone) console.warn(`[tenant-host] worker on port ${port} unreachable: ${errMessage(error)}`);
-        if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-        res.end();
-      });
-      res.on("close", () => {
-        if (res.writableFinished) return;
-        clientGone = true;
-        up.destroy();
-      });
-      req.pipe(up);
-    },
-    upgrade(req, socket, head) {
-      const up = request({ host: "127.0.0.1", port, method: req.method, path: req.url, headers: req.headers });
-      up.on("upgrade", (upRes, upSocket, upHead) => {
-        const lines = [`HTTP/1.1 ${upRes.statusCode ?? 101} ${upRes.statusMessage ?? "Switching Protocols"}`];
-        for (let i = 0; i < upRes.rawHeaders.length; i += 2)
-          lines.push(`${upRes.rawHeaders[i]}: ${upRes.rawHeaders[i + 1]}`);
-        socket.write(`${lines.join("\r\n")}\r\n\r\n`);
-        if (upHead.length) socket.write(upHead);
-        if (head.length) upSocket.write(head);
-        upSocket.pipe(socket).pipe(upSocket);
-        upSocket.on("error", () => socket.destroy());
-        socket.on("error", () => upSocket.destroy());
-      });
-      up.on("response", (upRes) => {
-        socket.end(`HTTP/1.1 ${upRes.statusCode ?? 502} ${upRes.statusMessage ?? ""}\r\nconnection: close\r\n\r\n`);
-      });
-      up.on("error", (error) => {
-        console.warn(`[tenant-host] worker on port ${port} refused an upgrade: ${errMessage(error)}`);
-        socket.destroy();
-      });
-      up.end();
-    },
-  };
 }

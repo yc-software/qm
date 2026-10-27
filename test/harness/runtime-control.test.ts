@@ -18,6 +18,7 @@ import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.t
 import { createMemoryDurableByteStore } from "../../src/files/durable-byte-store.ts";
 import { createModelGateway } from "../../src/model/model-gateway.ts";
 import { createAgentTools, type AgentToolsOptions } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import { createDeployStore } from "../../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../../src/deploy/deploy-service.ts";
@@ -292,7 +293,7 @@ test("cron inherit cannot select a saved model removed from policy", async () =>
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
-  ref: Parameters<typeof createAgentTools>[0];
+  ref: TurnToolStateInit;
   runtime?: RuntimeControl;
   requestedRuntime?: Partial<RuntimeChoice>;
   options: AgentToolsOptions;
@@ -349,7 +350,6 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
           return turn.emit(entry);
         },
         observeToolResult: turn.observeToolResult,
-        pendingApprovals: [],
       };
       const options: AgentToolsOptions = {
         ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
@@ -360,7 +360,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
         surfaceName: turn.surfaceName,
         ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
       };
-      const tools = createAgentTools(ref, options);
+      const tools = createAgentTools(createTurnToolState(ref), options);
       const record: Turn = {
         ref,
         runtime: turn.runtimeControl,
@@ -474,14 +474,14 @@ function script(turn: Turn, subagent: boolean): Call | undefined {
 }
 
 test("the sessions tool lists, starts and messages sessions through the real tool context", async () => {
-  const w = await world(["persistent_subagents"], script);
+  const w = await world([], script);
   const { parent } = await w.parentTurn("web", "web:U1:sessions");
   assert.equal(parent.results.length, 4);
   assert.deepEqual(parent.results.map(failed), [false, false, false, false], JSON.stringify(parent.results));
 });
 
 for (const [surface, flags] of [
-  ["web", ["persistent_subagents"]],
+  ["web", []],
   ["slack", ["responsive_spine"]],
 ] as const) {
   test(`a ${surface} subagent can do what its parent could, except SUBAGENT_EXCEPTIONS`, async () => {
@@ -501,7 +501,7 @@ for (const [surface, flags] of [
     assert.equal(child.requestedRuntime?.fastMode, undefined);
     const asParent = { ...child.options, ...Object.fromEntries(exceptions.map((key) => [key, parent.options[key]])) };
     assert.deepEqual(
-      createAgentTools(child.ref, asParent)
+      createAgentTools(createTurnToolState(child.ref), asParent)
         .map((t) => t.name)
         .sort(),
       parent.tools,
@@ -515,7 +515,7 @@ for (const [surface, flags] of [
 }
 
 test("human-descended tasks cannot finish silently without surface tools", async () => {
-  const w = await world(["persistent_subagents"], (turn, child) => {
+  const w = await world([], (turn, child) => {
     if (turn.results.length) return;
     return child
       ? { tool: "finish_silently", args: {} }
@@ -526,7 +526,7 @@ test("human-descended tasks cannot finish silently without surface tools", async
 });
 
 test("human-descended tasks can change their runtime but not scope defaults", async () => {
-  const w = await world(["persistent_subagents"], script);
+  const w = await world([], script);
   const { parent, child } = await w.parentTurn("web", "web:U1:runtime");
   const active = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
   assert.ok(child.runtime);

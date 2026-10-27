@@ -204,3 +204,12 @@ test("eager hydration failures are contained while explicit startup hydration re
     await built.runtime.stop();
   }
 });
+
+test("a deactivation that fails to persist leaves the principal active so a retry can still deactivate", async () => {
+  const unreachable = new URL(databaseUrl);
+  unreachable.port = "1";
+  const svc = createIdentityService(unreachable.toString());
+  await assert.rejects(() => svc.deactivate("U-flaky"));
+  assert.equal(svc.classify("U-flaky").type, "internal");
+  assert.equal(svc.deactivationSource("U-flaky"), undefined);
+});

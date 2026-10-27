@@ -333,7 +333,7 @@ function webhookTool(kit: ToolKit) {
     description:
       "Inbound webhooks: a turn runs whenever an external system POSTs to the URL. Confirm with the user before creating one.\n" +
       'create: `task` (what to do per event; the payload is appended), `verification`, optional `filters` and `destinationKey` (a key from the "Where scheduled tasks post" menu). ' +
-      `For ${SENDER_WEBHOOK_SCHEMES.join("/")} the user supplies the signing secret from the sender's settings; for hmac-sha256 generate a strong random one. ` +
+      `For ${SENDER_WEBHOOK_SCHEMES.join("/")} the user supplies the signing secret from the sender's settings; for hmac-sha256 generate a strong random one; for google-pubsub (Gmail and other Pub/Sub push) generate one too and have the user set it as the push subscription's audience. ` +
       "The result shows the public `url` and `secret` once; relay both verbatim to the user, who must configure the sender before it fires.\n" +
       "list: 25 per page, secrets elided. update: replace one's task (same URL and secret). disable: pause one.",
     parameters: Type.Object({

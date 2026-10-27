@@ -4,6 +4,7 @@ import { openSessionItem, searchSessionItems } from "../../src/sessions/history-
 import { forModelContext, forSearchView } from "../../src/harness/context-compaction.ts";
 import { contextSummaryItem } from "../../src/sessions/session-store.ts";
 import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState } from "../../src/harness/turn-tool-state.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 
 const entry = (seq: number, item: NewItem): Item =>
@@ -99,14 +100,16 @@ test("long hits clip a window around the match instead of an unrelated head", ()
 });
 
 test("history tool returns formatted hits and a clear no-match message", async () => {
-  const tools = createAgentTools({
-    current: {
-      history: async (q: string) =>
-        q.includes("budget") ? ["UserMessage#5 (2023-11-14T22:13:25.000Z): budget update: approved"] : [],
-    } as any,
-    emit: () => {},
-    scopeLabel: "personal:U1",
-  });
+  const tools = createAgentTools(
+    createTurnToolState({
+      current: {
+        history: async (q: string) =>
+          q.includes("budget") ? ["UserMessage#5 (2023-11-14T22:13:25.000Z): budget update: approved"] : [],
+      } as any,
+      emit: () => {},
+      scopeLabel: "personal:U1",
+    }),
+  );
   const history = tools.find((t) => t.name === "history");
   assert.ok(history);
   const run = (params: unknown) =>
@@ -132,25 +135,24 @@ test("openSessionItem keeps the overheard trust label — reopening never upgrad
   assert.doesNotMatch(opened, /^UserMessage#/);
 });
 
-test("openSessionItem elides only the middle of an oversized entry", () => {
-  const big = [entry(1, { kind: "AgentMessage", text: `HEAD ${"x".repeat(30_000)} TAIL` })];
-  const opened = openSessionItem(big, 1)!;
-  assert.ok(opened.length < 21_000);
-  assert.match(opened, /HEAD/);
-  assert.match(opened, /TAIL$/);
-  assert.match(opened, /chars total; middle elided/);
+test("openSessionItem returns an oversized entry whole", () => {
+  const body = `HEAD ${"x".repeat(30_000)} TAIL`;
+  const opened = openSessionItem([entry(1, { kind: "AgentMessage", text: body })], 1)!;
+  assert.ok(opened.endsWith(body));
 });
 
 test("history tool seq mode reopens an entry, reports a missing seq, and rejects a call with neither param", async () => {
-  const tools = createAgentTools({
-    current: {
-      history: async () => [],
-      historyOpen: async (seq: number) =>
-        seq === 5 ? "UserMessage#5 (2023-11-14T22:13:25.000Z): budget update: approved — full text" : null,
-    } as any,
-    emit: () => {},
-    scopeLabel: "personal:U1",
-  });
+  const tools = createAgentTools(
+    createTurnToolState({
+      current: {
+        history: async () => [],
+        historyOpen: async (seq: number) =>
+          seq === 5 ? "UserMessage#5 (2023-11-14T22:13:25.000Z): budget update: approved — full text" : null,
+      } as any,
+      emit: () => {},
+      scopeLabel: "personal:U1",
+    }),
+  );
   const history = tools.find((t) => t.name === "history");
   assert.ok(history);
   const run = (params: unknown) =>

@@ -7,7 +7,7 @@ import {
   type AmbientBatch,
   type AmbientDecision,
 } from "../../src/surface-cache/ambient-judge.ts";
-import { createPostgresChannelPolicyStore } from "../../src/surface-cache/channel-policy-store.ts";
+import { createPostgresChannelPolicyStore, parseBotLedger } from "../../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 
 test("ingest is idempotent per (container, ts) — a re-delivery upserts, never doubles", async () => {
@@ -132,6 +132,13 @@ test("channel policy store: every set appends a provenance revision to history",
   assert.equal(h[0]?.sessionId, "sess-2");
   assert.equal(h[1]?.setBy, "U-alice");
   assert.equal(h[1]?.sessionId, "sess-1");
+});
+
+test("channel policy store: a bot ledger is as large as the channel's bot roster", () => {
+  const roster = Object.fromEntries(Array.from({ length: 250 }, (_, i) => [`bot-${i}`, { mode: "ignore" }]));
+  const parsed = parseBotLedger(roster);
+  assert.ok("bots" in parsed, "a 250-bot ledger parses");
+  assert.equal(Object.keys(parsed.bots).length, 250);
 });
 
 test("channel policy store: bot ledger round-trips and an omitted `bots` leaves it unchanged", async () => {

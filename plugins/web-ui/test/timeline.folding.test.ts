@@ -116,10 +116,6 @@ test("steering separates tool folds with a visible unlabelled user message", asy
     user.deleted = true;
     conv.drawActiveChat();
     assert.equal(document.querySelector(".inline-steer .revision-badge")?.textContent, "(deleted)");
-    (conv.state.agent!.state.messages.at(-1) as unknown as { approvalDecision: string }).approvalDecision = "denied";
-    conv.drawActiveChat();
-    assert.equal(document.querySelectorAll(".tool-expandable").length, 0);
-    assert.equal(document.querySelectorAll(".inline-steer").length, 1);
   } finally {
     await h.close();
   }

@@ -2,6 +2,7 @@ import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import {
   cols,
   mapToTableMigration,
+  retireJsonKeysMigration,
   typedTable,
   type ColumnSpec,
   type MapConversion,
@@ -21,6 +22,18 @@ export function sandboxBodiesMigration(
     { table, key: "scopeId", columns: { ...BODY_COLUMNS, ...extra } },
     opts,
   );
+}
+
+export function withRetiredColumns(typed: MapConversion, legacy: Readonly<Record<string, ColumnSpec>>): MapConversion {
+  const { table } = typed.spec;
+  return {
+    ...typed,
+    spec: { ...typed.spec, columns: { ...typed.spec.columns, ...legacy } },
+    before: [
+      retireJsonKeysMigration(`sandbox/${table}/0000-retired-columns`, table, { columns: legacy }),
+      retireJsonKeysMigration(`contract/sandbox/${table}/0000-retired-columns`, table, { columns: legacy }),
+    ],
+  };
 }
 
 export function createSandboxBodies<T extends object>(databaseUrl: string, migration: MapConversion) {

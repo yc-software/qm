@@ -9,7 +9,8 @@ import { buildApp } from "../support/build-app.ts";
 import { scopeId, type SurfaceContextResult, type TurnRequest } from "../../src/types.ts";
 import type { Item } from "../../src/sessions/items.ts";
 import { testConfig } from "../support/test-config.ts";
-import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -217,8 +218,8 @@ test("read_file takes the [ref …] a read shows next to a file and fetches that
 });
 
 function surfaceTool(tc: Record<string, unknown>): any {
-  const ref = { current: tc } as unknown as ToolContextRef;
-  return createAgentTools(ref, { surfaceTools: true }).find((t) => t.name === "slack")!;
+  const ref = { current: tc } as unknown as TurnToolStateInit;
+  return createAgentTools(createTurnToolState(ref), { surfaceTools: true }).find((t) => t.name === "slack")!;
 }
 
 test("search action appends the mirror-coverage window to hits, and gives an honest no-match line when the mirror is bounded", async () => {

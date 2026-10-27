@@ -260,6 +260,17 @@ test("parseSkillFrontmatter requires name + description + body; requiredCapabili
   assert.throws(() => parseSkillFrontmatter("no frontmatter", "SKILL.md"), /missing YAML frontmatter/);
   assert.throws(() => parseSkillFrontmatter("---\ndescription: y\n---\nbody", "SKILL.md"), /missing "name"/);
   assert.throws(() => parseSkillFrontmatter("---\nname: x\n---\nbody", "SKILL.md"), /missing "description"/);
+  assert.deepEqual(
+    parseSkillFrontmatter(
+      "---\nname: x\ndescription: >-\n  folded\n  text\nrequiredCapabilities:\n---\nbody",
+      "SKILL.md",
+    ),
+    { name: "x", description: "folded text" },
+  );
+  assert.throws(
+    () => parseSkillFrontmatter("---\nname: x\ndescription: Use when: y\n---\nbody", "SKILL.md"),
+    /frontmatter is not valid YAML/,
+  );
   assert.throws(() => parseSkillFrontmatter("---\nname: x\ndescription: y\n---\n  \n", "SKILL.md"), /requires a body/);
   for (const name of ["..", ".", "foo/bar", "foo\\bar", "foo bar", ".hidden", "foo."]) {
     assert.throws(

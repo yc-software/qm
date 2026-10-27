@@ -11,7 +11,8 @@ import {
 import { fakeSprites } from "../../support/auto-fake-sprites.ts";
 import { buildApp } from "../../support/build-app.ts";
 import type { Config } from "../../../src/config.ts";
-import { createAgentTools, type ToolContextRef } from "../../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../../src/harness/turn-tool-state.ts";
 import { createToolContext, type ToolContextDeps } from "../../../src/tools/tool-context.ts";
 import type { ToolContext } from "../../../src/tools/primitives.ts";
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../../../src/types.ts";
@@ -86,8 +87,8 @@ const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[
 
 test("scope defaults to the durable scoped box; scratch is an explicit opt-in", async () => {
   const { tc, seen } = sinkToolContext();
-  const ref: ToolContextRef = { current: tc };
-  const [execute] = createAgentTools(ref);
+  const ref: TurnToolStateInit = { current: tc };
+  const [execute] = createAgentTools(createTurnToolState(ref));
   assert.deepEqual(schemaProps(execute!), [
     "command",
     "background",
@@ -123,7 +124,7 @@ test("scope defaults to the durable scoped box; scratch is an explicit opt-in", 
 
 test("the retired durable argument returns a crisp [error] without executing", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc });
+  const [execute] = createAgentTools(createTurnToolState({ current: tc }));
 
   for (const [scope, durable] of [
     ["scratch", true],
@@ -139,14 +140,14 @@ test("the retired durable argument returns a crisp [error] without executing", a
 test("the tool_call/tool_result entries record which box ran the command", async () => {
   const emitted: NewItem[] = [];
   const { tc } = sinkToolContext();
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: tc,
     emit: (e) => {
       emitted.push(e);
     },
     scopeLabel: scopeId("personal", "U1"),
   };
-  const [execute] = createAgentTools(ref);
+  const [execute] = createAgentTools(createTurnToolState(ref));
   await call(execute, { command: "echo hi", scope: "scratch", purpose: "Run test command" });
   await call(execute, { command: "echo hi", purpose: "Run test command" });
   assert.deepEqual(
@@ -303,7 +304,7 @@ test("execute refuses a credential that would override the computer's own enviro
 
 test("execute schema lists exact command credential handles", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc });
+  const [execute] = createAgentTools(createTurnToolState({ current: tc }));
   assert.deepEqual(schemaProps(execute!), [
     "command",
     "background",
@@ -331,16 +332,18 @@ test("execute masks credential output before model delivery, screening, and tran
     } as unknown as Sandbox,
     commandCredentials: [{ handle: "kc_test123456", env: [{ key: "TOKEN", value: secret }] }],
   });
-  const [execute] = createAgentTools({
-    current: ctx,
-    scopeLabel: scopeId("personal", "U1"),
-    emit: async (entry) => {
-      emitted.push(entry);
-    },
-    observeToolResult: (input) => {
-      screened.push(input);
-    },
-  });
+  const [execute] = createAgentTools(
+    createTurnToolState({
+      current: ctx,
+      scopeLabel: scopeId("personal", "U1"),
+      emit: async (entry) => {
+        emitted.push(entry);
+      },
+      observeToolResult: (input) => {
+        screened.push(input);
+      },
+    }),
+  );
   const result = await call(execute, {
     command: "diagnose",
     credentials: ["kc_test123456"],
@@ -409,13 +412,15 @@ test("execute records a safe provider-error result for native replay", async () 
       },
     } as unknown as Sandbox,
   });
-  const [execute] = createAgentTools({
-    current: ctx,
-    scopeLabel: scopeId("personal", "U1"),
-    emit: async (entry) => {
-      entries.push(entry);
-    },
-  });
+  const [execute] = createAgentTools(
+    createTurnToolState({
+      current: ctx,
+      scopeLabel: scopeId("personal", "U1"),
+      emit: async (entry) => {
+        entries.push(entry);
+      },
+    }),
+  );
   const result = await call(execute, { command: "diagnose", purpose: "Run test command" });
   assert.match(textOf(result), /<redacted:credential>/);
   assert.ok(!JSON.stringify({ result, entries }).includes(secret));

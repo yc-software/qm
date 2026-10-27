@@ -9,11 +9,6 @@ export const FEATURES = {
     personalOnly: true,
     hint: "Enables app text comments and annotation tools for the selected people. Applies on the next app page load; app management permission is still required.",
   },
-  persistent_subagents: {
-    label: "Persistent subagents",
-    personalOnly: true,
-    hint: "Persistent subagents are available for personal scopes only.",
-  },
   responsive_spine: { label: "Responsive spine (delegation)", personalOnly: true },
   inbox_loops: { label: "Inbox" },
   slack_loading_indicator: {

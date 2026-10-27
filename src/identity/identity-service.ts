@@ -126,13 +126,13 @@ export function createIdentityService(
     const existing = deactivated.get(key);
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
-    deactivated.set(key, record);
     await deactivations.put(foldPrincipalId(externalId), record);
+    deactivated.set(key, record);
   }
 
   async function reactivate(externalId: string): Promise<void> {
-    state().deactivated.delete(personKey(externalId));
     await db.q(`DELETE FROM deactivated_principals WHERE id = ANY($1::text[])`, [storeKeys(externalId)]);
+    state().deactivated.delete(personKey(externalId));
   }
 
   async function refresh(force = false): Promise<void> {

@@ -9,7 +9,6 @@ export const CI_JOBS = [
   "CLI",
   "Lint",
   "Production dependency audit",
-  "Core Postgres tests",
   "Web UI plugin",
   "Auth plugin",
   "Portal plugin",

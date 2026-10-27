@@ -188,9 +188,20 @@ export async function reconcileMessageRevisions(opts: {
   const ref = parseSlackThreadRef(opts.session.threadRef);
   if (!ref) return 0;
   const since = Math.max(1, Math.min(opts.anchorAt ?? opts.fallbackSince, slackTsToMs(opts.triggerTs) ?? Infinity));
-  const revised = await opts.surfaceCache.revisedSince(ref.container, since, ref.root ? { thread: ref.root } : {});
-  if (!revised.length) return 0;
   const entries = await opts.sessions.getItems(opts.session.id);
+  const ts = [
+    ...new Set(
+      entries
+        .filter(isUserMessage)
+        .map(messageTs)
+        .filter((t): t is string => Boolean(t)),
+    ),
+  ];
+  const revised = await opts.surfaceCache.revisedSince(ref.container, since, {
+    ts,
+    ...(ref.root ? { thread: ref.root } : {}),
+  });
+  if (!revised.length) return 0;
   let recorded = 0;
   for (const row of revised) {
     if (await recordRevision(opts.sessions, opts.lease, opts.session, entries, row)) recorded++;

@@ -170,7 +170,7 @@ export function patternError(pattern: string): string {
   }
 }
 export const states = new Map(Object.keys(fieldNames).map((key) => [key, new GovernanceState(key)]));
-export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
+export const { collect, capture, commit, status, statusKey } = settingRegistry(states);
 export function load(data: Record<string, any>, scope: string, only?: string) {
   const resources: Record<string, [boolean, Record<string, any>]> = {
     "auto-flagger": [

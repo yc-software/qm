@@ -6,7 +6,7 @@ import { createCronStore } from "../../src/cron/cron-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../../src/types.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
-import { idleJobs } from "../support/cron-slots.ts";
+import { manualFireJobs } from "../support/cron-slots.ts";
 import { harness, busyOnce, schedulerDeps } from "../support/cron-scheduler-harness.ts";
 
 test("a fire is journaled as running the moment it starts, then updated with the outcome", async () => {
@@ -182,7 +182,7 @@ test("a one-shot whose session is busy is deferred, stays enabled, and fires onc
   const calls: TurnRequest[] = [];
   let clock = 1000;
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...schedulerDeps(crons, databaseUrl),
     run: busyOnce(calls),
     now: () => clock,
@@ -230,7 +230,7 @@ test("a fire that is still busy ten minutes past its slot gives up: consumed and
   const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...schedulerDeps(crons, databaseUrl),
     run: async (req) => {
       calls.push(req);
@@ -276,7 +276,7 @@ test("manual cron preparation and detached fire retain admission across pause", 
     return get(id);
   };
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...schedulerDeps(crons, databaseUrl),
     admittedWork: work,
     run: () =>

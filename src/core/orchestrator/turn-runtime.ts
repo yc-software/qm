@@ -31,13 +31,12 @@ export async function selectTurnRuntime(
   ctx: TurnCtx,
   turn: {
     session: Session;
-    isRetry: boolean;
     controlClaims: Awaited<ReturnType<typeof buildCredentialCatalog>>["controlClaims"];
     scopeAttestation: Awaited<ReturnType<typeof buildCredentialCatalog>>["scopeAttestation"];
   },
 ) {
-  const { deps, input, actor, automatedTurn, liveAuthorTurn, scopeId, filterHistory } = ctx;
-  const { session, isRetry, controlClaims, scopeAttestation } = turn;
+  const { deps, input, actor, automatedTurn, liveAuthorTurn, scopeId, filterHistory, isRetry } = ctx;
+  const { session, controlClaims, scopeAttestation } = turn;
   const effectiveTurnWallClockMs =
     typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0
       ? input.turnWallClockMs

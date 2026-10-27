@@ -15,12 +15,9 @@ test("sanitizeBranding strips template braces and control characters from every 
     orgName: "Acme Corp",
   });
   assert.deepEqual(sanitizeBranding({ selfLabel: "a<b>\u0000c", mark: '"{Q}"' }), { selfLabel: "abc", mark: "Q" });
-  assert.equal(sanitizeBranding({ selfLabel: "x".repeat(80) })?.selfLabel?.length, 40);
-  assert.equal(sanitizeBranding({ selfLabel: "x".repeat(39) + "💚💚" })?.selfLabel, "x".repeat(39) + "💚");
-  assert.doesNotMatch(
-    sanitizeBranding({ selfLabel: "💚".repeat(50) })?.selfLabel ?? "",
-    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/,
-  );
+  assert.equal(sanitizeBranding({ selfLabel: "x".repeat(80) })?.selfLabel?.length, 80);
+  assert.equal(sanitizeBranding({ mark: "💚💚💚" })?.mark, "💚💚");
+  assert.equal(sanitizeBranding({ mark: "👩‍💻x" })?.mark, "👩‍💻x");
   assert.deepEqual(sanitizeBranding({ accent: "#6366f1" }), { accent: "#6366f1" });
   assert.equal(sanitizeBranding({ accent: "#abcde" }), undefined);
   assert.equal(sanitizeBranding({ accent: "#aabbccddee" }), undefined);
@@ -38,7 +35,9 @@ test("sanitizeBranding accepts only https mark image urls that cannot break out 
   assert.equal(sanitizeBranding({ markUrl: "https://a/x;color:red" }), undefined);
   assert.equal(sanitizeBranding({ markUrl: "https://a/</style><script>alert(1)</script>" }), undefined);
   assert.equal(sanitizeBranding({ markUrl: "https://a/ b" }), undefined);
-  assert.equal(sanitizeBranding({ markUrl: `https://a/${"x".repeat(500)}` }), undefined);
+  assert.deepEqual(sanitizeBranding({ markUrl: `https://a/${"x".repeat(500)}` }), {
+    markUrl: `https://a/${"x".repeat(500)}`,
+  });
 });
 
 test("resolveBranding prefers the store per field and fills the rest from the default", async () => {

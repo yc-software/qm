@@ -11,7 +11,7 @@ import {
 test("searchTerms tokenizes to lowercase alphanumerics", () => {
   assert.deepEqual(searchTerms("Memo-Board  refresh!"), ["memo", "board", "refresh"]);
   assert.deepEqual(searchTerms("  "), []);
-  assert.equal(searchTerms("a b c d e f g h i j").length, 8, "terms are capped");
+  assert.equal(searchTerms("a b c d e f g h i j").length, 10, "every term counts");
 });
 
 test("tsPrefixQuery builds an AND-of-prefixes tsquery", () => {

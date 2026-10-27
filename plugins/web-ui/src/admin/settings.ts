@@ -71,7 +71,9 @@ export const states = new Map(
     new SettingsState(key),
   ]),
 );
-export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
+const registry = settingRegistry(states);
+export const { collect, statusKey } = registry;
+const { capture } = registry;
 export function load(data: Data, scope: string, only?: string) {
   const org = scope.startsWith("org:");
   for (const [key, s] of states) {

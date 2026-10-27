@@ -1,11 +1,8 @@
 import { surfaceHas } from "../../surfaces/surface.ts";
 import type { TurnCtx } from "./turn-context.ts";
-import type { ScreenTrace } from "./inbound-screen.ts";
-import type { frameTurnPrompt } from "./turn-prompt.ts";
 import type { ApprovalLedger } from "./approvals.ts";
-import type { buildTurnTools } from "./turn-tools.ts";
-import type { prepareTurnInput } from "./turn-input.ts";
 import type { selectTurnRuntime } from "./turn-runtime.ts";
+import type { BegunTurn, HeldLease, ReadyTurn, TurnFrame } from "./handle-turn.ts";
 import type { SecurityObserver } from "./security-screen.ts";
 import type { Outbound } from "../../surfaces/outbound.ts";
 import type { Session } from "../../types.ts";
@@ -16,9 +13,8 @@ import { goalView } from "../../runs/turn-stream.ts";
 import { type GoalRecord, openGoal } from "../../harness/goal.ts";
 import { type Destination, type TurnRuntime } from "../../types.ts";
 import { loadProtocolFile } from "../../resolution/prompt-vars.ts";
-import { resolveTurnContext } from "../../resolution/turn-context.ts";
 import { reachPost } from "../../reach/reach.ts";
-import type { GapPhase, Lease } from "../../sessions/session-store.ts";
+import type { GapPhase } from "../../sessions/session-store.ts";
 import { isUserMessage, type Item, type NewItem } from "../../sessions/items.ts";
 import { environmentDelta } from "../environment-facts.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
@@ -39,7 +35,6 @@ import { reportFailure, swallowAs } from "../../util/errors.ts";
 import { absoluteAppLinks } from "../../util/markdown.ts";
 import { NonRetryableTurnError } from "../turn-error.ts";
 import { randomUUID } from "node:crypto";
-import type { OrchestratorDeps } from "./types.ts";
 import { stripAckPrefix } from "./turn-helpers.ts";
 import { createCompaction } from "./compaction.ts";
 import { createTurnSandboxes } from "./sandboxes.ts";
@@ -58,64 +53,66 @@ export interface TurnRunState {
   remainingDocumentBytes: number;
   remainingDocumentCount: number;
   remainingDocumentTokens: number;
-}
-
-/** What one harness segment needs from the turn's earlier phases. */
-export interface HarnessSegmentTurn {
-  screenTrace: ScreenTrace;
-  framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
-  approvalLedger: ApprovalLedger;
-  provision: ReturnType<typeof createTurnSandboxes>["provision"];
-  turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
-  prepared: Awaited<ReturnType<typeof prepareTurnInput>>;
-  selected: Awaited<ReturnType<typeof selectTurnRuntime>>;
-  strictReadOnly: boolean;
-  mcpToolsReady: ReturnType<NonNullable<OrchestratorDeps["mcp"]>["toolDefsFor"]> | undefined;
-  context: Awaited<ReturnType<typeof resolveTurnContext>>;
-  memoryView: Awaited<ReturnType<Awaited<ReturnType<typeof resolveTurnContext>>["memorySnapshot"]>>;
-  systemPrompt: string;
-  session: Session;
-  gapWork: { listener?: (work: GapWork) => void };
-  emitGapWork: (phase: GapPhase, start: number, end: number) => void;
-  lease: Lease;
-  turnAbort: AbortController;
-  run: TurnRunState;
-  publishFirstAck: (deliberatePost: boolean) => void;
   turnStart: number;
   emittedEntries: Item[];
-  syntheticPrompt: boolean;
-  blobTransfer: OrchestratorDeps["blobTransfer"];
+  tailOwnsReclaim: boolean;
+  gap: GapWorkFeed;
+}
+
+export interface GapWorkFeed {
+  listener?: (work: GapWork) => void;
+  emit: (phase: GapPhase, start: number, end: number) => void;
+}
+
+export interface SegmentTurn {
+  frame: TurnFrame;
+  session: Session;
+  held: HeldLease;
+  run: TurnRunState;
+  begun: BegunTurn;
+  ready: ReadyTurn;
+  selected: Awaited<ReturnType<typeof selectTurnRuntime>>;
+  approvalLedger: ApprovalLedger;
+  provision: ReturnType<typeof createTurnSandboxes>["provision"];
   observeSecurityData: SecurityObserver;
 }
 
-export function createHarnessSegment(ctx: TurnCtx, turn: HarnessSegmentTurn) {
+function createHarnessSegment(ctx: TurnCtx, turn: SegmentTurn) {
   return (harnessInput: string, extras: Parameters<typeof runHarnessSegment>[3], continuation?: { history: Item[] }) =>
     runHarnessSegment(ctx, turn, harnessInput, extras, continuation);
 }
 
-/** One harness run over the turn's prepared state; continuation segments pass their own history. */
+type Prepared = ReadyTurn["prepared"];
+
 async function runHarnessSegment(
   ctx: TurnCtx,
-  turn: HarnessSegmentTurn,
+  turn: SegmentTurn,
   harnessInput: string,
   extras: {
     priorTurns?: typeof ctx.input.priorTurns;
-    overheard?: HarnessSegmentTurn["prepared"]["importedOverheard"];
-    attachments?: HarnessSegmentTurn["prepared"]["inbound"]["metas"];
-    images?: HarnessSegmentTurn["prepared"]["inbound"]["images"];
+    overheard?: Prepared["importedOverheard"];
+    attachments?: Prepared["inbound"]["metas"];
+    images?: Prepared["inbound"]["images"];
   },
   continuation?: { history: Item[] },
 ) {
-  const { deps, input, messageTs, entryTs, turnTimezone, resolution, scopeId } = ctx;
-  const { surfaceName, delegateWork } = turn.framed;
+  const { deps, input, messageTs, entryTs, turnTimezone, resolution, scopeId, strictReadOnly } = ctx;
+  const { frame, ready, session, held, run } = turn;
+  const { surfaceName, delegateWork } = frame.framed;
   const { consume: consumeApproval } = turn.approvalLedger;
-  const { mayReadArtifact, surfaceToolDeps, tools } = turn.turnTools;
-  const { partial, resumePlan, history, documentInputs, continueTurn, isPollFire } = turn.prepared;
+  const { mayReadArtifact, surfaceToolDeps, tools } = ready.turnTools;
+  const { partial, resumePlan, history, documentInputs, continueTurn, isPollFire } = ready.prepared;
   const { effectiveTurnWallClockMs, runtimeState } = turn.selected;
-  const { strictReadOnly, mcpToolsReady, systemPrompt, session, lease, turnAbort, turnStart } = turn;
-  const segmentEnv = segmentEnvironment(turn, continuation);
+  const { mcpToolsReady } = frame;
+  const { systemPrompt } = turn.begun;
+  const { lease, turnAbort } = held;
+  const { turnStart } = run;
+  const segmentEnv = segmentEnvironment(
+    { frame, prepared: ready.prepared, memoryView: turn.begun.memoryView, session },
+    continuation,
+  );
   const { environment, silentResume } = segmentEnv;
-  const emit = createSegmentEmit(ctx, turn, segmentEnv, continuation);
+  const emit = createSegmentEmit(ctx, { framed: frame.framed, ready, lease, run }, segmentEnv, continuation);
   const initialDocuments = [...documentInputs.documents];
   const storedGoal = (await deps.sessions.goals([session.id])).get(session.id);
   const sessionGoal = openGoal(storedGoal);
@@ -128,7 +125,7 @@ async function runHarnessSegment(
     loadImage: artifactImageLoader(deps.files, mayReadArtifact),
     ...(turnTimezone ? { timezone: turnTimezone } : {}),
     prepareSteer: createPrepareSteer(ctx, turn, initialDocuments),
-    ...segmentRuntimeOptions(ctx, turn),
+    ...segmentRuntimeOptions(ctx, turn.selected, run),
     ...(input.runId ? { runId: input.runId } : {}),
     cancel: turnAbort.signal,
     ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
@@ -171,11 +168,14 @@ async function runHarnessSegment(
   return turnResult;
 }
 
-/** The segment's environment note: turn facts, environment and memory deltas since the history, inbound issues. */
-function segmentEnvironment(turn: HarnessSegmentTurn, continuation: { history: Item[] } | undefined) {
-  const { turnContextBlocks, memoryHeading } = turn.framed;
+function segmentEnvironment(
+  turn: { frame: TurnFrame; prepared: Prepared; memoryView: BegunTurn["memoryView"]; session: Session },
+  continuation: { history: Item[] } | undefined,
+) {
+  const { turnContextBlocks, memoryHeading } = turn.frame.framed;
   const { inboundIssues, recalled, history, documentInputs, turnEnvironmentContents, continueTurn } = turn.prepared;
-  const { context, memoryView, session } = turn;
+  const { context } = turn.frame;
+  const { memoryView, session } = turn;
   const recall = memoryRecallDelta(recalled, continuation?.history ?? history, memoryView.held, context.memoryLabels);
   const snapshot = environmentDelta(turnContextBlocks, continuation?.history ?? history, session.id);
   const turnEnvironment = environmentNote(
@@ -193,21 +193,20 @@ function segmentEnvironment(turn: HarnessSegmentTurn, continuation: { history: I
   return { recall, snapshot, environment, silentResume };
 }
 
-/**
- * The segment's transcript writer: stamps work times on replies, attaches the environment and recall
- * to the turn's first user message, then appends and mirrors each entry.
- */
 function createSegmentEmit(
   ctx: TurnCtx,
-  turn: HarnessSegmentTurn,
+  turn: { framed: TurnFrame["framed"]; ready: ReadyTurn; lease: HeldLease["lease"]; run: TurnRunState },
   { recall, snapshot, environment }: ReturnType<typeof segmentEnvironment>,
   continuation: { history: Item[] } | undefined,
 ): HarnessTurnInput["emit"] {
   const { deps, input, actor, humanInput, coreReceivedAt, withManagedRosterVersion, mirrorRunActivity } = ctx;
   const { surfaceName } = turn.framed;
-  const { spine } = turn.turnTools;
-  const { partial } = turn.prepared;
-  const { lease, run, publishFirstAck, emittedEntries, syntheticPrompt, emitGapWork } = turn;
+  const { spine } = turn.ready.turnTools;
+  const { partial } = turn.ready.prepared;
+  const { publishFirstAck, syntheticPrompt } = turn.ready;
+  const { lease, run } = turn;
+  const { emittedEntries } = run;
+  const emitGapWork = run.gap.emit;
   let recordedRecall = false;
   const emit: HarnessTurnInput["emit"] = async (entry) => {
     run.turnProgress++;
@@ -274,17 +273,19 @@ function createSegmentEmit(
   return emit;
 }
 
-/** Prepares a mid-turn steer: refreshed inbox header, staged attachments and their documents. */
 function createPrepareSteer(
   ctx: TurnCtx,
-  turn: HarnessSegmentTurn,
+  turn: Pick<SegmentTurn, "frame" | "ready" | "session" | "held" | "run" | "provision" | "observeSecurityData">,
   initialDocuments: HarnessTurnInput["documents"],
 ): NonNullable<HarnessTurnInput["prepareSteer"]> {
-  const { deps, input, actor, conversation, scopeId } = ctx;
-  const { turnInboxDir } = turn.framed;
-  const { fileRegistration, mayReadArtifact } = turn.turnTools;
-  const { documentInputs, observeDocuments } = turn.prepared;
-  const { screenTrace, provision, strictReadOnly, session, turnAbort, run, blobTransfer, observeSecurityData } = turn;
+  const { deps, input, actor, conversation, scopeId, strictReadOnly } = ctx;
+  const { blobTransfer } = deps;
+  const { screenTrace } = turn.frame;
+  const { turnInboxDir } = turn.frame.framed;
+  const { fileRegistration, mayReadArtifact } = turn.ready.turnTools;
+  const { documentInputs, observeDocuments } = turn.ready.prepared;
+  const { provision, session, run, observeSecurityData } = turn;
+  const { turnAbort } = turn.held;
   return async (text, request) => {
     const author = request ? deps.identity.resolve(request.actor).id : actor.id;
     const refreshedInbox =
@@ -368,8 +369,11 @@ function createPrepareSteer(
   };
 }
 
-/** The segment's runtime options: personal provider keys, pinning, runtime reports and the runtime tool. */
-function segmentRuntimeOptions(ctx: TurnCtx, turn: HarnessSegmentTurn): Partial<HarnessTurnInput> {
+function segmentRuntimeOptions(
+  ctx: TurnCtx,
+  selected: SegmentTurn["selected"],
+  run: TurnRunState,
+): Partial<HarnessTurnInput> {
   const { deps, input, actor, automatedTurn, sessionTurn } = ctx;
   const {
     runtimePurpose,
@@ -379,8 +383,7 @@ function segmentRuntimeOptions(ctx: TurnCtx, turn: HarnessSegmentTurn): Partial<
     restoredRuntime,
     checkRuntimeAuth,
     runtimeState,
-  } = turn.selected;
-  const { run } = turn;
+  } = selected;
   return {
     ...(runtimeState.userProviderKeys ? { providerKeys: runtimeState.userProviderKeys } : {}),
     ...(runtimeState.personalAuth && !purposeDefault && !restoredRuntime && run.runtimeHandoffs === 0
@@ -420,12 +423,17 @@ function segmentRuntimeOptions(ctx: TurnCtx, turn: HarnessSegmentTurn): Partial<
   };
 }
 
-/** The segment's streaming, security and accounting callbacks into the harness. */
-function segmentCallbacks(ctx: TurnCtx, turn: HarnessSegmentTurn) {
+function segmentCallbacks(
+  ctx: TurnCtx,
+  turn: Pick<SegmentTurn, "frame" | "ready" | "session" | "run" | "observeSecurityData">,
+) {
   const { deps, input, actor, scopeId } = ctx;
-  const { surfaceName } = turn.framed;
-  const { spineFirst, earlyTaskAck } = turn.turnTools;
-  const { screenTrace, session, gapWork, run, publishFirstAck, emittedEntries, observeSecurityData } = turn;
+  const { screenTrace } = turn.frame;
+  const { surfaceName } = turn.frame.framed;
+  const { spineFirst, earlyTaskAck } = turn.ready.turnTools;
+  const { publishFirstAck } = turn.ready;
+  const { session, run, observeSecurityData } = turn;
+  const { emittedEntries, gap: gapWork } = run;
   return {
     observeToolResult: ({ tool, result, unscreenable, provenance, source }: ToolResultScreenInput) => {
       if (provenance !== "external" || unscreenable) return;
@@ -498,29 +506,19 @@ function segmentCallbacks(ctx: TurnCtx, turn: HarnessSegmentTurn) {
 
 export async function runSegments(
   ctx: TurnCtx,
-  turn: {
-    framed: Awaited<ReturnType<typeof frameTurnPrompt>>;
-    turnTools: Awaited<ReturnType<typeof buildTurnTools>>;
-    prepared: Awaited<ReturnType<typeof prepareTurnInput>>;
-    selected: Awaited<ReturnType<typeof selectTurnRuntime>>;
-    strictReadOnly: boolean;
-    session: Session;
-    run: TurnRunState;
-    lease: Lease;
-    turnAbort: AbortController;
-    historyWindow: () => ReturnType<OrchestratorDeps["sessions"]["getContextWindow"]>;
-    turnStart: number;
-    runHarnessSegment: ReturnType<typeof createHarnessSegment>;
-    compactRecent: ReturnType<typeof createCompaction>["compactRecent"];
-  },
+  turn: SegmentTurn,
+  compactRecent: ReturnType<typeof createCompaction>["compactRecent"],
 ) {
-  const { deps, input, actor, withManagedRosterVersion, resolution, scopeId, filterHistory } = ctx;
-  const { defaultDestination } = turn.framed;
-  const { surfaceToolDeps, spine, spineFirst, postKeys, postProvenance } = turn.turnTools;
-  const { inbound, importedOverheard, priorTurns, baseText, turnInput, isPollFire } = turn.prepared;
+  const { deps, input, actor, withManagedRosterVersion, resolution, scopeId, filterHistory, strictReadOnly } = ctx;
+  const { defaultDestination } = turn.frame.framed;
+  const { surfaceToolDeps, spine, spineFirst, postKeys, postProvenance } = turn.ready.turnTools;
+  const { inbound, importedOverheard, priorTurns, baseText, turnInput, isPollFire } = turn.ready.prepared;
   const { effectiveTurnWallClockMs, adoptRuntime, runtimeState } = turn.selected;
-  const { strictReadOnly, session, run, lease, turnAbort, historyWindow, turnStart, runHarnessSegment, compactRecent } =
-    turn;
+  const { session, run } = turn;
+  const { lease, turnAbort } = turn.held;
+  const { historyWindow } = turn.begun;
+  const { turnStart } = run;
+  const runHarnessSegment = createHarnessSegment(ctx, turn);
   const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
     let segment = await runHarnessSegment(...args);
     while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {

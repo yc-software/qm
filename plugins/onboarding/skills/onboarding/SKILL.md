@@ -5,7 +5,7 @@ description: Connect a new user's accounts, learn their real work, choose a voic
 
 # Onboarding
 
-Use this skill when onboarding is pending or the user asks to onboard again. Finish with
+Use this skill for a new user's first conversation or when the user asks to onboard again. Finish with
 a durable profile and useful help using whatever authorized access is available.
 Connections are optional, not a prerequisite. Keep turns short and conversational, but complete the steps in order unless the
 user explicitly asks to skip one:
@@ -16,21 +16,17 @@ user explicitly asks to skip one:
 4. Confirm your read, then propose and—with approval—create concrete help.
 
 Do not ask about their voice, their work, or their week until connections are set up or
-explicitly deferred. If they ask to stop, mark onboarding completed and do not raise it again. A returning user
+explicitly deferred. If they ask to stop, do not raise it again. A returning user
 keeps what memory already knows; focus on what changed.
 
 ## State and persistence
 
 Memory is the source of truth. Before the first question, read the notebook with the
-`memory` tool and add this exact fact:
-
-`Onboarding: pending v2 since YYYY-MM-DD.`
+`memory` tool.
 
 After every step, add new facts and edit ones that changed. Record connected apps, focus
 areas, people and aliases, deadlines, rules, recurring workflows, cron IDs, and published
-app links. On completion or an explicit stop, edit the marker fact to:
-
-`Onboarding: completed v2 on YYYY-MM-DD.`
+app links.
 
 Memory is not a file; never edit it with shell commands.
 

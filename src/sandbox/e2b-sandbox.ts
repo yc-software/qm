@@ -16,7 +16,8 @@ import {
   type StoredSandboxRecord,
 } from "./provider-sandbox.ts";
 import type { BackendSandbox } from "./sandbox.ts";
-import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
+import { sandboxBodiesMigration, withRetiredColumns, type SandboxBodies } from "./sandbox-bodies.ts";
+import { cols } from "../persistence/typed-table.ts";
 
 const HOME_DIR = "/home/user";
 const DEFAULT_KEEP_WARM_SEC = 3600;
@@ -27,7 +28,13 @@ export interface StoredE2bSandbox extends StoredSandboxRecord {
   sandboxId?: string;
 }
 
-export const E2B_BODIES = sandboxBodiesMigration("e2b_sandbox_bodies", { sandboxId: { type: "text" } });
+const E2B_TYPED = sandboxBodiesMigration("e2b_sandbox_bodies", { sandboxId: { type: "text" } });
+
+const E2B_RETIRED_COLUMNS =
+  cols(`createdAtMs bigint, nativePause boolean, preservationState text, preservationError text,
+  recoverySnapshotId text, recoveryError text, operatorFilesStagedAt bigint, operatorRecoveryCompletedAt bigint`);
+
+export const E2B_BODIES = withRetiredColumns(E2B_TYPED, E2B_RETIRED_COLUMNS);
 
 export interface E2bSandboxOptions extends SandboxShared {
   client: E2bClient;

@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { getVerifier } from "../../src/webhooks/verifiers.ts";
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
+import { getVerifier, googlePubsubVerifier } from "../../src/webhooks/verifiers.ts";
 
 const SECRET = "shhh";
 const hmac = (body: string, prefix = "") => prefix + createHmac("sha256", SECRET).update(body).digest("hex");
@@ -92,7 +93,7 @@ test("slack dedup key is the signed body's event_id, not the unsigned x-slack-ev
 test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id for dedup", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_123", type: "charge.failed" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const v1 = hmac(`${t}.${rawBody}`);
   const input = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=${v1}` }, rawBody };
   assert.equal(v.verify(input), true);
@@ -100,10 +101,18 @@ test("stripe verifier validates t=…,v1=… over `t.body` and uses the event id
   assert.equal(v.verify({ ...input, headers: { "stripe-signature": `t=${t},v1=deadbeef` } }), false);
 });
 
+test("stripe verifier rejects a correctly signed event whose timestamp is stale, so a captured delivery can't be replayed", () => {
+  const v = getVerifier("stripe")!;
+  const rawBody = JSON.stringify({ id: "evt_old" });
+  const t = String(Math.floor(Date.now() / 1000) - 6 * 60);
+  const sig = `t=${t},v1=${hmac(`${t}.${rawBody}`)}`;
+  assert.equal(v.verify({ secret: SECRET, headers: { "stripe-signature": sig }, rawBody }), false);
+});
+
 test("stripe verifier accepts any valid v1 signature during key rotation", () => {
   const v = getVerifier("stripe")!;
   const rawBody = JSON.stringify({ id: "evt_rot" });
-  const t = "1700000000";
+  const t = String(Math.floor(Date.now() / 1000));
   const valid = hmac(`${t}.${rawBody}`);
   const rotated = { secret: SECRET, headers: { "stripe-signature": `t=${t},v1=oldkeysig,v1=${valid}` }, rawBody };
   assert.equal(v.verify(rotated), true);
@@ -188,4 +197,44 @@ test("linear dedup key is the signed body, ignoring the unsigned linear-delivery
 test("an unknown scheme has no verifier", () => {
   assert.equal(getVerifier("paypal"), null);
   assert.equal(getVerifier("none"), null);
+});
+
+test("google-pubsub accepts only an unexpired Google-issued RS256 token for the webhook's audience", async () => {
+  const { privateKey, publicKey } = await generateKeyPair("RS256");
+  const other = await generateKeyPair("RS256");
+  const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "RS256" };
+  const v = googlePubsubVerifier(createLocalJWKSet({ keys: [jwk] }));
+  const now = Math.floor(Date.now() / 1000);
+  const token = async (
+    claims: { iss?: string; aud?: string; exp?: number } = {},
+    key: Parameters<SignJWT["sign"]>[0] = privateKey,
+  ) => {
+    const jwt = new SignJWT({ email: "push@example.iam.gserviceaccount.com" })
+      .setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setIssuer(claims.iss ?? "https://accounts.google.com")
+      .setAudience(claims.aud ?? "push-audience")
+      .setIssuedAt(now);
+    if (claims.exp !== 0) jwt.setExpirationTime(claims.exp ?? now + 300);
+    return jwt.sign(key);
+  };
+  const rawBody = JSON.stringify({ message: { messageId: "m-42", data: "e30=" }, subscription: "s" });
+  const input = (authorization?: string, secret: string | undefined = "push-audience") => ({
+    ...(secret ? { secret } : {}),
+    headers: authorization ? { authorization } : {},
+    rawBody,
+  });
+
+  assert.equal(await v.verify(input(`Bearer ${await token()}`)), true);
+  assert.equal(await v.verify(input(`Bearer ${await token({ iss: "accounts.google.com" })}`)), true);
+  assert.equal(await v.verify(input(`Bearer ${await token({ aud: "someone-else" })}`)), false);
+  assert.equal(await v.verify(input(`Bearer ${await token({ iss: "https://evil.example" })}`)), false);
+  assert.equal(await v.verify(input(`Bearer ${await token({ exp: now - 60 })}`)), false);
+  assert.equal(await v.verify(input(`Bearer ${await token({ exp: 0 })}`)), false);
+  assert.equal(await v.verify(input(`Bearer ${await token({}, other.privateKey)}`)), false);
+  assert.equal(await v.verify(input(await token())), false);
+  assert.equal(await v.verify(input()), false);
+  assert.equal(await v.verify(input(`Bearer ${await token()}`, "")), false);
+  assert.equal(v.deliveryId(input()), "m-42");
+  assert.equal(v.deliveryId({ headers: {}, rawBody: "not json" }), v.deliveryId({ headers: {}, rawBody: "not json" }));
+  assert.equal(getVerifier("google-pubsub") !== null, true);
 });

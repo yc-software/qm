@@ -1,7 +1,6 @@
 import { contextSummary } from "./session-store.ts";
 import { isOverheard, itemFields, proseText, type Item } from "./items.ts";
 import { searchAuthor } from "./item-search.ts";
-import { headSlice, tailSlice } from "../util/text.ts";
 
 const MAX_HIT_CHARS = 500;
 const MATCH_LEAD_CHARS = 100;
@@ -25,9 +24,6 @@ function itemText(item: Item): string {
   return JSON.stringify(itemFields(item));
 }
 
-const MAX_OPEN_CHARS = 20_000;
-const OPEN_TAIL_CHARS = 2_000;
-
 function itemLabel(entry: Item): string {
   const stamp = `(${new Date(entry.createdAt).toISOString()})`;
   if (isOverheard(entry)) {
@@ -41,12 +37,7 @@ function itemLabel(entry: Item): string {
 export function openSessionItem(items: Item[], seq: number): string | null {
   const entry = items.find((e) => e.seq === seq);
   if (!entry) return null;
-  const text = itemText(entry).trim();
-  const body =
-    text.length <= MAX_OPEN_CHARS
-      ? text
-      : `${headSlice(text, MAX_OPEN_CHARS - OPEN_TAIL_CHARS)}\n… [${text.length} chars total; middle elided] …\n${tailSlice(text, OPEN_TAIL_CHARS)}`;
-  return `${itemLabel(entry)} ${body}`;
+  return `${itemLabel(entry)} ${itemText(entry).trim()}`;
 }
 
 export function searchSessionItems(entries: Item[], query: string, limit = 20): string[] {

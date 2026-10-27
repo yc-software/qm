@@ -130,8 +130,13 @@ const RETIRE_LEGACY_FIRE_HISTORY = {
   ],
 };
 
+const DROP_OLD_FIRE_SYNC = {
+  id: "cron/fires/0003-drop-old-fire-sync",
+  statements: ["DROP FUNCTION IF EXISTS qm_sync_legacy_cron_fire()"],
+};
+
 export function createPostgresCronFireStore(connectionString: string): CronFireStore {
-  const { q, query, pool } = createPgPool(connectionString, [RETIRE_LEGACY_FIRE_HISTORY]);
+  const { q, query, pool } = createPgPool(connectionString, [RETIRE_LEGACY_FIRE_HISTORY, DROP_OLD_FIRE_SYNC]);
 
   return {
     async record(cronId, entry) {

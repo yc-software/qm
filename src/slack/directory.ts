@@ -89,7 +89,7 @@ async function refreshUserSnapshot(deps: UserDirectoryDeps, client: any): Promis
   return { byId, fetchedAt };
 }
 
-export function createUserDirectory(deps: UserDirectoryDeps) {
+function createUserDirectory(deps: UserDirectoryDeps) {
   const { ids } = deps;
   const userCache = createUserCache();
   let snapshot: UserSnapshot | undefined;

@@ -18,6 +18,11 @@ test("stored harness choices are dropped while their runtime selections stay rec
       "DELETE FROM qm_schema_migrations WHERE id IN ('runtime/0002-drop-harness-choice', 'runtime/0003-promote-legacy-base-models', 'durable-map/swarms/0002-drop', 'feature-flags/store/0001-typed')",
     );
     await admin.query("DROP TABLE feature_flags");
+    await admin.query("DROP TABLE crons CASCADE");
+    await admin.query(
+      "DELETE FROM qm_schema_migrations WHERE id LIKE 'triggers/crons/%' OR id LIKE 'contract/triggers/crons/%'",
+    );
+    await admin.query("CREATE TABLE crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
     await asMapTables(admin, [CONFIG_TABLES.baseModels, CONFIG_TABLES.autoFlaggerConfigs]);
     for (const table of JSON_TABLES)
       await admin.query(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
@@ -38,11 +43,16 @@ test("stored harness choices are dropped while their runtime selections stay rec
     await insert("approved_harness_configs", "org:o", { scopeId: "org:o", ids: ["pi", "claude"] });
     await insert("auto_flagger_configs", "org:o", { scopeId: "org:o", harnessId: "claude", modelId: "m", rubric: "r" });
     const cron = (id: string, runtime: unknown) =>
-      admin.query(
-        `INSERT INTO crons (id, owner_scope_id, owner, created_by, enabled, created_at, schedule, runtime)
-         VALUES ($1, 'org:o', 'a', 'a', true, 1, '{}', $2)`,
-        [id, runtime && JSON.stringify(runtime)],
-      );
+      insert("crons", id, {
+        id,
+        ownerScopeId: "org:o",
+        owner: "a",
+        createdBy: "a",
+        enabled: true,
+        createdAt: 1,
+        schedule: {},
+        ...(runtime ? { runtime } : {}),
+      });
     await cron("c1", { harnessId: "claude", modelId: "m" });
     await cron("c2", null);
     await insert("swarms", "s1", { id: "s1", template: { harness: "claude", model: "m" } });

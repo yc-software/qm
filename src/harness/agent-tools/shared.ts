@@ -120,7 +120,9 @@ export const SURFACE_ACTIONS = [
 ] as const;
 const LIST_PAGE_SIZE = 25;
 export const CRON_ID_ACTIONS = new Set(["get", "runs", "patch", "delete", "disable", "run", "note"]);
-export const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter((scheme) => scheme !== "hmac-sha256");
+export const SENDER_WEBHOOK_SCHEMES = WEBHOOK_SCHEMES.filter(
+  (scheme) => scheme !== "hmac-sha256" && scheme !== "google-pubsub",
+);
 const LIST_PAGE_MAX = 100;
 const LIST_TASK_PREVIEW_CHARS = 200;
 export const WEBHOOK_ACTION_PREVIEW_CHARS = 2000;

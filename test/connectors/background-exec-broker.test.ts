@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createBackgroundBroker } from "../../src/connectors/background-exec-broker.ts";
 import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
-import { redactCommand, ProcessSessionGoneError } from "../../src/sandbox/exec-process-session.ts";
+import { ProcessSessionGoneError } from "../../src/sandbox/exec-process-session.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle, StartProcessOptions } from "../../src/sandbox/sandbox.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 
@@ -139,7 +139,7 @@ test("start registers a REDACTED background row and returns an id + initial outp
   const rows = await registry.listByScope(SCOPE);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.kind, "background");
-  assert.equal(rows[0]!.command, redactCommand("bg: npm run build"));
+  assert.equal(rows[0]!.command, "bg: npm run build");
 });
 
 test("start does not leak the foreground turn's env to a durable background job", async () => {
@@ -322,6 +322,21 @@ test("two commands sharing a long prefix do NOT reattach to each other (Bugbot r
   assert.equal(starts.length, 2);
 });
 
+test("a staged credential value in the command and purpose is stored masked", async () => {
+  const { broker, registry } = build();
+  const staged = { env: {}, secrets: ["stagedsecret999"] };
+  await broker.start(
+    handle,
+    "curl -H 'x-key: stagedsecret999' https://x.test",
+    "Probe stagedsecret999",
+    undefined,
+    staged,
+  );
+  const row = (await registry.listByScope(SCOPE))[0]!;
+  assert.equal(row.command, "bg: curl -H 'x-key: <redacted:credential>' https://x.test");
+  assert.equal(row.purpose, "Probe <redacted:credential>");
+});
+
 test("a known injected env value in the command is stored value-masked", async () => {
   const { broker, registry } = build();
   const envHandle: SandboxHandle = { ...handle, env: { GITHUB_TOKEN: "ghp_secretvalue12345" } };
@@ -345,20 +360,29 @@ test("whitespace is normalized before keying so spacing differences reattach to 
 
 test("a secret-bearing command is stored REDACTED but does NOT reattach (a redacted key aliases distinct secrets)", async () => {
   const { broker, registry, starts } = build();
-  const cmd = "deploy --token sekret123 --target prod";
-  await broker.start(handle, cmd, "Run background tests");
+  const envHandle: SandboxHandle = { ...handle, env: { DEPLOY_TOKEN: "sekret12345" } };
+  const cmd = `deploy --token sekret12345 --target prod ${"x".repeat(600)}`;
+  await broker.start(envHandle, cmd, "Run background tests");
   const row = (await registry.listByScope(SCOPE))[0]!;
-  assert.equal(row.command, redactCommand("bg: deploy --token sekret123 --target prod"));
-  assert.match(row.command, /<redacted>/);
-  const again = await broker.start(handle, cmd, "Run background tests");
+  assert.equal(row.command, `bg: deploy --token <redacted:DEPLOY_TOKEN> --target prod ${"x".repeat(600)}`);
+  const again = await broker.start(envHandle, cmd, "Run background tests");
   assert.equal(again.reattached, false);
   assert.equal(starts.length, 2);
 });
 
 test("two commands differing only in a redacted secret VALUE launch TWO distinct jobs (no alias reattach)", async () => {
   const { broker, starts } = build();
-  const a = await broker.start(handle, "deploy --token AAA --target prod", "Run background tests");
-  const b = await broker.start(handle, "deploy --token BBB --target prod", "Run background tests");
+  const withToken = (value: string): SandboxHandle => ({ ...handle, env: { DEPLOY_TOKEN: value } });
+  const a = await broker.start(
+    withToken("AAAAAAAAAA"),
+    "deploy --token AAAAAAAAAA --target prod",
+    "Run background tests",
+  );
+  const b = await broker.start(
+    withToken("BBBBBBBBBB"),
+    "deploy --token BBBBBBBBBB --target prod",
+    "Run background tests",
+  );
   assert.notEqual(a.processId, b.processId);
   assert.equal(b.reattached, false);
   assert.equal(starts.length, 2);
@@ -498,7 +522,7 @@ test("start requires a purpose before launching, and persists a trimmed, redacte
     "  Preview\nsecretvalue12345   server  ",
   );
   const row = await registry.get(result.processId);
-  assert.equal(row?.purpose, redactCommand("Preview secretvalue12345 server", { TOKEN: "secretvalue12345" }));
+  assert.equal(row?.purpose, "Preview <redacted:TOKEN> server");
   assert.equal(row?.command, "bg: node server.js");
   assert.equal((await broker.list())[0]?.purpose, row?.purpose);
   await broker.start(handle, "node server.js", "Another description");

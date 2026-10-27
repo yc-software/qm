@@ -33,7 +33,6 @@ import {
   revokeAdminGrant,
   revokeExternalUser,
   searchDirectory,
-  setUserOnboarding,
   startImpersonation,
   stopImpersonation,
 } from "./admin/users.ts";
@@ -167,7 +166,6 @@ const routes: Route<ApiCtx>[] = [
     route("GET", "/directory", searchDirectory),
     route("GET", "/keychain", listKeychainStatus, PRIVATE),
     route("GET", "/users/:principalId", getUserDetail, PRIVATE),
-    route("PUT", "/users/:principalId/onboarding", setUserOnboarding),
     route("POST", "/users/:principalId/reset", resetUserToBrandNew),
     route("GET", "/principal-links", listPrincipalLinks, portalOnly(LINKS)),
     route("POST", "/principal-links", createPrincipalLink, portalOnly(LINKS)),

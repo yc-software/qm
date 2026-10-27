@@ -163,8 +163,8 @@ test("a HiLO approval summarizer that hangs past the deadline falls back without
   assert.ok(Date.now() - started < 2_000, "the approval is abandoned at the (configured) deadline, not the 6s default");
 });
 
-test("denying a pending approval clears it and does not run the command", async () => {
-  const { app } = freshApp();
+test("denying a pending approval keeps the turn working without the command", async () => {
+  const { app, sessions } = freshApp();
   const first = await app.turn(dm("!run rm -rf build"));
   assert.equal(first.status, "pending_approval");
   const pending = first.pendingApprovals![0]!;
@@ -174,9 +174,31 @@ test("denying a pending approval clears it and does not run the command", async 
       approval: { requestId: pending.requestId, approved: false },
     }),
   );
-  assert.equal(denied.status, "refused");
-  assert.match(denied.reason ?? "", /approval denied/);
-  assert.equal(denied.refusalKind, "approval_denied");
+  assert.equal(denied.status, "ok", "a denial continues the turn instead of ending it");
+  assert.equal(denied.refusalKind, undefined);
+  assert.equal(denied.reply, "carried on without it");
+  assert.equal(denied.pendingApprovals, undefined, "the denied command is not asked for again");
+
+  const items = await sessions.getItems(denied.sessionId!);
+  const note = items.find((e) => e.kind === "UserMessage" && e.hidden);
+  assert.equal(
+    note?.text,
+    "The requesting human denied this pending operation, so it did not run: In plain English: rm -rf build (recursive delete).\nContinue without it. You need not address the denial. Do not retry it unless they ask again.",
+  );
+  assert.equal(items.filter((e) => e.kind === "ToolResult").length, 0, "the denied command never ran");
+  assert.equal(
+    items.filter((e) => e.kind === "UserMessage" && !e.hidden && e.text === "!run rm -rf build").length,
+    1,
+    "the paused request is replayed hidden, not shown a second time",
+  );
+  const decision = items.find((e) => e.kind === "ElicitationResponse");
+  assert.equal(decision?.approved, false);
+  assert.ok(
+    items.indexOf(decision!) < items.findIndex((e) => e.kind === "AgentMessage" && e.text === "carried on without it"),
+  );
+
+  const next = await app.turn(dm("thanks"));
+  assert.equal(next.status, "ok", "the cleared approval no longer blocks the thread");
 });
 
 test("collect-mode: a turn that finished after skipping an approval-gated command keeps its reply", async () => {

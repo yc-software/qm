@@ -289,7 +289,7 @@ test("approval handoff unlocks queue and steer without losing pending decisions"
       continuation.resolve(
         Response.json({
           status: "done",
-          result: { status: "refused", refusalKind: "approval_denied", reason: "approval denied" },
+          result: { status: "ok", reply: "Carried on without it." },
         }),
       );
       decision.resolve(Response.json({ runId: "r1" }));

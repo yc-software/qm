@@ -232,20 +232,21 @@ export const runRoutes: readonly WebRoute[] = [
     const { req, res, user } = c;
     res.writeHead(200, SSE_HEADERS);
     res.write(": open\n\n");
-    let set = eventClients.get(user);
+    const clients = eventClients();
+    let set = clients.get(user);
     if (!set) {
       set = new Set();
-      eventClients.set(user, set);
+      clients.set(user, set);
     }
     set.add(res);
     const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
     beat.unref?.();
     req.on("close", () => {
       clearInterval(beat);
-      const s = eventClients.get(user);
+      const s = clients.get(user);
       if (s) {
         s.delete(res);
-        if (!s.size) eventClients.delete(user);
+        if (!s.size) clients.delete(user);
       }
     });
     return;

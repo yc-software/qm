@@ -13,7 +13,7 @@ import type { SlackCoreClient } from "../api/slack-core-client.ts";
 
 export type RosterRef = { id: string; info?: ChannelMeta };
 export type RosterKind = { plural: string; authz: string; item: string; limit?: number; requireComplete?: boolean };
-export type ClassifiedRoster = { actors: ActorAssertion[]; complete: boolean };
+type ClassifiedRoster = { actors: ActorAssertion[]; complete: boolean };
 export interface RosterReader {
   ids: { botUserId: string };
   classifyUserCached: (client: any, userId: string | undefined) => Promise<CachedUser & { ok: boolean }>;
@@ -22,7 +22,7 @@ export interface RosterReader {
 const MEMBERS_PAGE_LIMIT = 200;
 const ROSTER_FETCH_CONCURRENCY = 4;
 
-export async function listBotConversations(client: any, types: string): Promise<Array<ChannelMeta & { id: string }>> {
+async function listBotConversations(client: any, types: string): Promise<Array<ChannelMeta & { id: string }>> {
   const out: Array<ChannelMeta & { id: string }> = [];
   for await (const res of client.paginate("conversations.list", {
     types,
@@ -45,7 +45,7 @@ export async function fetchChannelMemberIds(client: any, botUserId: string, chan
   return memberIds;
 }
 
-export async function allClassifiedRosters(
+async function allClassifiedRosters(
   reader: RosterReader,
   client: any,
   refs: ReadonlyArray<RosterRef>,

@@ -22,15 +22,15 @@ test("the org scope enables a feature everywhere", async () => {
   assert.equal(await store.enabled("inbox_loops", "channel:C1"), true);
 });
 
-test("persistent subagents and responsive spine default off and are enabled per person, independently", async () => {
+test("ui canvas and responsive spine default off and are enabled per person, independently", async () => {
   const store = createFeatureFlagStore(testDatabaseUrl());
-  assert.equal(await store.enabled("persistent_subagents", "personal:U1"), false);
-  await store.setEnabled("persistent_subagents", "personal:U1", true, "admin");
-  assert.equal(await store.enabled("persistent_subagents", "personal:U1"), true);
-  assert.equal(await store.enabled("persistent_subagents", "personal:U2"), false);
-  assert.equal(await store.enabled("persistent_subagents", "channel:C1"), false);
+  assert.equal(await store.enabled("ui_canvas", "personal:U1"), false);
+  await store.setEnabled("ui_canvas", "personal:U1", true, "admin");
+  assert.equal(await store.enabled("ui_canvas", "personal:U1"), true);
+  assert.equal(await store.enabled("ui_canvas", "personal:U2"), false);
+  assert.equal(await store.enabled("ui_canvas", "channel:C1"), false);
 
-  await store.setEnabled("persistent_subagents", "personal:U2", true, "admin");
+  await store.setEnabled("ui_canvas", "personal:U2", true, "admin");
   assert.equal(await store.enabled("responsive_spine", "personal:U2"), false);
   await store.setEnabled("responsive_spine", "personal:U1", true, "admin");
   assert.equal(await store.enabled("responsive_spine", "personal:U1"), true);

@@ -1,13 +1,10 @@
-// Wrappers applied to every agent tool: retry-safety marks, the approval gate, body timing and the runtime barrier.
-
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
-import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { redactSensitiveKeys } from "../../../plugins/chassis/src/redact-secrets.ts";
 import { toolCallApprovalKey } from "../../core/approval-id.ts";
-import { redactCommand } from "../../sandbox/exec-process-session.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
 import { isObj } from "../../util/objects.ts";
-import { type ToolContextRef } from "../agent-tools.ts";
+import type { ToolRuntime, TurnHalt } from "../turn-tool-state.ts";
 import { optionalBoolean, text } from "./shared.ts";
 
 const RETRY_SAFE_FIELD = "retrySafe";
@@ -76,12 +73,13 @@ async function declaredApprovalReason(tool: ToolApprovalDeclaration, params: unk
 }
 
 function approvalCallText(label: string, params: unknown): string {
-  return `${label} ${redactCommand(redactSecrets(canonicalJson(params ?? {})))}`;
+  return `${label} ${canonicalJson(redactSensitiveKeys(params ?? {}))}`;
 }
 
 export function withToolApprovalGate(
   tool: ToolDefinition & ToolApprovalDeclaration,
-  ref: ToolContextRef,
+  ref: Pick<ToolRuntime, "approves" | "holdApproval">,
+  halt: Pick<TurnHalt, "pauseForApproval">,
   rec: {
     recordCall: (callId: string, payload: Record<string, unknown>) => Promise<void>;
     recordResult: <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
@@ -126,9 +124,9 @@ export function withToolApprovalGate(
           true,
         );
       }
-      if (callKey && !ref.toolApprovalGate?.(callKey)) {
+      if (callKey && !ref.approves(callKey)) {
         const reason = declaredReason!;
-        ref.pendingApprovals?.push({
+        halt.pauseForApproval({
           command: approvalCallText(commandLabel, params),
           reason,
           kind: "approval",
@@ -137,7 +135,6 @@ export function withToolApprovalGate(
           grantModes: { session: false, always: false },
           ...(isObj(params) && typeof params.purpose === "string" ? { purpose: params.purpose } : {}),
         });
-        ref.pausedOnApproval = true;
         await rec.recordCall(callId, {
           tool: tool.name,
           ...(resourceAction ? { action: resourceAction } : {}),
@@ -158,18 +155,17 @@ export function withToolApprovalGate(
         );
       }
       if (!callKey) return (inner as (callId: string, params: unknown) => unknown)(callId, params);
-      const approved = (ref.approvedToolCalls ??= new Map());
-      approved.set(callId, callKey);
+      const release = ref.holdApproval(callId, callKey);
       try {
         return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
       } finally {
-        approved.delete(callId);
+        release();
       }
     },
   } as ToolDefinition;
 }
 
-export function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
+export function withToolBodyTiming(tool: ToolDefinition, ref: Pick<ToolRuntime, "reportGapWork">): ToolDefinition {
   const inner = tool.execute.bind(tool);
   return {
     ...tool,
@@ -179,7 +175,7 @@ export function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): T
         return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
       } finally {
         try {
-          ref.onGapWork?.({ phase: "tool_body", tool: tool.name, start, end: Date.now() });
+          ref.reportGapWork({ phase: "tool_body", tool: tool.name, start, end: Date.now() });
         } catch (error) {
           swallow("tool body timing sink", error);
         }
@@ -188,39 +184,39 @@ export function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): T
   } as ToolDefinition;
 }
 
-export function withRuntimeBarrier(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
+export function withRuntimeBarrier(
+  tool: ToolDefinition,
+  ref: Pick<
+    ToolRuntime,
+    "abortSignal" | "runtimeMutationPending" | "beginRuntimeMutation" | "endRuntimeMutation" | "trackRuntimeCall"
+  >,
+  halt: Pick<TurnHalt, "handoff" | "pausedOnApproval" | "silent">,
+): ToolDefinition {
   return {
     ...tool,
     async execute(...args) {
       const [, params] = args;
-      if (ref.runtimeHandoff || ref.runtimeMutationPending)
+      if (halt.handoff() || ref.runtimeMutationPending())
         return {
           ...text(
             "Runtime handoff in progress; this call was not executed. Resume unfinished work on the selected runtime.",
           ),
-          terminate: !!ref.runtimeHandoff,
+          terminate: !!halt.handoff(),
         };
       const mutation =
         tool.name === "context" || (tool.name === "runtime" && (!isObj(params) || params.action !== "get"));
       if (mutation) {
-        ref.runtimeMutationPending = true;
+        const settled = ref.beginRuntimeMutation();
         try {
-          await Promise.allSettled(ref.runtimeInFlight ?? []);
-          if (ref.abortSignal?.aborted || ref.pausedOnApproval || ref.silentRequested)
+          await settled;
+          if (ref.abortSignal?.aborted || halt.pausedOnApproval() || halt.silent())
             return { ...text("Runtime change cancelled before execution."), terminate: true };
           return await tool.execute(...args);
         } finally {
-          ref.runtimeMutationPending = false;
+          ref.endRuntimeMutation();
         }
       }
-      const inFlight = (ref.runtimeInFlight ??= new Set());
-      const result = Promise.resolve().then(() => tool.execute(...args));
-      inFlight.add(result);
-      try {
-        return await result;
-      } finally {
-        inFlight.delete(result);
-      }
+      return ref.trackRuntimeCall(Promise.resolve().then(() => tool.execute(...args)));
     },
   };
 }

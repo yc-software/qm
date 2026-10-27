@@ -17,14 +17,8 @@ ${SECURITY_SCREEN_OUTPUT_CONTRACT}`;
 
 export const SECURITY_SCREEN_SYSTEM_PROMPT = securityScreenSystemPrompt();
 
-/**
- * Step recorded on a captured security-screen LLM request. Screening calls are not part of any
- * turn's step sequence, so they are stamped with this sentinel — which also makes past screenings
- * findable as a replay corpus for the Auto flagger test run.
- */
 export const SECURITY_SCREEN_STEP = -1;
 
-/** Recover the screened payload from a captured screening request envelope, or null if it isn't one. */
 export function screenPayloadFromEnvelope(envelope: unknown): string | null {
   const messages = (envelope as { messages?: unknown } | null)?.messages;
   if (!Array.isArray(messages) || messages.length !== 1) return null;
@@ -131,12 +125,47 @@ interface SecurityScreenInput {
 const DATA_BEARING_SURFACES = new Set(["monitor", "webhook"]);
 export const MAX_SCREEN_CHARS = 16_000;
 
-export interface SecurityScreenPayload {
-  content: string;
-  truncated: boolean;
+type ScreenItem = { source: string; content: string };
+
+const SCREEN_OVERLAP_CHARS = 500;
+
+const fits = (items: ScreenItem[]) => JSON.stringify(items).length <= MAX_SCREEN_CHARS;
+
+function piecesOf(original: ScreenItem): ScreenItem[] {
+  if (fits([original])) return [original];
+  const labelChars = JSON.stringify([{ ...original, content: "" }]).length;
+  const item =
+    labelChars * 2 <= MAX_SCREEN_CHARS
+      ? original
+      : { source: "oversize-label", content: `${original.source}\n${original.content}` };
+  const budget = MAX_SCREEN_CHARS - JSON.stringify([{ ...item, content: "" }]).length;
+  const pieces: ScreenItem[] = [];
+  for (let start = 0; start < item.content.length;) {
+    let end = Math.min(item.content.length, start + budget);
+    while (!fits([{ ...item, content: item.content.slice(start, end) }]))
+      end = start + Math.max(1, Math.floor((end - start) / 2));
+    pieces.push({ ...item, content: item.content.slice(start, end) });
+    if (end === item.content.length) break;
+    start = Math.max(start + 1, end - Math.min(SCREEN_OVERLAP_CHARS, Math.floor((end - start) / 4)));
+  }
+  return pieces;
 }
 
-export function securityScreenPayload(input: SecurityScreenInput): SecurityScreenPayload | null {
+function packed(items: ScreenItem[]): string[] {
+  const chunks: string[] = [];
+  let current: ScreenItem[] = [];
+  for (const piece of items.flatMap(piecesOf)) {
+    if (current.length && !fits([...current, piece])) {
+      chunks.push(JSON.stringify(current));
+      current = [];
+    }
+    current.push(piece);
+  }
+  if (current.length) chunks.push(JSON.stringify(current));
+  return chunks;
+}
+
+export function securityScreenPayloads(input: SecurityScreenInput): string[] {
   const payloads: Array<{ source: string; content: string }> = [];
   const automation = input.origin?.kind === "automation" ? input.origin : undefined;
   if (
@@ -164,37 +193,11 @@ export function securityScreenPayload(input: SecurityScreenInput): SecurityScree
     seen.add(key);
     return true;
   });
-  if (!unique.length) return null;
-  const serialized = JSON.stringify(unique);
-  if (serialized.length <= MAX_SCREEN_CHARS) return { content: serialized, truncated: false };
-  const marker = "\n...[security screen input truncated]...\n";
-  const half = Math.floor((MAX_SCREEN_CHARS - marker.length) / 2);
-  return { content: serialized.slice(0, half) + marker + serialized.slice(-half), truncated: true };
-}
-
-const SCREEN_CHUNK_CHARS = 7_500;
-const SCREEN_CHUNK_OVERLAP = 500;
-
-function boundedChunk(surface: string, slice: string, out: string[]): void {
-  const payload = securityScreenPayload({ surface, text: "", origin: { kind: "automation", screenData: slice } });
-  if (!payload) return;
-  if (!payload.truncated || slice.length <= 1) {
-    out.push(payload.content);
-    return;
-  }
-  const mid = Math.ceil(slice.length / 2);
-  const overlap = Math.min(SCREEN_CHUNK_OVERLAP, Math.floor(slice.length / 4));
-  boundedChunk(surface, slice.slice(0, mid + overlap), out);
-  boundedChunk(surface, slice.slice(mid - overlap), out);
+  return packed(unique);
 }
 
 export function securityScreenChunks(surface: string, data: string): string[] {
-  const chunks: string[] = [];
-  const step = SCREEN_CHUNK_CHARS - SCREEN_CHUNK_OVERLAP;
-  for (let start = 0; start === 0 || start + SCREEN_CHUNK_OVERLAP < data.length; start += step) {
-    boundedChunk(surface, data.slice(start, start + SCREEN_CHUNK_CHARS), chunks);
-  }
-  return chunks;
+  return securityScreenPayloads({ surface, text: "", origin: { kind: "automation", screenData: data } });
 }
 
 export function toolLabelOf(tool: string): string {

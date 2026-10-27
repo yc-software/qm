@@ -20,7 +20,6 @@ process.env.PORTAL_PUBLIC_URL = "http://localhost:18198";
 process.env.PORTAL_SESSION_SECRET = "ui-channel-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "ui-channel-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "1";
 process.env.PORTAL_DEV_PRINCIPAL = "local-user";

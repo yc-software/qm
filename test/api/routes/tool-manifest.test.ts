@@ -2,7 +2,8 @@ import "../../support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createAgentTools, type ToolContextRef } from "../../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../../src/harness/turn-tool-state.ts";
 import { toolManifest, type ToolManifestInput } from "../../../src/harness/tool-manifest.ts";
 import type { McpToolDescriptor } from "../../../src/mcp/mcp-tool-service.ts";
 import { createServer } from "../../../src/api/server.ts";
@@ -43,9 +44,9 @@ test("createAgentTools returns exactly the manifest's present tools, in order, w
                   current: privileged
                     ? { installSharedCanvas: async () => null, admin: { operationsAvailable: true } }
                     : { admin: { operationsAvailable: false } },
-                } as unknown as ToolContextRef;
+                } as unknown as TurnToolStateInit;
                 const clientTools = [{ name: "page_read", description: "Read", inputSchema: { type: "object" } }];
-                const tools = createAgentTools(ref, {
+                const tools = createAgentTools(createTurnToolState(ref), {
                   controlTools,
                   surfaceTools,
                   surfaceName,
@@ -124,7 +125,6 @@ test("GET /v1/tool-manifest lists the signed-in person's web tools with their co
     mcpToolService: {
       toolDefsFor: async (principalId?: string) => (principalId === "alice@default-org" ? connectors : []),
     } as never,
-    featureFlags: { enabled: async (name: string) => name === "persistent_subagents" } as never,
   });
   server.listen(0);
   const get = async (principalId: string) => {

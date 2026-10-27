@@ -11,6 +11,7 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 import type { JobHandler, JobWorker } from "../../src/jobs/job-worker.ts";
 import type { TriggerDeps } from "../../src/triggers/run-trigger.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
+import { MAX_SCREEN_CHARS } from "../../src/security/security-screen.ts";
 
 const SECRET = "topsecret";
 let inFlight = 0;
@@ -388,7 +389,7 @@ test("history records the agent payload once per delivery without request header
   const events = await webhooks.listEvents(wh.id);
   assert.equal(events.length, 1);
   assert.match(events[0]?.payload ?? "", /truncated/);
-  assert.ok(events[0]!.payload.length < 16_100);
+  assert.ok(events[0]!.payload.length <= MAX_SCREEN_CHARS, "the recorded payload fits what the security screen reads");
   assert.equal(JSON.stringify(events).includes(SECRET), false);
   assert.equal(JSON.stringify(events).includes("x-hub-signature"), false);
 });
@@ -457,4 +458,26 @@ test("an edited task applies to the next delivery at the same URL and secret", a
   await flush();
   assert.match(calls[0]?.text ?? "", /new orders/);
   assert.doesNotMatch(calls[0]?.text ?? "", /old orders/);
+});
+
+test("a google-pubsub webhook without Google's signed token is refused", async () => {
+  const { webhooks, calls, receiver } = harness();
+  const wh = await webhooks.create({
+    ownerScopeId: scopeId("personal", "U1"),
+    owner: "U1",
+    createdBy: "U1",
+    action: "file the mail",
+    verification: { scheme: "google-pubsub", secret: "push-audience" },
+  });
+  const rawBody = JSON.stringify({ message: { messageId: "m-1", data: "e30=" } });
+  for (const authorization of [undefined, "Bearer not-a-jwt"])
+    assert.deepEqual(
+      await receiver.deliver(wh.id, {
+        headers: { "content-type": "application/json", ...(authorization ? { authorization } : {}) },
+        rawBody,
+      }),
+      { status: 401 },
+    );
+  await flush();
+  assert.equal(calls.length, 0);
 });

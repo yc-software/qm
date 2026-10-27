@@ -17,7 +17,6 @@ export type MessageFields = Partial<{
   sendFailure: string;
   edited: boolean;
   deleted: boolean;
-  approvalDecision: string;
   speaker: string;
   speakerId: string;
   timestamp: number;

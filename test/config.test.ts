@@ -35,9 +35,9 @@ test("ORG_BRAND_* parses into a validated branding default", () => {
   );
   assert.equal(loadConfig({ ORG_BRAND_ACCENT: "#abcde" }).brandingDefault, undefined);
   assert.deepEqual(loadConfig({ ORG_BRAND_MARK: 'a"bc' }).brandingDefault, { mark: "ab" });
-  assert.equal(loadConfig({ ORG_BRAND_SELF_LABEL: "x".repeat(80) }).brandingDefault?.selfLabel?.length, 40);
+  assert.equal(loadConfig({ ORG_BRAND_SELF_LABEL: "x".repeat(80) }).brandingDefault?.selfLabel?.length, 80);
   assert.deepEqual(loadConfig({ ORG_BRAND_ORG_NAME: "Acme Corp" }).brandingDefault, { orgName: "Acme Corp" });
-  assert.equal(loadConfig({ ORG_BRAND_ORG_NAME: "x".repeat(80) }).brandingDefault?.orgName?.length, 40);
+  assert.equal(loadConfig({ ORG_BRAND_ORG_NAME: "x".repeat(80) }).brandingDefault?.orgName?.length, 80);
   assert.deepEqual(loadConfig({ ORG_BRAND_SELF_LABEL: "{{straylight}}" }).brandingDefault, { selfLabel: "straylight" });
 });
 
@@ -500,6 +500,8 @@ test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "false" }).suggestedActivitiesEnabled, false);
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
+  const context = "The team ships on Fridays. ".repeat(400);
+  assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_CONTEXT: context }).suggestedActivitiesContext, context);
 });
 
 test("background ownership requires durable storage and an independent deployment authority", () => {
@@ -523,6 +525,8 @@ test("background ownership requires durable storage and an independent deploymen
     /distinct DEPLOYMENT_CONTROL_SECRET/,
   );
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
+  const longId = `core:${"release-".repeat(40)}end`;
+  assert.equal(loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: longId }).backgroundDeploymentId, longId);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
 });

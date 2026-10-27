@@ -1,4 +1,3 @@
-/** The Pi harness's side calls: reply detection, compaction, judging, security screening, ack emoji, titles and approval summaries. */
 import { refusalFallbackModelId } from "./turn-recovery.ts";
 import { type ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { ProviderTurnError } from "../core/turn-error.ts";
@@ -23,30 +22,31 @@ import {
   sanitizeTitle,
 } from "./pi-aux-prompts.ts";
 import { buildModelRuntime, complete } from "./pi-model-runtime.ts";
-import type { PiHarnessContext } from "./pi-harness.ts";
+import type { PiModelAccess } from "./pi-model-access.ts";
 import type { HarnessSecurityScreenInput } from "./harness.ts";
 import type { SecurityScreenVerdict } from "../security/security-screen.ts";
-/** One isolated completion on `modelId`; null when no provider key serves that model. */
 async function keyedOneShot(
-  ctx: PiHarnessContext,
+  access: PiModelAccess,
   modelId: string,
   systemPrompt: string,
   prompt: string,
   extra?: { signal?: AbortSignal; thinkingLevel?: ModelThinkingLevel },
 ): Promise<string | undefined | null> {
-  const { resolveProviderKeys, modelGateway, requiredModel, keyForModel } = ctx;
-  const model = requiredModel(modelId);
-  const providerKeys = await resolveProviderKeys();
-  if (!keyForModel(providerKeys, model)) return null;
-  return complete(model, providerKeys, systemPrompt, prompt, { modelGateway, ...extra });
+  const model = access.model(modelId);
+  const providerKeys = await access.providerKeys();
+  if (!access.keyFor(providerKeys, model)) return null;
+  return complete(model, providerKeys, systemPrompt, prompt, { modelGateway: access.gateway, ...extra });
 }
 
-export async function piShouldRespond(ctx: PiHarnessContext, detect: HarnessDetectInput): Promise<HarnessDetectResult> {
-  const { detectModelId, resolveProviderKeys, modelGateway, requiredModel, keyForModel } = ctx;
+export async function piShouldRespond(
+  access: PiModelAccess,
+  detectModelId: () => string,
+  detect: HarnessDetectInput,
+): Promise<HarnessDetectResult> {
   const modelId = detectModelId();
-  const model = requiredModel(modelId);
-  const providerKeys = await resolveProviderKeys();
-  if (!keyForModel(providerKeys, model)) return { respond: true };
+  const model = access.model(modelId);
+  const providerKeys = await access.providerKeys();
+  if (!access.keyFor(providerKeys, model)) return { respond: true };
   const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
   const prompt = renderDetectPrompt(detect);
   detect.recordModelCall({
@@ -54,17 +54,23 @@ export async function piShouldRespond(ctx: PiHarnessContext, detect: HarnessDete
     inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
     entryCount: detect.history.length,
   });
-  const out = ((await complete(model, providerKeys, detectSystemPrompt, prompt, { modelGateway })) ?? "").trim();
+  const out = (
+    (await complete(model, providerKeys, detectSystemPrompt, prompt, { modelGateway: access.gateway })) ?? ""
+  ).trim();
   return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
 }
 
-export async function piCompactHistory(ctx: PiHarnessContext, input: HarnessCompactInput): Promise<string> {
-  const { resolveModelId, resolveProviderKeys, modelGateway, companyServedId, requiredModel, opts } = ctx;
-  const primaryId = resolveModelId();
-  const providerKeys = await resolveProviderKeys();
-  const runtime = await buildModelRuntime(providerKeys, modelGateway);
+export async function piCompactHistory(
+  access: PiModelAccess,
+  primaryModelId: () => string,
+  fallbackModelId: () => string | undefined,
+  input: HarnessCompactInput,
+): Promise<string> {
+  const primaryId = primaryModelId();
+  const providerKeys = await access.providerKeys();
+  const runtime = await buildModelRuntime(providerKeys, access.gateway);
   const summarize = (compactModelId: string) =>
-    summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
+    summarizeHistory(input.history, access.model(compactModelId), (summaryModel, context, options) => {
       input.recordModelCall({
         model: compactModelId,
         inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
@@ -77,15 +83,15 @@ export async function piCompactHistory(ctx: PiHarnessContext, input: HarnessComp
   } catch (error) {
     const fallbackId = refusalFallbackModelId(
       primaryId,
-      opts?.resolveFallbackRuntime?.()?.modelId,
-      (id) => !!resolveModel(companyServedId(id)),
+      fallbackModelId(),
+      (id) => !!resolveModel(access.servedId(id)),
     );
     if (
       !(error instanceof ProviderTurnError) ||
       error.code !== "refusal" ||
       !fallbackId ||
-      !resolveModel(companyServedId(fallbackId)) ||
-      companyServedId(fallbackId) === companyServedId(primaryId)
+      !resolveModel(access.servedId(fallbackId)) ||
+      access.servedId(fallbackId) === access.servedId(primaryId)
     )
       throw error;
     console.error(`[pi] compaction failed on ${primaryId}; retrying on fallback model ${fallbackId}: ${error.message}`);
@@ -93,29 +99,28 @@ export async function piCompactHistory(ctx: PiHarnessContext, input: HarnessComp
   }
 }
 
-export function piContextTokenBudget(ctx: PiHarnessContext, _scopeLabel?: string, model?: string): number | undefined {
-  const { resolveModelId } = ctx;
-  const id = model && resolveModel(model) ? model : resolveModelId();
+export function piContextTokenBudget(primaryModelId: () => string, model?: string): number | undefined {
+  const id = model && resolveModel(model) ? model : primaryModelId();
   return contextTokenBudgetForModel(id);
 }
 
 export async function piOneShot(
-  ctx: PiHarnessContext,
+  access: PiModelAccess,
+  modelId: () => string,
   systemPrompt: string,
   prompt: string,
 ): Promise<string | undefined> {
-  const { resolveModelId } = ctx;
-  return (await keyedOneShot(ctx, resolveModelId(), systemPrompt, prompt)) ?? undefined;
+  return (await keyedOneShot(access, modelId(), systemPrompt, prompt)) ?? undefined;
 }
 
 export async function piJudge(
-  ctx: PiHarnessContext,
+  access: PiModelAccess,
+  judgeModelId: () => string,
   systemPrompt: string,
   prompt: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const { judgeModelId } = ctx;
-  const out = await keyedOneShot(ctx, judgeModelId(), systemPrompt, prompt, {
+  const out = await keyedOneShot(access, judgeModelId(), systemPrompt, prompt, {
     signal,
     thinkingLevel: "low",
   });
@@ -123,7 +128,8 @@ export async function piJudge(
 }
 
 export async function piScreenSecurity(
-  ctx: PiHarnessContext,
+  access: PiModelAccess,
+  detectModelId: () => string,
   {
     payload,
     modelId: configuredScreenModel,
@@ -133,12 +139,11 @@ export async function piScreenSecurity(
     recordLlmRequest,
   }: HarnessSecurityScreenInput,
 ): Promise<SecurityScreenVerdict | undefined> {
-  const { detectModelId, resolveProviderKeys, modelGateway, requiredModel, keyForModel } = ctx;
   try {
     const modelId = configuredScreenModel ?? detectModelId();
-    const model = requiredModel(modelId);
-    const providerKeys = await resolveProviderKeys();
-    if (!keyForModel(providerKeys, model)) return undefined;
+    const model = access.model(modelId);
+    const providerKeys = await access.providerKeys();
+    if (!access.keyFor(providerKeys, model)) return undefined;
     recordModelCall({
       model: modelId,
       inputTokens: countTokens(systemPrompt) + countTokens(payload),
@@ -154,7 +159,7 @@ export async function piScreenSecurity(
     return parseSecurityScreenVerdict(
       await complete(model, providerKeys, systemPrompt, payload, {
         signal,
-        modelGateway,
+        modelGateway: access.gateway,
       }),
     );
   } catch (e) {
@@ -164,22 +169,20 @@ export async function piScreenSecurity(
 }
 
 export async function piPickAckEmoji(
-  ctx: PiHarnessContext,
+  access: PiModelAccess,
   text: string,
   candidates: readonly string[],
 ): Promise<string | undefined> {
-  const { resolveProviderKeys, modelGateway, requiredModel, keyForModel } = ctx;
   if (!text.trim() || candidates.length === 0) return undefined;
   const ackModelId = auxiliaryModelForProvider("anthropic");
   if (!ackModelId) return undefined;
   try {
-    const model = requiredModel(ackModelId);
-    const providerKeys = await resolveProviderKeys();
-    if (!keyForModel(providerKeys, model)) return undefined;
+    const model = access.model(ackModelId);
+    const providerKeys = await access.providerKeys();
+    if (!access.keyFor(providerKeys, model)) return undefined;
     const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-    // Haiku thinks by default; a 64-token budget would go entirely to thinking.
     const raw = await complete(model, providerKeys, ACK_EMOJI_PROMPT, prompt, {
-      modelGateway,
+      modelGateway: access.gateway,
       thinkingLevel: "off",
       maxTokens: 64,
       retry: false,
@@ -194,20 +197,23 @@ export async function piPickAckEmoji(
   }
 }
 
-export async function piGenerateTitle(ctx: PiHarnessContext, transcript: string): Promise<string | undefined> {
-  const { titleModelId } = ctx;
+export async function piGenerateTitle(
+  access: PiModelAccess,
+  titleModelId: () => string,
+  transcript: string,
+): Promise<string | undefined> {
   if (!transcript.trim()) return undefined;
-  const out = await keyedOneShot(ctx, titleModelId(), TITLE_GENERATION_PROMPT, titleUserPrompt(transcript));
+  const out = await keyedOneShot(access, titleModelId(), TITLE_GENERATION_PROMPT, titleUserPrompt(transcript));
   return out === null ? undefined : sanitizeTitle(out);
 }
 
 export async function piSummarizeApproval(
-  ctx: PiHarnessContext,
+  access: PiModelAccess,
+  titleModelId: () => string,
   command: string,
   reason: string,
   purpose?: string,
 ): Promise<string | undefined> {
-  const { titleModelId } = ctx;
   if (!command.trim()) return undefined;
   const prompt = [
     `Policy flagged this as: ${reason}`,
@@ -216,7 +222,7 @@ export async function piSummarizeApproval(
     "Command:",
     command.slice(0, 4000),
   ].join("\n");
-  const out = (await keyedOneShot(ctx, titleModelId(), APPROVAL_SUMMARY_PROMPT, prompt))?.trim();
+  const out = (await keyedOneShot(access, titleModelId(), APPROVAL_SUMMARY_PROMPT, prompt))?.trim();
   if (!out || out === "NONE") return undefined;
   return out.replace(/^["']|["']$/g, "").slice(0, 300);
 }

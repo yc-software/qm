@@ -3,7 +3,6 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import {
   BookOpen,
-  Search,
   Brain,
   Bot,
   ChevronRight,
@@ -284,9 +283,7 @@ export function createToolRows({
     const sessionView = session ? sessionToolView(row, sessionsState.list) : null;
     const sessionDetail = [sessionView?.detail, session?.preview].filter(Boolean).join(" · ");
     const sessionText = session ? [session.label, sessionDetail].filter(Boolean).join(" ") : null;
-    const rowIcon = session
-      ? Bot
-      : { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[description.category];
+    const rowIcon = session ? Bot : { read: BookOpen, execute: meta.icon, other: meta.icon }[description.category];
     const classes = ["tool-row", `tool-${kind}`].join(" ");
     const head = html`<span class="tool-icon">${icon(rowIcon, 15)}</span>
       ${session && sessionView?.chipTitle ? html`<span class="session-action">${session.label}</span>${subagentChip(sessionView.chipTitle, sessionView.sessionId)}${sessionDetail ? html`<span class="tool-label session-message" title=${sessionDetail}>${sessionDetail}</span>` : nothing}` : html`<span class="tool-label" title=${sessionText ?? (detail ? `${label}: ${detail}` : label)}>${sessionText ?? visible}</span>`}`;

@@ -1,4 +1,4 @@
-import { randomBytes, createCipheriv, createDecipheriv, createHash, hkdfSync } from "node:crypto";
+import { randomBytes, createCipheriv, createDecipheriv, hkdfSync } from "node:crypto";
 import type { ConsentMode, OAuthClientResolver, ResolvedClient } from "./oauth.ts";
 import { ConnectorNotConfiguredError, PROVIDERS, createSecretClientResolver } from "./oauth.ts";
 import type { SecretSource } from "../credentials/secret-source.ts";
@@ -54,7 +54,6 @@ export interface DecryptedConnectorClient {
 
 export interface SecretKey {
   current: Buffer;
-  v1: Buffer;
   fallbacks?: SecretKey[];
 }
 
@@ -62,10 +61,7 @@ const HKDF_SALT = "agent-platform.secret-box";
 
 export function deriveConnectorKey(material: Buffer | string, purpose = "connector-secrets"): SecretKey {
   const ikm = Buffer.isBuffer(material) ? material : Buffer.from(material, "utf8");
-  const current = Buffer.from(hkdfSync("sha256", ikm, HKDF_SALT, `${purpose}.v2`, 32));
-  const v1 =
-    Buffer.isBuffer(material) && material.length === 32 ? material : createHash("sha256").update(material).digest();
-  return { current, v1 };
+  return { current: Buffer.from(hkdfSync("sha256", ikm, HKDF_SALT, `${purpose}.v2`, 32)) };
 }
 
 export function encryptSecret(plain: string, key: SecretKey): string {
@@ -78,13 +74,12 @@ export function encryptSecret(plain: string, key: SecretKey): string {
 
 export function decryptSecret(enc: string, key: SecretKey): string {
   const parts = enc.split(":");
-  const v2 = parts[0] === "v2";
-  const [ivB, tagB, ctB] = v2 ? parts.slice(1) : parts;
-  if (parts.length !== (v2 ? 4 : 3) || !ivB || !tagB || ctB === undefined) {
+  const [version, ivB, tagB, ctB] = parts;
+  if (parts.length !== 4 || version !== "v2" || !ivB || !tagB || ctB === undefined) {
     throw new Error("malformed encrypted secret");
   }
   const attempt = (k: SecretKey): string => {
-    const decipher = createDecipheriv("aes-256-gcm", v2 ? k.current : k.v1, Buffer.from(ivB, "base64"));
+    const decipher = createDecipheriv("aes-256-gcm", k.current, Buffer.from(ivB, "base64"));
     decipher.setAuthTag(Buffer.from(tagB, "base64"));
     return Buffer.concat([decipher.update(Buffer.from(ctB, "base64")), decipher.final()]).toString("utf8");
   };

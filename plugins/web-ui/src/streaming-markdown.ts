@@ -17,7 +17,3 @@ export function markdownFence(line: string): MarkdownFence | null {
     info: suffix.trim(),
   };
 }
-
-export function fenceDelimiter(line: string): string | null {
-  return markdownFence(line)?.marker ?? null;
-}

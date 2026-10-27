@@ -5,10 +5,10 @@ import type { SettingsState } from "./settings.ts";
 
 const fields = [
   ["accent", "branding-accent", "Accent color", "200px", "", "#4f46e5"],
-  ["markUrl", "branding-mark-url", "Brand icon (https image URL)", "420px", "500", "https://example.com/icon.png"],
+  ["markUrl", "branding-mark-url", "Brand icon (https image URL)", "420px", "", "https://example.com/icon.png"],
   ["mark", "branding-mark", "Brand mark (1–2 chars)", "200px", "2", "A"],
-  ["selfLabel", "branding-self-label", "Assistant label", "320px", "40", "Agent"],
-  ["orgName", "branding-org-name", "Organization name", "320px", "40", "Acme Corp"],
+  ["selfLabel", "branding-self-label", "Assistant label", "320px", "", "Agent"],
+  ["orgName", "branding-org-name", "Organization name", "320px", "", "Acme Corp"],
 ];
 
 export function brandingCard(s: SettingsState) {

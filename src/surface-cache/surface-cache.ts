@@ -26,8 +26,6 @@ function clampLimit(limit: number | undefined, fallback: number): number {
   return Math.max(1, Math.min(MAX_READ_LIMIT, Math.floor(limit ?? fallback)));
 }
 
-const REVISION_SCAN_LIMIT = 500;
-
 function rowToMessage(r: Record<string, unknown>): CachedMessage {
   return {
     container: r.container as string,
@@ -113,7 +111,6 @@ async function ingestEvents(pool: PgPool["pool"], events: IngestEvent[]): Promis
       );
       upserted += res.rowCount ?? 0;
       if (res.rows[0]?.content_accepted && e.files !== undefined) {
-        // A later accepted event for the same message replaces its files, as the per-event rewrite did.
         const byId = new Map<string, Record<string, unknown>>();
         for (const f of e.files) {
           if (!f.fileId) continue;
@@ -158,9 +155,6 @@ async function ingestEvents(pool: PgPool["pool"], events: IngestEvent[]): Promis
       }
     }
     if (states.length) {
-      // One row per container, folded the way successive per-event upserts would have left it:
-      // newest last_ts, numerically oldest oldest_ts, the last name/kind/non-empty member list given,
-      // and the first event's surface for a container seen for the first time.
       await client.query(
         `INSERT INTO channel_state(org_id, container, last_ts, oldest_ts, name, kind, members, updated_at, surface)
              SELECT $1, container, max(ts), (array_agg(ts ORDER BY ts::numeric))[1],
@@ -252,10 +246,13 @@ function surfaceMessageReads(q: PgPool["q"], liveFallback: LiveFallback | undefi
         args.push(opts.thread);
         conds.push(`(sub = $${args.length} OR ts = $${args.length})`);
       }
-      args.push(REVISION_SCAN_LIMIT);
+      if (opts.ts) {
+        args.push(opts.ts);
+        conds.push(`ts = ANY($${args.length}::text[])`);
+      }
       const rows = await q(
         `SELECT * FROM channel_messages WHERE ${conds.join(" AND ")}
-          ORDER BY GREATEST(COALESCE(edited_at, 0), COALESCE(deleted_at, 0)) DESC, ts DESC LIMIT $${args.length}`,
+          ORDER BY GREATEST(COALESCE(edited_at, 0), COALESCE(deleted_at, 0)) DESC, ts DESC`,
         args,
       );
       return rows.map(rowToMessage);
@@ -322,7 +319,7 @@ function surfaceContainerReads(q: PgPool["q"]) {
     },
 
     async listContainers(opts = {}) {
-      const limit = clampLimit(opts.limit, MAX_READ_LIMIT);
+      const limit = opts.limit === undefined ? null : Math.max(1, Math.floor(opts.limit));
       const rows = await q(
         `SELECT s.*,
                 (SELECT COUNT(*)::int FROM channel_messages m
@@ -357,7 +354,6 @@ export function createPostgresSurfaceCache(
   const { q, pool, close } = createPgPool(connectionString, [
     {
       id: "surface-cache/store/0007",
-      // The first release ran without a lock timeout.
       acceptedChecksums: ["d56a4323978d8233aab8258422908b794bf960dc2059e252b3850e6da3902a36"],
       statements: [
         `SET LOCAL lock_timeout = '3s'`,

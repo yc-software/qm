@@ -93,6 +93,7 @@ export interface SpawnMeta {
   model?: string;
   thinkingLevel?: string;
   fastMode?: boolean;
+  swarm?: true;
 }
 
 export interface Session {
@@ -287,7 +288,7 @@ export interface Cron extends TriggerBase {
 }
 
 interface WebhookVerification {
-  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear";
+  scheme: "hmac-sha256" | "github" | "slack" | "stripe" | "linear" | "google-pubsub";
   secret?: string;
 }
 
@@ -541,6 +542,7 @@ export interface TurnRequest {
   };
   sessionSenderId?: string;
   delegatingRunId?: string;
+  swarm?: true;
   privateSessionMessage?: true;
   sessionMessageDepth?: number;
   surface: string;
@@ -657,7 +659,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "internal_only";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;

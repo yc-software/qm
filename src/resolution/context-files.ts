@@ -1,8 +1,12 @@
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { GrantedHandle, ScopeId } from "../types.ts";
 import { collectBytes } from "../util/bytes.ts";
+import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 
-const MAX_SHARED_ARTIFACT_BYTES = 10 * 1024 * 1024;
+const tooLargeForModel = (name: string, sizeBytes: number) =>
+  new Error(
+    `shared file ${name} is ${sizeBytes} bytes, more than the ${MAX_LLM_REQUEST_BYTES}-byte model request limit; send it by Files ID or fetch it into a sandbox instead of reading it`,
+  );
 
 async function readGrantedArtifactBytes(
   files: FileArtifactStore | undefined,
@@ -16,18 +20,13 @@ async function readGrantedArtifactBytes(
     opened.stream.destroy();
     return null;
   }
-  // The advertised size can be absent on some backends (fails open at 0), so
-  // the collector enforces the cap on actual bytes read.
-  if (opened.sizeBytes > MAX_SHARED_ARTIFACT_BYTES) {
+  if (opened.sizeBytes > MAX_LLM_REQUEST_BYTES) {
     opened.stream.destroy();
-    throw new Error(
-      `shared file ${opened.artifact.name} is ${opened.sizeBytes} bytes — larger than the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`,
-    );
+    throw tooLargeForModel(opened.artifact.name, opened.sizeBytes);
   }
   const collected = await collectBytes(opened.stream, {
-    maxBytes: MAX_SHARED_ARTIFACT_BYTES,
-    tooLarge: () =>
-      new Error(`shared file ${opened.artifact.name} exceeds the ${MAX_SHARED_ARTIFACT_BYTES}-byte shared-read limit`),
+    maxBytes: MAX_LLM_REQUEST_BYTES,
+    tooLarge: () => tooLargeForModel(opened.artifact.name, MAX_LLM_REQUEST_BYTES + 1),
   });
   return collected.data;
 }

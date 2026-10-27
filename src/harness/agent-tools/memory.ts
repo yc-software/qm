@@ -160,7 +160,7 @@ function historyTool(kit: ToolKit) {
     label: "history",
     description:
       "Search or reopen this conversation's own transcript (including parts compacted out of context; tool results excluded) when something said earlier is not in front of you. " +
-      "`query` returns the newest matching entries tagged kind#seq; `seq` returns one entry (very long ones trimmed in the middle).",
+      "`query` returns the newest matching entries tagged kind#seq; `seq` returns one entry in full.",
     parameters: Type.Object({
       query: optionalString("Words to find (all must match, case-insensitive)."),
       seq: optionalInteger("Reopen this entry instead of searching."),

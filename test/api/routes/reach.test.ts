@@ -92,7 +92,11 @@ const failure = (result: Awaited<ReturnType<typeof createCron>>) => {
 
 it("builds a core-resolved principal destination the agent never authored", async () => {
   const result = await createCron(
-    { schedule: { firstFireAt: Date.now() }, action: "let Alice know the deploy is done", recipient: "Alice" },
+    {
+      schedule: { firstFireAt: Date.now() + 3_600_000 },
+      action: "let Alice know the deploy is done",
+      recipient: "Alice",
+    },
     claimsDm("U-carol"),
   );
   assert.ok(result.ok);
@@ -119,7 +123,7 @@ it("sends a verbatim message and echoes the resolved recipient (findings #1 + #2
 
 it("messages a teammate from a channel scope, reading the channel (§10 parity gate)", async () => {
   const result = await createCron(
-    { schedule: { firstFireAt: Date.now() }, text: "ping", recipient: "Alice" },
+    { schedule: { firstFireAt: Date.now() + 3_600_000 }, text: "ping", recipient: "Alice" },
     claimsChannel("U-carol"),
   );
   assert.ok(result.ok);
@@ -148,11 +152,17 @@ it("creates a channel cron that runs at the channel scope (named from a DM)", as
 
 it("refuses an unknown channel and returns candidates for an ambiguous one", async () => {
   const miss = failure(
-    await createCron({ schedule: { firstFireAt: Date.now() }, action: "x", channel: "nope" }, claimsDm("U-carol")),
+    await createCron(
+      { schedule: { firstFireAt: Date.now() + 3_600_000 }, action: "x", channel: "nope" },
+      claimsDm("U-carol"),
+    ),
   );
   assert.equal(miss.code, "channel_not_found");
   const amb = failure(
-    await createCron({ schedule: { firstFireAt: Date.now() }, action: "x", channel: "design" }, claimsDm("U-carol")),
+    await createCron(
+      { schedule: { firstFireAt: Date.now() + 3_600_000 }, action: "x", channel: "design" },
+      claimsDm("U-carol"),
+    ),
   );
   assert.equal(amb.code, "ambiguous_channel");
   assert.equal(amb.candidates?.length, 2);
@@ -160,7 +170,7 @@ it("refuses an unknown channel and returns candidates for an ambiguous one", asy
 
 it("authorizes a private-channel send by membership: member → ok, non-member → refused", async () => {
   const ok = await createCron(
-    { schedule: { firstFireAt: Date.now() }, action: "x", channel: "secret" },
+    { schedule: { firstFireAt: Date.now() + 3_600_000 }, action: "x", channel: "secret" },
     claimsDm("U-carol"),
   );
   assert.ok(ok.ok);
@@ -168,7 +178,10 @@ it("authorizes a private-channel send by membership: member → ok, non-member �
   assert.equal(ok.channel?.channelId, "C-secret");
 
   const denied = failure(
-    await createCron({ schedule: { firstFireAt: Date.now() }, action: "x", channel: "secret" }, claimsDm("U-alice")),
+    await createCron(
+      { schedule: { firstFireAt: Date.now() + 3_600_000 }, action: "x", channel: "secret" },
+      claimsDm("U-alice"),
+    ),
   );
   assert.equal(denied.code, "not_a_member");
 });
@@ -176,7 +189,7 @@ it("authorizes a private-channel send by membership: member → ok, non-member �
 it("rejects specifying both a recipient and a channel", async () => {
   const result = failure(
     await createCron(
-      { schedule: { firstFireAt: Date.now() }, action: "x", recipient: "Alice", channel: "eng" },
+      { schedule: { firstFireAt: Date.now() + 3_600_000 }, action: "x", recipient: "Alice", channel: "eng" },
       claimsDm("U-carol"),
     ),
   );

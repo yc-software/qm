@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import { reconstructMessagesFromHistory } from "../../src/harness/replay.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { createPostgresToolOutputStore, parkedOutputKey } from "../../src/sessions/tool-output.ts";
@@ -14,14 +15,14 @@ import { fakeToolContext, type Emitted, emittedItem, call, textOut } from "../su
 
 test("each agent tool emits a tool_call then a tool_result", async () => {
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
-  const [execute, , read] = createAgentTools(ref, { controlTools: true });
+  const [execute, , read] = createAgentTools(createTurnToolState(ref), { controlTools: true });
   const write = read;
 
   await call(execute, { command: "echo hi", purpose: "Run test command" });
@@ -63,8 +64,8 @@ test("sandbox manages the box out-of-band instead of running a command", async (
         "fetch failed <- Error ERR_HTTP2_GOAWAY_SESSION: New streams cannot be created after receiving a GOAWAY",
     }),
   };
-  const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
-  const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  const ref: TurnToolStateInit = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
+  const execute = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "sandbox")!;
 
   const status = (await call(execute, { action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
@@ -86,27 +87,32 @@ test("sandbox manages the box out-of-band instead of running a command", async (
   assert.equal(restarted.length, 1);
   assert.match(restart.content[0]!.text!, /restarting/i);
 
-  ref.current = {
-    ...tc,
-    restartComputer: async () => {
-      throw new Error("this computer's substrate (local) does not support restarting the computer");
-    },
-  };
-  const err = (await call(execute, { action: "restart", purpose: "p" })) as {
+  const unsupported = createAgentTools(
+    createTurnToolState({
+      ...ref,
+      current: {
+        ...tc,
+        restartComputer: async () => {
+          throw new Error("this computer's substrate (local) does not support restarting the computer");
+        },
+      },
+    }),
+  ).find((t) => t.name === "sandbox")!;
+  const err = (await call(unsupported, { action: "restart", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.match(err.content[0]!.text!, /does not support restarting/);
 });
 
 test("sandbox advertises available management actions and retires migrate", async () => {
-  const ref: ToolContextRef = { current: fakeToolContext(), emit: () => {}, scopeLabel: "personal:U1" };
-  const enabled = createAgentTools(ref);
+  const ref: TurnToolStateInit = { current: fakeToolContext(), emit: () => {}, scopeLabel: "personal:U1" };
+  const enabled = createAgentTools(createTurnToolState(ref));
   const sandbox = enabled.find((t) => t.name === "sandbox")!;
   const properties = (sandbox.parameters as { properties: Record<string, { enum?: string[] }> }).properties;
   assert.deepEqual(properties.action!.enum, ["status", "restart", "list", "create", "set_default", "retire"]);
   assert.ok(enabled.some((t) => t.name === "execute"));
   assert.ok(enabled.some((t) => t.name === "background"));
-  const execute = createAgentTools(ref).find((t) => t.name === "execute")!;
+  const execute = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "execute")!;
   assert.equal("computer" in (execute.parameters as { properties: object }).properties, false);
   assert.equal("to" in (execute.parameters as { properties: object }).properties, false);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /invalid sandbox arguments/);
@@ -115,7 +121,7 @@ test("sandbox advertises available management actions and retires migrate", asyn
 
 test("sandbox creation and default routing remain independent", async () => {
   const calls: unknown[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: {
       ...fakeToolContext(),
       async sandboxResources(action, input) {
@@ -124,7 +130,7 @@ test("sandbox creation and default routing remain independent", async () => {
       },
     },
   };
-  const sandbox = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  const sandbox = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "sandbox")!;
   await call(sandbox, { action: "create", backend: "modal", name: "analysis", purpose: "p" });
   assert.deepEqual(calls, [{ action: "create", input: { backend: "modal", name: "analysis", sandboxId: undefined } }]);
   await call(sandbox, { action: "set_default", sandbox_id: null, purpose: "p" });
@@ -132,22 +138,22 @@ test("sandbox creation and default routing remain independent", async () => {
 });
 
 test("sandbox management preserves approval handling", async () => {
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: {
       ...fakeToolContext(),
       async restartComputer() {
         throw new NeedsApproval("restart", "restart requested", "approval");
       },
     },
-    pendingApprovals: [],
   };
-  const sandbox = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  const state = createTurnToolState(ref);
+  const sandbox = createAgentTools(state).find((t) => t.name === "sandbox")!;
   assert.match(
     textOut(await call(sandbox, { action: "restart", purpose: "Recover the shell" })),
     /needs human approval/,
   );
-  assert.equal(ref.pausedOnApproval, true);
-  assert.equal(ref.pendingApprovals![0]!.purpose, "Recover the shell");
+  assert.equal(state.halt.pausedOnApproval(), true);
+  assert.equal(state.halt.approvals()[0]!.purpose, "Recover the shell");
 });
 
 test("computer status surfaces list-view disagreement and guest pressure", async () => {
@@ -161,8 +167,8 @@ test("computer status surfaces list-view disagreement and guest pressure", async
     }),
     restartComputer: async () => {},
   };
-  const ref: ToolContextRef = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
-  const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  const ref: TurnToolStateInit = { current: tc, emit: () => {}, scopeLabel: "personal:U1" };
+  const execute = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "sandbox")!;
   const status = (await call(execute, { action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
@@ -171,7 +177,7 @@ test("computer status surfaces list-view disagreement and guest pressure", async
 });
 
 test("computer status exposes paused lifecycle and recovery deadlines without claiming a failed shell", async () => {
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: {
       ...fakeToolContext(),
       computerStatus: async () => ({
@@ -193,7 +199,7 @@ test("computer status exposes paused lifecycle and recovery deadlines without cl
     emit: () => {},
     scopeLabel: "personal:U1",
   };
-  const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+  const execute = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "sandbox")!;
   const out = (await call(execute, { action: "status", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
@@ -235,12 +241,12 @@ test("computer status verdicts: answering guest is ok, dead guest without a mach
     { status: { machine: "check failed: http 503", guestResponsive: false }, wedged: false },
   ];
   for (const c of cases) {
-    const ref: ToolContextRef = {
+    const ref: TurnToolStateInit = {
       current: { ...base, computerStatus: async () => c.status, restartComputer: async () => {} },
       emit: () => {},
       scopeLabel: "personal:U1",
     };
-    const execute = createAgentTools(ref).find((t) => t.name === "sandbox")!;
+    const execute = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "sandbox")!;
     const out = (await call(execute, { action: "status", purpose: "p" })) as {
       content: Array<{ text?: string }>;
     };
@@ -263,36 +269,46 @@ test("an exec under io pressure carries a [pressure] warning; a calm one doesn't
       pressure: { ioFull10: 80, ioFull60: 62.4, load1: 12 },
     }),
   };
-  const ref: ToolContextRef = { current: pressured, emit: () => {}, scopeLabel: "personal:U1" };
-  const [execute] = createAgentTools(ref);
+  const ref: TurnToolStateInit = { current: pressured, emit: () => {}, scopeLabel: "personal:U1" };
+  const [execute] = createAgentTools(createTurnToolState(ref));
   const hot = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
   assert.match(hot.content[0]!.text!, /\[pressure\] .*io 62\.4%.*move self-contained runs to scope:"scratch"/);
 
-  ref.current = {
-    ...pressured,
-    execute: async () => ({
-      stdout: "ok",
-      stderr: "",
-      code: 0,
-      timedOut: false,
-      pressure: { ioFull10: 1, ioFull60: 2, load1: 0.5 },
+  const [calmExecute] = createAgentTools(
+    createTurnToolState({
+      ...ref,
+      current: {
+        ...pressured,
+        execute: async () => ({
+          stdout: "ok",
+          stderr: "",
+          code: 0,
+          timedOut: false,
+          pressure: { ioFull10: 1, ioFull60: 2, load1: 0.5 },
+        }),
+      },
     }),
-  };
-  const calm = (await call(execute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
+  );
+  const calm = (await call(calmExecute, { command: "echo ok", purpose: "p" })) as { content: Array<{ text?: string }> };
   assert.doesNotMatch(calm.content[0]!.text!, /\[pressure\]/);
 
-  ref.current = {
-    ...pressured,
-    execute: async () => ({
-      stdout: "ok",
-      stderr: "",
-      code: 0,
-      timedOut: false,
-      pressure: { ioFull10: 80, ioFull60: 62.4, load1: 12 },
-      reached: { scopeId: "personal:other", label: "Other" },
+  const [reachedExecute] = createAgentTools(
+    createTurnToolState({
+      ...ref,
+      current: {
+        ...pressured,
+        execute: async () => ({
+          stdout: "ok",
+          stderr: "",
+          code: 0,
+          timedOut: false,
+          pressure: { ioFull10: 80, ioFull60: 62.4, load1: 12 },
+          reached: { scopeId: "personal:other", label: "Other" },
+        }),
+      },
     }),
-  };
-  const reached = (await call(execute, { command: "echo ok", scope: "person:other", purpose: "p" })) as {
+  );
+  const reached = (await call(reachedExecute, { command: "echo ok", scope: "person:other", purpose: "p" })) as {
     content: Array<{ text?: string }>;
   };
   assert.doesNotMatch(
@@ -308,14 +324,14 @@ test("a giant tool result is capped for the model, keeping the tail and matching
     ...fakeToolContext(),
     execute: async () => ({ stdout: "x".repeat(150_000), stderr: "boom", code: 1, timedOut: false }),
   };
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: tc,
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
-  const [execute] = createAgentTools(ref);
+  const [execute] = createAgentTools(createTurnToolState(ref));
 
   const ret = (await call(execute, { command: "curl big", purpose: "Run test command" })) as {
     content: Array<{ type: string; text: string }>;
@@ -351,7 +367,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
     toolOutput: outputs,
     execute: async () => ({ stdout: full, stderr: "", code: 0, timedOut: false }),
   };
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: tc,
     emit: (e) => {
       emitted.push(emittedItem(e));
@@ -359,7 +375,8 @@ test("a result over the inline cap keeps its head and tail and parks the full te
     },
     scopeLabel: "personal:U1",
   };
-  const [execute] = createAgentTools(ref);
+  const state = createTurnToolState(ref);
+  const [execute] = createAgentTools(state);
   const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
     content: Array<{ type: string; text: string }>;
   };
@@ -384,7 +401,7 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   await pool.q("UPDATE qm_settings SET value = '0' WHERE key = 'tool_result_inline_tokens'");
   clock.at += 60_000;
   emitted.length = 0;
-  ref.emit = (e) => void emitted.push(emittedItem(e));
+  state.routeEmit((e) => void emitted.push(emittedItem(e)));
   await call(execute, { command: "seq", purpose: "Run test command" });
   const uncapped = emitted.find((e) => e.kind === "ToolResult")!.fields as { text: string; output?: unknown };
   assert.equal(uncapped.output, undefined, "0 turns the cap off");
@@ -399,14 +416,14 @@ test("execute stores its output once and replays exactly what the model saw", as
     ...fakeToolContext(),
     execute: async () => ({ stdout: "built 3 files", stderr: "warning: slow disk", code: 2, timedOut: false }),
   };
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: tc,
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
-  const [execute] = createAgentTools(ref);
+  const [execute] = createAgentTools(createTurnToolState(ref));
 
   const live = (await call(execute, { command: "make", purpose: "Run test command" })) as {
     content: Array<{ type: string; text: string }>;
@@ -431,14 +448,14 @@ test("execute stores its output once and replays exactly what the model saw", as
 
 test("background start and poll store their output only in result", async () => {
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
-  const tools = createAgentTools(ref);
+  const tools = createAgentTools(createTurnToolState(ref));
   await call(
     tools.find((t) => t.name === "execute"),
     { command: "serve", purpose: "Start server", background: true },

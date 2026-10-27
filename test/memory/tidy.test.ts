@@ -11,7 +11,7 @@ import type { MemoryFact } from "../../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../../src/types.ts";
 import { singleProcessDeps } from "../support/single-process.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
-import { idleJobs } from "../support/cron-slots.ts";
+import { manualFireJobs } from "../support/cron-slots.ts";
 
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();
@@ -38,7 +38,7 @@ function fixture() {
   };
   const service = createMemoryTidyService(deps);
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...singleProcessDeps(url),
     crons,
     outbound: recordingOutbound(),

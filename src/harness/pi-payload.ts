@@ -1,4 +1,3 @@
-/** Shapes outgoing Pi model requests: byte-budget trimming, capture sanitizing and the output-budget guard. */
 import type { LlmTransportMeta } from "../sessions/session-store.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { promptEnvelopeWithoutHistory } from "./harness.ts";
@@ -7,7 +6,6 @@ import { ELIDED_IMAGE_TEXT } from "./replay-images.ts";
 const MAX_CAPTURED_PAYLOAD_CHARS = 2_000_000;
 
 const LLM_REQUEST_TRIM_SLACK_BYTES = 3_000_000;
-/** Request-body cap for model-gateway calls, kept under the gateway's ~10 MB HTTP body limit. */
 export const GATEWAY_REQUEST_MAX_BYTES = 9_000_000;
 export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX_LLM_REQUEST_BYTES): unknown {
   const p = payload as Record<string, unknown> | null;

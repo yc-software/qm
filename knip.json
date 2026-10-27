@@ -41,7 +41,7 @@
       ]
     },
     "cli": {
-      "entry": ["bin/qm.ts", "src/contract.ts"]
+      "entry": ["bin/qm.ts", "src/contract.ts", "templates/aws/microvm-agent/agent.mjs"]
     },
     "plugins/*": {},
     "plugins/portal": {
@@ -58,7 +58,16 @@
         "src/app-text-selection.ts",
         "src/inbox.ts",
         "src/context-model.ts",
-        "src/assistant-sidebar.ts"
+        "src/assistant-sidebar.ts",
+        "src/admin/admin.ts",
+        "src/admin/artifacts.ts",
+        "src/admin/artifacts-skills.ts",
+        "src/admin/integrations.ts",
+        "src/admin/onboarding.ts",
+        "src/admin/settings.ts",
+        "src/admin/settings-providers.ts",
+        "src/admin/slack-activity.ts",
+        "src/admin/transcript.ts"
       ],
       "ignoreDependencies": [
         "katex-real",

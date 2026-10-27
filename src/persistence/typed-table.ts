@@ -156,8 +156,9 @@ export function mapToTableMigration(
   const column = (name: string) =>
     `EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = '${name}' AND NOT attisdropped)`;
   const contract = {
-    id: `${id}/contract`,
+    id: `contract/${id}`,
     statements: [
+      "SET LOCAL lock_timeout = '3s'",
       `DO $contract$ BEGIN
         IF to_regclass('${table}') IS NULL THEN RETURN; END IF;
         IF ${column("json")} AND NOT ${column(all[0]!.col.slice(1, -1))} THEN
@@ -175,7 +176,6 @@ export function mapToTableMigration(
         END IF;`
             : ""
         }
-        IF to_regclass('durable_map_versions') IS NOT NULL THEN DELETE FROM durable_map_versions WHERE tbl = '${table}'; END IF;
       END $contract$`,
     ],
   };
@@ -268,6 +268,33 @@ export function typedTable<T>(db: Pick<PgPool, "q" | "pool">, spec: TableSpec) {
 }
 
 export type TypedTable<T> = ReturnType<typeof typedTable<T>>;
+
+export function retireJsonKeysMigration(
+  id: string,
+  table: string,
+  opts: { columns?: Readonly<Record<string, ColumnSpec>>; drop?: readonly string[] },
+): PgMigrationDefinition {
+  const moved = Object.entries(opts.columns ?? {});
+  const list = `ARRAY[${[...moved.map(([field]) => field), ...(opts.drop ?? [])].map((k) => `'${k}'`).join(", ")}]::text[]`;
+  const sets = [
+    ...moved.map(
+      ([field, c]) => `${columnName(field)} = COALESCE(${fromJson("json", field, c.type)}, ${columnName(field)})`,
+    ),
+    `json = json - ${list}`,
+  ];
+  return {
+    id,
+    statements: [
+      `DO $retire$ BEGIN
+        IF to_regclass('${table}') IS NULL THEN RETURN; END IF;
+        ${moved.length ? `ALTER TABLE ${table} ${moved.map(([field, c]) => `ADD COLUMN IF NOT EXISTS ${columnName(field)} ${c.type}`).join(", ")};` : ""}
+        IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'json' AND NOT attisdropped) THEN
+          UPDATE ${table} SET ${sets.join(", ")} WHERE json ?| ${list};
+        END IF;
+      END $retire$`,
+    ],
+  };
+}
 
 export function ownerIndexMigration(table: string): PgMigrationDefinition {
   return {

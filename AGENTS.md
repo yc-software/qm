@@ -6,7 +6,7 @@ To run and test, see [`README.md`](./README.md).
 
 ## Slop-free zone
 
-The paths in [`slop-free-zone.txt`](./slop-free-zone.txt) are the core we hold up as the example to follow. Put new code there when it fits, and follow its patterns. Exemplar modules to copy: to be named once the zone is clean. The zone is held at zero [Wall of shame](./docs/SPEC.md#wall-of-shame) findings: the `Slop-free zone` CI check fails a PR when a model review with every lens finds anything in a zone file it touches, or anything new that it adds outside the zone. Run `node scripts/zone-review.ts --base origin/main` before pushing, or `node scripts/zone-review.ts` to re-read the whole zone; both need a model provider key (`OPENAI_API_KEY` by default). The same check runs `node scripts/code-ratchets.ts --base origin/main`: zone files may not have a function over 150 lines or a file over 800, the count of those elsewhere may not rise above `scripts/size-ratchet.json` (lower it when you shrink one), and no PR may add a new `legacy` identifier, feature flag, `*_MODE`/`*_ENABLED` env name, id-plus-JSON blob table, or key-value store helper.
+The paths in [`slop-free-zone.txt`](./slop-free-zone.txt) are the core we hold up as the example to follow. Put new code there when it fits, and follow its patterns. Exemplar modules to copy: to be named once the zone is clean. The zone is held at zero [Wall of shame](./docs/SPEC.md#wall-of-shame) findings. QM checks that with `node scripts/zone-review.ts --base origin/main`, or `node scripts/zone-review.ts` for the whole zone; it calls the model gateway at `MODEL_GATEWAY_URL` with `MODEL_GATEWAY_TOKEN` and prints the finding count and the findings as JSON. The `Slop-free zone` CI check runs `node scripts/code-ratchets.ts --base origin/main`: no PR may add a new `legacy` name, feature flag, `*_MODE`/`*_ENABLED` env name, id-plus-JSON blob table, key-value store helper, or comment in production code. `npm run lint` enforces the 150-line function and 800-line file limits everywhere.
 
 ## Working on the code
 
@@ -28,6 +28,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   comments or docblocks, TODO/FIXME notes, lint/type suppression directives, or commented-out
   code. Express intent through names, structure, and tests; put rationale in commit messages or
   PR descriptions. Interpreter shebangs are executable directives, not comments.
+  `node scripts/strip-comments.ts` removes every comment from production code except functional
+  directives it cannot drop safely (eslint and TypeScript directives, `/// <reference`, `#__PURE__`).
 - **Solve at the layer all paths flow through.** Before patching a call site, ask
   whether the fix belongs in the shared helper, the store interface, or the base
   module instead. Check for an existing helper before writing a new one-liner.

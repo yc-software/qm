@@ -1,53 +1,8 @@
 import { surfaceHas } from "../surfaces/surface.ts";
-import type { ScopeId, TurnRequest } from "../types.ts";
-import type { MemoryService } from "../memory/memory-service.ts";
-
-const ONBOARDING_VERSION = "v2";
+import type { TurnRequest } from "../types.ts";
 
 export const PROACTIVE_OPENER_PROMPT =
   "The user just opened the app for the first time and has not typed yet. Greet them by their sign-in name as their AI teammate in a sentence or two, say the first step is connecting their tools, and ask whether to start. Do not ask their name, role, preferred voice, or what they are working on, and do not research their work yet. Follow the onboarding skill. Do not mention Slack bot setup in this automatic greeting; wait for their reply before reading admin-only status. On that human-started turn, handle connections first as the onboarding skill describes. Offer Slack bot setup only to a verified org admin with a confirmed missing bot; silently skip existing, disabled, deferred, or unknown setup. For personal connections, discover authorized access using its existing skill and reuse connected accounts. An empty direct OAuth list does not rule out Composio. Never ask regular users to create OAuth apps or supply project keys; if no source is available to them or setup is deferred, skip connections and continue onboarding.";
-
-export type OnboardingStatus = "completed" | "dismissed" | "pending" | "not_started";
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function markerRe(state: "completed" | "dismissed" | "pending", version: string): RegExp {
-  return new RegExp(
-    `(?:^|\\n)\\s*[-*]?\\s*(?:\\(\\d{4}-\\d\\d-\\d\\d\\)\\s*)?Onboarding:\\s*${state}\\s+${escapeRegExp(version)}\\b`,
-    "i",
-  );
-}
-
-export function detectOnboardingStatus(memory: string, version = ONBOARDING_VERSION): OnboardingStatus {
-  if (markerRe("completed", version).test(memory)) return "completed";
-  if (markerRe("dismissed", version).test(memory)) return "dismissed";
-  if (markerRe("pending", version).test(memory)) return "pending";
-  return "not_started";
-}
-
-export async function setOnboardingStatus(
-  memory: MemoryService,
-  scope: ScopeId,
-  status: OnboardingStatus,
-  today: string,
-  author: string,
-  version = ONBOARDING_VERSION,
-): Promise<void> {
-  const stale = ((await memory.facts?.(scope)) ?? [])
-    .filter((fact) =>
-      (["completed", "dismissed", "pending"] as const).some((s) => markerRe(s, version).test(fact.text)),
-    )
-    .map((fact) => fact.id);
-  if (stale.length) await memory.delete?.(scope, stale, author);
-  if (status === "not_started") return;
-  const line =
-    status === "pending"
-      ? `Onboarding: pending ${version} since ${today}.`
-      : `Onboarding: ${status} ${version} on ${today}.`;
-  await memory.capture(scope, [line], Date.now(), author, { mode: "explicit" });
-}
 
 export function isIdeasConversation(input: {
   surface?: string;

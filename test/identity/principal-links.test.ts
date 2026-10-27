@@ -54,6 +54,16 @@ describe("principal link service: one person, several sign-ins", () => {
     assert.equal(await links.unlink(OIDC), null);
   });
 
+  it("links an OIDC principal whose encoded subject runs past 255 characters", async () => {
+    const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
+    const longSubject = `oidc:${"2".repeat(64)}:${"c".repeat(340)}`;
+    const evidence = `${EVIDENCE}; ${"verified against the HR roster export ".repeat(20)}`;
+    const row = await links.link({ principalId: longSubject, canonicalId: EMAIL, evidence, linkedBy: "admin" });
+    assert.equal(row.principalId, longSubject);
+    assert.equal(links.canonical(longSubject), EMAIL);
+    await links.unlink(longSubject);
+  });
+
   it("refuses self-links, chains, reversed links, missing evidence, and conflicting re-links", async () => {
     const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     const reject = async (input: Parameters<typeof links.link>[0], status: number, re: RegExp) => {

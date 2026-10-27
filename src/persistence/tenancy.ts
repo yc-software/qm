@@ -6,18 +6,6 @@ import {
   TENANT_TEXT_SETTINGS,
 } from "../../plugins/chassis/src/tenant-settings.ts";
 
-// Row-level tenancy for every table in the application schema.
-//
-// Each table carries `tenant_id uuid NOT NULL DEFAULT qm_tenant_id()` as the leading column of its primary key,
-// unique indexes and foreign keys, and a FORCE'd row-level-security policy that admits only rows of the current
-// tenant. The current tenant is the per-connection setting `qm.tenant_id`, which the pool sets from the
-// AsyncLocalStorage tenant on every checkout (see pg-pool.ts). When the setting is empty, `qm_tenant_id()` falls
-// back to the database's `qm_tenant` singleton, so a single-tenant deployment behaves exactly as before.
-// Migrations connect with `qm.tenant_bypass=on` so data migrations see every tenant's rows.
-//
-// `qm_tenantize()` is idempotent and runs after every store's migrations, so tables added later are covered
-// without a hand-written migration. Code that upserts must name `tenant_id` first in its ON CONFLICT target.
-
 export const TENANT_BYPASS_OPTION = "-c qm.tenant_bypass=on";
 
 export const TENANCY_EXCLUDED_TABLES = ["qm_tenant", "tenants", "qm_schema_migrations"];
@@ -61,20 +49,76 @@ const TENANCY_FUNCTIONS: readonly string[] = [
    $qm_tenant_id$`,
   `CREATE OR REPLACE FUNCTION qm_tenant_bypass() RETURNS boolean LANGUAGE sql STABLE PARALLEL SAFE
    AS $qm_tenant_bypass$ SELECT COALESCE(current_setting('qm.tenant_bypass', true), '') = 'on' $qm_tenant_bypass$`,
+  `CREATE OR REPLACE FUNCTION qm_tenant_columns(rel oid, attnums smallint[]) RETURNS text LANGUAGE sql STABLE
+   AS $qm_tenant_columns$
+     SELECT string_agg(quote_ident(a.attname), ', ' ORDER BY k.ord)
+     FROM unnest(attnums) WITH ORDINALITY k(attnum, ord)
+     JOIN pg_attribute a ON a.attrelid = rel AND a.attnum = k.attnum
+   $qm_tenant_columns$`,
+  `CREATE OR REPLACE FUNCTION qm_tenant_fk_def(con oid) RETURNS text LANGUAGE sql STABLE AS $qm_tenant_fk_def$
+     SELECT format('FOREIGN KEY (tenant_id, %s) REFERENCES %s(tenant_id, %s)%s%s%s%s%s%s',
+       qm_tenant_columns(c.conrelid, c.conkey),
+       c.confrelid::regclass,
+       qm_tenant_columns(c.confrelid, c.confkey),
+       CASE c.confmatchtype WHEN 'f' THEN ' MATCH FULL' WHEN 'p' THEN ' MATCH PARTIAL' ELSE '' END,
+       CASE c.confupdtype
+         WHEN 'r' THEN ' ON UPDATE RESTRICT' WHEN 'c' THEN ' ON UPDATE CASCADE'
+         WHEN 'n' THEN ' ON UPDATE SET NULL' WHEN 'd' THEN ' ON UPDATE SET DEFAULT' ELSE '' END,
+       CASE c.confdeltype
+         WHEN 'r' THEN ' ON DELETE RESTRICT' WHEN 'c' THEN ' ON DELETE CASCADE'
+         WHEN 'n' THEN ' ON DELETE SET NULL' WHEN 'd' THEN ' ON DELETE SET DEFAULT' ELSE '' END,
+       CASE WHEN c.confdeltype IN ('n', 'd')
+         THEN format(' (%s)', qm_tenant_columns(c.conrelid, COALESCE(c.confdelsetcols, c.conkey))) ELSE '' END,
+       CASE WHEN c.condeferrable THEN ' DEFERRABLE' ELSE '' END
+         || CASE WHEN c.condeferred THEN ' INITIALLY DEFERRED' ELSE '' END,
+       CASE WHEN c.convalidated THEN '' ELSE ' NOT VALID' END)
+     FROM pg_constraint c WHERE c.oid = con
+   $qm_tenant_fk_def$`,
+  `CREATE OR REPLACE FUNCTION qm_tenant_index_def(index_oid oid, index_name text) RETURNS text LANGUAGE sql STABLE
+   AS $qm_tenant_index_def$
+     WITH col AS (
+       SELECT n, n <= i.indnkeyatts AS is_key, pg_get_indexdef(i.indexrelid, n, true) AS plain,
+         pg_get_indexdef(i.indexrelid, n, true)
+           || CASE WHEN i.indcollation[n - 1] <> 0 THEN ' COLLATE ' || i.indcollation[n - 1]::regcollation::text ELSE '' END
+           || CASE WHEN oc.opcdefault = false THEN format(' %I.%I', ons.nspname, oc.opcname) ELSE '' END
+           || CASE WHEN i.indoption[n - 1] & 1 = 1 THEN ' DESC' ELSE '' END
+           || CASE WHEN i.indoption[n - 1] & 2 = 2 THEN ' NULLS FIRST'
+                   WHEN i.indoption[n - 1] & 1 = 1 THEN ' NULLS LAST' ELSE '' END AS key
+       FROM pg_index i
+       CROSS JOIN generate_series(1, i.indnatts) n
+       LEFT JOIN pg_opclass oc ON oc.oid = i.indclass[n - 1]
+       LEFT JOIN pg_namespace ons ON ons.oid = oc.opcnamespace
+       WHERE i.indexrelid = index_oid
+     )
+     SELECT format('CREATE UNIQUE INDEX %I ON %I USING %I (tenant_id, %s)%s%s%s%s',
+       index_name, tc.relname, am.amname,
+       (SELECT string_agg(key, ', ' ORDER BY n) FROM col WHERE is_key),
+       COALESCE(' INCLUDE (' || (SELECT string_agg(plain, ', ' ORDER BY n) FROM col WHERE NOT is_key) || ')', ''),
+       CASE WHEN i.indnullsnotdistinct THEN ' NULLS NOT DISTINCT' ELSE '' END,
+       COALESCE(' WITH (' || array_to_string(ic.reloptions, ', ') || ')', ''),
+       COALESCE(' WHERE ' || pg_get_expr(i.indpred, i.indrelid, true), ''))
+     FROM pg_index i
+     JOIN pg_class ic ON ic.oid = i.indexrelid
+     JOIN pg_class tc ON tc.oid = i.indrelid
+     JOIN pg_am am ON am.oid = ic.relam
+     WHERE i.indexrelid = index_oid
+   $qm_tenant_index_def$`,
+  `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $acl_grants_bump_version$
+   BEGIN
+     INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 1)
+     ON CONFLICT (tenant_id, only_row) DO UPDATE SET v = acl_grants_version.v + 1;
+     RETURN NULL;
+   END
+   $acl_grants_bump_version$`,
   `CREATE OR REPLACE FUNCTION qm_tenantize() RETURNS integer LANGUAGE plpgsql AS $qm_tenantize$
 DECLARE
   t record;
   ix record;
   fk record;
-  fn record;
   fks text[] := '{}';
-  fk_tables text[] := '{}';
-  def text;
   tmp text;
   changed integer := 0;
-  tenant_att smallint;
 BEGIN
-  -- 1. tenant_id column on every table.
   FOR t IN
     SELECT c.oid, c.relname FROM pg_class c
     WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind = 'r'
@@ -85,10 +129,8 @@ BEGIN
     changed := changed + 1;
   END LOOP;
 
-  -- 2. Drop foreign keys between tenant tables that do not lead with tenant_id; they are recreated below.
   FOR fk IN
-    SELECT con.conname, con.conrelid::regclass::text AS tbl, con.conrelid, con.conkey,
-           pg_get_constraintdef(con.oid) AS def
+    SELECT con.oid, con.conname, con.conrelid::regclass::text AS tbl
     FROM pg_constraint con
     JOIN pg_class src ON src.oid = con.conrelid
     JOIN pg_class dst ON dst.oid = con.confrelid
@@ -97,22 +139,13 @@ BEGIN
       AND src.relname NOT IN (${EXCLUDED}) AND dst.relname NOT IN (${EXCLUDED})
       AND (SELECT attname FROM pg_attribute WHERE attrelid = con.conrelid AND attnum = con.conkey[1]) <> 'tenant_id'
   LOOP
-    def := regexp_replace(fk.def, '^FOREIGN KEY \\(', 'FOREIGN KEY (tenant_id, ');
-    def := regexp_replace(def, ' REFERENCES ([^(]+)\\(', ' REFERENCES \\1(tenant_id, ');
-    IF def ~ 'ON DELETE SET NULL' AND def !~ 'ON DELETE SET NULL \\(' THEN
-      def := replace(def, 'ON DELETE SET NULL', 'ON DELETE SET NULL (' ||
-        (SELECT string_agg(quote_ident(attname), ', ' ORDER BY array_position(fk.conkey, attnum))
-           FROM pg_attribute WHERE attrelid = fk.conrelid AND attnum = ANY(fk.conkey)) || ')');
-    END IF;
-    fks := fks || format('ALTER TABLE %s ADD CONSTRAINT %I %s', fk.tbl, fk.conname, def);
+    fks := fks || format('ALTER TABLE %s ADD CONSTRAINT %I %s', fk.tbl, fk.conname, qm_tenant_fk_def(fk.oid));
     EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', fk.tbl, fk.conname);
     changed := changed + 1;
   END LOOP;
 
-  -- 3. Primary keys, unique constraints and unique indexes lead with tenant_id.
   FOR ix IN
-    SELECT i.indexrelid, i.indrelid, ic.relname AS index_name, tc.relname AS table_name,
-           con.conname, con.contype, pg_get_indexdef(i.indexrelid) AS def
+    SELECT i.indexrelid, ic.relname AS index_name, tc.relname AS table_name, con.conname, con.contype
     FROM pg_index i
     JOIN pg_class ic ON ic.oid = i.indexrelid
     JOIN pg_class tc ON tc.oid = i.indrelid
@@ -121,14 +154,13 @@ BEGIN
       AND tc.relname NOT IN (${EXCLUDED})
       AND COALESCE((SELECT attname FROM pg_attribute WHERE attrelid = i.indrelid AND attnum = i.indkey[0]), '') <> 'tenant_id'
   LOOP
-    def := regexp_replace(ix.def, ' USING (\\w+) \\(', ' USING \\1 (tenant_id, ');
     IF ix.conname IS NULL THEN
+      tmp := qm_tenant_index_def(ix.indexrelid, ix.index_name);
       EXECUTE format('DROP INDEX %I', ix.index_name);
-      EXECUTE def;
+      EXECUTE tmp;
     ELSE
       tmp := left('qm_tnt_' || md5(ix.index_name), 60);
-      def := regexp_replace(def, '^CREATE UNIQUE INDEX \\S+ ON ', 'CREATE UNIQUE INDEX ' || quote_ident(tmp) || ' ON ');
-      EXECUTE def;
+      EXECUTE qm_tenant_index_def(ix.indexrelid, tmp);
       EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', ix.table_name, ix.conname);
       EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I %s USING INDEX %I', ix.table_name, ix.conname,
         CASE ix.contype WHEN 'p' THEN 'PRIMARY KEY' ELSE 'UNIQUE' END, tmp);
@@ -136,14 +168,12 @@ BEGIN
     changed := changed + 1;
   END LOOP;
 
-  -- 4. Recreate the foreign keys with tenant_id leading.
-  FOREACH def IN ARRAY fks LOOP
-    EXECUTE def;
+  FOREACH tmp IN ARRAY fks LOOP
+    EXECUTE tmp;
   END LOOP;
 
-  -- 5. Row-level security on every tenant table.
   FOR t IN
-    SELECT c.oid, c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c
+    SELECT c.oid, c.relname FROM pg_class c
     WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind = 'r'
       AND c.relname NOT IN (${EXCLUDED}) AND c.relname NOT LIKE 'pg\\_%'
       AND (NOT c.relrowsecurity OR NOT c.relforcerowsecurity
@@ -155,17 +185,6 @@ BEGIN
       EXECUTE format('CREATE POLICY qm_tenant_isolation ON %I USING (tenant_id = qm_tenant_id() OR qm_tenant_bypass()) '
         'WITH CHECK (tenant_id = qm_tenant_id() OR qm_tenant_bypass())', t.relname);
     END IF;
-    changed := changed + 1;
-  END LOOP;
-
-  -- 6. Stored functions and triggers that upsert name tenant_id in their conflict target.
-  FOR fn IN
-    SELECT p.oid FROM pg_proc p
-    WHERE p.pronamespace = current_schema()::regnamespace AND p.prokind = 'f'
-      AND p.proname NOT IN ('qm_tenantize', 'qm_tenant_id', 'qm_tenant_bypass')
-      AND p.prosrc ~* 'ON CONFLICT\\s*\\((?!\\s*tenant_id)'
-  LOOP
-    EXECUTE regexp_replace(pg_get_functiondef(fn.oid), 'ON CONFLICT(\\s*)\\((?!\\s*tenant_id)', 'ON CONFLICT\\1(tenant_id, ', 'gi');
     changed := changed + 1;
   END LOOP;
   RETURN changed;

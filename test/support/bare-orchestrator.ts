@@ -19,6 +19,7 @@ import type { SessionStore } from "../../src/sessions/session-store.ts";
 import { createPostgresAuditLog } from "../../src/admin/postgres-audit-log.ts";
 import { createPostgresFileArtifactStore } from "../../src/files/postgres-file-artifact-store.ts";
 import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
+import { createPerTurnStrategy } from "../../src/memory/strategies/per-turn.ts";
 import { createPostgresRateLimiter } from "../../src/ratelimit/postgres-rate-limiter.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
@@ -66,6 +67,8 @@ export function buildBareOrchestrator(
     auditLog,
     acl,
   });
+  const harness = opts.harness ?? createMockHarness();
+  const memory = opts.memory ?? createPostgresMemoryService(databaseUrl);
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(databaseUrl),
@@ -77,9 +80,9 @@ export function buildBareOrchestrator(
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createPostgresRateLimiter(databaseUrl, { maxPerWindow: 1000, windowMs: 60_000 }),
-    harness: opts.harness ?? createMockHarness(),
-    memory: opts.memory ?? createPostgresMemoryService(databaseUrl),
-    ...(opts.memoryStrategy ? { memoryStrategy: opts.memoryStrategy } : {}),
+    harness,
+    memory,
+    memoryStrategy: opts.memoryStrategy ?? createPerTurnStrategy({ harness: harness.models, memory, databaseUrl }),
     deploy,
     acl,
   });

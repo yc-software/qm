@@ -2,6 +2,7 @@ import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } 
 import { createPgPool } from "../persistence/pg-pool.ts";
 import {
   cols,
+  retireJsonKeysMigration,
   mapToTableMigration,
   ownerIndexMigration,
   type TableSpec,
@@ -119,13 +120,21 @@ export const CRONS_MIGRATION = mapToTableMigration("triggers/crons/0001-typed", 
   ],
 });
 
+const CRONS_MIGRATIONS = [
+  retireJsonKeysMigration("triggers/crons/0000-drop-retired-keys", "crons", {
+    drop: ["adminAuthorization", "deliveryMigration", "initialVerificationRequestedAt", "groupDeliveryTestRequestedAt"],
+  }),
+  CRONS_MIGRATION,
+  ownerIndexMigration("crons"),
+];
+
 export function createCronStore(
   databaseUrl: string,
   opts: { staleRunningMs?: number; fires?: CronFireStore } = {},
 ): CronStore {
   const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts.fires ?? createPostgresCronFireStore(databaseUrl);
-  const db = createPgPool(databaseUrl, [CRONS_MIGRATION, ownerIndexMigration("crons")]);
+  const db = createPgPool(databaseUrl, CRONS_MIGRATIONS);
   const { q } = db;
   const table = typedTable<Cron>(db, CRONS);
   const { get } = table;

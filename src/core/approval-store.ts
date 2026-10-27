@@ -2,7 +2,13 @@ import { surfaceHas } from "../surfaces/surface.ts";
 import { swallowAs } from "../util/errors.ts";
 import { type PendingApprovalRecord, sourceDestination, type TurnRequest, turnSource } from "../types.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { cols, mapToTableMigration, type TableSpec, typedTable } from "../persistence/typed-table.ts";
+import {
+  cols,
+  retireJsonKeysMigration,
+  mapToTableMigration,
+  type TableSpec,
+  typedTable,
+} from "../persistence/typed-table.ts";
 import type { SurfaceRegistry } from "../surfaces/registry.ts";
 import type { Outbound } from "../surfaces/outbound.ts";
 import { principalDestination } from "../reach/reach.ts";
@@ -29,7 +35,10 @@ export const APPROVALS_MIGRATION = mapToTableMigration("core/approvals/0001-type
 });
 
 export function createApprovalRecords(databaseUrl: string) {
-  const pg = createPgPool(databaseUrl, [APPROVALS_MIGRATION]);
+  const pg = createPgPool(databaseUrl, [
+    retireJsonKeysMigration("core/approvals/0000-drop-screened-output", "approvals", { drop: ["screenedOutput"] }),
+    APPROVALS_MIGRATION,
+  ]);
   const { get, put, delete: remove, take, codec } = typedTable<PendingApprovalRecord>(pg, APPROVALS);
   const entries = (rows: Record<string, unknown>[]): Array<[string, PendingApprovalRecord]> =>
     rows.map((r) => [String(r.id), codec.row(r)]);

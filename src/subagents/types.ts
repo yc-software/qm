@@ -124,7 +124,6 @@ export interface SessionSyscallsFactory {
 export interface SessionSyscallDeps {
   mailbox: SessionMailbox;
   board?: SwarmBoard;
-  enabled?: (actorId: string) => Promise<boolean>;
   sessions: Pick<
     SessionStore,
     | "get"

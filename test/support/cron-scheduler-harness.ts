@@ -8,7 +8,7 @@ import { type DirectoryStore } from "../../src/directory/directory-store.ts";
 import { singleProcessDeps } from "./single-process.ts";
 import { testDatabaseUrl } from "./test-database.ts";
 import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
-import { idleJobs } from "./cron-slots.ts";
+import { manualFireJobs } from "./cron-slots.ts";
 
 export function harness(
   reply: string | ((req: TurnRequest) => Promise<TurnResult>) = "CRON-OUTPUT-XYZ",
@@ -26,7 +26,7 @@ export function harness(
     return { status: "ok", reply };
   };
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...singleProcessDeps(),
     crons,
     outbound,

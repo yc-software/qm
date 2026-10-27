@@ -1,6 +1,6 @@
 import type { DensityTier } from "./density";
 
-export type InboxSource = "gmail" | "slack" | "generic";
+type InboxSource = "gmail" | "slack" | "generic";
 
 export interface InboxDraft {
   to?: string[];
@@ -9,7 +9,7 @@ export interface InboxDraft {
   body: string;
 }
 
-export interface InboxContextMessage {
+interface InboxContextMessage {
   author: string;
   authorId?: string;
   avatarUrl?: string;
@@ -20,7 +20,7 @@ export interface InboxContextMessage {
   nearby?: boolean;
 }
 
-export interface LedgerThreadMessage {
+interface LedgerThreadMessage {
   id: string;
   role: "human" | "agent" | "system";
   text: string;

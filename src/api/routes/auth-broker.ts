@@ -9,8 +9,6 @@ import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts
 import { tenant } from "../../tenant.ts";
 
 const NAMESPACE = "authbroker:";
-const MAX_IDS = 64;
-const MAX_ID_LENGTH = 200;
 const MAX_HORIZON_MS = 24 * 60 * 60 * 1000;
 
 async function claimBrokerNonce(ctx: ApiCtx): Promise<RouteResult> {
@@ -23,15 +21,8 @@ async function claimBrokerNonce(ctx: ApiCtx): Promise<RouteResult> {
     });
   const b = isObj(body) ? body : {};
   const ids: unknown[] = Array.isArray(b.ids) ? b.ids : [];
-  if (
-    ids.length === 0 ||
-    ids.length > MAX_IDS ||
-    !ids.every((id) => typeof id === "string" && id.length > 0 && id.length <= MAX_ID_LENGTH)
-  )
-    return reply(400, {
-      error: "bad_request",
-      message: `ids must hold 1 to ${MAX_IDS} non-empty strings of at most ${MAX_ID_LENGTH} characters`,
-    });
+  if (ids.length === 0 || !ids.every((id) => typeof id === "string" && id.length > 0))
+    return reply(400, { error: "bad_request", message: "ids must hold at least one non-empty string" });
   const now = Date.now();
   const expiresAtMs = b.expiresAtMs;
   if (

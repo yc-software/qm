@@ -8,7 +8,7 @@ import { artifactPage, detailTpl, fieldTpl, listBackLink, listPageTpl, showPane,
 import { scopeChip } from "./contexts";
 import { deepLinkPath, UI_BASE } from "./deep-link";
 
-export interface WebhookView {
+interface WebhookView {
   id: string;
   ownerScopeId: string;
   action: string;

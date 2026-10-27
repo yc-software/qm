@@ -1,4 +1,3 @@
-/** The Pi turn's wall-clock race and the empty-ending re-prompt note. */
 import { piFailedAssistant, type AssistantTextSession } from "./turn-recovery.ts";
 import { swallowAs } from "../util/errors.ts";
 
@@ -16,28 +15,16 @@ export function emptyEndingNote(opts: {
   cancelled: boolean;
   surfaceTools: boolean;
   pollFire: boolean;
-  ref: {
-    runtimeHandoff?: unknown;
-    silentRequested?: boolean;
-    pausedOnApproval?: boolean;
-    pendingApprovals?: unknown[];
-    modelCalls?: number;
-  };
+  halted: boolean;
+  modelCalls: number;
   session: AssistantTextSession;
   turnWallClockMs: number;
   elapsedMs: number;
 }): string | null {
   if (opts.wallClock !== "ok" || opts.userAborted || opts.cancelled || opts.surfaceTools) return null;
-  if (
-    opts.ref.runtimeHandoff ||
-    opts.ref.silentRequested ||
-    opts.ref.pausedOnApproval ||
-    opts.ref.pendingApprovals?.length
-  )
-    return null;
+  if (opts.halted) return null;
   if (opts.pollFire) return null;
-  const calls = opts.ref.modelCalls ?? 0;
-  if (calls === 0) return null;
+  if (opts.modelCalls === 0) return null;
   if (piFailedAssistant(opts.session)) return null;
   if ((opts.session.getLastAssistantText() ?? "").trim()) return null;
   if (opts.turnWallClockMs > 0 && opts.turnWallClockMs - opts.elapsedMs < EMPTY_ENDING_MIN_BUDGET_MS) return null;

@@ -1,4 +1,4 @@
-import { securityScreenPayload } from "../../security/security-screen.ts";
+import { securityScreenPayloads } from "../../security/security-screen.ts";
 import { collectBlob } from "../../persistence/blob-transfer.ts";
 import { isVisionAttachment, safeAttachmentName, senderNote } from "../attachments.ts";
 import { renderOverheard, selectOverheardToImport, type OverheardEntryPayload } from "../../harness/replay.ts";
@@ -78,15 +78,15 @@ export function observeInboundTurn(
       sessionSender.scopeId === scopeId &&
       (await deps.sessions.getForParticipant(sessionSender.id, actor.id)),
     );
-    const screenPayload = securityScreenPayload({
+    const chunks = securityScreenPayloads({
       ...input,
       origin: sessionTurn ? { kind: "automation", screenData: input.text } : input.origin,
       overheard: [],
       externalPromptData,
       verifiedSessionMessage,
     });
-    if (screenPayload && !screenPayload.truncated)
-      await observeSecurityData(screenPayload.content, actor.id, scopeId, {
+    for (const chunk of chunks)
+      await observeSecurityData(chunk, actor.id, scopeId, {
         ...screenTrace,
         hook: "user_input",
         surface: input.surface,

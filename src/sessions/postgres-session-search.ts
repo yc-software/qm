@@ -85,7 +85,7 @@ export function sessionPinAndSearchMethods(ctx: SessionStoreCtx) {
       const rows = await q(
         participantSessionsSql(" AND COALESCE(p.title, s.title) ILIKE $2") +
           " ORDER BY COALESCE(s.last_activity, s.created_at) DESC, s.id LIMIT $3",
-        [principalId, like, Math.max(1, Math.min(Math.floor(limit), 100))],
+        [principalId, like, Math.max(1, Math.floor(limit))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );
       return rows.map(rowToParticipantSession);
@@ -108,7 +108,7 @@ export function sessionPinAndSearchMethods(ctx: SessionStoreCtx) {
             AND ${withinParticipantWindow("i", "p")}
           ORDER BY i.created_at DESC, i.session_id, i.seq DESC
           LIMIT $3`,
-        [principalId, ts, Math.max(1, Math.min(limit, 200))],
+        [principalId, ts, Math.max(1, Math.floor(limit))],
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );
       return rows.flatMap((r) => {

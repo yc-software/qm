@@ -17,13 +17,12 @@ export * as activity from "./activity.ts";
 export * as history from "./history.ts";
 export * as artifacts from "./artifacts.ts";
 export * as slackActivity from "./slack-activity.ts";
-export { charForName } from "../emoji-picker.ts";
 
 const modules = [governance, settings, integrations];
 export const states = new Map<string, GovernanceState | settings.SettingsState | SlackSetting>(
   modules.flatMap((module) => [...module.states]),
 );
-export const { owns, collect, capture, commit, status } = settingRegistry(states);
+export const { collect, capture, commit, status } = settingRegistry(states);
 export const statusKey = (id: string) => modules.map((module) => module.statusKey(id)).find(Boolean);
 export function mountCards() {
   modules.forEach((module) => module.mountCards());

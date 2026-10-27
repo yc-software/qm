@@ -4,7 +4,8 @@ import type { ClientConfig, Pool, PoolClient } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
-import { SCHEMA_BASELINE } from "./schema-baseline.ts";
+import { SCHEMA_BASELINE, schemaBaselineChain, type ChainMigration } from "./schema-baseline.ts";
+import { pgMigrationOrder, pgMigrationsFrom } from "./contract-migrations.ts";
 import { applyTenancy, TENANT_BYPASS_OPTION } from "./tenancy.ts";
 import { runPgQuery } from "./pg-query.ts";
 
@@ -86,8 +87,8 @@ export function configurePgPooling(config: PgPoolingConfig): void {
     ["DATABASE_POOL_MAX", config.queryMax],
     ["DATABASE_DIRECT_POOL_MAX", config.sessionMax],
   ] as const) {
-    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > 100)) {
-      throw new Error(`${name} must be an integer between 1 and 100`);
+    if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+      throw new Error(`${name} must be a positive integer`);
     }
   }
   poolingConfig = { ...config };
@@ -136,6 +137,15 @@ async function applyTenancyIfEnabled(pool: Pool, connectionString: string, chang
   tenantized.add(connectionString);
 }
 
+const DEFAULT_QUERY_POOL_MAX = 10;
+const DEFAULT_SESSION_POOL_MAX = 32;
+
+export function pgPoolMax(kind: "query" | "session"): number {
+  return kind === "query"
+    ? (poolingConfig.queryMax ?? DEFAULT_QUERY_POOL_MAX)
+    : (poolingConfig.sessionMax ?? DEFAULT_SESSION_POOL_MAX);
+}
+
 async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
   const pg = (await import("pg")).default;
   const key = `${kind}:${connectionString}`;
@@ -145,9 +155,8 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     return existing.pool;
   }
   const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
-  const max = { query: poolingConfig.queryMax ?? 10, session: poolingConfig.sessionMax ?? 32, migration: 1 }[kind];
-  if (!Number.isInteger(max) || max < 1 || max > 100)
-    throw new Error(`${setting} must be an integer between 1 and 100`);
+  const max = kind === "migration" ? 1 : pgPoolMax(kind);
+  if (!Number.isInteger(max) || max < 1) throw new Error(`${setting} must be a positive integer`);
   const connection = pgConnectionOptions(
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
@@ -208,6 +217,8 @@ export interface PgMigrationDefinition {
    */
   acceptedChecksums?: readonly string[];
   script?: boolean;
+  before?: readonly PgMigrationDefinition[];
+  contract?: PgMigrationDefinition;
 }
 
 export interface PgMigration extends PgMigrationDefinition {
@@ -327,14 +338,10 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
   }
 }
 
-// A database with no migration history gets the baseline schema. A database that applied every folded migration adopts
-// the baseline without running it. A database with only some of them, or with QM tables but no history, is refused: its
-// schema is older than this build can upgrade.
-async function planSchemaBaseline(
-  client: PoolClient,
-  ledger: ReadonlyMap<string, string>,
-): Promise<"recorded" | "apply" | "adopt"> {
-  const { id, checksum, folded } = SCHEMA_BASELINE;
+type BaselinePlan = "recorded" | "apply" | "adopt" | "upgrade";
+
+async function planSchemaBaseline(client: PoolClient, ledger: ReadonlyMap<string, string>): Promise<BaselinePlan> {
+  const { id, checksum } = SCHEMA_BASELINE;
   const recorded = ledger.get(id);
   if (recorded !== undefined) {
     if (recorded !== checksum) {
@@ -343,24 +350,112 @@ async function planSchemaBaseline(
     return "recorded";
   }
   if (ledger.size === 0) {
-    const existing = await client.query<{ present: boolean }>("SELECT to_regclass('sessions') IS NOT NULL AS present");
-    if (existing.rows[0]?.present) {
-      throw new Error(
-        `pg-pool: the database has QM tables but no ${PG_MIGRATIONS_TABLE} history, so its schema version is unknown; QM applies its baseline only to a database without them`,
-      );
-    }
-    return "apply";
-  }
-  const missing = folded.filter((migration) => !ledger.has(migration));
-  if (missing.length) {
-    throw new Error(
-      `pg-pool: the database schema predates baseline ${id}: ${missing.length} of the ${folded.length} migrations folded into it never ran (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}). Boot it once on a QM build from before the baseline that has all of them (qm main at ${SCHEMA_BASELINE.release} or later), then this build.`,
+    const existing = await client.query<{ present: boolean }>(
+      "SELECT COALESCE(to_regclass('sessions'), to_regclass('durable_map_versions'), to_regclass('schema_migrations')) IS NOT NULL AS present",
     );
+    if (!existing.rows[0]?.present) return "apply";
   }
-  return "adopt";
+  return schemaBaselineChain().migrations.every((migration) => ledger.has(migration.id)) ? "adopt" : "upgrade";
 }
 
-async function applySchemaBaseline(client: PoolClient, plan: "apply" | "adopt"): Promise<void> {
+async function applyInTransaction(
+  client: PoolClient,
+  label: string,
+  statements: readonly string[],
+  record: PgMigration | undefined,
+  failure: { discard?: Error },
+): Promise<void> {
+  await client.query("BEGIN");
+  try {
+    for (const statement of statements) await client.query(statement);
+    if (record) {
+      await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
+        record.id,
+        record.checksum,
+      ]);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    failure.discard = await rollbackOrReport(client, `pg-pool: rollback ${label}`);
+    throw error;
+  }
+}
+
+async function appliedUnderPreLedgerId(client: PoolClient, preLedgerId: string): Promise<boolean> {
+  const legacy = await client.query<{ present: boolean }>(
+    "SELECT to_regclass('schema_migrations') IS NOT NULL AS present",
+  );
+  if (!legacy.rows[0]?.present) return false;
+  return Boolean((await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", [preLedgerId])).rowCount);
+}
+
+async function runUntimed(client: PoolClient, statements: readonly string[]): Promise<void> {
+  await client.query("SET statement_timeout = 0");
+  try {
+    for (const statement of statements) await client.query(statement);
+  } finally {
+    await client.query("RESET statement_timeout").catch(swallowAs("pg-pool: reset statement timeout", undefined));
+  }
+}
+
+async function upgradeToSchemaBaseline(
+  client: PoolClient,
+  pending: readonly ChainMigration[],
+  failure: { discard?: Error },
+): Promise<void> {
+  const { before, after } = schemaBaselineChain();
+  for (const step of before)
+    await applyInTransaction(client, `maintenance ${step.id}`, step.statements, undefined, failure);
+  for (const migration of pending) {
+    if (migration.prepare) await runUntimed(client, migration.prepare);
+    if (migration.statements.some((statement) => concurrentIndexName(statement))) {
+      await createConcurrentIndexes(client, migration);
+      await applyInTransaction(client, `migration ${migration.id}`, [], migration, failure);
+      continue;
+    }
+    const adopted =
+      migration.preLedgerId !== undefined && (await appliedUnderPreLedgerId(client, migration.preLedgerId));
+    await applyInTransaction(
+      client,
+      `migration ${migration.id}`,
+      adopted ? [] : migration.statements,
+      migration,
+      failure,
+    );
+  }
+  for (const step of after)
+    await applyInTransaction(client, `maintenance ${step.id}`, step.statements, undefined, failure);
+}
+
+async function createConcurrentIndexes(client: PoolClient, migration: PgMigration): Promise<void> {
+  for (const statement of migration.statements) {
+    const name = concurrentIndexName(statement)!;
+    const table = /\sON\s+(?:ONLY\s+)?([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)\s*(?:USING\s+[a-z_]+\s*)?\(/i.exec(
+      statement,
+    )?.[1];
+    if (!table) throw new Error(`pg-pool: unsupported concurrent index target in ${migration.id}`);
+    const inspect = () =>
+      client.query<{ indisvalid: boolean; indisready: boolean; same_table: boolean; qualified_name: string }>(
+        `SELECT i.indisvalid, i.indisready, i.indrelid = t.oid AS same_table,
+              quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS qualified_name
+       FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace
+       JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = $2
+       JOIN pg_index i ON i.indexrelid = c.oid WHERE t.oid = to_regclass($1)`,
+        [table.toLowerCase(), name.toLowerCase()],
+      );
+    const existing = (await inspect()).rows[0];
+    if (existing && !existing.same_table)
+      throw new Error(`pg-pool: concurrent index ${name} belongs to a different table`);
+    if (existing?.indisvalid === false) await client.query(`DROP INDEX CONCURRENTLY ${existing.qualified_name}`);
+    await client.query(statement);
+    const built = (await inspect()).rows[0];
+    if (!built?.indisvalid || !built.indisready || !built.same_table) {
+      throw new Error(`pg-pool: concurrent index ${name} is not ready and valid`);
+    }
+  }
+}
+
+async function applySchemaBaseline(client: PoolClient, plan: BaselinePlan): Promise<void> {
   const { id, checksum, sql } = SCHEMA_BASELINE;
   await client.query("BEGIN");
   try {
@@ -376,15 +471,13 @@ async function applySchemaBaseline(client: PoolClient, plan: "apply" | "adopt"):
   }
 }
 
-// Everything that can refuse a migration run is checked before the first write, so a refused run leaves the database
-// exactly as it found it: recorded checksums, the pending set, and the baseline decision.
-function preflightPgMigrations(
+function preflightPgMigrations<M extends PgMigration>(
   ledger: ReadonlyMap<string, string>,
-  migrations: readonly PgMigration[],
-): { pending: PgMigration[]; acceptedPrior: string[] } {
+  migrations: readonly M[],
+): { pending: M[]; acceptedPrior: string[] } {
   const seen = new Map<string, string>();
   const problems: string[] = [];
-  const pending: PgMigration[] = [];
+  const pending: M[] = [];
   const acceptedPrior: string[] = [];
   for (const migration of migrations) {
     const twin = seen.get(migration.id);
@@ -420,12 +513,13 @@ const BASELINE_PLAN_LOG = {
   recorded: "already recorded",
   apply: "applying to an empty database",
   adopt: "adopting over the folded migrations",
+  upgrade: "upgrading through the pre-baseline migrations",
 } as const;
 
 /** Applies the baseline and any pending migrations; returns how many it applied. */
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<number> {
   const client = await pool.connect();
-  let discard: Error | undefined;
+  const failure: { discard?: Error } = {};
   try {
     await lockSchema(client, "qm:schema-migrations");
     const hasLedger = (
@@ -439,9 +533,14 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         : [],
     );
     const baseline = await planSchemaBaseline(client, ledger);
+    const chainPending =
+      baseline === "adopt" || baseline === "upgrade"
+        ? preflightPgMigrations(ledger, schemaBaselineChain().migrations).pending
+        : [];
     const { pending, acceptedPrior } = preflightPgMigrations(ledger, migrations);
     console.log(
       `[pg] migration preflight ok: ${pending.length} pending (${ledger.size} recorded); baseline ${BASELINE_PLAN_LOG[baseline]}` +
+        (chainPending.length ? ` (${chainPending.length} to run)` : "") +
         (acceptedPrior.length ? `; accepted an earlier checksum for ${acceptedPrior.join(", ")}` : ""),
     );
     if (baseline === "recorded" && pending.length === 0) return 0;
@@ -454,49 +553,22 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
     );
     let applied = 0;
     if (baseline !== "recorded") {
+      if (baseline === "upgrade") await upgradeToSchemaBaseline(client, chainPending, failure);
       await applySchemaBaseline(client, baseline);
-      applied++;
+      applied += chainPending.length + 1;
     }
     let remaining = pending;
     while (remaining.length) {
       const migration = remaining[0]!;
       remaining = remaining.slice(1);
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
-        // A concurrent build can run for minutes on a large table. It holds its own lock instead of the schema lock,
-        // so other processes' migration runs are not stuck behind it; they still wait here before passing this id.
         await client.query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))");
         const indexLock = `qm:schema-migrations:${migration.id}`;
         await lockSchema(client, indexLock);
         try {
           const done = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [migration.id]);
           if (!done.rowCount) {
-            for (const statement of migration.statements) {
-              const name = concurrentIndexName(statement)!;
-              const table =
-                /\sON\s+(?:ONLY\s+)?([a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?)\s*(?:USING\s+[a-z_]+\s*)?\(/i.exec(
-                  statement,
-                )?.[1];
-              if (!table) throw new Error(`pg-pool: unsupported concurrent index target in ${migration.id}`);
-              const inspect = () =>
-                client.query<{ indisvalid: boolean; indisready: boolean; same_table: boolean; qualified_name: string }>(
-                  `SELECT i.indisvalid, i.indisready, i.indrelid = t.oid AS same_table,
-                        quote_ident(n.nspname) || '.' || quote_ident(c.relname) AS qualified_name
-                 FROM pg_class t JOIN pg_namespace n ON n.oid = t.relnamespace
-                 JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = $2
-                 JOIN pg_index i ON i.indexrelid = c.oid WHERE t.oid = to_regclass($1)`,
-                  [table.toLowerCase(), name.toLowerCase()],
-                );
-              const existing = (await inspect()).rows[0];
-              if (existing && !existing.same_table)
-                throw new Error(`pg-pool: concurrent index ${name} belongs to a different table`);
-              if (existing?.indisvalid === false)
-                await client.query(`DROP INDEX CONCURRENTLY ${existing.qualified_name}`);
-              await client.query(statement);
-              const built = (await inspect()).rows[0];
-              if (!built?.indisvalid || !built.indisready || !built.same_table) {
-                throw new Error(`pg-pool: concurrent index ${name} is not ready and valid`);
-              }
-            }
+            await createConcurrentIndexes(client, migration);
             await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
               migration.id,
               migration.checksum,
@@ -509,7 +581,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
             .catch(swallowAs("pg-pool: concurrent index unlock", undefined));
         }
         await lockSchema(client, "qm:schema-migrations");
-        // Another process may have moved on while the lock was free: re-check what is left against the ledger.
         const ledgerNow = new Map(
           (
             await client.query<{ id: string; checksum: string }>(`SELECT id, checksum FROM ${PG_MIGRATIONS_TABLE}`)
@@ -518,18 +589,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         remaining = preflightPgMigrations(ledgerNow, remaining).pending;
         continue;
       }
-      await client.query("BEGIN");
-      try {
-        for (const statement of migration.statements) await client.query(statement);
-        await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
-          migration.id,
-          migration.checksum,
-        ]);
-        await client.query("COMMIT");
-      } catch (error) {
-        discard = await rollbackOrReport(client, `pg-pool: rollback migration ${migration.id}`);
-        throw error;
-      }
+      await applyInTransaction(client, `migration ${migration.id}`, migration.statements, migration, failure);
       applied++;
     }
     return applied;
@@ -537,7 +597,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
     await client
       .query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))")
       .catch(swallowAs("pg-pool: schema-migrations unlock", undefined));
-    client.release(discard);
+    client.release(failure.discard);
   }
 }
 
@@ -598,7 +658,7 @@ function registerPgMigration(connectionString: string, migration: PgMigration): 
 }
 
 export function registeredPgMigrations(connectionString: string): readonly PgMigration[] {
-  return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+  return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => pgMigrationOrder(a.id, b.id));
 }
 
 export async function migrateRegisteredPgSchemas(connectionString?: string): Promise<void> {
@@ -638,7 +698,7 @@ export function createPgPool(
   const migrates = idOrDefinitions !== undefined;
   const definitions =
     typeof idOrDefinitions === "string" ? [{ id: idOrDefinitions, statements }] : (idOrDefinitions ?? []);
-  const migrations = definitions.map(pgMigrationFrom);
+  const migrations = definitions.flatMap(pgMigrationsFrom);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
@@ -707,18 +767,18 @@ export function createPgPool(
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
-    const migration = pgMigrationFrom(definition);
-    registerPgMigration(connectionString, migration);
+    const migrations = pgMigrationsFrom(definition);
+    for (const migration of migrations) registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
     await withMigrationPool(async (instance) => {
-      const applied = await applyPgMigrations(instance, [migration]);
-      markSettled(connectionString, [migration]);
+      const applied = await applyPgMigrations(instance, migrations);
+      markSettled(connectionString, migrations);
       await applyTenancyIfEnabled(instance, connectionString, applied > 0);
     });
   }
   function registerMigration(definition: PgMigrationDefinition): void {
-    registerPgMigration(connectionString, pgMigrationFrom(definition));
+    for (const migration of pgMigrationsFrom(definition)) registerPgMigration(connectionString, migration);
   }
   return { pool, sessionPool, q, query, registerMigration, migrate, close };
 }

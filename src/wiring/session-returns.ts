@@ -106,5 +106,3 @@ export function buildSessionReturns(deps: SessionReturnsInputs) {
   });
   every("session-return-sweep", 1_000, sweepSessionReturns);
 }
-
-export type SessionReturnsModule = ReturnType<typeof buildSessionReturns>;

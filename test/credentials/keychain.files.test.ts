@@ -9,7 +9,7 @@ import {
   KeychainError,
 } from "../../src/credentials/keychain.ts";
 import { createKeychain } from "../../src/credentials/create-keychain.ts";
-import { deriveConnectorKey, encryptSecret } from "../../src/connectors/connector-client-store.ts";
+import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
 import { materializeGrant } from "../support/materialize-grant.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "../support/test-database.ts";
 import { KEY, kc, GH } from "../support/keychain-store.ts";
@@ -256,43 +256,6 @@ test("multi-input login: re-save upserts the same slot, and unique/non-empty fie
     (e: KeychainError) => e.status === 400 && /AGENT_\*/.test(e.message),
     "a field envKey in the harness namespace is rejected",
   );
-});
-
-test("legacy rows are rewritten once to the current shape and materialize as before", async () => {
-  const store = createKeychainStore(testDatabaseUrl());
-  const { creds } = store;
-  const k = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
-  const password = await k.save({
-    ownerId: "U1",
-    service: "acme-portal",
-    secret: "hunter2",
-    envKey: "ACME_PORTAL_PASSWORD",
-  });
-  await creds.update(password.id, (current) => ({ ...current, username: "alice@acme.co" }));
-  const file = await k.save({ ownerId: "U1", service: "netrc", target: ".netrc", secret: "machine x" });
-  const stored = (await creds.get(file.id))!;
-  const { targets: _targets, ...withoutTargets } = stored;
-  await creds.put(file.id, { ...withoutTargets, target: ".netrc", secretEnc: encryptSecret("machine x", KEY) });
-
-  assert.equal(await k.rewriteTargetUsernameCredentials(), 2);
-  assert.equal(await k.rewriteTargetUsernameCredentials(), 0, "a second pass finds nothing to rewrite");
-  const rewritten = (await creds.get(password.id))!;
-  assert.equal(rewritten.username, undefined);
-  assert.deepEqual(rewritten.fields, [
-    { envKey: "ACME_PORTAL_PASSWORD", secret: true },
-    { envKey: "ACME_PORTAL_USERNAME", secret: false },
-  ]);
-  assert.equal((await creds.get(file.id))!.target, undefined);
-
-  const own = await k.materializeOwn("U1");
-  const env = own.find((c) => c.credentialId === password.id) as { env: unknown };
-  assert.deepEqual(env.env, [
-    { key: "ACME_PORTAL_PASSWORD", value: "hunter2", secret: true },
-    { key: "ACME_PORTAL_USERNAME", value: "alice@acme.co", secret: false },
-  ]);
-  const [bundle] = await k.materializeOwnFiles("U1");
-  assert.equal(bundle!.files.length, 1);
-  assert.equal(Buffer.from(bundle!.files[0]!.contentBase64, "base64").toString("utf8"), "machine x");
 });
 
 test("manifest: explains itself in a bare channel, lists credentials + protocol when present, flags standing grants", async () => {

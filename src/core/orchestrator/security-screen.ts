@@ -7,6 +7,7 @@ import { errMessage, swallowAs } from "../../util/errors.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
 import { headSlice } from "../../util/text.ts";
 import type { OrchestratorDeps } from "./types.ts";
+import { SCREENING_ALLOW, screeningGate, type ScreeningGateDecision } from "./screening-gate.ts";
 
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
 const MAX_AUDITED_SOURCES = 20;
@@ -30,7 +31,7 @@ export type SecurityObserver = (
   actorId: string,
   scopeLabel: ScopeId,
   context: SecurityScreenContext,
-) => Promise<void>;
+) => Promise<ScreeningGateDecision>;
 
 function screenSources(payload: string): string[] {
   let parsed: unknown;
@@ -50,7 +51,7 @@ export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver
   const observe: SecurityObserver = async (payload, actorId, scopeLabel, context) => {
     const screener = deps.securityScreener;
     const model = deps.harness.models.screenSecurity;
-    if (!screener && !model) return;
+    if (!screener && !model) return SCREENING_ALLOW;
     const timeoutMs = deps.securityScreenTimeoutMs ?? CONFIG_DEFAULTS.securityScreenTimeoutMs;
     const hook = context.hook ?? "user_input";
     let request: { origin: string; text: string; truncated: boolean } | undefined;
@@ -139,9 +140,15 @@ export function createSecurityObserver(deps: OrchestratorDeps): SecurityObserver
     let status: ScreenStatus = "error";
     if (result && !result.verdict.unscreened) status = result.verdict.decision === "strict" ? "would_block" : "allow";
     audit(status, requestId, result, error);
+    return screeningGate({
+      hook,
+      ...(context.surface ? { surface: context.surface } : {}),
+      ...(context.origin ? { origin: context.origin } : {}),
+      ...(result ? { verdict: result.verdict } : {}),
+    });
   };
   return (payload, actorId, scopeLabel, context) =>
     observe(payload, actorId, scopeLabel, context).catch(
-      swallowAs("orchestrator: observed security screen", undefined),
+      swallowAs("orchestrator: observed security screen", SCREENING_ALLOW),
     );
 }

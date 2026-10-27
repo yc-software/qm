@@ -1,17 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
-import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 import { fakeToolContext, type Emitted, emittedItem, call, tool, textOut } from "../support/agent-tools.ts";
 
 test("cron/webhook register only when controlTools is on; instructions registers with controlTools OR surfaceTools", () => {
-  const off = createAgentTools({ current: fakeToolContext() });
+  const off = createAgentTools(createTurnToolState({ current: fakeToolContext() }));
   assert.ok(!off.some((t) => ["cron", "webhook", "instructions"].includes(t.name)), "off by default");
-  const on = createAgentTools({ current: fakeToolContext() }, { controlTools: true }).map((t) => t.name);
+  const on = createAgentTools(createTurnToolState({ current: fakeToolContext() }), { controlTools: true }).map(
+    (t) => t.name,
+  );
   for (const name of ["cron", "webhook", "instructions"])
     assert.ok(on.includes(name), `${name} registers when controlTools is on`);
-  const surfaceOnly = createAgentTools({ current: fakeToolContext() }, { surfaceTools: true }).map((t) => t.name);
+  const surfaceOnly = createAgentTools(createTurnToolState({ current: fakeToolContext() }), { surfaceTools: true }).map(
+    (t) => t.name,
+  );
   assert.ok(surfaceOnly.includes("instructions"), "instructions registers when surfaceTools is on");
   assert.ok(!surfaceOnly.includes("cron") && !surfaceOnly.includes("webhook"), "cron/webhook stay control-only");
 });
@@ -438,14 +443,14 @@ test("control tools degrade to a crisp [error] when the turn has no self-API (CO
 
 test("typed control tools emit tool_call then tool_result like every other tool", async () => {
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
-  const cronTool = createAgentTools(ref, { controlTools: true }).find((t) => t.name === "cron")!;
+  const cronTool = createAgentTools(createTurnToolState(ref), { controlTools: true }).find((t) => t.name === "cron")!;
   await call(cronTool, { action: "list" });
   assert.deepEqual(
     emitted.map((e) => `${e.kind}:${e.fields.tool}`),

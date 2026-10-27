@@ -29,30 +29,16 @@ import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import { LOCK_ICON } from "../../chassis/src/card-page.ts";
 import { json, escapeHtml, readBody, PayloadTooLargeError } from "../../chassis/src/http.ts";
-import {
-  CORE_API_URL as CORE,
-  CORE_ORG_ID as ORG,
-  CORE_SIGNING_SECRET,
-  PORTAL_IDENTITY_SECRET,
-} from "../../chassis/src/env.ts";
+import { CORE_API_URL as CORE, coreOrgId, coreSigningSecret, portalIdentitySecret } from "../../chassis/src/env.ts";
 
 import {
-  PUBLIC_URL,
   SESSION_SECRET,
   SESSION_MAX_TTL_S,
-  APPS_DOMAIN,
   SECURE_COOKIES,
-  ORIGIN,
-  OIDC,
-  AUTH_BROKER_UPSTREAM,
   AUTH_BROKER_PREFIX,
   PRINCIPAL_RULE,
-  DEV_SECRET,
-  sessionKey,
-  tmpKey,
-  trustedOidc,
-  trustedSignInLabel,
-  trustedAdminEnabled,
+  site,
+  type Site,
 } from "./config.ts";
 import { coreCall, adminCache, adminProbeAttempt } from "./core-calls.ts";
 import { cardPage, PAGE_CSP, sendHtml, redirect, signInErrorHtml } from "./pages.ts";
@@ -67,16 +53,27 @@ import {
   setAuthenticatedSession,
 } from "./sessions.ts";
 
-const trustedEntry = trustedOidc
-  ? createTrustedEntry(trustedOidc, SESSION_SECRET ?? DEV_SECRET, (key, expiresAt) =>
-      claimOnce(coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"), key, expiresAt),
-    )
-  : null;
+const trustedEntries = new WeakMap<Site, ReturnType<typeof createTrustedEntry>>();
+
+function trustedEntryOf(current: Site): ReturnType<typeof createTrustedEntry> | null {
+  if (!current.trusted) return null;
+  let entry = trustedEntries.get(current);
+  if (!entry) {
+    entry = createTrustedEntry(current.trusted, current.sessionSecret, (key, expiresAt) =>
+      claimOnce(coreClaimStore(CORE, coreSigningSecret(), "portal"), key, expiresAt),
+    );
+    trustedEntries.set(current, entry);
+  }
+  return entry;
+}
+
+const returnTarget = (returnTo: string | null): string =>
+  sanitizeReturnTo(returnTo, site().publicUrl, site().appsDomain);
 const TMP_TTL_S = 600;
 
 export async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   res.setHeader("cache-control", "no-store");
-  if (!SESSION_SECRET || SESSION_SECRET.trim().length < 32 || !CORE_SIGNING_SECRET) {
+  if (!SESSION_SECRET || SESSION_SECRET.trim().length < 32 || !coreSigningSecret()) {
     return json(res, 503, { error: "not_configured" });
   }
   if (url.pathname.endsWith("/redeem")) {
@@ -94,16 +91,16 @@ export async function desktopLogin(req: IncomingMessage, res: ServerResponse, ur
       body.get("code") ?? "",
       body.get("verifier") ?? "",
       body.get("state") ?? "",
-      SESSION_SECRET,
-      ORIGIN,
-      ORG,
+      site().sessionSecret,
+      site().origin,
+      coreOrgId(),
       SESSION_MAX_TTL_S,
     );
     if (!claims) return json(res, 400, { error: "invalid_desktop_login" });
     try {
       if (
         !(await claimOnce(
-          coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"),
+          coreClaimStore(CORE, coreSigningSecret(), "portal"),
           `desktop-login:${claims.jti}`,
           claims.expiresAtMs,
         ))
@@ -115,7 +112,7 @@ export async function desktopLogin(req: IncomingMessage, res: ServerResponse, ur
       throw error;
     }
     setSession(res, [
-      ...sessionCookieSet(seal(claims.session, sessionKey), claims.session.sub),
+      ...sessionCookieSet(seal(claims.session, site().sessionKey), claims.session.sub),
       clearCookie("portal_impersonate", "/", SECURE_COOKIES),
     ]);
     return json(res, 200, { ok: true });
@@ -145,7 +142,7 @@ export async function desktopLogin(req: IncomingMessage, res: ServerResponse, ur
     );
   }
   const callback = new URL("qm-desktop://auth/callback");
-  callback.searchParams.set("code", mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state));
+  callback.searchParams.set("code", mintDesktopLogin(session, site().sessionSecret, site().origin, challenge, state));
   callback.searchParams.set("state", state);
   return sendHtml(
     res,
@@ -163,7 +160,7 @@ export async function desktopLogin(req: IncomingMessage, res: ServerResponse, ur
 }
 
 export async function inviteLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!SESSION_SECRET || !CORE_SIGNING_SECRET) return json(res, 503, { error: "not_configured" });
+  if (!SESSION_SECRET || !coreSigningSecret()) return json(res, 503, { error: "not_configured" });
   if (req.method === "GET")
     return sendHtml(
       res,
@@ -214,7 +211,7 @@ export async function inviteLogin(req: IncomingMessage, res: ServerResponse): Pr
 }
 
 export async function adminLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!SESSION_SECRET || SESSION_SECRET.trim().length < 32 || !CORE_SIGNING_SECRET) {
+  if (!SESSION_SECRET || SESSION_SECRET.trim().length < 32 || !coreSigningSecret()) {
     return json(res, 503, { error: "not_configured" });
   }
   if (req.method === "GET") {
@@ -242,7 +239,7 @@ export async function adminLogin(req: IncomingMessage, res: ServerResponse): Pro
     if (error instanceof PayloadTooLargeError) return json(res, 413, { error: "payload_too_large" });
     throw error;
   }
-  const claims = openAdminLogin(token, SESSION_SECRET, ORIGIN);
+  const claims = openAdminLogin(token, site().sessionSecret, site().origin);
   const fail = () =>
     sendHtml(
       res,
@@ -255,7 +252,7 @@ export async function adminLogin(req: IncomingMessage, res: ServerResponse): Pro
     return sendHtml(res, 503, signInErrorHtml("Admin access could not be checked. Please try again."));
   if (!allowed) return sendHtml(res, 403, signInErrorHtml("This account does not have admin access."));
   try {
-    const claimsStore = coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal");
+    const claimsStore = coreClaimStore(CORE, coreSigningSecret(), "portal");
     if (!(await claimOnce(claimsStore, `admin-login:${claims.jti}`, claims.expiresAtMs))) return fail();
   } catch (error) {
     if (error instanceof ClaimStoreUnavailableError) {
@@ -268,20 +265,22 @@ export async function adminLogin(req: IncomingMessage, res: ServerResponse): Pro
 }
 
 export async function trustedAuth(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  if (!trustedEntry) return json(res, 404, { error: "not_found" });
+  const current = site();
+  const trustedEntry = trustedEntryOf(current);
+  if (!trustedEntry || !current.trusted) return json(res, 404, { error: "not_found" });
   const cookieName = "portal_trusted_tmp";
   const path = "/auth/trusted";
   if (url.pathname === `${path}/login`) {
     const returnTo =
       url.searchParams.get("returnTo") ??
-      openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), tmpKey, Date.now())?.returnTo ??
+      openTmp(readCookie(req.headers.cookie, "portal_oidc_tmp"), current.tmpKey, Date.now())?.returnTo ??
       null;
     const existing = currentSession(req);
-    const trustedPrefix = `oidc:${createHash("sha256").update(trustedOidc!.issuer).digest("hex")}:`;
+    const trustedPrefix = `oidc:${createHash("sha256").update(current.trusted.issuer).digest("hex")}:`;
     if (existing && !existing.anon && !existing.appOnly && existing.sub.startsWith(trustedPrefix)) {
-      return redirect(res, 302, sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
+      return redirect(res, 302, returnTarget(returnTo));
     }
-    const login = trustedEntry.start(sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN));
+    const login = trustedEntry.start(returnTarget(returnTo));
     setSession(res, [setCookie(cookieName, login.cookie, { path, maxAge: login.ttl, secure: SECURE_COOKIES })]);
     return redirect(res, 302, login.location);
   }
@@ -289,21 +288,21 @@ export async function trustedAuth(req: IncomingMessage, res: ServerResponse, url
   setSession(res, [clearCookie(cookieName, path, SECURE_COOKIES)]);
   try {
     const identity = await trustedEntry.finish(readCookie(req.headers.cookie, cookieName), url);
-    if (trustedAdminEnabled) {
+    if (current.trustedAdmin) {
       await provisionTrustedAdmin(
         {
           core: CORE,
-          signingSecret: CORE_SIGNING_SECRET!,
-          identitySecret: PORTAL_IDENTITY_SECRET!,
-          org: ORG,
-          issuer: trustedOidc!.issuer,
+          signingSecret: coreSigningSecret()!,
+          identitySecret: portalIdentitySecret()!,
+          org: coreOrgId(),
+          issuer: current.trusted.issuer,
         },
         identity.subject,
       );
-      adminCache.delete(identity.sub);
+      adminCache().delete(identity.sub);
     }
     setAuthenticatedSession(res, identity.sub, identity.name);
-    redirect(res, 302, sanitizeReturnTo(identity.returnTo, PUBLIC_URL, APPS_DOMAIN));
+    redirect(res, 302, returnTarget(identity.returnTo));
   } catch (error) {
     reportFailure("portal: trusted sign-in", error);
     sendHtml(
@@ -315,23 +314,25 @@ export async function trustedAuth(req: IncomingMessage, res: ServerResponse, url
 }
 
 export function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): void {
+  const { oidc, trusted, trustedLabel, brokerUpstream, tmpKey, sessionKey } = site();
+  const returnTo = returnTarget(url.searchParams.get("returnTo"));
   if (
-    trustedOidc &&
-    trustedSignInLabel &&
-    url.searchParams.get("provider") !== "primary" &&
-    readCookie(req.headers.cookie, "portal_login_provider") ===
-      createHash("sha256").update(trustedOidc.issuer).digest("hex")
+    trusted &&
+    (!oidc ||
+      (trustedLabel &&
+        url.searchParams.get("provider") !== "primary" &&
+        readCookie(req.headers.cookie, "portal_login_provider") ===
+          createHash("sha256").update(trusted.issuer).digest("hex")))
   ) {
-    const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
     return redirect(res, 302, `/auth/trusted/login?returnTo=${encodeURIComponent(returnTo)}`);
   }
-  const returnTo = sanitizeReturnTo(url.searchParams.get("returnTo"), PUBLIC_URL, APPS_DOMAIN);
+  if (!oidc) return json(res, 404, { error: "not_found" });
   const localSession = localDevSession(req, Date.now(), true);
   if (localSession) {
     setSession(res, [
       ...sessionCookieSet(seal(localSession, sessionKey), localSession.sub),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
-      ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
+      ...(brokerUpstream ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       clearCookie(LOCAL_LOGOUT_COOKIE, "/", SECURE_COOKIES),
     ]);
     return redirect(res, 302, returnTo);
@@ -344,10 +345,12 @@ export function authLogin(req: IncomingMessage, res: ServerResponse, url: URL): 
   setSession(res, [
     setCookie("portal_oidc_tmp", seal(tmp, tmpKey), { path: "/auth", maxAge: TMP_TTL_S, secure: SECURE_COOKIES }),
   ]);
-  redirect(res, 302, buildAuthorizeUrl(OIDC, { state, nonce, challenge }));
+  redirect(res, 302, buildAuthorizeUrl(oidc, { state, nonce, challenge }));
 }
 
 export async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const { oidc, tmpKey } = site();
+  if (!oidc) return json(res, 404, { error: "not_found" });
   const fail = (detail: string): void => {
     setSession(res, [clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES)]);
     sendHtml(res, 400, signInErrorHtml(detail));
@@ -363,7 +366,7 @@ export async function authCallback(req: IncomingMessage, res: ServerResponse, ur
   try {
     if (
       !(await claimOnce(
-        coreClaimStore(CORE, CORE_SIGNING_SECRET, "portal"),
+        coreClaimStore(CORE, coreSigningSecret(), "portal"),
         `oidc-state:${tmp.state}`,
         Date.now() + 2 * TMP_TTL_S * 1000,
       ))
@@ -378,18 +381,18 @@ export async function authCallback(req: IncomingMessage, res: ServerResponse, ur
   let principal: { sub: string; appOnly?: true };
   let name = "";
   try {
-    const { accessToken, idToken } = await exchangeCode(OIDC, { code, codeVerifier: tmp.pkceVerifier });
-    const claims = await verifyIdToken(OIDC, idToken, tmp.nonce);
-    if (OIDC.expectedTeamId) {
+    const { accessToken, idToken } = await exchangeCode(oidc, { code, codeVerifier: tmp.pkceVerifier });
+    const claims = await verifyIdToken(oidc, idToken, tmp.nonce);
+    if (oidc.expectedTeamId) {
       const team = claims["https://slack.com/team_id"];
-      if (team !== OIDC.expectedTeamId) throw new Error("workspace not permitted");
+      if (team !== oidc.expectedTeamId) throw new Error("workspace not permitted");
     }
-    const info = await fetchUserinfo(OIDC, accessToken);
+    const info = await fetchUserinfo(oidc, accessToken);
     const infoSub = typeof info.sub === "string" ? info.sub : "";
     if (!infoSub) throw new Error("userinfo missing sub");
     if (typeof claims.sub === "string" && claims.sub !== infoSub) throw new Error("subject mismatch");
     principal = await resolvePrincipal(PRINCIPAL_RULE, { sub: infoSub, claims, userinfo: info }, (email) =>
-      coreEmailAdmission(CORE, CORE_SIGNING_SECRET, email, "portal"),
+      coreEmailAdmission(CORE, coreSigningSecret(), email, "portal"),
     );
     const rawName = info.name ?? claims.name;
     if (typeof rawName === "string") name = rawName.trim().slice(0, 200);
@@ -398,5 +401,5 @@ export async function authCallback(req: IncomingMessage, res: ServerResponse, ur
   }
 
   setAuthenticatedSession(res, principal.sub, name, principal.appOnly);
-  redirect(res, 302, sanitizeReturnTo(tmp.returnTo, PUBLIC_URL, APPS_DOMAIN));
+  redirect(res, 302, returnTarget(tmp.returnTo));
 }

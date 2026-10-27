@@ -146,45 +146,7 @@ test("/v1/admin/users/:principalId: per-user detail counts personal conversation
   }
 });
 
-test("/v1/admin/users/:principalId/onboarding: org_admin sets/resets state, reflected in detail; bad input + non-admin rejected; audited", async () => {
-  const s = start();
-  try {
-    const dm: TurnRequest = {
-      origin: { kind: "direct" },
-      surface: "test",
-      actor: { externalId: "U1" },
-      conversation: { kind: "dm", threadRef: "dm:U1:t1" },
-      text: "hi",
-    };
-    assert.equal((await s.built.app.turn(dm)).status, "ok");
-    const adminHdr = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
-    const detail = async () =>
-      (await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: adminHdr })).json()) as any;
-    const setOb = (status: string, actor = "admin-alice@default-org") =>
-      fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
-        method: "PUT",
-        headers: { "x-admin-actor": actor, "content-type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-
-    assert.equal((await detail()).onboarding, "not_started");
-
-    assert.equal((await setOb("completed")).status, 200);
-    assert.equal((await detail()).onboarding, "completed");
-
-    assert.equal((await setOb("not_started")).status, 200);
-    assert.equal((await detail()).onboarding, "not_started");
-
-    assert.equal((await setOb("nope")).status, 400);
-    assert.equal((await setOb("completed", "user-uma@default-org")).status, 403);
-
-    assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.onboarding.set"));
-  } finally {
-    await s.close();
-  }
-});
-
-test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions + clears onboarding; non-admin denied; audited", async () => {
+test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions; non-admin denied; audited", async () => {
   const s = start();
   try {
     const dm: TurnRequest = {
@@ -199,14 +161,8 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
     const detail = async () =>
       (await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: adminHdr })).json()) as any;
 
-    await fetch(`${s.base}/v1/admin/users/U1/onboarding`, {
-      method: "PUT",
-      headers: { ...adminHdr, "content-type": "application/json" },
-      body: JSON.stringify({ status: "completed" }),
-    });
     let d = await detail();
     assert.equal(d.stats.sessions, 1, "one personal DM session before reset");
-    assert.equal(d.onboarding, "completed");
 
     const denied = await fetch(`${s.base}/v1/admin/users/U1/reset`, {
       method: "POST",
@@ -221,7 +177,6 @@ test("/v1/admin/users/:principalId/reset: deletes the user's personal sessions +
     d = await detail();
     assert.equal(d.stats.sessions, 0, "session wiped → user looks brand-new");
     assert.equal("conversations" in d, false);
-    assert.equal(d.onboarding, "not_started", "onboarding marker cleared");
 
     assert.ok((await s.built.auditLog.events()).some((e) => e.action === "user.reset"));
   } finally {
@@ -355,18 +310,11 @@ for (const canonicalPrincipal of ["alice@example.com", "Alice@example.com"]) {
       const base = `${s.base}/v1/admin/users/ALICE%40example.com`;
       const headers = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
       const detail = async () => (await (await fetch(base, { headers })).json()) as any;
-      const update = await fetch(base + "/onboarding", {
-        method: "PUT",
-        headers,
-        body: JSON.stringify({ status: "completed" }),
-      });
-      assert.equal(update.status, 200);
-      assert.equal(((await update.json()) as any).scopeId, scope);
-      assert.equal((await detail()).onboarding, "completed");
       const reset = await fetch(base + "/reset", { method: "POST", headers });
       assert.equal(reset.status, 200);
-      assert.equal(((await reset.json()) as any).deletedSessions, 1);
-      assert.equal((await detail()).onboarding, "not_started");
+      const body = (await reset.json()) as any;
+      assert.equal(body.scopeId, scope);
+      assert.equal(body.deletedSessions, 1);
       assert.equal((await detail()).stats.sessions, 0);
       assert.equal(await s.built.sessions.get(session.id), null);
       assert.ok(await s.built.sessions.get(other.id));

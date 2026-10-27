@@ -18,7 +18,7 @@ export function withTraceCarrier(request: OrchestratorInput): OrchestratorInput 
 }
 
 export function runPriority(request: OrchestratorInput, delegating: RunPriority | null): RunPriority {
-  if (request.delegatingRunId && delegating === null) return 2;
+  if (request.swarm || (request.delegatingRunId && delegating === null)) return 2;
   if (request.delegatingRunId) return delegating === 2 ? 2 : 1;
   return isPersonAuthored(request.origin.kind) ? 0 : 2;
 }

@@ -390,7 +390,7 @@ for (const surface of ["web", "slack"]) {
     const server = createInsecureTestServer(built.app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const request = `!screened-run printf '%s' "$(printf 'x%.0s' $(seq 1 20000)) quoted transcript"`;
+    const request = `!screened-run printf '%s' "$(printf 'x%.0s' $(seq 1 40000)) quoted transcript"`;
     try {
       for (const text of ["earlier private conversation", request]) {
         const response = await fetch(`${base}/v1/turns`, {

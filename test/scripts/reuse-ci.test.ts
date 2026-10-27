@@ -227,11 +227,7 @@ test("deployment notice fires only for a fully green main push and holds no repo
   assert.ok(
     job.includes("if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'"),
   );
-  assert.ok(
-    job.includes(
-      "needs: [core, cli, lint, dependency-audit, core-postgres, web-ui-plugin, auth-plugin, portal-plugin]",
-    ),
-  );
+  assert.ok(job.includes("needs: [core, cli, lint, dependency-audit, web-ui-plugin, auth-plugin, portal-plugin]"));
   assert.ok(job.includes("permissions: {}"));
   assert.ok(job.includes("continue-on-error: true"));
   assert.ok(!job.includes("exit 1"));
@@ -249,11 +245,7 @@ test("receipt is an isolated immutable checkout with no secrets, artifacts, cach
   assert.ok(job.includes('if (checks[id]?.result !== "success") throw new Error'));
   assert.ok(job.includes("always() && !cancelled()"));
   assert.ok(job.includes("permissions:\n      contents: read"));
-  assert.ok(
-    job.includes(
-      "needs: [core, cli, lint, core-postgres, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]",
-    ),
-  );
+  assert.ok(job.includes("needs: [core, cli, lint, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]"));
   assert.equal([...job.matchAll(/^ {6}- /gm)].length, 3);
   assert.ok(job.includes("ref: ${{ github.sha }}\n          persist-credentials: false"));
   assert.match(job, /uses: actions\/checkout@[a-f0-9]{40}/);
@@ -268,16 +260,7 @@ test("inline receipt eligibility rejects missing or failed prerequisites, not an
     .split("      - name: Checkout tested commit")[0]!
     .split("        run: |\n")[1]!
     .replace(/^ {10}/gm, "");
-  const ids = [
-    "core",
-    "cli",
-    "lint",
-    "core-postgres",
-    "web-ui-plugin",
-    "auth-plugin",
-    "portal-plugin",
-    "coauthor-trailers",
-  ];
+  const ids = ["core", "cli", "lint", "web-ui-plugin", "auth-plugin", "portal-plugin", "coauthor-trailers"];
   const checks = Object.fromEntries(ids.map((id) => [id, { result: "success" }]));
   checks.reuse = { result: "skipped" };
   const execute = (source = "123", target = "123") =>

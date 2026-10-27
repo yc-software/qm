@@ -2,7 +2,8 @@ import { after, before, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
+import { migrateRegisteredPgSchemas, registeredPgMigrations } from "../../src/persistence/pg-pool.ts";
+import { CONTRACT_MIGRATIONS } from "../../src/persistence/contract-migrations.ts";
 import type { Orchestrator, OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import type { Run, RunPriority } from "../../src/runs/run-store.ts";
@@ -571,4 +572,49 @@ test("stopping a tree stops every turn in its conversations in one step", { skip
     true,
   );
   assert.equal(await pointer(parent), null);
+});
+
+test(
+  "a run the legacy engine left in flight is failed so its thread is free, and Absurd turns are untouched",
+  { skip },
+  async () => {
+    const thread = `web:alice:${randomUUID()}`;
+    const legacy = randomUUID();
+    await admin.query(
+      `INSERT INTO runs(id, session_id, status, request, attempts, max_attempts, created_at, claim_priority, engine)
+     VALUES ($1, $2, 'pending', $3, 0, 3, $4, 0, 'legacy')`,
+      [legacy, thread, JSON.stringify(request(thread)), Date.now()],
+    );
+    const queued = await admit(`web:alice:${randomUUID()}`);
+    const settle = registeredPgMigrations(URL!).find((m) => m.id === "runs/store/0015-settle-unclaimed-in-flight")!;
+    for (const statement of settle.statements) await admin.query(statement);
+    const failed = await runStore.runs.get(legacy);
+    assert.equal(failed?.status, "failed");
+    assert.equal(failed?.result?.reason, "This turn stopped unexpectedly and could not be resumed.");
+    assert.equal(await runStore.runs.activeForThread(thread), null);
+    assert.equal((await runStore.runs.get(queued.run.id))?.status, "pending");
+  },
+);
+
+test("turns admit, fence and finish once the contract phase drops runs.engine", { skip }, async () => {
+  const { rows } = await admin.query(
+    "SELECT column_default FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'engine'",
+  );
+  assert.equal(rows[0]?.column_default, "'absurd'::text");
+  const drop = CONTRACT_MIGRATIONS.find((migration) => migration.id === "contract/0009-drop-runs-engine")!;
+  const client = await admin.connect();
+  try {
+    await client.query("BEGIN");
+    for (const statement of drop.statements) await client.query(statement);
+    await client.query("COMMIT");
+  } finally {
+    client.release();
+  }
+  const thread = `web:alice:${randomUUID()}`;
+  const admitted = await admit(thread);
+  const { run, token } = await claim();
+  assert.equal(run.id, admitted.run.id);
+  assert.equal(await ledger.fenceHeld(run.id, token), true);
+  assert.equal(await ledger.finish(run, token, { status: "done", result: ok(run) }), true);
+  assert.equal((await runStore.runs.get(run.id))?.status, "done");
 });

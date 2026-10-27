@@ -26,14 +26,11 @@ export function bindTurnLedger(
   };
 }
 
-/** Adopts runs the legacy engine left behind, then fails turns whose Absurd task is gone and frees their thread. */
 export async function sweepTurns(deps: {
   ledger: TurnLedger;
   sessions: Pick<SessionStore, "getByThread" | "forceReleaseLease" | "acquireLease" | "append" | "releaseLease">;
   errors?: ErrorLog;
 }): Promise<void> {
-  const adopted = await deps.ledger.adoptLegacy();
-  if (adopted) console.log(`[turns] adopted ${adopted} legacy run(s) onto Absurd`);
   for (const candidate of await deps.ledger.repairCandidates()) {
     const repaired = await deps.ledger.repair(candidate, {
       status: "failed",

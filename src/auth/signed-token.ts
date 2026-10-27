@@ -1,6 +1,5 @@
 import { createHmac } from "node:crypto";
 import { CompactSign, compactVerify, decodeProtectedHeader } from "jose";
-import { constantTimeEqual } from "../util/crypto.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -15,26 +14,8 @@ export function mintSignedPayload(value: unknown, secret: string): Promise<strin
     .sign(encoder.encode(secret));
 }
 
-function verifyHmacPayload(token: string, secrets: string[]): unknown | null {
-  const dot = token.lastIndexOf(".");
-  if (dot <= 0) return null;
-  const payload = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  for (const secret of secrets) {
-    const hmac = createHmac("sha256", secret).update(payload).digest();
-    if (!constantTimeEqual(hmac.toString("base64url"), sig) && !constantTimeEqual(hmac.toString("hex"), sig)) continue;
-    try {
-      return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as unknown;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 export async function verifySignedPayload(token: string, secret: string | string[]): Promise<unknown | null> {
   const secrets = Array.isArray(secret) ? secret : [secret];
-  if (token.split(".").length !== 3) return verifyHmacPayload(token, secrets);
   let kid: string | undefined;
   try {
     kid = decodeProtectedHeader(token).kid;

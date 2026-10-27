@@ -62,10 +62,15 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
     ...(meta.timezone ? { timezone: meta.timezone } : {}),
+    ...(meta.swarm ? { swarm: true } : {}),
   };
 }
 
-export async function openSubagent(ctx: TurnContext, input: SessionOpenInput): Promise<SessionOpenResult> {
+export async function openSubagent(
+  ctx: TurnContext,
+  input: SessionOpenInput,
+  opts: { swarm?: boolean } = {},
+): Promise<SessionOpenResult> {
   const { deps, binding, lock, cap, admissionKey, callerTitle, visibleTitle, currentCaller } = ctx;
   return (async () => {
     const threadRef = `${SUBAGENT_THREAD_PREFIX}${
@@ -114,6 +119,7 @@ export async function openSubagent(ctx: TurnContext, input: SessionOpenInput): P
         ...(binding.request.deliveryCandidates ? { deliveryCandidates: binding.request.deliveryCandidates } : {}),
         ...(caller.unattendedGrants ? { unattendedGrants: [...caller.unattendedGrants] } : {}),
         openFingerprint: fingerprint,
+        ...(opts.swarm ? { swarm: true } : {}),
         ...(turnSource(binding.request) ? { source: turnSource(binding.request) } : {}),
         ...(binding.request.externalSlack ? { externalSlack: binding.request.externalSlack } : {}),
         ...(binding.request.scopeVersion ? { scopeVersion: binding.request.scopeVersion } : {}),
@@ -213,6 +219,7 @@ export async function writeSession(ctx: TurnContext, input: SessionWriteInput): 
                 fastMode: target.spawnMeta?.fastMode,
               }
             : {}),
+          ...(target.spawnMeta?.swarm ? { swarm: true } : {}),
           surface: meta.surface ?? target.surface ?? "web",
           actor: caller.actor,
           origin: caller.origin,

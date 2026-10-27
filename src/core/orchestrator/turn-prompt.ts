@@ -2,7 +2,7 @@ import { surfaceProfile, surfaceHas } from "../../surfaces/surface.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
 import { isBackendCredential } from "../../credentials/keychain.ts";
 import { requiresDelegation } from "../../subagents/delegation.ts";
-import { type Destination, type ScopeId, turnSource } from "../../types.ts";
+import { type Destination, turnSource } from "../../types.ts";
 import { renderGatewayContext } from "../gateway-context.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../../resolution/branding.ts";
@@ -59,9 +59,7 @@ const IDEAS_CONVERSATION_MD = loadProtocolFile("turn-ideas-conversation");
 
 interface FrameTurnArgs {
   screenTrace: ScreenTrace;
-  useMemory: boolean;
   context: Awaited<ReturnType<typeof resolveTurnContext>>;
-  memoryScopeId: ScopeId;
   memoryStrategy: MemoryStrategy;
   observeSecurityData: SecurityObserver;
 }
@@ -79,15 +77,17 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
     turnTimezone,
     resolution,
     scopeId,
+    useMemory,
   } = ctx;
-  const { useMemory, context, memoryScopeId, memoryStrategy } = turn;
+  const { context, memoryStrategy } = turn;
+  const { memoryScopeId } = context;
   const profile = surfaceProfile(input.surface);
   const isWeb = profile.traits.includes("transcript");
   const surfaceTool = input.surface ?? "slack";
   const branding = await resolveBranding(deps.config, resolution.orgScopeId, deps.brandingDefault);
   const botName = branding.selfLabel ?? "QM";
   const orgName = branding.orgName ?? "this organization";
-  const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""), 40);
+  const rawHandle = cleanBrandingLabel(input.gatewayContext?.botHandle?.replace(/^@/, ""));
   const botHandle = rawHandle && rawHandle.toLowerCase() !== botName.toLowerCase() ? rawHandle : undefined;
   let modeName = "mode-fallback";
   if (input.surfaceTools) modeName = "mode-autonomous";
@@ -107,18 +107,12 @@ export async function frameTurnPrompt(ctx: TurnCtx, turn: FrameTurnArgs) {
     slack: profile.promptFlavor === "slack",
   };
   if (modeName === "mode-conversation") {
-    frameVars.userName = cleanBrandingLabel(actor.displayName, 80) ?? "there";
+    frameVars.userName = cleanBrandingLabel(actor.displayName) ?? "there";
     frameVars.userEmail = actor.id.includes("@") ? actor.id : undefined;
   }
   const surfaceName =
     input.origin.kind === "automation" && input.origin.destination ? "slack" : (input.surface ?? "slack");
-  const sessionSyscalls =
-    !external &&
-    deps.sessionSyscalls &&
-    (delegationEnabled ||
-      (await deps.featureFlags?.enabled("persistent_subagents", `personal:${actor.id}` as ScopeId)) === true)
-      ? deps.sessionSyscalls
-      : undefined;
+  const sessionSyscalls = external ? undefined : deps.sessionSyscalls;
   const delegateWork = requiresDelegation(input, delegationEnabled);
   let modeFrame = applyPromptVars(frameMd, frameVars);
   if (delegateWork) modeFrame += `\n\n${DELEGATE_WORK_MD}`;
@@ -303,40 +297,28 @@ const USER_REPLY_RULES_MD = loadProtocolFile("user-reply-rules");
 
 export async function finishSystemPrompt(
   ctx: TurnCtx,
-  turn: {
-    systemPrompt: string;
-    strictReadOnly: boolean;
-    turnContextBlocks: Record<string, string>;
-    configuredProviders: Awaited<ReturnType<typeof configuredConnectorProviders>>;
-    timeBlock: string;
-    onboardingBlock: string;
+  framed: Pick<
+    Awaited<ReturnType<typeof frameTurnPrompt>>,
+    "systemPrompt" | "turnContextBlocks" | "configuredProviders" | "timeBlock" | "onboardingBlock"
+  >,
+  catalog: {
     openSpeakerKeychain: boolean;
     credentialDescriptions: NonNullable<KeychainManifestInput["execution"]>;
     serviceCredRecords: PublicServiceCredential[];
     grantedCredSlugs: Set<string>;
     actorIsOrgAdmin: boolean;
-    reachAvailable: boolean;
+  },
+  directoryViews: {
     reachableChannelsFor: (directory: DirectoryStore, principalId: string) => Promise<DirectoryChannel[]>;
     directoryIndexFor: (directory: DirectoryStore) => Promise<Map<string, DirectoryMember>>;
   },
 ): Promise<{ systemPrompt: string; volatileContext: string }> {
-  const { deps, input, actor, conversation, external, automatedTurn } = ctx;
-  const {
-    strictReadOnly,
-    turnContextBlocks,
-    configuredProviders,
-    timeBlock,
-    onboardingBlock,
-    openSpeakerKeychain,
-    credentialDescriptions,
-    serviceCredRecords,
-    grantedCredSlugs,
-    actorIsOrgAdmin,
-    reachAvailable,
-    reachableChannelsFor,
-    directoryIndexFor,
-  } = turn;
-  let systemPrompt = turn.systemPrompt;
+  const { deps, input, actor, conversation, external, automatedTurn, strictReadOnly, reachAvailable } = ctx;
+  const { turnContextBlocks, configuredProviders, timeBlock, onboardingBlock } = framed;
+  const { openSpeakerKeychain, credentialDescriptions, serviceCredRecords, grantedCredSlugs, actorIsOrgAdmin } =
+    catalog;
+  const { reachableChannelsFor, directoryIndexFor } = directoryViews;
+  let systemPrompt = framed.systemPrompt;
   if (
     serviceCredRecords.some(
       (cred) => isBackendCredential(cred) && cred.enabled && cred.hasSecret && grantedCredSlugs.has(cred.slug),

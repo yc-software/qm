@@ -20,8 +20,14 @@ import {
 } from "./harness.ts";
 
 const SERVICES = ["core", "web-ui", "portal"] as const;
+const HOSTED = ["web-ui", "portal"] as const;
+const CONTAINERS = ["core", "pg", "widget"] as const;
 const WORKLOADS = ["core"] as const;
 const suffix = (names: string[], end: string): string | undefined => names.find((n) => n.endsWith(`-${end}`));
+const containerSet = (org: string): string[] =>
+  deploymentContainers(org)
+    .map((n) => n.slice(`qm-${org}-`.length))
+    .sort();
 
 function lifecycleSkip(): string | false {
   if (!dockerAvailable()) return "no Docker daemon reachable";
@@ -71,36 +77,35 @@ test(
       runCli(["up", "--build-from", checkout], { cwd: dep, env: { CORE_SIGNING_SECRET: undefined } });
 
     try {
-      await t.test("up builds + starts every service, the source plugin, and Postgres", () => {
-        for (const svc of ["web-ui", "portal"]) {
-          execFileSync("docker", [
-            "run",
-            "-d",
-            "--name",
-            `qm-${org}-${svc}`,
-            "--label",
-            `qm.org=${org}`,
-            "alpine:latest",
-            "sleep",
-            "3600",
-          ]);
-        }
-        const r = up();
-        assert.equal(r.code, 0, r.out);
-        assert.match(r.out, /stack up/);
-        assert.match(r.out, new RegExp(`web    : http://localhost:${basePort + 1}\\b`));
-        assert.match(r.out, new RegExp(`core   : http://localhost:${basePort}\\b`));
-        assert.match(r.out, /plugin widget running/);
+      await t.test(
+        "up starts core, the source plugin and Postgres, and removes stale hosted-service containers",
+        () => {
+          for (const svc of HOSTED) {
+            execFileSync("docker", [
+              "run",
+              "-d",
+              "--name",
+              `qm-${org}-${svc}`,
+              "--label",
+              `qm.org=${org}`,
+              "alpine:latest",
+              "sleep",
+              "3600",
+            ]);
+          }
+          const r = up();
+          assert.equal(r.code, 0, r.out);
+          assert.match(r.out, /stack up/);
+          assert.match(r.out, new RegExp(`web    : http://localhost:${basePort + 1}\\b`));
+          assert.match(r.out, new RegExp(`core   : http://localhost:${basePort}\\b`));
+          assert.match(r.out, /plugin widget running/);
 
-        const names = deploymentContainers(org);
-        for (const svc of [...SERVICES, "widget", "pg"]) {
-          assert.ok(suffix(names, svc), `expected a running container for ${svc}; got ${names.join(", ")}`);
-        }
-        for (const svc of ["web-ui", "portal"]) {
-          assert.equal(suffix(names, svc), undefined, `${svc} runs inside core, not in its own container`);
-        }
-        assert.match(r.out, new RegExp(`removing qm-${org}-portal \\(core hosts it now\\)`));
-      });
+          assert.deepEqual(containerSet(org), [...CONTAINERS]);
+          for (const svc of HOSTED) {
+            assert.match(r.out, new RegExp(`removing qm-${org}-${svc} \\(core hosts it now\\)`));
+          }
+        },
+      );
 
       await t.test("local sandbox mode gives only core the host Docker socket", () => {
         const names = deploymentContainers(org);
@@ -162,6 +167,8 @@ test(
         assert.match(r.out, /Up\b/);
         assert.match(r.out, new RegExp(`${basePort}->8080`));
         assert.match(r.out, new RegExp(`${basePort + 1}->8000`));
+        assert.match(r.out, new RegExp(`${HOSTED.join(", ")}: running in the core container`));
+        for (const svc of HOSTED) assert.doesNotMatch(r.out, new RegExp(`qm-${org}-${svc}\\b`));
       });
 
       await t.test("logs <service> tails one container; logs (all) interleaves with prefixes", () => {
@@ -175,8 +182,18 @@ test(
 
         const all = runCli(["logs", "--tail", "3"], { cwd: dep });
         assert.equal(all.code, 0, all.out);
-        for (const label of [...SERVICES, "widget", "pg"]) {
-          assert.match(all.out, new RegExp(`${label}\\s+\\|`), `interleaved logs missing ${label}`);
+        for (const label of CONTAINERS) {
+          assert.match(all.out, new RegExp(`^${label}\\s+\\|`, "m"), `interleaved logs missing ${label}`);
+        }
+        for (const label of HOSTED) assert.doesNotMatch(all.out, new RegExp(`^${label}\\s+\\|`, "m"));
+      });
+
+      await t.test("logs for a core-hosted service shows core's logs", () => {
+        for (const svc of HOSTED) {
+          const r = runCli(["logs", svc, "--tail", "1"], { cwd: dep });
+          assert.equal(r.code, 0, r.out);
+          assert.match(r.out, new RegExp(`${svc} runs in core; showing core logs`));
+          assert.match(r.out, /tail sentinel/);
         }
       });
 
@@ -189,7 +206,8 @@ test(
       await t.test("up is idempotent — re-running keeps the stack up", () => {
         const r = up();
         assert.equal(r.code, 0, r.out);
-        assert.ok(suffix(deploymentContainers(org), "core"), "core still up after re-up");
+        assert.doesNotMatch(r.out, /core hosts it now/);
+        assert.deepEqual(containerSet(org), [...CONTAINERS]);
       });
 
       await t.test("down (no purge) removes containers but keeps the network + volumes", () => {
@@ -204,7 +222,7 @@ test(
       await t.test("up after down reuses the preserved Postgres volume + recorded password", () => {
         const r = up();
         assert.equal(r.code, 0, r.out);
-        assert.ok(suffix(deploymentContainers(org), "core"), "stack back up");
+        assert.deepEqual(containerSet(org), [...CONTAINERS]);
       });
 
       await t.test("down --purge removes containers, the network, and the volumes", () => {

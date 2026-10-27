@@ -2,10 +2,14 @@ import { createHash } from "node:crypto";
 import { buildAuthorizeUrl, exchangeCode, fetchUserinfo, pkcePair, verifyIdToken, type OidcConfig } from "./oidc.ts";
 import { deriveKey, openTmp, randomToken, safeEqual, seal, type TmpClaims } from "./session.ts";
 
-export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): OidcConfig | null {
+export function trustedEntryConfig(
+  env: NodeJS.ProcessEnv,
+  publicUrl: string,
+  client?: { clientId: string; clientSecret: string },
+): OidcConfig | null {
   const raw = env.PORTAL_TRUSTED_OIDC;
-  const secret = env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET;
-  if (!raw && !secret) return null;
+  const secret = client ? client.clientSecret : env.PORTAL_TRUSTED_OIDC_CLIENT_SECRET;
+  if (!raw && !secret && !client) return null;
   if (!raw || !secret || secret.length < 32)
     throw new Error("Trusted entry requires configuration and a separate client secret of at least 32 characters");
   if ([env.OIDC_CLIENT_SECRET, env.PORTAL_SESSION_SECRET, env.CORE_SIGNING_SECRET].includes(secret))
@@ -24,14 +28,15 @@ export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): O
     if ((!local && url.protocol !== "https:") || url.username || url.password || url.hash || url.search)
       throw new Error(`Invalid trusted OIDC ${field}`);
   }
-  if (typeof obj.clientId !== "string" || !obj.clientId.trim()) throw new Error("Trusted OIDC requires clientId");
+  const clientId = client ? client.clientId : obj.clientId;
+  if (typeof clientId !== "string" || !clientId.trim()) throw new Error("Trusted OIDC requires clientId");
   return {
     issuer: obj.issuer as string,
     authEndpoint: obj.authEndpoint as string,
     tokenEndpoint: obj.tokenEndpoint as string,
     userinfoEndpoint: obj.userinfoEndpoint as string,
     jwksUri: obj.jwksUri as string,
-    clientId: obj.clientId,
+    clientId,
     clientSecret: secret,
     redirectUri: `${publicUrl}/auth/trusted/callback`,
     scopes: "openid profile",

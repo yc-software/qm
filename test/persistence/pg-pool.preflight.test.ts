@@ -141,20 +141,22 @@ test("memory text_hash: a database that ran the first release of 0002 reaches NO
     const log = console.log;
     console.log = (...args: unknown[]) => void logged.push(args.join(" "));
     try {
-      assert.equal(await applyPgMigrations(pool, migrations), 1);
+      assert.equal(await applyPgMigrations(pool, migrations), 2);
     } finally {
       console.log = log;
     }
-    const recorded = (await ledger(pool)).length - 1;
+    const recorded = (await ledger(pool)).length - 2;
     assert.deepEqual(
       logged.filter((line) => line.startsWith("[pg] migration preflight ok")),
       [
-        `[pg] migration preflight ok: 1 pending (${recorded} recorded); baseline already recorded; accepted an earlier checksum for memory/facts/0002-text-hash`,
+        `[pg] migration preflight ok: 2 pending (${recorded} recorded); baseline already recorded; accepted an earlier checksum for memory/facts/0002-text-hash`,
       ],
     );
     const rows = await ledger(pool);
     assert.equal(rows.find((r) => r.id === current.id)?.checksum, current.acceptedChecksums![0]);
     assert.ok(rows.some((r) => r.id === "memory/facts/0003-text-hash-not-null"));
+    const body = await pool.query("SELECT prosrc FROM pg_proc WHERE proname = 'memory_facts_text_hash'");
+    assert.match(body.rows[0].prosrc, /^\n {6}BEGIN\n {8}NEW\.text_hash/);
     const column = await pool.query(
       "SELECT is_nullable FROM information_schema.columns WHERE table_name = 'memory_facts' AND column_name = 'text_hash'",
     );

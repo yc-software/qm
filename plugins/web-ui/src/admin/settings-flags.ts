@@ -8,7 +8,7 @@ const state = {
   scope: "",
   available: false,
   selected: new Set<string>(),
-  feature: "persistent_subagents",
+  feature: "",
   saving: false,
   message: "",
   choices: [] as any[],
@@ -33,6 +33,7 @@ export async function loadFlags(data: any, scope: string) {
   state.scope = scope;
   state.available = scope.startsWith("org:") && "featureFlags" in data;
   state.rows = data.featureFlags || [];
+  if (!feature()) state.feature = state.rows[0]?.featureName ?? "";
   redraw();
   if (!state.available) return;
   const choices = await config.loadChoices();

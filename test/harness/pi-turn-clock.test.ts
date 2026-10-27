@@ -6,6 +6,7 @@ import {
   EMPTY_ENDING_NOTE,
   EMPTY_ENDING_MIN_BUDGET_MS,
 } from "../../src/harness/pi-turn-clock.ts";
+import { createTurnToolState } from "../../src/harness/turn-tool-state.ts";
 
 const never = new Promise<void>(() => {});
 
@@ -134,7 +135,8 @@ function base(over: Partial<Opts> = {}): Opts {
     cancelled: false,
     surfaceTools: false,
     pollFire: false,
-    ref: { modelCalls: 48 },
+    halted: false,
+    modelCalls: 48,
     session: session(""),
     turnWallClockMs: 1_800_000,
     elapsedMs: 60_000,
@@ -144,8 +146,8 @@ function base(over: Partial<Opts> = {}): Opts {
 
 test("a poll fire ending empty is the silence contract — never nudged into narration", () => {
   assert.equal(emptyEndingNote(base({ pollFire: true })), null);
-  assert.equal(emptyEndingNote(base({ pollFire: true, ref: { modelCalls: 1 } })), null);
-  assert.equal(emptyEndingNote(base({ pollFire: true, ref: {} })), null);
+  assert.equal(emptyEndingNote(base({ pollFire: true, modelCalls: 1 })), null);
+  assert.equal(emptyEndingNote(base({ pollFire: true, modelCalls: 0 })), null);
   assert.equal(emptyEndingNote(base({ pollFire: true, session: session("  \n ") })), null);
 });
 
@@ -162,17 +164,21 @@ test("whitespace-only counts as empty", () => {
 });
 
 test("explicit finish_silently is intentional silence, never nudged", () => {
-  assert.equal(emptyEndingNote(base({ ref: { modelCalls: 48, silentRequested: true } })), null);
+  const { halt } = createTurnToolState({ current: null, silentRequested: true });
+  assert.equal(emptyEndingNote(base({ halted: halt.halted() })), null);
 });
 
 test("a paused turn (approval or input wall) ends mid-loop legitimately", () => {
-  assert.equal(emptyEndingNote(base({ ref: { modelCalls: 48, pausedOnApproval: true } })), null);
-  assert.equal(emptyEndingNote(base({ ref: { modelCalls: 48, pendingApprovals: [{}] } })), null);
+  const paused = createTurnToolState({ current: null, pausedOnApproval: true }).halt;
+  assert.equal(emptyEndingNote(base({ halted: paused.halted() })), null);
+  const approval = createTurnToolState({ current: null }).halt;
+  approval.pauseForApproval({ command: "deploy", reason: "needs approval" });
+  assert.equal(emptyEndingNote(base({ halted: approval.halted() })), null);
 });
 
 test("an addressed turn whose first response is empty ('(no response)') IS recovered", () => {
-  assert.equal(emptyEndingNote(base({ ref: { modelCalls: 1 } })), EMPTY_ENDING_NOTE);
-  assert.equal(emptyEndingNote(base({ ref: {} })), null);
+  assert.equal(emptyEndingNote(base({ modelCalls: 1 })), EMPTY_ENDING_NOTE);
+  assert.equal(emptyEndingNote(base({ modelCalls: 0 })), null);
 });
 
 test("spine turns are excluded — the orchestrator's reply-or-decline nudge owns them", () => {

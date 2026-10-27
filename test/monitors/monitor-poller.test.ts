@@ -12,6 +12,7 @@ import { singleProcessDeps } from "../support/single-process.ts";
 import { createPostgresProcessRegistry } from "../../src/processes/process-registry.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
+import { MAX_SCREEN_CHARS } from "../../src/security/security-screen.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
@@ -100,7 +101,8 @@ async function harness(opts?: {
   result?: TurnResult;
   heartbeatMs?: number;
   minFireIntervalMs?: number;
-  onRun?: () => Promise<void>;
+  fireConcurrency?: number;
+  onRun?: (req: TurnRequest) => Promise<void>;
 }) {
   const fake = fakeSandbox();
   const url = testDatabaseUrl();
@@ -110,7 +112,7 @@ async function harness(opts?: {
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
-    await opts?.onRun?.();
+    await opts?.onRun?.(req);
     return opts?.result ?? { status: "ok", reply: opts?.reply ?? "MONITOR-REPLY" };
   };
   const identity = createIdentityService(url);
@@ -125,6 +127,7 @@ async function harness(opts?: {
     run,
     ...(opts?.heartbeatMs !== undefined ? { heartbeatMs: opts.heartbeatMs } : {}),
     ...(opts?.minFireIntervalMs !== undefined ? { minFireIntervalMs: opts.minFireIntervalMs } : {}),
+    ...(opts?.fireConcurrency !== undefined ? { fireConcurrency: opts.fireConcurrency } : {}),
   });
 
   fake.seed("p-1");
@@ -208,7 +211,7 @@ test("entity-heavy output cannot inflate the escaped event payload past the cap"
 
   const text = h.calls[0]?.text ?? "";
   const payload = text.slice(text.indexOf(">", text.indexOf("<event")) + 1, text.indexOf("</event>"));
-  assert.ok(payload.length <= 16_020, `escaped payload stays near the 16k cap, got ${payload.length}`);
+  assert.ok(payload.length <= MAX_SCREEN_CHARS, `escaped payload fits the security screen, got ${payload.length}`);
   assert.match(payload, /…\[truncated\]/);
   assert.match(payload, /&amp;/);
 });
@@ -346,6 +349,60 @@ test("one sandbox handle per scope per tick, torn down keep-warm afterwards", as
   assert.equal(h.counts().provisions, 1);
   assert.equal(h.counts().teardowns, 1);
   assert.equal(h.calls.length, 2);
+});
+
+test("a poll failure whose error can't be recorded still lets the other polls finish before teardown", async () => {
+  const h = await harness({ fireConcurrency: 1 });
+  const first = await h.arm();
+  await h.arm({ threadRef: "thread-2" });
+  h.append("p-1", "line\n");
+  const get = h.processes.get.bind(h.processes);
+  let failed = false;
+  h.processes.get = async (id: string) => {
+    if (!failed) {
+      failed = true;
+      throw new Error("registry read failed");
+    }
+    return get(id);
+  };
+  h.monitors.recordError = async () => {
+    throw new Error("db down");
+  };
+  await h.poller.tick();
+  assert.equal(h.calls.length, 1, "the second monitor still fired");
+  assert.equal(h.counts().teardowns, 1);
+  assert.ok((await h.monitors.get(first.id))?.enabled);
+});
+
+test("a slow turn on one watched job does not hold up another job's wake in the same tick", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const h = await harness({
+    onRun: async (req) => {
+      if (req.conversation.threadRef === "thread-1") await gate;
+    },
+  });
+  h.seed("p-2", "bg: npm test");
+  await h.processes.register({
+    processId: "p-2",
+    scopeId: SCOPE,
+    sandboxId: "sandbox-2",
+    kind: "background",
+    command: "bg: npm test",
+    ttlMs: 600_000,
+  });
+  await h.arm();
+  await h.arm({ processId: "p-2", command: "bg: npm test", threadRef: "thread-2" });
+  h.append("p-1", "slow\n");
+  h.append("p-2", "done\n");
+  h.finish("p-2", 0);
+  const tick = h.poller.tick();
+  for (let i = 0; i < 50 && h.calls.length < 2; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(h.calls.length, 2, "the second job's exit fired while the first job's turn was still running");
+  assert.ok(h.calls.some((c) => c.conversation.threadRef === "thread-2" && /exited with code 0/.test(c.text ?? "")));
+  release();
+  await tick;
+  assert.equal((await h.monitors.enabled()).length, 1);
 });
 
 test("a quiet watch heartbeats and steers the agent toward finish_silently", async () => {
@@ -490,6 +547,7 @@ test("an unwatch between the tick snapshot and the poll is honored", async () =>
   } = {};
   const h = await harness({
     minFireIntervalMs: 0,
+    fireConcurrency: 1,
     onRun: async () => {
       const fired = ref.calls?.at(-1)?.conversation.threadRef;
       const victim = fired === "thread-1" ? ref.byThread?.["thread-2"] : ref.byThread?.["thread-1"];

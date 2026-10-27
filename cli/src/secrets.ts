@@ -39,8 +39,8 @@ export interface ComputedSecret {
   aliases?: Array<{ service: DeclaredServiceName; name: string }>;
 }
 
-export const MINT_LOCALLY = "openssl rand -hex 32";
-export const MINT_JWK =
+const MINT_LOCALLY = "openssl rand -hex 32";
+const MINT_JWK =
   "node -e \"const {generateKeyPairSync}=require('node:crypto');process.stdout.write(JSON.stringify(generateKeyPairSync('ec',{namedCurve:'P-256'}).privateKey.export({format:'jwk'})))\"";
 
 export function mintSigningJwk(): string {

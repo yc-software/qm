@@ -1,7 +1,6 @@
 import type { ApprovalGrantModes, CommandPolicy, EgressPolicy, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import { defaultOrgPolicy } from "../policy/command-policy.ts";
-import { randomBytes } from "node:crypto";
 import { createKeyedQueue } from "../util/async.ts";
 import {
   deriveConnectorKey,
@@ -472,8 +471,8 @@ function createRuntimeConfig(org: ScopeId, rows: TypedTable<PersistedBaseModel>,
   };
 }
 
-function connectorClientsApi(rows: TypedTable<StoredConnectorClient>, secretKey: Buffer | string | undefined) {
-  const connectorKey = deriveConnectorKey(secretKey ?? randomBytes(32), "connector-clients");
+function connectorClientsApi(rows: TypedTable<StoredConnectorClient>, secretKey: Buffer | string) {
+  const connectorKey = deriveConnectorKey(secretKey, "connector-clients");
   const key = (id: ScopeId, provider: string) => `${id}|${provider}`;
   const optional = (rec: Omit<ConnectorClientInput, "clientId" | "clientSecret">) => ({
     ...(rec.scopes ? { scopes: rec.scopes } : {}),
@@ -569,7 +568,7 @@ function createTenantConfigStore(
 
 export function createConfigStore(opts: {
   databaseUrl: string;
-  connectorSecretKey?: Buffer | string;
+  connectorSecretKey: Buffer | string;
 }): ScopedConfigStore {
   const tables = openConfigTables<ConfigRecords>(opts.databaseUrl);
   const queue = createKeyedQueue();

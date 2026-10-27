@@ -1,9 +1,8 @@
-// How a pi turn reads a failed or refused model round, and how it recovers: retry without inline documents, or fall back to another model after a provider refusal.
-
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { defaultInteractiveThinkingLevel, modelDisplayName } from "../model/pi-models.ts";
 import { swallow } from "../util/errors.ts";
-import type { ToolContextRef } from "./agent-tools.ts";
+import type { TurnHalt } from "./turn-tool-state.ts";
+import type { TurnRequestSettings } from "./turn-request.ts";
 import type { HarnessTurnInput } from "./harness.ts";
 import { applyTurnEffort, wantsFastMode, withRequestHeaders } from "./pi-model-runtime.ts";
 import { EMPTY_ENDING_MIN_BUDGET_MS, type TurnWallClockOutcome } from "./pi-turn-clock.ts";
@@ -23,7 +22,7 @@ export function piFailedAssistant(session: AssistantTextSession): AssistantMessa
   return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
 }
 
-export function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
+function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
   const ok = [...session.messages]
     .reverse()
     .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
@@ -32,7 +31,7 @@ export function lastInputTokens(session: AssistantTextSession, failed: Assistant
   return u ? u.input + u.cacheRead + u.cacheWrite : undefined;
 }
 
-export function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
+function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | null {
   const failed = piFailedAssistant(session);
   if (!failed) return null;
   const contextWindow = (
@@ -41,9 +40,8 @@ export function piAssistantFailure(session: AssistantTextSession): ProviderTurnE
   return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
 }
 
-/** Codes that retry the turn on the configured fallback model. */
 export const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
-export const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
+const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
 export function documentsDroppedNote(documents: readonly DocumentInput[]): string {
   return (
@@ -54,10 +52,10 @@ export function documentsDroppedNote(documents: readonly DocumentInput[]): strin
   );
 }
 
-export const DOCUMENTS_DROPPED_RETRY_NOTE =
+const DOCUMENTS_DROPPED_RETRY_NOTE =
   "[system] The previous request failed while it carried inline attachments; they have been replaced with notes on how to read them from saved files. Continue with the request.";
 
-export function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
+function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
   const state = session.agent.state;
   for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
     const m = state.messages[i] as { role?: string; stopReason?: string } | undefined;
@@ -118,13 +116,11 @@ export function refusalFallbackNote(fromModel: string, toModel: string, refusal:
   );
 }
 
-/**
- * A turn's recovery from a failed model round: retry once without inline documents when the
- * provider rejected them, and fall back to another model after a provider refusal.
- */
 export function createTurnRecovery(o: {
   turn: HarnessTurnInput;
-  entry: { agentSession: AgentSession; ref: ToolContextRef & { effortLevel?: string } };
+  session: AgentSession;
+  request: Omit<TurnRequestSettings, "fast" | "addDocuments">;
+  halt: Pick<TurnHalt, "handoff">;
   messagesBefore: number;
   turnWallClockMs: number;
   raceCapMs: () => number;
@@ -136,7 +132,9 @@ export function createTurnRecovery(o: {
 }) {
   const {
     turn,
-    entry,
+    session,
+    request,
+    halt,
     messagesBefore,
     turnWallClockMs,
     raceCapMs,
@@ -149,7 +147,7 @@ export function createTurnRecovery(o: {
   const refusedModelIds = new Set<string>();
   const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
     if (stopped() || turn.cancel?.aborted) return false;
-    const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
+    const fromId = (session.model as { id?: string } | undefined)?.id;
     if (fromId) refusedModelIds.add(fromId);
     const configured = resolveFallbackRuntime();
     const fallbackId = fromId
@@ -165,14 +163,15 @@ export function createTurnRecovery(o: {
     );
     const custom = configured?.modelId === fallbackId ? configured : undefined;
     const wantFast = wantsFastMode(custom?.fastMode ?? turn.runtime?.fastMode, fallbackId);
-    await entry.agentSession.setModel(withRequestHeaders(fallback, directModel(fallbackId), wantFast));
-    entry.ref.fast = wantFast;
-    entry.ref.effortLevel =
-      custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
-    applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
-    dropFailedAssistant(entry.agentSession, messagesBefore);
+    await session.setModel(withRequestHeaders(fallback, directModel(fallbackId), wantFast));
+    request.setFast(wantFast);
+    request.setEffortLevel(
+      custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback),
+    );
+    applyTurnEffort(session, request.effortLevel());
+    dropFailedAssistant(session, messagesBefore);
     const outcome = await race(
-      entry.agentSession.prompt(refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal)),
+      session.prompt(refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal)),
       capMs,
     );
     if (stopped()) return false;
@@ -182,37 +181,37 @@ export function createTurnRecovery(o: {
   let documentRejection: ProviderTurnError | undefined;
   let documentRetried = false;
   const noteDocumentRejection = (message: unknown): void => {
-    if (documentRejection || !entry.ref.documents?.length) return;
+    if (documentRejection || !request.documents()?.length) return;
     const failed = message as AssistantMessage | undefined;
     if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
     const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
     if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
     documentRejection = failure;
-    entry.ref.documentsStubbed = true;
+    request.stubDocuments();
     console.error(
-      `[pi] request with ${entry.ref.documents.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
+      `[pi] request with ${request.documents()!.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
     );
   };
   const retryWithoutDocuments = async (): Promise<boolean> => {
     if (!documentRejection || documentRetried || stopped() || turn.cancel?.aborted) return false;
-    const lastAssistant = entry.agentSession.messages
+    const lastAssistant = session.messages
       .slice(messagesBefore)
       .findLast((m) => (m as { role?: string }).role === "assistant") as AssistantMessage | undefined;
     if (lastAssistant && lastAssistant.stopReason !== "error") return false;
     const capMs = raceCapMs();
     if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
     documentRetried = true;
-    dropFailedAssistant(entry.agentSession, messagesBefore);
-    const outcome = await race(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), capMs);
+    dropFailedAssistant(session, messagesBefore);
+    const outcome = await race(session.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), capMs);
     if (stopped()) return false;
     if (outcome !== "ok")
       throw new NonRetryableTurnError(`${documentRejection.message} (retry without inline documents was ${outcome})`);
     return true;
   };
   const recoverFailedRound = async (): Promise<void> => {
-    if (entry.ref.runtimeHandoff || stopped() || turn.cancel?.aborted) return;
+    if (halt.handoff() || stopped() || turn.cancel?.aborted) return;
     await retryWithoutDocuments();
-    const refusal = providerRefusalError(entry.agentSession, messagesBefore);
+    const refusal = providerRefusalError(session, messagesBefore);
     if (!refusal) return;
     try {
       await attemptRefusalFallback(refusal);

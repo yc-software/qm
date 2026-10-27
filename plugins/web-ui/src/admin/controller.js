@@ -1,4 +1,7 @@
 import * as governanceUI from "./admin.ts";
+import * as settings from "./settings.ts";
+import * as artifacts from "./artifacts.ts";
+import * as activity from "./activity.ts";
 import { ADMIN_SECTIONS, LOG_VIEWS, SCOPED_VIEWS, SETTINGS_VIEWS, VIEW_TITLE } from "./sections.ts";
 import { ADMIN_MARKUP } from "./markup.ts";
 import { adminApi, scopeUrl } from "./api.ts";
@@ -145,7 +148,6 @@ function webUiAsButton(target) {
     "Open web UI as this person ↗",
   );
 }
-const settings = governanceUI.settings;
 const stateToUrl = (st) => routes.stateToUrl(st, PAGE_BASE);
 const urlToState = () => routes.urlToState(PAGE_BASE, orgId, scope);
 let transcriptObserver = null;
@@ -388,9 +390,9 @@ const dataCache = new Map();
 function paintData(root, data) {
   root.textContent = "";
   if (["files", "memory", "skills", "crons", "deployments"].includes(view))
-    return governanceUI.artifacts[view](root, data, artifactContext());
+    return artifacts[view](root, data, artifactContext());
   if (["errors", "audit", "egress"].includes(view))
-    return governanceUI.activity[view](root, data, {
+    return activity[view](root, data, {
       ...helpers(),
       all: orgWideView(),
       scope,

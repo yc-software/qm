@@ -51,7 +51,7 @@ export interface SurfaceFileRef {
 }
 
 const SLACK_TS = "\\d+\\.\\d+";
-const FILE_REF = new RegExp(`^([A-Z0-9]+):(?:(${SLACK_TS})/)?(${SLACK_TS})#(\\d{1,3})$`);
+const FILE_REF = new RegExp(`^([A-Z0-9]+):(?:(${SLACK_TS})/)?(${SLACK_TS})#(\\d+)$`);
 
 export function formatFileRef(ref: SurfaceFileRef): string {
   return `${ref.channel}:${ref.threadTs && ref.threadTs !== ref.ts ? `${ref.threadTs}/` : ""}${ref.ts}#${ref.index}`;

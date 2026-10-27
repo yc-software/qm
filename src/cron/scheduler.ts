@@ -49,18 +49,21 @@ export interface CronFireJob {
   notBefore?: number;
 }
 
-/** `done` consumed the slot; `release` left it unconsumed (re-armed by the next enqueue); a number sleeps the job. */
-export type CronFireDisposition = JobDisposition;
+interface CronManualFireJob {
+  cronId: string;
+  fireKey: string;
+  firedAt: number;
+}
+
+type CronFireDisposition = JobDisposition;
 
 export const CRON_FIRE_JOB = "cron-fire";
+export const CRON_MANUAL_FIRE_JOB = "cron-fire-manual";
 
-/** Fires run as `cron-fire` jobs on the background job worker, one per (cron, slot), keyed `cron:<id>:<slot>`. */
 export interface Scheduler {
-  /** Fire every due slot inline at `now`, as the job path would (tests drive the clock with it). */
   tick(now?: number): Promise<void>;
   runNow(cronId: string): Promise<RunNowResult>;
   notifyChanged(cronId: string): void;
-  /** Re-enqueue every enabled cron's next slot; repairs slots lost to crashes or released fires. */
   repair(): Promise<void>;
 }
 
@@ -184,7 +187,6 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
   ].join("\n");
 }
 
-/** Fire `cron` once at `t` unless it was disabled or its skip check says no; journals the outcome either way. */
 async function fireCron(
   deps: SchedulerDeps,
   now: () => number,
@@ -314,6 +316,90 @@ async function fireEnabled(
   return { authzFailed: false };
 }
 
+interface ManualFireContext {
+  deps: SchedulerDeps;
+  now: () => number;
+  withWork: <T>(work: () => Promise<T>) => Promise<T>;
+  withCronLifecycle: <T>(cronId: string, scheduled: boolean, run: () => Promise<T>) => Promise<T | null>;
+  retryWhenClosed: (e: unknown) => JobDisposition;
+  handlerOpts: { concurrency?: number };
+}
+
+function manualFireRunner(ctx: ManualFireContext): Scheduler["runNow"] {
+  const { deps, now, withWork } = ctx;
+  const settling = new Map<string, PromiseWithResolvers<void>>();
+
+  async function fireManualJob(job: CronManualFireJob): Promise<CronFireDisposition> {
+    const cron = await deps.crons.get(job.cronId);
+    if (!cron) return "done";
+    await ctx
+      .withCronLifecycle(cron.id, false, () => fireCron(deps, now, cron, job.firedAt, job.fireKey))
+      .catch(reportFailureAs("scheduler: manual fire", undefined, `cron=${job.cronId}`));
+    return "done";
+  }
+
+  deps.jobs.handle(
+    CRON_MANUAL_FIRE_JOB,
+    (params) => {
+      const job = params as CronManualFireJob;
+      return withWork(() => fireManualJob(job))
+        .catch(ctx.retryWhenClosed)
+        .finally(() => {
+          settling.get(job.fireKey)?.resolve();
+          settling.delete(job.fireKey);
+        });
+    },
+    ctx.handlerOpts,
+  );
+
+  async function begin(cron: Cron): Promise<RunNowResult> {
+    const t = now();
+    const fireKey = `cron:${cron.id}:manual:${randomUUID()}`;
+    const threadRef = cronFireThreadRef(cron.id, fireKey);
+    const begun = await deps.crons.beginFire(
+      cron.id,
+      { fireKey, threadRef, firedAt: t, status: "running" },
+      { exclusive: true },
+    );
+    if (!begun.begun) {
+      return begun.running
+        ? { started: false, reason: "already_running", running: begun.running }
+        : { started: false, reason: "unavailable" };
+    }
+    const settled = Promise.withResolvers<void>();
+    settling.set(fireKey, settled);
+    const job: CronManualFireJob = { cronId: cron.id, fireKey, firedAt: t };
+    try {
+      await deps.jobs.spawn(CRON_MANUAL_FIRE_JOB, job, fireKey);
+    } catch (e) {
+      settling.delete(fireKey);
+      await deps.crons.recordFire(cron.id, {
+        fireKey,
+        threadRef,
+        firedAt: t,
+        endedAt: now(),
+        status: "failed",
+        note: truncate(errMessage(e), CRON_FIRE_REPLY_MAX_CHARS),
+      });
+      throw e;
+    }
+    return { started: true, fireKey, settled: settled.promise };
+  }
+
+  return async (cronId) => {
+    try {
+      return await withWork(async (): Promise<RunNowResult> => {
+        const cron = await deps.crons.get(cronId);
+        if (!cron || cron.archived || !cron.enabled) return { started: false, reason: "unavailable" };
+        return begin(cron);
+      });
+    } catch (error) {
+      if (error instanceof WorkAdmissionClosed) return { started: false, reason: "unavailable" };
+      throw error;
+    }
+  };
+}
+
 export function createScheduler(deps: SchedulerDeps): Scheduler {
   const now = deps.now ?? (() => Date.now());
   const withWork = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
@@ -393,17 +479,19 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return disposition;
   }
 
+  const retryWhenClosed = (e: unknown): JobDisposition => {
+    if (e instanceof WorkAdmissionClosed) return now();
+    throw e;
+  };
+  const handlerOpts = deps.fireConcurrency ? { concurrency: deps.fireConcurrency } : {};
   deps.jobs.handle(
     CRON_FIRE_JOB,
-    (params) =>
-      withWork(() => fireJob(params as CronFireJob)).catch((e: unknown) => {
-        if (e instanceof WorkAdmissionClosed) return now();
-        throw e;
-      }),
-    deps.fireConcurrency ? { concurrency: deps.fireConcurrency } : {},
+    (params) => withWork(() => fireJob(params as CronFireJob)).catch(retryWhenClosed),
+    handlerOpts,
   );
 
-  /** Every due slot fires inline through the job path at the caller's clock. */
+  const runNow = manualFireRunner({ deps, now, withWork, withCronLifecycle, retryWhenClosed, handlerOpts });
+
   const tick = async (nowArg?: number): Promise<void> => {
     const t = nowArg ?? now();
     await withWork(async () => {
@@ -416,34 +504,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   return {
     tick,
-    async runNow(cronId) {
-      try {
-        const preparing = withWork(async (): Promise<RunNowResult> => {
-          const cron = await deps.crons.get(cronId);
-          if (!cron || cron.archived || !cron.enabled) return { started: false, reason: "unavailable" };
-          const t = now();
-          const fireKey = `cron:${cron.id}:manual:${randomUUID()}`;
-          const begin = await deps.crons.beginFire(
-            cronId,
-            { fireKey, threadRef: cronFireThreadRef(cron.id, fireKey), firedAt: t, status: "running" },
-            { exclusive: true },
-          );
-          if (!begin.begun) {
-            return begin.running
-              ? { started: false, reason: "already_running", running: begin.running }
-              : { started: false, reason: "unavailable" };
-          }
-          const settled = withWork(() =>
-            withCronLifecycle(cron.id, false, () => fireCron(deps, now, cron, t, fireKey)),
-          ).then(() => undefined, reportFailureAs("scheduler: manual fire", undefined, `cron=${cronId}`));
-          return { started: true, fireKey, settled };
-        });
-        return await preparing;
-      } catch (error) {
-        if (error instanceof WorkAdmissionClosed) return { started: false, reason: "unavailable" };
-        throw error;
-      }
-    },
+    runNow,
     notifyChanged(cronId) {
       void enqueueNext(cronId).catch(reportFailureAs("scheduler: cron enqueue", undefined, `cron=${cronId}`));
     },

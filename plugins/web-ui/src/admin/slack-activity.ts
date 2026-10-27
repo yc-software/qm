@@ -16,7 +16,7 @@ const refused = (result: Row, denied: string) => empty(result.status === 403 ? d
 const param = (key: string, value?: string | null) => (value ? "&" + key + "=" + encodeURIComponent(value) : "");
 const reply = (m: Row) => m.sub && m.sub !== m.ts;
 const author = (m: Row) => (m.self ? context.brandSelfLabel() : m.authorName || m.authorId || "unknown");
-export function message(m: Row, opts: Row = {}) {
+function message(m: Row, opts: Row = {}) {
   return html`<div
     class=${classMap({ "sm-msg": true, "sm-self": !!m.self, "sm-reply": !!reply(m), "sm-deleted": !!m.deleted, "sm-target": !!opts.target })}
     data-ts=${m.ts}
@@ -63,12 +63,12 @@ function ackTag(name: string, icon?: string, accent = false) {
     ? html`<span class=${cls("ack-emoji-glyph")} title=${":" + name + ":"}>${icon}</span>`
     : html`<span class=${cls("pill")}>${name ? ":" + name + ":" : "None"}</span>`;
 }
-export function slackHref(workspace: string, container: string, ts: string) {
+function slackHref(workspace: string, container: string, ts: string) {
   return workspace && container?.startsWith("C") && ts
     ? workspace.replace(/\/$/, "") + "/archives/" + container + "/p" + ts.replace(".", "")
     : null;
 }
-export class SlackActivity {
+class SlackActivity {
   generation = 0;
   state: Row = {};
   messages: Row[] = [];

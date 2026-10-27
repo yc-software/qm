@@ -353,6 +353,7 @@ export function turnInput(req: TurnRequest, adm: TurnAdmission, intent: TurnInte
     ...(sameApprovedMessage && approvedRequest?.delegatingRunId
       ? { delegatingRunId: approvedRequest.delegatingRunId }
       : {}),
+    ...(sameApprovedMessage && approvedRequest?.swarm ? { swarm: true as const } : {}),
     ...(req.deliveryTarget ? { deliveryTarget: req.deliveryTarget } : {}),
     ...(req.deliveryCandidates?.length ? { deliveryCandidates: req.deliveryCandidates } : {}),
     actor,

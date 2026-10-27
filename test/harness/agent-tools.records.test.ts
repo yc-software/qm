@@ -1,19 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import { type ToolContext } from "../../src/tools/primitives.ts";
 import { fakeToolContext, type Emitted, emittedItem, call, callWith } from "../support/agent-tools.ts";
 
 test("tool entries carry the call id + faithful model-facing result (WAL replay record)", async () => {
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
-  const [execute, , read, , memory] = createAgentTools(ref);
+  const [execute, , read, , memory] = createAgentTools(createTurnToolState(ref));
 
   await callWith(execute, "call-exec", { command: "echo hi", purpose: "Run test command" });
   await callWith(read, "call-read", { action: "read", path: "a.txt" });
@@ -45,14 +46,14 @@ test("not-found read and denied command record isError + the faithful error text
       throw new CommandDenied("rm -rf /", "denied by policy");
     },
   };
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: denyTC,
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "org:default-org",
   };
-  const [execute, , read] = createAgentTools(ref);
+  const [execute, , read] = createAgentTools(createTurnToolState(ref));
   await callWith(execute, "c1", { command: "rm -rf /", purpose: "Run test command" });
   await callWith(read, "c2", { action: "read", path: "missing.txt" });
 
@@ -75,14 +76,14 @@ test("a denied command still emits a tool_result (denied), and a missing read re
       throw new CommandDenied("rm -rf /", "denied by policy");
     },
   };
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: denyTC,
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "org:default-org",
   };
-  const [execute, , read] = createAgentTools(ref);
+  const [execute, , read] = createAgentTools(createTurnToolState(ref));
 
   await call(execute, { command: "rm -rf /", purpose: "Run test command" });
   await call(read, { action: "read", path: "missing.txt" });
@@ -94,14 +95,14 @@ test("a denied command still emits a tool_result (denied), and a missing read re
 });
 
 test("no emit sink → tools still run, nothing logged (unit path)", async () => {
-  const [execute] = createAgentTools({ current: fakeToolContext() });
+  const [execute] = createAgentTools(createTurnToolState({ current: fakeToolContext() }));
   const r = await call(execute, { command: "echo ok", purpose: "Run test command" });
   assert.ok(r);
 });
 
 test("execute forwards the agent's timeout_seconds into tc.execute; omitting it sends no opts", async () => {
   const sink: { lastExecOpts?: { timeoutSeconds?: number } | undefined } = {};
-  const [execute] = createAgentTools({ current: fakeToolContext(sink) });
+  const [execute] = createAgentTools(createTurnToolState({ current: fakeToolContext(sink) }));
 
   await call(execute, { command: "npm ci", timeout_seconds: 240, purpose: "Run test command" });
   assert.deepEqual(sink.lastExecOpts, { timeoutSeconds: 240 });
@@ -127,7 +128,9 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
 
   const org = textOf(
     await call(
-      createAgentTools({ current: withAudience({ kind: "org", orgId: "acme" }) }).find((tool) => tool.name === "apps"),
+      createAgentTools(createTurnToolState({ current: withAudience({ kind: "org", orgId: "acme" }) })).find(
+        (tool) => tool.name === "apps",
+      ),
       {
         action: "publish",
         entrypoint: "x",
@@ -140,9 +143,9 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
 
   const members = textOf(
     await call(
-      createAgentTools({ current: withAudience({ kind: "members", channelRef: "C1", memberCount: 3 }) }).find(
-        (tool) => tool.name === "apps",
-      ),
+      createAgentTools(
+        createTurnToolState({ current: withAudience({ kind: "members", channelRef: "C1", memberCount: 3 }) }),
+      ).find((tool) => tool.name === "apps"),
       {
         action: "publish",
         entrypoint: "x",
@@ -154,7 +157,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
 
   const channel = textOf(
     await call(
-      createAgentTools({ current: withAudience({ kind: "members", channelRef: "C1" }) }).find(
+      createAgentTools(createTurnToolState({ current: withAudience({ kind: "members", channelRef: "C1" }) })).find(
         (tool) => tool.name === "apps",
       ),
       { action: "publish", entrypoint: "x", name: "site" },
@@ -165,7 +168,9 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
 
   const owner = textOf(
     await call(
-      createAgentTools({ current: withAudience({ kind: "owner" }) }).find((tool) => tool.name === "apps"),
+      createAgentTools(createTurnToolState({ current: withAudience({ kind: "owner" }) })).find(
+        (tool) => tool.name === "apps",
+      ),
       { action: "publish", entrypoint: "x", name: "site" },
     ),
   );
@@ -173,12 +178,14 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
 
   const noted = textOf(
     await call(
-      createAgentTools({
-        current: withAudience({
-          kind: "owner",
-          note: "couldn't enumerate the channel's members to auto-share — share manually",
+      createAgentTools(
+        createTurnToolState({
+          current: withAudience({
+            kind: "owner",
+            note: "couldn't enumerate the channel's members to auto-share — share manually",
+          }),
         }),
-      }).find((tool) => tool.name === "apps"),
+      ).find((tool) => tool.name === "apps"),
       { action: "publish", entrypoint: "x", name: "site" },
     ),
   );
@@ -201,7 +208,7 @@ test("publish reply: the reply never carries a capability token, even from a sta
   };
   const out = textOf(
     await call(
-      createAgentTools({ current: stale }).find((tool) => tool.name === "apps"),
+      createAgentTools(createTurnToolState({ current: stale })).find((tool) => tool.name === "apps"),
       { action: "publish", entrypoint: "x", name: "site" },
     ),
   );
@@ -213,19 +220,19 @@ test("publish reply: the reply never carries a capability token, even from a sta
 test("background dispatches each action and emits tool_call/tool_result", async () => {
   const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: fakeToolContext(),
     emit: (e) => {
       emitted.push(emittedItem(e));
     },
     scopeLabel: "personal:U1",
   };
-  const background = createAgentTools(ref).find((t) => t.name === "background");
+  const background = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "background");
   assert.ok(background);
 
   const started = textOf(
     await call(
-      createAgentTools(ref).find((t) => t.name === "execute"),
+      createAgentTools(createTurnToolState(ref)).find((t) => t.name === "execute"),
       { background: true, command: "npm run build", purpose: "Run background tests" },
     ),
   );
@@ -255,7 +262,7 @@ test("background dispatches each action and emits tool_call/tool_result", async 
 test("background watch reports an already exited job as a successful tail result", async () => {
   const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
   const emitted: Emitted[] = [];
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: {
       ...fakeToolContext(),
       async backgroundWatch(processId) {
@@ -274,7 +281,7 @@ test("background watch reports an already exited job as a successful tail result
     },
     scopeLabel: "personal:U1",
   };
-  const background = createAgentTools(ref).find((t) => t.name === "background");
+  const background = createAgentTools(createTurnToolState(ref)).find((t) => t.name === "background");
 
   const watched = textOf(await call(background, { action: "watch", process_id: "bg-1" }));
 
@@ -287,7 +294,9 @@ test("background watch reports an already exited job as a successful tail result
 
 test("background per-action validation returns a crisp [error] instead of throwing", async () => {
   const textOf = (r: unknown): string => (r as { content: Array<{ text: string }> }).content[0]?.text ?? "";
-  const background = createAgentTools({ current: fakeToolContext() }).find((t) => t.name === "background");
+  const background = createAgentTools(createTurnToolState({ current: fakeToolContext() })).find(
+    (t) => t.name === "background",
+  );
   assert.ok(background);
 
   assert.match(textOf(await call(background, { action: "start" })), /invalid background arguments/);
@@ -311,7 +320,7 @@ test("background surfaces a policy denial/approval as a tool_result, not a throw
   };
   const out = textOf(
     await call(
-      createAgentTools({ current: denyTC }).find((t) => t.name === "execute"),
+      createAgentTools(createTurnToolState({ current: denyTC })).find((t) => t.name === "execute"),
       { background: true, command: "rm -rf /", purpose: "Run background tests" },
     ),
   );
@@ -324,11 +333,11 @@ test("background surfaces a policy denial/approval as a tool_result, not a throw
       throw new NeedsApproval(command, "needs a human");
     },
   };
-  const pending: Array<{ command: string; reason: string }> = [];
-  const ref: ToolContextRef = { current: approvalTC, pendingApprovals: pending };
+  const state = createTurnToolState({ current: approvalTC });
+  const pending = state.halt.approvals();
   const out2 = textOf(
     await call(
-      createAgentTools(ref).find((t) => t.name === "execute"),
+      createAgentTools(state).find((t) => t.name === "execute"),
       { background: true, command: "deploy prod", purpose: "Run background tests" },
     ),
   );

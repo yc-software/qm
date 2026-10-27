@@ -66,6 +66,7 @@ const UNINHERITED_REQUEST_KEYS = [
   "privateSessionMessage",
   "sessionMessageDepth",
   "delegatingRunId",
+  "swarm",
   "approval",
   "proactiveOpener",
   "redeliveryKey",

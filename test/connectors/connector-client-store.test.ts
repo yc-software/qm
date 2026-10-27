@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, createCipheriv, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { test } from "node:test";
 import {
   createConnectorClientResolver,
@@ -28,24 +28,16 @@ test("AES-GCM secret round-trips and ciphertext differs from plaintext", () => {
   assert.throws(() => decryptSecret(enc, deriveConnectorKey("other-key")));
 });
 
-test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decrypt", () => {
+test("ciphertexts are v2 (HKDF) and unversioned ciphertexts are rejected", () => {
   const material = "a-persistent-key";
   const key = deriveConnectorKey(material);
 
   const enc = encryptSecret("fresh", key);
   assert.match(enc, /^v2:/);
   assert.equal(decryptSecret(enc, key), "fresh");
+  assert.throws(() => decryptSecret(enc.slice("v2:".length), key), /malformed/);
 
-  const legacyKey = createHash("sha256").update(material).digest();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", legacyKey, iv);
-  const ct = Buffer.concat([cipher.update("old-secret", "utf8"), cipher.final()]);
-  const legacyEnc = `${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${ct.toString("base64")}`;
-  assert.equal(decryptSecret(legacyEnc, key), "old-secret");
-
-  const raw = randomBytes(32);
-  const bufKey = deriveConnectorKey(raw);
-  assert.equal(bufKey.v1, raw);
+  const bufKey = deriveConnectorKey(randomBytes(32));
   assert.equal(decryptSecret(encryptSecret("buf", bufKey), bufKey), "buf");
 
   assert.notDeepEqual(
@@ -54,6 +46,17 @@ test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decr
   );
   assert.throws(() => decryptSecret("v2:not-enough", key), /malformed/);
   assert.throws(() => decryptSecret("just-one-part", key), /malformed/);
+});
+
+test("a connector client secret saved by one store reads back from a fresh store with the same key, as after a restart", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const opts = { databaseUrl, connectorSecretKey: "persistent-key" };
+  await testConfigStore(opts).setConnectorClient(orgScope("default-org"), "google", {
+    clientId: "cid",
+    clientSecret: "survives",
+  });
+  const restarted = testConfigStore(opts);
+  assert.equal((await restarted.getConnectorClientSecret(orgScope("default-org"), "google"))?.clientSecret, "survives");
 });
 
 test("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {

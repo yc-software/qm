@@ -17,79 +17,12 @@ import {
   withRuntimeBarrier,
 } from "./agent-tools/wrappers.ts";
 import { CONNECTOR_SHADOWED, CRON_ACTIONS, toolManifest } from "./tool-manifest.ts";
-import type { DocumentInput } from "../core/document-inputs.ts";
-import type { HarnessHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";
-import type { ClientToolDeclaration, ScopeId } from "../types.ts";
-import type { NewItem } from "../sessions/items.ts";
-import type { ToolContext } from "../tools/primitives.ts";
-import type { GapWork } from "../sessions/session-store.ts";
+import type { ClientToolDeclaration } from "../types.ts";
+import type { TurnHalt, TurnToolState } from "./turn-tool-state.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import { isObj } from "../util/objects.ts";
-import { type GoalGovernor, type GoalRecord } from "./goal.ts";
-import { type ToolResultScreenInput } from "../security/security-screen.ts";
-
-export interface ToolContextRef {
-  documents?: DocumentInput[];
-  documentsStubbed?: boolean;
-  runtimeHandoff?: HarnessHandoff;
-  runtimeActorId?: string;
-  runtimeMutationPending?: boolean;
-  runtimeInFlight?: Set<Promise<unknown>>;
-  current: ToolContext | null;
-  pendingApprovals?: Array<{
-    command: string;
-    reason: string;
-    kind?: "approval";
-    matched?: string;
-    purpose?: string;
-    approvalKey?: string;
-    summary?: string;
-    grantModes?: { session: boolean; always: boolean };
-  }>;
-  pausedOnApproval?: boolean;
-  emit?: (item: NewItem) => void | Promise<unknown>;
-  scopeLabel?: ScopeId;
-  orgScopeId?: ScopeId;
-  llmCapture?: Array<{
-    envelope: unknown;
-    truncated: boolean;
-    transport?: { modelId?: string; headers?: Record<string, string> };
-  }>;
-  modelCalls?: number;
-  modelDispatch?: Array<{
-    start: number;
-    first?: number;
-    gateway?: Record<string, string>;
-    streamStart?: number;
-    prepareNextTurn?: number;
-    transformContext?: number;
-  }>;
-  pendingPrepareNextTurn?: number;
-  pendingTransformContext?: number;
-  onGapWork?: (work: GapWork) => void;
-  fast?: boolean;
-  abortSignal?: AbortSignal;
-  shutdown?: AbortSignal;
-  pollFire?: boolean;
-  silentRequested?: boolean;
-
-  goal?: GoalRecord | null;
-  saveGoal?: (goal: GoalRecord) => Promise<void>;
-  goalOpenedThisTurn?: boolean;
-
-  goalRound?: number;
-
-  goalMeter?: import("./grind.ts").GrindMeter;
-  modelHasPrices?: () => boolean;
-  governGoal?: GoalGovernor;
-  /** The agent's recent work for the governor, newest last. */
-  goalRecentWork?: () => string;
-  observeToolResult?: (input: ToolResultScreenInput) => void;
-  toolApprovalGate?: (callKey: string) => boolean;
-  approvedToolCalls?: Map<string, string>;
-}
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
@@ -120,7 +53,7 @@ export function coreToolOptions(config: Config): CoreToolOptions {
 }
 
 export function pauseStampAfterToolCall(
-  ref: Pick<ToolContextRef, "pausedOnApproval" | "silentRequested" | "runtimeHandoff">,
+  halt: Pick<TurnHalt, "stopsTools">,
   prior?: (
     info: unknown,
     signal?: unknown,
@@ -128,15 +61,16 @@ export function pauseStampAfterToolCall(
 ): (info: unknown, signal?: unknown) => Promise<{ terminate?: boolean } | undefined> {
   return async (info, signal) => {
     const upstream = prior ? await prior(info, signal) : undefined;
-    if (ref.pausedOnApproval || ref.silentRequested || ref.runtimeHandoff) return { ...upstream, terminate: true };
+    if (halt.stopsTools()) return { ...upstream, terminate: true };
     return upstream;
   };
 }
 
-export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions): ToolDefinition[] {
+export function createAgentTools(state: TurnToolState, opts?: AgentToolsOptions): ToolDefinition[] {
+  const { tools: ref, goal, halt } = state;
   const kit = createToolKit(ref, opts);
   const { controlTools, surfaceTools, delegateWork, retryMarks, recordCall, recordResult } = kit;
-  const { execute, sandboxManagement, background, validateSandboxTool } = computerTools(kit);
+  const { execute, sandboxManagement, background, validateSandboxTool } = computerTools(kit, halt);
 
   const { discoverSkills, skill, read, installCanvas, write, publish } = workspaceTools(kit);
 
@@ -148,13 +82,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
 
   const { instructionsTool, sharingTool, resourceTool, adminActions, adminPreamble } = controlPlaneTools(kit);
 
-  const { surface, attach, finishSilently } = replyTools(kit);
+  const { surface, attach, finishSilently } = replyTools(kit, halt);
 
-  const { createGoal, getGoal, updateGoal } = goalTools(kit);
+  const { createGoal, getGoal, updateGoal } = goalTools(kit, goal);
 
   const { mcpDefs, mcpCandidates, clientTools } = externalTools(kit);
 
-  const { context, runtime } = runtimeTools(kit);
+  const { context, runtime } = runtimeTools(kit, goal, halt);
 
   const manifest = toolManifest({
     controlTools,
@@ -243,8 +177,9 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return tools.map((tool) => {
     const wrapped = withRuntimeBarrier(
-      withToolBodyTiming(withToolApprovalGate(validateSandboxTool(tool), ref, { recordCall, recordResult }), ref),
+      withToolBodyTiming(withToolApprovalGate(validateSandboxTool(tool), ref, halt, { recordCall, recordResult }), ref),
       ref,
+      halt,
     );
     return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
   });

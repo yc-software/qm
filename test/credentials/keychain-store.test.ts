@@ -83,7 +83,7 @@ test("a refresh failure is recorded only on the version it was read from", async
   assert.ok(failed.refresh?.refreshTokenEnc, "the stored refresh token survives");
 });
 
-test("a live-shaped map row with a legacy username converts in place and is rewritten at boot", async () => {
+test("a live-shaped map row with a legacy username converts in place", async () => {
   const databaseUrl = testDatabaseUrl();
   const raw = new pg.Pool({ connectionString: databaseUrl });
   const secretEnc = encryptSecret("hunter2", KEY);
@@ -110,13 +110,6 @@ test("a live-shaped map row with a legacy username converts in place and is rewr
     await raw.query(`INSERT INTO keychain_credentials VALUES ('c1', $1)`, [row]);
     const store = createKeychainStore(databaseUrl);
     assert.deepEqual(await store.creds.get("c1"), row);
-    const keychain = createKeychain({ lock: testAdvisoryLock(), store, key: KEY });
-    assert.equal(await keychain.rewriteTargetUsernameCredentials(), 1);
-    const [own] = await keychain.materializeOwn("U1");
-    assert.deepEqual(own!.env, [
-      { key: "ACME_PASSWORD", value: "hunter2", secret: true },
-      { key: "ACME_USERNAME", value: "alice@acme.co", secret: false },
-    ]);
   } finally {
     await raw.end();
   }

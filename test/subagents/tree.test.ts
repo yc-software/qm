@@ -155,7 +155,6 @@ test("ordinary sessions are not subject to the subagent tree queue limit", async
   const built = buildApp(testConfig());
   const actor = { id: "U1", type: "internal" as const };
   const session = await built.sessions.getOrCreateByThread("web:U1:ordinary-queue", "dm", "personal:U1");
-  assert.equal(await built.featureFlags.enabled("persistent_subagents", "personal:U1"), false);
   for (let i = 0; i < 11; i++) {
     await built.runs.enqueue({
       sessionId: session.threadRef,

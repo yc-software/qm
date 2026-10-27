@@ -29,7 +29,7 @@ export function contextSummaryItem(throughSeq: number, text: string): NewItem<"C
   return { kind: "ContextCompaction", throughSeq, text };
 }
 
-export interface ContextWindow {
+interface ContextWindow {
   items: Item[];
   totalItems: number;
 }
@@ -339,7 +339,7 @@ export interface ParticipantScope {
   lastActivityAt: number | null;
 }
 
-export type SearchHitType = "user" | "assistant" | "text";
+type SearchHitType = "user" | "assistant" | "text";
 
 export interface ItemSearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
   sessionId: string;

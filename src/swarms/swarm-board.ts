@@ -11,14 +11,14 @@ export interface SwarmBoardPost {
   createdAt: number;
 }
 
-export interface SwarmBoardChannel {
+interface SwarmBoardChannel {
   name: string;
   description: string;
   posts: number;
   lastPostAt: number | null;
 }
 
-export interface SwarmBoardPage {
+interface SwarmBoardPage {
   channel?: string;
   before?: number;
   limit: number;

@@ -1,5 +1,3 @@
-// The goal tool's create/get/update actions and the evidence files the governor reads.
-
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { errMessage } from "../../util/errors.ts";
@@ -20,17 +18,17 @@ import {
 } from "../goal.ts";
 import { createGrindMeter, grindState } from "../grind.ts";
 import { type ToolKit } from "./kit.ts";
+import type { TurnGoal } from "../turn-tool-state.ts";
 import { outsideWorkspace, sandboxSelector, text } from "./shared.ts";
 
-export function goalTools(kit: ToolKit) {
+export function goalTools(kit: ToolKit, turnGoal: TurnGoal) {
   const { GOAL_EVIDENCE_FILES, goalEvidenceFiles } = goalEvidence();
-  const { createGoal } = createGoalTool(kit);
-  const { getGoal } = getGoalTool(kit);
-  const { updateGoal } = updateGoalTool(kit, { GOAL_EVIDENCE_FILES, goalEvidenceFiles });
+  const { createGoal } = createGoalTool(kit, turnGoal);
+  const { getGoal } = getGoalTool(kit, turnGoal);
+  const { updateGoal } = updateGoalTool(kit, turnGoal, { GOAL_EVIDENCE_FILES, goalEvidenceFiles });
   return { createGoal, getGoal, updateGoal };
 }
 
-/** Reads the deliverable files a goal completion names, for the governor to check. */
 function goalEvidence() {
   const GOAL_EVIDENCE_FILES = 5;
   const GOAL_EVIDENCE_FILE_CHARS = 20_000;
@@ -58,9 +56,8 @@ function goalEvidence() {
   return { GOAL_EVIDENCE_FILES, goalEvidenceFiles };
 }
 
-/** goal create: registers a goal for sustained work. */
-function createGoalTool(kit: ToolKit) {
-  const { ref, recordCall, recordCoreAuthoredResult } = kit;
+function createGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
+  const { recordCall, recordCoreAuthoredResult } = kit;
   const createGoal = defineTool({
     name: "create",
     label: "create",
@@ -71,7 +68,7 @@ function createGoalTool(kit: ToolKit) {
     async execute(callId, params) {
       const p = params as GoalCreateInput;
       await recordCall(callId, { tool: "goal", action: "create", objective: p.objective });
-      if (goalIsOpen(ref.goal)) {
+      if (goalIsOpen(turnGoal.current())) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "create", error: "goal_exists" },
@@ -81,7 +78,7 @@ function createGoalTool(kit: ToolKit) {
           true,
         );
       }
-      if (p.floor?.minUsd !== undefined && ref.modelHasPrices?.() === false) {
+      if (p.floor?.minUsd !== undefined && turnGoal.modelHasPrices() === false) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "goal", action: "create", error: "spend_unmeasurable" },
@@ -102,9 +99,9 @@ function createGoalTool(kit: ToolKit) {
           true,
         );
       }
-      ref.goal = record;
-      ref.goalOpenedThisTurn = true;
-      await ref.saveGoal?.(record);
+      turnGoal.set(record);
+      turnGoal.markOpened();
+      await turnGoal.save(record);
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "create", goal: record },
@@ -118,9 +115,8 @@ function createGoalTool(kit: ToolKit) {
   return { createGoal };
 }
 
-/** goal get: the session's goal, its floor and usage. */
-function getGoalTool(kit: ToolKit) {
-  const { ref, recordCall, recordCoreAuthoredResult } = kit;
+function getGoalTool(kit: ToolKit, turnGoal: TurnGoal) {
+  const { recordCall, recordCoreAuthoredResult } = kit;
   const getGoal = defineTool({
     name: "get",
     label: "get",
@@ -128,20 +124,20 @@ function getGoalTool(kit: ToolKit) {
     parameters: Type.Object({}),
     async execute(callId) {
       await recordCall(callId, { tool: "goal", action: "get" });
-      const goal = ref.goal ?? null;
+      const goal = turnGoal.current() ?? null;
       return recordCoreAuthoredResult(
         callId,
         { tool: "goal", action: "get", goal },
-        text(goal ? goalReport(goal, ref.goalMeter ?? createGrindMeter()) : "No goal registered in this session."),
+        text(goal ? goalReport(goal, turnGoal.meter() ?? createGrindMeter()) : "No goal registered in this session."),
       );
     },
   });
   return { getGoal };
 }
 
-/** goal update: complete, resume, cancel or wait, with the governor's check on completion. */
 function updateGoalTool(
   kit: ToolKit,
+  turnGoal: TurnGoal,
   {
     GOAL_EVIDENCE_FILES,
     goalEvidenceFiles,
@@ -154,7 +150,7 @@ function updateGoalTool(
       "complete: only when the objective is actually achieved, never because budget is low or you are stopping; an independent governor reads the objective, your recent work, note and named files, and may reject (the goal stays active with its reasons) or pause it for the user. " +
       "resume/cancel: only when the person in this turn explicitly asks; never to escape unfinished work.",
     parameters: updateGoalParams(GOAL_EVIDENCE_FILES),
-    execute: (callId, params) => runUpdateGoal(kit, goalEvidenceFiles, callId, params),
+    execute: (callId, params) => runUpdateGoal(kit, turnGoal, goalEvidenceFiles, callId, params),
   });
   return { updateGoal };
 }
@@ -175,9 +171,9 @@ function updateGoalParams(GOAL_EVIDENCE_FILES: number) {
   });
 }
 
-/** Runs goal update: status changes, and the governor check before a completion lands. */
 async function runUpdateGoal(
   kit: ToolKit,
+  turnGoal: TurnGoal,
   goalEvidenceFiles: ReturnType<typeof goalEvidence>["goalEvidenceFiles"],
   callId: string,
   params: Static<ReturnType<typeof updateGoalParams>>,
@@ -196,9 +192,9 @@ async function runUpdateGoal(
     status,
     ...(p.note ? { note: p.note } : {}),
   });
-  const goal = ref.goal;
-  if (status === "cancel") return cancelGoalUpdate(kit, callId, goal, p.note);
-  if (status === "resume") return resumeGoalUpdate(kit, callId, goal);
+  const goal = turnGoal.current();
+  if (status === "cancel") return cancelGoalUpdate(kit, turnGoal, callId, goal, p.note);
+  if (status === "resume") return resumeGoalUpdate(kit, turnGoal, callId, goal);
   if (goal?.status !== "active") {
     return recordCoreAuthoredResult(
       callId,
@@ -212,7 +208,7 @@ async function runUpdateGoal(
     );
   }
   if (goal.floor) {
-    const state = grindState(goal.floor, goalFloorMeter(goal, ref.goalMeter ?? createGrindMeter()));
+    const state = grindState(goal.floor, goalFloorMeter(goal, turnGoal.meter() ?? createGrindMeter()));
     if (!state.met)
       return recordCoreAuthoredResult(
         callId,
@@ -229,11 +225,12 @@ async function runUpdateGoal(
   ].join("\n");
   let verdict: GovernorVerdict;
   try {
-    if (!ref.governGoal) throw new GovernorUndecided("no independent governor is available on this runtime");
-    verdict = await ref.governGoal({
+    const governGoal = turnGoal.governor();
+    if (!governGoal) throw new GovernorUndecided("no independent governor is available on this runtime");
+    verdict = await governGoal({
       objective: goal.objective,
       trigger: "completion",
-      recentWork: ref.goalRecentWork?.() ?? "",
+      recentWork: turnGoal.recentWork(),
       evidence,
       ...(goal.governor ? { previous: goal.governor } : {}),
     });
@@ -249,7 +246,7 @@ async function runUpdateGoal(
   }
   if (verdict.verdict !== "complete") {
     const applied = applyGovernorVerdict(goal, verdict);
-    await ref.saveGoal?.(goal);
+    await turnGoal.save(goal);
     let message = `The governor did not accept completion; the goal stays active. Reasons: ${verdict.reasons}`;
     if (applied.verdict === "step_back") message += `\n${GOAL_STEP_BACK_PROMPT}`;
     if (applied.verdict === "pause")
@@ -265,7 +262,7 @@ async function runUpdateGoal(
   goal.status = "complete";
   goal.updatedAt = Date.now();
   goal.completionNote = p.note;
-  await ref.saveGoal?.(goal);
+  await turnGoal.save(goal);
   return recordCoreAuthoredResult(
     callId,
     { tool: "goal", action: "update", goal },
@@ -273,8 +270,13 @@ async function runUpdateGoal(
   );
 }
 
-/** goal update status=cancel: only the user's own message after the goal started may cancel it. */
-async function cancelGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref"]["goal"], note: string) {
+async function cancelGoalUpdate(
+  kit: ToolKit,
+  turnGoal: TurnGoal,
+  callId: string,
+  goal: GoalRecord | null | undefined,
+  note: string,
+) {
   const { ref, recordCoreAuthoredResult } = kit;
   if (!goalIsOpen(goal)) {
     return recordCoreAuthoredResult(
@@ -284,7 +286,7 @@ async function cancelGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref
       true,
     );
   }
-  if (ref.current?.humanTurn !== true || (ref.goalRound ?? 0) > 0 || ref.goalOpenedThisTurn) {
+  if (ref.current?.humanTurn !== true || turnGoal.round() > 0 || turnGoal.openedThisTurn()) {
     return recordCoreAuthoredResult(
       callId,
       { tool: "goal", action: "update", error: "human_required" },
@@ -295,7 +297,7 @@ async function cancelGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref
     );
   }
   cancelGoal(goal, note);
-  await ref.saveGoal?.(goal);
+  await turnGoal.save(goal);
   return recordCoreAuthoredResult(
     callId,
     { tool: "goal", action: "update", goal },
@@ -305,8 +307,7 @@ async function cancelGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref
   );
 }
 
-/** goal update status=resume: only the user's own message may lift a pause. */
-async function resumeGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref"]["goal"]) {
+async function resumeGoalUpdate(kit: ToolKit, turnGoal: TurnGoal, callId: string, goal: GoalRecord | null | undefined) {
   const { ref, recordCoreAuthoredResult } = kit;
   if (goal?.status !== "paused") {
     return recordCoreAuthoredResult(
@@ -316,8 +317,6 @@ async function resumeGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref
       true,
     );
   }
-  // Only a person's own message can lift a pause the person put there;
-  // crons, webhooks, ambient and delegated wakes cannot.
   if (ref.current?.humanTurn !== true) {
     return recordCoreAuthoredResult(
       callId,
@@ -329,8 +328,8 @@ async function resumeGoalUpdate(kit: ToolKit, callId: string, goal: ToolKit["ref
     );
   }
   resumeGoal(goal);
-  ref.goalOpenedThisTurn = true;
-  await ref.saveGoal?.(goal);
+  turnGoal.markOpened();
+  await turnGoal.save(goal);
   return recordCoreAuthoredResult(
     callId,
     { tool: "goal", action: "update", goal },

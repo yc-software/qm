@@ -18,7 +18,6 @@ export async function startWebEdge(
   const webServer = await web.startServer(0, "127.0.0.1");
   const webUrl = `http://127.0.0.1:${(webServer.address() as AddressInfo).port}`;
   env.WEB_UI_UPSTREAM = webUrl;
-  env.ADMIN_UPSTREAM = `${webUrl}/admin`;
   const portal = await hosted("../plugins/portal/src/index.ts");
   return [webServer, await portal.startServer(opts.publicPort)];
 }

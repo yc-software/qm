@@ -11,7 +11,7 @@ import { createPostgresDirectoryStore } from "../../src/directory/postgres-direc
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresCronFireStore } from "../../src/cron/fire-store.ts";
-import { idleJobs } from "../support/cron-slots.ts";
+import { manualFireJobs } from "../support/cron-slots.ts";
 import { automationOrigin } from "../support/turn-origin.ts";
 import { harness, schedulerDeps } from "../support/cron-scheduler-harness.ts";
 
@@ -410,7 +410,7 @@ test("cron fires do not replay prior sessions or inline prior fire context", asy
     return { status: "ok", reply: replies[sessionIds.length - 1] ?? "ok", sessionId: session.id };
   };
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...schedulerDeps(crons, databaseUrl),
     run,
   });
@@ -447,7 +447,7 @@ test("an idempotency-skipped cron fire does not create fire log history", async 
   const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const calls: TurnRequest[] = [];
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...singleProcessDeps(),
     crons,
     outbound: recordingOutbound(),
@@ -523,7 +523,7 @@ test("a failing cron fire is logged, not swallowed", async (t) => {
   });
   const crons = createCronStore(databaseUrl, { fires: createPostgresCronFireStore(databaseUrl) });
   const scheduler = createScheduler({
-    jobs: idleJobs(),
+    jobs: manualFireJobs(),
     ...schedulerDeps(crons, databaseUrl),
     run: async () => {
       throw new Error("boom");

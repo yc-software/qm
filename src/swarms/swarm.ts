@@ -21,7 +21,7 @@ export const SWARM_ACTIONS = [
   "unsubscribe",
 ] as const;
 
-export type SwarmAction = (typeof SWARM_ACTIONS)[number];
+type SwarmAction = (typeof SWARM_ACTIONS)[number];
 
 export interface SwarmMemberOpen {
   requestId: string;
@@ -66,10 +66,8 @@ export interface SwarmCallContext {
   ): Promise<{ ok: true; sessionId: string; title: string } | { ok: false; message: string }>;
 }
 
-const MAX_MEMBERS_PER_START = 20;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-const MAX_POST_CHARS = 16_000;
 const PREVIEW_CHARS = 500;
 const NOTICE_CHARS = 2_000;
 const THREAD_CHARS = 64_000;
@@ -170,8 +168,6 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       };
     const members = (input.members ?? []).filter((member) => member.task?.trim());
     if (!members.length) return { ok: false, message: "start requires `members`: one {task, name?} per subagent." };
-    if (members.length > MAX_MEMBERS_PER_START)
-      return { ok: false, message: `start opens at most ${MAX_MEMBERS_PER_START} members per call.` };
     await ctx.board.ensure(ctx.session.id, ctx.session.id, Date.now());
     const opened = await mapBounded(members, OPEN_CONCURRENCY, async (member, index) => {
       const result = await ctx.open({
@@ -213,7 +209,7 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
       const created = await ctx.board.createChannel(
         swarmId,
         channel,
-        input.description?.trim().slice(0, 500) ?? "",
+        input.description?.trim() ?? "",
         ctx.session.id,
         Date.now(),
       );
@@ -265,7 +261,6 @@ export async function swarmCall(ctx: SwarmCallContext, input: SwarmInput): Promi
     case "post": {
       const body = input.text?.trim();
       if (!body) return { ok: false, message: "post requires `text`." };
-      if (body.length > MAX_POST_CHARS) return { ok: false, message: `post exceeds ${MAX_POST_CHARS} characters.` };
       const parent = input.replyTo ? await ctx.board.post(swarmId, input.replyTo) : null;
       if (input.replyTo && !parent) return { ok: false, message: `no post ${input.replyTo} on this board.` };
       const target = parent?.channel ?? channel ?? "general";

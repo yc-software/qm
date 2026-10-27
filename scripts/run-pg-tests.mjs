@@ -26,6 +26,7 @@ const files = (positionals.length > 0 ? positionals : await rootTestFiles()).toS
   (a, b) => statSync(b).size - statSync(a).size,
 );
 
+const { NODE_TEST_CONTEXT: _parentTestContext, ...inheritedEnv } = process.env;
 const baseUrl = process.env.DATABASE_URL;
 if (!baseUrl) throw new Error("Set DATABASE_URL to a Postgres server the tests may create databases on");
 const runId = `qmt_${process.pid}_${randomBytes(4).toString("hex")}`;
@@ -69,30 +70,35 @@ function runFile(file, env) {
     const started = Date.now();
     let output = "";
     let settled = false;
-    const finish = (ok) => {
+    let reason = null;
+    const finish = (failure) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       children.delete(child);
-      resolve({ file, ok, ms: Date.now() - started, output });
+      resolve({ file, ok: failure === null, reason: failure, ms: Date.now() - started, output });
     };
     const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", file], {
       detached: true,
-      env: { ...process.env, ...env },
+      env: { ...inheritedEnv, ...env },
     });
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));
     child.stderr?.on("data", (chunk) => (output += chunk));
     const timer = setTimeout(() => {
       output += `\n${file} exceeded ${timeoutSeconds}s and was killed\n`;
+      reason = `timed out after ${timeoutSeconds}s`;
       killGroup(child);
     }, timeoutSeconds * 1000);
     child.on("error", (error) => {
       output += `\n${file} could not run: ${error.message || error.code || error}\n`;
-      finish(false);
+      finish(`could not run: ${error.message || error.code || error}`);
     });
     child.on("exit", () => killGroup(child));
-    child.on("close", (code, signal) => finish(code === 0 && !signal));
+    child.on("close", (code, signal) => {
+      if (reason ?? signal) finish(reason ?? `killed by ${signal}`);
+      else finish(code === 0 ? null : `exited ${code}`);
+    });
   });
 }
 
@@ -100,7 +106,7 @@ async function runIsolated(file, index) {
   const name = `${runId}_${index}`;
   try {
     await admin.query(`CREATE DATABASE ${name}`);
-    if (stopping) return { file, ok: false, ms: 0, output: "" };
+    if (stopping) return { file, ok: false, reason: "stopped", ms: 0, output: "" };
     return await runFile(file, { DATABASE_URL: databaseUrl(name), QM_TEST_TEMPLATE_DATABASE: templateName });
   } finally {
     await dropDatabase(name);
@@ -114,7 +120,7 @@ function migrateTemplate() {
     const child = spawn(
       process.execPath,
       [new URL("../test/support/test-template.ts", import.meta.url).pathname, databaseUrl(templateName)],
-      { stdio: ["ignore", "ignore", "inherit"] },
+      { env: inheritedEnv, stdio: ["ignore", "ignore", "inherit"] },
     );
     child.on("error", reject);
     child.on("close", (code) =>
@@ -148,6 +154,7 @@ async function dropAbandonedRuns() {
 }
 
 const started = Date.now();
+process.stdout.write(`# run ${runId}: ${files.length} files with ${jobs} jobs\n`);
 await dropAbandonedRuns();
 await admin.query(`CREATE DATABASE ${templateName}`);
 await migrateTemplate().catch(async (error) => {
@@ -164,6 +171,7 @@ const work = Promise.all(
       const result = await runIsolated(files[index], index).catch((error) => ({
         file: files[index],
         ok: false,
+        reason: `could not run: ${error.message || error.code || error}`,
         ms: 0,
         output: `\n${files[index]} could not run: ${error.message || error.code || error}\n`,
       }));
@@ -193,10 +201,14 @@ if (stopping) await new Promise(() => {});
 await dropDatabase(runId);
 await endPool();
 
-const failed = results.filter((result) => !result.ok);
+const reported = new Set(results.map((result) => result.file));
+const failed = [
+  ...results.filter((result) => !result.ok),
+  ...files.filter((file) => !reported.has(file)).map((file) => ({ file, reason: "never reported a result" })),
+];
 const summedMs = results.reduce((sum, result) => sum + result.ms, 0);
 process.stdout.write(
-  `\n# ${results.length - failed.length}/${results.length} files passed with ${jobs} jobs in ${((Date.now() - started) / 1000).toFixed(1)}s (${(summedMs / 1000).toFixed(1)}s summed)\n`,
+  `\n# run ${runId}: ${files.length - failed.length}/${files.length} files passed with ${jobs} jobs in ${((Date.now() - started) / 1000).toFixed(1)}s (${(summedMs / 1000).toFixed(1)}s summed)\n`,
 );
-for (const result of failed) process.stdout.write(`# FAIL ${result.file}\n`);
+for (const result of failed) process.stdout.write(`# FAIL ${result.file}: ${result.reason}\n`);
 process.exitCode = failed.length > 0 ? 1 : 0;

@@ -34,8 +34,6 @@ export interface PrincipalLinkService extends PrincipalLinkResolver {
   refresh(force?: boolean): Promise<void>;
 }
 
-const MAX_ID_LENGTH = 255;
-const MAX_EVIDENCE_LENGTH = 500;
 const REFRESH_TTL_MS = 10_000;
 
 const PRINCIPAL_LINKS: TableSpec = {
@@ -47,7 +45,7 @@ const PRINCIPAL_LINKS: TableSpec = {
 const PRINCIPAL_LINKS_MIGRATION = mapToTableMigration("identity/principal-links/0001-typed", PRINCIPAL_LINKS);
 
 function validId(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLock): PrincipalLinkService {
@@ -106,12 +104,9 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
     async link(input) {
       return lock.withLock("principal-links", async () => {
         if (!validId(input.principalId) || !validId(input.canonicalId))
-          throw new PrincipalLinkError(
-            400,
-            `principalId and canonicalId must be non-empty ids of at most ${MAX_ID_LENGTH} characters`,
-          );
+          throw new PrincipalLinkError(400, "principalId and canonicalId must be non-empty ids");
         const evidence = typeof input.evidence === "string" ? input.evidence.trim() : "";
-        if (!evidence || evidence.length > MAX_EVIDENCE_LENGTH)
+        if (!evidence)
           throw new PrincipalLinkError(400, `evidence must say how the two identities were verified as one person`);
         const principalId = input.principalId.trim();
         const canonicalId = input.canonicalId.trim();

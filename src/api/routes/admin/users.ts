@@ -11,7 +11,6 @@ import { externalMemberActive, validEmail, type ExternalMember } from "../../../
 import { resolveBranding } from "../../../resolution/branding.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
-import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../onboarding/onboarding.ts";
 import { isObj } from "../shared.ts";
 import { badRequest, notFound, orgAdmin } from "./common.ts";
 import { type ApiCtx, ok, reply, type RouteResult } from "../route.ts";
@@ -351,10 +350,9 @@ export async function getUserDetail(ctx: ApiCtx): Promise<RouteResult> {
   const personal = makeScopeId("personal", principalId);
   authz.audit("user.read", principalId);
 
-  const [grants, stats, onboarding] = await Promise.all([
+  const [grants, stats] = await Promise.all([
     deps.admin?.listGrants() ?? [],
     deps.sessions?.scopeConversationCount(personal),
-    deps.memory ? deps.memory.read(personal).then(detectOnboardingStatus) : null,
   ]);
   const config = deps.config
     ? {
@@ -374,7 +372,6 @@ export async function getUserDetail(ctx: ApiCtx): Promise<RouteResult> {
     admin: adminStatusFromGrants(grants, principalId),
     stats: { sessions: stats ?? 0 },
     config,
-    onboarding,
   });
 }
 
@@ -397,33 +394,11 @@ export async function stopImpersonation(ctx: ApiCtx): Promise<RouteResult> {
   return ok({ ok: true });
 }
 
-const isoToday = () => new Date().toISOString().slice(0, 10);
-
-const ONBOARDING_STATUSES = new Set<OnboardingStatus>(["not_started", "pending", "completed", "dismissed"]);
-
-export async function setUserOnboarding(ctx: ApiCtx): Promise<RouteResult> {
-  const { deps, body, params } = ctx;
-  const authz = await orgAdmin(ctx);
-  const { actor } = authz;
-  if (!deps.memory) throw notFound();
-  const { principalId } = await resolveAdminUser(deps, params.principalId!);
-  const status = (body as { status?: unknown }).status;
-  if (typeof status !== "string" || !ONBOARDING_STATUSES.has(status as OnboardingStatus))
-    throw badRequest("onboarding requires { status: not_started|pending|completed|dismissed }");
-  const personal = makeScopeId("personal", principalId);
-  await setOnboardingStatus(deps.memory, personal, status as OnboardingStatus, isoToday(), actor.id);
-  authz.audit("user.onboarding.set", `${principalId}/${status}`, personal);
-  return ok({ ok: true, scopeId: personal, status });
-}
-
 export async function resetUserToBrandNew(ctx: ApiCtx): Promise<RouteResult> {
   const { deps, params } = ctx;
   const authz = await orgAdmin(ctx);
-  const { actor } = authz;
-  if (!deps.memory) throw notFound();
   const { principalId } = await resolveAdminUser(deps, params.principalId!);
   const personal = makeScopeId("personal", principalId);
-  await setOnboardingStatus(deps.memory, personal, "not_started", isoToday(), actor.id);
   const sessions = deps.sessions;
   const own = sessions ? (await sessions.listByParticipant(principalId)).filter((s) => s.scopeId === personal) : [];
   for (const s of own) await sessions!.deleteSession(s.id);

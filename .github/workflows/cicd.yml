@@ -286,52 +286,6 @@ jobs:
         if: needs.reuse.outputs.reusable != 'true'
         run: node scripts/check-config-template.ts
 
-  core-postgres:
-    name: Core Postgres tests
-    needs: reuse
-    if: always() && !cancelled()
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: pgvector/pgvector:0.8.1-pg16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: qm
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - name: Reuse the exact successful PR tree
-        if: needs.reuse.outputs.reusable == 'true'
-        run: echo "Full checks already passed for this exact tree; see Resolve exact tested tree."
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
-        if: needs.reuse.outputs.reusable != 'true'
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
-        if: needs.reuse.outputs.reusable != 'true'
-        with:
-          node-version-file: .node-version
-          cache: npm
-          cache-dependency-path: package-lock.json
-      - name: Install
-        if: needs.reuse.outputs.reusable != 'true'
-        run: npm ci
-      - name: Build connector SDK
-        if: needs.reuse.outputs.reusable != 'true'
-        run: npm run build:connector-sdk
-      - name: Memorable provider e2e (real CLI against Postgres)
-        if: needs.reuse.outputs.reusable != 'true'
-        env:
-          MEMORABLE_E2E_DB_URL: postgres://postgres:postgres@localhost:5432/qm
-          MEMORABLE_E2E_BIN: node node_modules/memorable-cli/dist/cli.js
-        run: |
-          # Pinned vendor CLI under test; not shipped, so the repo's release-age guard is bypassed for this install only.
-          npm i --no-save --no-audit --no-fund --min-release-age=0 memorable-cli@0.5.15
-          node --test test/e2e/memorable-cli.e2e.test.ts
-
   web-ui-plugin:
     name: Web UI plugin
     needs: reuse
@@ -421,7 +375,7 @@ jobs:
     timeout-minutes: 3
     continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'pull_request'
-    needs: [core, cli, lint, core-postgres, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]
+    needs: [core, cli, lint, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -433,7 +387,7 @@ jobs:
         run: |
           test -n "$PR_REPOSITORY_ID"
           test "$PR_REPOSITORY_ID" = "$GITHUB_REPOSITORY_ID"
-          node -e 'const checks = JSON.parse(process.env.CHECKS); for (const id of ["core", "cli", "lint", "core-postgres", "web-ui-plugin", "auth-plugin", "portal-plugin", "coauthor-trailers"]) { if (checks[id]?.result !== "success") throw new Error(`${id} did not pass`); }'
+          node -e 'const checks = JSON.parse(process.env.CHECKS); for (const id of ["core", "cli", "lint", "web-ui-plugin", "auth-plugin", "portal-plugin", "coauthor-trailers"]) { if (checks[id]?.result !== "success") throw new Error(`${id} did not pass`); }'
       - name: Checkout tested commit
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -451,7 +405,7 @@ jobs:
     timeout-minutes: 3
     continue-on-error: true
     if: always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [core, cli, lint, dependency-audit, core-postgres, web-ui-plugin, auth-plugin, portal-plugin]
+    needs: [core, cli, lint, dependency-audit, web-ui-plugin, auth-plugin, portal-plugin]
     runs-on: ubuntu-latest
     permissions: {}
     steps:

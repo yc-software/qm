@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { join } from "node:path";
+import { parse } from "yaml";
 import { JUNK_FILE, deploymentLayerBundle } from "./deployment-layer.ts";
 import { errMessage } from "./log.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./tool-descriptor.ts";
@@ -13,23 +14,6 @@ export interface SkillFrontmatter {
   requiredCapabilities?: string[];
 }
 
-function stripSkillQuotes(value: string): string {
-  const trimmed = value.trim();
-  if (
-    trimmed.length >= 2 &&
-    ((trimmed[0] === '"' && trimmed.at(-1) === '"') || (trimmed[0] === "'" && trimmed.at(-1) === "'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function skillIndent(line: string): number {
-  let indent = 0;
-  while (indent < line.length && (line[indent] === " " || line[indent] === "\t")) indent++;
-  return indent;
-}
-
 export function parseSkillFrontmatter(md: string, sourcePath: string): SkillFrontmatter {
   const source = md.startsWith("\uFEFF") ? md.slice(1) : md;
   const opening = /^---\r?\n/.exec(source);
@@ -40,51 +24,14 @@ export function parseSkillFrontmatter(md: string, sourcePath: string): SkillFron
   const body = source.slice(contentEnd + closing[0].length).replace(/^\s+/, "");
   if (!body.trim()) throw new Error(`${sourcePath}: skill requires a body below the frontmatter`);
 
-  const fields: Record<string, unknown> = {};
-  const lines = source.slice(contentStart, contentEnd).split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const kv = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!kv) continue;
-    const key = kv[1]!;
-    const rest = kv[2] ?? "";
-    if (rest === ">" || rest === "|" || rest === ">-" || rest === "|-") {
-      const literal = rest[0] === "|";
-      const baseIndent = skillIndent(line);
-      const collected: string[] = [];
-      while (i + 1 < lines.length) {
-        const next = lines[i + 1]!;
-        if (next.trim() && skillIndent(next) <= baseIndent) break;
-        collected.push(next.trim() ? next.slice(Math.min(skillIndent(next), baseIndent + 2)) : "");
-        i++;
-      }
-      fields[key] = (literal ? collected.join("\n") : collected.join(" ").replace(/\s+/g, " ")).trim();
-      continue;
-    }
-    if (rest) {
-      fields[key] =
-        rest.startsWith("[") && rest.endsWith("]")
-          ? rest.slice(1, -1).split(",").map(stripSkillQuotes).filter(Boolean)
-          : stripSkillQuotes(rest);
-      continue;
-    }
-    const baseIndent = skillIndent(line);
-    const items: string[] = [];
-    while (i + 1 < lines.length) {
-      const next = lines[i + 1]!;
-      if (!next.trim() || skillIndent(next) <= baseIndent) break;
-      const item = /^\s*-\s+(.*)$/.exec(next);
-      if (!item) break;
-      items.push(stripSkillQuotes(item[1]!));
-      i++;
-    }
-    fields[key] = items;
+  let fields: unknown;
+  try {
+    fields = parse(source.slice(contentStart, contentEnd), { schema: "failsafe", logLevel: "error" });
+  } catch (e) {
+    throw new Error(`${sourcePath}: frontmatter is not valid YAML: ${errMessage(e)}`, { cause: e });
   }
-
-  const name = fields["name"];
-  const description = fields["description"];
-  const requiredCapabilities = fields["requiredCapabilities"] ?? [];
+  const { name, description, requiredCapabilities: listed } = (fields ?? {}) as Record<string, unknown>;
+  const requiredCapabilities = listed || [];
   if (typeof name !== "string" || !name.trim()) throw new Error(`${sourcePath}: frontmatter is missing "name"`);
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9_-])?$/.test(name)) {
     throw new Error(
@@ -99,7 +46,7 @@ export function parseSkillFrontmatter(md: string, sourcePath: string): SkillFron
   ) {
     throw new Error(`${sourcePath}: frontmatter "requiredCapabilities" must be a YAML list`);
   }
-  const out: SkillFrontmatter = { name, description };
+  const out: SkillFrontmatter = { name, description: description.trim() };
   if (requiredCapabilities.length) out.requiredCapabilities = requiredCapabilities as string[];
   return out;
 }

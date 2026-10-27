@@ -32,7 +32,6 @@ export async function settleTurnResult(
   ctx: TurnCtx,
   turn: {
     session: Session;
-    strictReadOnly: boolean;
     hasSurfaceToolDeps: boolean;
     isPollFire: boolean;
     emittedEntries: Item[];
@@ -45,10 +44,9 @@ export async function settleTurnResult(
     turnUserSeq: number | undefined;
   },
 ): Promise<TurnResult> {
-  const { deps, input, withManagedRosterVersion, approvalOwner } = ctx;
+  const { deps, input, withManagedRosterVersion, approvalOwner, strictReadOnly } = ctx;
   const {
     session,
-    strictReadOnly,
     hasSurfaceToolDeps,
     isPollFire,
     emittedEntries,
@@ -214,15 +212,13 @@ export async function concludeTurn(
     partial: PartialTurn | null;
     turnInput: string;
     emittedEntries: Item[];
-    useMemory: boolean;
     memoryScopeId: ScopeId;
     captureDependencies: () => MemoryProvenance[];
     memoryStrategy: MemoryStrategy;
     memoryPolicy: MemoryPolicy;
-    pendingCaptures: Map<ScopeId, Promise<void>>;
   },
 ) {
-  const { deps, input, actor, automatedTurn, scopeId } = ctx;
+  const { deps, input, actor, automatedTurn, scopeId, useMemory } = ctx;
   const {
     session,
     result,
@@ -231,12 +227,10 @@ export async function concludeTurn(
     partial,
     turnInput,
     emittedEntries,
-    useMemory,
     memoryScopeId,
     captureDependencies,
     memoryStrategy,
     memoryPolicy,
-    pendingCaptures,
   } = turn;
   const stagedAttachments = attachStaging.staged();
   const harvestedAck = (() => {
@@ -260,38 +254,30 @@ export async function concludeTurn(
   const turnUserSeq = partial?.userSeq ?? emittedEntries.find(isUserMessage)?.seq;
   const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
   if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
-    const prior = pendingCaptures.get(memoryScopeId);
-    const capture = (async () => {
-      if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
-      try {
-        await onTurnEnd({
-          scopeId: memoryScopeId,
-          conversationScopeId: scopeId,
-          inheritedFacts: captureDependencies(),
-          input: turnInput,
-          reply,
-          actorId: actor.id,
-          ...(automatedTurn ? { autonomous: true } : {}),
+    try {
+      await onTurnEnd({
+        scopeId: memoryScopeId,
+        conversationScopeId: scopeId,
+        inheritedFacts: captureDependencies(),
+        input: turnInput,
+        reply,
+        actorId: actor.id,
+        ...(automatedTurn ? { autonomous: true } : {}),
+        sessionId: session.id,
+        idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
+      });
+    } catch (e) {
+      deps.errors?.record(
+        {
+          category: "memory",
+          code: "capture_failed",
+          message: errMessage(e),
+          scopeLabel: scopeId,
           sessionId: session.id,
-          idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
-        });
-      } catch (e) {
-        deps.errors?.record(
-          {
-            category: "memory",
-            code: "capture_failed",
-            message: errMessage(e),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          },
-          e,
-        );
-      }
-    })();
-    pendingCaptures.set(memoryScopeId, capture);
-    void capture.finally(() => {
-      if (pendingCaptures.get(memoryScopeId) === capture) pendingCaptures.delete(memoryScopeId);
-    });
+        },
+        e,
+      );
+    }
   }
   return { stagedAttachments, reply, cancelStopped, outcome, turnCompleted, pausing, turnUserSeq };
 }

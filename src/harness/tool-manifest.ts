@@ -33,7 +33,7 @@ const CONTROL_ON = "On because an admin set up this server's control API.";
 const CONTROL_OFF = "Off until an admin sets up this server's control API.";
 const EXECUTE_ON = "On unless a conversation hands command work to helper agents.";
 const DELEGATED = "Off because this conversation hands command work to helper agents.";
-const NO_SUBAGENTS = "Off because helper agents aren't enabled for you.";
+const NO_SUBAGENTS = "Off for people outside the organization.";
 const POSTS_ITSELF = "On because the agent posts its own messages in this run, as in channels and scheduled runs.";
 const READ_ONLY = "Off because this run is read-only.";
 export const CONNECTOR_SHADOWED = "Off because a built-in tool has the same name.";
@@ -95,18 +95,14 @@ export function toolManifest(input: ToolManifestInput): ToolManifestEntry[] {
     native("memory", always),
     native("history", always),
     native("background", gate(!input.delegateWork, EXECUTE_ON, DELEGATED)),
-    native("subagents", gate(input.sessionTools, "On because helper agents are enabled for you.", NO_SUBAGENTS)),
-    native(
-      "swarm",
-      gate(input.sessionTools, "Subagents are enabled; a swarm is a set of subagents sharing a board.", NO_SUBAGENTS),
-      [...SWARM_ACTIONS],
-    ),
+    native("subagents", gate(input.sessionTools, ALWAYS, NO_SUBAGENTS)),
+    native("swarm", gate(input.sessionTools, ALWAYS, NO_SUBAGENTS), [...SWARM_ACTIONS]),
     native(
       "sessions",
       input.sessionTools
         ? gate(
             surfaceHas(surface, "sidebar"),
-            "On in web conversations when helper agents are enabled.",
+            "On in web conversations.",
             "Off outside the web app, the only place with a sidebar.",
           )
         : { present: false, reason: NO_SUBAGENTS },

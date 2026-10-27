@@ -2,8 +2,7 @@ import { reportBackendError, reportFailure } from "../../chassis/src/error-repor
 import "./instrument.ts";
 import { createServer, METHODS, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
-import { isMainThread } from "node:worker_threads";
-import { multitenant, serveTenantsByHost } from "../../chassis/src/tenant-workers.ts";
+import { serveForHost } from "../../chassis/src/tenant-hosts.ts";
 import { answerPreflight, prepareCors } from "./cors.ts";
 import {
   seal,
@@ -31,22 +30,13 @@ import { errMessage } from "../../chassis/src/errors.ts";
 import { isUiChannel, UI_CHANNEL_COOKIE } from "../../chassis/src/ui-release.ts";
 import { CARD_SCENE_PATH, LOCK_ICON } from "../../chassis/src/card-page.ts";
 import { json, serveFavicon, readBody, PayloadTooLargeError } from "../../chassis/src/http.ts";
-import {
-  CORE_API_URL as CORE,
-  CORE_ORG_ID as ORG,
-  CORE_SIGNING_SECRET,
-  PORTAL_IDENTITY_SECRET,
-} from "../../chassis/src/env.ts";
+import { CORE_API_URL as CORE, coreOrgId, coreSigningSecret, portalIdentitySecret } from "../../chassis/src/env.ts";
 
 import {
   PORT,
-  PUBLIC_URL,
   SESSION_SECRET,
   SESSION_TTL_S,
-  APPS_DOMAIN,
-  COOKIE_DOMAIN,
   SECURE_COOKIES,
-  API_ALLOWED_ORIGINS,
   LOCAL_AUTH_BYPASS,
   LOCAL_AUTH_PRINCIPAL,
   PLAYGROUND,
@@ -54,16 +44,14 @@ import {
   PLAYGROUND_MINTS_PER_IP,
   PLAYGROUND_MINT_WINDOW_S,
   WEB_UI_UPSTREAM,
-  AUTH_BROKER_UPSTREAM,
   AUTH_BROKER_PREFIX,
   brokerRouteFor,
   XFF_TRUSTED_HOPS,
   clientIpOf,
-  impersonateKey,
-  trustedSignInLabel,
   IMPERSONATE_TTL_S,
   isLoopbackAddress,
   bootChecks,
+  site,
 } from "./config.ts";
 import {
   modelProviderConfigured,
@@ -155,9 +143,9 @@ async function handleSecretDrop(
       return json(res, 413, { error: "too_large", message: "that value is too large" });
     }
   }
-  const path = withSourceAuthNonce(o.corePath, CORE_SIGNING_SECRET);
+  const path = withSourceAuthNonce(o.corePath, coreSigningSecret());
   const headers = {
-    ...signedHeaders(CORE_SIGNING_SECRET, isPost ? "POST" : "GET", path, rawBody),
+    ...signedHeaders(coreSigningSecret(), isPost ? "POST" : "GET", path, rawBody),
     "x-drop-owner": o.session.sub,
     "x-drop-owner-org": o.session.org,
   };
@@ -184,7 +172,7 @@ async function handleSecretDrop(
 }
 
 async function handleSelfConnect(res: ServerResponse, o: { provider: string; session: SessionClaims }): Promise<void> {
-  const redirectUri = `${PUBLIC_URL}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
+  const redirectUri = `${site().publicUrl}/v1/connectors/oauth/${encodeURIComponent(o.provider)}/callback`;
   const qs = new URLSearchParams({ principalId: o.session.sub, redirectUri, returnTo: "/connectors" });
   try {
     const r = await coreCall<{ authorizeUrl: string; message: string }>(
@@ -212,6 +200,11 @@ async function handleSelfConnect(res: ServerResponse, o: { provider: string; ses
   }
 }
 
+function withIdentitySecret(): { identitySecret?: string } {
+  const identitySecret = portalIdentitySecret();
+  return identitySecret ? { identitySecret } : {};
+}
+
 function isOAuthPublicPassthrough(method: string, pathname: string): boolean {
   if (method !== "GET") return false;
   if (/^\/v1\/connectors\/oauth\/[^/]+\/callback$/.test(pathname)) return true;
@@ -237,7 +230,9 @@ function isDeploymentLayerPassthrough(method: string, pathname: string): boolean
   return (method === "GET" || method === "PUT") && pathname === "/v1/deployment-layer";
 }
 
-const server = createServer((req, res) => {
+const server = createServer((req, res) => serveForHost(req, res, () => respond(req, res)));
+
+function respond(req: IncomingMessage, res: ServerResponse): void {
   const startedAt = performance.now();
   let errorLogged = false;
   res.once("finish", () => {
@@ -256,7 +251,7 @@ const server = createServer((req, res) => {
     if (!res.headersSent) json(res, 500, { error: "internal_error" });
     else res.end();
   });
-});
+}
 
 const NEXT = Symbol("next");
 
@@ -291,8 +286,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
 async function appHostRoutes({ req, res }: RequestCtx): Promise<void | typeof NEXT> {
   const requestHost = (req.headers.host ?? "").toLowerCase().split(":")[0]!;
-  const appSuffix = APPS_DOMAIN ? `.${APPS_DOMAIN.toLowerCase()}` : undefined;
-  if (appSuffix && (requestHost.endsWith(appSuffix) || requestHost === APPS_DOMAIN?.toLowerCase())) {
+  const appsDomain = site().appsDomain?.toLowerCase();
+  const appSuffix = appsDomain ? `.${appsDomain}` : undefined;
+  if (appSuffix && (requestHost.endsWith(appSuffix) || requestHost === appsDomain)) {
     const label = requestHost.slice(0, -appSuffix.length);
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return json(res, 404, { error: "not_found" });
     return proxyToAppHost(req, res, CORE, clientIpOf(req));
@@ -303,7 +299,7 @@ async function appHostRoutes({ req, res }: RequestCtx): Promise<void | typeof NE
 
 async function publicRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
   const { req, res, method, url, pathname } = ctx;
-  ctx.crossOrigin = prepareCors(req, res, pathname, API_ALLOWED_ORIGINS.origins);
+  ctx.crossOrigin = prepareCors(req, res, pathname, site().apiAllowedOrigins);
   if (ctx.crossOrigin && method === "OPTIONS") return answerPreflight(res);
 
   const brokerPath = brokerRouteFor(method, pathname);
@@ -325,7 +321,7 @@ async function publicRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
     return serveFavicon(
       res,
       {
-        svg: process.env.PORTAL_FAVICON_SVG,
+        svg: site().faviconSvg ?? process.env.PORTAL_FAVICON_SVG,
         emoji: process.env.PORTAL_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F",
       },
       "max-age=86400",
@@ -363,10 +359,11 @@ async function publicRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
   }
   if (pathname === "/auth/logout" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden" });
-    if (AUTH_BROKER_UPSTREAM && url.searchParams.get("everywhere") === "1") {
+    const { brokerUpstream, cookieDomain } = site();
+    if (brokerUpstream && url.searchParams.get("everywhere") === "1") {
       const session = currentSession(req);
       if (!session || session.anon) return json(res, 401, { error: "sign in" });
-      if (!PORTAL_IDENTITY_SECRET) return json(res, 503, { error: "not_configured" });
+      if (!portalIdentitySecret()) return json(res, 503, { error: "not_configured" });
       try {
         const response = await coreCall("POST", "/v1/auth/broker/sessions/revoke", {
           body: JSON.stringify({ email: session.sub }),
@@ -383,18 +380,18 @@ async function publicRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
       }
     }
     const signedOutSession = currentSession(req);
-    const redirectTo = !AUTH_BROKER_UPSTREAM && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
+    const redirectTo = !brokerUpstream && signedOutSession && !signedOutSession.anon ? "/auth/signed-out" : "/";
     setSession(res, [
       ...(signedOutSession ? loginProviderCookie(signedOutSession.sub) : []),
       clearCookie("portal_impersonate", "/", SECURE_COOKIES),
       clearCookie("portal_trusted_tmp", "/auth/trusted", SECURE_COOKIES),
-      clearCookie("portal_session", "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, COOKIE_DOMAIN),
-      ...(COOKIE_DOMAIN
+      clearCookie("portal_session", "/", SECURE_COOKIES, cookieDomain),
+      clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES, cookieDomain),
+      ...(cookieDomain
         ? [clearCookie("portal_session", "/", SECURE_COOKIES), clearCookie(FRAME_SESSION_COOKIE, "/", SECURE_COOKIES)]
         : []),
       clearCookie("portal_oidc_tmp", "/auth", SECURE_COOKIES),
-      ...(AUTH_BROKER_UPSTREAM ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
+      ...(brokerUpstream ? [clearCookie("qm_idp_session", AUTH_BROKER_PREFIX, true)] : []),
       ...(LOCAL_AUTH_BYPASS && isLoopbackAddress(req.socket.remoteAddress)
         ? [setCookie(LOCAL_LOGOUT_COOKIE, "1", { path: "/", maxAge: SESSION_TTL_S, secure: SECURE_COOKIES })]
         : []),
@@ -411,7 +408,7 @@ async function publicRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
     return proxyToUpstream(
       req,
       res,
-      { baseUrl: AUTH_BROKER_UPSTREAM, path: brokerPath, search: url.search, forwardCookies: true },
+      { baseUrl: site().brokerUpstream, path: brokerPath, search: url.search, forwardCookies: true },
       FORWARD_BROKER_HEADERS,
       {
         "x-qm-client-ip": clientIpOf(req),
@@ -464,7 +461,7 @@ async function sessionRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
       exp: now + IMPERSONATE_TTL_S,
     };
     setSession(res, [
-      setCookie("portal_impersonate", seal(imp, impersonateKey), {
+      setCookie("portal_impersonate", seal(imp, site().impersonateKey), {
         path: "/",
         maxAge: IMPERSONATE_TTL_S,
         secure: SECURE_COOKIES,
@@ -475,7 +472,11 @@ async function sessionRoutes(ctx: RequestCtx): Promise<void | typeof NEXT> {
 
   if (pathname === "/auth/impersonate/stop" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
+    const imp = openImpersonation(
+      readCookie(req.headers.cookie, "portal_impersonate"),
+      site().impersonateKey,
+      Date.now(),
+    );
     setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
     if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
     if (wantsHtml(req)) {
@@ -659,15 +660,15 @@ async function surfaceRoutes(ctx: RequestCtx): Promise<void> {
       subPath,
       search: url.search,
       principal: session.sub,
-      signingSecret: CORE_SIGNING_SECRET,
-      ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
+      signingSecret: coreSigningSecret(),
+      ...withIdentitySecret(),
     });
   }
 
   const settingsPath = pathname === "/settings" || pathname.startsWith("/settings/") || seg === "admin";
   if (method === "GET" && wantsHtml(req) && !settingsPath) {
     await refreshSurfaceConfig();
-    if (modelProviderConfigured === false) {
+    if (modelProviderConfigured() === false) {
       if (await isAdmin(session.sub)) {
         return redirect(res, 302, "/settings/onboarding");
       }
@@ -678,7 +679,11 @@ async function surfaceRoutes(ctx: RequestCtx): Promise<void> {
   let principal = session.sub;
   let impersonator: string | undefined;
   if (!crossOrigin) {
-    const imp = openImpersonation(readCookie(req.headers.cookie, "portal_impersonate"), impersonateKey, Date.now());
+    const imp = openImpersonation(
+      readCookie(req.headers.cookie, "portal_impersonate"),
+      site().impersonateKey,
+      Date.now(),
+    );
     if (imp && imp.actor === session.sub && imp.org === session.org && (await isAdmin(session.sub))) {
       principal = imp.target;
       impersonator = session.sub;
@@ -706,7 +711,7 @@ async function surfaceRoutes(ctx: RequestCtx): Promise<void> {
     principal,
     ...(!impersonator && session.name ? { displayName: session.name } : {}),
     ...(impersonator ? { impersonator } : {}),
-    ...(PORTAL_IDENTITY_SECRET ? { identitySecret: PORTAL_IDENTITY_SECRET } : {}),
+    ...withIdentitySecret(),
     authenticatedPrincipal,
   });
 }
@@ -725,13 +730,14 @@ function loopbackPort(upstream: string): number | undefined {
 export async function startServer(port = PORT, host?: string): Promise<Server> {
   bootChecks();
   if (process.env.AUTH_EMBEDDED === "1") {
-    const brokerPort = loopbackPort(AUTH_BROKER_UPSTREAM);
+    const home = site();
+    const brokerPort = loopbackPort(home.brokerUpstream);
     if (!brokerPort) throw new Error("Embedded auth requires a loopback broker upstream");
     const auth = await import("../../auth/src/index.ts");
     const broker = await auth.startServer({
       port: brokerPort,
       host: "127.0.0.1",
-      ...(trustedSignInLabel ? { trustedSignInLabel } : {}),
+      ...(home.trustedLabel ? { trustedSignInLabel: home.trustedLabel } : {}),
     });
     server.once("close", () => broker.close());
     server.once("error", () => broker.close());
@@ -741,7 +747,7 @@ export async function startServer(port = PORT, host?: string): Promise<Server> {
     server.listen(port, host, () => {
       server.off("error", reject);
       resolve();
-      console.log(`[portal] public front door on http://localhost:${port} → web-ui over 6PN (org ${ORG})`);
+      console.log(`[portal] public front door on http://localhost:${port} → web-ui over 6PN (org ${coreOrgId()})`);
       if (!SESSION_SECRET)
         console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
       if (!SECURE_COOKIES)
@@ -765,11 +771,8 @@ export async function startServer(port = PORT, host?: string): Promise<Server> {
 
 export { handle, server };
 
-if (isMainThread && process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  (multitenant(process.env)
-    ? serveTenantsByHost({ entry: new URL(import.meta.url), service: "portal", port: PORT, env: process.env })
-    : startServer()
-  ).catch((error: unknown) => {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startServer().catch((error: unknown) => {
     reportBackendError(error);
     console.error("[portal] failed to start:", errMessage(error));
     process.exitCode = 1;

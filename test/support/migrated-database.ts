@@ -25,6 +25,8 @@ export async function typedRows<T = Record<string, unknown>>(pool: pg.Pool, spec
 export async function asMapTables(pool: pg.Pool, specs: readonly TableSpec[]) {
   for (const { table } of specs) {
     await pool.query(`DROP TABLE ${table}`);
-    await pool.query(`DELETE FROM qm_schema_migrations WHERE id = $1`, [`typed/config/${table}/0001`]);
+    await pool.query(`DELETE FROM qm_schema_migrations WHERE id = ANY($1)`, [
+      [`typed/config/${table}/0001`, `contract/typed/config/${table}/0001`],
+    ]);
   }
 }

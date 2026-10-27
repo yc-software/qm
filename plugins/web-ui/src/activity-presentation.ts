@@ -9,30 +9,12 @@ import {
 } from "./timeline.ts";
 import type { WorkBlock } from "./core-bridge.ts";
 
-export type ActivityCategory = "read" | "search" | "execute" | "other";
+export type ActivityCategory = "read" | "execute" | "other";
 
 function compactPath(path: string): string {
   const parts = path.replace(/\/$/, "").split("/");
   return parts.at(-1) === "SKILL.md" ? parts.slice(-2).join("/") : parts.at(-1) || path;
 }
-
-function shellWords(command: string): string[] | null {
-  if (command.includes("\n")) return null;
-  const pattern = /\s*(?:'([^']*)'|"([^"$`\\]*)"|([^\s'"\\;&|<>`$()]+))/gy;
-  const words: string[] = [];
-  while (pattern.lastIndex < command.length) {
-    if (!command.slice(pattern.lastIndex).trim()) break;
-    const match = pattern.exec(command);
-    if (!match) return null;
-    if (pattern.lastIndex < command.length && !/\s/.test(command[pattern.lastIndex]!)) return null;
-    words.push(match[1] ?? match[2] ?? match[3]!);
-  }
-  return words;
-}
-
-const SEARCH_FLAGS = new Set(
-  "-n --line-number -i --ignore-case -l --files-with-matches -F --fixed-strings -w --word-regexp --hidden".split(" "),
-);
 
 export function activityDescription(row: Pick<ToolRowModel, "call" | "result">): {
   category: ActivityCategory;
@@ -49,29 +31,6 @@ export function activityDescription(row: Pick<ToolRowModel, "call" | "result">):
   }
   if (tool !== "execute") return { category: "other", target: "" };
   const command = call.command ?? "";
-  const words = shellWords(command);
-  if (words?.[0] === "cat" && words.length === 2 && !words[1]!.startsWith("-")) {
-    return { category: "read", target: compactPath(words[1]!) };
-  }
-  if (
-    words?.[0] === "sed" &&
-    words.length === 4 &&
-    words[1] === "-n" &&
-    /^\d+(?:,\d+)?p$/.test(words[2]!) &&
-    !words[3]!.startsWith("-")
-  ) {
-    return { category: "read", target: compactPath(words[3]!) };
-  }
-  if (words?.[0] === "rg" && words[1] === "--files" && words.length <= 3 && !words[2]?.startsWith("-")) {
-    return { category: "search", target: `files${words[2] ? ` in ${compactPath(words[2])}` : ""}` };
-  }
-  if (words && ["rg", "grep"].includes(words[0]!)) {
-    const args = words.slice(1);
-    while (args.length && SEARCH_FLAGS.has(args[0]!)) args.shift();
-    if (args.length >= 1 && args.length <= 2 && !args.some((arg) => arg.startsWith("-"))) {
-      return { category: "search", target: `${args[0]}${args[1] ? ` in ${compactPath(args[1])}` : ""}` };
-    }
-  }
   return { category: "execute", target: command.split("\n")[0] ?? "" };
 }
 
@@ -97,12 +56,6 @@ export function activityLabel(row: ToolRowModel, status: WorkBlock["status"]): s
   if (category === "other") return null;
   const verbs = {
     read: { ok: "Read", running: "Reading", failed: "Failed to read", attempted: "Tried reading" },
-    search: {
-      ok: "Searched for",
-      running: "Searching for",
-      failed: "Failed searching for",
-      attempted: "Tried searching for",
-    },
     execute: { ok: "Ran", running: "Running", failed: "Failed running", attempted: "Tried running" },
   };
   if (state === "ok" && (category === "read" || category === "execute") && target) return target + exit;
@@ -135,7 +88,6 @@ export function activityGroupSummary(
   const active = running > 0;
   const phrases = [];
   if (categories.has("read")) phrases.push(active ? "Reading files" : "Read files");
-  if (categories.has("search")) phrases.push(active ? "Searching files" : "Searched files");
   if (categories.has("execute")) phrases.push(active ? "Running commands" : "Ran commands");
   if (categories.has("other")) phrases.push(active ? "Using tools" : "Used tools");
   const base = phrases.map((phrase, i) => (i ? phrase.toLowerCase() : phrase)).join(", ") || "Thought";
@@ -146,8 +98,7 @@ export function activityGroupSummary(
   ].filter(Boolean);
   return {
     label: [base, ...notes].join(" · "),
-    category:
-      (["search", "read", "execute"] as ActivityCategory[]).find((category) => categories.has(category)) ?? "other",
+    category: (["read", "execute"] as ActivityCategory[]).find((category) => categories.has(category)) ?? "other",
     attention: failed > 0 || approvals > 0,
   };
 }

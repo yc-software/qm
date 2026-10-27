@@ -46,9 +46,6 @@ after(async () => {
   await admin.end();
 });
 
-// One tenant app's slice of wiring.ts: its own run_stream bus, turn stream and sync responder, built inside the
-// tenant's context the way startMultitenant boots each tenant. The home tenant boots first, so it opens the
-// process-wide LISTEN connection that every tenant's bus shares.
 function tenantApp(t: Tenant, db: PgPool, channel: string) {
   return withTenant(t, () => {
     const bus = createPostgresNotifyBus<RunStreamEvent>(appUrl, channel, `run-stream ${t.orgId}`);
@@ -64,7 +61,6 @@ function tenantApp(t: Tenant, db: PgPool, channel: string) {
       if (text) emitRunText(bus, event.runId, text.slice(offset - start), offset, start);
     });
     const app = {
-      // Like app.getRun: a row-level-secured read, so it finds the run only inside the run's own tenant.
       async getRun(runId: string) {
         const [row] = await db.q(`SELECT status FROM stream_runs WHERE id = $1`, [runId]);
         if (!row) return null;
@@ -134,7 +130,6 @@ test(
       })();
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      // A legacy-engine turn on the non-home tenant: begin (a refresh notification), then stream text.
       await withTenant(kitten.tenant, async () => {
         kitten.stream.begin(runId);
         await new Promise((resolve) => setTimeout(resolve, 100));

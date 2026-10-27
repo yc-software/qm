@@ -1,5 +1,6 @@
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
-import { APPS_FRAME_DOMAIN, framedByOwnSurfaces, PUBLIC_URL, analyticsConfig, browserErrors } from "./server-env.ts";
+import { appsFrameDomain, framedByOwnSurfaces, publicUrl, analyticsConfig, browserErrors } from "./server-env.ts";
+import { coreTenantHost, perEdgeTenant } from "../../chassis/src/tenant-hosts.ts";
 import { LRUCache } from "lru-cache";
 import {
   coreFetch,
@@ -22,7 +23,7 @@ import {
   portalHeaders,
   relayCap,
 } from "./core-relay.ts";
-import { CORE_SIGNING_SECRET, CORE_API_URL as CORE, CORE_ORG_ID as ORG } from "../../chassis/src/env.ts";
+import { coreSigningSecret, CORE_API_URL as CORE, coreOrgId } from "../../chassis/src/env.ts";
 import { CAPABILITY_HEADER, fetchCoreText } from "../../chassis/src/core-client.ts";
 import { reportFailure } from "../../chassis/src/error-reporting.ts";
 import { type ServerResponse } from "node:http";
@@ -37,24 +38,26 @@ import { errMessage } from "../../chassis/src/errors.ts";
 const suggestedActivities = parseSuggestedActivities(process.env.WEB_UI_SUGGESTED_ACTIVITIES);
 
 const UNTRUSTED_CONTENT_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads";
-const FILE_FRAME_ANCESTORS = APPS_FRAME_DOMAIN
-  ? `frame-ancestors 'self' *.${APPS_FRAME_DOMAIN}`
-  : "frame-ancestors 'self'";
+const fileFrameAncestors = (): string =>
+  appsFrameDomain() ? `frame-ancestors 'self' *.${appsFrameDomain()}` : "frame-ancestors 'self'";
 
-const slackUrlCache = new LRUCache<string, { url: string | null }>({
-  max: 1,
-  ttl: 5 * 60_000,
-  fetchMethod: async () => {
-    const r = await coreFetch("GET", "/v1/directory/meta").catch(() => null);
-    return {
-      url: r?.status === 200 ? (tryParse<{ workspaceUrl?: string | null }>(r.text)?.workspaceUrl ?? null) : null,
-    };
-  },
-});
-const slackWorkspaceUrl = async () => (await slackUrlCache.fetch("url"))!.url;
+const slackUrlCache = perEdgeTenant(
+  () =>
+    new LRUCache<string, { url: string | null }>({
+      max: 1,
+      ttl: 5 * 60_000,
+      fetchMethod: async () => {
+        const r = await coreFetch("GET", "/v1/directory/meta").catch(() => null);
+        return {
+          url: r?.status === 200 ? (tryParse<{ workspaceUrl?: string | null }>(r.text)?.workspaceUrl ?? null) : null,
+        };
+      },
+    }),
+);
+const slackWorkspaceUrl = async () => (await slackUrlCache().fetch("url"))!.url;
 
 async function userPermissions(): Promise<string[]> {
-  if (!CORE_SIGNING_SECRET) return [];
+  if (!coreSigningSecret()) return [];
   try {
     const cap = await mintSessionCap();
     if (!("token" in cap)) {
@@ -62,7 +65,7 @@ async function userPermissions(): Promise<string[]> {
       return [];
     }
     const r = await fetch(`${CORE}/v1/admin/whoami`, {
-      headers: { "content-type": "application/json", [CAPABILITY_HEADER]: cap.token },
+      headers: { "content-type": "application/json", ...coreTenantHost(), [CAPABILITY_HEADER]: cap.token },
       redirect: "manual",
     });
     if (r.status !== 200) {
@@ -117,8 +120,8 @@ async function serveFileContent(c: WebCtx): Promise<unknown> {
   if (!r.ok || !r.body) return upstreamMissing(res, r.status);
   const contentType = r.headers.get("content-type") ?? "application/octet-stream";
   const csp = scriptCapableContentType(contentType)
-    ? `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${FILE_FRAME_ANCESTORS}`
-    : FILE_FRAME_ANCESTORS;
+    ? `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${fileFrameAncestors()}`
+    : fileFrameAncestors();
   const headers = {
     "content-type": contentType,
     ...(r.headers.get("content-length") ? { "content-length": r.headers.get("content-length")! } : {}),
@@ -186,8 +189,8 @@ export const workspaceRoutes: readonly WebRoute[] = [
     );
     if (result.status !== 200) return relay(c.res, result);
     const data = JSON.parse(result.text) as { returnTo?: string | null };
-    const base = new URL(PUBLIC_URL);
-    const target = data.returnTo ? new URL(data.returnTo, base) : new URL("./?view=settings", `${PUBLIC_URL}/`);
+    const base = new URL(publicUrl());
+    const target = data.returnTo ? new URL(data.returnTo, base) : new URL("./?view=settings", `${publicUrl()}/`);
     if (target.origin !== base.origin) return json(c.res, 400, { error: "invalid_return_url" });
     c.res.writeHead(303, { location: target.href });
     c.res.end();
@@ -197,7 +200,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
   route("POST", "/api/composio/slack/authorize", async (c) => {
     const body = await readJson<{ returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
     if (!body) return;
-    const callback = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+    const callback = composioCallbackUrl(publicUrl(), body.returnTo, body.state);
     if (!callback) return json(c.res, 400, { error: "invalid_return_url" });
     const url = new URL(callback);
     url.searchParams.delete("composioReturn");
@@ -215,7 +218,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
     const body = await readJson<{ toolkit?: unknown; returnTo?: unknown; state?: unknown }>(c.req, c.res, false);
     if (!body) return;
     c.res.setHeader("Cache-Control", "no-store");
-    const callbackUrl = composioCallbackUrl(PUBLIC_URL, body.returnTo, body.state);
+    const callbackUrl = composioCallbackUrl(publicUrl(), body.returnTo, body.state);
     if (!callbackUrl && (body.returnTo !== undefined || body.state !== undefined)) {
       return json(c.res, 400, { error: "invalid_return_url" });
     }
@@ -238,7 +241,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
         coreFetch("GET", "/v1/suggested-activities", "", 2_000)
           .then((response) => response.status === 200 && JSON.parse(response.text).enabled === true)
           .catch(() => false),
-        brandingCache.forRender(),
+        brandingCache().forRender(),
       ]);
       if (authStatus === null || authStatus.status !== 200) {
         return json(res, 503, {
@@ -255,7 +258,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
       if (await hasInboxLoopPreview(user)) permissions.push("inbox");
       return json(res, 200, {
         user,
-        org: ORG,
+        org: coreOrgId(),
         companyName: companyBranding.orgName?.trim() || null,
         ...(analyticsConfig && !resolveIdentity(req)?.impersonator ? { analytics: analyticsConfig } : {}),
         ...(browserErrors && !resolveIdentity(req)?.impersonator ? { browserErrors } : {}),
@@ -483,7 +486,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
         res,
         await fetchCoreText({
           origin: CORE,
-          secret: CORE_SIGNING_SECRET,
+          secret: coreSigningSecret(),
           method: "GET",
           path: `/v1/sessions/${enc(id)}?${qs.toString()}`,
           headers: portalHeaders(),
@@ -528,7 +531,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
   route("POST", "/api/connectors/:provider/start", async (c) => {
     const { res, user } = c;
     const provider = c.params.provider!;
-    const callback = `${PUBLIC_URL}/v1/connectors/oauth/${enc(provider)}/callback`;
+    const callback = `${publicUrl()}/v1/connectors/oauth/${enc(provider)}/callback`;
     const body = await readJson<{ returnTo?: unknown }>(c.req, res);
     if (!body) return;
     const returnTo =
@@ -536,7 +539,7 @@ export const workspaceRoutes: readonly WebRoute[] = [
       body.returnTo.startsWith("/") &&
       !body.returnTo.startsWith("//") &&
       !body.returnTo.includes("\\") &&
-      new URL(body.returnTo, PUBLIC_URL).origin === new URL(PUBLIC_URL).origin
+      new URL(body.returnTo, publicUrl()).origin === new URL(publicUrl()).origin
         ? body.returnTo
         : "/keychain";
     const params = new URLSearchParams({ principalId: user, redirectUri: callback, returnTo });

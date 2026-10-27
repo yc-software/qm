@@ -135,7 +135,7 @@ export default tseslint.config(
   },
   {
     files: ["**/*.{ts,tsx,js,mjs,cjs}"],
-    ignores: ["test/**", "**/test/**", "**/*.test.*", "**/vendor/**", "docs/**", "adrs/**", "scripts/code-ratchets.ts"],
+    ignores: ["test/**", "**/test/**", "**/*.test.*", "**/vendor/**", "docs/**", "adrs/**"],
     rules: {
       "max-lines": ["error", 800],
       "max-lines-per-function": ["error", 150],

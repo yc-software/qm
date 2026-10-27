@@ -203,10 +203,10 @@ test("a sealed-out deny never claims the command was denied", async () => {
   );
   assert.match(String(f.updates.at(-1)?.text ?? ""), /waiting for someone else/);
 
-  f.state.result = { status: "refused", reason: "approval denied for rm -rf /tmp/x" };
+  f.state.result = { status: "ok", reply: "Left it alone." };
   await f.click("U2", "hilo_deny");
   assert.equal(f.submitted.length, 2, "the restored card still denies once the conversation is unblocked");
-  assert.match(String(f.updates.at(-1)?.text ?? ""), /Denied/);
+  assert.match(JSON.stringify(f.updates.at(-1)?.blocks ?? []), /Denied by <@U2>/);
 });
 
 test("cold delegated approval resumes the child without posting its reply a second time", async () => {
@@ -241,7 +241,7 @@ test("a rejected grant scope preserves the same approval card instead of promisi
   assert.equal(f.posts.length, 0);
 });
 
-test("a deny click replaces the buttons before the resumed turn runs, then records who denied", async () => {
+test("a deny click replaces the buttons, then shows the continued turn's reply above who denied", async () => {
   const f = fixture();
   let release!: () => void;
   f.state.hold = new Promise<void>((resolve) => (release = resolve));
@@ -257,7 +257,9 @@ test("a deny click replaces the buttons before the resumed turn runs, then recor
   release();
   await clicked;
   const final = f.updates.at(-1);
-  assert.match(String(final.text), /^Denied by <@U2> · `rm -rf \/tmp\/x` · <!date\^\d+\^/);
+  assert.equal(final.text, "Understood, I won't run it.");
+  const decision = final.blocks.at(-1);
+  assert.match(decision.text.text, /^Denied by <@U2> · `rm -rf \/tmp\/x` · <!date\^\d+\^/);
   assert.equal(JSON.stringify(final.blocks).includes("hilo_"), false);
   assert.equal(f.ephemerals.length, 0);
 });

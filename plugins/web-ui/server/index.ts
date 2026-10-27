@@ -19,16 +19,18 @@ import {
   analyticsHost,
   browserErrors,
   analyticsConfig,
-  APPS_FRAME_DOMAIN,
+  appsFrameDomain,
+  faviconSvg,
   framedByOwnSurfaces,
   PORT,
-  PUBLIC_URL,
+  publicUrl,
+  slackServiceUrl,
 } from "./server-env.ts";
 import { sendBuffered, json, gzipAccepted, serveFavicon, PayloadTooLargeError } from "../../chassis/src/http.ts";
 import { existsSync, statSync, createReadStream, readFileSync } from "node:fs";
 import { workspaceRoutes } from "./api-workspace.ts";
 import { runRoutes } from "./api-runs.ts";
-import { CORE_API_URL as CORE, CORE_ORG_ID as ORG, PORTAL_IDENTITY_SECRET } from "../../chassis/src/env.ts";
+import { CORE_API_URL as CORE, coreOrgId, portalIdentitySecret } from "../../chassis/src/env.ts";
 import { reportFailure, reportBackendError, flushErrorReporting } from "../../chassis/src/error-reporting.ts";
 import { cookieUser, unauthorized, resolveIdentity } from "./identity.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
@@ -37,9 +39,8 @@ import { handleVoiceRoute, sweepDictationSpool } from "./voice-routes.ts";
 import { hasInboxLoopPreview } from "./web-turns.ts";
 import { findRoute } from "../../chassis/src/router.ts";
 import { PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { runStateFeed, runInboxFeed } from "./live-feeds.ts";
-import { isMainThread } from "node:worker_threads";
-import { multitenant, serveTenantsByHost } from "../../chassis/src/tenant-workers.ts";
+import { startLiveFeeds } from "./live-feeds.ts";
+import { coreTenantHost, serveForHost } from "../../chassis/src/tenant-hosts.ts";
 
 const WEB_UI_DEV = process.env.WEB_UI_DEV === "1";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,13 +49,13 @@ const UI = createUiDocuments(DIST, process.env.WEB_UI_RELEASES_URL);
 const uiDocument = UI.document;
 
 async function sendReleaseError(res: ServerResponse, error: unknown): Promise<void> {
-  const { selfLabel } = await brandingCache.forRender();
+  const { selfLabel } = await brandingCache().forRender();
   const page = releaseErrorPage(error, typeof selfLabel === "string" ? selfLabel : undefined);
   sendHtml(res, page.status, page.html);
 }
 
 async function serveWebManifest(res: ServerResponse): Promise<void> {
-  const branding = await brandingCache.forRender();
+  const branding = await brandingCache().forRender();
   const name = branding.selfLabel || "QM";
   const manifest = {
     name,
@@ -67,7 +68,7 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
     theme_color: "#ffffff",
     icons: [
       {
-        src: process.env.WEB_UI_FAVICON_SVG ? "/favicon.svg" : "/brand-mark.svg",
+        src: faviconSvg() ? "/favicon.svg" : "/brand-mark.svg",
         sizes: "any",
         type: "image/svg+xml",
         purpose: "any maskable",
@@ -79,7 +80,7 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
 }
 
 async function brandIndexHtml(html: string): Promise<string> {
-  const branding = await brandingCache.forRender();
+  const branding = await brandingCache().forRender();
   return injectBranding(html, branding, { titleSuffix: "· Web" });
 }
 
@@ -108,27 +109,30 @@ if (analyticsKey && (analyticsHost.protocol !== "https:" || analyticsHost.href !
   throw new Error("POSTHOG_HOST must be an HTTPS origin");
 const browserErrorOrigin = browserErrors ? new URL(browserErrors.dsn).origin : undefined;
 
-const SPA_CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
-  "font-src 'self' data:",
-  `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
-  "frame-src 'self' data: https:",
-  "worker-src 'self' blob:",
-  "frame-ancestors 'self'",
-  "base-uri 'none'",
-  `form-action 'self'${process.env.QM_SLACK_SERVICE_URL ? ` ${new URL(process.env.QM_SLACK_SERVICE_URL).origin} https://slack.com` : ""}`,
-  "object-src 'none'",
-].join("; ");
+function spaCsp(): string {
+  const slackService = slackServiceUrl();
+  return [
+    "default-src 'self'",
+    "script-src 'self' 'wasm-unsafe-eval'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data:",
+    `connect-src 'self'${analyticsConfig ? ` ${analyticsConfig.host}` : ""}${browserErrorOrigin ? ` ${browserErrorOrigin}` : ""}`,
+    "frame-src 'self' data: https:",
+    "worker-src 'self' blob:",
+    "frame-ancestors 'self'",
+    "base-uri 'none'",
+    `form-action 'self'${slackService ? ` ${new URL(slackService).origin} https://slack.com` : ""}`,
+    "object-src 'none'",
+  ].join("; ");
+}
 
 function withSecurityHeaders(headers: Record<string, string>): Record<string, string> {
   return {
     ...headers,
-    "content-security-policy": SPA_CSP,
+    "content-security-policy": spaCsp(),
     "strict-transport-security": "max-age=63072000; includeSubDomains",
-    "referrer-policy": process.env.QM_SLACK_SERVICE_URL ? "strict-origin" : "no-referrer",
+    "referrer-policy": slackServiceUrl() ? "strict-origin" : "no-referrer",
     "x-frame-options": "SAMEORIGIN",
     "x-content-type-options": "nosniff",
   };
@@ -197,7 +201,8 @@ function pipeFile(res: ServerResponse, filePath: string): void {
 
 async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
   const slug = (url.searchParams.get("slug") ?? "").toLowerCase();
-  if (!APPS_FRAME_DOMAIN || !/^[a-z0-9-]{1,63}$/.test(slug)) return false;
+  const appsDomain = appsFrameDomain();
+  if (!appsDomain || !/^[a-z0-9-]{1,63}$/.test(slug)) return false;
   let html: string;
   if (vite) html = await viteIndexHtml(req);
   else {
@@ -212,7 +217,7 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     html = document;
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-  const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`);
+  const csp = spaCsp().replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${appsDomain}`);
   sendBuffered(res, 200, framedByOwnSurfaces(res, headers, csp), await brandIndexHtml(html));
   return true;
 }
@@ -266,7 +271,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     return serveFavicon(
       res,
       {
-        svg: process.env.WEB_UI_FAVICON_SVG,
+        svg: faviconSvg(),
         emoji: process.env.WEB_UI_FAVICON_EMOJI ?? "\u{1F3F4}\u{200D}\u2620\uFE0F",
       },
       "no-cache",
@@ -287,7 +292,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const corePath = `/v1/connectors/oauth/${enc(provider)}/callback${url.search}`;
     let ok: boolean;
     try {
-      const r = await fetch(`${CORE}${corePath}`, { redirect: "manual" });
+      const r = await fetch(`${CORE}${corePath}`, { redirect: "manual", headers: coreTenantHost() });
       ok = r.status >= 200 && r.status < 300;
       if (!ok)
         console.warn(
@@ -348,8 +353,8 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     if (!user) return unauthorized(res, req);
     if (["/api/dictation", "/api/voice", "/api/voice/sessions"].includes(path)) {
       return handleVoiceRoute(req, res, path, resolveIdentity(req)!, {
-        org: ORG,
-        publicUrl: PUBLIC_URL,
+        org: coreOrgId(),
+        publicUrl: publicUrl(),
       });
     }
 
@@ -392,14 +397,16 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   }
 };
 
-const server = createServer((req, res) => {
+function respond(req: IncomingMessage, res: ServerResponse): void {
   void handler(req, res).catch((err: unknown) => {
     reportBackendError(err);
     console.error("%s", `[web-ui] 502 ${req.method ?? "?"} ${req.url ?? "?"}:`, String(err));
     if (!res.headersSent) json(res, 502, { error: "bad_gateway", message: "upstream error" });
     else res.end();
   });
-});
+}
+
+export const server = createServer((req, res) => serveForHost(req, res, () => respond(req, res)));
 
 export async function startServer(port = PORT, host?: string): Promise<Server> {
   vite = await createVite(server);
@@ -413,23 +420,19 @@ export async function startServer(port = PORT, host?: string): Promise<Server> {
   const address = server.address();
   const bound = typeof address === "object" && address ? address.port : port;
   console.log(
-    `[web-ui] surface on http://${host ?? "localhost"}:${bound} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
+    `[web-ui] surface on http://${host ?? "localhost"}:${bound} → core ${CORE} (org ${coreOrgId()})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
   );
   if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
     console.warn("[web-ui] dist-web/ not built, run `npm run build`");
-  if (!PORTAL_IDENTITY_SECRET)
+  if (!portalIdentitySecret())
     console.warn("[web-ui] no CORE_SIGNING_SECRET or PORTAL_IDENTITY_SECRET; every request will be refused");
-  void runStateFeed();
-  void runInboxFeed();
+  startLiveFeeds();
   void sweepDictationSpool();
   return server;
 }
 
-if (isMainThread && process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  (multitenant(process.env)
-    ? serveTenantsByHost({ entry: new URL(import.meta.url), service: "web-ui", port: PORT, env: process.env })
-    : startServer()
-  ).catch(async (err: unknown) => {
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  startServer().catch(async (err: unknown) => {
     reportBackendError(err);
     console.error("[web-ui] failed to start:", String(err));
     await flushErrorReporting();

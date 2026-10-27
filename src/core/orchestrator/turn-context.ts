@@ -32,10 +32,14 @@ export interface TurnCtx extends AdmittedTurn {
   isCurrentSharedScopeMember: ReturnType<typeof withLiveTurnMembership>;
   filterHistory: (entries: Item[]) => Item[];
   reconcileSessionParticipants: (sessionId: string) => Promise<void>;
+  strictReadOnly: boolean;
+  useMemory: boolean;
+  isRetry: boolean;
+  reachAvailable: boolean;
 }
 
 export async function resolveTurnScope(deps: OrchestratorDeps, admitted: AdmittedTurn): Promise<TurnCtx> {
-  const { input, actor, conversation, external, liveAuthorTurn } = admitted;
+  const { input, actor, conversation, external, liveAuthorTurn, delegatedSession } = admitted;
   const resolution = await deps.resolution.resolve(conversation, actor, external);
   const actorGrants = loadActorGrants(deps.approvalGrants, actor.id);
   const approvalOwner = (sessionId: string) => ({
@@ -84,6 +88,11 @@ export async function resolveTurnScope(deps: OrchestratorDeps, admitted: Admitte
     isCurrentSharedScopeMember,
     filterHistory,
     reconcileSessionParticipants,
+    strictReadOnly:
+      input.readOnly === true || input.privateSessionMessage === true || delegatedSession?.spawnMeta?.readOnly === true,
+    useMemory: !external && input.skipMemory !== true,
+    isRetry: (input.attempt ?? 1) > 1,
+    reachAvailable: !!deps.reachExec && !!deps.directory && conversation.kind === "dm",
   };
 }
 
@@ -105,7 +114,7 @@ export async function openTurnSession(ctx: TurnCtx): Promise<Session> {
   return session;
 }
 
-export async function resolveTurnWorkspace(ctx: TurnCtx, turn: { useMemory: boolean; memoryPolicy: MemoryPolicy }) {
+export async function resolveTurnWorkspace(ctx: TurnCtx, memoryPolicy: MemoryPolicy) {
   const {
     deps,
     actor,
@@ -116,8 +125,8 @@ export async function resolveTurnWorkspace(ctx: TurnCtx, turn: { useMemory: bool
     scopeId,
     resolution,
     isCurrentSharedScopeMember,
+    useMemory,
   } = ctx;
-  const { useMemory, memoryPolicy } = turn;
   const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
   const rwLayer = resolution.layers.find((l) => l.mode === "rw");
   if (rwLayer && environmentId !== rwLayer.scopeId) rwLayer.scopeId = environmentId;

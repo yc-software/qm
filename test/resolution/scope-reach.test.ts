@@ -3,7 +3,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../support/build-app.ts";
 import type { Config } from "../../src/config.ts";
-import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import { createToolContext, type ToolContextDeps } from "../../src/tools/tool-context.ts";
 import { type ToolContext, CommandDenied, NeedsApproval } from "../../src/tools/primitives.ts";
 import { resolveReachableChannel } from "../../src/resolution/scope-reach.ts";
@@ -219,8 +220,8 @@ const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[
   Object.keys((tool as unknown as { parameters: { properties: Record<string, unknown> } }).parameters.properties);
 
 test("reachExec OFF: the execute scope never accepts a room", () => {
-  const ref: ToolContextRef = { current: null };
-  const [execute] = createAgentTools(ref);
+  const ref: TurnToolStateInit = { current: null };
+  const [execute] = createAgentTools(createTurnToolState(ref));
   const scopeSchema = (execute as unknown as { parameters: { properties: { scope?: { anyOf?: unknown[] } } } })
     .parameters.properties.scope;
   assert.ok(Array.isArray(scopeSchema?.anyOf), "without reach, scope is a closed union, not a free room string");
@@ -228,7 +229,7 @@ test("reachExec OFF: the execute scope never accepts a room", () => {
 
 test("reachExec ON: scope accepts scoped, scratch, AND a room", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { reachExec: true });
+  const [execute] = createAgentTools(createTurnToolState({ current: tc }), { reachExec: true });
   assert.deepEqual(schemaProps(execute!), [
     "command",
     "background",
@@ -251,7 +252,7 @@ test("reachExec ON: scope accepts scoped, scratch, AND a room", async () => {
 
 test("reachExec ON: the scoped/scratch keywords match case-insensitively, never routed as a room", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { reachExec: true });
+  const [execute] = createAgentTools(createTurnToolState({ current: tc }), { reachExec: true });
   await call(execute, { command: "x", scope: "Scoped", purpose: "Run test command" });
   assert.deepEqual(seen.at(-1)!.opts, undefined, '"Scoped" is the scoped box, not a reach target');
   await call(execute, { command: "x", scope: "SCRATCH", purpose: "Run test command" });
@@ -266,12 +267,11 @@ test("reachExec ON: the scoped/scratch keywords match case-insensitively, never 
 
 test("Trap 1: a reach result prefixes provenance", async () => {
   const { tc } = sinkToolContext();
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: tc,
     scopeLabel: scopeId("personal", "U1"),
-    orgScopeId: scopeId("org", "default-org"),
   };
-  const [execute] = createAgentTools(ref, { reachExec: true });
+  const [execute] = createAgentTools(createTurnToolState(ref), { reachExec: true });
   const r = await call(execute, { command: "cat x", scope: "#project-alpha", purpose: "Run test command" });
   assert.match(textOf(r), /\[ran on #project-alpha's computer\]/);
 });

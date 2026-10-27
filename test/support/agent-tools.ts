@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { createAgentTools, type ToolContextRef } from "../../src/harness/agent-tools.ts";
+import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState, type TurnToolStateInit } from "../../src/harness/turn-tool-state.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../../src/runs/run-signal-store.ts";
 import type { ToolContext } from "../../src/tools/primitives.ts";
 import type { ClientToolDeclaration } from "../../src/types.ts";
@@ -440,10 +441,11 @@ export const call = (tool: ReturnType<typeof createAgentTools>[number] | undefin
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
 };
 
-export const surfaceTool = (ref: ToolContextRef, name = "slack") => {
-  const t = createAgentTools(ref, { surfaceTools: true, ...(name !== "slack" ? { surfaceName: name } : {}) }).find(
-    (x) => x.name === name,
-  );
+export const surfaceTool = (ref: TurnToolStateInit, name = "slack") => {
+  const t = createAgentTools(createTurnToolState(ref), {
+    surfaceTools: true,
+    ...(name !== "slack" ? { surfaceName: name } : {}),
+  }).find((x) => x.name === name);
   assert.ok(t, `the surface tool registers as \`${name}\``);
   return t;
 };
@@ -458,7 +460,7 @@ export const callWith = (
 };
 
 export const tool = (name: string, tc = fakeToolContext()) => {
-  const t = createAgentTools({ current: tc }, { controlTools: true }).find((x) => x.name === name);
+  const t = createAgentTools(createTurnToolState({ current: tc }), { controlTools: true }).find((x) => x.name === name);
   assert.ok(t, `${name} tool exists`);
   return t;
 };
@@ -474,7 +476,7 @@ export const clientTool = (name: string, timeoutMs?: number): ClientToolDeclarat
 export function clientToolRef(store = createMemoryRunSignalStore()) {
   const emitted: Emitted[] = [];
   const cancel = new AbortController();
-  const ref: ToolContextRef = {
+  const ref: TurnToolStateInit = {
     current: {
       ...fakeToolContext(),
       awaitClientResult: (callId, timeoutMs, signal) =>

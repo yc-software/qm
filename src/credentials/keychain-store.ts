@@ -3,8 +3,6 @@ import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persis
 import { pgTextSafe } from "../util/text.ts";
 import type { KeychainAsk, KeychainCredential, KeychainGrant } from "./keychain.ts";
 
-export type TargetUsernameCredential = KeychainCredential & { target?: string; username?: string };
-
 const CREDENTIALS: TableSpec = {
   table: "keychain_credentials",
   key: "id",
@@ -68,11 +66,10 @@ function rowTable<T>(spec: TableSpec, pg: PgPool) {
 const folded = (ownerIds: string[]) => ownerIds.map((id) => id.toLowerCase());
 
 function credentialTable(pg: PgPool) {
-  const creds = rowTable<TargetUsernameCredential>(CREDENTIALS, pg);
+  const creds = rowTable<KeychainCredential>(CREDENTIALS, pg);
   return {
     ...creds,
     byOwners: (ownerIds: string[]) => creds.select(`WHERE ${OWNED_BY} ORDER BY id`, [folded(ownerIds)]),
-    targetUsernameRows: () => creds.select(`WHERE target IS NOT NULL OR username IS NOT NULL ORDER BY id`),
     async deleteBrokerIfCurrent(id: string, ownerId: string, updatedAt: number): Promise<boolean> {
       const res = await pg.query(
         `DELETE FROM keychain_credentials WHERE id = $1 AND kind = 'broker' AND owner_id = $2 AND updated_at = $3`,

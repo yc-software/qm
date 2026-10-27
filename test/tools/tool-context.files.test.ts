@@ -333,10 +333,7 @@ test("write() under memory/ is refused with a pointer at the `memory` tool — n
     memoryStart: "# Memory\n- real fact\n",
   });
   for (const path of [MEMORY_FILE, "memory/log/2026-06-29.md"]) {
-    await assert.rejects(
-      () => ctx.write(path, "## Onboarding\n- Onboarding: dismissed v2 on 2026-06-29.\n"),
-      /`memory` tool/,
-    );
+    await assert.rejects(() => ctx.write(path, "## Preferences\n- Prefers short replies.\n"), /`memory` tool/);
   }
   assert.equal(getDurable(), "# Memory\n- real fact\n", "the durable notebook is untouched");
   assert.equal(wsWrites.length, 0);
@@ -344,9 +341,9 @@ test("write() under memory/ is refused with a pointer at the `memory` tool — n
 });
 
 test("read(MEMORY_FILE) returns the MemoryService notebook, not the sandbox/workspace copy", async () => {
-  const { ctx } = memoryFileRoutingHarness({ memoryStart: "# Memory\n- Onboarding: completed v2 on 2026-06-24.\n" });
+  const { ctx } = memoryFileRoutingHarness({ memoryStart: "# Memory\n- Prefers short replies.\n" });
   const r = await ctx.read(MEMORY_FILE);
-  assert.match(r.content ?? "", /Onboarding: completed v2/);
+  assert.match(r.content ?? "", /Prefers short replies/);
   assert.equal(r.sourceScopeId, personal);
 });
 

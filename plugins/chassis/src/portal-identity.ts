@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { edgeTenant } from "./tenant-hosts.ts";
 
 export interface PortalIdentity {
   p: string;
@@ -9,28 +10,29 @@ export interface PortalIdentity {
   exp: number;
 }
 
-const coreTenant = (): string | undefined => process.env.CORE_ORG_ID?.trim() || undefined;
+const coreTenant = (): string | undefined => edgeTenant()?.orgId ?? (process.env.CORE_ORG_ID?.trim() || undefined);
 
-function digest(payload: string, secret: string): string {
-  return createHmac("sha256", secret).update(payload).digest("base64url");
+const HEADER = Buffer.from(JSON.stringify({ alg: "HS256" }), "utf8").toString("base64url");
+
+function digest(signingInput: string, secret: string): string {
+  return createHmac("sha256", secret).update(signingInput).digest("base64url");
 }
 
 export function mintPortalIdentity(claims: PortalIdentity, secret: string): string {
   const tenant = coreTenant();
   const stamped = tenant ? { ...claims, t: tenant } : claims;
-  const payload = Buffer.from(JSON.stringify(stamped), "utf8").toString("base64url");
-  return `${payload}.${digest(payload, secret)}`;
+  const signingInput = `${HEADER}.${Buffer.from(JSON.stringify(stamped), "utf8").toString("base64url")}`;
+  return `${signingInput}.${digest(signingInput, secret)}`;
 }
 
 export function verifyPortalIdentity(token: string, secret: string, nowMs: number): PortalIdentity | null {
-  const dot = token.lastIndexOf(".");
-  if (dot <= 0) return null;
-  const payload = token.slice(0, dot);
-  const expected = digest(payload, secret);
-  const got = token.slice(dot + 1);
+  const [header, payload, got, ...rest] = token.split(".");
+  if (!header || !payload || got === undefined || rest.length) return null;
+  const expected = digest(`${header}.${payload}`, secret);
   if (got.length !== expected.length || !timingSafeEqual(Buffer.from(got), Buffer.from(expected))) return null;
   let claims: PortalIdentity;
   try {
+    if (JSON.parse(Buffer.from(header, "base64url").toString("utf8")).alg !== "HS256") return null;
     claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as PortalIdentity;
   } catch {
     return null;

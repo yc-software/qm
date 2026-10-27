@@ -4,16 +4,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import type { Config } from "../../src/config.ts";
-import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
-import {
-  detectOnboardingStatus,
-  setOnboardingStatus,
-  PROACTIVE_OPENER_PROMPT,
-} from "../../src/onboarding/onboarding.ts";
-import { scopeId, type TurnRequest } from "../../src/types.ts";
+import { PROACTIVE_OPENER_PROMPT } from "../../src/onboarding/onboarding.ts";
+import type { TurnRequest } from "../../src/types.ts";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
-import { testDatabaseUrl } from "../support/test-database.ts";
 
 const actor = { externalId: "U1" };
 const onboardingSkillDir = join(process.cwd(), "plugins/onboarding/skills");
@@ -30,29 +24,6 @@ async function waitForOnboardingSkill(skills: ReturnType<typeof buildApp>["skill
   }
   assert.fail("onboarding skill was not seeded");
 }
-
-test("onboarding memory markers are detected from readable memory bullets", () => {
-  assert.equal(detectOnboardingStatus(""), "not_started");
-  assert.equal(detectOnboardingStatus("## Onboarding\n\n- Onboarding: pending v2 since 2026-06-09."), "pending");
-  assert.equal(detectOnboardingStatus("- (2026-06-09) Onboarding: completed v2 on 2026-06-09."), "completed");
-  assert.equal(detectOnboardingStatus("- Onboarding: dismissed v2 on 2026-06-09."), "dismissed");
-});
-
-test("setOnboardingStatus replaces the marker fact and round-trips through detect", async () => {
-  const memory = createPostgresMemoryService(testDatabaseUrl());
-  const scope = scopeId("personal", "U1");
-  await memory.capture(scope, ["some prefs", "onboarding:  Pending v2."], Date.UTC(2026, 5, 1));
-
-  await setOnboardingStatus(memory, scope, "completed", "2026-06-22", "admin");
-  const completed = await memory.read(scope);
-  assert.equal(detectOnboardingStatus(completed), "completed");
-  assert.doesNotMatch(completed, /pending/i);
-  assert.match(completed, /some prefs/);
-
-  await setOnboardingStatus(memory, scope, "not_started", "2026-06-22", "admin");
-  assert.equal(detectOnboardingStatus(await memory.read(scope)), "not_started");
-  assert.match(await memory.read(scope), /some prefs/);
-});
 
 test("a new personal DM offers onboarding through the skills index", async () => {
   const { app, skills } = freshApp();
@@ -78,7 +49,7 @@ test("the opener defers Slack setup until status can be checked without requirin
 });
 
 test("ideas web conversations bypass onboarding on every turn without completing it", async () => {
-  const { app, skills, memory } = freshApp();
+  const { app, skills } = freshApp();
   await waitForOnboardingSkill(skills);
   const threadRef = "web:U1:ideas:12345678-1234-4123-8123-123456789abc";
   for (let i = 0; i < 2; i++) {
@@ -91,7 +62,6 @@ test("ideas web conversations bypass onboarding on every turn without completing
     } as TurnRequest);
     assert.match(sys.reply ?? "", /Skip the onboarding skill and setup flow for this entire conversation/);
   }
-  assert.equal(detectOnboardingStatus(await memory.read(scopeId("personal", "U1"))), "not_started");
   const ordinary = await app.turn({
     origin: { kind: "direct" },
     surface: "web",

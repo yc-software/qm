@@ -31,7 +31,7 @@ export type WebConversation = {
   channelName?: string;
 };
 
-export function conversationForScope(
+function conversationForScope(
   threadRef: string,
   scope: string | undefined,
   channelName: string | undefined,
@@ -140,7 +140,7 @@ export async function webTurnBase(
   };
 }
 
-export const SEND_KEY_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+const SEND_KEY_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
 export function namespacedSendKey(user: string, raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;

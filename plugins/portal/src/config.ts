@@ -4,17 +4,15 @@ import { parseAllowedOrigins } from "./cors.ts";
 import { deriveKey } from "./session.ts";
 import { type OidcConfig, type PrincipalRule, hostedDomainHint } from "./oidc.ts";
 import { isPrivateNetworkIp } from "../../chassis/src/network.ts";
+import { reportFailure } from "../../chassis/src/error-reporting.ts";
+import { edgeTenant, tenantPublicUrl } from "../../chassis/src/tenant-hosts.ts";
+import { deriveTenantSecret, type TenantSettings } from "../../chassis/src/tenant-settings.ts";
 import { validEmail } from "../../chassis/src/email.ts";
-import {
-  CORE_SIGNING_SECRET,
-  PORTAL_IDENTITY_SECRET,
-  isMissingOrPlaceholder,
-  portFromEnv,
-} from "../../chassis/src/env.ts";
+import { coreSigningSecret, portalIdentitySecret, isMissingOrPlaceholder, portFromEnv } from "../../chassis/src/env.ts";
 
 export const PORT = portFromEnv(8097);
 
-export const PUBLIC_URL = (process.env.PORTAL_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+const PUBLIC_URL = (process.env.PORTAL_PUBLIC_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 
 export const SESSION_SECRET = process.env.PORTAL_SESSION_SECRET;
 
@@ -24,9 +22,9 @@ export const SESSION_MAX_TTL_S = Math.max(2592000, 3 * SESSION_TTL_S);
 
 export const SESSION_RENEW_AFTER_S = Math.floor(SESSION_TTL_S / 2);
 
-export const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
+const APPS_DOMAIN = process.env.PORTAL_APPS_DOMAIN || process.env.DEPLOY_APPS_DOMAIN || undefined;
 
-export const COOKIE_DOMAIN =
+const COOKIE_DOMAIN =
   process.env.PORTAL_COOKIE_DOMAIN ||
   (APPS_DOMAIN ? derivedCookieDomain(hostOf(process.env.PORTAL_PUBLIC_URL ?? ""), APPS_DOMAIN) : undefined);
 
@@ -34,7 +32,7 @@ const IS_PROD = process.env.NODE_ENV === "production";
 
 export const SECURE_COOKIES = PUBLIC_URL.startsWith("https://");
 
-export const ORIGIN = (() => {
+const ORIGIN = (() => {
   try {
     return new URL(PUBLIC_URL).origin;
   } catch {
@@ -42,7 +40,7 @@ export const ORIGIN = (() => {
   }
 })();
 
-export const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
+const API_ALLOWED_ORIGINS = parseAllowedOrigins(process.env.PORTAL_API_ALLOWED_ORIGINS);
 
 const LOCAL_AUTH_BYPASS_REQUESTED = process.env.PORTAL_LOCAL_AUTH_BYPASS === "1";
 
@@ -69,7 +67,11 @@ function isSlackIssuer(issuer: string): boolean {
   }
 }
 
-export const OIDC: OidcConfig = {
+const AUTH_BROKER_UPSTREAM = (process.env.AUTH_BROKER_UPSTREAM ?? "").replace(/\/$/, "");
+
+export const AUTH_BROKER_PREFIX = (process.env.AUTH_BROKER_PREFIX ?? "/idp").replace(/\/$/, "");
+
+const OIDC: OidcConfig = {
   authEndpoint: process.env.OIDC_AUTH_ENDPOINT ?? "https://slack.com/openid/connect/authorize",
   tokenEndpoint: process.env.OIDC_TOKEN_ENDPOINT ?? "https://slack.com/api/openid.connect.token",
   userinfoEndpoint: process.env.OIDC_USERINFO_ENDPOINT ?? "https://slack.com/api/openid.connect.userInfo",
@@ -82,13 +84,10 @@ export const OIDC: OidcConfig = {
   expectedTeamId: process.env.PORTAL_EXPECTED_TEAM_ID || undefined,
   prompt: process.env.OIDC_PROMPT || undefined,
   hostedDomain: hostedDomainHint(process.env.OIDC_ISSUER ?? "https://slack.com", process.env.OIDC_ALLOWED_EMAIL_DOMAIN),
+  ...(AUTH_BROKER_UPSTREAM ? { headers: { "x-forwarded-host": hostOf(PUBLIC_URL) } } : {}),
 };
 
 const OIDC_JWKS_CONFIGURED = Boolean(process.env.OIDC_JWKS_URI?.trim());
-
-export const AUTH_BROKER_UPSTREAM = (process.env.AUTH_BROKER_UPSTREAM ?? "").replace(/\/$/, "");
-
-export const AUTH_BROKER_PREFIX = (process.env.AUTH_BROKER_PREFIX ?? "/idp").replace(/\/$/, "");
 
 const BROKER_PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
   { method: "GET", path: "/authorize" },
@@ -98,7 +97,7 @@ const BROKER_PUBLIC_ROUTES: ReadonlyArray<{ method: string; path: string }> = [
 ];
 
 export function brokerRouteFor(method: string, pathname: string): string | null {
-  if (!AUTH_BROKER_UPSTREAM || !AUTH_BROKER_PREFIX || !pathname.startsWith(`${AUTH_BROKER_PREFIX}/`)) return null;
+  if (!site().brokerUpstream || !AUTH_BROKER_PREFIX || !pathname.startsWith(`${AUTH_BROKER_PREFIX}/`)) return null;
   const rest = pathname.slice(AUTH_BROKER_PREFIX.length);
   return BROKER_PUBLIC_ROUTES.some((route) => route.method === method && route.path === rest) ? rest : null;
 }
@@ -125,29 +124,126 @@ export const PRINCIPAL_RULE: PrincipalRule = {
     .filter(Boolean),
 };
 
-export const DEV_SECRET = "dev-only-insecure-portal-session-secret";
+const DEV_SECRET = "dev-only-insecure-portal-session-secret";
 
-export const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
+export interface Site {
+  tenantId: string;
+  publicUrl: string;
+  origin: string;
+  appsDomain: string | undefined;
+  cookieDomain: string | undefined;
+  oidc: OidcConfig | null;
+  brokerUpstream: string;
+  trusted: OidcConfig | null;
+  trustedLabel: string | undefined;
+  trustedAdmin: boolean;
+  faviconSvg: string | undefined;
+  apiAllowedOrigins: ReadonlySet<string>;
+  sessionSecret: string;
+  sessionKey: Buffer;
+  tmpKey: Buffer;
+  impersonateKey: Buffer;
+}
 
-export const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
+function siteSecrets(tenantId: string): Pick<Site, "sessionSecret" | "sessionKey" | "tmpKey" | "impersonateKey"> {
+  const base = SESSION_SECRET ?? DEV_SECRET;
+  const sessionSecret = tenantId ? deriveTenantSecret(base, tenantId) : base;
+  return {
+    sessionSecret,
+    sessionKey: deriveKey(sessionSecret, "portal.session.v1"),
+    tmpKey: deriveKey(sessionSecret, "portal.tmp.v1"),
+    impersonateKey: deriveKey(sessionSecret, "portal.impersonate.v1"),
+  };
+}
 
-export const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
+const IDENTITY_SECRET_DISTINCT = (() => {
+  const signing = coreSigningSecret();
+  const identity = portalIdentitySecret();
+  return Boolean(signing && identity && identity.length >= 32 && identity !== signing);
+})();
 
-export const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);
+function trustedSite(trusted: OidcConfig | null, label: string | undefined, admin: boolean) {
+  if (admin && (!trusted || !IDENTITY_SECRET_DISTINCT))
+    throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
+  return { trusted, trustedLabel: trusted ? label?.trim() || undefined : undefined, trustedAdmin: admin };
+}
 
-export const trustedSignInLabel = trustedOidc ? process.env.PORTAL_TRUSTED_OIDC_LABEL?.trim() || undefined : undefined;
+const HOME_SITE: Site = {
+  tenantId: "",
+  publicUrl: PUBLIC_URL,
+  origin: ORIGIN,
+  appsDomain: APPS_DOMAIN,
+  cookieDomain: COOKIE_DOMAIN,
+  oidc: OIDC,
+  brokerUpstream: AUTH_BROKER_UPSTREAM,
+  ...trustedSite(
+    trustedEntryConfig(process.env, PUBLIC_URL),
+    process.env.PORTAL_TRUSTED_OIDC_LABEL,
+    process.env.PORTAL_TRUSTED_OIDC_ADMIN === "1",
+  ),
+  faviconSvg: undefined,
+  apiAllowedOrigins: API_ALLOWED_ORIGINS.origins,
+  ...siteSecrets(""),
+};
 
-export const trustedAdminEnabled = process.env.PORTAL_TRUSTED_OIDC_ADMIN === "1";
+function brokerOidc(publicUrl: string, tenantId: string): OidcConfig {
+  const issuer = `${publicUrl}${AUTH_BROKER_PREFIX}`;
+  return {
+    ...OIDC,
+    clientSecret: deriveTenantSecret(OIDC.clientSecret, tenantId),
+    issuer,
+    authEndpoint: `${issuer}/authorize`,
+    redirectUri: `${publicUrl}/auth/callback`,
+    headers: { "x-forwarded-host": hostOf(publicUrl) },
+  };
+}
 
-if (
-  trustedAdminEnabled &&
-  (!trustedOidc ||
-    !CORE_SIGNING_SECRET ||
-    !PORTAL_IDENTITY_SECRET ||
-    PORTAL_IDENTITY_SECRET.length < 32 ||
-    PORTAL_IDENTITY_SECRET === CORE_SIGNING_SECRET)
-)
-  throw new Error("Trusted administrator provisioning requires trusted OIDC and a distinct portal identity secret");
+function tenantSite(tenant: TenantSettings & { id: string }): Site {
+  const publicUrl = tenantPublicUrl(tenant);
+  const appsDomain = tenant.appsDomain || undefined;
+  const client = tenant.oidcClientId
+    ? { clientId: tenant.oidcClientId, clientSecret: tenant.secrets.oidcClientSecret ?? "" }
+    : undefined;
+  return {
+    tenantId: tenant.id,
+    publicUrl,
+    origin: originOf(publicUrl),
+    appsDomain,
+    cookieDomain: appsDomain ? derivedCookieDomain(hostOf(publicUrl), appsDomain) : undefined,
+    oidc: AUTH_BROKER_UPSTREAM ? brokerOidc(publicUrl, tenant.id) : null,
+    brokerUpstream: AUTH_BROKER_UPSTREAM,
+    ...trustedSite(
+      client ? trustedEntryConfig(process.env, publicUrl, client) : null,
+      tenant.oidcLabel,
+      tenant.oidcAdmin,
+    ),
+    faviconSvg: tenant.faviconSvg,
+    apiAllowedOrigins: new Set(),
+    ...siteSecrets(tenant.id),
+  };
+}
+
+const tenantSites = new WeakMap<TenantSettings, Site>();
+
+function servedSite(tenant: TenantSettings & { id: string }): Site {
+  try {
+    return tenantSite(tenant);
+  } catch (error) {
+    reportFailure(`portal: tenant ${tenant.slug} trusted sign-in is misconfigured and stays off`, error);
+    return tenantSite({ ...tenant, oidcClientId: undefined, oidcAdmin: false });
+  }
+}
+
+export function site(): Site {
+  const tenant = edgeTenant();
+  if (!tenant?.id) return HOME_SITE;
+  let found = tenantSites.get(tenant);
+  if (!found) {
+    found = servedSite({ ...tenant, id: tenant.id });
+    tenantSites.set(tenant, found);
+  }
+  return found;
+}
 
 export const IMPERSONATE_TTL_S = 3600;
 
@@ -271,7 +367,7 @@ export function bootChecks(): void {
   if (IS_PROD) {
     if (isMissingOrPlaceholder(SESSION_SECRET))
       problems.push("PORTAL_SESSION_SECRET is required and may not be a placeholder in production");
-    if (isMissingOrPlaceholder(CORE_SIGNING_SECRET))
+    if (isMissingOrPlaceholder(coreSigningSecret()))
       problems.push("CORE_SIGNING_SECRET is required and may not be a placeholder in production");
     if (isMissingOrPlaceholder(OIDC.clientId))
       problems.push("OIDC_CLIENT_ID is required and may not be a placeholder in production");
@@ -302,7 +398,7 @@ export function bootChecks(): void {
     if (!isSlackIssuer(OIDC.issuer) && !OIDC_JWKS_CONFIGURED) {
       problems.push("OIDC_JWKS_URI is required for a non-Slack issuer");
     }
-    if (SESSION_SECRET && CORE_SIGNING_SECRET && SESSION_SECRET === CORE_SIGNING_SECRET) {
+    if (SESSION_SECRET && coreSigningSecret() && SESSION_SECRET === coreSigningSecret()) {
       problems.push("PORTAL_SESSION_SECRET must differ from CORE_SIGNING_SECRET");
     }
     if (!PUBLIC_URL.startsWith("https://")) problems.push("PORTAL_PUBLIC_URL must be https in production");

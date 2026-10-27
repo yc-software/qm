@@ -80,6 +80,16 @@ const RUN_STORE_MIGRATIONS = [
       `DO $$ BEGIN IF to_regclass('run_signals') IS NOT NULL THEN UPDATE run_signals SET payload = jsonb_set(payload, '{request}', pg_temp.qm_turn_origin(payload -> 'request')) WHERE jsonb_typeof(payload -> 'request') = 'object' AND NOT (payload -> 'request') ? 'origin'; END IF; END $$`,
     ],
   },
+  {
+    id: "runs/store/0014-engine-default-absurd",
+    statements: [`SET LOCAL lock_timeout = '3s'`, `ALTER TABLE runs ALTER COLUMN engine SET DEFAULT 'absurd'`],
+  },
+  {
+    id: "runs/store/0015-settle-unclaimed-in-flight",
+    statements: [
+      `UPDATE runs SET status = 'failed', result = json_build_object('status', 'failed', 'sessionId', session_id, 'reason', 'This turn stopped unexpectedly and could not be resumed.')::text, lease_token = NULL, lease_expires_at = NULL, worker_id = NULL, finished_at = (extract(epoch FROM clock_timestamp()) * 1000)::bigint WHERE engine = 'legacy' AND status IN ('pending', 'running')`,
+    ],
+  },
 ];
 
 type Query = ReturnType<typeof createPgPool>["query"];

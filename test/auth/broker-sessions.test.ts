@@ -161,6 +161,15 @@ test("the claim route refuses unsigned callers", async (t) => {
   assert.equal(unsigned.status, 401);
 });
 
+test("a claim batch is bounded by the request body, not by a slot count or id length", async (t) => {
+  const srv = start();
+  t.after(() => srv.close());
+  const slots = Array.from({ length: 65 }, (_, i) => `rate:wide:${i}`);
+  assert.equal((await claim(srv.base, { ids: slots, expiresAtMs: soon() })).json.claimed, "rate:wide:0");
+  const longId = `oidc:${"a".repeat(64)}:${"b".repeat(340)}`;
+  assert.equal((await claim(srv.base, { ids: [longId], expiresAtMs: soon() })).json.claimed, longId);
+});
+
 test("the claim route validates its input", async (t) => {
   const srv = start();
   t.after(() => srv.close());
@@ -173,8 +182,6 @@ test("the claim route validates its input", async (t) => {
     { ids: "ok", expiresAtMs: soon() },
     { ids: [""], expiresAtMs: soon() },
     { ids: [42], expiresAtMs: soon() },
-    { ids: ["x".repeat(201)], expiresAtMs: soon() },
-    { ids: Array.from({ length: 65 }, (_, i) => `slot-${i}`), expiresAtMs: soon() },
   ];
   for (const body of cases) {
     const response = await claim(srv.base, body);

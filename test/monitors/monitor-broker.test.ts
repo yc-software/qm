@@ -162,6 +162,14 @@ test("watch rejects an invalid regex pattern up front", async () => {
   await assert.rejects(() => broker.watch("p-1", { pattern: ".*a.*a.*a.*a.*a.*a.*a.*a.*b" }), /literal alternatives/);
 });
 
+test("watch accepts a long literal pattern and rejects an empty one", async () => {
+  const { broker } = await harness();
+  const longLiteral = `${"needle-".repeat(100)}done`;
+  const r = armed(await broker.watch("p-1", { pattern: longLiteral, instructions: "ping" }));
+  assert.equal(r.processId, "p-1");
+  await assert.rejects(() => broker.watch("p-1", { pattern: "" }), /pattern must not be empty/);
+});
+
 test("unwatch removes own monitors only", async () => {
   const { broker, store } = await harness();
   const r = armed(await broker.watch("p-1"));

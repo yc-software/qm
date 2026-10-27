@@ -209,7 +209,10 @@ for (const origin of [CHANNEL, GROUP, DM]) {
     await memory.capture(PERSONAL, ["Existing fact"], Date.now());
     const before = await memory.read(PERSONAL);
     await strategy.onTurnEnd!({ scopeId: origin, input: INPUT, reply: REPLY, actorId: ACTOR });
-    assert.match(await memory.read(origin), /task list is ship the launch/);
+    assert.match(
+      await flushed(() => memory.read(origin), [/task list is ship the launch/]),
+      /task list is ship the launch/,
+    );
     if (origin !== PERSONAL) assert.equal(await memory.read(PERSONAL), before);
     else assert.equal((await memory.read(PERSONAL)).split("task list is ship the launch").length - 1, 1);
   });
@@ -224,7 +227,10 @@ test("redirected capture writes only to the resolved target, not the speaker's n
     reply: REPLY,
     actorId: ACTOR,
   });
-  assert.match(await memory.read("personal:U2"), /task list is ship the launch/);
+  assert.match(
+    await flushed(() => memory.read("personal:U2"), [/task list is ship the launch/]),
+    /task list is ship the launch/,
+  );
   assert.equal(await memory.read(PERSONAL), "");
   assert.equal(await memory.read(CHANNEL), "");
 });
@@ -245,7 +251,7 @@ test("burst debounce: a full burst flushes immediately at captureMaxTurns", asyn
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
-  const body = await memory.read(DM);
+  const body = await flushed(() => memory.read(DM), [/fact one is alpha/, /fact two is beta/]);
   assert.match(body, /fact one is alpha/, "cap reached — no waiting on the quiet window");
   assert.match(body, /fact two is beta/);
 });
@@ -309,6 +315,25 @@ test("burst debounce: turns appended through two instances flush once, as one ex
   await new Promise((r) => setTimeout(r, 60));
   assert.equal(prompts.length, 1, "the first instance's timer yields to the later append");
   assert.match(prompts[0]!, /first[\s\S]*second/);
+});
+
+test("a turn's capture is on disk once onTurnEnd resolves, before any extraction runs", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const memory = createPostgresMemoryService(databaseUrl);
+  let extractions = 0;
+  const harness: HarnessModelUtilities = {
+    oneShot() {
+      extractions++;
+      return Promise.resolve("NONE");
+    },
+  };
+  const strategy = createPerTurnStrategy({ harness, memory, databaseUrl });
+  await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
+  const { q } = createPgPool(databaseUrl);
+  assert.equal((await q(`SELECT turns FROM memory_capture_pending`)).length, 1, "the burst is durable at return");
+  assert.equal(extractions, 0, "the caller never waits on the model");
+  for (let attempt = 0; attempt < 300 && extractions === 0; attempt++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(extractions, 1);
 });
 
 test("burst debounce: the sweep finishes a burst whose instance went away", async () => {

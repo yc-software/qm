@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { configurePgTenancy, createPgPool } from "../../src/persistence/pg-pool.ts";
+import { configurePgTenancy, createPgPool, tenantCols } from "../../src/persistence/pg-pool.ts";
 import { tenantFor, withTenant } from "../../src/tenant.ts";
 import {
   assertRowSecurityEnforced,
@@ -61,6 +61,17 @@ test("tenancy: tenant_id leads every key, RLS separates tenants, legacy rows sta
            END $fn$`,
           `CREATE TRIGGER widgets_bump AFTER INSERT ON widgets FOR EACH STATEMENT EXECUTE FUNCTION bump_counter()`,
           `INSERT INTO widgets(id, label, email) VALUES ('w1', 'legacy', 'A@x.com')`,
+        ],
+      },
+      {
+        id: "tenancy-test/0002",
+        statements: [
+          `CREATE OR REPLACE FUNCTION bump_counter() RETURNS trigger LANGUAGE plpgsql AS $fn$
+           BEGIN
+             INSERT INTO counters(only_row, v) VALUES (TRUE, 1)
+             ON CONFLICT (${tenantCols("only_row")}) DO UPDATE SET v = counters.v + 1;
+             RETURN NULL;
+           END $fn$`,
         ],
       },
     ]);

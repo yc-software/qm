@@ -1,14 +1,13 @@
-// The context and runtime tools: compacting this conversation's context and switching model, effort or fast mode.
-
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { isObj } from "../../util/objects.ts";
 import { goalIsOpen } from "../goal.ts";
 import type { RuntimeRequest } from "../runtime-types.ts";
 import { type ToolKit } from "./kit.ts";
+import type { TurnGoal, TurnHalt } from "../turn-tool-state.ts";
 import { optionalString, text } from "./shared.ts";
 
-export function runtimeTools(kit: ToolKit) {
+export function runtimeTools(kit: ToolKit, goal: Pick<TurnGoal, "current">, halt: Pick<TurnHalt, "handOff">) {
   const { ref, opts, recordCall, recordCoreAuthoredResult } = kit;
   const context = defineTool({
     name: "context",
@@ -26,7 +25,7 @@ export function runtimeTools(kit: ToolKit) {
           terminate: true,
         },
       );
-      ref.runtimeHandoff = { context: "recent" };
+      halt.handOff({ context: "recent" });
       return result;
     },
   });
@@ -48,7 +47,7 @@ export function runtimeTools(kit: ToolKit) {
     async execute(callId, params) {
       const request = params as RuntimeRequest;
       await recordCall(callId, { tool: "runtime", ...request });
-      if (request.action !== "get" && goalIsOpen(ref.goal)) {
+      if (request.action !== "get" && goalIsOpen(goal.current())) {
         return recordCoreAuthoredResult(
           callId,
           { tool: "runtime", error: "goal_in_progress" },
@@ -75,7 +74,7 @@ export function runtimeTools(kit: ToolKit) {
         { ...text(JSON.stringify(result)), ...(handoff ? { terminate: true } : {}) },
         !result.ok,
       );
-      if (handoff) ref.runtimeHandoff = handoff;
+      if (handoff) halt.handOff(handoff);
       return ret;
     },
   });

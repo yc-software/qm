@@ -21,8 +21,6 @@ const AWS_BROKER_ENV = {
   AWS_REGION: "region",
   AWS_DEFAULT_REGION: "region",
 } as const;
-export const BROKER_ENV_KEYS: readonly string[] = [CREDENTIAL_TOKEN_ENV, ...Object.keys(AWS_BROKER_ENV)];
-
 const CONNECTOR_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
 export function createCatalogState(

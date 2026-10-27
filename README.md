@@ -224,6 +224,7 @@ upstream source history to merge.
 ## Going deeper
 
 - [`docs/getting-started.md`](./docs/getting-started.md) — first run, end to end
+- [`UPGRADING.md`](./UPGRADING.md) — retired settings, typed-table conversion and the upgrade path
 - [`cli/README.md`](./cli/README.md) — the `qm` CLI and the deployment directory contract
 - [`docs/deploy-directory.md`](./docs/deploy-directory.md) — the deployment directory in full
 - [`docs/principal-links.md`](./docs/principal-links.md) — one person, several sign-ins: linking principals

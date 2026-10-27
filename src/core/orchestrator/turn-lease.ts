@@ -47,7 +47,7 @@ function recordSessionBusy(
   });
 }
 
-export async function acquireTurnLeaseOrRefuse(
+async function acquireTurnLeaseOrRefuse(
   deps: Pick<OrchestratorDeps, "errors" | "sessions" | "turnLeaseWaitMs">,
   args: {
     sessionId: string;

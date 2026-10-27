@@ -80,7 +80,7 @@ export interface ServiceDef {
   tcpIngress?: { healthCheck: string[] };
 }
 
-export interface BrandEnv {
+interface BrandEnv {
   botName?: string;
   orgName?: string;
 }

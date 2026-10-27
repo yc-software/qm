@@ -56,14 +56,14 @@ export async function detectAmbientDecline(
   ctx: TurnCtx,
   turn: {
     session: Session;
-    isRetry: boolean;
     recordedTurn: RecordedTurn | null;
     historyWindow: () => ReturnType<OrchestratorDeps["sessions"]["getContextWindow"]>;
     transcripts: ReturnType<typeof createTranscriptSource>;
   },
 ): Promise<TurnResult | undefined> {
-  const { deps, input, actor, conversation, ambientTurn, sessionTurn, resolution, scopeId, filterHistory } = ctx;
-  const { session, isRetry, recordedTurn, historyWindow, transcripts } = turn;
+  const { deps, input, actor, conversation, ambientTurn, sessionTurn, resolution, scopeId, filterHistory, isRetry } =
+    ctx;
+  const { session, recordedTurn, historyWindow, transcripts } = turn;
   if (
     ambientTurn &&
     !sessionTurn &&

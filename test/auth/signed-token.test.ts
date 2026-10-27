@@ -53,30 +53,12 @@ test("malformed tokens are null, never throws", async () => {
   }
 });
 
-test("still verifies the retired HMAC wire formats (hex and base64url digests)", async () => {
-  assert.deepEqual(
-    await verifySignedPayload(
-      "eyJhY3RvcklkIjoiVTEiLCJzY29wZUlkIjoicGVyc29uYWw6VTEiLCJleHAiOjE3ODEwMDAwMDAwMDB9." +
-        "48970bbdda5eb8744f1b8e134266e028b8291100ad3a864d2aea9556b4375890",
-      "s3cret",
-    ),
-    { actorId: "U1", scopeId: "personal:U1", exp: 1781000000000 },
-  );
-  assert.deepEqual(
+test("two-part HMAC tokens are rejected", async () => {
+  assert.equal(
     await verifySignedPayload(
       "eyJkZXBsb3ltZW50SWQiOiJkLTEiLCJleHAiOjE3ODEwMDAwMDAwMDB9." + "HrVy5rOz6W6IbfEdNPhUsmVbOjuhId7wMnnSTL2EQSk",
       "s3cret",
     ),
-    { deploymentId: "d-1", exp: 1781000000000 },
+    null,
   );
-});
-
-test("a legacy token verifies under a rotated secret list too", async () => {
-  const legacy =
-    "eyJkZXBsb3ltZW50SWQiOiJkLTEiLCJleHAiOjE3ODEwMDAwMDAwMDB9." + "HrVy5rOz6W6IbfEdNPhUsmVbOjuhId7wMnnSTL2EQSk";
-  assert.deepEqual(await verifySignedPayload(legacy, ["new-secret", "s3cret"]), {
-    deploymentId: "d-1",
-    exp: 1781000000000,
-  });
-  assert.equal(await verifySignedPayload(legacy, ["new-secret"]), null);
 });

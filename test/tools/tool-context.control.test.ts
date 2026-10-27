@@ -12,6 +12,7 @@ import type { ToolLedger } from "../../src/runs/tool-ledger.ts";
 import type { Sandbox, SandboxHandle } from "../../src/sandbox/sandbox.ts";
 import { testConfig } from "../support/test-config.ts";
 import { createAgentTools } from "../../src/harness/agent-tools.ts";
+import { createTurnToolState } from "../../src/harness/turn-tool-state.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../../src/core/orchestrator/surface-tools.ts";
 import { createPostgresChannelPolicyStore } from "../../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "../support/test-database.ts";
@@ -83,7 +84,9 @@ test("the cron tool lets a live org-admin owner attach unattended admin-read gra
   const { built } = build();
   const control = createControlService(built.app, built.scheduler, built.admin);
   const ctx = ctxFor({ control, controlClaims: { ...claims("admin-alice"), liveActor: true } });
-  const cron = createAgentTools({ current: ctx }, { controlTools: true }).find((t) => t.name === "cron")!;
+  const cron = createAgentTools(createTurnToolState({ current: ctx }), { controlTools: true }).find(
+    (t) => t.name === "cron",
+  )!;
   const run = async (params: Record<string, unknown>) =>
     (
       (await cron.execute("call", params as never, undefined, undefined, {} as never)) as {
@@ -107,7 +110,7 @@ test("the cron tool lets a live org-admin owner attach unattended admin-read gra
   assert.deepEqual((await built.app.getCron(id))?.unattendedGrants, ["admin.spend.read"]);
 
   const nonAdmin = createAgentTools(
-    { current: ctxFor({ control, controlClaims: { ...claims("U1"), liveActor: true } }) },
+    createTurnToolState({ current: ctxFor({ control, controlClaims: { ...claims("U1"), liveActor: true } }) }),
     { controlTools: true },
   ).find((t) => t.name === "cron")!;
   const refused = (
@@ -243,13 +246,13 @@ test("concurrent instructions edits reject a stale replacement without losing th
   await ctx.instructionsWrite("First rule. Second rule.");
   const entries: string[] = [];
   const tool = createAgentTools(
-    {
+    createTurnToolState({
       current: ctx,
       scopeLabel: scopeId("personal", "U1"),
       emit: (entry) => {
         entries.push(entry.kind);
       },
-    },
+    }),
     { controlTools: true },
   ).find((t) => t.name === "instructions")!;
   const edit = (old: string, next: string) =>
@@ -284,7 +287,9 @@ test("channel settings through the instructions tool initialize missing policies
     defaultDestination: {},
   } as unknown as SurfaceToolsContext)!;
   const ctx = ctxFor({ surface });
-  const tool = createAgentTools({ current: ctx }, { controlTools: true }).find((t) => t.name === "instructions")!;
+  const tool = createAgentTools(createTurnToolState({ current: ctx }), { controlTools: true }).find(
+    (t) => t.name === "instructions",
+  )!;
   const replace = (params: Record<string, unknown>) =>
     tool.execute("settings", { action: "replace", ...params }, undefined, undefined, {} as never);
   await replace({ ambientEnabled: true });

@@ -64,12 +64,13 @@ for (const tenant of [null, "6a1f6f62-3a52-4c6f-9a8e-0d7c8f6d2a11"]) {
   test(`channel guidance moves into the channel's instructions${tenant ? " per tenant" : ""}`, { skip }, async () => {
     await withMigratedDatabase(async (url, admin) => {
       await admin.query(
-        "DELETE FROM qm_schema_migrations WHERE id IN ('surface-cache/channel-policy/0003-orders-into-instructions', 'typed/config/soul_configs/0001')",
+        "DELETE FROM qm_schema_migrations WHERE id IN ('surface-cache/channel-policy/0003-orders-into-instructions', 'typed/config/soul_configs/0001', 'contract/typed/config/soul_configs/0001')",
       );
       await admin.query(
         "INSERT INTO qm_schema_migrations (id, checksum) VALUES ('surface-cache/channel-policy/0002-orders-into-instructions', 'retired') ON CONFLICT DO NOTHING",
       );
       await admin.query("DROP TABLE soul_configs, channel_policy, channel_state CASCADE");
+      await admin.query("ALTER TABLE channel_policy_history ADD COLUMN orders TEXT NOT NULL DEFAULT ''");
       await legacy(admin, tenant);
       await migrate(url);
       const rows = await instructions(admin);
