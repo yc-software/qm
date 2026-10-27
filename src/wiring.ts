@@ -1925,18 +1925,16 @@ export function buildApp(
     ...(deployGitSecret && deployGitBase
       ? {
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
-            const env: Record<string, string> = {
-              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, deployment.id),
-            };
             const orgScope = scopeId("org", config.orgId);
             const credentials = await deploymentCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
               acl,
             );
-            if (credentials.length) {
-              env.AGENT_API_URL = deployGitBase;
-              env.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
+            return {
+              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, deployment.id),
+              AGENT_API_URL: deployGitBase,
+              AGENT_CREDENTIAL_TOKEN: await mintCapabilityToken(
                 {
                   actorId: deployment.createdBy,
                   scopeId: personalScope(deployment.createdBy),
@@ -1947,9 +1945,8 @@ export function buildApp(
                 },
                 config.capabilitySecret ?? deployGitSecret,
                 config.capabilityTokenCompression,
-              );
-            }
-            return env;
+              ),
+            };
           },
         }
       : {}),

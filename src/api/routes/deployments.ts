@@ -22,7 +22,7 @@ import { audit, authorizeAdmin, isObj, orgScope } from "./shared.ts";
 import { parseScopeId, scopeId, type Permission } from "../../types.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { CONFIG_DEFAULTS } from "../../config.ts";
-import { resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
+import { livePersonCapability, resolveShareTarget as resolveShareTargetGrammar } from "../artifact-share.ts";
 import { verifyDeployGitAccess, viewerIdentityKey } from "../../deploy/access-token.ts";
 import { appAnnotationAsset } from "../../deploy/app-annotate.ts";
 import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
@@ -49,6 +49,7 @@ function isRedeployInput(b: unknown): b is RedeployInput {
     (b.homeFiles === undefined || Array.isArray(b.homeFiles)) &&
     (b.env === undefined || isStringRecord(b.env)) &&
     b.stampEnv === undefined &&
+    b.actor === undefined &&
     (b.alwaysOn === undefined || typeof b.alwaysOn === "boolean")
   );
 }
@@ -1256,7 +1257,7 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
         body,
       });
     const result = isPush
-      ? await ctx.app.runDeploymentGitPush(parts.id, async () => {
+      ? await ctx.app.runDeploymentGitPush(parts.id, access?.principalId, async () => {
           if (
             access?.principalId &&
             !(await ctx.app.authorizesDeploymentGitAccess(parts.id, access.principalId, "write"))
@@ -1433,7 +1434,7 @@ async function rollbackDeployment(ctx: ApiCtx): Promise<void> {
   if (typeof b.version !== "number")
     return sendJson(res, 400, { error: "bad_request", message: "version (number) required" });
   try {
-    await app.rollbackDeployment(id, b.version);
+    await app.rollbackDeployment(id, b.version, ctx.capability?.actorId ?? ctx.actor?.p);
     return sendJson(res, 200, { ok: true });
   } catch (e) {
     return sendJson(res, 400, { error: "rollback_failed", message: errMessage(e) });
@@ -1453,7 +1454,9 @@ async function redeployDeployment(ctx: ApiCtx): Promise<void> {
     });
   }
   try {
-    return sendJson(res, 200, { deployment: deploymentView(await app.redeploy(id, body)) });
+    const actor = ctx.capability?.actorId ?? ctx.actor?.p;
+    const input = actor ? { ...body, actor } : body;
+    return sendJson(res, 200, { deployment: deploymentView(await app.redeploy(id, input)) });
   } catch (e) {
     return sendJson(res, 400, { error: "deploy_failed", message: errMessage(e) });
   }
@@ -1542,6 +1545,25 @@ async function setDeploymentEmbedAncestors(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 200, { deployment: deploymentView(await app.setDeploymentEmbedAncestors(id, ancestors)) });
   } catch (e) {
     return sendJson(res, 400, { error: "embed_ancestors_failed", message: errMessage(e) });
+  }
+}
+
+async function setDeploymentConnectors(ctx: ApiCtx): Promise<void> {
+  const { res, app, params, body, capability, actor } = ctx;
+  const principalId = capability ? capability.actorId : actor?.p;
+  if (!principalId || (capability && !livePersonCapability(capability)))
+    return sendJson(res, 403, {
+      error: "forbidden",
+      message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
+    });
+  const connectors = (body as { connectors?: unknown }).connectors;
+  if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
+    return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
+  try {
+    const deployment = await app.setDeploymentConnectors(params.id!, connectors, { createdBy: principalId });
+    return sendJson(res, 200, { deployment: deploymentView(deployment) });
+  } catch (e) {
+    return sendShareFailure(res, e);
   }
 }
 
@@ -1686,6 +1708,7 @@ const DEPLOY_ACCESS_STATUS: Record<DeployAccessErrorCode, number> = {
   forbidden: 403,
   external_sharing_disabled: 403,
   public_links_unavailable: 409,
+  unknown_connector: 400,
 };
 
 function sendShareFailure(res: ApiCtx["res"], e: unknown): void {
@@ -1724,4 +1747,5 @@ export const deploymentRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/deployments/:id/display-name", auth: "either", handle: setDeploymentDisplayName },
   { method: "POST", path: "/v1/deployments/:id/always-on", auth: "either", handle: setDeploymentAlwaysOn },
   { method: "POST", path: "/v1/deployments/:id/embed-ancestors", auth: "either", handle: setDeploymentEmbedAncestors },
+  { method: "POST", path: "/v1/deployments/:id/connectors", auth: "either", handle: setDeploymentConnectors },
 ];

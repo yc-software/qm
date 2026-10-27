@@ -502,6 +502,8 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
   },
 };
 
+export const CONNECTOR_HOSTS: readonly string[] = Object.values(PROVIDERS).flatMap((p) => p.hosts);
+
 export interface PublicOAuthClient {
   name: string;
   host: string;

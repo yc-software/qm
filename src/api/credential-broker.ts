@@ -10,7 +10,7 @@ import {
   type ServiceCredentialReader,
 } from "../credentials/keychain.ts";
 
-interface BrokerFetchResponse {
+export interface BrokerFetchResponse {
   status: number;
   contentType?: string;
   text(): Promise<string>;
@@ -43,6 +43,15 @@ export interface BrokerRequest {
   body?: unknown;
 }
 
+export type BrokerAudit = (e: {
+  principalId: string;
+  action: string;
+  resource: string;
+  scopeLabel: string;
+  status?: string;
+  detail?: string;
+}) => void;
+
 export interface BrokerResult {
   status: number;
   json: unknown;
@@ -51,6 +60,35 @@ export interface BrokerResult {
 const ALLOWED_CALLER_HEADERS = new Set(["accept", "accept-language", "content-type", "user-agent"]);
 
 const MAX_RESPONSE_BYTES = 5_000_000;
+
+export function callerHeaders(raw: unknown): Record<string, string> {
+  const caller: Record<string, string> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) caller[k] = v;
+    }
+  }
+  return caller;
+}
+
+export async function relayedResult(resp: BrokerFetchResponse): Promise<BrokerResult> {
+  const text = await resp.text();
+  const truncated = text.length > MAX_RESPONSE_BYTES;
+  return {
+    status: 200,
+    json: {
+      status: resp.status,
+      ...(resp.contentType ? { contentType: resp.contentType } : {}),
+      body: truncated ? text.slice(0, MAX_RESPONSE_BYTES) : text,
+      ...(truncated ? { truncated: true } : {}),
+    },
+  };
+}
+
+export const UPSTREAM_UNREACHABLE: BrokerResult = {
+  status: 502,
+  json: { error: "upstream_unreachable", message: "the credential's host could not be reached" },
+};
 
 function brokerHostMatches(requestHost: string, pinnedHost: string): boolean {
   const h = requestHost.toLowerCase();
@@ -130,14 +168,7 @@ export async function brokerCredentialCall(opts: {
   reader: ServiceCredentialReader;
   fetchImpl: BrokerFetch;
   usage?: CredentialUsageSink;
-  audit?: (e: {
-    principalId: string;
-    action: string;
-    resource: string;
-    scopeLabel: string;
-    status?: string;
-    detail?: string;
-  }) => void;
+  audit?: BrokerAudit;
 }): Promise<BrokerResult> {
   const { claims, body, orgScopeId, reader, fetchImpl } = opts;
   const slug = typeof body.credential === "string" ? body.credential : "";
@@ -222,13 +253,7 @@ export async function brokerCredentialCall(opts: {
       );
   }
 
-  const caller: Record<string, string> = {};
-  if (body.headers && typeof body.headers === "object") {
-    for (const [k, v] of Object.entries(body.headers as Record<string, unknown>)) {
-      if (typeof v === "string" && ALLOWED_CALLER_HEADERS.has(k.toLowerCase())) caller[k] = v;
-    }
-  }
-  const headers = brokerRequestHeaders(rec, caller);
+  const headers = brokerRequestHeaders(rec, callerHeaders(body.headers));
   if (rec.injection?.actor) headers["x-qm-actor"] = claims.actorId;
 
   let resp: BrokerFetchResponse;
@@ -238,7 +263,7 @@ export async function brokerCredentialCall(opts: {
       headers,
       ...(typeof body.body === "string" ? { body: body.body } : {}),
     });
-  } catch {
+  } catch (err) {
     opts.usage?.record({
       slug,
       host: rec.host,
@@ -252,19 +277,12 @@ export async function brokerCredentialCall(opts: {
       resource: slug,
       scopeLabel: claims.scopeId,
       status: "error",
+      detail: errMessage(err),
     });
-    return {
-      status: 502,
-      json: { error: "upstream_unreachable", message: "the credential's host could not be reached" },
-    };
+    return UPSTREAM_UNREACHABLE;
   }
 
-  let text = await resp.text();
-  let truncated = false;
-  if (text.length > MAX_RESPONSE_BYTES) {
-    text = text.slice(0, MAX_RESPONSE_BYTES);
-    truncated = true;
-  }
+  const result = await relayedResult(resp);
   opts.usage?.record({
     slug,
     host: rec.host,
@@ -281,13 +299,5 @@ export async function brokerCredentialCall(opts: {
     status: "ok",
     ...(claims.deployment ? { detail: `deployment:${claims.deployment}` } : {}),
   });
-  return {
-    status: 200,
-    json: {
-      status: resp.status,
-      ...(resp.contentType ? { contentType: resp.contentType } : {}),
-      body: text,
-      ...(truncated ? { truncated: true } : {}),
-    },
-  };
+  return result;
 }

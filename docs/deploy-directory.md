@@ -179,6 +179,30 @@ record. If its injection configuration enables actor attestation, the broker set
 `x-qm-actor` from the stored publisher. Caller-supplied actor headers are rejected.
 The destination receives the configured credential, never the deployment token.
 
+### Lending a publisher's connected apps to their app
+
+A publisher can let their app call any of their connected apps (mail, calendar, chat,
+files, and so on) as them, the same way apps use org credentials through the broker.
+Nothing is lent by default. The publisher opts in per app and per connected-app host with
+`POST /v1/deployments/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
+withdraws. Only the publisher may call it, from a live turn or a signed-in session. Public
+apps cannot borrow connectors, and an app that borrows them cannot be made public. When
+anyone other than the publisher publishes, pushes or rolls back a version, the loan is
+withdrawn before that version runs. The token comes from the publisher's personal
+connection, else their default, else their company one.
+
+The app's server sends the broker `connector` (the host) instead of `credential`, with
+the same `url`, `method`, `headers` and `body`. The broker pins the URL to that exact host
+over standard HTTPS, injects the token and returns only the response; the app never sees
+the token. Every call acts as the publisher, whoever is using the app, so the app's own
+code decides who may do what, typically from the signed-in viewer in
+`x-portal-identity`. A bug in the app, or code a co-manager slipped in before the
+publisher lent again, can act as the publisher without a click, exactly as with an org
+credential.
+
+Each call and refusal is audited as `connector.broker.use`, `.denied` or `.error` with the
+app, method, path and outcome; each loan change as `deploy_connectors`.
+
 ### Public AWS plugin routes
 
 Plugins stay private by default. An AWS plugin workload can declare

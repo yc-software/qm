@@ -148,6 +148,11 @@ apps({ action: "share", id: "status-board", toScope: "org", permission: "read" }
 - **A deployment is scoped data.** Sharing into a wider scope makes the app — and whatever
   data you baked into it — reachable by everyone in that scope. Apply the same audience
   judgment you would before posting into that channel.
+- **Connected apps stay the publisher's.** An app reaches the publisher's connected apps
+  only after the publisher asks you to lend them (`POST /v1/deployments/:id/connectors`).
+  Its server calls `/v1/credentials/broker` with `{connector, url, method, body}`, and
+  every call acts as the publisher, so gate actions on the signed-in viewer
+  (`x-portal-identity`). A publish by anyone else withdraws the loan.
 - **Publishing/rollback/rename are writes.** Confirm before rolling back or renaming
   something others rely on, same as any consequential action.
 

@@ -34,6 +34,7 @@ export function createDeploymentMethods(
   | "setDeploymentAlwaysOn"
   | "setDeploymentEmbedAncestors"
   | "setDeploymentPublic"
+  | "setDeploymentConnectors"
   | "maintainDeployments"
   | "reachDeployment"
   | "deploymentLogsFor"
@@ -136,8 +137,8 @@ export function createDeploymentMethods(
       const deployment = (await deps.deploy.listDeployments()).find((d) => d.id === idOrName || d.name === idOrName);
       return deployment ? principalGitPermission(deployment, principalId) : null;
     },
-    rollbackDeployment(id, version) {
-      return deps.deploy.rollbackDeployment(id, version);
+    rollbackDeployment(id, version, actor) {
+      return deps.deploy.rollbackDeployment(id, version, actor ? { actor } : undefined);
     },
     canManageDeployment(idOrName, callerId, actingScopeId) {
       return deps.deploy.canManageDeployment(idOrName, callerId, actingScopeId);
@@ -163,6 +164,9 @@ export function createDeploymentMethods(
     setDeploymentPublic(idOrName, isPublic, actor) {
       return deps.deploy.setDeploymentPublic(idOrName, isPublic, actor);
     },
+    setDeploymentConnectors(idOrName, connectors, actor) {
+      return deps.deploy.setDeploymentConnectors(idOrName, connectors, actor);
+    },
     maintainDeployments() {
       return deps.deploy.maintainDeployments();
     },
@@ -186,8 +190,8 @@ export function createDeploymentMethods(
     deploymentGitRepoPath(id) {
       return deps.deploy.gitRepoPath(id);
     },
-    runDeploymentGitPush(id, runReceivePack) {
-      return deps.deploy.pushGit(id, runReceivePack);
+    runDeploymentGitPush(id, actor, runReceivePack) {
+      return deps.deploy.pushGit(id, runReceivePack, actor);
     },
     async deploymentGitUrlFor(idOrName, principalId, opts) {
       const d = await deps.deploy.getDeployment(idOrName);
