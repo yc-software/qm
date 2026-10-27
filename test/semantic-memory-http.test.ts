@@ -161,7 +161,7 @@ pgTest("HTTP turn injects semantic matches; grep remains independent", async (t)
   assert.ok(result.reply.includes(fact));
   assert.ok(result.reply.includes(orgFact));
   assert.ok(!result.reply.includes(otherFact));
-  const memoryBlock = result.reply.split("## What you remember")[1] ?? "";
+  const memoryBlock = result.reply.split("## What you remember\n")[1] ?? "";
   assert.ok(memoryBlock.indexOf(fact) < memoryBlock.indexOf("warehouse") || !memoryBlock.includes("warehouse"));
   const cap = await mintCapabilityToken(
     {
@@ -286,7 +286,7 @@ pgTest("HTTP Open DM combines room and current memory, then blocks reads after m
     return result.reply;
   };
   const prompt = await turn("!sysprompt\nverify the change", "cross-scope-http");
-  const memory = prompt.split("## What you remember")[1]!.split("</environment>")[0]!;
+  const memory = prompt.split("## What you remember\n")[1]!.split("</environment>")[0]!;
   const packed = memory.slice(memory.indexOf("### ")).trim();
   assert.ok(packed.length <= 6000);
   assert.ok(memory.indexOf("REMOTE_BEST") >= 0);

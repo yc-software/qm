@@ -3,7 +3,6 @@ import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import { swallow } from "../util/errors.ts";
 import { assertSafeSkillName } from "./skill-name.ts";
-import type { ScopeId } from "../types.ts";
 
 export const SKILLS_DIR = "skills";
 export const SKILLS_ROOT = ".agent-skills";
