@@ -208,7 +208,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   assert.match(sys.reply ?? "", /google-workspace/);
   assert.match(sys.reply ?? "", /google-drive-sheets/);
   assert.match(sys.reply ?? "", /github-gitlab/);
-  assert.doesNotMatch(sys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*|\*\*zoom\*\*/);
+  assert.doesNotMatch(sys.reply ?? "", /^- (?:dropbox|linear|zoom) — /m);
 
   const channelSys = await app.turn({
     surface: "test",
@@ -218,7 +218,7 @@ test("a fresh app advertises and materializes only admin-enabled connector skill
   } as TurnRequest);
   assert.match(channelSys.reply ?? "", /google-workspace/);
   assert.match(channelSys.reply ?? "", /google-drive-sheets/);
-  assert.doesNotMatch(channelSys.reply ?? "", /\*\*dropbox\*\*|\*\*linear\*\*|\*\*zoom\*\*/);
+  assert.doesNotMatch(channelSys.reply ?? "", /^- (?:dropbox|linear|zoom) — /m);
 
   const read = await app.turn({
     surface: "test",

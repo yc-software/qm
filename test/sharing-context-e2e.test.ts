@@ -381,7 +381,7 @@ test("sharing e2e: explicit text-file grants survive Isolated and revoke without
 test("sharing e2e: unavailable connector skills cannot be read or executed", async (t) => {
   const b = await fixture(t);
   await b.skill("personal:U1", "google-workspace", "UNCONFIGURED_CONNECTOR");
-  assert.doesNotMatch(await b.turn("!sysprompt", true), /\*\*google-workspace\*\*/);
+  assert.doesNotMatch(await b.turn("!sysprompt", true), /^- google-workspace — /m);
   assert.match(await b.turn("!skill google-workspace", true), /no skill file/);
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
 });

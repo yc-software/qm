@@ -194,7 +194,7 @@ test("Open sharing keeps private skill metadata out of the persisted channel sho
     text: "!sysprompt",
   });
   assert.equal(result.status, "ok");
-  assert.doesNotMatch(result.reply ?? "", /assemble a morning digest|\*\*make-digest\*\*/);
+  assert.doesNotMatch(result.reply ?? "", /assemble a morning digest|^- make-digest — /m);
   const read = await built.app.turn({
     surface: "test",
     origin: { kind: "human" },
