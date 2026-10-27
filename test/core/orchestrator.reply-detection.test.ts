@@ -49,7 +49,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
       },
     },
   };
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(databaseUrl));
   const auditLog = createPostgresAuditLog(databaseUrl);
   const errors = createPostgresErrorLog(databaseUrl);
@@ -57,7 +57,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   const orch = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(databaseUrl),
-    resolution: createResolutionService("default-org", config, acl),
+    resolution: createResolutionService(config, acl),
     sessions: createPostgresSessionStore(databaseUrl),
     workspace,
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),

@@ -47,7 +47,7 @@ const claims: CapabilityClaims = {
   exp: Date.now() + 60000,
 };
 async function setup(allowed = true) {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setRuntimeSelection("org:default-org", active);
   const service = createRuntimeService(
     { config, baseModelDefault: active.modelId },
@@ -388,7 +388,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
-  const config = testConfigStore("org");
+  const config = testConfigStore();
   await config.setSetting("interactiveFastMode", true);
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
@@ -398,7 +398,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { authorizesCapabilityScope: async () => true },
     ),
     identity: createIdentityService(testDatabaseUrl()),
-    resolution: createResolutionService("org", config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     runs,
     workspace,

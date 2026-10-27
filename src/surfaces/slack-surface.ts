@@ -1,5 +1,6 @@
 import type { ExternalSlackAccess } from "../slack/external-access.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { perTenant } from "../tenant.ts";
 import type { SurfaceSender } from "./outbound.ts";
 import { surfaceProfile, type Surface } from "./surface.ts";
 
@@ -13,7 +14,7 @@ interface SlackAccountHandle {
 export type SlackEventsHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
 
 export interface SlackNative {
-  accounts: Map<string, SlackAccountHandle>;
+  readonly accounts: Map<string, SlackAccountHandle>;
   attach(sender: SurfaceSender): () => void;
   serveEvents(account: string, handler: SlackEventsHandler): () => void;
   events(account: string): SlackEventsHandler | undefined;
@@ -24,24 +25,30 @@ export interface SlackSurface extends Surface {
 }
 
 export function createSlackSurface(): SlackSurface {
-  const accounts = new Map<string, SlackAccountHandle>();
-  let senders: SurfaceSender[] = [];
-  const events = new Map<string, SlackEventsHandler>();
+  const state = perTenant(() => ({
+    accounts: new Map<string, SlackAccountHandle>(),
+    senders: [] as SurfaceSender[],
+    events: new Map<string, SlackEventsHandler>(),
+  }));
   const slack: SlackNative = {
-    accounts,
+    get accounts() {
+      return state().accounts;
+    },
     attach(sender) {
-      senders = [...senders, sender];
+      const own = state();
+      own.senders = [...own.senders, sender];
       return () => {
-        senders = senders.filter((s) => s !== sender);
+        own.senders = own.senders.filter((s) => s !== sender);
       };
     },
     serveEvents(account, handler) {
+      const { events } = state();
       events.set(account, handler);
       return () => {
         if (events.get(account) === handler) events.delete(account);
       };
     },
-    events: (account) => events.get(account),
+    events: (account) => state().events.get(account),
   };
   return {
     name: "slack",
@@ -50,7 +57,7 @@ export function createSlackSurface(): SlackSurface {
     destinationTypes: ["slack", "group", "principal"],
     slack,
     async deliver(post) {
-      const sender = senders.at(-1);
+      const sender = state().senders.at(-1);
       if (!sender) throw new Error(`no ${post.destination.type} connection is available to post this message`);
       return sender(post);
     },

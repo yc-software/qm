@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createPgPool, tenantCols } from "../persistence/pg-pool.ts";
 import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { errMessage } from "../util/errors.ts";
+import { perTenant } from "../tenant.ts";
 
 interface IdempotencyRecord {
   key: string;
@@ -43,14 +44,15 @@ export function createIdempotencyStore(databaseUrl: string, opts: IdempotencySto
   const now = opts.now ?? Date.now;
   const pg = createPgPool(databaseUrl, [IDEMPOTENCY_MIGRATION]);
   const { codec, ...table } = typedTable<IdempotencyRecord>(pg, IDEMPOTENCY);
-  const done = new Map<string, number>();
-  let lastPruneAt = now();
+  const state = perTenant(() => ({ done: new Map<string, number>(), lastPruneAt: now() }));
+  const done = () => state().done;
 
   function pruneIfDue(t: number): void {
-    if (t - lastPruneAt < pruneIntervalMs) return;
-    lastPruneAt = t;
+    const s = state();
+    if (t - s.lastPruneAt < pruneIntervalMs) return;
+    s.lastPruneAt = t;
     const cutoff = t - retentionMs;
-    for (const [key, at] of done) if (at < cutoff) done.delete(key);
+    for (const [key, at] of s.done) if (at < cutoff) s.done.delete(key);
     void pg.q(`DELETE FROM idempotency WHERE at < $1`, [cutoff]).catch((e: unknown) => {
       console.error("[idempotency] retention prune failed:", errMessage(e));
     });
@@ -58,11 +60,11 @@ export function createIdempotencyStore(databaseUrl: string, opts: IdempotencySto
 
   const isCommitted = async (key: string): Promise<boolean> => {
     const cutoff = now() - retentionMs;
-    const cached = done.get(key);
+    const cached = done().get(key);
     if (cached != null && cached >= cutoff) return true;
     const record = await table.get(key);
     if (record != null && !record.claim && record.at >= cutoff) {
-      done.set(record.key, record.at);
+      done().set(record.key, record.at);
       return true;
     }
     return false;
@@ -94,7 +96,7 @@ export function createIdempotencyStore(databaseUrl: string, opts: IdempotencySto
       }
       const at = now();
       await table.put(key, { key, at });
-      done.set(key, at);
+      done().set(key, at);
       pruneIfDue(at);
       return true;
     },

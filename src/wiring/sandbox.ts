@@ -31,6 +31,7 @@ import {
 } from "../sandbox/managed-agents-sandbox.ts";
 import { createSdkManagedAgentsClient } from "../sandbox/managed-agents-client.ts";
 import { createSdkModalClient } from "../sandbox/modal-client.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
 import { type Config, enabledSandboxBackends } from "../config.ts";
 
 type SandboxInputs = Pick<Head, "config" | "late"> & {
@@ -54,14 +55,15 @@ export function buildSandbox(deps: SandboxInputs) {
         throw new Error("stop this sandbox's background jobs before retiring it");
     },
     provisionOptions: async (scopeId) => {
-      const secret = config.capabilitySecret ?? config.signingSecret;
+      const { capabilitySecret, signingSecret, apiBaseUrl } = tenantConfig(config);
+      const secret = capabilitySecret ?? signingSecret;
       if (!secret) return {};
       const egressToken = await mintCapabilityToken(
         {
           actorId: "system:sandbox-create",
           scopeId,
           aud: EGRESS_PROXY_AUD,
-          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, config.apiBaseUrl ?? ""),
+          egress: egressClaimAllowingControlPlane({ allowedHosts: [] }, apiBaseUrl ?? ""),
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
         secret,
@@ -109,9 +111,7 @@ function buildSandboxBackends(deps: SandboxInputs) {
     extraTools: deploymentLayer.advertisedTools,
     credentialPaths: deploymentLayer.credentialPaths,
     layerToolFiles: () => deploymentLayer.installFiles,
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+    tenantConfig: () => tenantConfig(config),
     onError: sandboxOnError,
   };
   const e2bBodies = createSandboxBodies<StoredE2bSandbox>(databaseUrl, E2B_BODIES);
@@ -181,9 +181,11 @@ function buildSandboxBackends(deps: SandboxInputs) {
       client: createSdkModalClient({
         tokenId: modal.tokenId,
         tokenSecret: modal.tokenSecret,
-        appName: modal.appName ?? "qm",
+        app: () => {
+          const { modalAppName, modalEnvironment } = tenantConfig(config);
+          return { name: modalAppName ?? "qm", ...(modalEnvironment ? { environment: modalEnvironment } : {}) };
+        },
         ...(modal.image ? { image: modal.image } : {}),
-        ...(modal.environment ? { environment: modal.environment } : {}),
         ...(config.sandbox.cpus !== undefined ? { cpus: config.sandbox.cpus } : {}),
         ...(config.sandbox.memoryMb !== undefined ? { memoryMb: config.sandbox.memoryMb } : {}),
         ...(config.sandbox.maxLifetimeSec ? { sandboxTimeoutMs: config.sandbox.maxLifetimeSec * 1000 } : {}),

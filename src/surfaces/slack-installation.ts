@@ -4,6 +4,7 @@ import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/
 import { ErrorCode } from "@slack/web-api";
 import { SLACK_AUTH_ERRORS, slackErrorCode } from "../slack/payloads.ts";
 import { slackWebClient, type SlackWebClientFactory } from "../slack/web-client.ts";
+import { perTenant, tenant } from "../tenant.ts";
 
 interface ActiveSlackInstallation {
   serviceBlocked?: boolean;
@@ -97,11 +98,10 @@ export const SLACK_INSTALLATION_MIGRATION = mapToTableMigration(
 );
 
 export function createSlackInstallationStore(
-  orgId: string,
   databaseUrl: string,
-  keyMaterial: Buffer | string,
+  keyMaterial: () => Buffer | string,
 ): SlackInstallationStore {
-  const key = deriveConnectorKey(keyMaterial, "slack-installation");
+  const keys = perTenant(() => deriveConnectorKey(keyMaterial(), "slack-installation"));
   const pg = createPgPool(databaseUrl, [SLACK_INSTALLATION_MIGRATION]);
   const { get: read, modify } = typedTable<StoredSlackInstallation>(pg, SLACK_INSTALLATION);
   const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
@@ -118,7 +118,8 @@ export function createSlackInstallationStore(
       : { configured: false, managed: record !== null };
   return {
     async get() {
-      const record = await read(orgId);
+      const key = keys();
+      const record = await read(tenant().orgId);
       if (!record || record.disabled) return null;
       return {
         botToken: decryptSecret(record.botTokenEnc, key),
@@ -134,9 +135,11 @@ export function createSlackInstallationStore(
       };
     },
     async status() {
-      return publicStatus(await read(orgId));
+      return publicStatus(await read(tenant().orgId));
     },
     async set(input) {
+      const { orgId } = tenant();
+      const key = keys();
       const updatedAt = Date.now();
       const record: StoredSlackInstallation = {
         orgId,
@@ -160,6 +163,8 @@ export function createSlackInstallationStore(
       return publicStatus(stored);
     },
     async setManaged(input) {
+      const { orgId } = tenant();
+      const key = keys();
       let accepted = false;
       await modify(orgId, (current) => {
         const record: StoredSlackInstallation = current ?? {
@@ -196,7 +201,7 @@ export function createSlackInstallationStore(
     },
     async enableManaged() {
       let accepted = true;
-      await modify(orgId, (record) => {
+      await modify(tenant().orgId, (record) => {
         if (!record) return null;
         if (!record.disabled && !record.installId) {
           accepted = false;
@@ -207,6 +212,7 @@ export function createSlackInstallationStore(
       return accepted;
     },
     async disableManaged(installId) {
+      const { orgId } = tenant();
       let disabled = false;
       await modify(orgId, (record) => {
         if (!record || record.disabled || record.installId !== installId) return record;
@@ -223,6 +229,7 @@ export function createSlackInstallationStore(
       return disabled;
     },
     async delete(updatedBy) {
+      const { orgId } = tenant();
       await modify(orgId, (current) => {
         const updatedAt = Date.now();
         if (!current)

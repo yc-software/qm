@@ -4,6 +4,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
+import { perTenant } from "../tenant.ts";
 
 const TOOL_OUTPUT_SETTING = "tool_result_inline_tokens";
 export const DEFAULT_INLINE_TOKENS = 4096;
@@ -89,22 +90,27 @@ export function createPostgresToolOutputStore(opts: {
   now?: () => number;
 }): ToolOutputStore {
   const now = opts.now ?? (() => Date.now());
-  let setting: { value: number; at: number } | null = null;
-  let tenant: Promise<{ id: string; bytes: DurableByteStore }> | null = null;
-  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> =>
-    (tenant ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
+  const state = perTenant(() => ({
+    setting: null as { value: number; at: number } | null,
+    bytes: null as Promise<{ id: string; bytes: DurableByteStore }> | null,
+  }));
+  const tenantBytes = (): Promise<{ id: string; bytes: DurableByteStore }> => {
+    const s = state();
+    return (s.bytes ??= opts.pool.q("SELECT qm_tenant_id()::text AS id").then((rows) => {
       const id = rows[0]?.id as string;
       return { id, bytes: opts.bytesFor(`${TOOL_OUTPUT_PATH}${id}/`) };
     })).catch((err: unknown) => {
-      tenant = null;
+      s.bytes = null;
       throw err;
     });
+  };
   return {
     async inlineTokens() {
-      if (setting && now() - setting.at < SETTING_CACHE_MS) return setting.value;
+      const s = state();
+      if (s.setting && now() - s.setting.at < SETTING_CACHE_MS) return s.setting.value;
       const rows = await opts.pool.q("SELECT value FROM qm_settings WHERE key = $1", [TOOL_OUTPUT_SETTING]);
-      setting = { value: inlineTokensFrom(rows[0]?.value), at: now() };
-      return setting.value;
+      s.setting = { value: inlineTokensFrom(rows[0]?.value), at: now() };
+      return s.setting.value;
     },
     async save(text) {
       const { id, bytes } = await tenantBytes();

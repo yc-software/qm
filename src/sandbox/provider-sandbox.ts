@@ -37,7 +37,6 @@ const OPTIONAL_TOOLS = ["gh", "aws", "gcloud", "kubectl", "flyctl", "glab"];
 type ErrorReport = (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 
 export interface SandboxShared extends BlobStagingOptions {
-  namePrefix?: string;
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   snapshotIntervalSec?: number;
@@ -54,6 +53,9 @@ export interface SandboxShared extends BlobStagingOptions {
   connectorSdk?: () => Promise<ConnectorSdkBundle>;
   onError?: ErrorReport;
 }
+
+export const sandboxNamePrefix = (shared: BlobStagingOptions): string =>
+  shared.tenantConfig?.().sandboxNamePrefix ?? "qm";
 
 export interface StoredSandboxRecord {
   initializationPending?: boolean;
@@ -224,7 +226,7 @@ function createProviderBase(
   { driver, backend, lock }: ProviderContext,
   shared: SandboxShared,
   deps: {
-    prefix: string;
+    prefix: () => string;
     defaultTimeoutSec: number;
     initialize: (scope: string, name: string, onStatus?: (text: string) => void) => Promise<boolean>;
     scopeOf: (name: string) => Promise<string | undefined>;
@@ -468,7 +470,7 @@ export function createProviderSandbox(
   store: SandboxBodies<StoredSandboxRecord>,
 ): ProviderSandbox {
   const { backend, homeDir } = driver;
-  const prefix = shared.namePrefix ?? "qm";
+  const prefix = (): string => sandboxNamePrefix(shared);
   const defaultTimeoutSec = shared.defaultTimeoutSec ?? DEFAULT_TIMEOUT_SEC;
   const snapshotIntervalMs = (shared.snapshotIntervalSec ?? DEFAULT_SNAPSHOT_INTERVAL_SEC) * 1000;
   const checkpointDue = (stored: StoredSandboxRecord | null | undefined, opts?: TeardownOptions): boolean => {
@@ -476,10 +478,10 @@ export function createProviderSandbox(
     return !opts?.homeUnchanged || stored?.homeDirty !== false;
   };
   const lock = <T>(scope: string, fn: () => Promise<T>): Promise<T> =>
-    shared.advisoryLock.withLock(`${backend}-provision:${prefix}:${scope}`, fn);
+    shared.advisoryLock.withLock(`${backend}-provision:${prefix()}:${scope}`, fn);
   const scopeByName = new Map<string, string>();
   const nameFor = (scope: string): string => {
-    const name = sandboxScopeName(prefix, scope);
+    const name = sandboxScopeName(prefix(), scope);
     scopeByName.set(name, scope);
     return name;
   };

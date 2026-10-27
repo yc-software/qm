@@ -9,6 +9,8 @@ import type { OrchestratorModule } from "./orchestrator.ts";
 import type { FilesModule } from "./files.ts";
 import type { DeployModule } from "./deploy.ts";
 import type { SandboxModule } from "./sandbox.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
+import { tenantSecretKey } from "../credentials/tenant-secret-key.ts";
 import type { Head } from "./late.ts";
 import { createAmbientCursors } from "../api/ambient-cursors.ts";
 import { createContextRequests } from "../api/context-requests.ts";
@@ -52,9 +54,30 @@ export function buildApiApp(deps: ApiAppInputs) {
   const { keychain } = deps.credentials;
   const { auditLog } = deps.deploymentLayer;
 
+  const current = () => tenantConfig(deps.config);
+  const viewerTokenKey = tenantSecretKey(() =>
+    deriveConnectorKey(current().connectorSecretKey!, "context-viewer-tokens"),
+  );
   const app = createApp({
     ...appDepsHead(deps),
     ...appDepsTail(deps),
+    get externalSlackPolicies() {
+      return current().externalSlackPolicies;
+    },
+    get publicWebUrl() {
+      return current().publicWebUrl;
+    },
+    get emailAuthMembers() {
+      return current().emailAuthPrincipals?.map((principalId) => ({
+        principalId,
+        displayName: principalId,
+        type: "internal" as const,
+      }));
+    },
+    get deployAppsDomain() {
+      return current().awsDeploy.appsDomain;
+    },
+    contextViewerTokenKey: viewerTokenKey,
   });
   late.app = app;
   every("deploy-maintenance", 5 * 60_000, () => app.maintainDeployments());
@@ -124,7 +147,7 @@ function appDepsHead(deps: ApiAppInputs) {
     projects,
     environments,
   } = deps.stores;
-  const { config, admittedWork, gates, late, overrides } = deps;
+  const { admittedWork, gates, late, overrides } = deps;
   const { orchestrator, skillFetcher } = deps.orchestrator;
   const { runs, maxAttempts, turnStream, runStreamEvents, runActivity } = deps.runs;
   const { runSignals, modelCredentials, refreshModels, customProviders, refreshCustomProviders } = deps.harness;
@@ -135,12 +158,10 @@ function appDepsHead(deps: ApiAppInputs) {
   const { outbound } = deps.outbound;
   return {
     teams,
-    externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
     shutdown: () => gates.inlineShutdown.signal,
     resourceSearch: createPostgresResourceSearch(pgPool),
     identity,
-    ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
     orchestrator,
     runs,
@@ -174,22 +195,13 @@ function appDepsHead(deps: ApiAppInputs) {
     webhooks,
     outbound,
     directory,
-    ...(config.emailAuthPrincipals?.length
-      ? {
-          emailAuthMembers: config.emailAuthPrincipals.map((principalId) => ({
-            principalId,
-            displayName: principalId,
-            type: "internal" as const,
-          })),
-        }
-      : {}),
     projects,
     environments,
   } satisfies Partial<Parameters<typeof createApp>[0]>;
 }
 
 function appDepsTail(deps: ApiAppInputs) {
-  const { config, connectorSecretKey } = deps;
+  const { config } = deps;
   const { deployService } = deps.deploy;
   const { deploymentLayer } = deps.deploymentLayer;
   const { processes, sessionStateBus, ledgerEventBus, contextRequestEvents } = deps.runs;
@@ -202,7 +214,6 @@ function appDepsTail(deps: ApiAppInputs) {
   const { databaseUrl } = deps.stores;
   return {
     deploy: deployService,
-    deployAppsDomain: config.awsDeploy.appsDomain,
     deploymentLayer,
     ...(processes ? { processes } : {}),
     monitors,
@@ -213,7 +224,6 @@ function appDepsTail(deps: ApiAppInputs) {
     ledgerEventBus,
     contextRequests: createContextRequests(databaseUrl),
     contextRequestEvents,
-    contextViewerTokenKey: deriveConnectorKey(connectorSecretKey, "context-viewer-tokens"),
     surfaceCache,
     channelPolicy,
     ...(harness.models.judge

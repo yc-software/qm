@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
-import type { ScopeId } from "../types.ts";
 import {
   safeSkillFilePath,
   type Skill,
@@ -22,6 +21,7 @@ import type { SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, reportFailure } from "../util/errors.ts";
 import { hasLoneSurrogate } from "../util/text.ts";
+import { perTenant, tenant } from "../tenant.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import {
   declaredInstallFiles,
@@ -263,7 +263,6 @@ interface DeploymentLayerStoreOptions {
   runtime: DeploymentLayerRuntime;
   skills: SkillStore;
   skillBundles?: SkillBundleStore;
-  scopeId: ScopeId;
   seedFallback?: () => Promise<unknown>;
   now?: () => number;
   retryDelaysMs?: readonly number[];
@@ -289,7 +288,7 @@ type Retrying = ReturnType<typeof retryingWith>;
 
 function layerProjection(opts: DeploymentLayerStoreOptions, retrying: Retrying) {
   const layerSkills = (all: Skill[]): Skill[] =>
-    all.filter((skill) => skill.scopeId === opts.scopeId && skill.createdBy === LAYER_CREATED_BY);
+    all.filter((skill) => skill.scopeId === tenant().orgScope && skill.createdBy === LAYER_CREATED_BY);
 
   const activeBundleClaims = async (all: Skill[]): Promise<Map<string, string>> => {
     const claimed = new Map<string, string>();
@@ -355,7 +354,7 @@ function layerProjection(opts: DeploymentLayerStoreOptions, retrying: Retrying) 
       for (const manifest of manifests) {
         wanted.add(manifest.name);
         const outcome = await upsertSeedSkill(opts.skills, {
-          scopeId: opts.scopeId,
+          scopeId: tenant().orgScope,
           manifest,
           createdBy: LAYER_CREATED_BY,
           reviewer: LAYER_REVIEWER,
@@ -385,7 +384,7 @@ function layerProjection(opts: DeploymentLayerStoreOptions, retrying: Retrying) 
       }
       for (const skill of projected) {
         if (
-          skill.scopeId === opts.scopeId &&
+          skill.scopeId === tenant().orgScope &&
           skill.createdBy === LAYER_CREATED_BY &&
           !wanted.has(skill.manifest.name)
         ) {
@@ -415,10 +414,10 @@ async function assertPutAllowed(
   activeBundleClaims: (all: Skill[]) => Promise<Map<string, string>>,
 ): Promise<void> {
   const existing = await opts.skills.list();
+  const { orgScope } = tenant();
   const claimed = new Map<string, string>();
   for (const skill of existing) {
-    if (skill.status !== "published" || skill.scopeId !== opts.scopeId || skill.createdBy === LAYER_CREATED_BY)
-      continue;
+    if (skill.status !== "published" || skill.scopeId !== orgScope || skill.createdBy === LAYER_CREATED_BY) continue;
     for (const path of persistedSkillRecordPaths(skill.manifest.name, skill.manifest.files))
       claimed.set(path, `skill "${skill.manifest.name}" created by ${skill.createdBy}`);
   }
@@ -426,7 +425,7 @@ async function assertPutAllowed(
   for (const manifest of manifests) {
     const clash = foreignSkillCollision(
       existing,
-      opts.scopeId,
+      orgScope,
       manifest.name,
       (skill) => skill.createdBy === LAYER_CREATED_BY,
     );
@@ -498,16 +497,18 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
   );
   const retrying = retryingWith(opts.retryDelaysMs ?? [250, 1000, 4000]);
   const projection = layerProjection(opts, retrying);
-  let appliedHash: string | null = null;
-  let failedHash: string | null = null;
-  let seeded = false;
+  const state = perTenant(() => ({
+    appliedHash: null as string | null,
+    failedHash: null as string | null,
+    seeded: false,
+  }));
   const queue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock;
   const withFleetLock = <T>(fn: () => Promise<T>): Promise<T> => advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
 
   const reportApplyFailure = (record: StoredDeploymentLayer, error: unknown): void => {
-    if (failedHash === record.contentHash) return;
-    failedHash = record.contentHash;
+    if (state().failedHash === record.contentHash) return;
+    state().failedHash = record.contentHash;
     console.error(
       `[deployment-layer] stored layer ${record.contentHash} failed to apply — keeping the current runtime layer until a valid layer is PUT: ${errMessage(error)}`,
     );
@@ -515,15 +516,16 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
 
   const apply = async (record: StoredDeploymentLayer): Promise<void> => {
     const { manifests, runtime: nextRuntime } = validateBundle(record.bundle, `durable:${record.contentHash}`);
+    const s = state();
     if (
-      appliedHash === record.contentHash &&
+      s.appliedHash === record.contentHash &&
       (await projection.projectionMatches(record, { bundle: record.bundle, manifests, runtime: nextRuntime }))
     )
       return;
-    appliedHash = null;
+    s.appliedHash = null;
     await projection.project(manifests, nextRuntime);
-    appliedHash = record.contentHash;
-    failedHash = null;
+    s.appliedHash = record.contentHash;
+    s.failedHash = null;
   };
 
   const auditPersisted = async (record: StoredDeploymentLayer, strict: boolean): Promise<void> => {
@@ -553,9 +555,9 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
       await apply(record);
     } catch (error) {
       reportApplyFailure(record, error);
-      if (!(error instanceof DeploymentLayerMutationError) && opts.seedFallback && !seeded) {
+      if (!(error instanceof DeploymentLayerMutationError) && opts.seedFallback && !state().seeded) {
         await opts.seedFallback();
-        seeded = true;
+        state().seeded = true;
       }
     }
     return record;
@@ -563,7 +565,7 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
 
   return {
     isApplied: async (hash) => {
-      if (appliedHash !== hash) return false;
+      if (state().appliedHash !== hash) return false;
       try {
         const record = await layer.get(CURRENT);
         return record?.contentHash === hash && projection.projectionMatches(record);
@@ -580,9 +582,9 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
             await auditPersisted(record, false);
             return applyForHydrate(record);
           }
-          if (opts.seedFallback && !seeded) {
+          if (opts.seedFallback && !state().seeded) {
             await opts.seedFallback();
-            seeded = true;
+            state().seeded = true;
             let appeared: StoredDeploymentLayer | null = null;
             try {
               appeared = await retrying(() => layer.get(CURRENT));
@@ -604,7 +606,7 @@ export function createDeploymentLayerStore(opts: DeploymentLayerStoreOptions): D
           const record = await layer.get(CURRENT);
           if (!record) return null;
           await auditPersisted(record, false);
-          if (failedHash !== record.contentHash) {
+          if (state().failedHash !== record.contentHash) {
             try {
               await apply(record);
             } catch (error) {

@@ -8,7 +8,12 @@ import { sleep } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
 import { dockerContainerNetworks, ensureDockerNetwork, spawnDockerExec, type DockerExec } from "./docker-exec.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
-import { createProviderSandbox, type SandboxShared, type StoredSandboxRecord } from "./provider-sandbox.ts";
+import {
+  createProviderSandbox,
+  sandboxNamePrefix,
+  type SandboxShared,
+  type StoredSandboxRecord,
+} from "./provider-sandbox.ts";
 import { sandboxBodiesMigration, type SandboxBodies } from "./sandbox-bodies.ts";
 import type { BackendSandbox, ExecResult } from "./sandbox.ts";
 
@@ -269,9 +274,8 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   const dexec = opts.dockerExec ?? spawnDockerExec(opts.dockerBin ?? "docker");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const homeDir = opts.homeDir ?? HOME_DIR;
-  const prefix = opts.namePrefix ?? DEFAULT_PREFIX;
-  const networkOf = (name: string): string => localNetworkName(name, prefix);
-  const volumeOf = (name: string): string => sibling("home", name, prefix);
+  const networkOf = (name: string): string => localNetworkName(name, sandboxNamePrefix(opts));
+  const volumeOf = (name: string): string => sibling("home", name, sandboxNamePrefix(opts));
 
   const portByName = new Map<string, number>();
   const attached = new Set<string>();

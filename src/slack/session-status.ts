@@ -43,7 +43,7 @@ export interface SlackStatusActivity {
   sessions?: Pick<SessionStore, "getByThread">;
   processes?: Pick<ProcessRegistry, "liveByScope">;
   monitors?: Pick<MonitorStore, "enabled">;
-  publicWebUrl?: string;
+  publicWebUrl?: () => string | undefined;
 }
 
 const SESSION_STATUS: TableSpec = {
@@ -151,7 +151,7 @@ export function createSlackSessionStatus(
         };
         if (now() - state.startedAt! > 5 * 60_000 && anchor?.sessionId) {
           const session = await activity.sessions?.getByThread(anchor.sessionId);
-          if (session) state.followUrl = conversationWebUrl(activity.publicWebUrl, session.id);
+          if (session) state.followUrl = conversationWebUrl(activity.publicWebUrl?.(), session.id);
         }
         if (lost()) return true;
         if (!(await persist(state))) return true;

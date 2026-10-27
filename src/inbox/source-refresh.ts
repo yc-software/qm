@@ -10,6 +10,7 @@ import type { RefreshKit, SourceRefresher } from "./sources/refresh.ts";
 import { createGmailRefresher } from "./sources/gmail-refresh.ts";
 import { createSlackRefresher } from "./sources/slack-refresh.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
+import { perTenant } from "../tenant.ts";
 
 interface RefreshDeps {
   items: InboxLedger;
@@ -26,13 +27,15 @@ interface RefreshDeps {
 export type InboxSourceRefresh = (owner: string, items: InboxItem[], mode?: "avatars") => Promise<void>;
 
 export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh {
-  const checked = new LRUCache<string, boolean>({ max: 2000, ttl: 60_000 });
-  const info = new LRUCache<string, Record<string, unknown>>({ max: 2000, ttl: 300_000 });
-  const limited = new LRUCache<string, boolean>({ max: 2000 });
-  const running = new Map<string, Promise<void>>();
-  const infoRunning = new Map<string, Promise<Record<string, unknown>>>();
+  const caches = perTenant(() => ({
+    checked: new LRUCache<string, boolean>({ max: 2000, ttl: 60_000 }),
+    info: new LRUCache<string, Record<string, unknown>>({ max: 2000, ttl: 300_000 }),
+    limited: new LRUCache<string, boolean>({ max: 2000 }),
+    running: new Map<string, Promise<void>>(),
+    infoRunning: new Map<string, Promise<Record<string, unknown>>>(),
+    positions: new LRUCache<string, number>({ max: 2000 }),
+  }));
   const now = deps.now ?? Date.now;
-  const positions = new LRUCache<string, number>({ max: 2000 });
 
   function recordFailure(owner: string, subject: string, error: unknown): void {
     deps.errors?.record({
@@ -48,6 +51,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
     now,
     recordFailure,
     limiter(owner, key) {
+      const { limited } = caches();
       const limitKey = `${owner}:${key}`;
       if (limited.has(limitKey)) throw new Error("Source rate limited. The next refresh will retry.");
       return (retry) => limited.set(limitKey, true, { ttl: Math.max(60, Number.isFinite(retry) ? retry : 60) * 1000 });
@@ -56,6 +60,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
       return new Error("Couldn't refresh the source. Your item has not been dismissed.", { cause });
     },
     cached(key, load) {
+      const { info, infoRunning } = caches();
       const hit = info.get(key);
       if (hit) return Promise.resolve(hit);
       const pending = infoRunning.get(key);
@@ -101,6 +106,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
   }
 
   async function one(owner: string, item: InboxItem, mode?: "avatars"): Promise<void> {
+    const { checked, running } = caches();
     const itemKey = `${owner}:${item.id}:${item.sourceAt ?? 0}`;
     const key = `${itemKey}:${mode ?? "source"}`;
     if (checked.has(key)) return;
@@ -136,6 +142,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
   }
   return async (owner, items, mode) => {
     if (!(await deps.featureFlags.enabled("inbox_loops", personalScope(owner)))) return;
+    const { positions } = caches();
     const positionKey = `${owner}:${mode ?? "source"}`;
     const start = positions.get(positionKey) ?? 0;
     const ordered = items.slice(start).concat(items.slice(0, start));

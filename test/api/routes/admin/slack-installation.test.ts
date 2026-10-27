@@ -21,7 +21,7 @@ type SlackSetupStatus = {
 };
 
 async function fixture(t: test.TestContext) {
-  const store = createSlackInstallationStore("test", testDatabaseUrl(), "test-key");
+  const store = createSlackInstallationStore(testDatabaseUrl(), () => "test-key");
   const calls: Array<{ path: string; body?: string }> = [];
   let remote = Response.json({ companyOwned: true, appReady: false, connected: false });
   const managedSlack = createManagedSlack({

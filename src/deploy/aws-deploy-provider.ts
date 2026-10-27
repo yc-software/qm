@@ -130,7 +130,6 @@ function awsDeployContext(opts: AwsDeployProviderOptions) {
     perf: Date,
   });
   const suspendedDurationSeconds = opts.suspendedDurationSeconds ?? maximumDurationInSeconds;
-  const appsDomain = opts.appsDomain;
   const tokenTtlMinutes = opts.tokenTtlMinutes ?? 30;
   const dataBucket = opts.dataBucket;
   const dataPrefix = (opts.dataPrefix ?? "deploy-data").replace(/\/+$/, "");
@@ -167,7 +166,6 @@ function awsDeployContext(opts: AwsDeployProviderOptions) {
     maxIdleDurationSeconds,
     resolveCache,
     suspendedDurationSeconds,
-    appsDomain,
     dataBucket,
     snapshotIntervalMs,
     s3,
@@ -447,7 +445,6 @@ function awsResolver(ctx: AwsDeployContext, data: AwsDataSnapshots, litestreamOp
     appPort,
     renewAtOf,
     resolveCache,
-    appsDomain,
     snapshotIntervalMs,
     s3,
     litestream,
@@ -476,8 +473,8 @@ function awsResolver(ctx: AwsDeployContext, data: AwsDataSnapshots, litestreamOp
       proxyHeaders: { "X-aws-proxy-auth": token, "X-aws-proxy-port": String(appPort) },
       renewAt: renewAtOf(stored),
     };
-    if (appsDomain) {
-      result.publicUrl = `https://${d.name ?? d.id}.${appsDomain}/`;
+    if (opts.appsDomain) {
+      result.publicUrl = `https://${d.name ?? d.id}.${opts.appsDomain}/`;
     }
     return result;
   }

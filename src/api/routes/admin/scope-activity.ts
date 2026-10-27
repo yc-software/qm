@@ -1,5 +1,6 @@
 import type { ScopeActivity, SessionStore } from "../../../sessions/session-store.ts";
 import { reportFailure } from "../../../util/errors.ts";
+import { perTenant } from "../../../tenant.ts";
 
 const REFRESH_MS = 5 * 60_000;
 
@@ -8,13 +9,15 @@ export interface ScopeActivitySnapshot {
   byScope: Map<string, ScopeActivity>;
 }
 
-const snapshots = new WeakMap<SessionStore, { snapshot?: ScopeActivitySnapshot; refreshing?: Promise<void> }>();
+type ActivityState = { snapshot?: ScopeActivitySnapshot; refreshing?: Promise<void> };
+
+const snapshots = new WeakMap<SessionStore, () => ActivityState>();
 
 export function scopeActivity(store: SessionStore | undefined): ScopeActivitySnapshot | null {
   if (!store) return null;
   let entry = snapshots.get(store);
-  if (!entry) snapshots.set(store, (entry = {}));
-  const state = entry;
+  if (!entry) snapshots.set(store, (entry = perTenant((): ActivityState => ({}))));
+  const state = entry();
   if (!state.refreshing && (!state.snapshot || Date.now() - state.snapshot.asOf > REFRESH_MS)) {
     state.refreshing = store
       .scopeActivity()

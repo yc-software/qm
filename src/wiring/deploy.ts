@@ -6,6 +6,7 @@ import type { RunsModule } from "./runs.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { CredentialsModule } from "./credentials.ts";
 import type { Head } from "./late.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
 import { createDeployStore, type Deployment } from "../deploy/deploy-store.ts";
 import { createDeployGitArchiveStore } from "../deploy/deploy-git-store.ts";
 import { createDeployBodyStore } from "../deploy/deploy-body-store.ts";
@@ -57,12 +58,15 @@ export function buildDeploy(deps: DeployInputs) {
     git: {
       repoRoot: config.deployGitDir,
       archiveStore: createDeployGitArchiveStore(databaseUrl),
-      ...(config.s3Bucket ? { archiveBytes: s3Bytes(config.s3Bucket, "deploy-git/") } : {}),
+      ...(config.s3Bucket ? { archiveBytes: s3Bytes("deploy-git/") } : {}),
     },
   });
   const buildAwsDeploy = (): DeployProvider =>
     createAwsDeployProvider({
       ...config.awsDeploy,
+      get appsDomain() {
+        return tenantConfig(config).awsDeploy.appsDomain;
+      },
       advisoryLock,
       store: createDeployBodyStore(databaseUrl, AWS_DEPLOY_BODIES_MIGRATION),
       onError: sandboxOnError,
@@ -92,13 +96,18 @@ export function buildDeploy(deps: DeployInputs) {
       "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset) — deployed apps have NO durable /data",
     );
   }
-  const deployGitSecret = config.signingSecret;
-  const deployGitBase = config.apiBaseUrl;
+  const current = () => tenantConfig(config);
   const deployService = createDeployService({
     outbound,
-    deployAppsDomain: config.awsDeploy.appsDomain,
-    publicLinksAvailable: !!(config.awsDeploy.appsDomain && config.awsDeploy.gateSecret),
-    publicWebUrl: config.publicWebUrl,
+    get deployAppsDomain() {
+      return current().awsDeploy.appsDomain;
+    },
+    get publicLinksAvailable() {
+      return !!(current().awsDeploy.appsDomain && config.awsDeploy.gateSecret);
+    },
+    get publicWebUrl() {
+      return current().publicWebUrl;
+    },
     appPublished: productAnalytics.appPublished,
     deployStore,
     provider: deployProvider,
@@ -114,26 +123,27 @@ export function buildDeploy(deps: DeployInputs) {
       return (
         identity.isInternal(identity.classify(email)) &&
         ((await directory.get(email))?.type === "internal" ||
-          config.emailAuthPrincipals?.includes(email) ||
-          Boolean(config.emailAuthDomain && email.endsWith(`@${config.emailAuthDomain}`)) ||
+          current().emailAuthPrincipals?.includes(email) ||
+          Boolean(current().emailAuthDomain && email.endsWith(`@${current().emailAuthDomain}`)) ||
           identity.externalMember(email) !== undefined)
       );
     },
     managesArtifactHome,
-    ...(deployGitSecret && deployGitBase
+    ...(config.signingSecret && config.apiBaseUrl
       ? {
           deploymentEnv: async (deployment: Deployment): Promise<Record<string, string>> => {
+            const { signingSecret, apiBaseUrl, capabilitySecret, orgId } = current();
             const env: Record<string, string> = {
-              VIEWER_IDENTITY_KEY: viewerIdentityKey(deployGitSecret, deployment.id),
+              VIEWER_IDENTITY_KEY: viewerIdentityKey(signingSecret!, deployment.id),
             };
-            const orgScope = scopeId("org", config.orgId);
+            const orgScope = scopeId("org", orgId);
             const credentials = await deploymentCredentialSlugs(
               await serviceCreds.listServiceCredentials(orgScope),
               orgScope,
               acl,
             );
             if (credentials.length) {
-              env.AGENT_API_URL = deployGitBase;
+              env.AGENT_API_URL = apiBaseUrl!;
               env.AGENT_CREDENTIAL_TOKEN = await mintCapabilityToken(
                 {
                   actorId: deployment.createdBy,
@@ -143,7 +153,7 @@ export function buildDeploy(deps: DeployInputs) {
                   deployment: deployment.id,
                   exp: Date.now() + DEPLOYMENT_CREDENTIAL_TTL_MS,
                 },
-                config.capabilitySecret ?? deployGitSecret,
+                capabilitySecret ?? signingSecret!,
                 config.capabilityTokenCompression,
               );
             }

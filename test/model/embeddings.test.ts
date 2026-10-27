@@ -99,11 +99,11 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
 
 test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
   const databaseUrl = testDatabaseUrl();
-  const first = testConfigStore("test", { databaseUrl });
+  const first = testConfigStore({ databaseUrl });
   await first.setEmbeddingModel("gateway/embed");
-  await first.setRuntimeSelection("org:test", { modelId: "gpt-5.5" });
-  await first.setRuntimeSelection("org:test", null);
-  const restarted = testConfigStore("test", { databaseUrl });
+  await first.setRuntimeSelection("org:default-org", { modelId: "gpt-5.5" });
+  await first.setRuntimeSelection("org:default-org", null);
+  const restarted = testConfigStore({ databaseUrl });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);
   assert.equal(await first.getEmbeddingModelDurable(), null);

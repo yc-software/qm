@@ -1,7 +1,7 @@
 // Turns registered MCP servers into callable agent tools.
 //
-// Maintains a cached snapshot of each enabled server's tool list (refreshed
-// when the registry changes and on a slow interval), and executes calls with
+// Maintains a cached snapshot of each enabled server's tool list per tenant
+// (refreshed when the registry changes and on a slow interval), and executes calls with
 // the server's configured credential. Every call is audited. Tool names are
 // namespaced `<serverId>_<toolName>` so two servers can't collide with each
 // other or with built-in tools.
@@ -14,6 +14,7 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import { perTenant, tenant, withTenant, type Tenant } from "../tenant.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -170,12 +171,14 @@ interface McpToolServiceOptions {
   userTokens?: Pick<ConnectorTokenStore, "connectorAccessToken" | "connectorTokenStatus">;
   now?: () => number;
   refreshIntervalMs?: number;
-  signInUrl?: (serverId: string) => string;
+  signInUrl?: (serverId: string) => string | undefined;
 }
 
 interface McpToolState {
+  tenant: Tenant;
   snapshot: McpToolDescriptor[];
   perUserServers: Map<string, McpServer>;
+  callers: McpCallers;
 }
 
 function createMcpCallers(opts: McpToolServiceOptions, now: () => number) {
@@ -285,7 +288,8 @@ function createMcpCallers(opts: McpToolServiceOptions, now: () => number) {
 
 type McpCallers = ReturnType<typeof createMcpCallers>;
 
-async function refreshMcpTools(opts: McpToolServiceOptions, callers: McpCallers, state: McpToolState): Promise<void> {
+async function refreshMcpTools(opts: McpToolServiceOptions, state: McpToolState): Promise<void> {
+  const { callers } = state;
   callers.catalogs.clear();
   const all = await opts.servers.list();
   setPublicOAuthClients(mcpPublicOAuthClients(all));
@@ -336,15 +340,11 @@ async function refreshMcpTools(opts: McpToolServiceOptions, callers: McpCallers,
   state.perUserServers = nextPerUser;
 }
 
-function mcpCallMethods(
-  opts: McpToolServiceOptions,
-  callers: McpCallers,
-  state: McpToolState,
-  refresh: () => Promise<void>,
-) {
+function mcpCallMethods(opts: McpToolServiceOptions, state: () => McpToolState, refresh: () => Promise<void>) {
   return {
     async needsApproval(name, args, principalId) {
-      const def = state.snapshot.find((t) => t.name === name);
+      const { snapshot, callers } = state();
+      const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       if (!def.catalog) return def.needsApproval;
       if (args.operation !== "invoke") return false;
@@ -358,7 +358,8 @@ function mcpCallMethods(
       }
     },
     async call(name, args, principalId, approval) {
-      const def = state.snapshot.find((t) => t.name === name);
+      const { snapshot, callers } = state();
+      const def = snapshot.find((t) => t.name === name);
       if (!def) throw new Error(`unknown MCP tool: ${name}`);
       const server = await opts.servers.get(def.serverId);
       if (!server || !server.enabled) throw new Error(`MCP server ${def.serverId} is not available`);
@@ -390,10 +391,15 @@ function mcpCallMethods(
 
 export function createMcpToolService(opts: McpToolServiceOptions): McpToolService {
   const now = opts.now ?? (() => Date.now());
-  const state: McpToolState = { snapshot: [], perUserServers: new Map() };
-  const callers = createMcpCallers(opts, now);
   let closed = false;
-  const refresh = (): Promise<void> => refreshMcpTools(opts, callers, state);
+  const refresh = (): Promise<void> => refreshMcpTools(opts, state());
+  const refreshInBackground = (): void => {
+    if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
+  };
+  const state = perTenant<McpToolState>(() => {
+    queueMicrotask(refreshInBackground);
+    return { tenant: tenant(), snapshot: [], perUserServers: new Map(), callers: createMcpCallers(opts, now) };
+  });
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
     if (!principalId || !server.credentialHost || !opts.userTokens) return false;
@@ -404,8 +410,7 @@ export function createMcpToolService(opts: McpToolServiceOptions): McpToolServic
   }
 
   async function toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]> {
-    const current = state.snapshot;
-    const gated = state.perUserServers;
+    const { snapshot: current, perUserServers: gated } = state();
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
     const ready = new Set<string>();
@@ -417,18 +422,17 @@ export function createMcpToolService(opts: McpToolServiceOptions): McpToolServic
     return current.filter((t) => !gated.has(t.serverId) || Boolean(t.signIn) !== ready.has(t.serverId));
   }
 
-  const refreshInBackground = (): void => {
-    if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
-  };
   const unsubscribe = opts.servers.onChange(refreshInBackground);
-  const timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
+  const timer = setInterval(() => {
+    for (const s of state.all()) withTenant(s.tenant, refreshInBackground);
+  }, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
   timer.unref?.();
-  refreshInBackground();
+  state();
 
   return {
-    toolDefs: () => state.snapshot,
+    toolDefs: () => state().snapshot,
     toolDefsFor,
-    ...mcpCallMethods(opts, callers, state, refresh),
+    ...mcpCallMethods(opts, state, refresh),
     refresh,
     async probe(server, principalId) {
       const tools = await createMcpClient({ url: server.url, auth: authOf(server) }).listTools({

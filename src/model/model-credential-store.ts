@@ -1,3 +1,4 @@
+import { tenantSecretKey } from "../credentials/tenant-secret-key.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
@@ -40,10 +41,10 @@ const MODEL_CREDENTIALS_MIGRATION = mapToTableMigration("model/credentials/0001-
 
 export function createModelCredentialStore(input: {
   databaseUrl: string;
-  keyMaterial: string | Buffer;
+  keyMaterial: () => string | Buffer;
   fallback?: Partial<Record<ModelProvider, string>>;
 }): ModelCredentialStore {
-  const key = deriveConnectorKey(input.keyMaterial, "model-credentials");
+  const key = tenantSecretKey(() => deriveConnectorKey(input.keyMaterial(), "model-credentials"));
   const table = typedTable<StoredModelCredential>(
     createPgPool(input.databaseUrl, [MODEL_CREDENTIALS_MIGRATION]),
     MODEL_CREDENTIALS,

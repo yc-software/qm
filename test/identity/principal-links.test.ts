@@ -467,7 +467,7 @@ describe("link mutation serialization", () => {
           );
         const identity = createIdentityService(databaseUrl, {
           principalLinks: links,
-          directorySyncProtected: ["B"],
+          directorySyncProtected: () => ["B"],
         });
         await identity.hydrate();
         assert.equal(identity.classify("B").type, "guest");

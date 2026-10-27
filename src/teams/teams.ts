@@ -2,6 +2,7 @@ import { foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { createPgPool, withPgTransaction, tenantCols } from "../persistence/pg-pool.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
+import { tenant } from "../tenant.ts";
 import type { Conversation, Principal, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 
@@ -43,13 +44,9 @@ export interface TeamStore {
 const keysOf = (id: string) => personIds(id).map(foldPrincipalId);
 const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some((k) => team.present.has(k));
 
-export function createPostgresTeamStore(
-  connectionString: string,
-  flags: Pick<FeatureFlagStore, "enabled">,
-  orgScope: ScopeId,
-): TeamStore {
+export function createPostgresTeamStore(connectionString: string, flags: Pick<FeatureFlagStore, "enabled">): TeamStore {
   const { q, pool } = createPgPool(connectionString, []);
-  const enabled = () => flags.enabled("team_scopes", orgScope);
+  const enabled = () => flags.enabled("team_scopes", tenant().orgScope);
   return {
     async list() {
       if (!(await enabled())) return [];

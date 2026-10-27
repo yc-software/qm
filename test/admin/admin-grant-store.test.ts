@@ -29,13 +29,13 @@ test("grant store: add / list / revoke round-trip on (principal, scope, role)", 
 test("grant store: seed applies only when empty and never undoes a revoke", async () => {
   const persist = createPostgresAdminGrantStore(testDatabaseUrl());
   const seed = [{ principalId: "A", scopeId: "org:default-org", role: "org_admin" as const }];
-  const store = createAdminGrantStore(persist, { seed });
+  const store = createAdminGrantStore(persist, { seed: () => seed });
   assert.equal((await store.list()).length, 1);
   await store.revoke("A", "org:default-org", "org_admin");
   assert.equal((await store.list()).length, 0);
 
   await persist.put({ principalId: "B", scopeId: "org:default-org", role: "org_admin" });
-  const store2 = createAdminGrantStore(persist, { seed });
+  const store2 = createAdminGrantStore(persist, { seed: () => seed });
   assert.deepEqual(
     (await store2.list()).map((g) => g.principalId),
     ["B"],
@@ -43,7 +43,7 @@ test("grant store: seed applies only when empty and never undoes a revoke", asyn
 });
 
 test("grant store: an empty seed grants no admins (deliberate lock-out)", async () => {
-  const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed: [] });
+  const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed: () => [] });
   assert.deepEqual(await store.list(), []);
 });
 
@@ -73,7 +73,7 @@ test("admin grants: a failed seed is retried on the next call (rejection not cac
     async remove() {},
   };
   const store = createAdminGrantStore(persist, {
-    seed: [{ principalId: "p", scopeId: scopeId("personal", "p"), role: "org_admin" }],
+    seed: () => [{ principalId: "p", scopeId: scopeId("personal", "p"), role: "org_admin" }],
   });
   await assert.rejects(() => store.list(), /transient pg failure/);
   const listed = await store.list();

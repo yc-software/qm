@@ -237,7 +237,7 @@ test("custom provider models live in their own namespace, never the gateway one"
 });
 
 test("removed gateway selections never fall back to a different org or direct model", async () => {
-  const store = testConfigStore("default-org");
+  const store = testConfigStore();
   const org = "org:default-org" as const;
   const personal = "personal:alice" as const;
   const fallback = { modelId: "claude-opus-5" };

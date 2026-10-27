@@ -37,7 +37,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
     store: testSandboxBodies(SPRITES_BODIES),
     advisoryLock: testAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
-    namePrefix: "qmt",
+    tenantConfig: () => ({ sandboxNamePrefix: "qmt" }),
     baseUrl: fake.baseUrl,
     ...extra,
   });

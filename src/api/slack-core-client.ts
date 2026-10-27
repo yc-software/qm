@@ -45,7 +45,7 @@ import type { RuntimeChoice } from "../harness/harness.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../inbox/sources/adapter.ts";
 import { slackConversationRef } from "../inbox/sources/slack.ts";
-import { tenant } from "../tenant.ts";
+import { perTenant, tenant } from "../tenant.ts";
 
 interface SlackRunHooks {
   onReplying?(): void;
@@ -77,7 +77,6 @@ interface DirectoryPush {
   groupsSyncedAt?: number;
 }
 
-/** Periodic upkeep for one Slack app attached in this process; `slack:*` background jobs run each kind. */
 export type SlackUpkeep = { reconcileStatus(): Promise<unknown> } & Partial<
   Record<"replayEnvelopes" | "publishEmojiCatalog" | "reconcileTaskAcks", () => Promise<unknown>>
 >;
@@ -111,9 +110,7 @@ export interface SlackCoreClient {
   pushDirectory(body: DirectoryPush): Promise<boolean>;
   slack: SlackNative;
   upkeep: {
-    /** The returned detach waits out this app's in-flight upkeep. */
     attach(upkeep: SlackUpkeep): () => Promise<void>;
-    /** Run one kind of upkeep for every Slack app attached in this process. */
     run(kind: keyof SlackUpkeep): Promise<void>;
   };
   stagedEnvelopes?: StagedEnvelopes;
@@ -165,7 +162,7 @@ export interface SlackCoreClientDeps {
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   ackPicks?: AckEmojiPickStore;
   ackModelId?: () => string | undefined;
-  brandingDefault?: OrgBranding;
+  brandingDefault?: () => OrgBranding | undefined;
   leaderLease: LeaderLease;
   stagedEnvelopes?: StagedEnvelopes;
   handledEvents?: HandledEvents;
@@ -178,9 +175,10 @@ const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
 
 function slackUpkeepRegistry(): SlackCoreClient["upkeep"] {
-  const upkeeps = new Map<SlackUpkeep, Set<Promise<unknown>>>();
+  const attached = perTenant(() => new Map<SlackUpkeep, Set<Promise<unknown>>>());
   return {
     attach(upkeep) {
+      const upkeeps = attached();
       const running = new Set<Promise<unknown>>();
       upkeeps.set(upkeep, running);
       return async () => {
@@ -189,7 +187,7 @@ function slackUpkeepRegistry(): SlackCoreClient["upkeep"] {
       };
     },
     async run(kind) {
-      for (const [upkeep, running] of upkeeps) {
+      for (const [upkeep, running] of attached()) {
         const run = upkeep[kind]?.() ?? Promise.resolve();
         running.add(run);
         await run.finally(() => running.delete(run));
@@ -198,7 +196,8 @@ function slackUpkeepRegistry(): SlackCoreClient["upkeep"] {
   };
 }
 
-function surfaceSettingsMethods(deps: SlackCoreClientDeps, lease: LeaderLease, orgScope: ScopeId) {
+function surfaceSettingsMethods(deps: SlackCoreClientDeps, lease: LeaderLease) {
+  const orgScope = (): ScopeId => tenant().orgScope;
   return {
     decideDeploymentAccess: (value, actor, approve) =>
       decideDeploymentAccess(deps.app, deps.identity, value, actor, approve),
@@ -219,16 +218,16 @@ function surfaceSettingsMethods(deps: SlackCoreClientDeps, lease: LeaderLease, o
         }
       : {}),
     async externalSlackParticipants() {
-      return (await deps.config.settingDurable("externalSlackParticipants", orgScope)) === true;
+      return (await deps.config.settingDurable("externalSlackParticipants", orgScope())) === true;
     },
 
-    ackEmojiOverride: () => deps.config.settingDurable("ackEmoji", orgScope),
-    publishEmojiCatalog: (emoji) => deps.config.setSlackEmojiCatalog(orgScope, emoji),
+    ackEmojiOverride: () => deps.config.settingDurable("ackEmoji", orgScope()),
+    publishEmojiCatalog: (emoji) => deps.config.setSlackEmojiCatalog(orgScope(), emoji),
 
     async surfaceHeaderFacts(scope) {
       const [choice, branding] = await Promise.all([
-        resolveRuntimeChoiceDurable(deps.config, orgScope, scope, deps.runtimeFallback),
-        resolveBranding(deps.config, orgScope, deps.brandingDefault),
+        resolveRuntimeChoiceDurable(deps.config, orgScope(), scope, deps.runtimeFallback),
+        resolveBranding(deps.config, orgScope(), deps.brandingDefault?.()),
       ]);
       return {
         ...(branding.selfLabel ? { agentLabel: branding.selfLabel } : {}),
@@ -500,14 +499,13 @@ function directoryAndContextMethods(deps: SlackCoreClientDeps, lease: LeaderLeas
 
 export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClient {
   const lease = deps.leaderLease;
-  const orgScope: ScopeId = tenant().orgScope;
   const terminalWaiters = new Map<string, Set<() => void>>();
   deps.runs.onTerminal((run) => {
     for (const wake of terminalWaiters.get(run.id) ?? []) wake();
   });
 
   return {
-    ...surfaceSettingsMethods(deps, lease, orgScope),
+    ...surfaceSettingsMethods(deps, lease),
     ...surfaceDataMethods(deps),
     ...runMethods(deps, terminalWaiters),
     ...directoryAndContextMethods(deps, lease),

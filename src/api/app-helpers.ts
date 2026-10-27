@@ -258,9 +258,8 @@ async function replayOrphanedRunSignals(
 }
 
 export function createAppHelpers(deps: AppDeps, app: App) {
-  const adminBase = deps.publicWebUrl;
   const adminLink = (sessionId: string): string | undefined =>
-    adminBase ? adminSessionUrl(adminBase, sessionId) : undefined;
+    deps.publicWebUrl ? adminSessionUrl(deps.publicWebUrl, sessionId) : undefined;
   const audit = (principalId: string, action: string, resource: string, scopeLabel: ScopeId): void =>
     deps.auditLog.record({ at: Date.now(), principalId, action, resource, scopeLabel });
 
@@ -327,7 +326,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
   );
 
   return {
-    adminBase,
     audit,
     directoryMember: (principalId: string) => app.directoryMember(principalId),
     withAdminLink,

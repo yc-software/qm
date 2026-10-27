@@ -5,6 +5,7 @@ import type { ScopedConfigStore } from "./config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
 import { principalEntitledToScope } from "./context-filter.ts";
+import { tenant } from "../tenant.ts";
 
 export interface ResolutionService {
   scopeFor(conversation: Conversation, actor: Principal): ScopeId;
@@ -32,9 +33,7 @@ export function composeInstructions(orgInstructions: string | null, scopeInstruc
   return parts.join("\n\n");
 }
 
-export function createResolutionService(orgId: string, config: ScopedConfigStore, acl: AclStore): ResolutionService {
-  const orgScope = scopeId("org", orgId);
-
+export function createResolutionService(config: ScopedConfigStore, acl: AclStore): ResolutionService {
   function scopeFor(conversation: Conversation, actor: Principal): ScopeId {
     return conversationScope(conversation, actor.id);
   }
@@ -42,6 +41,7 @@ export function createResolutionService(orgId: string, config: ScopedConfigStore
   return {
     scopeFor,
     async resolve(conversation, actor, external = false): Promise<Resolution> {
+      const { orgScope } = tenant();
       const scope = scopeFor(conversation, actor);
       const isDm = conversation.kind === "dm";
       const liveConfigScopes = new Set<ScopeId>([orgScope, scope, scopeId("personal", actor.id)]);

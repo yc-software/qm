@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
 import { createPgPool, tenantCols } from "../../persistence/pg-pool.ts";
+import { perTenant, tenant, withTenant } from "../../tenant.ts";
 import { cols, mapToTableMigration, tableCodec, type TableSpec } from "../../persistence/typed-table.ts";
 import { jsonbStringify } from "../../util/text.ts";
 import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
@@ -148,7 +149,7 @@ function createBurstBuffer(
   flush: (burst: Burst) => Promise<void>,
   onError?: (e: unknown, burst: Burst) => void,
 ): { add(ctx: TurnEndCtx): Promise<void>; sweep(): Promise<void> } {
-  const timers = new Map<string, NodeJS.Timeout>();
+  const timers = perTenant(() => new Map<string, NodeJS.Timeout>());
   return {
     async add({
       scopeId,
@@ -175,20 +176,22 @@ function createBurstBuffer(
 
       const key = JSON.stringify([scopeId, burst.conversationScopeId, actorId ?? "", sessionId ?? ""]);
       const active = await pending.append(key, { ...burst, token: randomUUID(), at: Date.now() });
-      clearTimeout(timers.get(key));
-      timers.delete(key);
+      const owner = tenant();
+      const scheduled = timers();
+      clearTimeout(scheduled.get(key));
+      scheduled.delete(key);
       if (active.turns.length >= maxTurns) {
         if (await pending.take(key, active.token)) await flush(active);
         return;
       }
       const timer = setTimeout(() => {
-        timers.delete(key);
-        void (async () => {
+        scheduled.delete(key);
+        void withTenant(owner, async () => {
           if (await pending.take(key, active.token)) await flush(active);
-        })().catch((e) => onError?.(e, active));
+        }).catch((e) => onError?.(e, active));
       }, quietMs);
       timer.unref?.();
-      timers.set(key, timer);
+      scheduled.set(key, timer);
     },
     async sweep() {
       if (!pending) return;

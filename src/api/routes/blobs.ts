@@ -8,7 +8,7 @@ import {
 import { CAPABILITY_HEADER } from "../contract.ts";
 import { extendBodyDeadline, fail, headerValue, pipeToResponse, verifySignedRoute } from "../http.ts";
 import { type BaseCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
-import { reportForeignTenant } from "../../tenant.ts";
+import { foreignTenant } from "../../tenants/directory.ts";
 
 const STAGE_UPLOAD_DEADLINE_MS = 1_800_000;
 
@@ -31,8 +31,8 @@ async function authorizeBlob(
       capSecret,
       dir === "read" ? { dir, id: blobId ?? "" } : { dir },
     );
-    if (!claims) return rejectBlob(ctx, "blob-transfer capability token not valid for this transfer");
-    reportForeignTenant(claims.orgId, "blob transfer capability");
+    if (!claims || foreignTenant(claims.orgId, "blob transfer capability"))
+      return rejectBlob(ctx, "blob-transfer capability token not valid for this transfer");
     if (!(await ctx.app.authorizesCapabilityScope(claims)))
       return rejectBlob(ctx, "the acting user is not currently authorized for this conversation");
     return "capability";

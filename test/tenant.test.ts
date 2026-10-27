@@ -17,6 +17,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { useTenantDirectory } from "../src/tenants/directory.ts";
 
 test("outside any tenant context the process tenant comes from ORG_ID", () => {
   const before = process.env.ORG_ID;
@@ -108,23 +109,32 @@ test("custom providers, Slack mention names and MCP sign-in clients do not cross
   );
 });
 
-test("a portal identity naming another tenant is reported and still accepted while every process serves one tenant", async (t) => {
-  const reports = t.mock.method(console, "error", () => {});
+async function servingMany(fn: () => Promise<void>): Promise<void> {
+  useTenantDirectory({
+    byHost: async () => undefined,
+    active: async () => [tenant()],
+    watch() {},
+    close: async () => {},
+  });
+  try {
+    await fn();
+  } finally {
+    useTenantDirectory(undefined);
+  }
+}
+
+test("a portal identity naming another tenant is refused when serving many tenants, and only reported otherwise", async () => {
   const secret = "portal-identity-tenant-secret";
   const now = 1_000_000;
   const forAlpha = await mintPortalIdentity({ p: "alice@example.com", t: "tenant-alpha", exp: now + 60_000 }, secret);
   assert.equal((await withTenant(alpha, () => verifyPortalIdentity(forAlpha, secret, now)))?.p, "alice@example.com");
-  assert.equal(reports.mock.callCount(), 0);
   assert.equal((await withTenant(beta, () => verifyPortalIdentity(forAlpha, secret, now)))?.p, "alice@example.com");
-  assert.equal(reports.mock.callCount(), 1);
-  assert.match(
-    String(reports.mock.calls[0]!.arguments[0]),
-    /credential issued for another tenant.*portal identity names tenant tenant-alpha; this process serves tenant-beta/,
-  );
+  await servingMany(async () => {
+    assert.equal(await withTenant(beta, () => verifyPortalIdentity(forAlpha, secret, now)), null);
+  });
 });
 
-test("the API reports a capability token minted for another tenant", async (t) => {
-  const reports = t.mock.method(console, "error", () => {});
+test("when serving many tenants the API refuses a capability token minted for another tenant", async () => {
   const secret = "tenant-capability-secret".repeat(2);
   const built = buildApp(testConfig({ signingSecret: secret }));
   const server = createServer(built.app, {
@@ -144,13 +154,8 @@ test("the API reports a capability token minted for another tenant", async (t) =
     (await fetch(`${base}/v1/apis`, { headers: { "x-agent-capability": cap } })).status;
   try {
     assert.equal(await status(await mint()), 200);
-    assert.equal(reports.mock.calls.filter((call) => /another tenant/.test(String(call.arguments[0]))).length, 0);
     assert.equal(await status(await withTenant(alpha, mint)), 200);
-    assert.equal(
-      reports.mock.calls.filter((call) => /capability token names tenant tenant-alpha/.test(String(call.arguments[0])))
-        .length,
-      1,
-    );
+    await servingMany(async () => assert.equal(await status(await withTenant(alpha, mint)), 401));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

@@ -1,4 +1,5 @@
 import type { CronStore } from "../cron/cron-store.ts";
+import { perTenant } from "../tenant.ts";
 import type { InboxEventSink, InboxLedger } from "./ledger.ts";
 import type { ConversationEvent } from "./sources/adapter.ts";
 import { sourceAdapter } from "./sources/index.ts";
@@ -15,18 +16,18 @@ const CRON_CACHE_TTL_MS = 60_000;
 export function createInboxRealtime(deps: InboxRealtimeDeps): {
   onConversationEvent(event: ConversationEvent): Promise<void>;
 } {
-  let cachedInboxCrons: Array<{ id: string; owner: string }> = [];
-  let cacheAt = 0;
+  const cache = perTenant(() => ({ crons: [] as Array<{ id: string; owner: string }>, at: 0 }));
 
   async function inboxCrons(): Promise<Array<{ id: string; owner: string }>> {
+    const own = cache();
     const now = Date.now();
-    if (now - cacheAt > CRON_CACHE_TTL_MS) {
-      cachedInboxCrons = (await deps.crons.list())
+    if (now - own.at > CRON_CACHE_TTL_MS) {
+      own.crons = (await deps.crons.list())
         .filter((cron) => cron.inbox?.source && !cron.archived)
         .map((cron) => ({ id: cron.id, owner: cron.owner }));
-      cacheAt = now;
+      own.at = now;
     }
-    return cachedInboxCrons;
+    return own.crons;
   }
 
   return {

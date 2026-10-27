@@ -80,7 +80,7 @@ export function fakeSandbox(): Sandbox {
 }
 
 export function buildOrchestrator(harness: Harness, maxContextTokens?: number, defaultTurnWallClockMs?: number) {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const errors = createPostgresErrorLog(testDatabaseUrl());
@@ -98,7 +98,7 @@ export function buildOrchestrator(harness: Harness, maxContextTokens?: number, d
     ...singleProcessDeps(),
     config,
     identity: createIdentityService(testDatabaseUrl()),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),

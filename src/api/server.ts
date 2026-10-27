@@ -30,7 +30,7 @@ import { proxyDeploymentSubdomain } from "./routes/deployment-subdomain.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
 import { livePersonCapability } from "./artifact-share.ts";
 import { canonicalPerson, samePerson } from "../directory/person.ts";
-import { reportForeignTenant } from "../tenant.ts";
+import { foreignTenant } from "../tenants/directory.ts";
 import { InstructionsTooLargeError } from "../resolution/config-instructions.ts";
 import { zodMessage } from "./routes/shared.ts";
 
@@ -113,8 +113,8 @@ async function verifyCapability(
   if (!capToken) return refuse(res, 401, `${requiredAud} capability token required`);
   const capSecret = deps.capabilitySecret ?? secret;
   const capability = capSecret ? await verifyCapabilityToken(capToken, capSecret) : null;
-  if (!capability) return refuse(res, 401, "invalid or expired capability token");
-  reportForeignTenant(capability.orgId, "capability token");
+  if (!capability || foreignTenant(capability.orgId, "capability token"))
+    return refuse(res, 401, "invalid or expired capability token");
   if (
     capability.externalSlack &&
     !(
@@ -298,14 +298,25 @@ const matchApi = createRouter(apiRoutes);
 function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
   const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
   if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
+  const dedupe = deps.replayDedupe;
   const auth =
-    deps.signingSecret && deps.replayDedupe
-      ? createSourceAuth({ signingSecret: deps.signingSecret, dedupe: deps.replayDedupe })
+    deps.signingSecret && dedupe
+      ? createSourceAuth({
+          get signingSecret() {
+            return deps.signingSecret!;
+          },
+          dedupe,
+        })
       : null;
   const wiring: Wiring = {
     app,
-    deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
-    secret: deps.signingSecret,
+    deps: Object.defineProperties(
+      { control: createControlService(app, deps.scheduler, deps.admin) } as ServerDeps,
+      Object.getOwnPropertyDescriptors(deps),
+    ),
+    get secret() {
+      return deps.signingSecret;
+    },
     auth,
     requirePortalIdentity,
     allowUnsignedSourceAuth,

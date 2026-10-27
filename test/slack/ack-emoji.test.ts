@@ -7,7 +7,7 @@ import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS, createAckPresenter } from "..
 import type { SlackCoreClient } from "../../src/api/slack-core-client.ts";
 import { testConfigStore } from "../support/test-database.ts";
 
-const ORG = "org:test" as const;
+const ORG = "org:default-org" as const;
 
 test("parseAckEmoji: normalizes colons/case, splits on commas and spaces, drops junk, dedupes", () => {
   assert.deepEqual(parseAckEmoji(":custom_thinking:, CUSTOM_OK  custom_ok\n:+1:"), [
@@ -22,7 +22,7 @@ test("parseAckEmoji: normalizes colons/case, splits on commas and spaces, drops 
 });
 
 test("config store: ack emoji set/get/clear roundtrip, durable read included", async () => {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   assert.equal(config.setting("ackEmoji", ORG), null);
   assert.equal(await config.settingDurable("ackEmoji", ORG), null);
   await config.setSetting("ackEmoji", ["custom_thinking", "custom_ok"], ORG);

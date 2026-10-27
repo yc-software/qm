@@ -1,6 +1,7 @@
 import type { StoresModule } from "./stores.ts";
 import type { FilesModule } from "./files.ts";
 import type { SandboxModule } from "./sandbox.ts";
+import { tenant } from "../tenant.ts";
 import type { Head } from "./late.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "../runs/postgres-session-state-bus.ts";
@@ -95,7 +96,7 @@ export function buildRuns(deps: RunsInputs) {
       return advisoryLock.withLock("session-run-admission", enqueue);
     },
   };
-  const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
+  const productAnalytics = createProductAnalytics(() => tenant().orgId, config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
   const ledger = runStore.ledger;
   every("turns:pointer-repair", 60_000, () => sweepTurns({ ledger: turnLedger, sessions, errors }), {

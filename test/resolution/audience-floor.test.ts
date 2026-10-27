@@ -7,7 +7,7 @@ import { testConfigStore } from "../support/test-database.ts";
 const ORG = scopeId("org", "default-org");
 
 async function configWithOrgHosts(hosts: string[]) {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setSetting("egress", { allowedHosts: hosts }, ORG);
   return config;
 }
@@ -35,7 +35,7 @@ test("audienceEgressFloor for several principals = the INTERSECTION of their rea
 });
 
 test("audienceDeniedFloor is the UNION across the audience (a deny by anyone applies to the room)", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["org-bad.test"] }, ORG);
   await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["alice-bad.test"] }, scopeId("personal", "U1"));
   await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["bob-bad.test"] }, scopeId("personal", "U2"));
@@ -49,14 +49,14 @@ test("audienceDeniedFloor is the UNION across the audience (a deny by anyone app
 });
 
 test("audienceDeniedFloor carries the org-floor deny even to a single principal with none of their own", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["org-bad.test"] }, ORG);
   const alice: Principal = { id: "U1", type: "internal" };
   assert.deepEqual(audienceDeniedFloor([alice], config, ORG), ["org-bad.test"]);
 });
 
 test("audienceDeniedFloor for an EMPTY audience is empty", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["org-bad.test"] }, ORG);
   assert.deepEqual(audienceDeniedFloor([], config, ORG), []);
 });

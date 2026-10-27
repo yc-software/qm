@@ -32,7 +32,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
     store,
     advisoryLock: createNoopAdvisoryLock(),
     client: fake.client,
-    namePrefix: "qmt",
+    tenantConfig: () => ({ sandboxNamePrefix: "qmt" }),
     ...extra,
   });
 }

@@ -66,7 +66,6 @@ export function fixture() {
       databaseUrl,
       runtime: emptyDeploymentLayer(),
       skills,
-      scopeId: org,
       ...opts,
     });
   return { databaseUrl, skills, layer };

@@ -12,7 +12,8 @@ import { escapeHtml } from "../../../plugins/chassis/src/http.ts";
 import { type ApiCtx, ok, reply, type Route, type RouteResult } from "./route.ts";
 import { audit, resolveCapabilityDestination, verifiedConversationSpeaker } from "./shared.ts";
 import { reportFailureAs, swallow } from "../../util/errors.ts";
-import { reportForeignTenant, tenant } from "../../tenant.ts";
+import { tenant } from "../../tenant.ts";
+import { foreignTenant } from "../../tenants/directory.ts";
 
 const TRIGGERED = "secret-drop links can only be minted on a turn a person sent — this turn was fired by a trigger";
 
@@ -132,9 +133,9 @@ async function dropLinkClaims(
   const token = ctx.url.searchParams.get("t");
   if (!capSecret || !token) return null;
   const claims = await verifyCapabilityToken(token, capSecret);
-  reportForeignTenant(claims?.orgId, "secret drop capability");
   if (
     !claims ||
+    foreignTenant(claims.orgId, "secret drop capability") ||
     claims.aud !== SECRET_DROP_AUD ||
     claims.drop !== dropId ||
     !samePerson(claims.actorId, rec.ownerId) ||

@@ -19,6 +19,7 @@ import {
   spawnTask,
   TaskCancelled,
 } from "./absurd.ts";
+import { noticePayload } from "../persistence/postgres-notify-bus.ts";
 import { TURN_QUEUES, tenantQueue, type TurnQueue } from "./absurd-schema.ts";
 import { turnFenceHeld } from "./turn-fence.ts";
 
@@ -208,7 +209,7 @@ async function start(client: PoolClient, run: Run): Promise<void> {
   });
   await client.query(`UPDATE runs SET status = 'pending', absurd_task_id = $2 WHERE id = $1`, [run.id, spawned.taskId]);
   await point(client, run.sessionId, run.id);
-  await client.query("SELECT pg_notify($1, $2)", [TURN_READY_CHANNEL, JSON.stringify(queue)]);
+  await client.query("SELECT pg_notify($1, $2)", [TURN_READY_CHANNEL, noticePayload(JSON.stringify(queue))]);
 }
 
 async function advance(client: PoolClient, threadRef: string, ending: string): Promise<void> {
@@ -223,7 +224,7 @@ async function advance(client: PoolClient, threadRef: string, ending: string): P
     const queue = queueOf(run);
     await point(client, threadRef, run.id);
     await emitEvent(client, queue, resumeEvent(run.id, run.preemptions), { turnId: run.id });
-    await client.query("SELECT pg_notify($1, $2)", [TURN_READY_CHANNEL, JSON.stringify(queue)]);
+    await client.query("SELECT pg_notify($1, $2)", [TURN_READY_CHANNEL, noticePayload(JSON.stringify(queue))]);
     return;
   }
   const { rows } = await client.query(
@@ -261,7 +262,7 @@ async function releaseClaim(
 
 async function requeue(client: PoolClient, queue: TurnQueue, absurdRunId: string, at: Date): Promise<void> {
   await scheduleRun(client, queue, absurdRunId, at);
-  await client.query("SELECT pg_notify($1, $2)", [TURN_READY_CHANNEL, JSON.stringify(queue)]);
+  await client.query("SELECT pg_notify($1, $2)", [TURN_READY_CHANNEL, noticePayload(JSON.stringify(queue))]);
 }
 
 async function askToYield(client: PoolClient, activeId: string): Promise<boolean> {
@@ -272,7 +273,7 @@ async function askToYield(client: PoolClient, activeId: string): Promise<boolean
   );
   if (!rows[0]) return false;
   if (rows[0].status === "running") {
-    await client.query("SELECT pg_notify($1, $2)", [TURN_YIELD_CHANNEL, JSON.stringify(activeId)]);
+    await client.query("SELECT pg_notify($1, $2)", [TURN_YIELD_CHANNEL, noticePayload(JSON.stringify(activeId))]);
     return false;
   }
   await client.query("UPDATE runs SET last_stop = $2, preemptions = preemptions + 1 WHERE id = $1", [
@@ -358,7 +359,7 @@ async function cancelLocked(
   if (run.status !== "queued" && run.status !== "pending" && run.status !== "running") return null;
   if (run.absurdTaskId) await cancelTask(client, queueOf(run), run.absurdTaskId);
   if (run.status === "running") {
-    await client.query("SELECT pg_notify($1, $2)", [TURN_CANCEL_CHANNEL, JSON.stringify(run.id)]);
+    await client.query("SELECT pg_notify($1, $2)", [TURN_CANCEL_CHANNEL, noticePayload(JSON.stringify(run.id))]);
     return { outcome: "signalled", settled: false };
   }
   let settled = false;

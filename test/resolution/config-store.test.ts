@@ -22,6 +22,7 @@ import { createPgPool } from "../../src/persistence/pg-pool.ts";
 import { defaultOrgPolicy } from "../../src/policy/command-policy.ts";
 import { InstructionsTooLargeError, MAX_INSTRUCTIONS_CHARS } from "../../src/resolution/config-instructions.ts";
 import { scopeId, type ScopeId } from "../../src/types.ts";
+import { tenantFor, withTenant } from "../../src/tenant.ts";
 import { buildApp as buildProductionApp } from "../../src/wiring.ts";
 import { stopAtEnd } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
@@ -32,7 +33,7 @@ function tables() {
   const databaseUrl = testDatabaseUrl();
   const db = createPgPool(databaseUrl);
   return {
-    open: () => testConfigStore("default-org", { databaseUrl }),
+    open: () => testConfigStore({ databaseUrl }),
     instructions: typedTable<PersistedInstructions>(db, CONFIG_TABLES.instructions),
     legacyHistory: typedTable<PersistedInstructionsRevision>(db, CONFIG_TABLES.instructionsHistory),
   };
@@ -326,13 +327,16 @@ test("pg config store: settings written on one core reach another core through r
 
 test("a durable database is pinned to one organization", async () => {
   const databaseUrl = testDatabaseUrl();
-  await testConfigStore("default-org", { databaseUrl }).hydrate!();
-  await assert.rejects(testConfigStore("other", { databaseUrl }).hydrate!(), /database belongs to org default-org/);
+  await testConfigStore({ databaseUrl }).hydrate!();
+  await assert.rejects(
+    withTenant(tenantFor("other"), () => testConfigStore({ databaseUrl }).hydrate!()),
+    /database belongs to org default-org/,
+  );
 });
 
 test("purpose runtimes persist independently without manufacturing a conversation default", async () => {
   const databaseUrl = testDatabaseUrl();
-  const store = testConfigStore("default-org", { databaseUrl });
+  const store = testConfigStore({ databaseUrl });
   const org = "org:default-org";
   const cron = { modelId: "gpt-5.5", fastMode: false };
   const subagent = { modelId: "claude-opus-5", effortLevel: "low" };
@@ -341,7 +345,7 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   await store.setPurposeRuntime("subagent", subagent);
   assert.equal(store.getRuntimeSelection(org)?.modelId ?? null, null);
   assert.equal(await store.getRuntimeSelectionDurable(org), null);
-  const reader = testConfigStore("default-org", { databaseUrl });
+  const reader = testConfigStore({ databaseUrl });
   await reader.hydrate!();
   assert.deepEqual(reader.getPurposeRuntime("cron"), cron);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
@@ -365,7 +369,7 @@ test("purpose runtimes persist independently without manufacturing a conversatio
 
 test("interactive fast mode defaults off and persists across instances", async () => {
   const databaseUrl = testDatabaseUrl();
-  const first = testConfigStore("org", { databaseUrl });
+  const first = testConfigStore({ databaseUrl });
   await first.hydrate!();
   assert.equal(first.setting("interactiveFastMode"), false);
   assert.equal(await first.settingDurable("interactiveFastMode"), false);
@@ -373,7 +377,7 @@ test("interactive fast mode defaults off and persists across instances", async (
   await first.setSetting("interactiveFastMode", true);
   assert.equal(first.setting("interactiveFastMode"), true);
 
-  const second = testConfigStore("org", { databaseUrl });
+  const second = testConfigStore({ databaseUrl });
   await second.hydrate!();
   assert.equal(second.setting("interactiveFastMode"), true);
   assert.equal(await second.settingDurable("interactiveFastMode"), true);
@@ -389,9 +393,9 @@ test("the org default reaches only human turns that expressed no preference", ()
 
 test("refreshScope picks up an interactive fast mode change written elsewhere", async () => {
   const databaseUrl = testDatabaseUrl();
-  const store = testConfigStore("org", { databaseUrl });
+  const store = testConfigStore({ databaseUrl });
   await store.hydrate!();
-  const org = scopeId("org", "org");
+  const org = scopeId("org", "default-org");
   await createPgPool(databaseUrl).q(`INSERT INTO interactive_fast_mode_flag (scope_id, "on") VALUES ($1, true)`, [org]);
   await store.refreshScope(org);
   assert.equal(store.setting("interactiveFastMode"), true);
@@ -403,8 +407,8 @@ const SECRET = "personal-account-test-signing-secret";
 
 test("personal account choice persists across instances without changing anyone else's choice", async () => {
   const databaseUrl = testDatabaseUrl();
-  const first = testConfigStore("default-org", { databaseUrl });
-  const second = testConfigStore("default-org", { databaseUrl });
+  const first = testConfigStore({ databaseUrl });
+  const second = testConfigStore({ databaseUrl });
   assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
   await first.setPersonalModelAuth("alice", true);
   assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
@@ -559,8 +563,8 @@ function servers() {
   const databaseUrl = testDatabaseUrl();
   return {
     rows: typedTable<PersistedBaseModel>(createPgPool(databaseUrl), CONFIG_TABLES.baseModels),
-    left: testConfigStore("default-org", { databaseUrl }),
-    right: testConfigStore("default-org", { databaseUrl }),
+    left: testConfigStore({ databaseUrl }),
+    right: testConfigStore({ databaseUrl }),
   };
 }
 
@@ -608,8 +612,8 @@ const channel = scopeId("channel", "C1");
 
 test("a config write resolves only after another instance can read it from the store", async () => {
   const databaseUrl = testDatabaseUrl();
-  const writer = testConfigStore("default-org", { databaseUrl });
-  const reader = testConfigStore("default-org", { databaseUrl });
+  const writer = testConfigStore({ databaseUrl });
+  const reader = testConfigStore({ databaseUrl });
 
   await writer.setSetting("orgAmbient", false);
 
@@ -618,7 +622,7 @@ test("a config write resolves only after another instance can read it from the s
 
 test("a failed config write rejects and leaves this instance's cache on the stored value", async () => {
   const databaseUrl = testDatabaseUrl();
-  const config = testConfigStore("default-org", { databaseUrl });
+  const config = testConfigStore({ databaseUrl });
   await config.hydrate!();
   await failTableWrites(databaseUrl, "egress_policies");
 
@@ -631,12 +635,12 @@ test("a failed config write rejects and leaves this instance's cache on the stor
   assert.deepEqual(await createPgPool(databaseUrl).q("SELECT scope_id FROM egress_policies"), []);
 });
 
-const acmeOrg = scopeId("org", "acme");
+const acmeOrg = scopeId("org", "default-org");
 const pinChannel = "channel:C123" as ScopeId;
 const otherChannel = "channel:C456" as ScopeId;
 
 async function freshStore() {
-  const store = testConfigStore("acme", {});
+  const store = testConfigStore({});
   await store.hydrate!();
   return store;
 }

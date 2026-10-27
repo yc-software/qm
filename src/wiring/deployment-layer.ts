@@ -2,7 +2,7 @@ import type { StoresModule } from "./stores.ts";
 import type { Head } from "./late.ts";
 import { loadDeploymentLayer, emptyDeploymentLayer } from "../deployment/load-layer.ts";
 import { resolve } from "node:path";
-import { scopeId } from "../types.ts";
+import { tenant } from "../tenant.ts";
 import { createPostgresAuditLog } from "../admin/postgres-audit-log.ts";
 import {
   createDeploymentLayerStore,
@@ -25,29 +25,29 @@ export function buildDeploymentLayer(deps: DeploymentLayerInputs) {
     : emptyDeploymentLayer();
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const brokeredTools = deploymentLayer.brokeredTools;
-  const orgScope = scopeId("org", config.orgId);
   const auditLog = createPostgresAuditLog(databaseUrl);
   const layerStore = createDeploymentLayerStore({
     databaseUrl,
     runtime: deploymentLayer,
     skills,
     skillBundles,
-    scopeId: orgScope,
     advisoryLock,
-    auditPersisted: (record) =>
-      auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
+    auditPersisted: (record) => {
+      const { orgScope } = tenant();
+      return auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {
         at: record.updatedAt,
         principalId: record.updatedBy,
         action: "deployment_layer.updated",
         resource: record.contentHash,
         scopeLabel: orgScope,
-      }),
+      });
+    },
     ...(config.seedSkills && layerSkillsDir
       ? {
           seedFallback: () =>
             installSeedSkills(skills, {
               dir: layerSkillsDir,
-              scopeId: orgScope,
+              scopeId: tenant().orgScope,
               createdBy: LAYER_CREATED_BY,
               reviewer: LAYER_REVIEWER,
             }),
@@ -62,6 +62,7 @@ export function buildDeploymentLayer(deps: DeploymentLayerInputs) {
   const rehydrateLayer = () => void layerStore.hydrate().catch(reportFailureAs("deployment layer refresh", undefined));
   deploymentLayerChanged.subscribe(rehydrateLayer, { onResync: rehydrateLayer });
   const installCatalogs = async (): Promise<void> => {
+    const { orgScope } = tenant();
     await installSeedSkills(skills, { dir: resolve("./skills-seed"), scopeId: orgScope, respectArchived: true });
     for (const dir of config.pluginSkillDirs) {
       if (layerSkillsDir && resolve(dir) === layerSkillsDir) continue;

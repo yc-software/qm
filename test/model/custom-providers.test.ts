@@ -113,7 +113,7 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
 
 test("store round-trip: upsert validates and encrypts the key, statuses never leak it, delete disables", async () => {
   const databaseUrl = testDatabaseUrl();
-  const store = createCustomProviderStore({ databaseUrl, keyMaterial: "test-key-material" });
+  const store = createCustomProviderStore({ databaseUrl, keyMaterial: () => "test-key-material" });
 
   await store.upsert(GATEWAY, "sk-secret-123", "admin@example.com");
   const statuses = await store.statuses();
@@ -210,9 +210,9 @@ for (const protocol of ["openai", "openai-responses", "anthropic"] as const) {
     test(`custom ${protocol} reasoning=${reasoning} survives persistence and runtime mappings`, async () => {
       const spec = { ...GATEWAY, protocol, models: [{ ...GATEWAY.models[0]!, reasoning }] };
       const databaseUrl = testDatabaseUrl();
-      const store = createCustomProviderStore({ databaseUrl, keyMaterial: "reasoning-test" });
+      const store = createCustomProviderStore({ databaseUrl, keyMaterial: () => "reasoning-test" });
       await store.upsert(spec, "local", "admin@example.com");
-      const reloaded = createCustomProviderStore({ databaseUrl, keyMaterial: "reasoning-test" });
+      const reloaded = createCustomProviderStore({ databaseUrl, keyMaterial: () => "reasoning-test" });
       setCustomProviders(await reloaded.enabled());
       const model = resolveCustomModel("custom/acme-gateway/acme-large")!;
       assert.equal(model.reasoning, reasoning ?? false);

@@ -10,10 +10,10 @@ import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts"
 const actor: Principal = { id: "U1", type: "internal" };
 
 async function setup() {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setInstructions(scopeId("personal", "U1"), "PERSONAL_INSTRUCTIONS");
   await config.setInstructions(scopeId("channel", "C1"), "CHANNEL_INSTRUCTIONS");
-  return createResolutionService("default-org", config, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
+  return createResolutionService(config, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
 }
 
 test("DM mounts global + personal (the user's own workspace)", async () => {
@@ -55,15 +55,11 @@ test("resolution.systemPrompt is the org/scope policy layer only — protocol gu
 });
 
 test("egress floor includes the actor's team-scope denylist (resolved to the per-turn token)", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["org-bad.test"] }, scopeId("org", "default-org"));
   await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["team-bad.test"] }, scopeId("team", "T1"));
   await config.setSetting("egress", { allowedHosts: [], deniedHosts: ["me-bad.test"] }, scopeId("personal", "U1"));
-  const res = createResolutionService(
-    "default-org",
-    config,
-    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-  );
+  const res = createResolutionService(config, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
   const teamActor: Principal = { id: "U1", type: "internal", teamIds: ["T1"] };
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [teamActor] };
   const r = await res.resolve(conv, teamActor);
@@ -71,7 +67,7 @@ test("egress floor includes the actor's team-scope denylist (resolved to the per
 });
 
 test("egress floor includes the conversation scope policy for shared rooms", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setSetting(
     "egress",
     {
@@ -80,11 +76,7 @@ test("egress floor includes the conversation scope policy for shared rooms", asy
     },
     scopeId("channel", "C1"),
   );
-  const res = createResolutionService(
-    "default-org",
-    config,
-    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-  );
+  const res = createResolutionService(config, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
   const conv: Conversation = { kind: "channel", threadRef: "C1:t1", channelRef: "C1", audience: [actor] };
   const r = await res.resolve(conv, actor);
   assert.deepEqual(r.egress.allowedHosts, ["channel-api.test"]);
@@ -103,7 +95,7 @@ test("the writable layer is the scope, global is read-only", async () => {
 
 test("resolution refreshes security config written by another instance", async () => {
   const databaseUrl = testDatabaseUrl();
-  const reader = testConfigStore("default-org", { databaseUrl });
+  const reader = testConfigStore({ databaseUrl });
   const personal = scopeId("personal", "U1");
   const db = createPgPool(databaseUrl);
   await db.q("INSERT INTO soul_configs (scope_id, content, version) VALUES ($1, 'FLEET_LIVE', 1)", [personal]);
@@ -111,11 +103,7 @@ test("resolution refreshes security config written by another instance", async (
     personal,
     { allowedHosts: [], deniedHosts: ["blocked.example"] },
   ]);
-  const res = createResolutionService(
-    "default-org",
-    reader,
-    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-  );
+  const res = createResolutionService(reader, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const resolved = await res.resolve(conv, actor);
   assert.match(resolved.systemPrompt, /FLEET_LIVE/);
@@ -133,14 +121,10 @@ test("SOUL composition keeps organization precedence without duplicating identic
 });
 
 test("external audiences receive no organization or scope policy", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   await config.setInstructions(scopeId("org", "default-org"), "PRIVATE_ORG");
   await config.setInstructions(scopeId("channel", "C1"), "PRIVATE_SCOPE");
-  const resolution = createResolutionService(
-    "default-org",
-    config,
-    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
-  );
+  const resolution = createResolutionService(config, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
   const conversation: Conversation = { kind: "channel", channelRef: "C1", threadRef: "C1:t", audience: [actor] };
   assert.equal((await resolution.resolve(conversation, actor, true)).systemPrompt, "");
 });

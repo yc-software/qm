@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 
+const PG_POOL = "../../src/persistence/pg-pool.ts";
+const actual = (await import(`${PG_POOL}?actual`)) as typeof import("../../src/persistence/pg-pool.ts");
 const started: string[][] = [];
 const pending: Array<() => void> = [];
 let closed = false;
 mock.module("../../src/persistence/pg-pool.ts", {
   namedExports: {
+    ...actual,
     createPgPool: () => ({
       query: (_sql: string, [payload]: string[][]) => {
-        started.push(payload!);
+        started.push(payload!.map((notice) => String((JSON.parse(notice) as { e: unknown }).e)));
         return new Promise<void>((resolve) => pending.push(resolve));
       },
       close: async () => {

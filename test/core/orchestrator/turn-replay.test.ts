@@ -28,7 +28,6 @@ import { testConfigStore, testDatabaseUrl, testDeployBackings } from "../../supp
 import { createPostgresGrantStore } from "../../../src/acl/postgres-grant-store.ts";
 import { testRunStore } from "../../support/turns.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:retry", audience: [actor] };
 scopeId("personal", "U1");
@@ -86,7 +85,7 @@ function buildScenario(interruptAfterToolResult = false) {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(databaseUrl),
-    resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
+    resolution: createResolutionService(testConfigStore(), acl),
     sessions,
     runs,
     workspace,

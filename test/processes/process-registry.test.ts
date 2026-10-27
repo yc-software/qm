@@ -245,7 +245,6 @@ test("registry preserves purpose without replacing the command and accepts legac
   }
 });
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
 
@@ -331,7 +330,7 @@ function fakeProcessSandbox() {
 
 function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
   const databaseUrl = testDatabaseUrl();
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(databaseUrl));
   const auditLog = createPostgresAuditLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "dps-")));
@@ -346,7 +345,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(databaseUrl),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions: createPostgresSessionStore(databaseUrl),
     workspace,
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),
@@ -364,8 +363,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
 
 async function memoryScope(): Promise<string> {
   const resolution = createResolutionService(
-    ORG,
-    testConfigStore(ORG),
+    testConfigStore(),
     createAclStore(createPostgresGrantStore(testDatabaseUrl())),
   );
   return writableMemoryScope((await resolution.resolve(conv, actor)).layers, resolution.scopeFor(conv, actor));

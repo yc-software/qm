@@ -1,6 +1,7 @@
 import { SocketModeClient } from "@slack/socket-mode";
 import type { Receiver, App as BoltApp } from "@slack/bolt";
 import { errMessage } from "../util/errors.ts";
+import { tenant, withTenant } from "../tenant.ts";
 import { parseLogLevel } from "./payloads.ts";
 import type { EnvelopeStaging } from "./envelope-staging.ts";
 
@@ -155,6 +156,7 @@ export function createDeferredAckReceiver(opts: {
     },
   });
   let app: BoltApp | undefined;
+  const owner = tenant();
   client.on(
     "slack_event",
     (args: {
@@ -163,12 +165,14 @@ export function createDeferredAckReceiver(opts: {
       retry_num?: number;
       retry_reason?: string;
     }) =>
-      processEnvelope(app, args.body, args.ack, {
-        capMs: opts.capMs,
-        staging: opts.staging,
-        retryNum: args.retry_num,
-        retryReason: args.retry_reason,
-      }),
+      withTenant(owner, () =>
+        processEnvelope(app, args.body, args.ack, {
+          capMs: opts.capMs,
+          staging: opts.staging,
+          retryNum: args.retry_num,
+          retryReason: args.retry_reason,
+        }),
+      ),
   );
   return {
     client,

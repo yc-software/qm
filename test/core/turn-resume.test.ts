@@ -571,7 +571,7 @@ function buildScenario() {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testDatabaseUrl()),
-    resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
+    resolution: createResolutionService(testConfigStore(), acl),
     sessions,
     runs,
     workspace,

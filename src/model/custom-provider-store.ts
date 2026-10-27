@@ -1,3 +1,4 @@
+import { tenantSecretKey } from "../credentials/tenant-secret-key.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
@@ -47,11 +48,11 @@ function strip(saved: StoredCustomProvider): CustomProviderSpec {
 
 export function createCustomProviderStore(input: {
   databaseUrl: string;
-  keyMaterial: string | Buffer;
+  keyMaterial: () => string | Buffer;
   write?: <T>(fn: () => Promise<T>) => Promise<T>;
 }): CustomProviderStore {
   const write = input.write ?? (<T>(fn: () => Promise<T>) => fn());
-  const key = deriveConnectorKey(input.keyMaterial, "custom-model-providers");
+  const key = tenantSecretKey(() => deriveConnectorKey(input.keyMaterial(), "custom-model-providers"));
   const pg = createPgPool(input.databaseUrl, [CUSTOM_PROVIDERS_MIGRATION]);
   const table = typedTable<StoredCustomProvider>(pg, CUSTOM_PROVIDERS);
 

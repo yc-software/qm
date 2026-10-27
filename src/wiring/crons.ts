@@ -1,6 +1,7 @@
 import type { RunsModule } from "./runs.ts";
 import type { StoresModule } from "./stores.ts";
 import type { OutboundModule } from "./outbound.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
 import type { Head } from "./late.ts";
 import { createMonitorStore } from "../monitors/monitor-store.ts";
 import type { LedgerEvent } from "../inbox/events.ts";
@@ -63,10 +64,13 @@ export function buildCrons(deps: CronsInputs) {
     },
   };
   const webhooks = createWebhookStore(databaseUrl);
-  const webUiBase = config.slack?.webUiPublicUrl ?? config.publicWebUrl;
   const approvals = createApprovalStore(createApprovalRecords(databaseUrl), outbound, {
     surfaces: chatSurfaces,
-    webSessionUrl: (sessionId) => (webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined),
+    webSessionUrl: (sessionId) => {
+      const { slack, publicWebUrl } = tenantConfig(config);
+      const webUiBase = slack?.webUiPublicUrl ?? publicWebUrl;
+      return webUiBase ? `${webUiBase}/s/${encodeURIComponent(sessionId)}` : undefined;
+    },
   });
   late.approvals = approvals;
   let securityScreener = overrides.securityScreener;

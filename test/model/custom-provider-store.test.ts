@@ -317,7 +317,7 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
 test("QA: registrations survive a restart (shared durable backing + same secret)", async () => {
   const databaseUrl = testDatabaseUrl();
   const secret = "restart-secret-restart-secret-restart-secret";
-  const first = createCustomProviderStore({ databaseUrl, keyMaterial: secret });
+  const first = createCustomProviderStore({ databaseUrl, keyMaterial: () => secret });
   await first.upsert(
     {
       id: "survivor",
@@ -329,7 +329,7 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
     "sk-live-key",
     "admin-alice@default-org",
   );
-  const second = createCustomProviderStore({ databaseUrl, keyMaterial: secret });
+  const second = createCustomProviderStore({ databaseUrl, keyMaterial: () => secret });
   const enabled = await second.enabled();
   assert.equal(enabled[0]?.id, "survivor", "spec survives the restart");
   assert.equal(await second.resolveKey("survivor"), "sk-live-key", "key decrypts after restart with the same secret");
@@ -340,7 +340,10 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
 
 test("QA: a corrupt stored key degrades that provider only — admin surface stays intact", async () => {
   const databaseUrl = testDatabaseUrl();
-  const writer = createCustomProviderStore({ databaseUrl, keyMaterial: "first-secret-first-secret-first-secret-1" });
+  const writer = createCustomProviderStore({
+    databaseUrl,
+    keyMaterial: () => "first-secret-first-secret-first-secret-1",
+  });
   await writer.upsert(
     {
       id: "corrupted",
@@ -352,7 +355,10 @@ test("QA: a corrupt stored key degrades that provider only — admin surface sta
     "sk-will-be-unreadable",
     "admin-alice@default-org",
   );
-  const reader = createCustomProviderStore({ databaseUrl, keyMaterial: "other-secret-other-secret-other-secret-2" });
+  const reader = createCustomProviderStore({
+    databaseUrl,
+    keyMaterial: () => "other-secret-other-secret-other-secret-2",
+  });
   await assert.rejects(reader.resolveKey("corrupted"), "decryption fails with the wrong secret");
   const statuses = await reader.statuses();
   assert.equal(statuses[0]?.id, "corrupted");

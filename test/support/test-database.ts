@@ -72,8 +72,8 @@ export function testAdvisoryLock(): AdvisoryLock {
   return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
 }
 
-export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {
-  return createConfigStore(orgId, { databaseUrl: opts.databaseUrl ?? testDatabaseUrl(), ...opts });
+export function testConfigStore(opts: Partial<Parameters<typeof createConfigStore>[0]> = {}) {
+  return createConfigStore({ databaseUrl: opts.databaseUrl ?? testDatabaseUrl(), ...opts });
 }
 
 export async function failTableWrites(url: string, table: string): Promise<void> {
@@ -93,7 +93,7 @@ export function testAdminGrantStore(
     role: "org_admin" as const,
   })),
 ): AdminGrantStore {
-  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed });
+  return createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), { seed: () => seed });
 }
 
 export function testDeployBackings(

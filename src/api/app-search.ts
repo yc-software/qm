@@ -9,13 +9,13 @@ import { reportFailure, swallowAs } from "../util/errors.ts";
 import type { App, AppDeps } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 
-function conversationBackend(app: App, publicWebUrl: string | undefined): SearchBackend {
+function conversationBackend(app: App, deps: Pick<AppDeps, "publicWebUrl">): SearchBackend {
   return createIntersectionBackend({
     name: "conversations",
     key: (hit) => hit.id,
     searchForPrincipal: async (principal, query, limit) =>
       (await app.searchSessions(principal.id, query, limit)).map((hit) => {
-        const url = conversationWebUrl(publicWebUrl, hit.sessionId);
+        const url = conversationWebUrl(deps.publicWebUrl, hit.sessionId);
         return {
           id: `${hit.sessionId}:${hit.seq}`,
           type: "conversation" as const,
@@ -145,7 +145,7 @@ export function createSearchMethods(deps: AppDeps, app: App, helpers: AppHelpers
   const options = {
     onBackendError: (backend: string, error: unknown) => reportFailure(`search: backend ${backend}`, error),
   };
-  const conversationsBackend = conversationBackend(app, deps.publicWebUrl);
+  const conversationsBackend = conversationBackend(app, deps);
   const core = createCoreSearch(
     [conversationsBackend, ...(slack ? [slack] : []), fileBackend(deps, app, helpers)],
     options,

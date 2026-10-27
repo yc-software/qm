@@ -2,6 +2,7 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
+import { perTenant } from "../tenant.ts";
 
 export interface PrincipalLink {
   principalId: string;
@@ -51,12 +52,15 @@ function validId(value: unknown): value is string {
 
 export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLock): PrincipalLinkService {
   const table = typedTable<PrincipalLink>(createPgPool(databaseUrl, [PRINCIPAL_LINKS_MIGRATION]), PRINCIPAL_LINKS);
-  const byAlias = new Map<string, PrincipalLink>();
-  const byCanonical = new Map<string, PrincipalLink[]>();
-  let refreshedAt = 0;
-  let refreshP: Promise<void> | null = null;
+  const state = perTenant(() => ({
+    byAlias: new Map<string, PrincipalLink>(),
+    byCanonical: new Map<string, PrincipalLink[]>(),
+    refreshedAt: 0,
+    refreshP: null as Promise<void> | null,
+  }));
 
   function index(rows: PrincipalLink[]): void {
+    const { byAlias, byCanonical } = state();
     byAlias.clear();
     byCanonical.clear();
     for (const row of rows) {
@@ -69,32 +73,33 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
   }
 
   async function refresh(force = false): Promise<void> {
-    if (refreshP && !force) return refreshP;
-    while (refreshP) await refreshP;
-    if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
-    refreshP = table
+    const s = state();
+    if (s.refreshP && !force) return s.refreshP;
+    while (s.refreshP) await s.refreshP;
+    if (!force && Date.now() - s.refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
+    s.refreshP = table
       .all()
       .then(index)
       .then(() => {
-        refreshedAt = Date.now();
+        s.refreshedAt = Date.now();
       })
       .finally(() => {
-        refreshP = null;
+        s.refreshP = null;
       });
-    return refreshP;
+    return s.refreshP;
   }
 
   return {
     canonical(key) {
-      return byAlias.get(key)?.canonicalId;
+      return state().byAlias.get(key)?.canonicalId;
     },
     aliases(key) {
-      return (byCanonical.get(key) ?? []).map((row) => row.principalId);
+      return (state().byCanonical.get(key) ?? []).map((row) => row.principalId);
     },
     refresh,
     async list() {
       await refresh(true);
-      return [...byAlias.values()].sort(
+      return [...state().byAlias.values()].sort(
         (a, b) => a.createdAt - b.createdAt || a.principalId.localeCompare(b.principalId),
       );
     },
@@ -114,6 +119,7 @@ export function createPrincipalLinkService(databaseUrl: string, lock: AdvisoryLo
         const canonicalKey = foldPrincipalId(canonicalId);
         if (aliasKey === canonicalKey) throw new PrincipalLinkError(400, "a principal cannot be linked to itself");
         await refresh(true);
+        const { byAlias, byCanonical } = state();
         const existing = byAlias.get(aliasKey);
         if (existing) {
           if (foldPrincipalId(existing.canonicalId) === canonicalKey) return existing;

@@ -1,5 +1,7 @@
 import type { StoresModule } from "./stores.ts";
 import type { Head } from "./late.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
+import { perTenant } from "../tenant.ts";
 import { createPostgresToolOutputStore } from "../sessions/tool-output.ts";
 import { createAclStore } from "../acl/acl-store.ts";
 import { createPostgresGrantStore } from "../acl/postgres-grant-store.ts";
@@ -45,33 +47,30 @@ export function buildFiles(deps: FilesInputs) {
     config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined
       ? createPostgresBudgetTracker(databaseUrl, budgetOpts)
       : undefined;
-  const resolution = createResolutionService(config.orgId, configStore, acl);
+  const resolution = createResolutionService(configStore, acl);
   const workspace = createLocalWorkspaceStore(config.dataDir);
+  const s3Options = (prefix: string) => ({
+    get bucket() {
+      return tenantConfig(config).s3Bucket ?? config.s3Bucket!;
+    },
+    ...(config.s3Region ? { region: config.s3Region } : {}),
+    get prefix() {
+      return `${tenantConfig(config).s3Prefix ?? ""}${prefix}`;
+    },
+  });
   const blobTransfer: BlobTransferStore = config.s3Bucket
-    ? createS3BlobTransferStore({
-        bucket: config.s3Bucket,
-        ...(config.s3Region ? { region: config.s3Region } : {}),
-        ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-      })
+    ? tenantBlobTransfer(perTenant(() => createS3BlobTransferStore(s3Options(""))))
     : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
-  const s3Bytes = (bucket: string, prefix: string): DurableByteStore =>
-    createS3DurableByteStore({
-      bucket,
-      ...(config.s3Region ? { region: config.s3Region } : {}),
-      prefix: `${config.s3Prefix ?? ""}${prefix}`,
-    });
+  const s3Bytes = (prefix: string): DurableByteStore =>
+    tenantBytes(perTenant(() => createS3DurableByteStore(s3Options(prefix))));
   const byteStore = (prefix: string, localDir: string): DurableByteStore =>
-    config.s3Bucket ? s3Bytes(config.s3Bucket, prefix) : createLocalDurableByteStore(join(config.dataDir, localDir));
+    config.s3Bucket ? s3Bytes(prefix) : createLocalDurableByteStore(join(config.dataDir, localDir));
   const fileBytes = byteStore("", "docstore");
   const files: FileArtifactStore = createPostgresFileArtifactStore(databaseUrl, fileBytes);
   const fileUploads = config.s3Bucket
-    ? createDirectFileUploads({
-        bucket: config.s3Bucket,
-        ...(config.s3Region ? { region: config.s3Region } : {}),
-        ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-        store: createPostgresFileUploadStore(databaseUrl),
-        files,
-      })
+    ? createDirectFileUploads(
+        Object.assign(s3Options(""), { store: createPostgresFileUploadStore(databaseUrl), files }),
+      )
     : undefined;
   const mcpServers = createMcpServerStore(databaseUrl);
   const errors = withErrorReporting(createPostgresErrorLog(databaseUrl));
@@ -95,6 +94,25 @@ export function buildFiles(deps: FilesInputs) {
     rateLimiter,
     budget,
     fileUploads,
+  };
+}
+
+function tenantBytes(store: () => DurableByteStore): DurableByteStore {
+  return {
+    put: (source, opts) => store().put(source, opts),
+    open: (blobKey) => store().open(blobKey),
+    delete: (blobKey) => store().delete(blobKey),
+  };
+}
+
+function tenantBlobTransfer(store: () => BlobTransferStore): BlobTransferStore {
+  return {
+    put: (source, opts) => store().put(source, opts),
+    open: (blobId) => store().open(blobId),
+    delete: (blobId) => store().delete(blobId),
+    sweep: (maxAgeMs) => store().sweep(maxAgeMs),
+    ensureExpiry: (maxAgeDays) => store().ensureExpiry!(maxAgeDays),
+    s3Ref: (blobId) => store().s3Ref!(blobId),
   };
 }
 

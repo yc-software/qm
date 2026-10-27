@@ -13,6 +13,10 @@ import { type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShareStore } from "./sessions/session-share.ts";
 import { companySubscriptionAuth, configuredModel, providerKeysPresent, type Config } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
+import type { ManagedSlack } from "./surfaces/slack-managed.ts";
+import { tenantConfig } from "./tenants/tenant-config.ts";
+import { isHomeTenant } from "./tenants/directory.ts";
+import { tenant } from "./tenant.ts";
 import { type IdentityService } from "./identity/identity-service.ts";
 import { type PrincipalLinkService } from "./identity/principal-links.ts";
 import type { ComposioReturns, SlackAccounts } from "./connectors/composio-links.ts";
@@ -417,133 +421,191 @@ export function serverDeps(
   built: BuiltApp,
   slackEnvironmentState: "absent" | "configured" | "partial" = "absent",
   slackEnvBotToken?: string,
+  managedSlack?: () => ManagedSlack | undefined,
 ): Omit<ServerDeps, "control"> {
   const deploymentModel = configuredModel(config);
   const subscriptionAuth = companySubscriptionAuth(config);
-  return {
-    externalSlackPolicies: config.externalSlackPolicies,
-    modelGatewayTransport: built.modelGatewayTransport,
-    resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
-    production: config.production,
-    checkReadiness: built.checkReadiness,
-    ...(built.backgroundOwnership
-      ? {
-          backgroundOwnership: built.backgroundOwnership,
-          deploymentControlSecret: config.deploymentControlSecret,
-          deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
-        }
-      : {}),
-    ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
-    ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
-    replayDedupe: built.replayDedupe,
-    brokerSessions: built.brokerSessions,
-    config: built.config,
-    ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
-    ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
-    providerKeys: providerKeysPresent(config),
-    modelCredentials: built.modelCredentials,
-    userModelCredentials: built.userModelCredentials,
-    refreshModels: built.refreshModels,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    mcpServers: built.mcpServers,
-    mcpToolService: built.mcpToolService,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
-    connectorTokens: built.connectorTokens,
-    slackInstallation: built.slackInstallation,
-    slackEnvironmentState,
-    slackEvents: built.slackCore.slack.events,
-    chatSurfaces: built.chatSurfaces,
-    ...(slackEnvBotToken ? { slackEnvBotToken } : {}),
-    resolveClient: built.resolveClient,
-    consentLinks: built.consentLinks,
-    oauthFlows: built.oauthFlows,
-    secretDrops: built.secretDrops,
-    fireDropResolution: built.fireDropResolution,
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-    ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
-    admin: built.admin,
-    ...(config.emailAuthPrincipals ? { emailAuthPrincipals: config.emailAuthPrincipals } : {}),
-    ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
-    ...(config.slack ? { slackAllowFrom: config.slack.allowFrom ?? [] } : {}),
-    ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
-      : {}),
-    rateLimiter: built.rateLimiter,
-    ...(built.budget ? { budget: built.budget } : {}),
-    acl: built.acl,
-    credentialUsage: built.credentialUsage,
-    featureFlags: built.featureFlags,
-    decisions: built.decisions,
-    teams: built.teams,
-    egressAudit: built.egressAudit,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    errors: built.errors,
-    crons: built.crons,
-    inbox: built.inbox,
-    deploymentLayer: built.deploymentLayerStore,
-    ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
-    ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
-    ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
-    ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
-    ...(config.deployAppsLoginPath ? { deployAppsLoginPath: config.deployAppsLoginPath } : {}),
-    ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
-    scheduler: built.scheduler,
-    webhookReceiver: built.webhookReceiver,
-    identity: built.identity,
-    principalLinks: built.principalLinks,
-    slackAccounts: built.slackAccounts,
-    composioReturns: built.composioReturns,
-    keychain: built.keychain,
-    serviceCreds: built.serviceCreds,
-    outbound: built.outbound,
-    keychainApprovals: built.keychainApprovals,
-    runs: built.runs,
-    signals: built.signals,
-    sessionStateBus: built.sessionStateBus,
-    workspace: built.workspace,
-    files: built.files,
-    ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
-    memory: built.memory,
-    blobTransfer: built.blobTransfer,
-    sandboxBackend: built.sandbox.profile.backend,
-    egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
-    egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {
-      signingSecret: config.signingSecret,
-      apiBaseUrl: config.apiBaseUrl,
-    }),
-    egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
-    sandbox: built.sandbox,
-    advisoryLock: built.advisoryLock,
-    ...(built.processes ? { processes: built.processes } : {}),
-    browserSessionStore: built.browserSessionStore,
-    directory: built.directory,
-    ambientJudgments: built.ambientJudgments,
-    ackEmojiPicks: built.ackEmojiPicks,
-    channelPolicy: built.channelPolicy,
-    ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
-    uiState: built.uiState,
-    inboxSourceTokens: built.keychain,
-    inboxSourceRefresh: createInboxSourceRefresh({
+  const perRequest = tenantServerDeps(config, built, { slackEnvironmentState, slackEnvBotToken, managedSlack });
+  return Object.defineProperties(
+    {
+      modelGatewayTransport: built.modelGatewayTransport,
+      resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
+      production: config.production,
+      checkReadiness: built.checkReadiness,
+      ...(built.backgroundOwnership
+        ? {
+            backgroundOwnership: built.backgroundOwnership,
+            deploymentControlSecret: config.deploymentControlSecret,
+            deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
+          }
+        : {}),
+      ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
+      capabilityTokenCompression: config.capabilityTokenCompression,
+      ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
+      replayDedupe: built.replayDedupe,
+      brokerSessions: built.brokerSessions,
+      config: built.config,
+      ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
+      ...(deploymentModel ? { baseModelDefault: deploymentModel } : {}),
+      providerKeys: providerKeysPresent(config),
+      modelCredentials: built.modelCredentials,
+      userModelCredentials: built.userModelCredentials,
+      refreshModels: built.refreshModels,
+      customProviders: built.customProviders,
+      refreshCustomProviders: built.refreshCustomProviders,
+      mcpServers: built.mcpServers,
+      mcpToolService: built.mcpToolService,
+      ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),
+      connectorTokens: built.connectorTokens,
+      slackInstallation: built.slackInstallation,
+      slackEvents: built.slackCore.slack.events,
+      chatSurfaces: built.chatSurfaces,
+      resolveClient: built.resolveClient,
+      consentLinks: built.consentLinks,
+      oauthFlows: built.oauthFlows,
+      secretDrops: built.secretDrops,
+      fireDropResolution: built.fireDropResolution,
+      admin: built.admin,
+      ...(config.resendApiKey && config.emailFrom
+        ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
+        : {}),
+      rateLimiter: built.rateLimiter,
+      ...(built.budget ? { budget: built.budget } : {}),
+      acl: built.acl,
+      credentialUsage: built.credentialUsage,
       featureFlags: built.featureFlags,
-      items: built.inbox.items,
+      decisions: built.decisions,
+      teams: built.teams,
+      egressAudit: built.egressAudit,
+      sessions: built.sessions,
+      auditLog: built.auditLog,
       errors: built.errors,
-      record: built.inbox.record,
-      tokens: built.keychain,
+      crons: built.crons,
+      inbox: built.inbox,
+      deploymentLayer: built.deploymentLayerStore,
+      ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
+      ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
+      scheduler: built.scheduler,
+      webhookReceiver: built.webhookReceiver,
+      identity: built.identity,
+      principalLinks: built.principalLinks,
+      slackAccounts: built.slackAccounts,
+      composioReturns: built.composioReturns,
+      keychain: built.keychain,
+      serviceCreds: built.serviceCreds,
+      outbound: built.outbound,
+      keychainApprovals: built.keychainApprovals,
+      runs: built.runs,
+      signals: built.signals,
+      sessionStateBus: built.sessionStateBus,
+      workspace: built.workspace,
+      files: built.files,
+      ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
+      memory: built.memory,
+      blobTransfer: built.blobTransfer,
+      sandboxBackend: built.sandbox.profile.backend,
+      egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
+      sandbox: built.sandbox,
+      advisoryLock: built.advisoryLock,
+      ...(built.processes ? { processes: built.processes } : {}),
+      browserSessionStore: built.browserSessionStore,
       directory: built.directory,
-      ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
-    }),
-    inboxSlackClient: slackUserClientFactory(config.slack?.apiUrl),
-    sessionShares: built.sessionShares,
-    sessionShareBytes: built.sessionShareBytes,
-    environments: built.environments,
-    sandboxResources: built.sandboxResources,
-  };
+      ambientJudgments: built.ambientJudgments,
+      ackEmojiPicks: built.ackEmojiPicks,
+      channelPolicy: built.channelPolicy,
+      ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
+      uiState: built.uiState,
+      inboxSourceTokens: built.keychain,
+      inboxSourceRefresh: createInboxSourceRefresh({
+        featureFlags: built.featureFlags,
+        items: built.inbox.items,
+        errors: built.errors,
+        record: built.inbox.record,
+        tokens: built.keychain,
+        directory: built.directory,
+        ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
+      }),
+      inboxSlackClient: slackUserClientFactory(config.slack?.apiUrl),
+      sessionShares: built.sessionShares,
+      sessionShareBytes: built.sessionShareBytes,
+      environments: built.environments,
+      sandboxResources: built.sandboxResources,
+    } satisfies Omit<ServerDeps, "control" | keyof typeof perRequest>,
+    Object.getOwnPropertyDescriptors(perRequest),
+  ) as Omit<ServerDeps, "control">;
+}
+
+function tenantServerDeps(
+  config: Config,
+  built: BuiltApp,
+  slack: {
+    slackEnvironmentState: "absent" | "configured" | "partial";
+    slackEnvBotToken?: string;
+    managedSlack?: () => ManagedSlack | undefined;
+  },
+) {
+  const current = () => tenantConfig(config);
+  return {
+    get slackEnvironmentState() {
+      return isHomeTenant(tenant()) ? slack.slackEnvironmentState : "absent";
+    },
+    get slackEnvBotToken() {
+      return isHomeTenant(tenant()) ? slack.slackEnvBotToken : undefined;
+    },
+    get externalSlackPolicies() {
+      return current().externalSlackPolicies;
+    },
+    get managedSlack() {
+      return slack.managedSlack?.();
+    },
+    get signingSecret() {
+      return current().signingSecret;
+    },
+    get capabilitySecret() {
+      return current().capabilitySecret;
+    },
+    get portalIdentitySecret() {
+      return current().portalIdentitySecret;
+    },
+    get brandingDefault() {
+      return current().brandingDefault;
+    },
+    get apiBaseUrl() {
+      return current().apiBaseUrl;
+    },
+    get publicUrl() {
+      return current().publicUrl;
+    },
+    get portalUrl() {
+      return current().publicWebUrl;
+    },
+    get emailAuthPrincipals() {
+      return current().emailAuthPrincipals;
+    },
+    get emailAuthDomain() {
+      return current().emailAuthDomain;
+    },
+    get slackAllowFrom() {
+      const slack = current().slack;
+      return slack ? (slack.allowFrom ?? []) : undefined;
+    },
+    get deployAppsDomain() {
+      return current().awsDeploy.appsDomain;
+    },
+    get deployAppsSessionSecret() {
+      return current().deployAppsSessionSecret;
+    },
+    get deployAppsLoginUrl() {
+      return current().deployAppsLoginUrl;
+    },
+    get deployAppsLoginPath() {
+      return current().deployAppsLoginPath;
+    },
+    get egressEnforcement() {
+      return effectiveEgressEnforcement(built.sandbox.profile, current());
+    },
+    get egressControlPlaneConfigured() {
+      return Boolean(current().signingSecret && current().apiBaseUrl);
+    },
+  } satisfies Partial<ServerDeps>;
 }

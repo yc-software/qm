@@ -17,6 +17,7 @@ import { reportFailure } from "../util/errors.ts";
 import { type ConfigTables, openConfigTables } from "./config-tables.ts";
 import type { TypedTable } from "../persistence/typed-table.ts";
 import { createInstructions } from "./config-instructions.ts";
+import { perTenant, tenant } from "../tenant.ts";
 
 export interface PersistedInstructions {
   scopeId: ScopeId;
@@ -172,7 +173,7 @@ type SettingTable = Exclude<
   | "deploymentIdentity"
 >;
 
-export interface ScopeSettingValues {
+interface ScopeSettingValues {
   commandPolicy: CommandPolicy | null;
   egress: EgressPolicy | null;
   unfulfilledInsights: boolean;
@@ -508,23 +509,22 @@ function connectorClientsApi(rows: TypedTable<StoredConnectorClient>, secretKey:
   };
 }
 
-export function createConfigStore(
-  orgId: string,
-  opts: { databaseUrl: string; connectorSecretKey?: Buffer | string },
-): ScopedConfigStore {
-  const org = scopeId("org", orgId);
-  const tables = openConfigTables<ConfigRecords>(opts.databaseUrl);
-  const queue = createKeyedQueue();
+function createTenantConfigStore(
+  tables: ConfigTables<ConfigRecords>,
+  queue: Queue,
+  connectorClients: ReturnType<typeof connectorClientsApi>,
+) {
+  const { orgId, orgScope: org } = tenant();
   const settings = createScopeSettings(org, tables, queue);
   const allSettings = Object.values(settings);
   const instructions = createInstructions(org, tables.instructions, tables.instructionsHistory, queue);
   const runtime = createRuntimeConfig(org, tables.baseModels, queue);
   let hydrated: Promise<void> | null = null;
-  return {
+  const store: ScopedConfigStore = {
     ...settingsApi(org, settings),
     ...instructions.api,
     ...runtime.api,
-    ...connectorClientsApi(tables.connectorClients, opts.connectorSecretKey),
+    ...connectorClients,
     async refreshSecurity(ids) {
       await Promise.all(
         ids.flatMap((id) => [
@@ -541,13 +541,19 @@ export function createConfigStore(
     },
     getSlackEmojiCatalogDurable: (id) => tables.slackEmojiCatalog.get(id),
     hydrate() {
-      hydrated ??= (async () => {
-        const identity = await tables.deploymentIdentity.insertOrGet("singleton", { orgId });
-        if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
-        await instructions.hydrate();
-        await runtime.hydrate();
-        await Promise.all(allSettings.map((setting) => setting.hydrate()));
-      })();
+      if (!hydrated) {
+        const pending = (async () => {
+          const identity = await tables.deploymentIdentity.insertOrGet("singleton", { orgId });
+          if (identity.orgId !== orgId) throw new Error(`database belongs to org ${identity.orgId}, not ${orgId}`);
+          await instructions.hydrate();
+          await runtime.hydrate();
+          await Promise.all(allSettings.map((setting) => setting.hydrate()));
+        })();
+        hydrated = pending;
+        pending.catch(() => {
+          if (hydrated === pending) hydrated = null;
+        });
+      }
       return hydrated;
     },
     async refreshScope(id) {
@@ -558,4 +564,21 @@ export function createConfigStore(
       ]);
     },
   };
+  return store;
+}
+
+export function createConfigStore(opts: {
+  databaseUrl: string;
+  connectorSecretKey?: Buffer | string;
+}): ScopedConfigStore {
+  const tables = openConfigTables<ConfigRecords>(opts.databaseUrl);
+  const queue = createKeyedQueue();
+  const connectorClients = connectorClientsApi(tables.connectorClients, opts.connectorSecretKey);
+  const stores = perTenant(() => createTenantConfigStore(tables, queue, connectorClients));
+  const bound: Record<string, unknown> = {};
+  for (const key of Object.keys(stores())) {
+    bound[key] = (...args: unknown[]) =>
+      (stores() as unknown as Record<string, (...args: unknown[]) => unknown>)[key]!(...args);
+  }
+  return bound as unknown as ScopedConfigStore;
 }

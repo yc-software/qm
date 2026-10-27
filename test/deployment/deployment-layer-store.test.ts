@@ -12,6 +12,7 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 import { tool, skill, readLayer, putLayer } from "../support/deployment-layer.ts";
 import { createNoopAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresAdvisoryLock } from "../../src/persistence/advisory-lock.ts";
+import { tenantFor, withTenant } from "../../src/tenant.ts";
 
 const org = scopeId("org", "default-org");
 
@@ -24,7 +25,6 @@ function fixture() {
       databaseUrl,
       runtime: emptyDeploymentLayer(),
       skills,
-      scopeId: org,
       ...opts,
     });
   return { databaseUrl, skills, layer };
@@ -100,18 +100,16 @@ test("invalid descriptors never replace the durable current layer", async () => 
 
 test("a legacy published skill with an unsafe name is quarantined without blocking layer replacement", async () => {
   const { databaseUrl, skills, layer } = fixture();
-  const org = scopeId("org", "legacy-org");
+  const legacyTenant = tenantFor("legacy-org");
   await createPgPool(databaseUrl).q(
     `INSERT INTO skills (id, scope_id, manifest, status, created_by, version, granted_capabilities, approvals)
      VALUES ('legacy', $1, $2, 'published', 'legacy-import', 1, '{}', '{}')`,
-    [org, { name: "My Skill", description: "legacy", requiredCapabilities: [], body: "legacy" }],
+    [legacyTenant.orgScope, { name: "My Skill", description: "legacy", requiredCapabilities: [], body: "legacy" }],
   );
-  const store = layer({
-    scopeId: org,
-  });
+  const store = layer();
 
-  await store.put({ contract: 1, tools: [], skills: [] }, "test");
-  assert.deepEqual(await skills.visibleFor([org]), []);
+  await withTenant(legacyTenant, () => store.put({ contract: 1, tools: [], skills: [] }, "test"));
+  assert.deepEqual(await skills.visibleFor([legacyTenant.orgScope]), []);
   assert.equal(
     (await skills.get("legacy"))?.status,
     "published",

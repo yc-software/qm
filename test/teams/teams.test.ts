@@ -115,13 +115,12 @@ test("team scope read and write follow team membership", async () => {
 });
 
 const URL = process.env.DATABASE_URL!;
-const org = scopeId("org", "default-org");
 
 beforeEach(async () => {
   await truncateTables(URL, ["team_rooms", "team_members", "teams"]);
 });
 
-const store = (on = true) => createPostgresTeamStore(URL, { enabled: async () => on }, org);
+const store = (on = true) => createPostgresTeamStore(URL, { enabled: async () => on });
 
 test("pg teams: members are rows, edited one at a time, looked up by person", async () => {
   const teams = store();

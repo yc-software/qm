@@ -84,7 +84,7 @@ async function buildOrchestrator(
   } = {},
 ) {
   const databaseUrl = testDatabaseUrl();
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   if (opts.orgInstructions !== undefined) await config.setInstructions(scopeId("org", ORG), opts.orgInstructions);
   if (opts.branding) await config.setSetting("branding", opts.branding, scopeId("org", ORG));
 
@@ -100,7 +100,7 @@ async function buildOrchestrator(
     auditLog,
     acl,
   });
-  const resolution = createResolutionService(ORG, config, acl);
+  const resolution = createResolutionService(config, acl);
 
   if (opts.scopeInstructionsFor) {
     const scope = resolution.scopeFor(opts.scopeInstructionsFor.conversation, actor);

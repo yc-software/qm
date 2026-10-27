@@ -45,7 +45,7 @@ export const sandboxScopeName = (prefix: string, id: string): string => {
 export interface ExecSandboxBaseDeps {
   workspace: WorkspaceStore;
   label: string;
-  prefix: string;
+  prefix: () => string;
   homeDir: string;
   defaultTimeoutSec: number;
   credentialPaths: CredentialPathSpec[];
@@ -165,7 +165,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
   const activeScratch = new Map<string, number>();
 
   async function ensureScratch(key: string): Promise<{ name: string; coldStart: boolean }> {
-    const name = sandboxScopeName(`${prefix}-scratch`, key);
+    const name = sandboxScopeName(`${prefix()}-scratch`, key);
     return provisionQueue(`scratch:${key}`, async () => {
       scratchKeyByName.set(name, key);
       const active = activeScratch.get(name) ?? 0;
@@ -243,7 +243,7 @@ export function createExecSandboxBase(deps: ExecSandboxBaseDeps): ExecSandboxBas
     if (scratch) {
       ({ name, coldStart } = await ensureScratch(scratch.key));
     } else {
-      name = sandboxScopeName(prefix, scope);
+      name = sandboxScopeName(prefix(), scope);
       scopeByName.set(name, scope);
       ({ coldStart } = await provisionQueue(scope, () => deps.ensureResident(name, scope, provOpts?.onStatus)));
     }

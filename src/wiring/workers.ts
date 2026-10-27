@@ -16,6 +16,7 @@ import { type DrainController, createDrainController } from "../runs/drain.ts";
 import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { TURN_READY_CHANNEL, TURN_CANCEL_CHANNEL, TURN_YIELD_CHANNEL } from "../turns/turn-ledger.ts";
 import { createTurnRunner, RUN_MAX_CLAIMS } from "../turns/turn-runner.ts";
+import { tenantTurnRunners } from "../tenants/fan-out.ts";
 import { TURN_QUEUES } from "../turns/absurd-schema.ts";
 import {
   type ProcessReaper,
@@ -67,18 +68,20 @@ export function buildWorkers(deps: WorkersInputs) {
   const turnReady = createPostgresNotifyBus<string>(databaseUrl, TURN_READY_CHANNEL, "turn readiness");
   const turnCancels = createPostgresNotifyBus<string>(databaseUrl, TURN_CANCEL_CHANNEL, "turn cancels");
   const turnYields = createPostgresNotifyBus<string>(databaseUrl, TURN_YIELD_CHANNEL, "turn yields");
-  const turnRunner = createTurnRunner({
-    ledger: turnLedger,
-    orchestrator,
-    queues: TURN_QUEUES,
-    slots: Math.max(1, config.workers),
-    ready: turnReady,
-    cancels: turnCancels,
-    yields: turnYields,
-    canClaim: canClaimRuns,
-    errors,
-    maxClaims: RUN_MAX_CLAIMS,
-  });
+  const turnRunner = tenantTurnRunners(() =>
+    createTurnRunner({
+      ledger: turnLedger,
+      orchestrator,
+      queues: TURN_QUEUES,
+      slots: Math.max(1, config.workers),
+      ready: turnReady,
+      cancels: turnCancels,
+      yields: turnYields,
+      canClaim: canClaimRuns,
+      errors,
+      maxClaims: RUN_MAX_CLAIMS,
+    }),
+  );
   late.turnRunner = turnRunner;
   const processReaper: ProcessReaper | null = processes
     ? createProcessReaper(processes, {

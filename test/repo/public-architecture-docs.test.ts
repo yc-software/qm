@@ -5,7 +5,7 @@ import { DEFAULT_AGENT_MODEL_ID } from "../../src/model/pi-models.ts";
 
 const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 const readme = read("README.md");
-const boot = read("src/tenants/boot.ts");
+const boot = read("src/boot.ts");
 const toolWrappers = read("src/harness/agent-tools/wrappers.ts");
 const rootPackage = JSON.parse(read("package.json")) as { dependencies: Record<string, string> };
 const webPackage = JSON.parse(read("plugins/web-ui/package.json")) as {

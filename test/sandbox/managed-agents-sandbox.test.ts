@@ -38,7 +38,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
     store,
     advisoryLock: testAdvisoryLock(),
     client: fake.client,
-    namePrefix: "qmt",
+    tenantConfig: () => ({ sandboxNamePrefix: "qmt" }),
     ...extra,
   });
 }

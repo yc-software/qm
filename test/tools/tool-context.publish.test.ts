@@ -624,7 +624,7 @@ const RESIDENT_HOME: AgentComputerExportEntry[] = [
 ];
 
 test("publish always splits: bakes NO resident creds and injects no acting-as env", async () => {
-  const config = testConfigStore("default-org");
+  const config = testConfigStore();
   const { deploy, captured } = spyDeploy();
   const tc = createToolContext({
     sandbox: exportSandbox(RESIDENT_HOME),

@@ -57,7 +57,7 @@ test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decr
 });
 
 test("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {
-  const store = testConfigStore("default-org", { connectorSecretKey: "persistent-key" });
+  const store = testConfigStore({ connectorSecretKey: "persistent-key" });
   await store.setConnectorClient(orgScope("default-org"), "google", {
     clientId: "org-cid",
     clientSecret: "org-secret",
@@ -89,7 +89,7 @@ test("BYO record wins over env; the secret is encrypted at rest and never echoed
 });
 
 test("a provider with no org record falls back to env", async () => {
-  const store = testConfigStore("default-org", { connectorSecretKey: "k" });
+  const store = testConfigStore({ connectorSecretKey: "k" });
   const resolve = createConnectorClientResolver({
     reader: store,
     orgScopeId: orgScope,
@@ -102,7 +102,7 @@ test("a provider with no org record falls back to env", async () => {
 });
 
 test("a disabled org connector is refused (grays out the app grid)", async () => {
-  const store = testConfigStore("default-org", { connectorSecretKey: "k" });
+  const store = testConfigStore({ connectorSecretKey: "k" });
   await store.setConnectorClient(orgScope("default-org"), "google", {
     clientId: "c",
     clientSecret: "s",
@@ -113,7 +113,7 @@ test("a disabled org connector is refused (grays out the app grid)", async () =>
 });
 
 test("deleting a connector record falls back to env / unconfigured", async () => {
-  const store = testConfigStore("default-org", { connectorSecretKey: "k" });
+  const store = testConfigStore({ connectorSecretKey: "k" });
   await store.setConnectorClient(orgScope("default-org"), "google", { clientId: "c", clientSecret: "s" });
   assert.equal((await store.listConnectorClients(orgScope("default-org"))).length, 1);
   await store.deleteConnectorClient(orgScope("default-org"), "google");

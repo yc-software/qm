@@ -2,13 +2,12 @@ import type { StoresModule } from "./stores.ts";
 import type { FilesModule } from "./files.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { Head } from "./late.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
+import { perTenant } from "../tenant.ts";
+import { tenantSecretKey } from "../credentials/tenant-secret-key.ts";
 import { createEnvSecretSource } from "../credentials/secret-source.ts";
 import { type OAuthClientResolver, withPublicOAuthClients, makeRefresh } from "../connectors/oauth.ts";
-import {
-  createConnectorClientResolver,
-  deriveConnectorKey,
-  type SecretKey,
-} from "../connectors/connector-client-store.ts";
+import { createConnectorClientResolver, deriveConnectorKey } from "../connectors/connector-client-store.ts";
 import { scopeId } from "../types.ts";
 import type { Keychain, OAuthToken } from "../credentials/keychain.ts";
 import { createKeychain } from "../credentials/create-keychain.ts";
@@ -45,14 +44,15 @@ export function buildCredentials(deps: CredentialsInputs) {
       secrets: secretSource,
     }),
   );
-  const signingSecretCredentialKey =
-    config.signingSecret && config.signingSecret !== connectorSecretKey
-      ? deriveConnectorKey(config.signingSecret, "keychain")
-      : undefined;
-  const credentialKey: SecretKey = {
-    ...deriveConnectorKey(connectorSecretKey, "keychain"),
-    ...(signingSecretCredentialKey ? { fallbacks: [signingSecretCredentialKey] } : {}),
-  };
+  const credentialKey = tenantSecretKey(() => {
+    const { signingSecret, connectorSecretKey: tenantKey = connectorSecretKey } = tenantConfig(config);
+    const signingSecretCredentialKey =
+      signingSecret && signingSecret !== tenantKey ? deriveConnectorKey(signingSecret, "keychain") : undefined;
+    return {
+      ...deriveConnectorKey(tenantKey, "keychain"),
+      ...(signingSecretCredentialKey ? { fallbacks: [signingSecretCredentialKey] } : {}),
+    };
+  });
   const credentialStore: Keychain = createKeychain({
     store: createKeychainStore(databaseUrl),
     key: credentialKey,
@@ -108,11 +108,10 @@ export function buildCredentials(deps: CredentialsInputs) {
     servers: mcpServers,
     audit: auditLog,
     userTokens: keychain,
-    ...(config.publicWebUrl
-      ? {
-          signInUrl: (id: string) => `${config.publicWebUrl!}/connect/${encodeURIComponent(id)}/self-connect`,
-        }
-      : {}),
+    signInUrl: (id: string) => {
+      const base = tenantConfig(config).publicWebUrl;
+      return base ? `${base}/connect/${encodeURIComponent(id)}/self-connect` : undefined;
+    },
   });
   const browserSessionStore: BrowserSessionStore = createBrowserSessionStore({
     databaseUrl,
@@ -123,9 +122,12 @@ export function buildCredentials(deps: CredentialsInputs) {
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(databaseUrl);
   const secretDrops: SecretDropStore = createSecretDropStore(databaseUrl);
   const modelGateway = createModelGateway();
-  let started: { ready: Promise<void>; skillsReady: Promise<void> } | undefined;
+  const started = perTenant(() => ({
+    at: undefined as { ready: Promise<void>; skillsReady: Promise<void> } | undefined,
+  }));
   const startOnce = () => {
-    if (started) return started;
+    const tenantStart = started();
+    if (tenantStart.at) return tenantStart.at;
     const layerReady = deploymentLayerStore.hydrate();
     const layerSettled = layerReady.then(() => undefined, reportFailureAs("startup: deployment layer", undefined));
     const skillsReady = config.seedSkills
@@ -134,15 +136,19 @@ export function buildCredentials(deps: CredentialsInputs) {
           layerSettled,
         ]).then(() => undefined)
       : layerSettled;
-    if (config.brokerCredentials?.length) warnShadowedBrokerCredentials(config.brokerCredentials);
+    const { brokerCredentials } = tenantConfig(config);
+    if (brokerCredentials?.length) warnShadowedBrokerCredentials(brokerCredentials);
     const identityReady = identity.hydrate();
     const configReady = configStore.hydrate?.();
     identityReady.catch(reportFailureAs("startup: hydrate identity", undefined));
     configReady?.catch(reportFailureAs("startup: hydrate configuration", undefined));
     const ready = Promise.all([identityReady, configReady, layerReady]).then(() => {});
-    ready.catch(() => {});
-    started = { ready, skillsReady };
-    return started;
+    const at = { ready, skillsReady };
+    ready.catch(() => {
+      if (tenantStart.at === at) tenantStart.at = undefined;
+    });
+    tenantStart.at = at;
+    return at;
   };
   const skillsReady: PromiseLike<void> = { then: (resolve, reject) => startOnce().skillsReady.then(resolve, reject) };
   return {

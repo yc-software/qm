@@ -69,7 +69,7 @@ export function buildBareOrchestrator(
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(databaseUrl),
-    resolution: createResolutionService(BARE_ORG, testConfigStore(BARE_ORG), acl),
+    resolution: createResolutionService(testConfigStore(), acl),
     sessions: opts.sessions ?? createPostgresSessionStore(databaseUrl),
     workspace: createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "bare-orchestrator-"))),
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),

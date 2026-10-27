@@ -59,16 +59,16 @@ export const TENANT_COLUMNS = [
   ...TENANT_TEXT_SETTINGS.map(([, column]) => column),
 ].join(", ");
 
+export function deriveTenantSecret(shared: string, tenantId: string): string {
+  return Buffer.from(hkdfSync("sha256", shared, tenantId, "qm-tenant", 32)).toString("hex");
+}
+
 export function tenantSecretsKey(env: Env): Buffer | undefined {
   const raw = env.QM_TENANT_SECRETS_KEY?.trim();
   if (!raw) return undefined;
   const key = Buffer.from(raw, "base64");
   if (key.length !== 32) throw new Error("QM_TENANT_SECRETS_KEY must be 32 bytes, base64-encoded");
   return key;
-}
-
-export function deriveTenantSecret(shared: string, tenantId: string): string {
-  return Buffer.from(hkdfSync("sha256", shared, tenantId, "qm-tenant", 32)).toString("hex");
 }
 
 export function sealTenantSecret(value: unknown, key: Buffer): Buffer {

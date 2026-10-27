@@ -81,16 +81,15 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
 
   return {
     async hold<T>(key: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
-      if (held.has(key)) return null;
-      held.add(key);
+      const lockKey = tenantLockKey(`leader-lease:${key}`);
+      if (held.has(lockKey)) return null;
+      held.add(lockKey);
       const entry = client();
       try {
         const c = await entry.cp;
         let won: boolean;
         try {
-          const res = await c.query("SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS won", [
-            tenantLockKey(`leader-lease:${key}`),
-          ]);
+          const res = await c.query("SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS won", [lockKey]);
           won = res.rows[0]?.won === true;
         } catch (e) {
           drop(entry, c, true);
@@ -105,9 +104,7 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
         } finally {
           entry.lost.delete(notifyLost);
           try {
-            const res = await c.query("SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS released", [
-              tenantLockKey(`leader-lease:${key}`),
-            ]);
+            const res = await c.query("SELECT pg_advisory_unlock(hashtextextended($1, 0)) AS released", [lockKey]);
             if (res.rows[0]?.released !== true) {
               console.error(
                 `[leader-lease] unlock of ${key} reported not-held — is DATABASE_URL behind a transaction-pooling proxy?`,
@@ -120,7 +117,7 @@ export function createPostgresLeaderLease(pg: PgPool): LeaderLease {
           }
         }
       } finally {
-        held.delete(key);
+        held.delete(lockKey);
         void entry.cp
           .then((c) => {
             if (held.size === 0) drop(entry, c, false);

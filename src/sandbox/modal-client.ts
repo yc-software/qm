@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import { resolveModalImage } from "./modal-image.ts";
 import { swallow } from "../util/errors.ts";
 import { withTimeout } from "../util/async.ts";
+import { perTenant } from "../tenant.ts";
 
 export interface ModalCommandResult {
   stdout: string;
@@ -52,12 +53,16 @@ export interface ModalClient {
   listRunning?(tags: Record<string, string>): AsyncIterable<string>;
 }
 
+interface ModalApp {
+  name: string;
+  environment?: string;
+}
+
 export interface SdkModalClientOptions {
   tokenId: string;
   tokenSecret: string;
-  appName: string;
+  app: () => ModalApp;
   image?: string;
-  environment?: string;
   cpus?: number;
   memoryMb?: number;
   sandboxTimeoutMs?: number;
@@ -219,7 +224,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   const idleTimeoutMs = wholeSeconds(Math.min(opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, sandboxTimeoutMs));
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
   const network = opts.egressProxyUrl ? modalEgressAllowlist(opts.egressProxyUrl) : {};
-  let ctx: Promise<Ctx> | null = null;
+  const ctxByTenant = perTenant(() => ({ ctx: null as Promise<Ctx> | null }));
   const buildCtx = async (): Promise<Ctx> => {
     let sdk: ModalSdk;
     try {
@@ -227,20 +232,23 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
     } catch (e) {
       throw new Error(`the modal SDK is not installed: ${errText(e)}`, { cause: e });
     }
+    const { name, environment } = opts.app();
     const client = new sdk.ModalClient({
       tokenId: opts.tokenId,
       tokenSecret: opts.tokenSecret,
-      ...(opts.environment ? { environment: opts.environment } : {}),
+      ...(environment ? { environment } : {}),
     });
-    const app = await client.apps.fromName(opts.appName, { createIfMissing: true });
+    const app = await client.apps.fromName(name, { createIfMissing: true });
     const image = await resolveModalImage(client, opts.image);
     return { sdk, client, app, image };
   };
-  const loadCtx = (): Promise<Ctx> =>
-    (ctx ??= buildCtx().catch((e) => {
-      ctx = null;
+  const loadCtx = (): Promise<Ctx> => {
+    const slot = ctxByTenant();
+    return (slot.ctx ??= buildCtx().catch((e) => {
+      slot.ctx = null;
       throw e;
     }));
+  };
 
   return {
     lifetimeMs: sandboxTimeoutMs,
@@ -280,7 +288,7 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
       const { sdk, client } = await loadCtx();
       let sbx: SdkSandbox;
       try {
-        sbx = await client.sandboxes.fromName(opts.appName, name);
+        sbx = await client.sandboxes.fromName(opts.app().name, name);
       } catch (err) {
         if (isSandboxGoneError(sdk, err)) return null;
         throw err;

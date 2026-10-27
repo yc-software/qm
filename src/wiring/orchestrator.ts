@@ -9,6 +9,8 @@ import type { SandboxModule } from "./sandbox.ts";
 import type { MemoryModule } from "./memory.ts";
 import type { DeployModule } from "./deploy.ts";
 import type { CronsModule } from "./crons.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
+import { tenant } from "../tenant.ts";
 import type { Head } from "./late.ts";
 import { createApprovalGrants } from "../core/orchestrator/approvals.ts";
 import { type SurfaceCache, createPostgresSurfaceCache } from "../surface-cache/surface-cache.ts";
@@ -92,9 +94,34 @@ export function buildOrchestrator(deps: OrchestratorInputs) {
   };
   const surfaceCache: SurfaceCache = createPostgresSurfaceCache(databaseUrl, { liveFallback });
   const channelPolicy: ChannelPolicyStore = createPostgresChannelPolicyStore(databaseUrl);
+  const current = () => tenantConfig(deps.config);
   const orchestratorDeps: OrchestratorDeps = {
     ...orchestratorDepsHead({ ...deps, channelPolicy, surfaceCache, uiState, sessionSyscalls }),
     ...orchestratorDepsTail({ ...deps, layerBrokerFor }),
+    get externalSlackPolicies() {
+      return current().externalSlackPolicies;
+    },
+    get brandingDefault() {
+      return current().brandingDefault;
+    },
+    get signingSecret() {
+      return current().signingSecret;
+    },
+    get capabilitySecret() {
+      return current().capabilitySecret;
+    },
+    get apiBaseUrl() {
+      return current().apiBaseUrl;
+    },
+    get publicWebUrl() {
+      return current().publicWebUrl;
+    },
+    get deployAppsDomain() {
+      return current().deployAppsDomain;
+    },
+    get webhookPublicUrl() {
+      return current().publicUrl;
+    },
   };
   const orchestrator = createOrchestrator(orchestratorDeps);
   const { skillFetcher, screenSecurity, ambientJudgments, ackEmojiPicks, providerKeys } = buildAppServices(deps);
@@ -153,7 +180,6 @@ function orchestratorDepsHead(
       return null;
     },
     sessionStateBus,
-    externalSlackPolicies: config.externalSlackPolicies,
     sessionSyscalls,
     refreshModels,
     identity,
@@ -161,7 +187,6 @@ function orchestratorDepsHead(
     config: configStore,
     defaultTurnWallClockMs: config.turnWallClockMs,
     userModelCredentials,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
     sessions,
     workspace,
     files,
@@ -188,17 +213,11 @@ function orchestratorDepsHead(
     ...(securityScreener ? { securityScreener } : {}),
     backgroundJobTtlMs: BACKGROUND_JOB_TTL_MS,
     backgroundJobTtlMaxMs: BACKGROUND_JOB_TTL_MAX_MS,
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(gatewayTransport ? { sandboxModels: true } : {}),
-    ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
-    ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
     ...(config.resendApiKey && config.emailFrom
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
-    ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
   } satisfies Partial<OrchestratorDeps>;
 }
 
@@ -285,7 +304,7 @@ function buildSessionSyscalls(deps: OrchestratorInputs) {
     configStore,
   } = deps.stores;
   const { runs, maxAttempts } = deps.runs;
-  const { runSignals, runtimeOrgScope, fallback, hydrateModelCatalog } = deps.harness;
+  const { runSignals, fallback, hydrateModelCatalog } = deps.harness;
 
   const layerEnv = config.layerEnv ?? {};
   const layerBrokerCache = new Map<string, AwsRoleBroker>();
@@ -350,7 +369,7 @@ function buildSessionSyscalls(deps: OrchestratorInputs) {
     async validateRuntime(input, scope) {
       await resolveRuntimeChoiceDurable(
         configStore,
-        runtimeOrgScope,
+        tenant().orgScope,
         scope,
         fallback,
         {
@@ -377,13 +396,11 @@ function buildAppServices(deps: OrchestratorInputs) {
   const { budget } = deps.files;
 
   const uuidId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const recoveryAdminBase = config.publicWebUrl;
-  const recoveryAdminUrlFor = recoveryAdminBase
-    ? (sessionId: string): string | undefined =>
-        uuidId.test(sessionId) ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
-    : undefined;
   const runResultRecovery = wireRunResultPosts(runs, outbound, {
-    ...(recoveryAdminUrlFor ? { adminUrlFor: recoveryAdminUrlFor } : {}),
+    adminUrlFor: (sessionId: string): string | undefined => {
+      const base = tenantConfig(config).publicWebUrl;
+      return base && uuidId.test(sessionId) ? adminSessionUrl(base, sessionId) : undefined;
+    },
     sessions,
     postsImmediately: chatSurfaces.receives,
   });
@@ -394,7 +411,7 @@ function buildAppServices(deps: OrchestratorInputs) {
         {
           serviceCredential: async (slug) => {
             const record = nonDeploymentCredential(
-              await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
+              await serviceCreds.getServiceCredentialSecret(tenant().orgScope, slug),
             );
             return record && record.delivery !== "env" ? record : undefined;
           },

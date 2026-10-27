@@ -30,7 +30,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
     store,
     advisoryLock: createNoopAdvisoryLock(),
     client: fake.client,
-    namePrefix: "qmt",
+    tenantConfig: () => ({ sandboxNamePrefix: "qmt" }),
     ...extra,
   });
 }
@@ -313,8 +313,7 @@ test("blob staging is advertised only when the channel is actually wired", async
   );
   const wired = make({
     blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
+    tenantConfig: () => ({ capabilitySecret: "blob-secret", apiBaseUrl: "http://core.internal:8080" }),
   });
   assert.equal(supportsBlobStaging(wired), true, "wired up, e2b can move bytes by reference");
 });
@@ -322,8 +321,7 @@ test("blob staging is advertised only when the channel is actually wired", async
 test("stageOut posts to core's blob endpoint by streaming, never by buffering in the guest", async () => {
   const sb = make({
     blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
+    tenantConfig: () => ({ capabilitySecret: "blob-secret", apiBaseUrl: "http://core.internal:8080" }),
   });
   const h = await sb.provision(layers);
   await assert.rejects(() => sb.stageOut!(h, "artifacts/big.bin"), /e2b stageOut/);
@@ -339,8 +337,7 @@ test("stageOut posts to core's blob endpoint by streaming, never by buffering in
 test("stageIn pulls a blob into the guest atomically (temp then mv)", async () => {
   const sb = make({
     blobTransfer: createMemoryBlobTransferStore(),
-    capabilitySecret: "blob-secret",
-    apiBaseUrl: "http://core.internal:8080",
+    tenantConfig: () => ({ capabilitySecret: "blob-secret", apiBaseUrl: "http://core.internal:8080" }),
   });
   const h = await sb.provision(layers);
   await assert.rejects(() => sb.stageIn!(h, "inbox/big.bin", "f".repeat(32)), /e2b stageIn/);

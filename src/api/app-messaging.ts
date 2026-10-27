@@ -151,11 +151,15 @@ function contextRequestMethods(deps: AppDeps) {
   const contextRequests = deps.contextRequests;
   const contextRequestEvents =
     deps.contextRequestEvents ?? createMemoryEventBus<ContextRequestEvent>("context requests");
-  const viewerTokenKey = deps.contextViewerTokenKey ?? deriveConnectorKey(randomBytes(32), "context-viewer-tokens");
+  const ephemeralViewerTokenKey = deriveConnectorKey(randomBytes(32), "context-viewer-tokens");
+  const viewerTokenKey = () => deps.contextViewerTokenKey ?? ephemeralViewerTokenKey;
   const withViewerToken = ({ sealedViewerToken, ...request }: SurfaceContextRequest): SurfaceContextRequest => {
     if (!sealedViewerToken) return request;
     try {
-      return { ...request, query: { ...request.query, viewerToken: decryptSecret(sealedViewerToken, viewerTokenKey) } };
+      return {
+        ...request,
+        query: { ...request.query, viewerToken: decryptSecret(sealedViewerToken, viewerTokenKey()) },
+      };
     } catch (error) {
       reportFailureAs("context: viewer token unreadable", undefined)(error);
       return request;
@@ -174,7 +178,7 @@ function contextRequestMethods(deps: AppDeps) {
       await contextRequests.create({
         ...request,
         ...(viewerToken && !surfaceHas(source, "transcript")
-          ? { sealedViewerToken: encryptSecret(viewerToken, viewerTokenKey) }
+          ? { sealedViewerToken: encryptSecret(viewerToken, viewerTokenKey()) }
           : {}),
       });
       if (surfaceHas(source, "transcript")) {
@@ -231,7 +235,6 @@ function contextRequestMethods(deps: AppDeps) {
 }
 
 function directoryMethods(deps: AppDeps, h: AppHelpers) {
-  const { adminBase } = h;
   const identityMembers = async (): Promise<DirectoryMember[]> => {
     const [externals, participants] = await Promise.all([
       deps.identity.listExternalMembers(),
@@ -321,7 +324,8 @@ function directoryMethods(deps: AppDeps, h: AppHelpers) {
     },
     samePerson: (a, b) => samePersonInDirectory(deps.directory, a, b),
     personMatcher: (actorId) => samePersonMatcher(deps.directory, actorId),
-    cronAdminUrl: (cron) => (adminBase ? adminCronHistoryUrl(adminBase, cron.ownerScopeId, cron.id) : undefined),
+    cronAdminUrl: (cron) =>
+      deps.publicWebUrl ? adminCronHistoryUrl(deps.publicWebUrl, cron.ownerScopeId, cron.id) : undefined,
     async channelName(channelId) {
       const chan = (await deps.directory.listChannels()).find((c) => c.channelId === channelId);
       return chan ? `#${chan.name.replace(/^#/, "")}` : undefined;

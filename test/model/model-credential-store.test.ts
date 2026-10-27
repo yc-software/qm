@@ -536,10 +536,10 @@ test("a company Claude subscription credential is reported as company subscripti
 
 test("admin model credentials survive a second app instance on the same durable store", async () => {
   const databaseUrl = testDatabaseUrl();
-  const first = createModelCredentialStore({ databaseUrl, keyMaterial: "shared-model-key" });
+  const first = createModelCredentialStore({ databaseUrl, keyMaterial: () => "shared-model-key" });
   await first.set("openrouter", "durable-openrouter-key", "admin-alice@default-org");
 
-  const second = createModelCredentialStore({ databaseUrl, keyMaterial: "shared-model-key" });
+  const second = createModelCredentialStore({ databaseUrl, keyMaterial: () => "shared-model-key" });
   assert.equal(await second.resolve("openrouter"), "durable-openrouter-key");
   assert.doesNotMatch(
     JSON.stringify(await createPgPool(databaseUrl).q(`SELECT * FROM model_credentials`)),

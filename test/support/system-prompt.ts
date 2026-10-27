@@ -99,7 +99,7 @@ export function buildOrchestrator(
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
 ) {
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "spo-")));
@@ -117,7 +117,7 @@ export function buildOrchestrator(
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(testDatabaseUrl()),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files,

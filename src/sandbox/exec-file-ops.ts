@@ -246,7 +246,7 @@ interface ExecBlobStagingDeps {
   label: string;
   exec(id: string, script: string, timeoutSec: number): Promise<{ code: number; stdout: string; stderr: string }>;
   proxyPrefix(handle: SandboxHandle): string;
-  apiBaseUrl: string;
+  apiBaseUrl(): string;
   capabilityHeader: string;
   mintToken(grant: { dir: "read" | "write"; id?: string }, forTimeoutSec?: number): Promise<string>;
   timeoutSec?: number;
@@ -257,11 +257,23 @@ interface ExecBlobStaging {
   stageOutAbs(handle: SandboxHandle, abs: string, timeoutSec?: number): Promise<string>;
 }
 
-export interface BlobStagingOptions {
-  blobTransfer?: BlobTransferStore;
+interface SandboxTenantConfig {
+  sandboxNamePrefix?: string;
+  apiBaseUrl?: string;
   signingSecret?: string;
   capabilitySecret?: string;
-  apiBaseUrl?: string;
+}
+
+export interface BlobStagingOptions {
+  blobTransfer?: BlobTransferStore;
+  tenantConfig?: () => SandboxTenantConfig;
+}
+
+function blobControlPlane(opts: BlobStagingOptions): { apiBaseUrl: string; secret: string } | null {
+  const current = opts.tenantConfig?.() ?? {};
+  const secret = current.capabilitySecret ?? current.signingSecret;
+  if (!secret || !current.apiBaseUrl) return null;
+  return { apiBaseUrl: current.apiBaseUrl, secret };
 }
 
 const STAGE_TIMEOUT_SEC = 900;
@@ -271,13 +283,17 @@ export function createBackendBlobStaging(
   exec: ExecBlobStagingDeps["exec"],
   opts: BlobStagingOptions,
 ): Required<Pick<Sandbox, "stageIn" | "stageOut">> | null {
-  const secret = opts.capabilitySecret ?? opts.signingSecret;
-  if (!opts.blobTransfer || !secret || !opts.apiBaseUrl) return null;
+  if (!opts.blobTransfer || !blobControlPlane(opts)) return null;
+  const controlPlane = (): { apiBaseUrl: string; secret: string } => {
+    const current = blobControlPlane(opts);
+    if (!current) throw new Error(`${label} blob staging: the current tenant has no control-plane url or secret`);
+    return current;
+  };
   const staging = createExecBlobStaging({
     label,
     exec,
     proxyPrefix: proxyExportPrefix,
-    apiBaseUrl: opts.apiBaseUrl,
+    apiBaseUrl: () => controlPlane().apiBaseUrl,
     capabilityHeader: CAPABILITY_HEADER,
     timeoutSec: STAGE_TIMEOUT_SEC,
     mintToken: (grant, forTimeoutSec) =>
@@ -289,7 +305,7 @@ export function createBackendBlobStaging(
           blob: grant,
           exp: Date.now() + (forTimeoutSec ?? STAGE_TIMEOUT_SEC) * 1000 + BLOB_TRANSFER_TTL_MS,
         },
-        secret,
+        controlPlane().secret,
       ),
   });
   return {
@@ -304,12 +320,12 @@ export function createBackendBlobStaging(
 
 function createExecBlobStaging(deps: ExecBlobStagingDeps): ExecBlobStaging {
   const { label, exec, proxyPrefix, capabilityHeader, mintToken } = deps;
-  const base = deps.apiBaseUrl;
   const timeoutSec = deps.timeoutSec ?? 300;
   return {
     async stageInAbs(handle, abs, blobId, callTimeoutSec): Promise<void> {
       const effectiveTimeoutSec = callTimeoutSec ?? timeoutSec;
       const token = await mintToken({ dir: "read", id: blobId }, effectiveTimeoutSec);
+      const base = deps.apiBaseUrl();
       const tmp = `${abs}.${randomBytes(8).toString("hex")}.part`;
       const script =
         proxyPrefix(handle) +
@@ -326,6 +342,7 @@ function createExecBlobStaging(deps: ExecBlobStagingDeps): ExecBlobStaging {
     async stageOutAbs(handle, abs, callTimeoutSec): Promise<string> {
       const effectiveTimeoutSec = callTimeoutSec ?? timeoutSec;
       const token = await mintToken({ dir: "write" }, effectiveTimeoutSec);
+      const base = deps.apiBaseUrl();
       const script =
         proxyPrefix(handle) +
         `sha=$(sha256sum ${shq(abs)} | cut -d' ' -f1) && ` +

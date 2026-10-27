@@ -156,7 +156,7 @@ test("parseAdminGrants: parses org_admin grants and skips malformed / removed-ro
 
 test("ADMIN_GRANTS-seeded admins resolve and authorize org-wide; non-admins do not", async () => {
   const store = createAdminGrantStore(createPostgresAdminGrantStore(testDatabaseUrl()), {
-    seed: parseAdminGrants("U1:org_admin", "default-org"),
+    seed: () => parseAdminGrants("U1:org_admin", "default-org") ?? [],
   });
   const svc = createAdminService(store);
   const u1 = svc.resolveActor("U1@default-org");

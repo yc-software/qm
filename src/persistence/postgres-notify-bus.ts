@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { createPgPool } from "./pg-pool.ts";
+import { registeredTenant, scopedTenant, tenant, withTenant } from "../tenant.ts";
 import { swallowAs } from "../util/errors.ts";
 import { createMemoryEventBus, type EventBus } from "../util/event-bus.ts";
 
@@ -16,6 +17,40 @@ function encodeCapped<T>(event: T, label: string): string | null {
   return null;
 }
 
+interface Notice<T> {
+  t: string | null;
+  e: T;
+}
+
+export function noticePayload(encoded: string): string {
+  return `{"t":${JSON.stringify(tenant().id ?? null)},"e":${encoded}}`;
+}
+
+function parseNotice<T>(payload: string): Notice<T> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(payload);
+    if (typeof parsed !== "object" || parsed === null || !("e" in parsed) || !("t" in parsed)) return undefined;
+    const { t } = parsed as { t: unknown };
+    return t === null || typeof t === "string" ? (parsed as Notice<T>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function deliverTo<T>(cb: (event: T) => void): (notice: Notice<T>) => void {
+  const own = scopedTenant();
+  const here = AsyncResource.bind((fn: () => void) => fn());
+  if (own)
+    return (notice) => {
+      if (notice.t === (own.id ?? null)) here(() => cb(notice.e));
+    };
+  return (notice) => {
+    if (notice.t === null) return here(() => cb(notice.e));
+    const t = registeredTenant(notice.t);
+    if (t) here(() => withTenant(t, () => cb(notice.e)));
+  };
+}
+
 export function createPostgresNotifyBus<T>(
   connectionString: string,
   channel: string,
@@ -24,7 +59,7 @@ export function createPostgresNotifyBus<T>(
 ): EventBus<T> {
   if (!/^[a-z][a-z0-9_]*$/.test(channel)) throw new Error(`invalid NOTIFY channel name: ${channel}`);
   const pg = createPgPool(connectionString);
-  const local = createMemoryEventBus<T>(label);
+  const local = createMemoryEventBus<Notice<T>>(label);
 
   let stopListening: (() => Promise<void>) | null = null;
   let closed = false;
@@ -60,7 +95,10 @@ export function createPostgresNotifyBus<T>(
     stopListening = subscribePostgresChannel(
       connectionString,
       channel,
-      (payload) => local.emit(JSON.parse(payload) as T),
+      (payload) => {
+        const notice = parseNotice<T>(payload);
+        if (notice) local.emit(notice);
+      },
       () => local.resync(),
     );
   }
@@ -70,16 +108,13 @@ export function createPostgresNotifyBus<T>(
       if (closed) return;
       const payload = encode(event);
       if (payload === null) return;
-      pending.push(payload);
+      pending.push(noticePayload(payload));
       publishing ??= Promise.resolve().then(flush);
     },
 
     subscribe(cb, opts) {
-      // Notifications arrive on one LISTEN connection shared per database, in the async context of whichever
-      // caller opened it. Run each callback in its subscriber's context instead, so a tenant's handlers query as
-      // that tenant (pg-pool sets qm.tenant_id from it) rather than as the tenant that booted first.
       const onResync = opts?.onResync;
-      const off = local.subscribe(AsyncResource.bind(cb), {
+      const off = local.subscribe(deliverTo(cb), {
         ...opts,
         ...(onResync ? { onResync: AsyncResource.bind(onResync) } : {}),
       });

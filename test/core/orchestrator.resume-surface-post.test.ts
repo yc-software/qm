@@ -29,7 +29,6 @@ import { testDatabaseUrl } from "../support/test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 
-const ORG = "default-org";
 const RUN_ID = "7f3c2a1e-5b4d-4c6e-8f9a-0b1c2d3e4f50";
 const actor: Principal = { id: "U1", type: "internal" };
 
@@ -61,7 +60,7 @@ function buildOrchestrator(
   outbound: Outbound,
 ) {
   const databaseUrl = testDatabaseUrl();
-  const config = testConfigStore(ORG);
+  const config = testConfigStore();
   const acl = createAclStore(createPostgresGrantStore(databaseUrl));
   const auditLog = createPostgresAuditLog(databaseUrl);
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rsp-")));
@@ -76,7 +75,7 @@ function buildOrchestrator(
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(databaseUrl),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),

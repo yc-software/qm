@@ -24,7 +24,7 @@ const event = {
 
 async function fixture(t: test.TestContext, appId = "A123") {
   const url = testDatabaseUrl();
-  const store = createSlackInstallationStore("company", url, "test-encryption-key");
+  const store = createSlackInstallationStore(url, () => "test-encryption-key");
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",
@@ -147,7 +147,7 @@ test("failed delivery withholds acknowledgment", async (t) => {
 });
 
 test("installation launch restricts redirect origin and hides service credentials", async () => {
-  const store = createSlackInstallationStore("company", testDatabaseUrl(), "test-key");
+  const store = createSlackInstallationStore(testDatabaseUrl(), () => "test-key");
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",
@@ -227,14 +227,14 @@ test("explicit app pin still rejects another app at installation", async (t) => 
 });
 
 test("managed Slack refuses a service credential that a bearer header cannot carry", () => {
-  const store = createSlackInstallationStore("company", testDatabaseUrl(), "test-encryption-key");
+  const store = createSlackInstallationStore(testDatabaseUrl(), () => "test-encryption-key");
   for (const token of ["", "company-token\n", " company-token"]) {
     assert.throws(() => createManagedSlack({ serviceUrl: "https://slack.example.com", token, store }), /credential/);
   }
 });
 
 test("managed service failures carry the HTTP status and body", async () => {
-  const store = createSlackInstallationStore("company", testDatabaseUrl(), "test-encryption-key");
+  const store = createSlackInstallationStore(testDatabaseUrl(), () => "test-encryption-key");
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",

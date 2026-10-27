@@ -18,6 +18,7 @@ import { createInboxRealtime } from "../inbox/realtime.ts";
 import { createKeychainApprovals } from "../credentials/keychain-approval.ts";
 import { createSlackCoreClient } from "../api/slack-core-client.ts";
 import { auxiliaryModelForProvider } from "../model/pi-models.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
 
 type SlackCoreInputs = Pick<Head, "config"> & {
   crons: CronsModule;
@@ -69,7 +70,7 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     surfaceCache,
     taskAcknowledgements: createTaskAckStore(databaseUrl),
     sessionStatus: createSessionStatusStore(databaseUrl),
-    statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
+    statusActivity: { processes, monitors, sessions, publicWebUrl: () => tenantConfig(config).publicWebUrl },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
@@ -85,7 +86,7 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     turnStream,
     ackPicks: ackEmojiPicks,
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
+    brandingDefault: () => tenantConfig(config).brandingDefault,
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });
   every("slack:envelope-replay", 60_000, () => slackCore.upkeep.run("replayEnvelopes"));

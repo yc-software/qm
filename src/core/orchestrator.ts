@@ -7,6 +7,7 @@ import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { personKey } from "../directory/person.ts";
 import { LRUCache } from "lru-cache";
+import { perTenant } from "../tenant.ts";
 import type { Orchestrator, OrchestratorDeps } from "./orchestrator/types.ts";
 import { createSessionTitles } from "./session-title.ts";
 import { renderTitleTranscript, visibleTitleItemText } from "./orchestrator/turn-helpers.ts";
@@ -37,29 +38,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const pendingCaptures = new Map<ScopeId, Promise<void>>();
 
   const REACH_ROSTER_TTL_MS = 5 * 60_000;
-  const reachRosterCache = new LRUCache<string, DirectoryChannel[]>({
-    max: INSTANCE_CACHE_MAX_ENTRIES,
-    ttl: REACH_ROSTER_TTL_MS,
-  });
+  const reachRosterCache = perTenant(
+    () =>
+      new LRUCache<string, DirectoryChannel[]>({
+        max: INSTANCE_CACHE_MAX_ENTRIES,
+        ttl: REACH_ROSTER_TTL_MS,
+      }),
+  );
   async function reachableChannelsFor(directory: DirectoryStore, principalId: string): Promise<DirectoryChannel[]> {
-    const cached = reachRosterCache.get(principalId);
+    const cached = reachRosterCache().get(principalId);
     if (cached) return cached;
     const channels = await directory.listChannelsFor(principalId);
-    reachRosterCache.set(principalId, channels);
+    reachRosterCache().set(principalId, channels);
     return channels;
   }
 
   const DIRECTORY_INDEX_TTL_MS = REACH_ROSTER_TTL_MS;
-  const directoryIndexCache = new LRUCache<string, Map<string, DirectoryMember>>({
-    max: DIRECTORY_INDEX_CACHE_MAX_ENTRIES,
-    ttl: DIRECTORY_INDEX_TTL_MS,
-  });
+  const directoryIndexCache = perTenant(
+    () =>
+      new LRUCache<string, Map<string, DirectoryMember>>({
+        max: DIRECTORY_INDEX_CACHE_MAX_ENTRIES,
+        ttl: DIRECTORY_INDEX_TTL_MS,
+      }),
+  );
   async function directoryIndexFor(directory: DirectoryStore): Promise<Map<string, DirectoryMember>> {
-    const cached = directoryIndexCache.get("org");
+    const cached = directoryIndexCache().get("org");
     if (cached) return cached;
     const byId = new Map<string, DirectoryMember>();
     for (const m of await directory.list()) byId.set(personKey(m.principalId), m);
-    directoryIndexCache.set("org", byId);
+    directoryIndexCache().set("org", byId);
     return byId;
   }
 

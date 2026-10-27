@@ -14,7 +14,8 @@ import {
   resolveEmbeddingModel,
   CODEX_SUBSCRIPTION_PROVIDER,
 } from "../model/pi-models.ts";
-import { scopeId } from "../types.ts";
+import { tenant } from "../tenant.ts";
+import { tenantConfig } from "../tenants/tenant-config.ts";
 import { configuredModel, baseModelProviders, providerKeysPresent } from "../config.ts";
 import { createPiHarness, piHarnessConfigOptions } from "../harness/pi-harness.ts";
 import { createDecisionHooks, turnStartState, routeTurnRuntime } from "../decisions/hooks.ts";
@@ -61,8 +62,7 @@ export function buildHarness(deps: HarnessInputs) {
     const subscription = codexSubscriptionModelId(id);
     return resolveModel(subscription) ? subscription : id;
   };
-  const runtimeOrgScope = scopeId("org", config.orgId);
-  const orgBaseModelId = (): string | undefined => configStore.getRuntimeSelection(runtimeOrgScope)?.modelId;
+  const orgBaseModelId = (): string | undefined => configStore.getRuntimeSelection(tenant().orgScope)?.modelId;
   const deploymentDefaultModel = () =>
     defaultModel(
       configuredModel(config),
@@ -91,19 +91,17 @@ export function buildHarness(deps: HarnessInputs) {
     decisions,
     createDecisionBackend({
       providers: (ids) => decisions.providers(ids),
-      ...(config.modelGateway?.apiKey
-        ? {
-            gateway: {
-              url: config.modelGateway.url,
-              apiKey: config.modelGateway.apiKey,
-              ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
-            },
-          }
-        : {}),
+      get gateway() {
+        const apiKey = tenantConfig(config).modelGatewayApiKey;
+        if (!apiKey || !config.modelGateway) return undefined;
+        return {
+          url: config.modelGateway.url,
+          apiKey,
+          ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
+        };
+      },
       credential: async (slug) => {
-        const rec = nonDeploymentCredential(
-          await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug),
-        );
+        const rec = nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(tenant().orgScope, slug));
         return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
       },
     }),
@@ -120,7 +118,7 @@ export function buildHarness(deps: HarnessInputs) {
     const resolve = (requested: typeof input.runtime) =>
       resolveRuntimeChoiceDurable(
         configStore,
-        runtimeOrgScope,
+        tenant().orgScope,
         input.scopeLabel,
         fallback,
         requested,
@@ -151,7 +149,6 @@ export function buildHarness(deps: HarnessInputs) {
   return {
     harness,
     runSignals,
-    runtimeOrgScope,
     fallback,
     hydrateModelCatalog,
     orgBaseModelId,
@@ -180,11 +177,16 @@ function buildModelCredentials(deps: HarnessInputs) {
   const gatewayCatalog = config.modelGateway
     ? createGatewayCatalog(config.modelGateway, overrides.modelCredentialFetch)
     : undefined;
-  const gatewayTransport = gatewayCatalog?.transport;
+  const gatewayTransport =
+    gatewayCatalog &&
+    Object.defineProperty(gatewayCatalog.transport, "apiKey", {
+      enumerable: true,
+      get: () => tenantConfig(config).modelGatewayApiKey ?? config.modelGateway!.apiKey,
+    });
   const directProviderAvailability = providerKeysPresent(config);
   const directModelCredentials = createModelCredentialStore({
     databaseUrl,
-    keyMaterial: connectorSecretKey,
+    keyMaterial: () => tenantConfig(config).connectorSecretKey ?? connectorSecretKey,
     fallback: {
       ...(config.anthropicApiKey ? { anthropic: config.anthropicApiKey } : {}),
       ...(config.openaiApiKey ? { openai: config.openaiApiKey } : {}),
@@ -221,7 +223,7 @@ function buildModelKeys(deps: HarnessInputs, mc: ReturnType<typeof buildModelCre
   const customProviders = createCustomProviderStore({
     write: writeModelRegistry,
     databaseUrl,
-    keyMaterial: connectorSecretKey,
+    keyMaterial: () => tenantConfig(config).connectorSecretKey ?? connectorSecretKey,
   });
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());

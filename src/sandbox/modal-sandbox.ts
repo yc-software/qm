@@ -1,7 +1,7 @@
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { cols } from "../persistence/typed-table.ts";
 import type { MapConversion } from "../persistence/typed-table.ts";
-import { tenant } from "../tenant.ts";
+import { perTenant, tenant } from "../tenant.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { createExecProcessSessions } from "./exec-process-session.ts";
@@ -14,6 +14,7 @@ import {
 } from "./modal-client.ts";
 import {
   createProviderSandbox,
+  sandboxNamePrefix,
   type ProviderSandbox,
   type SandboxDriver,
   type SandboxShared,
@@ -87,19 +88,18 @@ type ModalCtx = ReturnType<typeof modalCtx>;
 function modalCtx(opts: ModalSandboxOptions, provider: () => ProviderSandbox) {
   const { client } = opts;
   const { store } = opts;
-  const prefix = opts.namePrefix ?? "qm";
   const nameFor = (scope: string): string => provider().nameFor(scope);
   const snapshotIntervalMs = (opts.snapshotIntervalSec ?? DEFAULT_SNAPSHOT_INTERVAL_SEC) * 1000;
   const lock = opts.advisoryLock;
   const sessions = new Map<string, ModalSession>();
   const scratchNames = new Set<string>();
   const rotationHold = new Map<string, number>();
-  const lastTouch = new Map<string, number>();
-  const refreshAttempt = new Map<string, number>();
+  const lastTouch = perTenant(() => new Map<string, number>());
+  const refreshAttempt = perTenant(() => new Map<string, number>());
   const orphanFirstSeen = new Map<string, number>();
   const tags = (kind: "scope" | "scratch"): Record<string, string> => ({
     "qm-org": tenant().orgId,
-    "qm-prefix": prefix,
+    "qm-prefix": sandboxNamePrefix(opts),
     "qm-kind": kind,
   });
   const report = (category: string, code: string, e: unknown, scopeLabel?: string): void => {
@@ -165,8 +165,8 @@ async function createScratch(ctx: ModalCtx, name: string): Promise<ModalSession>
 async function touch(ctx: ModalCtx, scope: string): Promise<void> {
   const { store, lastTouch } = ctx;
   const now = Date.now();
-  if (now - (lastTouch.get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
-  lastTouch.set(scope, now);
+  if (now - (lastTouch().get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
+  lastTouch().set(scope, now);
   await store.update(scope, { lastActivityMs: now }).catch(swallowAs("modal-sandbox: record activity", undefined));
 }
 
@@ -379,8 +379,8 @@ async function refresh(
 ): Promise<void> {
   const { store, refreshAttempt, snapshotIntervalMs, report } = ctx;
   const provider = ctx.provider();
-  if (now - Math.max(rec.lastSnapshotMs ?? 0, refreshAttempt.get(scope) ?? 0) <= snapshotIntervalMs) return;
-  refreshAttempt.set(scope, now);
+  if (now - Math.max(rec.lastSnapshotMs ?? 0, refreshAttempt().get(scope) ?? 0) <= snapshotIntervalMs) return;
+  refreshAttempt().set(scope, now);
   await provider
     .lifecycle(scope, async () => {
       const after = await store.get(scope);

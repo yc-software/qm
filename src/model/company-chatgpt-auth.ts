@@ -10,6 +10,7 @@ import {
 } from "./chatgpt-auth-file.ts";
 import { refreshChatGPTTokens } from "./subscription-oauth.ts";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
+import { perTenant } from "../tenant.ts";
 
 export interface CompanyChatGPTAuth {
   readonly description: string;
@@ -50,7 +51,7 @@ function refreshingAuth(
 ): CompanyChatGPTAuth {
   const refresh = deps.refresh ?? refreshChatGPTTokens;
   const now = deps.now ?? Date.now;
-  let refreshing: Promise<JsonObject | null> | null = null;
+  const inFlight = perTenant(() => ({ refreshing: null as Promise<JsonObject | null> | null }));
 
   const fresh = (auth: JsonObject): boolean => {
     const expiresAt = accessExpiresAt(auth);
@@ -61,7 +62,8 @@ function refreshingAuth(
     const current = await read();
     if (!current) return null;
     if (fresh(current.auth)) return current.auth;
-    refreshing ??= (async () => {
+    const state = inFlight();
+    state.refreshing ??= (async () => {
       const locked = await read();
       if (!locked || fresh(locked.auth)) return locked?.auth ?? null;
       const replaced = authTokens(locked.auth)?.refresh;
@@ -72,10 +74,10 @@ function refreshingAuth(
       await latest.write(next);
       return next;
     })().finally(() => {
-      refreshing = null;
+      state.refreshing = null;
     });
     try {
-      const refreshed = await refreshing;
+      const refreshed = await state.refreshing;
       if (refreshed) return refreshed;
     } catch (error) {
       swallow("chatgpt: company oauth refresh", error);
@@ -113,20 +115,23 @@ function credentialRevision(meta: KeychainCredentialMeta): string {
 export function keychainCompanyChatGPTAuth(
   deps: RefreshDeps & { keychain: Keychain; credentialId: string },
 ): CompanyChatGPTAuth {
-  let cached: { revision: string; found: { path: string; auth: JsonObject } | null } | undefined;
+  const cache = perTenant(() => ({
+    cached: undefined as { revision: string; found: { path: string; auth: JsonObject } | null } | undefined,
+  }));
   return refreshingAuth(
     `keychain credential ${deps.credentialId}`,
     async () => {
       const meta = await deps.keychain.getCredential(deps.credentialId);
       if (!meta || meta.kind !== "file") return null;
       const revision = credentialRevision(meta);
-      if (cached?.revision !== revision) {
+      const state = cache();
+      if (state.cached?.revision !== revision) {
         const bundle = (await deps.keychain.materializeOwnFiles(meta.ownerId)).find(
           (b) => b.credentialId === deps.credentialId,
         );
-        cached = { revision, found: bundle ? authFromFiles(bundle.files) : null };
+        state.cached = { revision, found: bundle ? authFromFiles(bundle.files) : null };
       }
-      const found = cached.found;
+      const found = state.cached.found;
       if (!found) return null;
       return {
         auth: found.auth,
@@ -138,7 +143,7 @@ export function keychainCompanyChatGPTAuth(
             files: [{ path: found.path, contentBase64: Buffer.from(JSON.stringify(next), "utf8").toString("base64") }],
             ...(expiresAt !== undefined ? { expiresAt } : {}),
           });
-          cached = {
+          state.cached = {
             revision: credentialRevision(saved),
             found: { path: found.path, auth: next },
           };

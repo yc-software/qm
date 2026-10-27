@@ -27,7 +27,7 @@ function freshApp() {
 }
 
 test("external-slack-participants: default off; the org flip is what turns it on", async () => {
-  const c = testConfigStore("default-org");
+  const c = testConfigStore();
   assert.equal(c.setting("externalSlackParticipants", org), false);
   await c.setSetting("externalSlackParticipants", true, org);
   assert.equal(c.setting("externalSlackParticipants", org), true);
@@ -37,8 +37,8 @@ test("external-slack-participants: default off; the org flip is what turns it on
 
 test("external-slack-participants: the durable read sees a flip from another instance without a restart", async () => {
   const databaseUrl = testDatabaseUrl();
-  const a = testConfigStore("default-org", { databaseUrl });
-  const b = testConfigStore("default-org", { databaseUrl });
+  const a = testConfigStore({ databaseUrl });
+  const b = testConfigStore({ databaseUrl });
 
   await a.setSetting("externalSlackParticipants", true, org);
   await Promise.resolve();

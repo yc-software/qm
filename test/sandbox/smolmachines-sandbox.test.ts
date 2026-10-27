@@ -40,7 +40,7 @@ function make(extra: Record<string, unknown> = {}): Sandbox {
     store: testSandboxBodies(SMOLMACHINES_BODIES),
     advisoryLock: testAdvisoryLock(),
     token: FAKE_SMOLMACHINES_TOKEN,
-    namePrefix: "qmt",
+    tenantConfig: () => ({ sandboxNamePrefix: "qmt" }),
     fetchImpl: fake.fetchImpl,
     ...extra,
   });

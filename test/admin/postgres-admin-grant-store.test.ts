@@ -57,7 +57,7 @@ test("pg admin grants survive a restart: a promotion is read back through a SEPA
 
 test("pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbers runtime grants", async () => {
   const seed = [grant({ principalId: "seed-admin" })];
-  const s1 = createAdminGrantStore(createPostgresAdminGrantStore(URL), { seed });
+  const s1 = createAdminGrantStore(createPostgresAdminGrantStore(URL), { seed: () => seed });
   assert.equal(
     (await s1.list()).some((g) => g.principalId === "seed-admin"),
     true,
@@ -65,7 +65,7 @@ test("pg-backed AdminGrantStore: seed applies once, then a redeploy never clobbe
   );
   await s1.add(grant({ principalId: "promoted-at-runtime" }));
 
-  const s2 = createAdminGrantStore(createPostgresAdminGrantStore(URL), { seed });
+  const s2 = createAdminGrantStore(createPostgresAdminGrantStore(URL), { seed: () => seed });
   const ids = (await s2.list()).map((g) => g.principalId).sort();
   assert.deepEqual(ids, ["promoted-at-runtime", "seed-admin"], "redeploy preserves both seed + runtime grants");
 });

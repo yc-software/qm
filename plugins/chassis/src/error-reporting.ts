@@ -229,9 +229,18 @@ export function initializeErrorReporting(
   });
 }
 
+let deploymentTag: () => string | undefined = () => undefined;
+
+export function tagErrorDeployment(source: () => string | undefined): void {
+  deploymentTag = source;
+}
+
 export function reportBackendError(error: unknown, code?: string, extra?: Record<string, unknown>): string | undefined {
+  const deployment = deploymentTag();
+  const tags = { ...(code ? { error_code: code } : {}), ...(deployment ? { deployment } : {}) };
   return client?.captureException(error, {
-    ...(code ? { tags: { error_code: code }, fingerprint: ["{{ default }}", code] } : {}),
+    ...(Object.keys(tags).length ? { tags } : {}),
+    ...(code ? { fingerprint: ["{{ default }}", code] } : {}),
     ...(extra ? { extra } : {}),
   });
 }

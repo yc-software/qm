@@ -3,61 +3,43 @@ import type { Server } from "node:http";
 import { stopWithBackstop } from "./wiring.ts";
 import { shutdownOnUncaught } from "./util/process-guard.ts";
 import { startWebEdge } from "./web-edge.ts";
-import { multitenant } from "../plugins/chassis/src/tenant-workers.ts";
-import { bootTenant, type BootedTenant } from "./tenants/boot.ts";
-import { startMultitenant } from "./tenants/host.ts";
+import { bootApp } from "./boot.ts";
+import { createTenantFront } from "./tenants/host.ts";
+import { hostOfUrl } from "../plugins/chassis/src/tenant-hosts.ts";
 
-async function bootSingleTenant(): Promise<{ tenants: BootedTenant[]; servers: Server[] }> {
-  const servers: Server[] = [];
-  const booted = await bootTenant(process.env, async (server, config) => {
-    servers.push(server);
-    await new Promise<void>((resolve) => server.listen(config.port, resolve));
-    console.log(
-      `[qm] listening on :${config.port} (org=${config.orgId}, ` +
-        `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+const servers: Server[] = [];
+const booted = await bootApp(process.env, async (server, config) => {
+  const listener = config.multitenant ? createTenantFront(server) : server;
+  servers.push(listener);
+  await new Promise<void>((resolve) => listener.listen(config.port, resolve));
+  console.log(
+    `[qm] listening on :${config.port} (org=${config.orgId}, ` +
+      `workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled}, multitenant=${config.multitenant})`,
+  );
+  const homeHost = hostOfUrl(config.apiBaseUrl ?? config.publicUrl);
+  if (config.multitenant && homeHost) process.env.CORE_TENANT_HOST ??= homeHost;
+  if (config.publicPort)
+    servers.push(
+      ...(await startWebEdge(
+        { publicPort: config.publicPort, corePort: config.port, orgId: config.orgId },
+        process.env,
+      )),
     );
-    if (config.publicPort)
-      servers.push(
-        ...(await startWebEdge(
-          { publicPort: config.publicPort, corePort: config.port, orgId: config.orgId },
-          process.env,
-        )),
-      );
-  });
-  return { tenants: [booted], servers };
-}
-
-const { tenants, servers, stopWorkers } = multitenant(process.env)
-  ? await startMultitenant(process.env)
-  : { ...(await bootSingleTenant()), stopWorkers: async () => {} };
-const home = tenants[0]!;
+});
 
 let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[qm] ${signal} received, shutting down`);
-  for (const booted of tenants) booted.beginShutdown();
+  booted.beginShutdown();
   for (const server of servers) {
     server.close();
     server.closeIdleConnections();
   }
-  stopWithBackstop(
-    {
-      async stop() {
-        await Promise.all(tenants.map((booted) => booted.stop()));
-        await stopWorkers();
-      },
-      releaseInFlightRuns: async () => {
-        await Promise.all(tenants.map((booted) => booted.releaseInFlightRuns()));
-      },
-    },
-    home.config.shutdownDrainMs,
-    "qm",
-    () => {
-      for (const server of servers) server.closeAllConnections();
-    },
-  );
+  stopWithBackstop(booted, booted.config.shutdownDrainMs, "qm", () => {
+    for (const server of servers) server.closeAllConnections();
+  });
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

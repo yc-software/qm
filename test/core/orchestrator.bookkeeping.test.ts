@@ -28,7 +28,6 @@ import { createPostgresSessionStore } from "../../src/sessions/postgres-session-
 import { testConfigStore, testDatabaseUrl, testDeployBackings } from "../support/test-database.ts";
 import { createPostgresGrantStore } from "../../src/acl/postgres-grant-store.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = {
   kind: "channel",
@@ -84,7 +83,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(databaseUrl),
-    resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
+    resolution: createResolutionService(testConfigStore(), acl),
     sessions,
     workspace,
     files: createPostgresFileArtifactStore(databaseUrl, createMemoryDurableByteStore()),

@@ -228,7 +228,12 @@ mock.module("e2b", {
 });
 
 test("Modal native directory snapshot has a ten-minute timeout, thirty-day retention, and restores the exact image", async () => {
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    app: () => ({ name: "test" }),
+    image: "ubuntu",
+  });
   const session = await client.create({ name: "test" });
   const imageId = await session.snapshotHome();
   assert.deepEqual(modalCalls[0], ["snapshot", "/root", { ttlMs: MODAL_CHECKPOINT_RETENTION_MS, timeoutMs: 600_000 }]);
@@ -239,7 +244,12 @@ test("Modal native directory snapshot has a ten-minute timeout, thirty-day reten
 });
 
 test("Modal exec deadlines are whole seconds with a single grace margin, even near a snapshot deadline", async () => {
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    app: () => ({ name: "test" }),
+    image: "ubuntu",
+  });
   const session = await client.create({});
   modalExecs.length = 0;
   await session.runCommand("wc -c < /root/.qm-home.tar", { timeoutMs: 12_345 });
@@ -253,7 +263,12 @@ test("Modal exec deadlines are whole seconds with a single grace margin, even ne
 });
 
 test("Modal passes command env through exec and spools oversized commands through the filesystem", async () => {
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    app: () => ({ name: "test" }),
+    image: "ubuntu",
+  });
   const session = await client.create({});
   modalExecs.length = 0;
   modalWrites.length = 0;
@@ -276,7 +291,12 @@ test("Modal passes command env through exec and spools oversized commands throug
 
 test("Modal creates sandboxes with a real reservation, an idle backstop, tags and the egress allowlist", async () => {
   modalCreateParams.length = 0;
-  const bare = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const bare = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    app: () => ({ name: "test" }),
+    image: "ubuntu",
+  });
   await bare.create({ name: "qm-scope", tags: { "qm-kind": "scope" } });
   assert.deepEqual(modalCreateParams[0], {
     name: "qm-scope",
@@ -289,7 +309,7 @@ test("Modal creates sandboxes with a real reservation, an idle backstop, tags an
   const tuned = createSdkModalClient({
     tokenId: "id",
     tokenSecret: "secret",
-    appName: "test",
+    app: () => ({ name: "test" }),
     image: "ubuntu",
     cpus: 4,
     memoryMb: 8192,
@@ -311,7 +331,12 @@ test("Modal creates sandboxes with a real reservation, an idle backstop, tags an
 });
 
 test("Modal lists running tagged sandboxes within the app and reports oversized reads clearly", async () => {
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    app: () => ({ name: "test" }),
+    image: "ubuntu",
+  });
   modalRunning.set("sb-live", true);
   modalRunning.set("sb-done", false);
   modalCalls.length = 0;
@@ -329,7 +354,12 @@ test("Modal classifies gone sandboxes, missing files, deadlines and name conflic
     modalFault = {};
     modalPoll = null;
   });
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    app: () => ({ name: "test" }),
+    image: "ubuntu",
+  });
   const session = await client.create({});
   const plain = new Error("unrecognized failure");
   modalFault = { exec: plain, read: plain, write: plain };
@@ -372,7 +402,12 @@ test("Modal classifies gone sandboxes, missing files, deadlines and name conflic
 });
 
 test("Modal terminate returns only once the sandbox has stopped, so its name is free to reuse", async () => {
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    app: () => ({ name: "test" }),
+    image: "ubuntu",
+  });
   const session = await client.create({ name: "scope" });
   modalTerminated.length = 0;
   modalWaited.length = 0;
@@ -563,7 +598,12 @@ test("Modal executes a one-megabyte payload through the sandbox and SDK without 
       wait: async () => result.status ?? -1,
     };
   };
-  const client = createSdkModalClient({ tokenId: "id", tokenSecret: "secret", appName: "test", image: "ubuntu" });
+  const client = createSdkModalClient({
+    tokenId: "id",
+    tokenSecret: "secret",
+    app: () => ({ name: "test" }),
+    image: "ubuntu",
+  });
   const session = await client.create({});
   const sandbox = createModalSandbox(createLocalWorkspaceStore(join(root, "workspace")), {
     store: testSandboxBodies(MODAL_BODIES),

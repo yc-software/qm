@@ -41,7 +41,7 @@ function makeDeps(overrides: { config?: ScopedConfigStore; advisoryLock?: Adviso
   const crons = createCronStore(testDatabaseUrl());
   const webhooks = createWebhookStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
-  const config = overrides.config ?? testConfigStore(ORG);
+  const config = overrides.config ?? testConfigStore();
   const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const identity = {
     classify: (id: string) => ({ id, type: "internal" }),
@@ -214,8 +214,8 @@ test("SOUL: a private-channel or group member may edit; a public-channel member 
 test("SOUL: shared-lock writers refresh fleet state before assigning the next version", async () => {
   const databaseUrl = testDatabaseUrl();
   const lock = testAdvisoryLock();
-  const leftConfig = testConfigStore(ORG, { databaseUrl });
-  const rightConfig = testConfigStore(ORG, { databaseUrl });
+  const leftConfig = testConfigStore({ databaseUrl });
+  const rightConfig = testConfigStore({ databaseUrl });
   const left = createApp(makeDeps({ config: leftConfig, advisoryLock: lock }) as unknown as AppDeps);
   const right = createApp(makeDeps({ config: rightConfig, advisoryLock: lock }) as unknown as AppDeps);
 
@@ -230,7 +230,7 @@ test("SOUL: shared-lock writers refresh fleet state before assigning the next ve
 
 test("SOUL: a durable write failure rejects and restores the live cache", async () => {
   const databaseUrl = testDatabaseUrl();
-  const config = testConfigStore(ORG, { databaseUrl });
+  const config = testConfigStore({ databaseUrl });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   assert.equal(await app.updateInstructions(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
   await failTableWrites(databaseUrl, "soul_configs");
@@ -245,7 +245,7 @@ test("SOUL: a durable write failure rejects and restores the live cache", async 
 test("SOUL: the HTTP route reports durable storage failures as 500", async () => {
   const databaseUrl = testDatabaseUrl();
   await failTableWrites(databaseUrl, "soul_configs");
-  const config = testConfigStore(ORG, { databaseUrl });
+  const config = testConfigStore({ databaseUrl });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number; body?: { error?: string } } = {};
   const res = {
@@ -298,7 +298,7 @@ test("SOUL: failed persistence keeps the pre-write cache", async () => {
     updatedBy: OWNER,
     history: [{ scopeId: privScope, content: "durable prior", version: 7, updatedAt: 70, updatedBy: OWNER }],
   };
-  const config = testConfigStore(ORG, { databaseUrl });
+  const config = testConfigStore({ databaseUrl });
   await config.restoreInstructionsSnapshot(privScope, prior);
   await failTableWrites(databaseUrl, "soul_configs");
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);

@@ -34,7 +34,7 @@ async function main(): Promise<void> {
     createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "managed-agents-smoke-ws-"))),
     {
       client,
-      namePrefix: prefix,
+      tenantConfig: () => ({ sandboxNamePrefix: prefix }),
       store,
       advisoryLock: createNoopAdvisoryLock(),
     },
