@@ -86,7 +86,6 @@ export interface McpToolService {
   needsApproval(name: string, args: Record<string, unknown>, principalId?: string): Promise<boolean>;
   /** Force a registry re-read + tools/list refresh (admin save path, tests). */
   refresh(): Promise<void>;
-  /** Probe a server config without persisting it. Returns its tools and self-description. */
   probe(server: McpServer, principalId?: string): Promise<McpListing>;
   close(): void;
 }
