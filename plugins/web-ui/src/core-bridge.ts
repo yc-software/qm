@@ -1955,6 +1955,7 @@ interface MessageRevisionNote {
   ts: string;
   content: string;
   speaker?: string;
+  byAgent?: boolean;
   timestamp?: number;
 }
 
@@ -2045,18 +2046,32 @@ function goalCancelledPayload(payload: unknown): GoalCancelledNote | null {
 }
 
 function messageRevisionPayload(payload: unknown): MessageRevisionNote | null {
-  const p = payload as { kind?: unknown; action?: unknown; ts?: unknown; text?: unknown; name?: unknown } | null;
+  const p = payload as {
+    kind?: unknown;
+    action?: unknown;
+    ts?: unknown;
+    text?: unknown;
+    name?: unknown;
+    sourceRole?: unknown;
+  } | null;
   if (p?.kind !== "message_revision") return null;
   if (p.action !== "edited" && p.action !== "deleted") return null;
   if (typeof p.ts !== "string" || !p.ts) return null;
+  const byAgent = p.sourceRole === "agent";
   return {
     role: "system-note",
     note: "message_revision",
     action: p.action,
     ts: p.ts,
     content: typeof p.text === "string" ? p.text : "",
-    ...(typeof p.name === "string" && p.name.trim() ? { speaker: p.name.trim() } : {}),
+    ...(byAgent ? { byAgent } : {}),
+    ...(!byAgent && typeof p.name === "string" && p.name.trim() ? { speaker: p.name.trim() } : {}),
   };
+}
+
+function isAgentEcho(payload: unknown): boolean {
+  const p = payload as { overheard?: unknown; sourceRole?: unknown } | null;
+  return p?.overheard === true && p?.sourceRole === "agent";
 }
 
 function userEntryText(payload: unknown): string | null {
@@ -2081,7 +2096,7 @@ export function userEntryMessage(
     ts?: string;
     attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
-  if (payload?.hidden) return null;
+  if (payload?.hidden || isAgentEcho(payload)) return null;
   const text = userEntryText(payload) ?? "";
   const attachments = payload?.attachments ?? [];
   if (!text && !attachments.length) return null;
@@ -2129,11 +2144,6 @@ function deliveredSilence(a: ToolActivity): boolean {
   if (a.type !== "tool_result") return false;
   const p = a.payload as { tool?: string; silent?: boolean; ok?: boolean } | null;
   return (p?.tool === "finish_silently" && p?.silent === true) || (p?.tool === "stay_silent" && p?.ok === true);
-}
-
-function isAgentEcho(payload: unknown): boolean {
-  const p = payload as { overheard?: unknown; sourceRole?: unknown } | null;
-  return p?.overheard === true && p?.sourceRole === "agent";
 }
 
 function isFinishedReplyEntry(entry: SessionEntry): boolean {
@@ -2321,7 +2331,11 @@ export function entriesToMessages(entries: SessionEntry[], model?: Model<Api>): 
       continue;
     }
     if (e.type === "user") {
-      if (isAgentEcho(e.payload)) continue;
+      if (isAgentEcho(e.payload)) {
+        spillHeldPosts();
+        flushWork("", e.createdAt);
+        continue;
+      }
       if (!payload?.steered) {
         stoppedShown = false;
         hiddenPrompt = payload?.hidden === true;

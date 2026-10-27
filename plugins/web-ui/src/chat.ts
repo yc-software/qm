@@ -2001,7 +2001,7 @@ export function createChatSurface(
       `;
       if (note.note === "goal_cancelled")
         return row(html`Goal cancelled: <span class="system-note-text">${goalObjectiveLabel(note.content)}</span>`);
-      const who = note.speaker ?? "The user";
+      const who = note.byAgent ? brandName() : (note.speaker ?? "The user");
       return row(
         note.action === "deleted"
           ? html`${who} deleted their message`
