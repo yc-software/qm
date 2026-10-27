@@ -731,10 +731,14 @@ export function defaultModelForHarness(
   if (configured && (modelUnavailableReason(configured) || modelSupportedByHarness(configured, harness)))
     return configured;
   if (!providers) return DEFAULT_AGENT_MODEL_ID;
-  const servable = [...PROVIDER_DEFAULT_MODEL_IDS, ...selectableBaseModels(true).map((model) => model.id)].find(
-    (id) => modelSupportedByHarness(id, harness) && modelServiceable(id, providers),
+  const billable = (id: string) => modelSupportedByHarness(id, harness) && modelServiceable(id, providers);
+  return (
+    PROVIDER_DEFAULT_MODEL_IDS.find(billable) ??
+    selectableBaseModels(true)
+      .map((model) => model.id)
+      .find(billable) ??
+    DEFAULT_AGENT_MODEL_ID
   );
-  return servable ?? DEFAULT_AGENT_MODEL_ID;
 }
 
 export interface ModelProviderAvailability {
