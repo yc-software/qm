@@ -18,7 +18,7 @@ import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../to
 import type { GapWork } from "../sessions/session-store.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
-import { deferredMcpTools, mcpToolDescription, searchMcpTools } from "./deferred-tools.ts";
+import { mcpToolDescription, searchMcpTools, visibleMcpTools } from "./deferred-tools.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
@@ -3916,7 +3916,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const mcpDefs = deferredMcpTools(opts?.mcpTools, opts?.readOnly);
+  const mcpDefs = visibleMcpTools(opts?.mcpTools, opts?.readOnly);
   const mcpCandidates = mcpDefs.map((d) => ({
     ...defineTool({
       name: d.name,
@@ -3957,9 +3957,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
       : d.needsApproval === true,
   }));
-  const deferredTools = new Map(
-    mcpCandidates.map((t) => [t.name, withToolApprovalGate(t, ref, { recordCall, recordResult })]),
-  );
   const toolSearch = defineTool({
     name: "tool_search",
     label: "tool_search",
@@ -3970,7 +3967,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }),
     async execute(callId, params) {
       await recordCall(callId, { tool: "tool_search", query: params.query });
-      return recordResult(callId, { tool: "tool_search" }, text(searchMcpTools(mcpDefs, params.query)));
+      return recordResult(callId, { tool: "tool_search" }, text(searchMcpTools(searchable, params.query)));
     },
   });
   const mcpCall = defineTool({
@@ -4174,8 +4171,17 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     context,
     ...clientTools,
   ];
+  const nativeNames = new Set(tools.map((t) => t.name));
+  const inline = new Set(mcpDefs.filter((d) => d.catalog && !nativeNames.has(d.name)).map((d) => d.name));
+  const searchable = mcpDefs.filter((d) => !inline.has(d.name));
+  const inlineTools = mcpCandidates.filter((t) => inline.has(t.name));
+  const deferredTools = new Map(
+    mcpCandidates
+      .filter((t) => !inline.has(t.name))
+      .map((t) => [t.name, withToolApprovalGate(t, ref, { recordCall, recordResult })]),
+  );
   const connectorTools: ToolDefinition[] = deferredTools.size ? [toolSearch, mcpCall] : [];
-  tools.push(...connectorTools);
+  tools.push(...inlineTools, ...connectorTools);
   const operationFields: Record<string, Record<string, string[]>> = {
     sandbox: {
       status: ["sandbox_id"],
@@ -4247,7 +4253,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     };
   };
   const active = opts?.readOnly
-    ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || connectorTools.includes(t))
+    ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t))
     : tools;
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {

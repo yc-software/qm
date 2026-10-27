@@ -10,11 +10,18 @@ export function mcpToolDescription(tool: McpToolDescriptor): string {
   );
 }
 
-export function deferredMcpTools(
+export function visibleMcpTools(
   tools: readonly McpToolDescriptor[] | undefined,
   readOnly: boolean | undefined,
 ): McpToolDescriptor[] {
   return (tools ?? []).filter((tool) => !readOnly || tool.readOnly);
+}
+
+export function deferredMcpTools(
+  tools: readonly McpToolDescriptor[] | undefined,
+  readOnly: boolean | undefined,
+): McpToolDescriptor[] {
+  return visibleMcpTools(tools, readOnly).filter((tool) => !tool.catalog);
 }
 
 const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
@@ -68,6 +75,10 @@ function aboutPhrase(about: string): string {
   return `${space > 0 ? cut.slice(0, space) : cut}…`;
 }
 
+function bare(text: string): string {
+  return [...text.toLowerCase()].filter((char) => char.toUpperCase() !== char || (char >= "0" && char <= "9")).join("");
+}
+
 function purpose(tools: readonly McpToolDescriptor[]): string {
   const about = tools[0]!.serverAbout && aboutPhrase(tools[0]!.serverAbout);
   if (about) return about;
@@ -79,7 +90,8 @@ function purpose(tools: readonly McpToolDescriptor[]): string {
     if (next.length > PURPOSE_CHARS) return out ? `${out}, …` : `${next.slice(0, PURPOSE_CHARS)}…`;
     out = next;
   }
-  return out;
+  const server = tools[0]!;
+  return [server.serverId, server.serverName].some((name) => bare(name) === bare(out)) ? "" : out;
 }
 
 export function connectorToolsNote(tools: readonly McpToolDescriptor[]): string {
@@ -90,7 +102,8 @@ export function connectorToolsNote(tools: readonly McpToolDescriptor[]): string 
     const server = group[0]!.serverName;
     const signIn = group.find((tool) => tool.signIn);
     if (signIn) return `- ${server}: not connected; mcp_call ${signIn.name} to connect.`;
-    return `- ${server} (${purpose(group)}): ${group.length} ${group.length === 1 ? "tool" : "tools"}`;
+    const phrase = purpose(group);
+    return `- ${server}${phrase ? ` (${phrase})` : ""}: ${group.length} ${group.length === 1 ? "tool" : "tools"}`;
   });
   return ["## Connectors", "Load on demand: tool_search finds a tool, mcp_call runs it.", ...lines].join("\n");
 }
