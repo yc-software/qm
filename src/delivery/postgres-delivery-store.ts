@@ -188,7 +188,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                    AND (earlier.delivery_sequence < candidate.delivery_sequence
                      OR (earlier.id <> candidate.id AND earlier.claim_expires_at > ${NOW_MS_SQL}))
                ))
-             ORDER BY delivery_sequence
+             ORDER BY created_at
              LIMIT $3
                FOR UPDATE SKIP LOCKED
           )
