@@ -5,7 +5,7 @@ description: Ask a person for access to one of their keychain credentials when a
 
 # Request access to someone's credential
 
-Use this when the Credentials section lists a credential you need under "Not granted here". Your own credentials in your own personal conversation never need this.
+Use this when a command needs someone's credential and the Credentials section shows no handle for it here. Your own credentials in your own personal conversation never need this.
 
 ## Request
 
@@ -13,11 +13,13 @@ One call, from this session or any sub-agent. The approval belongs to the whole 
 so every session in it sees the same grant.
 
 ```sh
-curl -fsS -X POST "$AGENT_API_URL/v1/keychain/asks" \
+curl -sS -X POST "$AGENT_API_URL/v1/keychain/asks" \
   -H "x-agent-capability: $AGENT_API_TOKEN" -H 'content-type: application/json' \
-  -d '{"credential":"<credential id>","purpose":"<what the command will do>"}'
+  -d '{"owner":"<their name or principal id>","service":"<service, e.g. github>","purpose":"<what the command will do>"}'
 ```
 
+- The server finds the credential from `owner` and `service`. If it can't tell which one you mean,
+  it answers 404 or 409 with `candidates`; pick one and send `{"credential":"<its credential id>", ...}` instead.
 - `purpose` is one plain sentence about the command, not the whole task.
 - If a request for that credential is already pending, the same one comes back. Don't ask twice.
 

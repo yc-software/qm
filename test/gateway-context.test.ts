@@ -16,7 +16,7 @@ test("renders gateway + location + identifier lines", () => {
     details: { channel: "C0123", channel_name: "#eng-platform", thread_ts: "1718.0001" },
   });
   assert.match(out, /^## Where you are/);
-  assert.match(out, /over slack, in #eng-platform/);
+  assert.match(out, /^Slack, in #eng-platform\.$/m);
   assert.match(out, /- channel: C0123/);
   assert.match(out, /- channel_name: #eng-platform/);
   assert.match(out, /- thread_ts: 1718\.0001/);
@@ -24,16 +24,13 @@ test("renders gateway + location + identifier lines", () => {
 
 test("gateway only (no surface-provided context) still names the gateway", () => {
   const out = renderGatewayContext("slack");
-  assert.match(out, /over slack\./);
+  assert.match(out, /^Slack conversation\.$/m);
   assert.doesNotMatch(out, /Identifiers for this conversation/);
 });
 
 test("web gateway keeps scheduled deliveries in the web conversation by default", () => {
-  const out = renderGatewayContext("web");
-  assert.match(out, /over web\./);
-  assert.match(out, /post back to this conversation unless the person asks for another destination/);
-  assert.doesNotMatch(out, /cannot receive future external notifications/);
-  assert.doesNotMatch(out, /use `recipient` for a Slack DM/);
+  const out = renderGatewayContext("web", undefined, "regan");
+  assert.equal(out, "## Where you are\nWeb DM with regan.\nCrons you create here post back here.");
 });
 
 test("surface-supplied instructions are appended verbatim (and alone are enough to render)", () => {
@@ -74,7 +71,7 @@ test("gateway context flows into the system prompt the harness sees", async () =
   });
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /## Where you are/);
-  assert.match(res.reply ?? "", /over slack, in a direct message with the user/);
+  assert.match(res.reply ?? "", /^Slack DM with U1\.$/m);
   assert.match(res.reply ?? "", /- channel: D9/);
 });
 
@@ -87,7 +84,7 @@ test("no gateway context: prompt names the surface but adds no identifier lines"
     text: "!sysprompt",
   });
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /over slack\./);
+  assert.match(res.reply ?? "", /^Slack DM with U2\.$/m);
   assert.doesNotMatch(res.reply ?? "", /Identifiers for this conversation/);
 });
 
@@ -100,7 +97,7 @@ test("web prompt tells cron creators to use a real notification destination", as
     text: "!sysprompt",
   });
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /post back to this conversation unless/);
+  assert.match(res.reply ?? "", /^Crons you create here post back here\.$/m);
   assert.doesNotMatch(res.reply ?? "", /cannot receive future external notifications/);
 });
 

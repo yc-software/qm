@@ -416,7 +416,7 @@ export function createMockHarness(): Harness {
           reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
         } else if (command0.startsWith("!run ") || command0.startsWith("!scratch ")) {
           const tag = command0.startsWith("!scratch ") ? "!scratch " : "!run ";
-          const inboxDir = /available in \.\/(\S+?)\/:/.exec(turn.environment ?? "")?.[1] ?? "inbox";
+          const inboxDir = / shared \S+ \(\.\/(\S+)\/[^/)]+\)\./.exec(turn.environment ?? "")?.[1] ?? "inbox";
           const command = cmd.slice(cmd.indexOf(tag) + tag.length).replaceAll("{INBOX}", inboxDir);
           if (gateTool("execute")) {
             await turn.emit({

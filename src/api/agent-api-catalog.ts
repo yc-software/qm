@@ -477,7 +477,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST|GET",
         path: "/v1/keychain/asks",
         summary:
-          "ask a credential's owner for access, including scheduled turns in personal or shared conversations for discoverable credentials (no access until owner approval) / list asks",
+          "ask a credential's owner for access by {owner, service} (the server resolves the credential, or returns the candidates when it can't), including scheduled turns in personal or shared conversations (no access until owner approval) / list asks",
       },
       {
         method: "POST",
@@ -581,6 +581,12 @@ const FAMILIES: AgentApiFamily[] = [
   },
   {
     routes: [
+      {
+        method: "GET",
+        path: "/v1/connectors/catalog",
+        summary:
+          "list the direct OAuth apps this deployment knows; `configured: true` marks the ones an admin enabled, the only ones to offer consent links for",
+      },
       {
         method: "POST",
         path: "/v1/connectors/oauth/consent/mint",

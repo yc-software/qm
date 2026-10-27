@@ -179,7 +179,7 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
     return at;
   };
 
-  const ordered = ["Skills", "Where you are", "Where scheduled tasks post", "Sandboxes", "What you remember"];
+  const ordered = ["Where you are", "Where scheduled tasks post", "Sandboxes", "Skills", "What you remember"];
   assert.doesNotMatch(prompt, /\n## Your logins\n/);
   const positions = ordered.map((title) => ({ title, at: headingAt(title) }));
   positions.reduce((prev, cur) => {
@@ -427,7 +427,7 @@ test("Open keeps unclassified personal memory out of rooms, loads room memory in
     }),
   );
   assert.match(dmPrompt.reply ?? "", /### channel:C1[\s\S]*ROOM_ONLY_MEMORY/);
-  assert.match(dmPrompt.reply ?? "", /use these authorized memories freely/);
+  assert.match(dmPrompt.reply ?? "", /Use them freely, but a preference tagged with another scope heading/);
   assert.doesNotMatch(dmPrompt.reply ?? "", /apply it only if that tag matches here/);
 
   member = false;
@@ -477,9 +477,8 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
     assert.ok(systemOf(first.reply ?? "").includes(`\n## ${title}\n`), `expected "## ${title}" in the system prompt`);
     assert.ok(!environmentOf(second.reply ?? "").includes(`\n## ${title}\n`));
   }
-  assert.match(systemOf(first.reply ?? ""), /Direct OAuth apps you may offer with the connect-apps skill: Google\./);
-  assert.doesNotMatch(systemOf(first.reply ?? ""), /local time|\d{4}-\d{2}-\d{2}T/);
-  assert.match(environmentOf(first.reply ?? ""), /The user's local time: \S+ \(America\/New_York\)/);
+  assert.doesNotMatch(systemOf(first.reply ?? ""), /Local time|\d{4}-\d{2}-\d{2}/);
+  assert.match(environmentOf(first.reply ?? ""), /Local time: \S+ \d\d:\d\d E[SD]T \(America\/New_York\)/);
   assert.notEqual(environmentOf(second.reply ?? ""), environmentOf(first.reply ?? ""), "the clock moved a minute");
   assert.equal(
     systemOf(second.reply ?? ""),
@@ -545,8 +544,8 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
   const prompt = b.reply ?? "";
 
   assert.match(prompt, /schedule the wake-up in the same turn/);
-  assert.match(prompt, /\n## Already scheduled here\n/);
-  assert.match(prompt, /Vendor status — every 5 minutes/);
+  assert.match(prompt, /\n## Scheduled here \(America\/Los_Angeles\)\n/);
+  assert.match(prompt, /Vendor status — every 5 min$/m);
   assert.match(prompt, /Legal follow-up — once at/);
   assert.doesNotMatch(prompt, /poll the vendor status page|follow up with legal/);
   assert.doesNotMatch(prompt, /hi alice/);
@@ -565,7 +564,7 @@ test("sandboxes render as one provider line without the substrate spec; no resiz
   assert.equal(b.status, "ok");
   const prompt = b.reply ?? "";
   assert.doesNotMatch(prompt, /## Resizing this computer/);
-  assert.match(prompt, /\n## Sandboxes\nProviders: \S+ \(default\)/);
+  assert.match(prompt, /\n## Sandboxes\n\S+ \(default\)/);
   assert.doesNotMatch(prompt, /vCPU|GB RAM/);
 });
 
@@ -1207,9 +1206,9 @@ test("scheduled-work changes update the next turn's system block without rewriti
     throw new Error("inventory unavailable");
   };
   assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
-  for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Already scheduled|Sandboxes|Debian|vCPU/);
-  assert.match(seen[0]!.systemPrompt, /No active scheduled work/);
-  assert.match(seen[1]!.systemPrompt, /Synthetic status — every 5 minutes/);
+  for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Scheduled here|Sandboxes|Debian|vCPU/);
+  assert.match(seen[0]!.systemPrompt, /Nothing is scheduled here/);
+  assert.match(seen[1]!.systemPrompt, /Synthetic status — every 5 min$/m);
   assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
   assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
   assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);

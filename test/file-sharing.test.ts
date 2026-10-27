@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
-import type { GrantedHandle, IncomingAttachment } from "../src/types.ts";
+import { scopeId, type GrantedHandle, type IncomingAttachment } from "../src/types.ts";
+import { createToolContext } from "../src/tools/primitives.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
@@ -96,9 +97,16 @@ test("inboundManifest lists files under ./inbox/", () => {
     { name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" },
     { name: "b.csv", mimetype: "text/csv", sizeBytes: 9, direction: "in" },
   ]);
-  assert.match(m, /shared 2 files/);
-  assert.match(m, /inbox\/a\.txt/);
-  assert.match(m, /inbox\/b\.csv/);
+  assert.equal(m, "The user shared a.txt (./inbox/a.txt).\nThe user shared b.csv (./inbox/b.csv).");
+  assert.equal(
+    inboundManifest(
+      [{ name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" }],
+      "inbox",
+      undefined,
+      "regan",
+    ),
+    "regan shared a.txt (./inbox/a.txt).",
+  );
   assert.equal(inboundManifest([]), "");
 });
 
@@ -132,9 +140,7 @@ test("inboundManifest attributes each file to its poster when the author is know
     { name: "selfie.jpg", mimetype: "image/jpeg", sizeBytes: 5, direction: "in", author: "taylor" },
     { name: "poster.png", mimetype: "image/png", sizeBytes: 7, direction: "in", author: "eve" },
   ]);
-  assert.match(m, /inbox\/selfie\.jpg \(image\/jpeg, 5 bytes\) — shared by taylor/);
-  assert.match(m, /inbox\/poster\.png \(image\/png, 7 bytes\) — shared by eve/);
-  assert.doesNotMatch(m, /The user shared/);
+  assert.equal(m, "taylor shared selfie.jpg (./inbox/selfie.jpg).\neve shared poster.png (./inbox/poster.png).");
 });
 
 test("inboundManifest leaves a file unattributed when its author is unknown (mixed case)", () => {
@@ -142,8 +148,7 @@ test("inboundManifest leaves a file unattributed when its author is unknown (mix
     { name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in", author: "eve" },
     { name: "b.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" },
   ]);
-  assert.match(m, /inbox\/a\.txt \(text\/plain, 3 bytes\) — shared by eve/);
-  assert.match(m, /^- inbox\/b\.txt \(text\/plain, 3 bytes\)$/m);
+  assert.equal(m, "eve shared a.txt (./inbox/a.txt).\nThe user shared b.txt (./inbox/b.txt).");
 });
 
 test("shared files render as one count line without file names, '' when nothing is shared", () => {
@@ -153,10 +158,34 @@ test("shared files render as one count line without file names, '' when nothing 
     { handlePath: "shared/report.txt", ownerScopeId: "personal:U4", fileId: "1".repeat(32), permission: "read" },
   ];
   const s = sharedFilesSystemSection(handles);
-  assert.match(s, /^2 files are shared with you; /);
-  assert.doesNotMatch(s, /report|budget|\n/);
-  assert.match(sharedFilesSystemSection(handles.slice(0, 1)), /^1 file is shared with you; /);
+  assert.equal(s, "## Files\n2 files are shared with you; list and read them with the `files` tool.");
+  assert.match(sharedFilesSystemSection(handles.slice(0, 1)), /^## Files\n1 file is shared with you; /);
   assert.equal(sharedFilesSystemSection([]), "");
+});
+
+test("reading shared/ lists the files shared with you without touching a computer", async () => {
+  const handle = (handlePath: string): GrantedHandle => ({
+    handlePath,
+    ownerScopeId: scopeId("personal", "U2"),
+    fileId: "1".repeat(32),
+    permission: "read",
+  });
+  const tc = createToolContext({
+    sandbox: {} as Sandbox,
+    provision: async () => {
+      throw new Error("must not provision");
+    },
+    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
+    commandPolicy: () => ({ mode: "denylist", rules: [] }),
+    authorizeCommand: () => false,
+    grantedHandles: [handle("shared/report.txt"), handle("shared/budget.xlsx"), handle("shared/report.txt")],
+    workspace: {} as never,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: "U1",
+  });
+  assert.equal((await tc.read("shared/")).content, "shared/budget.xlsx\nshared/report.txt");
+  assert.equal((await tc.read("shared")).content, "shared/budget.xlsx\nshared/report.txt");
 });
 
 test("environmentNote wraps turn-scoped notes in an <environment> block ('' for empty input)", () => {

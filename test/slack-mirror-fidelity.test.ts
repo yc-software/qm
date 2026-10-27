@@ -268,9 +268,7 @@ for (const postgres of [false, true]) {
         assert.deepEqual(views[1]!.messages, views[0]!.messages);
         assert.equal(views[1]!.messages[0]!.authorId, "BOTHER");
         assert.equal(views[1]!.messages[0]!.name, "Report bot");
-        assert.deepEqual(views[1]!.files, views[0]!.files);
         assert.deepEqual(views[1]!.messages[0]!.files, ["Large report"]);
-        assert.deepEqual(views[1]!.files, []);
         assert.deepEqual(views[1]!.omittedFiles, []);
         await cache.ingest([{ container, ts: "1000", deleted: true }]);
         await cache.ingest([{ ...event, botId: "BWRONG", editedAt: 30 }]);

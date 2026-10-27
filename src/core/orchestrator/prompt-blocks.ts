@@ -32,59 +32,92 @@ export function renderProjectHomeChannel(channelName: string): string {
   ].join("\n");
 }
 
-function localIsoTime(timezone: string, nowMs: number): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function clockTime(hour: number, minute: number): string {
+  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour < 12 ? "AM" : "PM"}`;
+}
+
+function wholeNumbers(field: string, max: number): number[] | undefined {
+  const values = field.split(",").map(Number);
+  return values.every((v) => Number.isInteger(v) && v >= 0 && v <= max) ? values : undefined;
+}
+
+function weekdays(field: string): string | undefined {
+  if (field === "*") return "daily";
+  const range = field.split("-");
+  if (range.length === 2) {
+    const [from, to] = range.map((d) => wholeNumbers(d, 7)?.[0]);
+    return from !== undefined && to !== undefined ? `${WEEKDAYS[from % 7]}–${WEEKDAYS[to % 7]}` : undefined;
+  }
+  return wholeNumbers(field, 7)
+    ?.map((d) => WEEKDAYS[d % 7])
+    .join("/");
+}
+
+function shortCron(expression: string): string {
+  const [minute, hour, dayOfMonth, month, dayOfWeek, ...rest] = expression.trim().split(/\s+/);
+  const minutes = minute !== undefined ? wholeNumbers(minute, 59) : undefined;
+  const hours = hour !== undefined ? wholeNumbers(hour, 23) : undefined;
+  const days = dayOfWeek !== undefined ? weekdays(dayOfWeek) : undefined;
+  if (minutes?.length === 1 && hours && days && dayOfMonth === "*" && month === "*" && !rest.length)
+    return `${hours.map((h) => clockTime(h, minutes[0]!)).join(", ")} ${days}`;
+  return cronstrue.toString(expression.replaceAll("#L", "L"));
+}
+
+function shortInterval(everyMs: number): string {
+  for (const [size, unit] of [
+    [3_600_000, "h"],
+    [60_000, "min"],
+    [1000, "s"],
+  ] as const) {
+    if (everyMs % size === 0) return `every ${everyMs / size} ${unit}`;
+  }
+  return `every ${everyMs} ms`;
+}
+
+function zonedParts(timezone: string, nowMs: number): Record<string, string> {
+  const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
-    second: "2-digit",
     hourCycle: "h23",
-    timeZoneName: "longOffset",
+    timeZoneName: "short",
   }).formatToParts(nowMs);
-  const fields = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
-  const offset = fields.timeZoneName === "GMT" ? "+00:00" : fields.timeZoneName!.slice(3);
-  return `${fields.year}-${fields.month}-${fields.day}T${fields.hour}:${fields.minute}:${fields.second}${offset}`;
+  return Object.fromEntries(parts.map(({ type, value }) => [type, value]));
 }
 
-function cronSchedulePromptLabel(c: Cron, timezone: string): string {
+function scheduleLabel(c: Cron): { label: string; timezone?: string } {
   const schedule = c.schedule;
-  if (schedule.cron)
-    return `${cronstrue.toString(schedule.cron.replaceAll("#L", "L"))} (${schedule.timezone ?? DEFAULT_CRON_TIMEZONE})`;
-  if (schedule.everyMs != null) {
-    for (const [size, unit] of [
-      [3_600_000, "hours"],
-      [60_000, "minutes"],
-      [1000, "seconds"],
-    ] as const) {
-      if (schedule.everyMs % size === 0) return `every ${schedule.everyMs / size} ${unit}`;
-    }
-    return `every ${schedule.everyMs} milliseconds`;
-  }
-  return `once at ${localIsoTime(timezone, schedule.firstFireAt ?? c.createdAt)}`;
+  const timezone = schedule.timezone ?? DEFAULT_CRON_TIMEZONE;
+  if (schedule.cron) return { label: shortCron(schedule.cron), timezone };
+  if (schedule.everyMs != null) return { label: shortInterval(schedule.everyMs) };
+  const at = zonedParts(timezone, schedule.firstFireAt ?? c.createdAt);
+  return {
+    label: `once at ${at.year}-${at.month}-${at.day} ${clockTime(Number(at.hour), Number(at.minute))}`,
+    timezone,
+  };
 }
 
-export function renderStandingObligations(
-  crons: Cron[],
-  webhooks: Webhook[],
-  monitors: Monitor[],
-  timezone = DEFAULT_CRON_TIMEZONE,
-): string {
+export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], monitors: Monitor[]): string {
   const summary = (text: string) => (text.length > 100 ? `${text.slice(0, 97)}…` : text);
+  const schedules = crons
+    .toSorted((a, b) => a.id.localeCompare(b.id))
+    .map((c) => ({ title: c.title || "Untitled scheduled task", ...scheduleLabel(c) }));
+  const zones = [...new Set(schedules.flatMap((s) => (s.timezone ? [s.timezone] : [])))];
   const lines = [
-    ...crons
-      .toSorted((a, b) => a.id.localeCompare(b.id))
-      .map((c) => `- ${c.title || "Untitled scheduled task"} — ${cronSchedulePromptLabel(c, timezone)}`),
+    ...schedules.map((s) => `- ${s.title} — ${s.label}${zones.length > 1 && s.timezone ? ` (${s.timezone})` : ""}`),
     ...webhooks.toSorted((a, b) => a.id.localeCompare(b.id)).map((w) => `- Webhook: ${summary(w.action)}`),
     ...monitors
       .toSorted((a, b) => a.id.localeCompare(b.id))
       .map((m) => `- Job watch: ${summary(m.purpose ?? m.command)}`),
   ];
   return [
-    "## Already scheduled here",
-    ...(lines.length ? lines : ["No active scheduled work was found for this conversation."]),
+    `## Scheduled here${zones.length === 1 ? ` (${zones[0]})` : ""}`,
+    ...(lines.length ? lines : ["Nothing is scheduled here."]),
   ].join("\n");
 }
 
@@ -111,7 +144,7 @@ const ROSTER_CAP = 20;
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
   const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
-  const lines = shown.map((m) => `- ${m.displayName} (${m.principalId})`);
+  const lines = shown.map((m) => `- ${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`);
   const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
   return (
     [
@@ -123,7 +156,8 @@ export function renderConversationRoster(members: DirectoryMember[]): string | n
 }
 
 export function currentTimeBlock(timezone: string, nowMs: number): string {
-  return `The user's local time: ${localIsoTime(timezone, nowMs)} (${timezone})`;
+  const at = zonedParts(timezone, nowMs);
+  return `Local time: ${at.year}-${at.month}-${at.day} ${at.hour!.padStart(2, "0")}:${at.minute} ${at.timeZoneName} (${timezone})`;
 }
 
 export function renderSurfaceBriefing(surface: SurfaceBriefing): string {

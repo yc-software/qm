@@ -13,7 +13,7 @@ import { createServer } from "../src/api/server.ts";
 import {
   createKeychain,
   credentialHandle,
-  renderAskLedger,
+  askResolutionEvents,
   renderKeychainManifest,
   fileCredentialEnvironment,
   KeychainError,
@@ -473,7 +473,7 @@ describe("connectors are grantable like any keychain record", () => {
     assert.equal((await k2.materializeStanding(G1)).length, 0);
   });
 
-  it("the manifest lists a participant's ungranted connected apps as requestable by credential id", async () => {
+  it("the manifest leaves a participant's ungranted connected apps out", async () => {
     const k = kc();
     await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
     const connectorsByOwner = await k.listConnectorsByOwners(["alex@x"]);
@@ -486,10 +486,7 @@ describe("connectors are grantable like any keychain record", () => {
       connectorsByOwner,
       scopeGrants: [],
     });
-    assert.match(
-      md,
-      /### Alex \(alex@x\)\n- Not granted here; ask with the `request-access` skill: gmail\.googleapis\.com connector `[a-f0-9]+`$/,
-    );
+    assert.doesNotMatch(md, /Alex|gmail|[a-f0-9]{16}/);
   });
 });
 
@@ -883,7 +880,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     detectedByOwner: new Map([["U1", ["GitHub", "AWS SSO"]]]),
   });
   assert.match(detected, /NOT registered or grantable/);
-  assert.match(detected, /### Alice \(U1\)/);
+  assert.match(detected, /^### Alice$/m);
   assert.match(detected, /AWS SSO — detected/);
 
   const k = kc();
@@ -912,7 +909,7 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
     ],
   });
   assert.match(block, /## Credentials/);
-  assert.match(block, /### Alice \(U1\)/);
+  assert.match(block, /^### Alice$/m);
   assert.match(block, new RegExp(`github:${cred.id}`));
   assert.doesNotMatch(block, /STANDING|gh for repo work here|grant `/);
   assert.match(block, /`github:[a-f0-9]+` — github \(AliceBell\); env `GITHUB_TOKEN`/);
@@ -963,7 +960,7 @@ test("manifest: own credentials need no grant but require explicit execution req
       description: "",
     })),
   });
-  assert.match(own, /### Alice \(U1\)\n/);
+  assert.match(own, /^### Alice\n/m);
   assert.match(own, /`file-login:[a-f0-9]+` — file-login; files in \$HOME/);
   assert.match(own, /`npm:[a-f0-9]+` — npm; expired$/m);
   assert.doesNotMatch(own, /request-access|grant/);
@@ -995,7 +992,7 @@ test("manifest: own credentials need no grant but require explicit execution req
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
   });
-  assert.match(other, /Not granted here; ask with the `request-access` skill: .*npm \(expired\) `[a-f0-9]+`/);
+  assert.doesNotMatch(other, /Alice|npm|request-access/);
 
   const channel = renderKeychainManifest({
     scopeId: "channel:C1",
@@ -1005,7 +1002,7 @@ test("manifest: own credentials need no grant but require explicit execution req
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
   });
-  assert.match(channel, /Not granted here; ask with the `request-access` skill/);
+  assert.doesNotMatch(channel, /Alice|npm|request-access/);
 });
 
 const SECRET = "keychain-route-secret".repeat(3);
@@ -1334,10 +1331,7 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   const sys = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
   assert.equal(sys.status, "ok");
   assert.match(sys.reply ?? "", /## Credentials/);
-  assert.match(
-    sys.reply ?? "",
-    /### Alice \(U_OWNER\)\n- Not granted here; ask with the `request-access` skill: github \(AliceBell\) `/,
-  );
+  assert.doesNotMatch(sys.reply ?? "", /### Alice|github \(AliceBell\)|request-access` skill:/);
   assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
   await selectDefaultSandbox(built, "U_ASKER", "channel:C1");
 
@@ -1506,22 +1500,27 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
       },
       now,
     );
-  const ledger = async () => renderAskLedger(await k.listAsks({ requesterScopeId: "channel:C1" }), now);
+  const events = async (since: number) =>
+    askResolutionEvents(
+      (await k.listAsks({ requesterScopeId: "channel:C1" })).map((a) => ({
+        ask: a,
+        ownerName: "U1",
+        service: "github",
+      })),
+      since,
+    );
   const first = await manifest();
-  const pendingLedger = await ledger();
   for (const advance of [61_000, 3 * 3_600_000]) {
     now += advance;
     assert.equal(await manifest(), first);
-    assert.equal(await ledger(), pendingLedger);
+    assert.equal(await events(ask.createdAt), "");
   }
   assert.doesNotMatch(first, /expires at|\d{4}-\d{2}-\d{2}T|approval card/);
-  assert.match(pendingLedger, /waiting on U1's approval card/);
   now = ask.expiresAt;
-  assert.equal(await ledger(), pendingLedger);
+  assert.equal(await events(ask.createdAt), "");
   now++;
-  const expiredAsk = await ledger();
-  assert.match(expiredAsk, /request to U1: expired/);
-  assert.doesNotMatch(expiredAsk, /waiting on U1's approval card/);
+  assert.equal(await events(ask.createdAt), "Access request to U1 for `github` was expired.");
+  assert.equal(await events(now), "");
   await assert.rejects(
     k.approveAsk({ askId: ask.id, ownerId: "U1", mode: "once", purpose: "test access" }),
     (e: KeychainError) => e.status === 410,
@@ -1669,11 +1668,8 @@ test("manifest merges credential representations without conflating login identi
   };
   const rendered = renderKeychainManifest(input, 1000);
   assert.equal(rendered.split("### ").length - 1, 1);
-  assert.equal(rendered.split("gmail.googleapis.com connector").length - 1, 1);
-  assert.match(
-    rendered,
-    /`connector:gmail\.googleapis\.com:default`, `[^`]+` — gmail\.googleapis\.com connector; expired/,
-  );
+  assert.equal(rendered.split("— Google").length - 1, 1);
+  assert.match(rendered, /`connector:gmail\.googleapis\.com:default`, `[^`]+` — Google; expired/);
   assert.match(rendered, /aws \(work\); expired/);
   assert.match(rendered, /aws \(personal\); env `OTHER_AWS_TOKEN`/);
   assert.doesNotMatch(rendered, /expires at|\d{4}-\d{2}-\d{2}T/);
@@ -1714,9 +1710,6 @@ test("granted connector keeps account and refresh semantics when owner is absent
     },
     1000,
   );
-  assert.match(
-    rendered,
-    /### U_OWNER\n- `[^`]+` — gmail\.googleapis\.com connector \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/,
-  );
+  assert.match(rendered, /### U_OWNER\n- `[^`]+` — Google \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/);
   assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
 });

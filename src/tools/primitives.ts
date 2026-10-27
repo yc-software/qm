@@ -977,6 +977,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const content = await withAbort(() => memory.read(deps.memoryScopeId!), signal);
         return { content, sourceScopeId: deps.memoryScopeId };
       }
+      if (path.replace(/\/+$/, "") === "shared") {
+        const names = [...new Set(deps.grantedHandles.map((handle) => handle.handlePath))].sort();
+        return { content: names.length ? names.join("\n") : "[no files are shared with you]", sourceScopeId: null };
+      }
       const sharedFile = deps.context
         ? await withAbort(() => deps.context!.readFile(path), signal)
         : await withAbort(() => readContextFile(path, deps.grantedHandles, deps.files), signal);

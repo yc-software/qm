@@ -364,7 +364,6 @@ test("thread history keeps file references and authors but only current files ar
     },
     { audience: [] },
   );
-  assert.deepEqual(view.files, [{ name: "current.txt" }]);
   const rendered = renderConversationView(view);
   assert.equal(rendered.overheard[0]?.name, "U1");
   assert.deepEqual(rendered.overheard[0]?.files, ["old-notes.txt"]);

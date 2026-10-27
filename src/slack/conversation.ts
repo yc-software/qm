@@ -2,7 +2,6 @@ import { resolveMentions } from "./mrkdwn.ts";
 export { resolveMentions } from "./mrkdwn.ts";
 import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
 import { utcMinute } from "../util/time.ts";
-import { MAX_ATTACHMENTS_PER_TURN } from "./attachments.ts";
 
 export interface ContextWireMessage {
   ts: string;
@@ -111,21 +110,11 @@ function arrangeForDisplay(messages: readonly RecentMessage[]): Array<{ message:
   return out;
 }
 
-interface ConversationMember {
-  id: string;
-  name: string;
-  mentionId?: string;
-  isYou?: boolean;
-  isBot?: boolean;
-}
-
 export interface ConversationView {
   contextNote?: string;
   channel: { name?: string; kind: "dm" | "channel" | "group"; isPrivate?: boolean };
-  members: readonly ConversationMember[];
   messages: readonly RecentMessage[];
   here: { kind: "thread"; youOpenedIt: boolean; starterName?: string; openerText?: string } | { kind: "top-level" };
-  files: ReadonlyArray<{ name: string }>;
   omittedFiles: ReadonlyArray<{ name: string; reason: "too-big" | string }>;
   nameById?: ReadonlyMap<string, string>;
 }
@@ -208,31 +197,15 @@ export function renderConversationView(view: ConversationView): RenderedConversa
   let where = `You are in ${view.channel.name ? `#${view.channel.name}` : "a channel"}${view.channel.isPrivate ? " (private)" : ""}.`;
   if (view.channel.kind === "dm") where = "This is a direct message.";
   else if (view.channel.kind === "group") where = "This is a group direct message.";
-  const mentionable = (m: ConversationMember): string => {
-    const mentionId = m.mentionId ?? (/^[A-Z0-9]+$/i.test(m.id) ? m.id : undefined);
-    const tags = [mentionId ? `<@${mentionId}>` : "", m.isBot ? "agent" : ""].filter(Boolean);
-    return `@${m.name}${tags.length ? ` (${tags.join(", ")})` : ""}`;
-  };
-  const who = view.members.length
-    ? "People here: " + view.members.map((m) => (m.isYou ? "you" : mentionable(m))).join(", ") + "."
-    : "";
   let here: string;
   if (view.here.kind === "top-level") here = "You are replying to a top-level message (not in a thread).";
   else if (view.here.youOpenedIt) here = "You are replying in a thread you started.";
   else here = `You are replying in a thread${view.here.starterName ? ` @${view.here.starterName} started` : ""}.`;
-  const fileNames = view.files.map((f) => f.name).filter((n) => n.trim());
-  const shownFileNames = fileNames.slice(0, MAX_ATTACHMENTS_PER_TURN);
-  const moreFileNames = fileNames.length - shownFileNames.length;
-  const fileLine = shownFileNames.length
-    ? "Files referenced in this conversation: " +
-      shownFileNames.join(", ") +
-      (moreFileNames > 0 ? ` (+${moreFileNames} more).` : ".")
-    : "";
   const omittedLine = view.omittedFiles.length
     ? "Files too big to view this turn: " + view.omittedFiles.map((f) => f.name).join(", ") + "."
     : "";
 
-  const header = [fileLine, omittedLine, where, who, here, view.contextNote].filter(Boolean).join(" ");
+  const header = [omittedLine, where, here, view.contextNote].filter(Boolean).join(" ");
 
   const detectContext = msgs
     .filter((m) => !m.isBot && !m.isSelf && !m.isTrigger)

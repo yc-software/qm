@@ -1,6 +1,6 @@
 import type { GatewayContext } from "../types.ts";
 
-export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext): string {
+export function renderGatewayContext(surface: string | undefined, ctx?: GatewayContext, dmWith?: string): string {
   const gateway = (surface ?? "").trim();
   const location = ctx?.location?.trim();
   const details = Object.entries(ctx?.details ?? {})
@@ -11,18 +11,16 @@ export function renderGatewayContext(surface: string | undefined, ctx?: GatewayC
   if (!gateway && !location && details.length === 0 && !instructions) return "";
 
   const lines = ["## Where you are"];
-  if (gateway && location) lines.push(`You are talking with the user over ${gateway}, in ${location}.`);
-  else if (gateway) lines.push(`You are talking with the user over ${gateway}.`);
-  else if (location) lines.push(`You are talking with the user in ${location}.`);
+  const place = gateway ? `${gateway.charAt(0).toUpperCase()}${gateway.slice(1)}` : "";
+  if (place && dmWith) lines.push(`${place} DM with ${dmWith}.`);
+  else if (place && location) lines.push(`${place}, in ${location}.`);
+  else if (place) lines.push(`${place} conversation.`);
+  else if (location) lines.push(`In ${location}.`);
   if (details.length) {
     lines.push("Identifiers for this conversation (use these if you need to act on it directly):");
     for (const [k, v] of details) lines.push(`- ${k}: ${v}`);
   }
-  if (gateway.toLowerCase() === "web") {
-    lines.push(
-      "Crons, reminders and watches created here post back to this conversation unless the person asks for another destination.",
-    );
-  }
+  if (gateway.toLowerCase() === "web") lines.push("Crons you create here post back here.");
   if (instructions) lines.push(instructions);
   return lines.join("\n");
 }

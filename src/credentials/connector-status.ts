@@ -37,10 +37,6 @@ export async function providerTokenStatuses(
   return all.filter(({ provider, hosts }) => !provider.mcpLabel || hosts.some((h) => h.connected));
 }
 
-export function connectorLabel(name: string): string {
-  return PROVIDERS[name]?.label ?? name.charAt(0).toUpperCase() + name.slice(1);
-}
-
 export async function configuredConnectorProviders(resolveClient: OAuthClientResolver): Promise<string[]> {
   const configured = await Promise.all(
     Object.keys(PROVIDERS).map(async (provider) => {

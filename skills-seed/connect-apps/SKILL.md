@@ -11,9 +11,15 @@ of the direct OAuth flow below. An empty direct OAuth list or a native
 app restrictions and account permissions; never switch credentials to evade a denial.
 
 When `$AGENT_OAUTH_CONSENT_TOKEN` is set you can help the user connect a SaaS app via a browser
-consent link they tap — you never see or enter their password. In 1:1s your instructions list
-the direct OAuth apps configured by the admin: offer direct OAuth links only for those, and none
-when they say none are configured. Mint a single-use link for the selected provider, then give the user the full URL to open:
+consent link they tap — you never see or enter their password. The direct OAuth allowlist is
+the providers configured by the admin, the catalog entries with `configured: true`:
+
+```sh
+curl -fsS "$AGENT_API_URL/v1/connectors/catalog" -H "x-agent-capability: $AGENT_API_TOKEN" \
+  | jq -r '.catalog[] | select(.configured) | .provider'
+```
+
+Offer direct OAuth links only for those providers, and none when the list is empty. Mint a single-use link for the selected provider, then give the user the full URL to open:
 curl -sS -X POST "$AGENT_API_URL/v1/connectors/oauth/consent/mint" \
       -H "X-Agent-Capability: $AGENT_OAUTH_CONSENT_TOKEN" -H 'content-type: application/json' \
 -d '{"provider":"<configured-provider>"}'

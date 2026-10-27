@@ -4,7 +4,11 @@ import { membershipEvent, renderSandboxProviders } from "../src/core/environment
 import { currentTimeBlock, renderStandingObligations } from "../src/core/orchestrator/prompt-blocks.ts";
 import type { Cron, SessionEntry } from "../src/types.ts";
 
-const member = (principalId: string, displayName = principalId.toLowerCase()) => ({ principalId, displayName });
+const member = (principalId: string, displayName = principalId.toLowerCase(), slackId?: string) => ({
+  principalId,
+  displayName,
+  ...(slackId ? { slackId } : {}),
+});
 
 function entry(seq: number, members: ReturnType<typeof member>[], history: SessionEntry[]): SessionEntry {
   const event = membershipEvent(members, history, "s");
@@ -24,43 +28,43 @@ test("membership changes are reported once, after the turn that first saw the ro
   assert.equal((first.payload as { environment: string }).environment, "");
   const history: SessionEntry[] = JSON.parse(JSON.stringify([first]));
   assert.equal(membershipEvent([member("U2"), member("U1")], history, "s").text, "");
-  const second = entry(2, [member("U1"), member("U3", "Cy")], history);
+  const second = entry(2, [member("U1"), member("u3@example.com", "Cy", "U3")], history);
+  assert.equal((second.payload as { environment: string }).environment, "Joined: Cy (U3). Left: u2.");
   assert.equal(
-    (second.payload as { environment: string }).environment,
-    "Joined this conversation since your last turn: Cy (U3).\nLeft this conversation since your last turn: u2 (U2).",
+    membershipEvent([member("U1"), member("u3@example.com", "Cy", "U3")], [...history, second], "s").text,
+    "",
   );
-  assert.equal(membershipEvent([member("U1"), member("U3", "Cy")], [...history, second], "s").text, "");
 });
 
 test("membership is compared with the last recorded roster, and turns without a roster record none", () => {
   const first = entry(1, [member("U1")], []);
   const joined = [member("U1"), member("U2")];
-  assert.match(membershipEvent(joined, [first], "s").text, /Joined .*U2/);
+  assert.equal(membershipEvent(joined, [first], "s").text, "Joined: u2 (U2).");
   assert.match(
     membershipEvent(joined, [first, entry(2, [member("U3")], [first])], "s").text,
-    /Joined .*U1.*U2[^]*Left .*U3/,
+    /^Joined: u1 \(U1\), u2 \(U2\)\. Left: u3\.$/,
   );
   assert.deepEqual(membershipEvent(undefined, [first], "s"), { text: "" });
 });
 
-test("sandbox providers render as one sorted line naming the default", () => {
+test("sandbox providers render as one line, default first", () => {
   assert.equal(
     renderSandboxProviders(["sprites", "e2b", "modal"], "e2b"),
-    "## Sandboxes\nProviders: e2b (default), modal, sprites. Use `sandbox list` for details; the workspace path is $PWD.",
+    "## Sandboxes\ne2b (default), modal, sprites. `sandbox list` for details.",
   );
   assert.equal(renderSandboxProviders([]), "");
 });
 
-test("local ISO clock follows daylight-saving transitions and non-hour offsets", () => {
-  assert.match(
+test("local clock follows daylight-saving transitions and non-hour offsets", () => {
+  assert.equal(
     currentTimeBlock("America/Los_Angeles", Date.parse("2026-03-08T09:59:59Z")),
-    /2026-03-08T01:59:59-08:00/,
+    "Local time: 2026-03-08 01:59 PST (America/Los_Angeles)",
   );
-  assert.match(
+  assert.equal(
     currentTimeBlock("America/Los_Angeles", Date.parse("2026-03-08T10:00:00Z")),
-    /2026-03-08T03:00:00-07:00/,
+    "Local time: 2026-03-08 03:00 PDT (America/Los_Angeles)",
   );
-  assert.match(currentTimeBlock("Asia/Kathmandu", 0), /1970-01-01T05:30:00\+05:30/);
+  assert.equal(currentTimeBlock("Asia/Kathmandu", 0), "Local time: 1970-01-01 05:30 GMT+5:30 (Asia/Kathmandu)");
 });
 
 test("standing work includes all titles and readable timings, not IDs, owners or task bodies", () => {
@@ -78,7 +82,8 @@ test("standing work includes all titles and readable timings, not IDs, owners or
   const text = renderStandingObligations(crons, [], []);
   assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, 15);
   assert.match(text, /Task 14/);
-  assert.match(text, /08:00 AM, only on Monday, Wednesday, and Friday/);
+  assert.match(text, /^## Scheduled here \(America\/Los_Angeles\)$/m);
+  assert.match(text, /^- Task 3 — 8:00 AM Mon\/Wed\/Fri$/m);
   assert.doesNotMatch(text, /cron-1|private instructions|private-owner|and .* more/);
   assert.match(
     renderStandingObligations(
@@ -93,5 +98,16 @@ test("standing work includes all titles and readable timings, not IDs, owners or
     [],
     [],
   );
-  assert.match(once, /2026-11-01T02:00:00-08:00/);
+  assert.match(once, /— once at 2026-11-01 2:00 AM$/m);
+  assert.match(
+    renderStandingObligations([{ ...crons[0]!, schedule: { everyMs: 900_000 } }], [], []),
+    /^## Scheduled here\n- Task 0 — every 15 min$/,
+  );
+  const mixed = renderStandingObligations(
+    [crons[0]!, { ...crons[1]!, schedule: { cron: "30 9 * * 1-5", timezone: "Europe/London" } }],
+    [],
+    [],
+  );
+  assert.match(mixed, /^## Scheduled here\n/);
+  assert.match(mixed, /- Task 1 — 9:30 AM Mon–Fri \(Europe\/London\)/);
 });

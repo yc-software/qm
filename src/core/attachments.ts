@@ -204,24 +204,20 @@ function shownToModel(meta: AttachmentMeta): boolean {
   return isVisionAttachment(meta) && meta.sizeBytes > 0 && meta.sizeBytes <= MAX_VISION_IMAGE_BYTES;
 }
 
-export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, unstaged?: Set<string>): string {
-  if (!metas.length) return "";
-  const list = metas
-    .map(
-      (m) =>
-        `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}${
-          unstaged?.has(m.name)
-            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); send it directly with {file_id: "${m.artifactId}"}; if you need it on disk, choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)} to a path you choose`
-            : ""
-        }`,
-    )
+export function inboundManifest(
+  metas: AttachmentMeta[],
+  inboxDir = INBOX_DIR,
+  unstaged?: Set<string>,
+  sharer?: string,
+): string {
+  return metas
+    .map((m) => {
+      const where = unstaged?.has(m.name)
+        ? `Files ID ${m.artifactId}, not yet on a computer: send it with {file_id: "${m.artifactId}"}, or choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)}`
+        : `./${inboxDir}/${m.name}`;
+      return `${m.author ?? sharer ?? "The user"} shared ${m.name} (${where}).`;
+    })
     .join("\n");
-  const noun = metas.length === 1 ? "file" : "files";
-  const where = unstaged?.size ? `for ./${inboxDir}/` : `available in ./${inboxDir}/`;
-  const lead = metas.some((m) => m.author)
-    ? `${metas.length} ${noun} shared in this conversation, ${where}:`
-    : `The user shared ${metas.length} ${noun}, ${where}:`;
-  return `${lead}\n${list}`;
 }
 
 export function inboundIssuesNote(issues: readonly string[]): string {
@@ -253,7 +249,7 @@ export function inboundIssueList(opts: {
 export function sharedFilesSystemSection(handles: readonly GrantedHandle[]): string {
   const total = new Set(handles.map((h) => h.handlePath)).size;
   if (!total) return "";
-  return `${total} ${total === 1 ? "file is" : "files are"} shared with you; list them with \`GET /v1/files\` and read one with the \`files\` tool at \`shared/<name>\`.`;
+  return `## Files\n${total} ${total === 1 ? "file is" : "files are"} shared with you; list and read them with the \`files\` tool.`;
 }
 
 export function environmentNote(text: string): string {

@@ -14,7 +14,7 @@ import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
   createKeychain,
-  renderAskLedger,
+  askResolutionEvents,
   KeychainError,
   ASK_TTL_MS,
   ASK_PRUNE_AFTER_MS,
@@ -509,7 +509,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
   assert.deepEqual(await texts(ok), ["done"], "just the turn's reply, no fallback");
 });
 
-test("manifest: the requester-side ledger names no ask ids or purposes, and asks go through one route", async () => {
+test("an ask's resolution is one event line, shown only to the first turn after it resolved", () => {
   const now = Date.now();
   const pending: KeychainAsk = {
     id: "a1b2c3d4e5f6",
@@ -529,15 +529,9 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
     note: "not for prod",
     resolvedAt: now - 60_000,
   };
-
-  const ledger = renderAskLedger([pending, declined], now);
-  assert.match(ledger, /^Asks sent from this conversation:/);
-  assert.match(ledger, /- waiting on U_ALICE's approval card/);
-  assert.match(ledger, /- request to U_ALICE: declined/);
-  assert.ok(!ledger.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
-  for (const leak of [pending.id, declined.id, pending.purpose, "not for prod"])
-    assert.ok(!ledger.includes(leak), `ledger leaks ${leak}`);
-  assert.equal(renderAskLedger([{ ...declined, resolvedAt: now - 25 * 3_600_000 }], now), "");
+  const asks = [pending, declined].map((ask) => ({ ask, ownerName: "alice", service: "github" }));
+  assert.equal(askResolutionEvents(asks, now - 120_000), "Access request to alice for `github` was declined.");
+  assert.equal(askResolutionEvents(asks, now - 60_000), "");
 });
 
 describe("/v1/keychain/asks — card approval end to end", async () => {
@@ -618,6 +612,40 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   });
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("an ask names the owner and service; the server resolves the credential or returns the candidates", async () => {
+    const alice = await capFor("U_ALICE");
+    const save = async (service: string, accountLabel?: string, envKey?: string) =>
+      (
+        (await (
+          await post("/v1/keychain/credentials", { service, secret: "s", accountLabel, envKey }, alice)
+        ).json()) as any
+      ).credential;
+    const deploy = await save("named-deploy");
+    await save("named-twin", "work", "TWIN_WORK");
+    await save("named-twin", "home", "TWIN_HOME");
+    const bob = await bobInInfra();
+    const ask = (body: Record<string, unknown>) =>
+      post("/v1/keychain/asks", { purpose: "run the deploy", ...body }, bob);
+
+    const resolved = await ask({ owner: "alice", service: "Named-Deploy" });
+    assert.equal(resolved.status, 200);
+    assert.equal(((await resolved.json()) as any).ask.credentialId, deploy.id);
+
+    const ambiguous = await ask({ owner: "U_ALICE", service: "named-twin" });
+    assert.equal(ambiguous.status, 409);
+    const { candidates } = (await ambiguous.json()) as any;
+    assert.deepEqual(candidates.map((c: any) => [c.service, c.account]).sort(), [
+      ["named-twin", "home"],
+      ["named-twin", "work"],
+    ]);
+    assert.equal((await ask({ credential: candidates[0].credential })).status, 200);
+
+    const unknown = await ask({ owner: "Alice", service: "nope" });
+    assert.equal(unknown.status, 404);
+    assert.ok(((await unknown.json()) as any).candidates.some((c: any) => c.service === "named-deploy"));
+    assert.equal((await ask({ owner: "Nobody", service: "named-deploy" })).status, 404);
   });
 
   it("the web approval route decides through the same card path, owner only, never by capability", async () => {

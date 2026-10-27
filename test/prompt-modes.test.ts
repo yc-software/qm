@@ -429,7 +429,7 @@ test("Mode 2 (spine channel): static prose stays within the word-count ceiling (
   const systemPrompt = prompt.split("\n\n<environment>")[0]!;
   assert.match(
     prompt,
-    /<environment>[^]*The user's local time: /,
+    /<environment>[^]*Local time: /,
     "the volatile tail rides the environment note, not the system prompt",
   );
 

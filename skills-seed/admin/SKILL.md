@@ -78,14 +78,14 @@ still have a key they are not granted. To check the org, read
 `enabled: true`, `hasSecret: true`, `delivery: "env"` and `envKey: "COMPOSIO_API_KEY"`
 means Composio is configured.
 
-**Own OAuth apps.** In 1:1s your instructions list the direct OAuth providers configured
-with client credentials, from Admin → Connectors or deployment secrets. The line "No direct
-OAuth apps are configured" means none are; otherwise at least one is.
+**Own OAuth apps.** `GET $AGENT_API_URL/v1/connectors/catalog` (header `x-agent-capability: $AGENT_API_TOKEN`) marks each provider
+configured with client credentials, from Admin → Connectors or deployment secrets, with
+`configured: true`. No such entry means none are.
 `GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Admin →
 Connectors, not ones set by deployment secrets, so it cannot prove absence.
 
 Composio is absent only when the toolkits read fails and the org check finds no such
-credential. If either source exists, skip silently. If the line is missing or a read
+credential. If either source exists, skip silently. If a read
 fails, treat it as unknown, not absent, and do not offer setup. Only when both are
 confirmed absent, send one short message:
 

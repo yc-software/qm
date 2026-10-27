@@ -13,6 +13,7 @@ import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
+import { connectorHostLabel } from "../connectors/oauth.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -1682,7 +1683,7 @@ export const connectorHandle = (host: string, accountType?: string): string =>
 
 export function connectorLine(host: string, accountType?: string, expired = false): CredentialLine {
   const account = accountType && accountType !== "default" ? ` (${accountType})` : "";
-  return { label: `${host} connector${account}`, use: `env \`${envKey(host)}\``, expired };
+  return { label: `${connectorHostLabel(host)}${account}`, use: `env \`${envKey(host)}\``, expired };
 }
 
 function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine {
@@ -1742,21 +1743,21 @@ function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
   return !c.managed && c.kind !== "broker";
 }
 
+const ORGANIZATION_OWNER_KEY = personKey("Organization");
+
 export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {
   const groups = new Map<string, Set<string>>();
-  const requestable = new Map<string, Set<string>>();
-  const add = (map: Map<string, Set<string>>, ownerId: string, text: string): void => {
+  const ownerNames = new Map<string, string>();
+  const add = (ownerId: string, text: string): void => {
     const owner = personKey(ownerId);
-    let rows = map.get(owner);
-    if (!rows) map.set(owner, (rows = new Set()));
+    let rows = groups.get(owner);
+    if (!rows) groups.set(owner, (rows = new Set()));
     rows.add(text);
+    if (!ownerNames.has(owner))
+      ownerNames.set(owner, input.members.find((member) => samePerson(member.id, ownerId))?.displayName ?? ownerId);
   };
-  const ownPersonal = input.scopeId === toScopeId("personal", input.actorId);
-  const openSpeaker = input.openSpeakerKeychain === true && input.conversationKind !== "dm";
-  const isOwn = (ownerId: string): boolean => (ownPersonal || openSpeaker) && samePerson(ownerId, input.actorId);
   const execution = input.execution ?? [];
   const handleNames = new Set(execution.map((entry) => entry.handle));
-  const granted = new Set(input.scopeGrants.map(({ credential }) => credential.id));
   const handles = (credentialId: string): string =>
     execution
       .filter((entry) => entry.credentialId === credentialId)
@@ -1779,44 +1780,35 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service.toLowerCase()));
     for (const service of input.detectedByOwner?.get(member.id) ?? [])
       if (!registered.has(service.toLowerCase()))
-        add(groups, member.id, `- ${service} — detected on their computer, NOT registered or grantable`);
+        add(member.id, `- ${service} — detected on their computer, NOT registered or grantable`);
   }
   for (const [credentialId, { ownerId, line, connector }] of rows) {
     const shown = handles(credentialId);
-    if (shown) add(groups, ownerId, `- ${shown} — ${credentialLineText(line)}`);
-    else if (!isOwn(ownerId) && !granted.has(credentialId))
-      add(requestable, ownerId, `${line.label}${line.expired ? " (expired)" : ""} \`${credentialId}\``);
-    else if (connector && line.expired && !handleNames.has(connector))
-      add(groups, ownerId, `- ${credentialLineText(line)}`);
+    if (shown) add(ownerId, `- ${shown} — ${credentialLineText(line)}`);
+    else if (connector && line.expired && !handleNames.has(connector)) add(ownerId, `- ${credentialLineText(line)}`);
   }
   for (const entry of execution)
     if (!entry.credentialId || !rows.has(entry.credentialId))
-      add(groups, entry.ownerId, `- \`${entry.handle}\` — ${entry.description}`);
+      add(entry.ownerId, `- \`${entry.handle}\` — ${entry.description}`);
   const lines = [
     "## Credentials",
-    "Select handles in execute.credentials. Nothing attaches tokens for you: send them yourself (connector tokens as `Authorization: Bearer`). Proxy handles work through the use-shared-credential skill.",
+    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill.",
   ];
-  const owners = [...new Set([...groups.keys(), ...requestable.keys()])].sort((a, b) => a.localeCompare(b));
-  for (const ownerId of owners) {
-    const member = input.members.find((member) => personKey(member.id) === ownerId);
-    const asked = [...(requestable.get(ownerId) ?? [])].sort();
-    lines.push(
-      "",
-      `### ${member?.displayName ? `${member.displayName} (${ownerId})` : ownerId}`,
-      ...[...(groups.get(ownerId) ?? [])].sort(),
-      ...(asked.length ? [`- Not granted here; ask with the \`request-access\` skill: ${asked.join(", ")}`] : []),
-    );
-  }
-  if (!owners.length) lines.push("", "No credentials available.");
+  const owners = [...groups.keys()].sort(
+    (a, b) => Number(b === ORGANIZATION_OWNER_KEY) - Number(a === ORGANIZATION_OWNER_KEY) || a.localeCompare(b),
+  );
+  for (const owner of owners) lines.push(`### ${ownerNames.get(owner)}`, ...[...(groups.get(owner) ?? [])].sort());
+  if (!owners.length) lines.push("No credentials available.");
   return lines.join("\n");
 }
 
-export function renderAskLedger(scopeAsks: readonly KeychainAsk[], now: number = Date.now()): string {
-  const asks = scopeAsks.flatMap((ask) => {
-    if (ask.status === "pending") return [`- waiting on ${ask.ownerId}'s approval card`];
-    if (ask.resolvedAt !== undefined && now - ask.resolvedAt < 24 * 3_600_000)
-      return [`- request to ${ask.ownerId}: ${ask.status}`];
-    return [];
-  });
-  return asks.length ? ["Asks sent from this conversation:", ...asks.sort()].join("\n") : "";
+export function askResolutionEvents(
+  asks: ReadonlyArray<{ ask: KeychainAsk; ownerName: string; service: string }>,
+  since: number,
+): string {
+  return asks
+    .filter(({ ask }) => ask.status !== "pending" && ask.resolvedAt !== undefined && ask.resolvedAt > since)
+    .toSorted((a, b) => a.ask.resolvedAt! - b.ask.resolvedAt!)
+    .map(({ ask, ownerName, service }) => `Access request to ${ownerName} for \`${service}\` was ${ask.status}.`)
+    .join("\n");
 }

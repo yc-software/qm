@@ -1075,7 +1075,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const read = defineTool({
     name: "read",
     label: "read",
-    description: "Read a workspace or shared file.",
+    description: "Read a workspace or shared file; `shared/` lists the files shared with you.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative path." }),
       sandbox_id: sandboxSelector("Sandbox; omit for the default."),
@@ -3122,7 +3122,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description:
             "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
             (surfaceName === "slack"
-              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in People here / read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
+              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in the conversation roster and in read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
               : ""),
         }),
       ),

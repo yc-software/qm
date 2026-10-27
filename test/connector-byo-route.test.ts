@@ -6,7 +6,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
+import { scopeId } from "../src/types.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -251,5 +253,26 @@ test("managed deployments accept validated own apps and preserve credentials on 
     assert.equal((await srv.built.slackInstallation.get())?.botToken, "xoxb-own");
   } finally {
     await srv.close();
+  }
+});
+
+test("an agent capability token can read the connector catalog; an unauthenticated request cannot", async () => {
+  const secret = "catalog-route-secret".repeat(3);
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "catalog-")), signingSecret: secret }));
+  const server = createServer(built.app, { signingSecret: secret });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  try {
+    const token = await mintCapabilityToken(
+      { actorId: "U1", scopeId: scopeId("personal", "U1"), exp: Date.now() + CAPABILITY_TTL_MS },
+      secret,
+    );
+    const res = await fetch(`${base}/v1/connectors/catalog`, { headers: { "x-agent-capability": token } });
+    assert.equal(res.status, 200);
+    const { catalog } = (await res.json()) as { catalog: Array<{ provider: string; configured: boolean }> };
+    assert.ok(catalog.some((c) => c.provider === "google" && c.configured === false));
+    assert.equal((await fetch(`${base}/v1/connectors/catalog`)).status, 401);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

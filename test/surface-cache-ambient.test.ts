@@ -816,8 +816,8 @@ test("a solicited ambient wake carries the complete channel roster", async () =>
 
     const pending = await pollDeliveries(built.deliveries);
     assert.equal(pending.length, 1);
-    assert.match(pending[0].text, /Alice \(alice@acme\.com\)/);
-    assert.match(pending[0].text, /Bob \(bob@acme\.com\)/);
+    assert.match(pending[0].text, /- Alice \(alice@acme\.com, U1\)/);
+    assert.match(pending[0].text, /- Bob \(bob@acme\.com, U2\)/);
   } finally {
     await built.runtime.stop();
   }

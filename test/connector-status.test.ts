@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { connectorLabel, providerTokenStatuses } from "../src/credentials/connector-status.ts";
+import { providerTokenStatuses } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
 import { setPublicOAuthClients } from "../src/connectors/oauth.ts";
 
@@ -23,12 +23,6 @@ test("provider statuses choose a usable account over a lapsed account for the sa
   assert.equal(status?.connected, true);
   assert.equal(status?.expiresAt, 5000);
   assert.equal(status?.needsReconnect, undefined);
-});
-
-test("labels: known providers get friendly names; unknown is capitalized", () => {
-  assert.equal(connectorLabel("google"), "Google");
-  assert.equal(connectorLabel("github"), "GitHub");
-  assert.equal(connectorLabel("acme"), "Acme");
 });
 
 test("provider statuses include linked per-user MCP sign-ins and skip unlinked ones", async (t) => {

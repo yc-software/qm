@@ -2278,7 +2278,7 @@ test("turn file context leads the environment block before the conversation head
 
   const res = await app.turn(
     channel("what should I do with this?", {
-      conversationHeader: "You are in #eng. People here: @Alice, @Bob. You are replying to a top-level message.",
+      conversationHeader: "You are in #eng. You are replying to a top-level message.",
       attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
     }),
   );
@@ -2287,7 +2287,7 @@ test("turn file context leads the environment block before the conversation head
   const reply = res.reply ?? "";
   const requestAt = reply.indexOf("what should I do with this?");
   const envAt = reply.indexOf("<environment>");
-  const inboxAt = reply.indexOf("The user shared 1 file");
+  const inboxAt = reply.indexOf("shared notes.txt (");
   const headerAt = reply.indexOf("You are in #eng");
   const envEndAt = reply.indexOf("</environment>");
   assert.notEqual(requestAt, -1, "expected live user request");
@@ -2305,13 +2305,13 @@ test("the situational conversationHeader rides in the <environment> block, not a
   const { app } = freshApp();
   const res = await app.turn(
     channel("@agent is this possible?", {
-      conversationHeader: "You are in #design. People here: @U2, @U3. You are replying in a thread @U2 started.",
+      conversationHeader: "You are in #design. You are replying in a thread @U2 started.",
       priorTurns: [{ role: "user", name: "U2", text: "here's the original idea that started this thread" }],
     }),
   );
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /<environment>/);
-  assert.match(res.reply ?? "", /People here: @U2, @U3/);
+  assert.match(res.reply ?? "", /You are replying in a thread @U2 started\./);
   const found = await app.getSession(res.sessionId!);
   const userEntry = found!.entries.find((e) => e.type === "user");
   const userText = (userEntry!.payload as { text: string }).text;
@@ -4453,15 +4453,30 @@ for (const [securityPosture, securityScreen] of [
   });
 }
 
+test("only a conversation where several people can speak names the sender of each message", async () => {
+  const { app } = freshApp();
+  const ada = { externalId: "U1", displayName: "Ada" };
+  const environmentOf = (reply?: string) => (reply ?? "").split("<environment>")[1] ?? "";
+  const direct = await app.turn(dm("!sysprompt", { actor: ada }));
+  assert.doesNotMatch(environmentOf(direct.reply), /This message is from/);
+  const room = await app.turn(
+    channel("!sysprompt", {
+      actor: ada,
+      conversation: { kind: "channel", threadRef: "ch:C1:sender", channelRef: "C1", audience: [ada] },
+    }),
+  );
+  assert.match(environmentOf(room.reply), /This message is from @Ada\./);
+});
+
 test("inventories ride a byte-stable system prompt; a warm turn's environment carries only the clock", async () => {
   const { app } = freshApp();
   const first = await app.turn(dm("!sysprompt", { timezone: "America/Los_Angeles" }));
   const second = await app.turn(dm("!sysprompt", { timezone: "America/Los_Angeles" }));
   const [system1, environment1] = (first.reply ?? "").split("<environment>");
   const [system2, environment2] = (second.reply ?? "").split("<environment>");
-  assert.match(system1!, /\n## Sandboxes\nProviders: /);
+  assert.match(system1!, /\n## Sandboxes\n\S+ \(default\)/);
   assert.equal(system2, system1);
-  assert.match(environment2!, /^\nThe user's local time: \S+ \(America\/Los_Angeles\)\n<\/environment>$/);
+  assert.match(environment2!, /^\nLocal time: \S+ \d\d:\d\d P[SD]T \(America\/Los_Angeles\)\n<\/environment>$/);
   assert.doesNotMatch(environment1!, /## /);
 });
 
@@ -4497,7 +4512,7 @@ test("an isolated channel environment does not disclose the actor's private sand
   };
   const result = await built.app.turn(request);
   assert.equal(result.status, "ok");
-  assert.match(result.reply ?? "", /## Sandboxes\nProviders: sprites/);
+  assert.match(result.reply ?? "", /## Sandboxes\nsprites/);
   assert.ok(!(result.reply ?? "").includes(privateName), "the private sandbox name must not reach the shared turn");
   assert.ok(!(result.reply ?? "").includes(personal.id), "the private sandbox ID must not reach the shared turn");
 });
