@@ -693,9 +693,9 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             tree.map((f) => f.size),
             deps.provider.profile.maxAppBytes,
           );
+          await withdrawLoanUnlessPublisher(before, actor);
           const v = await deps.deployStore.addVersionFromCommit(id, pushed);
           if (!v) return result;
-          await withdrawLoanUnlessPublisher(before, actor);
           const endpoint = await applyVersion(id, v, before.appliedVersion ?? before.currentVersion);
           await markVersionRunning(id, v.version, endpoint);
           void deps
