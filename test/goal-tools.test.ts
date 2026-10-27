@@ -732,7 +732,7 @@ test("wait ends within one poll once the swarm pauses the worker, and the goal s
     for (let j = 0; j < 5; j++) await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(settled, true, "the wait returned instead of running out its thirty minutes");
-  await waiting;
+  assert.match(textOf((await waiting) as never), /The swarm paused or stopped you, so the wait ended/);
   assert.equal(ref.goal?.status, "active");
 });
 

@@ -3762,7 +3762,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const signal = ref.abortSignal;
         const interrupted = () => !!signal?.aborted || !!ref.shutdown?.aborted;
         let arrived: string | undefined;
-        const waitStarted = Date.now();
         try {
           arrived = await waitForGoalMessages(
             ref.goalInbox,
@@ -3785,8 +3784,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         await ref.saveGoal?.(goal).catch(swallowAs("goal: save after a wait", undefined));
         let outcome = `No swarm message reached you in ${GOAL_WAIT_MAX_MS / 60_000} minutes, so the goal is active again. Check on what you were waiting for, work around it if you can, or wait again.`;
         if (interrupted()) outcome = "The wait was interrupted; the goal is active again.";
-        else if (!arrived && Date.now() - waitStarted < GOAL_WAIT_MAX_MS)
-          outcome = "The wait ended early; the goal is active again.";
+        else if (!arrived && (await goalInboxHeld(ref.goalInbox)))
+          outcome = "The swarm paused or stopped you, so the wait ended; the goal is active again.";
         if (arrived) outcome = `The goal is active again; this reached you while you waited:\n\n${arrived}`;
         return recordCoreAuthoredResult(callId, { tool: "goal", action: "update", goal }, text(outcome));
       }
