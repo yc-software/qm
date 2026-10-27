@@ -276,7 +276,8 @@ query settles, even when a sweep reports a selection timeout.
 `active`, or `stopped`. Humans in the swarm may control any worker; an agent may
 control only itself or its descendants. The root session cannot be controlled.
 Controls apply to descendants too. Pausing holds new notifications as pending
-until the worker is resumed and returns unstarted queued runs to pending. A goal
+until the worker is resumed and returns queued runs that never started to pending;
+retries and runs already started still run, and their goal turn is held. A goal
 turn the swarm dispatched ends at the worker's next tool result or reply instead
 of drawing keep-going prompts, and a goal wait returns; the goal stays open.
 Resuming delivers the held notifications; a worker with none waits for its next

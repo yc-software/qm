@@ -241,3 +241,64 @@ test("pausing a worker withdraws its unstarted deliveries and resuming delivers 
   await f.service.sweep();
   assert.ok(await runFor(), "the message is delivered once resumed");
 });
+
+test("a message a paused goal turn already saw is handed over, not delivered again on resume", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
+  await f.service.sweep();
+  const first = (await f.runs.list()).find((run) => run.request.swarm)!;
+  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const input = {
+    ...claimed.request,
+    runId: claimed.id,
+    runLeaseToken: claimed.leaseToken!,
+    attempt: claimed.attempts,
+  };
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  await f.service.sweep();
+  assert.deepEqual(
+    (await f.service.queuedMessages(input)).map((message) => message.id),
+    [note.id],
+  );
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  assert.deepEqual(
+    (await f.service.handOver(input, [note.id])).map((message) => message.id),
+    [note.id],
+  );
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  await f.service.sweep();
+  assert.equal(
+    (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id),
+    undefined,
+  );
+});
+
+test("a message handed over while its run is being withdrawn by a pause stays handed", async () => {
+  const f = await swarmFixture();
+  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
+  await f.service.sweep();
+  const first = (await f.runs.list()).find((run) => run.request.swarm)!;
+  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
+  const input = {
+    ...claimed.request,
+    runId: claimed.id,
+    runLeaseToken: claimed.leaseToken!,
+    attempt: claimed.attempts,
+  };
+  const note = await f.service.send(f.caller, { requestId: "n", audience: [worker!.id], text: "next", notify: true });
+  await f.service.sweep();
+  const withdraw = f.runs.withdraw.bind(f.runs);
+  f.runs.withdraw = async (runId, options) => {
+    const withdrawn = await withdraw(runId, options);
+    await f.service.handOver(input, [note.id]);
+    return withdrawn;
+  };
+  await f.service.control(f.caller, { memberId: worker!.id, state: "paused" });
+  f.runs.withdraw = withdraw;
+  await f.service.control(f.caller, { memberId: worker!.id, state: "active" });
+  await f.service.sweep();
+  assert.equal(
+    (await f.runs.list()).find((run) => run.request.swarm?.messageId === note.id),
+    undefined,
+  );
+});

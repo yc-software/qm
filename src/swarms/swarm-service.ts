@@ -863,8 +863,9 @@ export function createSwarmService(deps: {
           await store.update(updated.id, (current) => {
             for (const item of withdrawn) {
               const message = current.messages.find((m) => m.id === item.messageId);
-              if (message?.notifications[item.id]?.runId === item.runId)
-                message.notifications[item.id] = { state: "pending" };
+              const notification = message?.notifications[item.id];
+              if (notification?.state === "queued" && notification.runId === item.runId)
+                message!.notifications[item.id] = { state: "pending", runId: item.runId };
             }
           });
       }
@@ -951,7 +952,13 @@ export function createSwarmService(deps: {
           for (const id of messageIds) {
             const message = current.messages.find((item) => item.id === id);
             const notification = message?.notifications[target.recipientId];
-            if (!message || (notification?.state !== "queued" && notification?.state !== "mailbox")) continue;
+            if (
+              !message ||
+              (notification?.state !== "queued" &&
+                notification?.state !== "mailbox" &&
+                !(notification?.state === "pending" && notification.runId))
+            )
+              continue;
             message.notifications[target.recipientId] = { ...notification, state: "handed" };
             handed.push(structuredClone(message));
           }
