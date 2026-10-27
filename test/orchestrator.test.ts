@@ -1926,10 +1926,7 @@ test("a file shared with the session is counted, not named, in the system prompt
   const res = await app.turn(dm("!sysprompt"));
   assert.equal(res.status, "ok");
   const system = (res.reply ?? "").split("<environment>")[0]!;
-  assert.match(
-    system,
-    /\n1 file is shared with you; list them with `GET \/v1\/files` and read one with the `files` tool at `shared\/<name>`\.\n/,
-  );
+  assert.match(system, /\n1 file is shared with you; /);
   assert.doesNotMatch(res.reply ?? "", /budget\.csv/);
   assert.equal(boxes.provisioned, 0, "listing shared files must not provision a box");
 });

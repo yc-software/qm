@@ -14,7 +14,7 @@ import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
   createKeychain,
-  renderKeychainManifest,
+  renderAskLedger,
   KeychainError,
   ASK_TTL_MS,
   ASK_PRUNE_AFTER_MS,
@@ -530,51 +530,14 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
     resolvedAt: now - 60_000,
   };
 
-  const channel = renderKeychainManifest({
-    scopeId: "channel:C1",
-    conversationKind: "channel",
-    actorId: "U_BOB",
-    members: [{ id: "U_BOB" }],
-    entriesByOwner: new Map(),
-    scopeGrants: [],
-    scopeAsks: [pending, declined],
-  });
-  assert.match(channel, /Asks sent from this conversation:/);
-  assert.match(channel, /- waiting on U_ALICE's approval card/);
-  assert.match(channel, /- request to U_ALICE: declined/);
-  assert.match(channel, /approval card/);
-  assert.ok(!channel.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
+  const ledger = renderAskLedger([pending, declined], now);
+  assert.match(ledger, /^Asks sent from this conversation:/);
+  assert.match(ledger, /- waiting on U_ALICE's approval card/);
+  assert.match(ledger, /- request to U_ALICE: declined/);
+  assert.ok(!ledger.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
   for (const leak of [pending.id, declined.id, pending.purpose, "not for prod"])
-    assert.ok(!channel.includes(leak), `manifest leaks ${leak}`);
-
-  const dm = renderKeychainManifest({
-    scopeId: scopeId("personal", "U_ALICE"),
-    conversationKind: "dm",
-    actorId: "U_ALICE",
-    members: [{ id: "U_ALICE" }],
-    entriesByOwner: new Map([
-      [
-        "U_ALICE",
-        [
-          {
-            id: "cred1",
-            ownerId: "U_ALICE",
-            service: "github",
-            kind: "env",
-            envKey: "GITHUB_TOKEN",
-            accountLabel: "alice-acme",
-            fingerprint: "f",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-      ],
-    ]),
-    scopeGrants: [],
-    scopeAsks: [pending, declined],
-  });
-  assert.ok(!dm.includes("Asks waiting on you"), "the owner answers on the card, not in chat");
-  for (const leak of [pending.id, pending.purpose, "/decline", "/v1/keychain/grants"]) assert.ok(!dm.includes(leak));
+    assert.ok(!ledger.includes(leak), `ledger leaks ${leak}`);
+  assert.equal(renderAskLedger([{ ...declined, resolvedAt: now - 25 * 3_600_000 }], now), "");
 });
 
 describe("/v1/keychain/asks — card approval end to end", async () => {

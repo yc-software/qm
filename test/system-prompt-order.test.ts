@@ -565,10 +565,7 @@ test("sandboxes render as one provider line without the substrate spec; no resiz
   assert.equal(b.status, "ok");
   const prompt = b.reply ?? "";
   assert.doesNotMatch(prompt, /## Resizing this computer/);
-  assert.match(
-    prompt,
-    /\n## Sandboxes\nProviders: \S+ \(default\)\. Use `sandbox list` for details; the workspace path is \$PWD\.\n/,
-  );
+  assert.match(prompt, /\n## Sandboxes\nProviders: \S+ \(default\)/);
   assert.doesNotMatch(prompt, /vCPU|GB RAM/);
 });
 

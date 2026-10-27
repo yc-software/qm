@@ -1913,6 +1913,13 @@ export function buildApp(
     ],
   });
   pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/connector_status/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS connector_status",
+      "DELETE FROM durable_map_versions WHERE tbl = 'connector_status'",
+    ],
+  });
+  pgArtifactMap?.pool.registerMigration({
     id: "durable-map/pinned_skills/0002-drop",
     statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
   });

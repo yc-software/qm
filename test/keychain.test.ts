@@ -13,6 +13,7 @@ import { createServer } from "../src/api/server.ts";
 import {
   createKeychain,
   credentialHandle,
+  renderAskLedger,
   renderKeychainManifest,
   fileCredentialEnvironment,
   KeychainError,
@@ -1499,24 +1500,26 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
         members: [{ id: "U1" }],
         entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
         scopeGrants: [],
-        scopeAsks: await k.listAsks({ requesterScopeId: "channel:C1" }),
         execution: [
           { credentialId: credential.id, ownerId: "U1", handle: credentialHandle(credential), description: "" },
         ],
       },
       now,
     );
+  const ledger = async () => renderAskLedger(await k.listAsks({ requesterScopeId: "channel:C1" }), now);
   const first = await manifest();
+  const pendingLedger = await ledger();
   for (const advance of [61_000, 3 * 3_600_000]) {
     now += advance;
     assert.equal(await manifest(), first);
+    assert.equal(await ledger(), pendingLedger);
   }
-  assert.doesNotMatch(first, /expires at|\d{4}-\d{2}-\d{2}T/);
-  assert.match(first, /waiting on U1's approval card/);
+  assert.doesNotMatch(first, /expires at|\d{4}-\d{2}-\d{2}T|approval card/);
+  assert.match(pendingLedger, /waiting on U1's approval card/);
   now = ask.expiresAt;
-  assert.equal(await manifest(), first);
+  assert.equal(await ledger(), pendingLedger);
   now++;
-  const expiredAsk = await manifest();
+  const expiredAsk = await ledger();
   assert.match(expiredAsk, /request to U1: expired/);
   assert.doesNotMatch(expiredAsk, /waiting on U1's approval card/);
   await assert.rejects(
@@ -1584,7 +1587,6 @@ test("manifest inventories are canonical across discovery order without mutating
       ["U1", ["zsh", "aws"]],
       ["U2", ["gcloud", "aws"]],
     ]),
-    scopeAsks: await k.listAsks({ requesterScopeId: "channel:C1" }),
   };
   const before = structuredClone(input);
   const first = renderKeychainManifest(input, 1000);
@@ -1600,11 +1602,8 @@ test("manifest inventories are canonical across discovery order without mutating
   }
   for (const entries of reversed.connectorsByOwner!.values()) entries.reverse();
   for (const entries of reversed.detectedByOwner!.values()) entries.reverse();
-  reversed.scopeAsks!.reverse();
   assert.equal(renderKeychainManifest(reversed, 1000), first);
   assert.deepEqual(input, before);
-  assert.match(first, /waiting on U1's approval card/);
-  assert.ok(!first.includes("Asks waiting on you"));
   reversed.connectorsByOwner!.get("U1")![0]!.needsReconnect = true;
   assert.notEqual(renderKeychainManifest(reversed, 1000), first);
 });

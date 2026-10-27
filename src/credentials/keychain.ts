@@ -1666,13 +1666,33 @@ export interface KeychainManifestInput {
     description: string;
   }>;
   detectedByOwner?: Map<string, string[]>;
-  scopeAsks?: KeychainAsk[];
 }
 
-function credentialDescription(c: KeychainCredentialMeta, now: number): string {
-  if (c.managed === "connector") return connectorDescription(connectorMeta(c, now));
-  if (isBackendCredential(c)) return "Composio backend access; use the composio skill";
-  const slot =
+interface CredentialLine {
+  label: string;
+  use: string;
+  expired: boolean;
+}
+
+export const credentialLineText = (line: CredentialLine): string =>
+  `${line.label}; ${line.expired ? "expired" : line.use}`;
+
+export const connectorHandle = (host: string, accountType?: string): string =>
+  `connector:${host}:${accountType ?? "default"}`;
+
+export function connectorLine(host: string, accountType?: string, expired = false): CredentialLine {
+  const account = accountType && accountType !== "default" ? ` (${accountType})` : "";
+  return { label: `${host} connector${account}`, use: `env \`${envKey(host)}\``, expired };
+}
+
+function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine {
+  if (c.managed === "connector") {
+    const meta = connectorMeta(c, now);
+    return connectorLine(meta.host, meta.accountType, meta.needsReconnect);
+  }
+  if (isBackendCredential(c))
+    return { label: "Composio backend access", use: "use the composio skill", expired: false };
+  const use =
     c.kind === "env"
       ? `env ${(c.fields?.map((f) => f.envKey) ?? [c.envKey])
           .filter(Boolean)
@@ -1680,8 +1700,11 @@ function credentialDescription(c: KeychainCredentialMeta, now: number): string {
           .map((key) => `\`${key}\``)
           .join(" + ")}`
       : "files in $HOME";
-  const expired = c.kind !== "file" && typeof c.expiresAt === "number" && c.expiresAt < now;
-  return `${c.service}${c.accountLabel ? ` (${c.accountLabel})` : ""}; ${expired ? "expired" : slot}`;
+  return {
+    label: `${c.service}${c.accountLabel ? ` (${c.accountLabel})` : ""}`,
+    use,
+    expired: c.kind !== "file" && typeof c.expiresAt === "number" && c.expiresAt < now,
+  };
 }
 
 const oauthExpired = (rec: KeychainCredentialMeta, t: number, oauthSkew: number) =>
@@ -1700,11 +1723,6 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
     connected: true,
     ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
   };
-}
-
-function connectorDescription(cm: ConnectorMeta): string {
-  const account = cm.accountType && cm.accountType !== "default" ? ` (${cm.accountType})` : "";
-  return `${cm.host} connector${account}; ${cm.needsReconnect ? "expired" : `env \`${envKey(cm.host)}\``}`;
 }
 
 export const MAX_CREDENTIAL_FILES = 500;
@@ -1745,35 +1763,31 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       .map((entry) => `\`${entry.handle}\``)
       .sort()
       .join(", ");
-  const rows = new Map<string, { ownerId: string; description: string; connectorHandle?: string }>();
+  const rows = new Map<string, { ownerId: string; line: CredentialLine; connector?: string }>();
   const entries = new Map(input.scopeGrants.map(({ credential }) => [credential.id, credential]));
   for (const member of input.members)
     for (const credential of input.entriesByOwner.get(member.id) ?? []) entries.set(credential.id, credential);
   for (const credential of entries.values())
-    rows.set(credential.id, { ownerId: credential.ownerId, description: credentialDescription(credential, now) });
+    rows.set(credential.id, { ownerId: credential.ownerId, line: credentialLine(credential, now) });
   for (const member of input.members) {
     for (const connector of input.connectorsByOwner?.get(member.id) ?? [])
       rows.set(connector.credentialId, {
         ownerId: member.id,
-        description: connectorDescription(connector),
-        connectorHandle: `connector:${connector.host}:${connector.accountType ?? "default"}`,
+        line: connectorLine(connector.host, connector.accountType, connector.needsReconnect),
+        connector: connectorHandle(connector.host, connector.accountType),
       });
     const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service.toLowerCase()));
     for (const service of input.detectedByOwner?.get(member.id) ?? [])
       if (!registered.has(service.toLowerCase()))
         add(groups, member.id, `- ${service} — detected on their computer, NOT registered or grantable`);
   }
-  for (const [credentialId, { ownerId, description, connectorHandle }] of rows) {
+  for (const [credentialId, { ownerId, line, connector }] of rows) {
     const shown = handles(credentialId);
-    const expired = description.endsWith("; expired");
-    if (shown) add(groups, ownerId, `- ${shown} — ${description}`);
+    if (shown) add(groups, ownerId, `- ${shown} — ${credentialLineText(line)}`);
     else if (!isOwn(ownerId) && !granted.has(credentialId))
-      add(
-        requestable,
-        ownerId,
-        `${description.slice(0, description.indexOf(";"))}${expired ? " (expired)" : ""} \`${credentialId}\``,
-      );
-    else if (connectorHandle && expired && !handleNames.has(connectorHandle)) add(groups, ownerId, `- ${description}`);
+      add(requestable, ownerId, `${line.label}${line.expired ? " (expired)" : ""} \`${credentialId}\``);
+    else if (connector && line.expired && !handleNames.has(connector))
+      add(groups, ownerId, `- ${credentialLineText(line)}`);
   }
   for (const entry of execution)
     if (!entry.credentialId || !rows.has(entry.credentialId))
@@ -1794,12 +1808,15 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
     );
   }
   if (!owners.length) lines.push("", "No credentials available.");
-  const asks = (input.scopeAsks ?? []).flatMap((ask) => {
+  return lines.join("\n");
+}
+
+export function renderAskLedger(scopeAsks: readonly KeychainAsk[], now: number = Date.now()): string {
+  const asks = scopeAsks.flatMap((ask) => {
     if (ask.status === "pending") return [`- waiting on ${ask.ownerId}'s approval card`];
     if (ask.resolvedAt !== undefined && now - ask.resolvedAt < 24 * 3_600_000)
       return [`- request to ${ask.ownerId}: ${ask.status}`];
     return [];
   });
-  if (asks.length) lines.push("", "Asks sent from this conversation:", ...asks.sort());
-  return lines.join("\n");
+  return asks.length ? ["Asks sent from this conversation:", ...asks.sort()].join("\n") : "";
 }

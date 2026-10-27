@@ -7,7 +7,7 @@ import type { Cron, SessionEntry } from "../src/types.ts";
 const member = (principalId: string, displayName = principalId.toLowerCase()) => ({ principalId, displayName });
 
 function entry(seq: number, members: ReturnType<typeof member>[], history: SessionEntry[]): SessionEntry {
-  const event = membershipEvent(members, history);
+  const event = membershipEvent(members, history, "s");
   return {
     sessionId: "s",
     seq,
@@ -23,24 +23,24 @@ test("membership changes are reported once, after the turn that first saw the ro
   const first = entry(1, [member("U1"), member("U2")], []);
   assert.equal((first.payload as { environment: string }).environment, "");
   const history: SessionEntry[] = JSON.parse(JSON.stringify([first]));
-  assert.equal(membershipEvent([member("U2"), member("U1")], history).text, "");
+  assert.equal(membershipEvent([member("U2"), member("U1")], history, "s").text, "");
   const second = entry(2, [member("U1"), member("U3", "Cy")], history);
   assert.equal(
     (second.payload as { environment: string }).environment,
     "Joined this conversation since your last turn: Cy (U3).\nLeft this conversation since your last turn: u2 (U2).",
   );
-  assert.equal(membershipEvent([member("U1"), member("U3", "Cy")], [...history, second]).text, "");
+  assert.equal(membershipEvent([member("U1"), member("U3", "Cy")], [...history, second], "s").text, "");
 });
 
 test("membership is compared with the last recorded roster, and turns without a roster record none", () => {
   const first = entry(1, [member("U1")], []);
   const joined = [member("U1"), member("U2")];
-  assert.match(membershipEvent(joined, [first]).text, /Joined .*U2/);
+  assert.match(membershipEvent(joined, [first], "s").text, /Joined .*U2/);
   assert.match(
-    membershipEvent(joined, [first, entry(2, [member("U3")], [first])]).text,
+    membershipEvent(joined, [first, entry(2, [member("U3")], [first])], "s").text,
     /Joined .*U1.*U2[^]*Left .*U3/,
   );
-  assert.deepEqual(membershipEvent(undefined, [first]), { text: "" });
+  assert.deepEqual(membershipEvent(undefined, [first], "s"), { text: "" });
 });
 
 test("sandbox providers render as one sorted line naming the default", () => {
