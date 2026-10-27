@@ -111,6 +111,9 @@ jobs:
         env:
           CORE_TEST_SHARD: ${{ matrix.shard }}/5
         run: npm run test:root:shard
+      - name: Egress proxy image and transport regression
+        if: needs.reuse.outputs.reusable != 'true' && matrix.shard == 1
+        run: docker build -f deploy/egress-proxy/Dockerfile -t qm-egress-proxy:ci .
 
   core:
     name: Core

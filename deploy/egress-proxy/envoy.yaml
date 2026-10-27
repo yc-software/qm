@@ -79,6 +79,7 @@ static_resources:
                         - match: { prefix: "/" }
                           route:
                             cluster: original_dst
+                            timeout: 0s
                 http_filters:
                   - name: envoy.filters.http.lua
                     typed_config:

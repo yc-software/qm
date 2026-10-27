@@ -20,6 +20,8 @@ RUN chmod +x start.sh
 # A rejected config is a fleet-wide outage: start.sh kills the container when Envoy dies, so an
 # invalid envoy.yaml has to fail the build, not the deploy.
 RUN envoy --mode validate -c /app/envoy.yaml
+COPY test/egress-proxy-timeout.test.ts ./test/
+RUN node test/egress-proxy-timeout.test.ts /usr/local/bin/envoy /app/envoy.yaml
 
 ENV NODE_ENV=production
 EXPOSE 48080
