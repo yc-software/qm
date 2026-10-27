@@ -688,6 +688,22 @@ for (const surfaceTools of [false, true]) {
   });
 }
 
+test("Claude ends a finish_silently turn quietly when the SDK reports the interrupt as an error", async () => {
+  currentScript = async function* () {
+    await toolHandlers.get("finish_silently")!({ reason: "nothing new" });
+    yield resultMessage("", { subtype: "error_during_execution", errors: ["turn interrupted"], is_error: true });
+  };
+  const harness = createClaudeHarness();
+  const { turn, entries } = harnessTurn({ pollFire: true });
+  const result = await harness.turns.runTurn(turn);
+  assert.equal(result.silent, true);
+  assert.equal(result.reply, "");
+  assert.equal(
+    entries.some((entry) => entry.type === "assistant"),
+    false,
+  );
+});
+
 test("a Claude worker the swarm holds ends its goal turn quietly instead of as a stopped turn", async () => {
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
