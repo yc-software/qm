@@ -323,8 +323,11 @@ test("semantic recall ranks only currently disclosed facts and rechecks membersh
   const queries: string[][] = [];
   const semantic = createSemanticMemoryService(f.raw, async () => ({ id: "test", embed: async () => [[1, 0]] }), {
     async search(input) {
-      queries.push(input.facts.map((fact) => fact.id));
-      return input.facts.map((fact) => ({ factId: fact.id, hash: fact.hash, score: 1 }));
+      queries.push([...input.ids]);
+      const facts = f.notebooks.get(input.scope) ?? [];
+      return facts
+        .filter((fact) => input.ids.includes(fact.id))
+        .map((fact) => ({ factId: fact.id, updatedAt: fact.updatedAt, score: 1 }));
     },
   });
   const view = disclosedMemory(semantic, f.access);

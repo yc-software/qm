@@ -13,7 +13,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 test("real Modal adapter creates blank worker computers without snapshot or restore calls", async () => {
-  const fake = installFakeModal({ native: true });
+  const fake = installFakeModal();
   const snapshotStore = instrumentedSnapshotStore();
   let snapshotCalls = 0;
   let restoreCalls = 0;
@@ -42,7 +42,6 @@ test("real Modal adapter creates blank worker computers without snapshot or rest
     ...singleProcessDeps(),
     client,
     snapshots: snapshotStore.store,
-    nativeSnapshotsEnabled: true,
     namePrefix: "swarm-test",
   });
   const fixture = await swarmFixture({ backend });

@@ -154,6 +154,7 @@ export interface OrchestratorDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
+  sandboxModels?: boolean;
   publicWebUrl?: string;
   /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
    *  tool hands the user to point the sender at; matches the HTTP webhook route's base exactly. */
@@ -192,7 +193,6 @@ export interface OrchestratorDeps {
   connectorTokens?: ConnectorTokenStore;
   connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
-  scratchExec?: boolean;
   featureFlags?: FeatureFlagStore;
   installSharedCanvas?: (
     actorId: string,
@@ -210,7 +210,6 @@ export interface OrchestratorDeps {
   currentScopeMembers?: import("../../resolution/scope-membership.ts").CurrentScopeMembers;
   managedGroups?: Pick<ManagedGroupDirectory, "recognizes" | "members" | "version" | "withVersion" | "slackChannel">;
   reachExec?: boolean;
-  eagerProvision?: boolean;
   environments?: EnvironmentStore;
   layerBrokerFor?: (tool: BrokeredLayerTool) => AwsRoleBroker | undefined;
   brokeredTools?: readonly BrokeredLayerTool[];
@@ -218,7 +217,6 @@ export interface OrchestratorDeps {
   surfaceContext?: SurfaceContextPuller;
   surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;
-  slackContextSource?: "live" | "shadow" | "mirror";
   channelPolicy?: ChannelPolicyStore;
   surfaceDebugFooter?: boolean;
 }

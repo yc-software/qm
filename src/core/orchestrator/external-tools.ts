@@ -12,7 +12,7 @@ export function externalTools(tools: ToolContext, authorizeSandbox?: (id: string
       if (property === "sessionSyscalls" || property === "runtime") return undefined;
       if (property === "execute")
         return async (command: string, opts?: Parameters<ToolContext["execute"]>[1]) => {
-          if (opts?.scratch || opts?.ownerAuth || opts?.reachTarget) return denied();
+          if (opts?.scratch || opts?.reachTarget) return denied();
           if (opts?.sandboxId) {
             if (!authorizeSandbox) return denied();
             await authorizeSandbox(opts.sandboxId);

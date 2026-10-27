@@ -30,7 +30,7 @@ export interface ApiCtx extends BaseCtx {
   actor?: PortalIdentity | null;
 }
 
-export type RouteAuth = "either" | "source" | "public" | { aud: string };
+export type RouteAuth = "either" | "source" | "public" | { aud: string; bearer?: true };
 
 export type RouteActor = "person" | "system" | `${"query" | "body"}.${string}`;
 

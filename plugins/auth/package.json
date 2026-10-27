@@ -21,6 +21,6 @@
   "dependencies": {
     "@sentry/node": "10.75.0",
     "jose": "^6.2.3",
-    "nodemailer": "^10.1.0"
+    "nodemailer": "^10.2.1"
   }
 }

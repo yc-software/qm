@@ -22,7 +22,8 @@ import { type CustomRuntimeModel, isCustomModelId, resolveCustomModel } from "./
 const getModel = getBuiltinModel as unknown as (provider: string, id: string) => Model<Api> | undefined;
 
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
-export const DEFAULT_CODEX_MODEL_ID = "gpt-5.6-sol";
+export const DEFAULT_CODEX_MODEL_ID = "gpt-6.1-sol";
+const PROVIDER_DEFAULT_MODEL_IDS = [DEFAULT_AGENT_MODEL_ID, DEFAULT_CODEX_MODEL_ID, "openrouter/auto"];
 /**
  * pi-ai's ChatGPT-subscription provider: the same model ids as "openai",
  * served from the Codex backend and authenticated with a ChatGPT OAuth
@@ -340,6 +341,22 @@ export const MODEL_REGISTRY: readonly ModelEntry[] = [
       cacheRead: 0.6,
       cacheWrite: 15,
       tiers: [{ inputTokensAbove: 272_000, input: 24, output: 90, cacheRead: 1.2, cacheWrite: 30 }],
+    },
+  },
+  {
+    id: "gpt-6.1-terra",
+    buttonLabel: "6.1 Terra",
+    name: "GPT-6.1 Terra",
+    fastMode: true,
+    webui: true,
+    base: true,
+    clone: {
+      ...GPT_56_CLONE,
+      input: 1,
+      output: 5,
+      cacheRead: 0.05,
+      cacheWrite: 1.25,
+      tiers: [{ inputTokensAbove: 272_000, input: 2, output: 7.5, cacheRead: 0.1, cacheWrite: 2.5 }],
     },
   },
   {
@@ -713,12 +730,15 @@ export function defaultModelForHarness(
 ): string {
   if (configured && (modelUnavailableReason(configured) || modelSupportedByHarness(configured, harness)))
     return configured;
-  const preferred = DEFAULT_AGENT_MODEL_ID;
-  if (!providers || modelServiceable(preferred, providers)) return preferred;
-  const servable = selectableBaseModels(true).find(
-    (model) => modelSupportedByHarness(model.id, harness) && modelServiceable(model.id, providers),
+  if (!providers) return DEFAULT_AGENT_MODEL_ID;
+  const billable = (id: string) => modelSupportedByHarness(id, harness) && modelServiceable(id, providers);
+  return (
+    PROVIDER_DEFAULT_MODEL_IDS.find(billable) ??
+    selectableBaseModels(true)
+      .map((model) => model.id)
+      .find(billable) ??
+    DEFAULT_AGENT_MODEL_ID
   );
-  return servable?.id ?? preferred;
 }
 
 export interface ModelProviderAvailability {

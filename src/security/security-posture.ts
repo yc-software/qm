@@ -8,12 +8,13 @@ export type SecurityScreenMode = (typeof SECURITY_SCREEN_MODES)[number];
 type ToolApprovalBehavior = "none" | "all";
 
 export interface ResolvedSecurityPolicy {
+  readonly posture: SecurityPosture;
   readonly screening: SecurityScreenMode;
   readonly denyPrivateNetworks: boolean;
   readonly toolApprovals: ToolApprovalBehavior;
 }
 
-const POSTURE_POLICIES: Record<SecurityPosture, Omit<ResolvedSecurityPolicy, "screening">> = {
+const POSTURE_POLICIES: Record<SecurityPosture, Omit<ResolvedSecurityPolicy, "posture" | "screening">> = {
   dangerous: { toolApprovals: "none", denyPrivateNetworks: false },
   auto: { toolApprovals: "none", denyPrivateNetworks: true },
   strict: { toolApprovals: "all", denyPrivateNetworks: false },
@@ -24,7 +25,7 @@ export function resolveSecurityPolicy(
   deployment: SecurityScreenMode = "off",
 ): ResolvedSecurityPolicy {
   const screening = deployment === "enforce" && posture === "dangerous" ? "observe" : deployment;
-  return { ...POSTURE_POLICIES[posture], screening };
+  return { posture, ...POSTURE_POLICIES[posture], screening };
 }
 
 const POSTURE_RANK: Record<SecurityPosture, number> = {

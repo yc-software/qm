@@ -1,4 +1,5 @@
 @import "@earendil-works/pi-web-ui/app.css";
+@import "katex/dist/katex.min.css";
 
 :root {
   --app-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -11722,6 +11723,9 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 :is(markdown-block, qm-markdown).markdown-content table {
   font-size: max(min(12px, calc(var(--chat-font-size) - 2px)), calc((var(--chat-font-size) - 2px) * var(--text-scale)));
   line-height: 1.65;
+}
+.katex-display {
+  margin: 0;
 }
 .activity-group > .work-head {
   font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));

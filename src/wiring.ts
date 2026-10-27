@@ -119,6 +119,8 @@ import type {
   ScopeId,
   Session,
   SurfaceContextRequest,
+  TurnRequest,
+  TurnResult,
   Webhook,
 } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
@@ -127,7 +129,7 @@ import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import { createRateLimiter, type RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
-import { createBudgetTracker, estimateCostUsd } from "./ratelimit/budget.ts";
+import { createBudgetTracker, estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
@@ -341,6 +343,7 @@ import {
   type ProcessRegistry,
 } from "./processes/process-registry.ts";
 import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
+import { createJobComputerSweep } from "./processes/job-computers.ts";
 import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
 import { createMonitorPoller, type MonitorPoller } from "./monitors/monitor-poller.ts";
 import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
@@ -484,7 +487,7 @@ export interface BuiltApp {
   consentLinks: ConsentLinkStore;
   oauthFlows: OAuthFlowStore;
   secretDrops: SecretDropStore;
-  browserModelGateway?: ModelGatewayTransportConfig;
+  modelGatewayTransport?: ModelGatewayTransportConfig;
   resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
@@ -507,6 +510,7 @@ export interface BuiltApp {
   loopIngress: LoopIngressService;
   admin: AdminService;
   rateLimiter: RateLimiter;
+  budget: BudgetTracker;
   errors: ErrorLog;
   crons: CronStore;
   credentialUsage: CredentialUsageSink;
@@ -981,8 +985,6 @@ export function buildApp(
       }),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
       ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
-      ...(modal.snapshotIntervalSec !== undefined ? { snapshotIntervalMs: modal.snapshotIntervalSec * 1000 } : {}),
-      nativeSnapshotsEnabled: modal.nativeSnapshotsEnabled ?? false,
       ...(modal.nativeSnapshotIntervalSec !== undefined
         ? { nativeSnapshotIntervalMs: modal.nativeSnapshotIntervalSec * 1000 }
         : {}),
@@ -2085,6 +2087,7 @@ export function buildApp(
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
+    ...(gatewayTransport ? { sandboxModels: true } : {}),
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
     ...(config.resendApiKey && config.emailFrom
@@ -2119,7 +2122,6 @@ export function buildApp(
     crons,
     webhooks,
     resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
-    ...(config.scratchExecEnabled ? { scratchExec: true } : {}),
     directory,
     isCurrentSharedScopeMember,
     currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
@@ -2127,7 +2129,6 @@ export function buildApp(
     projects,
     ...(config.reachExecEnabled ? { reachExec: true } : {}),
     ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
-    ...(config.eagerProvisionEnabled ? { eagerProvision: true } : {}),
     environments,
     brokeredTools,
     deploymentLayer,
@@ -2506,8 +2507,14 @@ export function buildApp(
   );
   orchestratorDeps.channelPolicy = channelPolicy;
   orchestratorDeps.surfaceCache = surfaceCache;
-  orchestratorDeps.slackContextSource = config.slackContextSource ?? "live";
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
+  const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
+    const slackSource =
+      !req.slackSource && (await sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
+        ? (await runs.latestForThread(req.conversation.threadRef))?.request.slackSource
+        : undefined;
+    return app.turn(slackSource ? { ...req, slackSource } : req);
+  };
   const askResolution = keychain
     ? (ask: KeychainAsk, grant?: KeychainGrant) =>
         fireAskResolution(
@@ -2515,7 +2522,7 @@ export function buildApp(
             deliveries,
             idempotency,
             identity,
-            run: (req) => app.turn(req),
+            run: runTriggered,
             directory,
             currentScopeMembers,
             sessions,
@@ -2530,10 +2537,7 @@ export function buildApp(
     : undefined;
   const dropResolution = keychain
     ? (drop: DropResolution) =>
-        fireDropResolution(
-          { deliveries, idempotency, identity, run: (req) => app.turn(req), directory, resolveRecipient },
-          drop,
-        )
+        fireDropResolution({ deliveries, idempotency, identity, run: runTriggered, directory, resolveRecipient }, drop)
     : undefined;
   const loopFire: LoopFireService = createLoopFireService({
     admittedWork,
@@ -2549,7 +2553,7 @@ export function buildApp(
       deliveries,
       idempotency,
       identity,
-      run: (req) => app.turn(req),
+      run: runTriggered,
       directory,
       currentScopeMembers,
       sessions,
@@ -2600,7 +2604,7 @@ export function buildApp(
     deliveries,
     idempotency,
     identity,
-    run: (req) => app.turn(req),
+    run: runTriggered,
     leaderLease,
     directory,
     currentScopeMembers,
@@ -2674,7 +2678,7 @@ export function buildApp(
           deliveries,
           idempotency,
           identity,
-          run: (req) => app.turn(req),
+          run: runTriggered,
           directory,
           currentScopeMembers,
           sessions,
@@ -2695,7 +2699,7 @@ export function buildApp(
     deliveries,
     idempotency,
     identity,
-    run: (req) => app.turn(req),
+    run: runTriggered,
     directory,
     currentScopeMembers,
     resolveRecipient,
@@ -2736,7 +2740,25 @@ export function buildApp(
     ? createProcessReaper(processes, {
         intervalMs: config.processReaperIntervalMs,
         ...(supportsProcessSessions(sandbox)
-          ? { kill: createReaperKillHook(sandbox, { onExit: finishCredentials }) }
+          ? {
+              kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
+              afterSweep: createJobComputerSweep({
+                resources: sandboxResources,
+                sandbox,
+                processes: processes!,
+                finish: finishCredentials,
+                onError: (error, scopeId) =>
+                  errors.record(
+                    {
+                      category: "process_session",
+                      code: "job_computer_retire_failed",
+                      message: errMessage(error),
+                      scopeLabel: scopeId,
+                    },
+                    error,
+                  ),
+              }),
+            }
           : {}),
         leaderLease,
       })
@@ -2985,7 +3007,8 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
-    browserModelGateway: gatewayTransport,
+    modelGatewayTransport: gatewayTransport,
+    budget,
     resolveBrowserCompanyKeys,
     modelGateway,
     modelCredentials,
@@ -3075,7 +3098,7 @@ export function serverDeps(
   const carriedModelAuth = harnessCarriedModelAuth(config);
   return {
     externalSlackPolicies: config.externalSlackPolicies,
-    browserModelGateway: built.browserModelGateway,
+    modelGatewayTransport: built.modelGatewayTransport,
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
@@ -3133,6 +3156,7 @@ export function serverDeps(
       ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
       : {}),
     rateLimiter: built.rateLimiter,
+    budget: built.budget,
     acl: built.acl,
     credentialUsage: built.credentialUsage,
     featureFlags: built.featureFlags,
@@ -3170,7 +3194,6 @@ export function serverDeps(
     workspace: built.workspace,
     files: built.files,
     ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
-    filesDirectUploadsEnabled: config.filesDirectUploadsEnabled,
     memory: built.memory,
     blobTransfer: built.blobTransfer,
     sandboxBackend: built.sandbox.profile.backend,

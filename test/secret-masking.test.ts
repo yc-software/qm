@@ -42,11 +42,12 @@ test("a value embedding another is masked whole (longest first)", () => {
 test("plumbing keys and short values are not masked", () => {
   const mask = createSecretValueMasker({
     AGENT_API_URL: "https://core.example.test",
+    MODEL_GATEWAY_URL: "https://core.example.test/v1/sandbox-model",
     AWS_REGION: "us-west-2",
     PYTHONUNBUFFERED: "1",
     DB_PASS: "hunter2",
   });
-  const cmd = "curl https://core.example.test --region us-west-2 && echo 1 hunter2";
+  const cmd = "curl https://core.example.test/v1/sandbox-model/v1/models --region us-west-2 && echo 1 hunter2";
   assert.equal(mask(cmd), cmd);
 });
 

@@ -62,6 +62,7 @@ export interface ProcessReaperOptions {
   intervalMs: number;
   kill?: (rec: ProcessRecord) => Promise<void>;
   onReaped?: (rec: ProcessRecord) => Promise<void>;
+  afterSweep?: () => Promise<void>;
   leaderLease: LeaderLease;
 }
 
@@ -87,6 +88,7 @@ export function createProcessReaper(registry: ProcessRegistry, opts: ProcessReap
           .onReaped(rec)
           .catch((err) => console.error("[process-reaper] onReaped hook failed:", errMessage(err)));
     }
+    await opts.afterSweep?.();
     return { reaped };
   }
 

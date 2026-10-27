@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createToolContext, type CommandCredential, type ToolContextDeps } from "../src/tools/primitives.ts";
+import { createAgentTools } from "../src/harness/agent-tools.ts";
 import type { ExecOptions, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -186,15 +187,80 @@ test("newly available handles are resolved from the current catalog and revocati
   assert.equal(runs.length, 2);
 });
 
-test("owner credentials cannot be requested on scoped or scratch workspaces", async () => {
+function scratchContext(events: string[], extra: Partial<ToolContextDeps> = {}) {
+  const commands: Array<[string, string, Record<string, string> | undefined]> = [];
+  const sandbox = {
+    async run(target: SandboxHandle, command: string) {
+      commands.push([target.id, command, target.env]);
+      return { code: 0, stdout: "ok", stderr: "", timedOut: false };
+    },
+  } as unknown as Sandbox;
+  const { ctx } = context(
+    events,
+    [
+      {
+        ...credential(events, "granted", { env: [{ key: "GRANTED_TOKEN", value: "granted-secret" }] }),
+        scratchOnly: true,
+      },
+      {
+        ...credential(events, "brokered", { env: [{ key: "AGENT_CREDENTIAL_TOKEN", value: "room-capability" }] }),
+        scratchOnly: false,
+      },
+    ],
+    {
+      sandbox,
+      sandboxResources: {} as ToolContextDeps["sandboxResources"],
+      async provisionResource() {
+        events.push("resource");
+        return { id: "room-resource", rootDir: "/room" };
+      },
+      async provisionScratch() {
+        events.push("scratch");
+        return { id: "scratch", rootDir: "/scratch", env: { AGENT_API_TOKEN: "turn-capability" } };
+      },
+      ...extra,
+    },
+  );
+  return { ctx, commands };
+}
+
+test("background jobs with private credentials start on their own job computer", async () => {
   const events: string[] = [];
-  const selected = { ...credential(events, "owner"), scope: "owner" as const };
-  const { ctx, runs } = context(events, [selected], { provisionOwnerAuth: async () => handle });
-  await assert.rejects(ctx.execute("true", { credentials: ["owner"] }), /requires scope:owner/);
-  await assert.rejects(ctx.execute("true", { credentials: ["owner"], scratch: true }), /requires scope:owner/);
-  assert.deepEqual(events, []);
-  await ctx.execute("true", { credentials: ["owner"], ownerAuth: true });
-  assert.equal(runs.length, 1);
+  const started: Array<[string, string, Record<string, string> | undefined]> = [];
+  const broker = {
+    async start(
+      target: SandboxHandle,
+      command: string,
+      _purpose: string,
+      _ttl: number,
+      credentials?: { env?: Record<string, string> },
+    ) {
+      started.push([target.id, command, credentials?.env]);
+      return { processId: "p1", output: "", cursor: 0, status: { state: "running" }, reattached: false };
+    },
+  } as unknown as ToolContextDeps["backgroundBroker"];
+  const without = scratchContext(events, { backgroundBroker: broker });
+  await assert.rejects(
+    without.ctx.backgroundStart("sync", { purpose: "Sync", credentials: ["granted"] }),
+    /cannot use granted; run the command in the foreground/,
+  );
+  assert.ok(!events.some((event) => event.startsWith("resolve")));
+  const { ctx } = scratchContext(events, {
+    backgroundBroker: broker,
+    async provisionJobComputer() {
+      events.push("job-computer");
+      return { id: "job-box", rootDir: "/job", resourceId: "job-box" };
+    },
+  });
+  const job = await ctx.backgroundStart("sync", { purpose: "Sync", sandboxId: "box-a", credentials: ["granted"] });
+  assert.equal(job.jobComputer, true);
+  const plain = await ctx.backgroundStart("poll", { purpose: "Poll", credentials: ["brokered"] });
+  assert.equal(plain.jobComputer, undefined);
+  assert.deepEqual(started, [
+    ["job-box", "sync", { GRANTED_TOKEN: "granted-secret" }],
+    ["credential-preparation", "poll", { AGENT_CREDENTIAL_TOKEN: "room-capability" }],
+  ]);
+  assert.ok(!events.includes("scratch") && !events.includes("resource"));
 });
 
 test("replay returns cached masked bytes without resolving a consumed single-use credential", async () => {
@@ -240,4 +306,33 @@ test("replay returns cached masked bytes without resolving a consumed single-use
   assert.deepEqual(replay, first);
   assert.equal(resolutions, 1);
   assert.deepEqual(events, []);
+});
+
+test("the model and transcript see when a command moved to the scratch computer", async () => {
+  const entries: Array<Record<string, unknown>> = [];
+  let available = true;
+  const { ctx } = scratchContext([], {
+    async provisionScratch() {
+      if (!available) throw new Error("provider unavailable");
+      return { id: "scratch", rootDir: "/scratch" };
+    },
+  });
+  const execute = createAgentTools({
+    current: ctx,
+    emit: (entry) => void entries.push(entry.payload as Record<string, unknown>),
+    scopeLabel: scopeId("channel", "room"),
+  })[0]!;
+  const run = (params: Record<string, unknown>) =>
+    (execute.execute as unknown as (id: string, p: unknown) => Promise<{ content: Array<{ text: string }> }>)("call", {
+      purpose: "Check login",
+      command: "whoami",
+      ...params,
+    });
+  await run({ credentials: ["granted"] });
+  assert.equal(entries.at(-1)?.scope, "scratch");
+  await run({ credentials: ["brokered"] });
+  assert.equal(entries.at(-1)?.scope, "scoped");
+  available = false;
+  await assert.rejects(run({ credentials: ["granted"] }), /provider unavailable/);
+  assert.equal(entries.at(-1)?.isError, true);
 });

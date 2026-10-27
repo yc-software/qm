@@ -1664,7 +1664,6 @@ export interface KeychainManifestInput {
     ownerId: string;
     credentialId?: string;
     description: string;
-    scope: "scoped" | "owner";
   }>;
   detectedByOwner?: Map<string, string[]>;
   scopeAsks?: KeychainAsk[];
@@ -1749,11 +1748,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   const isOwn = (ownerId: string): boolean => (ownPersonal || openSpeaker) && samePerson(ownerId, input.actorId);
   const grants = new Map(input.scopeGrants.map(({ grant, credential }) => [credential.id, grant]));
   const execution = input.execution ?? [];
-  const scopeCounts = new Map<string, number>();
-  for (const entry of execution) scopeCounts.set(entry.scope, (scopeCounts.get(entry.scope) ?? 0) + 1);
-  const common = [...scopeCounts].sort(([a, x], [b, y]) => y - x || a.localeCompare(b))[0]?.[0];
-  const handle = (entry: (typeof execution)[number]): string =>
-    `\`${entry.handle}\`${entry.scope === common ? "" : ` (execute scope \`${entry.scope}\`)`}`;
+  const handle = (entry: (typeof execution)[number]): string => `\`${entry.handle}\``;
   const access = (ownerId: string, id: string): [string, string?] => {
     const grant = grants.get(id);
     if (grant)
@@ -1764,11 +1759,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
         grant.purpose,
       ];
     if (!isOwn(ownerId)) return ["no grant for this conversation"];
-    return [
-      openSpeaker
-        ? "own; Open live turn only, isolated owner execution"
-        : "own; no grant needed (including background turns)",
-    ];
+    return [openSpeaker ? "own; Open live turn only" : "own; no grant needed (including background turns)"];
   };
   const handles = (credentialId: string): string =>
     execution
@@ -1805,7 +1796,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   }
   const lines = [
     "## Credentials",
-    `Execution handles are shown in backticks${common ? ` and run in execute scope \`${common}\` unless marked` : ""}; select them in execute.credentials. Credential IDs identify entries for access requests, not execution handles.`,
+    "Execution handles are shown in backticks; select them in execute.credentials. Credential IDs identify entries for access requests, not execution handles.",
   ];
   for (const [ownerId, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
     const member = input.members.find((member) => personKey(member.id) === ownerId);
@@ -1834,7 +1825,7 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   if (asks.length) lines.push("", "Asks sent from this conversation:", ...asks.sort());
   lines.push(
     "",
-    "Grants: Use of private credentials outside of a 1:1 DM with that person requires an explicit grant. The exception is the live speaker's isolated owner execution in an Open shared conversation, not continuing room or background access. Otherwise use the `request-access` skill; consider whether one-time, standing or time-bound access fits the request.",
+    "Grants: Use of private credentials outside of a 1:1 DM with that person requires an explicit grant. The exception is the live speaker's own credentials in an Open shared conversation, for their live turn only, not continuing room or background access. Otherwise use the `request-access` skill; consider whether one-time, standing or time-bound access fits the request.",
     "Secret drop: for a credential nobody has saved, mint a one-time link with the `secret-drop` skill; never collect secrets in chat or send people to the keychain page. Keys enter the submitter's private keychain; in a shared channel they are shared for use in that channel alone.",
     "Device code or CLI logins: read the `interactive-login` skill from the first step. It logs in under a temporary home and saves the result. Never log in against this computer's $HOME; only keychain entries are durable and grantable.",
   );

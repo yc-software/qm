@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDeployStore } from "../src/deploy/deploy-store.ts";
+import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
+import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
@@ -142,3 +143,76 @@ test("withDeployLock: same-instance lifecycle ops still serialize (no overlap)",
   ]);
   assert.equal(maxActive, 1, "two redeploys on one deployment never ran apply() concurrently");
 });
+
+function copyingDeployStore(): DeployStore {
+  const map = createMemoryMap<Deployment>();
+  return createDeployStore({
+    ...map,
+    get: async (id) => structuredClone(await map.get(id)),
+    all: async () => structuredClone(await map.all()),
+    put: (id, value) => map.put(id, structuredClone(value)),
+  });
+}
+
+for (const [visit, stop, status] of [
+  ["reach", "archive", "archived"],
+  ["reach", "idle reap", "stopped"],
+  ["keep-warm", "archive", "archived"],
+] as const) {
+  test(`withDeployLock: a ${visit} waiting on the ${stop} leaves the app ${status} and never re-applies it`, async () => {
+    const deployStore = copyingDeployStore();
+    let applies = 0;
+    const destroying = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const resolving = Promise.withResolvers<void>();
+    const provider: DeployProvider = {
+      profile: { managedScaleToZero: false },
+      apply: async () => {
+        applies++;
+        return { host: "127.0.0.1", port: 5000 };
+      },
+      resolveEndpoint: async () => {
+        resolving.resolve();
+        return null;
+      },
+      destroy: async () => {
+        destroying.resolve();
+        await release.promise;
+      },
+    };
+    const deploy = createDeployService({
+      ...singleProcessDeps(),
+      deployStore,
+      provider,
+      auditLog: { record() {}, events: async () => [], tail: async () => [] },
+      acl: createAclStore(),
+      deployDir: mkdtempSync(join(tmpdir(), "reach-stop-")),
+    });
+    const d = await deploy.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "x",
+      files: [],
+      alwaysOn: visit === "keep-warm",
+    });
+    const stopping = stop === "archive" ? deploy.archiveDeployment(d.id) : deploy.reapIdleDeployments(60_000, future);
+    await destroying.promise;
+    let settled = false;
+    const visiting = (visit === "reach" ? deploy.reachDeployment(d.id, "U1") : deploy.maintainDeployments()).finally(
+      () => {
+        settled = true;
+      },
+    );
+    await resolving.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, `the ${visit} waits while the ${stop} holds the deploy lock`);
+    release.resolve();
+    await stopping;
+    const result = await visiting;
+    assert.equal(applies, 1, `the waiting ${visit} does not re-apply the ${status} app`);
+    const after = (await deployStore.get(d.id))!;
+    assert.equal(after.status, status, `the app stays ${status}`);
+    assert.equal(after.endpoint, null);
+    assert.deepEqual(result, visit === "reach" ? { status: "not_found" } : 0);
+  });
+}

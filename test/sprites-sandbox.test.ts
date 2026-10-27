@@ -713,6 +713,18 @@ test("destroying a scope exports the home to the snapshot store first and a repl
   assert.equal(typeof make().persistHomeSnapshot, "undefined");
 });
 
+test("a job computer's home is never snapshotted, on teardown or destroy", async () => {
+  const snapshots = createMemorySnapshotStore();
+  const s = make({ snapshots });
+  const jobScope = "job-1234";
+  const jobLayers = [{ scopeId: jobScope, mode: "rw" as const, mountPath: "" }];
+  const h = await s.provision(jobLayers);
+  await s.run(h, 'printf secret > "$HOME/notes.txt"');
+  await s.teardown(h, { keepWarm: true });
+  await s.destroyScope!(jobScope);
+  assert.ok(!fake.names().includes(h.id), "the sprite is gone");
+  assert.equal(await snapshots.open(jobScope), null);
+});
 test("a failed export refuses to destroy the sprite", async () => {
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });

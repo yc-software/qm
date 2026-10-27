@@ -121,7 +121,6 @@ function fixture(
       return "synthetic-narrow-egress";
     },
     connectorEnv: { AGENT_API_TOKEN: "synthetic-room-capability", SHARED_SECRET: "synthetic-room-secret" },
-    ownerAuthAvailable: false,
     turnSessionDir: "turn/session",
     turnFilesDir: "turn/session/fire",
     visibleSkills: [roomSkill],

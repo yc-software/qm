@@ -30,7 +30,13 @@ import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
-import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  HOME_SNAPSHOT_PRUNE,
+  isJobComputerScope,
+  snapshotDue,
+  type HomeSnapshotStore,
+} from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
@@ -75,8 +81,6 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
   advisoryLock: AdvisoryLock;
   namePrefix?: string;
   defaultTimeoutSec?: number;
-  snapshotIntervalMs?: number;
-  nativeSnapshotsEnabled?: boolean;
   nativeSnapshotIntervalMs?: number;
   rotateAfterMs?: number;
   reapIdleMs?: number;
@@ -99,12 +103,9 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const client = opts.client;
   const prefix = opts.namePrefix ?? "qm";
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
-  const usesNativeSnapshots = (stored?: StoredModalSandbox | null): boolean =>
-    !!stored?.nativeSnapshotId || !!(client.nativeSnapshots && opts.nativeSnapshotsEnabled);
-  const snapshotIntervalMs = (stored?: StoredModalSandbox | null): number =>
-    usesNativeSnapshots(stored) ? (opts.nativeSnapshotIntervalMs ?? 5 * 60_000) : (opts.snapshotIntervalMs ?? 0);
+  const snapshotIntervalMs = opts.nativeSnapshotIntervalMs ?? 5 * 60_000;
   const lastSnapshotAttemptMs = (stored?: StoredModalSandbox | null): number =>
-    Math.max(stored?.lastSnapshotMs ?? 0, usesNativeSnapshots(stored) ? (stored?.lastSnapshotAttemptMs ?? 0) : 0);
+    Math.max(stored?.lastSnapshotMs ?? 0, stored?.lastSnapshotAttemptMs ?? 0);
   const rotateAfterMs = opts.rotateAfterMs ?? 20 * 3600_000;
   const reapIdleMs = opts.reapIdleMs ?? 6 * 3600_000;
   const fileChunkBytes = opts.fileChunkBytes ?? 64 * 1024 * 1024;
@@ -163,48 +164,43 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   }
 
   async function snapshotHome(scope: string, session: ModalSession): Promise<void> {
+    if (isJobComputerScope(scope)) return;
     await assertHydrated(session);
-    if (usesNativeSnapshots(await store.get(scope))) {
-      if (!session.snapshotHome) throw new Error("native Modal home checkpoint is not supported by this client");
-      if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
-      const requested = await store.update(scope, (current) => {
-        if (current.sandboxId !== session.sandboxId) throw new Error("Modal checkpoint source has been replaced");
-        return {
-          ...current,
-          snapshotGeneration: (current.snapshotGeneration ?? 0) + 1,
-          lastSnapshotAttemptMs: Date.now(),
-        };
-      });
-      if (!requested) throw new Error("Modal checkpoint source is no longer tracked");
-      const capturedAtMs = Date.now();
-      try {
-        const snapshot = await session.snapshotHome();
-        const committed = await store.update(scope, (current) =>
-          current.sandboxId === session.sandboxId && current.snapshotGeneration === requested.snapshotGeneration
-            ? {
-                ...current,
-                nativeSnapshotId: snapshot.imageId,
-                nativeSnapshotExpiresAtMs: snapshot.expiresAtMs,
-                recoveryError: undefined,
-                lastSnapshotAttemptMs: undefined,
-                lastSnapshotMs: capturedAtMs,
-                homeDirty: false,
-              }
-            : current,
-        );
-        if (committed?.nativeSnapshotId !== snapshot.imageId)
-          throw new Error("Modal checkpoint was superseded; keeping the source running");
-      } catch (error) {
-        await store.update(scope, (current) =>
-          current.sandboxId === session.sandboxId && current.snapshotGeneration === requested.snapshotGeneration
-            ? { ...current, recoveryError: errMessage(error) }
-            : current,
-        );
-        throw error;
-      }
-    } else if (homeSnapshots) {
-      await homeSnapshots.snapshotHome(scope, session);
-      await store.merge(scope, { lastSnapshotMs: Date.now(), homeDirty: false });
+    if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
+    const requested = await store.update(scope, (current) => {
+      if (current.sandboxId !== session.sandboxId) throw new Error("Modal checkpoint source has been replaced");
+      return {
+        ...current,
+        snapshotGeneration: (current.snapshotGeneration ?? 0) + 1,
+        lastSnapshotAttemptMs: Date.now(),
+      };
+    });
+    if (!requested) throw new Error("Modal checkpoint source is no longer tracked");
+    const capturedAtMs = Date.now();
+    try {
+      const snapshot = await session.snapshotHome();
+      const committed = await store.update(scope, (current) =>
+        current.sandboxId === session.sandboxId && current.snapshotGeneration === requested.snapshotGeneration
+          ? {
+              ...current,
+              nativeSnapshotId: snapshot.imageId,
+              nativeSnapshotExpiresAtMs: snapshot.expiresAtMs,
+              recoveryError: undefined,
+              lastSnapshotAttemptMs: undefined,
+              lastSnapshotMs: capturedAtMs,
+              homeDirty: false,
+            }
+          : current,
+      );
+      if (committed?.nativeSnapshotId !== snapshot.imageId)
+        throw new Error("Modal checkpoint was superseded; keeping the source running");
+    } catch (error) {
+      await store.update(scope, (current) =>
+        current.sandboxId === session.sandboxId && current.snapshotGeneration === requested.snapshotGeneration
+          ? { ...current, recoveryError: errMessage(error) }
+          : current,
+      );
+      throw error;
     }
   }
 
@@ -256,7 +252,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     let hydrated: boolean;
     try {
       if (previous?.nativeSnapshotId) {
-        if (!session.restoreHome) throw new Error("native Modal home restore is not supported by this client");
         await session.restoreHome(previous.nativeSnapshotId);
         hydrated = true;
       } else {
@@ -279,7 +274,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     }
     await store.merge(scope, { hydrationPending: false });
     sessionByName.set(name, session);
-    if (hydrated && !previous?.nativeSnapshotId) await store.merge(scope, { lastSnapshotMs: Date.now() });
     return { session, coldStart: !hydrated };
   }
 
@@ -305,7 +299,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
       const stale =
         allowRotation &&
         !!stored &&
-        (!!homeSnapshots || usesNativeSnapshots(stored)) &&
         Date.now() - stored.createdAtMs > rotateAfterMs &&
         Date.now() >= (rotationHoldUntil.get(scope) ?? 0);
 
@@ -466,7 +459,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   const profile: AgentComputerProfile = {
     backend: "modal",
-    writablePersistence: usesNativeSnapshots() ? "provider_managed" : "snapshot_to_workspace",
+    writablePersistence: "provider_managed",
     processSessions: true,
     egressEnforcement: opts.egressProxyUrl ? "domain" : "none",
     spec: {
@@ -586,7 +579,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         if (
           !current ||
           current.sandboxId !== rec.sandboxId ||
-          Date.now() - lastSnapshotAttemptMs(current) <= snapshotIntervalMs(current)
+          Date.now() - lastSnapshotAttemptMs(current) <= snapshotIntervalMs
         )
           return;
         await snapshotHome(scope, session);
@@ -613,7 +606,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           await snapshotHome(scope, session);
           await session.terminate();
           sessionByName.delete(name);
-          if (!(await store.get(scope))?.nativeSnapshotId) await store.delete(scope);
           return 1;
         } catch (e) {
           if (e instanceof ModalSandboxGoneError) {
@@ -887,9 +879,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         if (!session) return;
         const stored = await store.get(scope);
         if (!tdOpts?.homeUnchanged) await store.merge(scope, { homeDirty: true });
-        if (
-          snapshotDue({ ...stored, lastSnapshotMs: lastSnapshotAttemptMs(stored) }, tdOpts, snapshotIntervalMs(stored))
-        ) {
+        if (snapshotDue({ ...stored, lastSnapshotMs: lastSnapshotAttemptMs(stored) }, tdOpts, snapshotIntervalMs)) {
           try {
             await snapshotHome(scope, session);
             await store.merge(scope, { lastActivityMs: Date.now() });
@@ -958,8 +948,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
             continue;
           }
         }
-        if (usesNativeSnapshots(rec) && now - lastSnapshotAttemptMs(rec) > snapshotIntervalMs(rec))
-          await refreshCheckpoint(scope, rec, session);
+        if (now - lastSnapshotAttemptMs(rec) > snapshotIntervalMs) await refreshCheckpoint(scope, rec, session);
       }
       reaped += await sweepOrphans(now);
       return { reaped };

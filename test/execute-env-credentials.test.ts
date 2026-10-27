@@ -79,11 +79,6 @@ test("role broker vends only for explicitly selected scoped execution", async ()
   const run = (text: string) => built.app.turn({ surface: "slack", actor, conversation, text });
   assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
   assert.equal(assumes, 0);
-  await assert.rejects(
-    run(`!execute ${JSON.stringify({ command: "true", credentials: ["broker_acmecli"], ownerAuth: true })}`),
-    /requires scope:scoped/,
-  );
-  assert.equal(assumes, 0);
   assert.equal(
     (
       await run(
@@ -95,6 +90,69 @@ test("role broker vends only for explicitly selected scoped execution", async ()
   assert.equal(assumes, 1);
   assert.equal((await run('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
   assert.equal(assumes, 1);
+});
+
+test("role broker sessions in a shared conversation reach only the turn's scratch computer", async () => {
+  const built = buildApp(
+    testConfig({
+      dataDir: mkdtempSync(join(tmpdir(), "shared-broker-")),
+      signingSecret: "shared-broker-signing",
+      apiBaseUrl: "http://core.test",
+      deploymentLayerDir: acmecliBrokeredLayer(),
+      maxAttempts: 1,
+    }),
+    {
+      credentialBrokers: {
+        acmecli: createAwsRoleBroker({
+          roleArn: "arn:aws:iam::123456789012:role/acmecli-broker",
+          region: "us-west-2",
+          sessionActions: ["execute-api:Invoke"],
+          assumeRole: async () => ({
+            Credentials: {
+              AccessKeyId: "AKIA_SHARED_ROOM",
+              SecretAccessKey: "shared-room-secret",
+              SessionToken: "shared-room-session",
+              Expiration: new Date(Date.now() + 3600000),
+            },
+          }),
+        }),
+      },
+    },
+  );
+  const members = [actor, { externalId: "U_ENV_PEER" }];
+  await built.directory.replaceChannels(
+    [{ channelId: "C_BROKER", name: "broker-room", isPrivate: true }],
+    members.map(({ externalId }) => ({ channelId: "C_BROKER", principalId: externalId })),
+  );
+  await selectDefaultSandbox(built, actor.externalId, scopeId("channel", "C_BROKER"));
+  const scratchBoxes = new Set<string>();
+  const provision = built.sandbox.provision.bind(built.sandbox);
+  built.sandbox.provision = async (layers, opts) => {
+    const handle = await provision(layers, opts);
+    if (opts?.scratch) scratchBoxes.add(handle.id);
+    return handle;
+  };
+  const exposed: string[] = [];
+  const run = built.sandbox.run.bind(built.sandbox);
+  built.sandbox.run = async (handle, command, opts) => {
+    if (JSON.stringify(handle.env ?? {}).includes("shared-room-secret") && !scratchBoxes.has(handle.id))
+      exposed.push(handle.id);
+    return run(handle, command, opts);
+  };
+  const conversation = {
+    kind: "channel" as const,
+    channelRef: "C_BROKER",
+    threadRef: "C_BROKER:shared-broker",
+    audience: members,
+  };
+  const turn = (text: string) => built.app.turn({ surface: "slack", actor, conversation, text });
+  const result = await turn(
+    `!execute ${JSON.stringify({ command: 'test "$AWS_ACCESS_KEY_ID" = AKIA_SHARED_ROOM && test -n "${AGENT_API_TOKEN-}" && echo scratch', credentials: ["broker_acmecli"] })}`,
+  );
+  assert.equal(result.reply, "scratch", JSON.stringify(result));
+  assert.equal(scratchBoxes.size, 1);
+  assert.deepEqual(exposed, []);
+  assert.equal((await turn('!run test -z "${AWS_ACCESS_KEY_ID-}" && echo absent')).reply, "absent");
 });
 
 test("selected broker execute honors deployment approval rules before vending credentials", async () => {

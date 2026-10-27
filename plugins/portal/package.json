@@ -21,6 +21,6 @@
     "@sentry/node": "10.75.0",
     "jose": "^6.2.3",
     "lru-cache": "^11.5.2",
-    "nodemailer": "^10.1.0"
+    "nodemailer": "^10.2.1"
   }
 }

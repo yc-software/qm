@@ -18,6 +18,11 @@ files, origin, label and expiry come from the new save.
 
 ## Execution
 
+In a shared conversation, every command that names a saved login runs on the turn's
+scratch computer, so the bundle is staged there and never on the conversation's computer;
+in the owner's personal conversation it is staged on their own computer unless another
+conversation shares that computer through an environment.
+
 `src/credentials/execute-files.ts` stages requested bundles in a private
 `/tmp/qm-credentials.<random>/home`, points the CLI at it, captures changed files after the
 command and writes them back with `keychain.updateFiles`, which rejects stale writes. Only

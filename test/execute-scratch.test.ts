@@ -80,30 +80,11 @@ const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, par
 };
 const schemaProps = (tool: ReturnType<typeof createAgentTools>[number]): string[] =>
   Object.keys((tool as unknown as { parameters: { properties: Record<string, unknown> } }).parameters.properties);
-const schemaRequired = (tool: ReturnType<typeof createAgentTools>[number]): string[] =>
-  (tool as unknown as { parameters: { required?: string[] } }).parameters.required ?? [];
 
-test("flag OFF: the execute surface is exactly the legacy one (no scope/durable, scoped box)", async () => {
-  const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc });
-  assert.deepEqual(schemaProps(execute!), [
-    "command",
-    "background",
-    "sandbox_id",
-    "purpose",
-    "timeout_seconds",
-    "credentials",
-    "retrySafe",
-  ]);
-  assert.deepEqual(schemaRequired(execute!), ["command", "purpose"]);
-  await call(execute, { command: "echo hi", purpose: "Run test command" });
-  assert.deepEqual(seen, [{ command: "echo hi", opts: undefined }]);
-});
-
-test("flag ON: scope defaults to the durable scoped box; scratch is an explicit opt-in", async () => {
+test("scope defaults to the durable scoped box; scratch is an explicit opt-in", async () => {
   const { tc, seen } = sinkToolContext();
   const ref: ToolContextRef = { current: tc };
-  const [execute] = createAgentTools(ref, { scratchExec: true });
+  const [execute] = createAgentTools(ref);
   assert.deepEqual(schemaProps(execute!), [
     "command",
     "background",
@@ -139,9 +120,9 @@ test("flag ON: scope defaults to the durable scoped box; scratch is an explicit 
   assert.deepEqual(seen.at(-1)!.opts, { timeoutSeconds: 9 });
 });
 
-test("flag ON: unsupported scope/durable pairings return a crisp [error] without executing", async () => {
+test("unsupported scope/durable pairings return a crisp [error] without executing", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { scratchExec: true });
+  const [execute] = createAgentTools({ current: tc });
 
   const e1 = textOf(
     await call(execute, { command: "echo hi", scope: "scratch", durable: true, purpose: "Run test command" }),
@@ -156,7 +137,7 @@ test("flag ON: unsupported scope/durable pairings return a crisp [error] without
   assert.equal(seen.length, 0, "invalid pairings never reach the sandbox");
 });
 
-test("flag ON: the tool_call/tool_result entries record which box ran the command", async () => {
+test("the tool_call/tool_result entries record which box ran the command", async () => {
   const emitted: Array<{ type: string; payload: { tool?: string; scope?: string } }> = [];
   const { tc } = sinkToolContext();
   const ref: ToolContextRef = {
@@ -166,28 +147,13 @@ test("flag ON: the tool_call/tool_result entries record which box ran the comman
     },
     scopeLabel: scopeId("personal", "U1"),
   };
-  const [execute] = createAgentTools(ref, { scratchExec: true });
+  const [execute] = createAgentTools(ref);
   await call(execute, { command: "echo hi", scope: "scratch", purpose: "Run test command" });
   await call(execute, { command: "echo hi", purpose: "Run test command" });
   assert.deepEqual(
     emitted.map((e) => `${e.type}:${e.payload.scope}`),
     ["tool_call:scratch", "tool_result:scratch", "tool_call:scoped", "tool_result:scoped"],
   );
-});
-
-test("flag ON: the description advertises the routing policy truthfully", () => {
-  const { tc } = sinkToolContext();
-  const [legacy] = createAgentTools({ current: tc });
-  const [execute] = createAgentTools({ current: tc }, { scratchExec: true });
-  const desc = (execute as unknown as { description: string }).description;
-  assert.match(desc, /"scoped" \(DEFAULT\)/);
-  assert.match(desc, /Use it for self-contained commands and API work/);
-  assert.match(desc, /only credentials explicitly requested/);
-  assert.doesNotMatch(JSON.stringify(execute), /credential-free|blank, instant/);
-  assert.match(desc, /including Files/);
-  assert.match(desc, /local files are discarded after the turn/);
-  assert.match(desc, /Use scope:"scoped" when you need existing workspace files/);
-  assert.doesNotMatch((legacy as unknown as { description: string }).description, /scratch/i);
 });
 
 async function freshApp(extra: Partial<Config> = {}) {
@@ -305,7 +271,7 @@ test("execute rejects unavailable, conflicting, and reached credential requests"
   );
   await assert.rejects(
     ctx.execute("true", { reachTarget: "#other", credentials: ["kc_one12345678"] }),
-    /scoped, scratch, or owner computers/,
+    /scoped or scratch computers/,
   );
 });
 
@@ -348,6 +314,8 @@ test("execute schema lists exact command credential handles", async () => {
     "purpose",
     "timeout_seconds",
     "credentials",
+    "scope",
+    "durable",
     "retrySafe",
   ]);
 
@@ -482,10 +450,13 @@ test("execute respects secret metadata even for configuration-named credentials"
   assert.equal((await ctx.execute("diagnose", { credentials: ["kc_config1234"] })).stdout, "<redacted:credential>");
 });
 
-test("owner execute masks selected credentials and inherited proxy credentials", async () => {
+test("rerouted scratch execute masks selected credentials and inherited proxy credentials", async () => {
   const { ctx } = routingCtx({
-    provisionOwnerAuth: async () => ({ ...scopedHandle, env: { HTTPS_PROXY: "https://user:proxy-secret@proxy.test" } }),
-    commandCredentials: [{ handle: "owner-token", scope: "owner", env: [{ key: "TOKEN", value: "owner-secret" }] }],
+    provisionScratch: async () => ({
+      ...scopedHandle,
+      env: { HTTPS_PROXY: "https://user:proxy-secret@proxy.test" },
+    }),
+    commandCredentials: [{ handle: "owner-token", scratchOnly: true, env: [{ key: "TOKEN", value: "owner-secret" }] }],
     sandbox: {
       async run() {
         return { stdout: "owner-secret https://user:proxy-secret@proxy.test", stderr: "", code: 0, timedOut: false };
@@ -493,7 +464,7 @@ test("owner execute masks selected credentials and inherited proxy credentials",
     } as unknown as Sandbox,
   });
   assert.equal(
-    (await ctx.execute("diagnose", { ownerAuth: true, credentials: ["owner-token"] })).stdout,
+    (await ctx.execute("diagnose", { credentials: ["owner-token"] })).stdout,
     "<redacted:credential> <redacted:credential>",
   );
 });
@@ -505,7 +476,6 @@ test("scratch credentials are selected per command and masked before returning",
     commandCredentials: [
       { handle: "selected", env: [{ key: "TOKEN", value: "selected-secret" }] },
       { handle: "unselected", env: [{ key: "OTHER_TOKEN", value: "other-secret" }] },
-      { handle: "owner", scope: "owner", env: [{ key: "OWNER_TOKEN", value: "owner-secret" }] },
     ],
     sandbox: {
       async run(handle: SandboxHandle) {
@@ -520,7 +490,6 @@ test("scratch credentials are selected per command and masked before returning",
   assert.equal(environments[0]?.OTHER_TOKEN, undefined);
   await ctx.execute("env", { scratch: true });
   assert.equal(environments[1]?.TOKEN, undefined);
-  await assert.rejects(ctx.execute("env", { scratch: true, credentials: ["owner"] }), /requires scope:owner/);
 });
 
 function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {

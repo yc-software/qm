@@ -21,6 +21,10 @@ const PROVIDER_BASE_URL_ENV: Record<ProviderId, string> = {
 
 export type ProviderBaseUrls = Partial<Record<ProviderId, string>>;
 
+export function gatewayRoot(url: string): string {
+  return url.replace(/\/+$/, "").replace(/\/v1$/, "");
+}
+
 export interface ModelGatewayTransportConfig {
   url: string;
   apiKey: string;
@@ -105,7 +109,7 @@ export function modelGatewayRequest<T extends { id: string; baseUrl: string; api
       ...model,
       compat: { ...model.compat, sendSessionAffinityHeaders: true },
       baseUrl: isGatewayModelId(model.id)
-        ? `${config.url.replace(/\/v1$/, "")}${model.api === "anthropic-messages" ? "" : "/v1"}`
+        ? `${gatewayRoot(config.url)}${model.api === "anthropic-messages" ? "" : "/v1"}`
         : config.url,
     },
     target,

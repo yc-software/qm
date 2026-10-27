@@ -97,6 +97,7 @@ test("resolution carries the durable effective security posture", async () => {
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const resolved = await res.resolve(conv, actor);
   assert.deepEqual(resolved.securityPolicy, {
+    posture: "strict",
     screening: "enforce",
     denyPrivateNetworks: false,
     toolApprovals: "all",
