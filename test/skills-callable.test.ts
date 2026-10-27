@@ -136,7 +136,7 @@ test("skill files stay on the computer across turns", async () => {
   assert.match((await app.turn({ ...request, text: "!skill helper" } as TurnRequest)).reply ?? "", /no skill file/);
 });
 
-test("skills index order uses visible history, resets with compaction, and leaves the system prefix stable", async () => {
+test("skills index order ignores skill use, so the system prompt stays byte-stable", async () => {
   const built = freshApp();
   for (let i = 0; i < 20; i++) {
     const skill = await built.skills.create({
@@ -158,9 +158,8 @@ test("skills index order uses visible history, resets with compaction, and leave
     conversation: { kind: "dm" as const, threadRef: "shortlist-history" },
     text: "!sysprompt",
   };
-  const promoted = (prompt: string) => prompt.indexOf("**helper-19**") < prompt.indexOf("**helper-00**");
   const first = await built.app.turn(request);
-  assert.ok(!promoted(first.reply ?? ""));
+  assert.ok((first.reply ?? "").indexOf("**helper-00**") < (first.reply ?? "").indexOf("**helper-19**"));
   const sessionId = first.sessionId!;
   const { lease } = await built.sessions.acquireLease(sessionId, "turn");
   assert.ok(lease);
@@ -170,27 +169,11 @@ test("skills index order uses visible history, resets with compaction, and leave
     scopeLabel: "personal:U1",
   });
   await built.sessions.releaseLease(lease);
-  const second = await built.app.turn(request);
-  assert.ok(promoted(second.reply ?? ""));
-  const unchanged = await built.app.turn(request);
-  assert.doesNotMatch(unchanged.reply ?? "", /\*\*helper-00\*\*/);
-  const entries = await built.sessions.getEntries(sessionId);
-  const reset = await built.sessions.acquireLease(sessionId, "compaction");
-  assert.ok(reset.lease);
-  await built.sessions.append(reset.lease, {
-    type: "system",
-    payload: { kind: "context_summary", text: "Earlier work complete", throughSeq: entries.at(-1)!.seq },
-    scopeLabel: "personal:U1",
-  });
-  await built.sessions.releaseLease(reset.lease);
-  const third = await built.app.turn(request);
-  assert.ok(!promoted(third.reply ?? ""));
+  await built.app.turn(request);
   const recorded = (await built.sessions.listLlmRequests(sessionId)).filter((r) => r.model === "mock");
   const systems = recorded.map((r) => (r.promptEnvelope as { system: string }).system);
-  assert.equal(systems.length, 4);
+  assert.equal(systems.length, 2);
   assert.equal(systems[0], systems[1]);
-  assert.equal(systems[1], systems[2]);
-  assert.equal(systems[2], systems[3]);
 });
 
 test("Open sharing keeps private skill metadata out of the persisted channel shortlist", async () => {

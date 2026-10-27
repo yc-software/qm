@@ -129,8 +129,6 @@ export const MAX_OUTBOUND_FILES = 20;
 
 export const MAX_INBOUND_FILES = 10;
 
-export const MAX_SHARED_FILES_LISTED = 25;
-
 export interface ArtifactRegistration {
   store: FileArtifactStore;
   ownerScopeId: ScopeId;
@@ -252,29 +250,10 @@ export function inboundIssueList(opts: {
   return issues;
 }
 
-export function sharedManifest(handles: readonly GrantedHandle[]): string {
-  const seen = new Set<string>();
-  const lines: string[] = [];
-  for (const h of handles) {
-    if (seen.has(h.handlePath)) continue;
-    seen.add(h.handlePath);
-    lines.push(`- ${h.handlePath}${h.permission === "write" ? " (writable)" : ""}`);
-  }
-  if (!lines.length) return "";
-  const total = lines.length;
-  const shown = lines.sort().slice(0, MAX_SHARED_FILES_LISTED);
-  const omitted = total - shown.length;
-  if (omitted > 0) {
-    shown.push(`…and ${omitted} more (read shared/<name> to fetch)`);
-  }
-  const noun = total === 1 ? "file" : "files";
-  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${shown.join("\n")}`;
-}
-
 export function sharedFilesSystemSection(handles: readonly GrantedHandle[]): string {
-  const body = sharedManifest(handles);
-  if (!body) return "";
-  return `## Files shared with you\n${body}`;
+  const total = new Set(handles.map((h) => h.handlePath)).size;
+  if (!total) return "";
+  return `${total} ${total === 1 ? "file is" : "files are"} shared with you; list them with \`GET /v1/files\` and read one with the \`files\` tool at \`shared/<name>\`.`;
 }
 
 export function environmentNote(text: string): string {

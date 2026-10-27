@@ -1039,7 +1039,7 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
 
     async listSkills(query = "", offset = 0, limit = 50, source?: string) {
       const available = (await deps.listSkills?.(source)) ?? [];
-      const matches = rankedSkills(available, query, [], Boolean(query));
+      const matches = rankedSkills(available, query, Boolean(query));
       const start = Math.max(0, Math.floor(offset));
       const selected = matches.slice(start, start + Math.max(1, Math.min(100, Math.floor(limit))));
       const sourceScopeId = selected.length && source ? selected[0]!.skill!.scopeId : null;

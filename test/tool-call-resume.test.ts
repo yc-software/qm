@@ -218,7 +218,12 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildScenario() {
-  const received: Array<{ input: string; resumeToolCall?: ResumableToolCall; historyTypes: string[] }> = [];
+  const received: Array<{
+    input: string;
+    continueTurn?: boolean;
+    resumeToolCall?: ResumableToolCall;
+    historyTypes: string[];
+  }> = [];
   const harness = defineHarness(
     {
       id: "pi",
@@ -231,6 +236,7 @@ function buildScenario() {
       async runTurn(turn) {
         received.push({
           input: turn.input,
+          ...(turn.continueTurn ? { continueTurn: true } : {}),
           ...(turn.resumeToolCall ? { resumeToolCall: turn.resumeToolCall } : {}),
           historyTypes: turn.history.map((e) => e.type),
         });
@@ -324,7 +330,7 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   assert.equal(received.length, 1);
   const turn = received[0]!;
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
-  assert.equal(turn.input, "", "the request is not re-sent");
+  assert.equal(turn.continueTurn, true, "the harness continues the recorded turn instead of re-sending the request");
 
   const entries = await sessions.getEntries(sessionId);
   const types = entries.map((e) => e.type);
@@ -346,7 +352,7 @@ for (const [label, payload] of [
     assert.equal(received.length, 1);
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
-    assert.equal(turn.input, "", "the request is not re-sent");
+    assert.equal(turn.continueTurn, true, "the harness continues the recorded turn instead of re-sending the request");
     const entries = await sessions.getEntries(sessionId);
     assert.deepEqual(
       entries.map((e) => e.type),

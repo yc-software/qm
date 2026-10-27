@@ -31,8 +31,7 @@ test("gateway only (no surface-provided context) still names the gateway", () =>
 test("web gateway keeps scheduled deliveries in the web conversation by default", () => {
   const out = renderGatewayContext("web");
   assert.match(out, /over web\./);
-  assert.match(out, /no explicit destination posts back into this web conversation/);
-  assert.match(out, /Leave the destination unset by default/);
+  assert.match(out, /post back to this conversation unless the person asks for another destination/);
   assert.doesNotMatch(out, /cannot receive future external notifications/);
   assert.doesNotMatch(out, /use `recipient` for a Slack DM/);
 });
@@ -101,7 +100,7 @@ test("web prompt tells cron creators to use a real notification destination", as
     text: "!sysprompt",
   });
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /posts back into this web conversation/);
+  assert.match(res.reply ?? "", /post back to this conversation unless/);
   assert.doesNotMatch(res.reply ?? "", /cannot receive future external notifications/);
 });
 

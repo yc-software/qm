@@ -50,7 +50,7 @@ sources** section:
 
 - Composio: `GET /v1/composio/toolkits` succeeds, or the org scope's `serviceCredentials`
   has an enabled `COMPOSIO_API_KEY` env credential with a secret.
-- Own OAuth apps: the live Connected apps block lists providers.
+- Own OAuth apps: your instructions list direct OAuth apps.
 
 If either exists, skip silently and continue to the Slack bot and personal connections.
 If a signal is missing or a read fails, treat it as unknown, not absent, and do not offer
@@ -102,8 +102,8 @@ create OAuth apps for connections this source already provides. Do not infer tha
 or a native provider-not-configured error. Explicit app restrictions and account permissions
 still apply; never switch credentials to evade a denial.
 
-For direct OAuth, the live Connected apps block is the complete allowlist of providers
-configured by the admin. Offer direct OAuth links only for that list. If it is empty and
+For direct OAuth, the direct OAuth apps line in your instructions is the complete allowlist of
+providers configured by the admin. Offer direct OAuth links only for that list. If it is empty and
 no other authorized access path is available, skip account connection without advertising
 unsupported apps. For regular users, do not turn onboarding into provider configuration: do not ask
 for a Composio project key, new OAuth apps, or per-app auth configs just because access

@@ -87,7 +87,7 @@ for (const kind of ["command", "security-screen"] as const) {
       assert.equal(initial.status, "pending_approval");
       let approvedPrompt = "";
       exerciseTurn = async (turn) => {
-        approvedPrompt = turn.systemPrompt;
+        approvedPrompt = turn.environment ?? "";
       };
       const approved = await built.app.turn({
         ...request,
@@ -504,10 +504,12 @@ test("a resolved command approval informs the model without changing its request
     assert.equal(approved.status, "ok");
     assert.equal(turns.at(-1)!.input, request.text);
     assert.ok(
-      turns.at(-1)!.systemPrompt.includes("The requesting human has approved the pending operation for this turn"),
+      (turns.at(-1)!.environment ?? "").includes(
+        "The requesting human has approved the pending operation for this turn",
+      ),
     );
     assert.equal(
-      turns[0]!.systemPrompt.includes("The requesting human has approved the pending operation for this turn"),
+      (turns[0]!.environment ?? "").includes("The requesting human has approved the pending operation for this turn"),
       false,
     );
     const count = turns.length;

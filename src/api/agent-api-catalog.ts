@@ -457,8 +457,7 @@ const FAMILIES: AgentApiFamily[] = [
     ],
   },
   {
-    guidance:
-      "The keychain ask→card approval→execute.credentials protocol is documented in your keychain manifest when one renders.",
+    guidance: "The keychain ask→card approval→execute.credentials protocol is documented in the request-access skill.",
     routes: [
       {
         method: "POST|GET",

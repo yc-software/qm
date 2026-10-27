@@ -27,7 +27,6 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { ConnectorStatusCache } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import { createSkillStore, type SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type TurnRequest } from "../src/types.ts";
@@ -70,10 +69,6 @@ function readSandbox(): Sandbox {
   };
 }
 
-const connectorStatusCache: ConnectorStatusCache = {
-  get: async () => ({ principalId: actor.id, checkedAt: Date.now(), providers: { google: { connected: true } } }),
-  put: async () => {},
-};
 const connectorTokens = {
   listConnectorsByOwners: async () => new Map(),
   connectorAccessToken: async () => null,
@@ -92,7 +87,6 @@ function buildOrchestrator(
     harness?: Harness;
     memoryPolicy?: import("../src/memory/policy.ts").MemoryPolicy;
     crons?: CronStore;
-    connectorStatusCache?: ConnectorStatusCache;
     sandbox?: Sandbox;
     skills?: SkillStore;
     skillBundles?: SkillBundleStore;
@@ -134,7 +128,6 @@ function buildOrchestrator(
     config,
     skills,
     connectorTokens,
-    connectorStatusCache,
     resolveConnectorClient: async (provider) => {
       if (provider !== "google") throw new Error("not configured");
       return { id: "client", secret: "secret", clientRef: "test" };
@@ -186,13 +179,7 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
     return at;
   };
 
-  const ordered = [
-    "Where you are",
-    "Where scheduled tasks post",
-    "Sandbox environment profile",
-    "Connected apps",
-    "What you remember",
-  ];
+  const ordered = ["Skills", "Where you are", "Where scheduled tasks post", "Sandboxes", "What you remember"];
   assert.doesNotMatch(prompt, /\n## Your logins\n/);
   const positions = ordered.map((title) => ({ title, at: headingAt(title) }));
   positions.reduce((prev, cur) => {
@@ -201,8 +188,8 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   });
 
   assert.ok(
-    headingAt("What you remember") > headingAt("Connected apps"),
-    "memory (## What you remember) must be appended AFTER ## Connected apps (most-volatile-last)",
+    headingAt("What you remember") > prompt.indexOf("<environment>"),
+    "memory rides the per-message environment, after the whole system block",
   );
   assert.match(prompt, /chartreuse/);
 
@@ -486,24 +473,13 @@ test("the system prompt is byte-identical across two turns a minute apart; the c
   assert.equal(first.status, "ok");
   assert.equal(second.status, "ok");
 
-  for (const title of ["Skills", "Where you are", "Where scheduled tasks post", "Connected apps"]) {
-    assert.ok(
-      environmentOf(first.reply ?? "").includes(`\n## ${title}\n`),
-      `expected "## ${title}" in the first environment`,
-    );
-    assert.ok(
-      !environmentOf(second.reply ?? "").includes(`\n## ${title}\n`),
-      `unchanged "## ${title}" must not repeat`,
-    );
-    assert.ok(!systemOf(first.reply ?? "").includes(`\n## ${title}\n`));
+  for (const title of ["Skills", "Where you are", "Where scheduled tasks post", "Sandboxes"]) {
+    assert.ok(systemOf(first.reply ?? "").includes(`\n## ${title}\n`), `expected "## ${title}" in the system prompt`);
+    assert.ok(!environmentOf(second.reply ?? "").includes(`\n## ${title}\n`));
   }
-  for (const title of ["Sandbox environment profile", "The user's local time", "What you remember", "Your logins"]) {
-    assert.ok(
-      !systemOf(first.reply ?? "").includes(`\n## ${title}\n`),
-      `"## ${title}" must not be in the system prompt`,
-    );
-  }
-  assert.match(environmentOf(first.reply ?? ""), /## The user's local time/);
+  assert.match(systemOf(first.reply ?? ""), /Direct OAuth apps you may offer with the connect-apps skill: Google\./);
+  assert.doesNotMatch(systemOf(first.reply ?? ""), /local time|\d{4}-\d{2}-\d{2}T/);
+  assert.match(environmentOf(first.reply ?? ""), /The user's local time: \S+ \(America\/New_York\)/);
   assert.notEqual(environmentOf(second.reply ?? ""), environmentOf(first.reply ?? ""), "the clock moved a minute");
   assert.equal(
     systemOf(second.reply ?? ""),
@@ -532,11 +508,7 @@ test("the cached prefix survives skill-store reordering + a recordUse-style meta
   assert.equal(second.status, "ok");
 
   const prefixA = prefixOf(first.reply ?? "");
-  assert.ok(
-    first.reply!.includes("**alpha**") && first.reply!.includes("**zeta**"),
-    "skills render in the initial environment",
-  );
-  assert.doesNotMatch(second.reply!, /\*\*alpha\*\*|\*\*zeta\*\*/);
+  assert.ok(prefixA.includes("**alpha**") && prefixA.includes("**zeta**"), "skills render in the system prompt");
   assert.equal(
     prefixOf(second.reply ?? ""),
     prefixA,
@@ -581,7 +553,7 @@ test("standing obligations: this scope's pending triggers render; other scopes' 
   assert.doesNotMatch(prompt, /channel-only digest/);
 });
 
-test("'Sandbox environment profile' renders the substrate profile's spec; no resize menu renders", async () => {
+test("sandboxes render as one provider line without the substrate spec; no resize menu renders", async () => {
   const sized: Sandbox = {
     ...fakeSandbox(),
     profile: {
@@ -593,7 +565,11 @@ test("'Sandbox environment profile' renders the substrate profile's spec; no res
   assert.equal(b.status, "ok");
   const prompt = b.reply ?? "";
   assert.doesNotMatch(prompt, /## Resizing this computer/);
-  assert.match(prompt, /4 vCPU \/ 8 GB RAM/, "the This-machine block shows the profile spec");
+  assert.match(
+    prompt,
+    /\n## Sandboxes\nProviders: \S+ \(default\)\. Use `sandbox list` for details; the workspace path is \$PWD\.\n/,
+  );
+  assert.doesNotMatch(prompt, /vCPU|GB RAM/);
 });
 
 test("Slack turns get the terse-response style instruction; other surfaces do not", async () => {
@@ -1202,7 +1178,7 @@ for (const surfaceTools of [false, true]) {
   });
 }
 
-test("profile and scheduled-work changes append fresh snapshots without rewriting the cached prefix or history", async () => {
+test("scheduled-work changes update the next turn's system block without rewriting history", async () => {
   const crons = createCronStore();
   const sandbox = fakeSandbox();
   const seen: HarnessTurnInput[] = [];
@@ -1234,45 +1210,14 @@ test("profile and scheduled-work changes append fresh snapshots without rewritin
     throw new Error("inventory unavailable");
   };
   assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");
-  for (const turn of seen) {
-    assert.equal(turn.systemPrompt, seen[0]!.systemPrompt);
-    assert.doesNotMatch(turn.systemPrompt, /Sandbox environment profile|Already scheduled here|synthetic status/);
-    assert.match(turn.systemPrompt, /Use `cron` list\/get for details/);
-  }
-  assert.match(seen[0]!.environment!, /Debian 12/);
-  assert.match(seen[0]!.environment!, /No active scheduled work/);
-  assert.match(seen[1]!.environment!, /Other Linux|8 vCPU/);
-  assert.match(seen[1]!.environment!, /Synthetic status/g);
-  assert.doesNotMatch(seen[2]!.environment!, /Synthetic status/g);
-  assert.match(seen[2]!.environment!, /No active scheduled work/);
-  assert.match(seen[3]!.environment!, /No longer included: Sandbox environment profile/);
-  assert.match(seen[3]!.environment!, /Scheduled-work status is unavailable/);
-  assert.doesNotMatch(seen[3]!.environment!, /Other Linux|synthetic status|No active scheduled work/);
+  for (const turn of seen) assert.doesNotMatch(turn.environment ?? "", /Already scheduled|Sandboxes|Debian|vCPU/);
+  assert.match(seen[0]!.systemPrompt, /No active scheduled work/);
+  assert.match(seen[1]!.systemPrompt, /Synthetic status — every 5 minutes/);
+  assert.equal(seen[2]!.systemPrompt, seen[0]!.systemPrompt);
+  assert.match(seen[3]!.systemPrompt, /Scheduled-work status is unavailable/);
+  assert.doesNotMatch(seen[1]!.systemPrompt, /Other Linux|8 vCPU|\/new\/workspace/);
   assert.deepEqual(seen[1]!.history, originalHistory);
   assert.deepEqual((await sessions.getEntries(first.sessionId!)).slice(0, originalHistory.length), originalHistory);
-});
-
-test("connector revocation refreshes the environment without treating historical inventories as authority", async () => {
-  let revoked = false;
-  const { orchestrator } = buildOrchestrator({
-    connectorStatusCache: {
-      get: async () => ({
-        principalId: actor.id,
-        checkedAt: Date.now(),
-        providers: { google: { connected: true, needsReconnect: revoked } },
-      }),
-      put: async () => {},
-    },
-  });
-  const first = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
-  revoked = true;
-  const second = await orchestrator.handleTurn(dm("dm:U1:revoked-cache", "!sysprompt"));
-  const prefix = (reply: string) => reply.split("\n\n<environment>")[0]!;
-  assert.match(first.reply!, /Connected: Google/);
-  assert.match(second.reply!, /Needs reconnect: Google.*Do not use these apps/);
-  assert.doesNotMatch(second.reply!, /Connected: Google/);
-  assert.equal(prefix(first.reply!), prefix(second.reply!));
-  assert.match(second.reply!, /sections below replace their earlier versions/);
 });
 
 for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {

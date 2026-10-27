@@ -10,10 +10,6 @@ export function envKey(host: string, principalId?: string): string {
   return `VAULT_TOKEN_${normalizedHost}__${normalizedPrincipal}_${tag}`;
 }
 
-export function connectorTokenNote(host: string): string {
-  return `token in \`$${envKey(host)}\`; send it yourself as \`Authorization: Bearer\`; nothing adds it for you`;
-}
-
 export function withOperatorTokenFallback(
   store: ConnectorTokenStore,
   serviceHosts: string[],

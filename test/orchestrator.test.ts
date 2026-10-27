@@ -1902,7 +1902,7 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
   assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
 });
 
-test("a file shared with the session is LISTED in the cached system prompt — without provisioning a sandbox", async () => {
+test("a file shared with the session is counted, not named, in the system prompt — without provisioning a sandbox", async () => {
   const built = freshApp();
   const { app, acl } = built;
   const boxes = spyProvisioning(built.sandbox);
@@ -1925,9 +1925,12 @@ test("a file shared with the session is LISTED in the cached system prompt — w
   });
   const res = await app.turn(dm("!sysprompt"));
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /## Files shared with you/);
-  assert.match(res.reply ?? "", /shared\/budget\.csv/);
-  assert.match(res.reply ?? "", /read a path below to fetch that file on demand/);
+  const system = (res.reply ?? "").split("<environment>")[0]!;
+  assert.match(
+    system,
+    /\n1 file is shared with you; list them with `GET \/v1\/files` and read one with the `files` tool at `shared\/<name>`\.\n/,
+  );
+  assert.doesNotMatch(res.reply ?? "", /budget\.csv/);
   assert.equal(boxes.provisioned, 0, "listing shared files must not provision a box");
 });
 
@@ -4453,22 +4456,16 @@ for (const [securityPosture, securityScreen] of [
   });
 }
 
-test("environment inventories are incremental across real turns with a durable full-snapshot anchor", async () => {
-  const { app, sessions } = freshApp();
-  const first = await app.turn(dm("first", { timezone: "America/Los_Angeles" }));
-  assert.equal(first.status, "ok");
-  assert.match(first.reply ?? "", /## Sandbox provider/);
-  const second = await app.turn(dm("second", { timezone: "America/Los_Angeles" }));
-  assert.equal(second.status, "ok");
-  assert.doesNotMatch(second.reply ?? "", /## Sandboxes|## Sandbox provider/);
-  assert.match(second.reply ?? "", /## The user's local time/);
-  const entries = await sessions.getEntries(first.sessionId!);
-  const users = entries.filter((entry) => entry.type === "user");
-  const firstSnapshot = (users[0]!.payload as { environmentSnapshot: { hashes: Record<string, string> } })
-    .environmentSnapshot;
-  assert.ok(Object.keys(firstSnapshot.hashes).some((key) => key.startsWith("Sandbox provider")));
-  const secondSnapshot = (users[1]!.payload as { environmentSnapshot: { anchorSeq: number } }).environmentSnapshot;
-  assert.equal(secondSnapshot.anchorSeq, users[0]!.seq);
+test("inventories ride a byte-stable system prompt; a warm turn's environment carries only the clock", async () => {
+  const { app } = freshApp();
+  const first = await app.turn(dm("!sysprompt", { timezone: "America/Los_Angeles" }));
+  const second = await app.turn(dm("!sysprompt", { timezone: "America/Los_Angeles" }));
+  const [system1, environment1] = (first.reply ?? "").split("<environment>");
+  const [system2, environment2] = (second.reply ?? "").split("<environment>");
+  assert.match(system1!, /\n## Sandboxes\nProviders: /);
+  assert.equal(system2, system1);
+  assert.match(environment2!, /^\nThe user's local time: \S+ \(America\/Los_Angeles\)\n<\/environment>$/);
+  assert.doesNotMatch(environment1!, /## /);
 });
 
 test("an isolated channel environment does not disclose the actor's private sandbox", async () => {
@@ -4499,16 +4496,11 @@ test("an isolated channel environment does not disclose the actor's private sand
       channelRef: "C1",
       audience: [{ externalId: "U1" }, { externalId: "U2" }],
     },
-    text: "hello",
+    text: "!sysprompt",
   };
   const result = await built.app.turn(request);
   assert.equal(result.status, "ok");
-  const session = await built.sessions.getByThread(request.conversation.threadRef);
-  const entries = await built.sessions.getEntries(session!.id);
-  const environment = (entries.find((entry) => entry.type === "user")!.payload as { environment: string }).environment;
-  assert.match(environment, /## Sandbox provider sprites/);
-  for (const content of [environment, result.reply ?? ""]) {
-    assert.ok(!content.includes(privateName), "the private sandbox name must not reach the shared turn");
-    assert.ok(!content.includes(personal.id), "the private sandbox ID must not reach the shared turn");
-  }
+  assert.match(result.reply ?? "", /## Sandboxes\nProviders: sprites/);
+  assert.ok(!(result.reply ?? "").includes(privateName), "the private sandbox name must not reach the shared turn");
+  assert.ok(!(result.reply ?? "").includes(personal.id), "the private sandbox ID must not reach the shared turn");
 });

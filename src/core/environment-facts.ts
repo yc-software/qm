@@ -1,138 +1,39 @@
-import { createHash } from "node:crypto";
-import { retainedSnapshot } from "../harness/context-snapshot.ts";
-import type { SandboxResources } from "../sandbox/sandbox-resources.ts";
 import type { SessionEntry } from "../types.ts";
-import type { AgentComputerSpec } from "../sandbox/sandbox.ts";
-import { connectorLabel, type ConnectorStatusRecord } from "../credentials/connector-status.ts";
 
-export interface WorkspaceLayoutInfo {
-  hasGlobal: boolean;
-  teamCount: number;
+export function renderSandboxProviders(names: readonly string[], defaultName?: string): string {
+  if (!names.length) return "";
+  const listed = names.toSorted().map((name) => (name === defaultName ? `${name} (default)` : name));
+  return `## Sandboxes\nProviders: ${listed.join(", ")}. Use \`sandbox list\` for details; the workspace path is $PWD.`;
 }
 
-export function renderComputerBlock(spec: AgentComputerSpec | undefined, layout: WorkspaceLayoutInfo): string {
-  if (!spec) return "";
-  const lines: string[] = ["## Sandbox environment profile"];
-
-  const size: string[] = [];
-  if (spec.cpus) size.push(`${spec.cpus} vCPU`);
-  if (spec.memoryMb) size.push(`${Math.round(spec.memoryMb / 1024)} GB RAM`);
-  if (spec.diskGb) size.push(`${spec.diskGb} GB disk`);
-  const head = [spec.os, size.join(" / ")].filter(Boolean).join(" · ");
-  if (head) lines.push(`${head}.`);
-  if (spec.runtimes?.length) lines.push(`Runtimes: ${spec.runtimes.toSorted().join(", ")}.`);
-  if (spec.tools?.length) lines.push(`Installed CLIs: ${spec.tools.toSorted().join(", ")}.`);
-  if (spec.notInstalled?.length) {
-    lines.push(`NOT installed (install on demand if a task needs one): ${spec.notInstalled.toSorted().join(", ")}.`);
-  }
-
-  const cwd = spec.workdir ?? ".";
-  const home = spec.homeDir ?? "~";
-  const ws = [`The workspace path is \`${cwd}\` (read-write). \`$HOME\` (\`${home}\`) holds native logins and config.`];
-  if (layout.hasGlobal) ws.push("Shared org files are at `./global` (read-only).");
-  if (layout.teamCount > 0) {
-    ws.push(`Team files are at \`./team-*\` (read-only; ${layout.teamCount} mounted).`);
-  }
-  lines.push(ws.join(" "));
-
-  return lines.join("\n");
+interface RosterSnapshot {
+  roster: Array<{ id: string; name: string }>;
 }
 
-export function renderConnectedAppsBlock(
-  record: ConnectorStatusRecord | null,
-  availableProviders: readonly string[] = [],
-  connectionsUrl?: string,
-): string {
-  const allowed = new Set(availableProviders);
-  const entries = Object.entries(record?.providers ?? {})
-    .filter(([name, e]) => allowed.has(name) || e.mcpLabel)
-    .sort(([a], [b]) => a.localeCompare(b));
-  const label = (name: string, e: (typeof entries)[number][1]) => e.mcpLabel ?? connectorLabel(name);
-  const connected = entries.filter(([, e]) => e.connected && !e.needsReconnect).map(([name, e]) => label(name, e));
-  const reconnect = entries
-    .filter(([, e]) => e.needsReconnect)
-    .map(([name, e]) => `${label(name, e)}${e.refreshError ? ` (refresh failed: ${e.refreshError})` : ""}`);
-  const lines = [
-    "## Connected apps",
-    "This list covers direct OAuth only; it does not describe app access through separately authorized credentials. Use the matching access skill for those, respecting explicit app restrictions and account permissions.",
-  ];
-  if (connectionsUrl) lines.push(`Connection page: ${connectionsUrl}`);
-  if (!availableProviders.length) {
-    lines.push("No direct OAuth app connections are configured. Do not offer direct OAuth consent links.");
-    if (!connected.length && !reconnect.length) return lines.join("\n");
-  } else {
-    const connectedNames = new Set(entries.filter(([, e]) => e.connected).map(([name]) => name));
-    const available = availableProviders.filter((name) => !connectedNames.has(name)).sort();
-    if (available.length) {
-      lines.push(
-        `Available to connect: ${available.map(connectorLabel).join(", ")}. Only offer direct OAuth consent links for this admin-configured list.`,
-      );
-    } else {
-      lines.push("Only offer direct OAuth consent links for the admin-configured list below.");
-    }
-  }
-  if (connected.length) {
-    lines.push(
-      `Connected: ${connected.join(", ")}. Use their tools directly; for API calls, select the app's credential in execute.credentials and send its token yourself.`,
-    );
-  }
-  if (reconnect.length) {
-    lines.push(`Needs reconnect: ${reconnect.join(", ")}. Do not use these apps until the user reconnects them.`);
-  }
-  return lines.join("\n");
-}
-
-interface EnvironmentSnapshot {
-  hashes: Record<string, string>;
-  sessionId: string;
-  anchorSeq?: number;
-}
-
-export function environmentDelta(
-  blocks: Record<string, string>,
+export function membershipEvent(
+  current: ReadonlyArray<{ principalId: string; displayName: string }> | undefined,
   history: readonly SessionEntry[],
-  sessionId: string,
-): { text: string; record: EnvironmentSnapshot } {
-  const { previous, anchorSeq } = retainedSnapshot(
-    history,
-    (entry) => (entry.payload as { environmentSnapshot?: EnvironmentSnapshot } | null)?.environmentSnapshot,
-  );
-  const current = Object.fromEntries(Object.entries(blocks).filter(([, text]) => text.trim()));
-  const hashes = Object.fromEntries(
-    Object.entries(current).map(([key, text]) => [key, createHash("sha256").update(text).digest("hex")]),
-  );
-  const record = { hashes, sessionId, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
-  if (!previous) return { text: Object.values(current).join("\n\n"), record };
-  const changed = Object.entries(current).filter(([key]) => previous.hashes[key] !== hashes[key]);
-  const removed = Object.keys(previous.hashes).filter((key) => !(key in current));
-  return {
-    text:
-      changed.length || removed.length
-        ? [
-            "Environment changes: sections below replace their earlier versions; unlisted sections are unchanged. Inventories are not permission grants; access is checked live.",
-            ...changed.map(([, text]) => text),
-            ...removed.map((key) => `No longer included: ${key}. Do not rely on its earlier inventory.`),
-          ].join("\n\n")
-        : "",
-    record,
+): { text: string; record?: RosterSnapshot } {
+  if (!current) return { text: "" };
+  const record = {
+    roster: current.map((m) => ({ id: m.principalId, name: m.displayName })).sort((a, b) => a.id.localeCompare(b.id)),
   };
+  const previous = history.findLast((entry) => entry.type === "user" && rosterOf(entry.payload));
+  if (!previous) return { text: "", record };
+  const before = rosterOf(previous.payload)!;
+  const label = (m: { id: string; name: string }) => `${m.name} (${m.id})`;
+  const missingFrom = (list: RosterSnapshot["roster"], other: RosterSnapshot["roster"]) =>
+    list.filter((m) => !other.some((o) => o.id === m.id)).map(label);
+  const joined = missingFrom(record.roster, before);
+  const left = missingFrom(before, record.roster);
+  const lines = [
+    joined.length ? `Joined this conversation since your last turn: ${joined.join(", ")}.` : "",
+    left.length ? `Left this conversation since your last turn: ${left.join(", ")}.` : "",
+  ].filter(Boolean);
+  return { text: lines.join("\n"), record };
 }
 
-export function renderSandboxProfiles(
-  providers: ReturnType<SandboxResources["profiles"]>,
-  layout: WorkspaceLayoutInfo,
-): Record<string, string> {
-  return Object.fromEntries(
-    providers
-      .toSorted((a, b) => a.name.localeCompare(b.name))
-      .map((provider) => [
-        `Sandbox provider ${provider.name}`,
-        [
-          `## Sandbox provider ${provider.name}`,
-          `Available actions: ${provider.actions.toSorted().join(", ")}.`,
-          renderComputerBlock(provider.spec, layout).replace("## Sandbox environment profile\n", "") ||
-            "Environment profile unknown.",
-        ].join("\n"),
-      ]),
-  );
+function rosterOf(payload: unknown): RosterSnapshot["roster"] | undefined {
+  const roster = (payload as { environmentSnapshot?: { roster?: unknown } } | null)?.environmentSnapshot?.roster;
+  return Array.isArray(roster) ? (roster as RosterSnapshot["roster"]) : undefined;
 }

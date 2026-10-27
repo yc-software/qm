@@ -159,7 +159,7 @@ test("a pack bundle may ship a root SKILL.md of its own", async () => {
 
 const names = (index: string) => [...index.matchAll(/\*\*([^*]+)\*\*/g)].map((m) => m[1]);
 
-test("skills index lists every skill in a message-independent order, visibly used ones first", () => {
+test("skills index lists every skill alphabetically, independent of the message and of use", () => {
   const skills = Array.from({ length: 20 }, (_, i) => res(`skill-${String(i).padStart(2, "0")}`, "body"));
   for (const r of skills) r.skill!.manifest.description = "General task";
   skills[19]!.skill!.manifest.description = "Prepare telescope observations";
@@ -167,19 +167,19 @@ test("skills index lists every skill in a message-independent order, visibly use
   const duplicate = structuredClone(skills[0]!);
   duplicate.skill!.manifest.description = "shadowed description";
   const visible = [...skills, duplicate, { skill: null, shadowed: [] }];
-  const index = skillsIndex(visible, [], ["skill-17"]);
+  const index = skillsIndex(visible, []);
   const shown = names(index);
   assert.equal(shown.length, 20);
-  assert.deepEqual(shown.slice(0, 3), ["skill-17", "skill-00", "skill-01"]);
+  assert.deepEqual(shown.slice(0, 3), ["skill-00", "skill-01", "skill-02"]);
   assert.doesNotMatch(index, /shadowed description|lastUsedAt|shortened|omitted/);
   assert.match(index, /- \*\*skill-19\*\* — Prepare telescope observations/);
   assert.match(index, /skills action read/);
   assert.equal(rankedSkills(visible).length, 20);
   assert.deepEqual(
-    rankedSkills(visible, "telescope", [], true).map((r) => r.skill!.manifest.name),
+    rankedSkills(visible, "telescope", true).map((r) => r.skill!.manifest.name),
     ["skill-19"],
   );
-  assert.deepEqual(rankedSkills(visible, "unmatched", [], true), []);
+  assert.deepEqual(rankedSkills(visible, "unmatched", true), []);
   assert.equal(skillsIndex([{ skill: null, shadowed: [] }]), "");
 });
 
@@ -193,20 +193,20 @@ test("an index over budget shortens descriptions, then drops them, then leaves t
   const full = skillsIndex(skills);
   assert.doesNotMatch(full, /shortened|omitted/);
 
-  const shortened = skillsIndex(skills, [], [], 4_000);
+  const shortened = skillsIndex(skills, [], 4_000);
   assert.ok(body(shortened).join("\n").length <= 4_000);
   assert.match(shortened, /30 descriptions are shortened/);
   assert.deepEqual(names(shortened), names(full));
   assert.ok(body(shortened).every((line) => /^- \*\*skill-\d+\*\* — word.*…$/.test(line)));
 
-  const namesOnly = skillsIndex(skills, [], [], 1_000);
+  const namesOnly = skillsIndex(skills, [], 1_000);
   assert.match(namesOnly, /Descriptions are omitted to fit the list\./);
   assert.deepEqual(names(namesOnly), names(full));
   assert.ok(body(namesOnly).every((line) => /^- \*\*skill-\d+\*\*$/.test(line)));
 
-  const truncated = skillsIndex(skills, [], ["skill-29"], 200);
+  const truncated = skillsIndex(skills, [], 200);
   assert.match(truncated, /and 17 skills are left out; find them with skills action search/);
-  assert.deepEqual(names(truncated).slice(0, 2), ["skill-29", "skill-00"]);
+  assert.deepEqual(names(truncated).slice(0, 2), ["skill-00", "skill-01"]);
   assert.equal(names(truncated).length, 13);
 });
 

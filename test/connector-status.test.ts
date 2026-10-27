@@ -1,13 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import {
-  connectorLabel,
-  connectorStatusIsStale,
-  createConnectorStatusCache,
-  refreshConnectorStatus,
-  type ConnectorStatusRecord,
-} from "../src/credentials/connector-status.ts";
+import { connectorLabel, providerTokenStatuses } from "../src/credentials/connector-status.ts";
 import type { ConnectorTokenStore, OAuthTokenStatus } from "../src/credentials/keychain.ts";
 import { setPublicOAuthClients } from "../src/connectors/oauth.ts";
 
@@ -17,118 +10,19 @@ function fakeTokens(status: (host: string, accountType?: string) => OAuthTokenSt
   } as unknown as ConnectorTokenStore;
 }
 
-test("connector status cache: put/get round-trips per principal", async () => {
-  const cache = createConnectorStatusCache(createMemoryMap<ConnectorStatusRecord>());
-  assert.equal(await cache.get("U1"), null);
-  const rec: ConnectorStatusRecord = { principalId: "U1", checkedAt: 1, providers: { slack: { connected: true } } };
-  await cache.put(rec);
-  assert.deepEqual(await cache.get("U1"), rec);
-  assert.equal(await cache.get("U2"), null);
-});
+const hostStatus = async (tokens: ConnectorTokenStore, provider: string, host: string) =>
+  (await providerTokenStatuses(tokens, "U1")).find((p) => p.name === provider)?.hosts.find((h) => h.host === host);
 
-test("staleness: null/over-floor/past-expiry are stale; fresh+unexpired is not", () => {
-  const now = 1_000_000;
-  assert.equal(connectorStatusIsStale(null, now), true);
-  const overFloor: ConnectorStatusRecord = { principalId: "U1", checkedAt: now - 20 * 60_000, providers: {} };
-  assert.equal(connectorStatusIsStale(overFloor, now), true);
-  const expired: ConnectorStatusRecord = {
-    principalId: "U1",
-    checkedAt: now - 1000,
-    providers: { google: { connected: true, expiresAt: now - 1 } },
-  };
-  assert.equal(connectorStatusIsStale(expired, now), true);
-  const fresh: ConnectorStatusRecord = {
-    principalId: "U1",
-    checkedAt: now - 1000,
-    providers: { google: { connected: true, expiresAt: now + 60_000 }, slack: { connected: false } },
-  };
-  assert.equal(connectorStatusIsStale(fresh, now), false);
-});
-
-test("staleness: a token already expired AT refresh time does not make every check stale (no refresh loop)", () => {
-  const now = 1_000_000;
-  const refreshedAfterExpiry: ConnectorStatusRecord = {
-    principalId: "U1",
-    checkedAt: now - 1000,
-    providers: { google: { connected: true, expiresAt: now - 5000 } },
-  };
-  assert.equal(
-    connectorStatusIsStale(refreshedAfterExpiry, now),
-    false,
-    "expiry before checkedAt means another refresh learns nothing — wait for the TTL instead",
-  );
-  assert.equal(
-    connectorStatusIsStale(refreshedAfterExpiry, now + 20 * 60_000),
-    true,
-    "the TTL floor still forces an eventual re-check",
-  );
-});
-
-test("refresh: marks a provider connected from the token store and records the soonest expiry", async () => {
-  const now = 500;
-  const tokens = fakeTokens((host) =>
-    host === "slack.com" ? { connected: true, expiresAt: 9999 } : { connected: false },
-  );
-  const rec = await refreshConnectorStatus(tokens, "U1", now);
-  assert.equal(rec.checkedAt, now);
-  assert.equal(rec.providers.slack?.connected, true);
-  assert.equal(rec.providers.slack?.expiresAt, 9999);
-  assert.equal(rec.providers.google?.connected, false);
-});
-
-test("refresh: a provider with multiple hosts uses the soonest connected expiry", async () => {
-  const tokens = fakeTokens((host) => {
-    if (host === "gmail.googleapis.com") return { connected: true, expiresAt: 5000 };
-    if (host === "sheets.googleapis.com") return { connected: true, expiresAt: 3000 };
-    return { connected: false };
-  });
-  const rec = await refreshConnectorStatus(tokens, "U1", 1);
-  assert.equal(rec.providers.google?.connected, true);
-  assert.equal(rec.providers.google?.expiresAt, 3000);
-});
-
-test("refresh: carries reconnect-needed and refresh failure metadata", async () => {
-  const tokens = fakeTokens((host) =>
-    host === "api.github.com"
-      ? {
-          connected: true,
-          expiresAt: 100,
-          hasRefreshToken: true,
-          needsReconnect: true,
-          refreshFailedAt: 600,
-          refreshError: "revoked by provider",
-        }
-      : { connected: false },
-  );
-
-  const rec = await refreshConnectorStatus(tokens, "U1", 1_000);
-  assert.deepEqual(rec.providers.github, {
-    connected: true,
-    expiresAt: 100,
-    needsReconnect: true,
-    refreshFailedAt: 600,
-    refreshError: "revoked by provider",
-  });
-});
-
-test("refresh: chooses a usable account status over a lapsed account for the same host", async () => {
+test("provider statuses choose a usable account over a lapsed account for the same host", async () => {
   const tokens = fakeTokens((host, accountType) => {
     if (host !== "gmail.googleapis.com") return { connected: false };
     if (accountType === "personal") return { connected: true, expiresAt: 5000, accountType: "personal" };
-    return {
-      connected: true,
-      expiresAt: 100,
-      needsReconnect: true,
-      refreshFailedAt: 300,
-      refreshError: "default token revoked",
-    };
+    return { connected: true, expiresAt: 100, needsReconnect: true, refreshFailedAt: 300 };
   });
-
-  const rec = await refreshConnectorStatus(tokens, "U1", 1_000);
-  assert.equal(rec.providers.google?.connected, true);
-  assert.equal(rec.providers.google?.expiresAt, 5000);
-  assert.equal(rec.providers.google?.needsReconnect, undefined);
-  assert.equal(rec.providers.google?.refreshFailedAt, undefined);
+  const status = await hostStatus(tokens, "google", "gmail.googleapis.com");
+  assert.equal(status?.connected, true);
+  assert.equal(status?.expiresAt, 5000);
+  assert.equal(status?.needsReconnect, undefined);
 });
 
 test("labels: known providers get friendly names; unknown is capitalized", () => {
@@ -137,7 +31,7 @@ test("labels: known providers get friendly names; unknown is capitalized", () =>
   assert.equal(connectorLabel("acme"), "Acme");
 });
 
-test("refresh includes linked per-user MCP sign-ins and skips unlinked ones", async (t) => {
+test("provider statuses include linked per-user MCP sign-ins and skip unlinked ones", async (t) => {
   t.after(() => setPublicOAuthClients([]));
   const client = (name: string, label: string) => ({
     name,
@@ -149,11 +43,8 @@ test("refresh includes linked per-user MCP sign-ins and skips unlinked ones", as
     label,
   });
   setPublicOAuthClients([client("orders", "Orders"), client("other", "Other")]);
-  const rec = await refreshConnectorStatus(
-    fakeTokens((host) => (host === "api.orders.example" ? { connected: true } : { connected: false })),
-    "U1",
-    1,
-  );
-  assert.deepEqual(rec.providers.orders, { connected: true, mcpLabel: "Orders" });
-  assert.equal(rec.providers.other, undefined);
+  const tokens = fakeTokens((host) => (host === "api.orders.example" ? { connected: true } : { connected: false }));
+  const names = (await providerTokenStatuses(tokens, "U1")).map((p) => p.name);
+  assert.ok(names.includes("orders"));
+  assert.ok(!names.includes("other"));
 });

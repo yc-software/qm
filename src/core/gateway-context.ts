@@ -20,7 +20,7 @@ export function renderGatewayContext(surface: string | undefined, ctx?: GatewayC
   }
   if (gateway.toLowerCase() === "web") {
     lines.push(
-      "A cron, reminder, or watch you create here with no explicit destination posts back into this web conversation, and the person sees it here. Leave the destination unset by default; use `recipient`, `channel`, or `destinationKey` only when the person asks for delivery somewhere else.",
+      "Crons, reminders and watches created here post back to this conversation unless the person asks for another destination.",
     );
   }
   if (instructions) lines.push(instructions);

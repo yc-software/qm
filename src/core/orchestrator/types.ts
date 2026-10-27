@@ -38,7 +38,6 @@ import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../.
 import type { FeatureFlagStore } from "../../feature-flags.ts";
 import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
-import type { ConnectorStatusCache } from "../../credentials/connector-status.ts";
 import type { ModelGateway } from "../../model/model-gateway.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
@@ -191,7 +190,6 @@ export interface OrchestratorDeps {
     purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
   ) => Promise<string | null>;
   connectorTokens?: ConnectorTokenStore;
-  connectorStatusCache?: ConnectorStatusCache;
   resolveConnectorClient?: OAuthClientResolver;
   featureFlags?: FeatureFlagStore;
   installSharedCanvas?: (

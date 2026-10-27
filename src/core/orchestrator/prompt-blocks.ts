@@ -116,14 +116,14 @@ export function renderConversationRoster(members: DirectoryMember[]): string | n
   return (
     [
       "## Who's in this conversation",
-      "The people party to this conversation, from the company directory. Each is a distinct, real person — when a request names someone, it means this specific person, not anyone who merely posted here:",
+      "Each is a distinct, real person from the company directory; a request naming someone means this person.",
       ...lines,
     ].join("\n") + more
   );
 }
 
 export function currentTimeBlock(timezone: string, nowMs: number): string {
-  return `## The user's local time\n${localIsoTime(timezone, nowMs)} (${timezone})`;
+  return `The user's local time: ${localIsoTime(timezone, nowMs)} (${timezone})`;
 }
 
 export function renderSurfaceBriefing(surface: SurfaceBriefing): string {

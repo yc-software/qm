@@ -5,8 +5,7 @@ description: Ask a person for access to one of their keychain credentials when a
 
 # Request access to someone's credential
 
-Use this when the keychain manifest lists a credential you need but shows no grant for this
-conversation. Your own credentials in your own personal conversation never need this.
+Use this when the Credentials section lists a credential you need under "Not granted here". Your own credentials in your own personal conversation never need this.
 
 ## Request
 

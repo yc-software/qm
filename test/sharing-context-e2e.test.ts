@@ -495,8 +495,8 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     });
   }
   const prompt = await b.turn("!sysprompt", true);
-  assert.match(prompt, /### U1 — own; Open live turn only[^\n]*\n(?:(?!###)[\s\S])*npm/);
-  assert.match(prompt, /### U2 — no grant for this conversation\n(?:(?!###)[\s\S])*npm/);
+  assert.match(prompt, /### U1\n(?:(?!###)[\s\S])*`npm:/);
+  assert.match(prompt, /### U2\n(?:(?!###)[\s\S])*Not granted here; ask with the `request-access` skill: [^\n]*npm/);
   assert.ok(!prompt.includes("npm_U1"));
   await b.workspace.write("channel:C1", "room-only.txt", "room_data");
   const probe = `python3 -c 'import os,pathlib; p=pathlib.Path.home()/".custom-cli/auth"; print("|".join([os.getenv("NPM_TOKEN","unset"),os.getenv("VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM","unset"),p.read_text() if p.exists() else "absent",str(bool(os.getenv("AGENT_API_TOKEN"))),"room" if pathlib.Path("room-only.txt").exists() else "isolated"]))'`;
@@ -511,8 +511,11 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
     );
   }
   const ambientPrompt = await b.turn("!sysprompt", true, "U2", { origin: { kind: "ambient", live: true } });
-  assert.match(ambientPrompt, /### U2 — own; Open live turn only[^\n]*\n(?:(?!###)[\s\S])*npm/);
-  assert.match(ambientPrompt, /### U1 — no grant for this conversation\n(?:(?!###)[\s\S])*npm/);
+  assert.match(ambientPrompt, /### U2\n(?:(?!###)[\s\S])*`npm:/);
+  assert.match(
+    ambientPrompt,
+    /### U1\n(?:(?!###)[\s\S])*Not granted here; ask with the `request-access` skill: [^\n]*npm/,
+  );
   assert.match(await b.turn(`!run ${probe}`, true, "U2"), /^unset\|unset\|absent\|/);
   await b.directory.replaceGroups([
     { groupId: "G1", principalId: "U1" },

@@ -472,7 +472,7 @@ describe("connectors are grantable like any keychain record", () => {
     assert.equal((await k2.materializeStanding(G1)).length, 0);
   });
 
-  it("the manifest lists a participant's connected apps with credential id and grant status", async () => {
+  it("the manifest lists a participant's ungranted connected apps as requestable by credential id", async () => {
     const k = kc();
     await k.setConnectorToken(GMAIL, "alex@x", { accessToken: "ya29.alex", expiresAt: Date.now() + 3_600_000 });
     const connectorsByOwner = await k.listConnectorsByOwners(["alex@x"]);
@@ -485,9 +485,10 @@ describe("connectors are grantable like any keychain record", () => {
       connectorsByOwner,
       scopeGrants: [],
     });
-    assert.match(md, /connected app gmail\.googleapis\.com/);
-    assert.match(md, /credential id/);
-    assert.match(md, /no grant for this conversation/);
+    assert.match(
+      md,
+      /### Alex \(alex@x\)\n- Not granted here; ask with the `request-access` skill: gmail\.googleapis\.com connector `[a-f0-9]+`$/,
+    );
   });
 });
 
@@ -868,7 +869,6 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
   });
   assert.match(empty, /## Credentials/);
   assert.match(empty, /No credentials available/);
-  assert.match(empty, /`request-access` skill/);
   assert.doesNotMatch(empty, /Teammate keychains/);
   assert.ok(!empty.includes("/v1/keychain/grants"), "no chat-driven approval route");
 
@@ -913,9 +913,9 @@ test("manifest: explains itself in a bare channel, lists credentials + protocol 
   assert.match(block, /## Credentials/);
   assert.match(block, /### Alice \(U1\)/);
   assert.match(block, new RegExp(`github:${cred.id}`));
-  assert.match(block, /STANDING grant .*gh for repo work here/);
-  assert.match(block, /github:[a-f0-9]+.*GITHUB_TOKEN/);
-  assert.match(block, /select them in execute.credentials/);
+  assert.doesNotMatch(block, /STANDING|gh for repo work here|grant `/);
+  assert.match(block, /`github:[a-f0-9]+` — github \(AliceBell\); env `GITHUB_TOKEN`/);
+  assert.match(block, /Select handles in execute.credentials/);
   assert.ok(!block.includes("/v1/keychain/grants"));
 
   const login = renderKeychainManifest({
@@ -947,23 +947,44 @@ test("manifest: own credentials need no grant but require explicit execution req
     service: "file-login",
     files: [{ path: ".qa/token", contentBase64: Buffer.from("file-secret").toString("base64") }],
   });
+  const entries = await k.listByOwner("U1");
   const own = renderKeychainManifest({
     scopeId: "personal:U1",
     conversationKind: "dm",
     actorId: "U1",
     members: [{ id: "U1", displayName: "Alice" }],
-    entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
+    entriesByOwner: new Map([["U1", entries]]),
     scopeGrants: [],
+    execution: entries.map((c) => ({
+      credentialId: c.id,
+      ownerId: "U1",
+      handle: credentialHandle(c),
+      description: "",
+    })),
   });
-  assert.match(own, /### Alice \(U1\) — own; no grant needed \(including background turns\)\n.*file-login/);
-  assert.doesNotMatch(own, /Teammate keychains/);
-  assert.ok(!own.includes("no grant for this conversation"));
-  assert.match(
-    own,
-    /EXPIRED — they must re-auth before it can be used/,
-    "an expired own credential points at re-auth, not the grant flow",
+  assert.match(own, /### Alice \(U1\)\n/);
+  assert.match(own, /`file-login:[a-f0-9]+` — file-login; files in \$HOME/);
+  assert.match(own, /`npm:[a-f0-9]+` — npm; expired$/m);
+  assert.doesNotMatch(own, /request-access|grant/);
+  assert.equal(
+    renderKeychainManifest({
+      scopeId: "personal:U1",
+      conversationKind: "dm",
+      actorId: "U1",
+      scopeGrants: [],
+      members: [{ id: "U1" }],
+      entriesByOwner: new Map([["U1", entries]]),
+    }),
+    renderKeychainManifest({
+      scopeId: "personal:U1",
+      conversationKind: "dm",
+      actorId: "U1",
+      scopeGrants: [],
+      members: [{ id: "U1" }],
+      entriesByOwner: new Map(),
+    }),
+    "own credentials without an execution handle are not listed",
   );
-  assert.ok(!own.includes("before requesting a grant"));
 
   const other = renderKeychainManifest({
     scopeId: "personal:U2",
@@ -973,9 +994,7 @@ test("manifest: own credentials need no grant but require explicit execution req
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
   });
-  assert.match(other, /no grant for this conversation/);
-  assert.match(other, /EXPIRED — ask the owner to re-auth before requesting a grant/);
-  assert.ok(!other.includes("their own — no grant needed"), "a teammate's credential never reads as implied");
+  assert.match(other, /Not granted here; ask with the `request-access` skill: .*npm \(expired\) `[a-f0-9]+`/);
 
   const channel = renderKeychainManifest({
     scopeId: "channel:C1",
@@ -985,11 +1004,7 @@ test("manifest: own credentials need no grant but require explicit execution req
     entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
     scopeGrants: [],
   });
-  assert.ok(
-    !channel.includes("access is implied"),
-    "the actor's own credentials in a shared scope keep the grant protocol",
-  );
-  assert.match(channel, /no grant for this conversation/);
+  assert.match(channel, /Not granted here; ask with the `request-access` skill/);
 });
 
 const SECRET = "keychain-route-secret".repeat(3);
@@ -1318,8 +1333,10 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
   const sys = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
   assert.equal(sys.status, "ok");
   assert.match(sys.reply ?? "", /## Credentials/);
-  assert.match(sys.reply ?? "", /### Alice \(U_OWNER\)/);
-  assert.match(sys.reply ?? "", /no grant for this conversation/);
+  assert.match(
+    sys.reply ?? "",
+    /### Alice \(U_OWNER\)\n- Not granted here; ask with the `request-access` skill: github \(AliceBell\) `/,
+  );
   assert.ok(!(sys.reply ?? "").includes("ghp_e2e"), "prompt never carries the secret");
   await selectDefaultSandbox(built, "U_ASKER", "channel:C1");
 
@@ -1335,15 +1352,16 @@ test("turn e2e: prompt lists exact handles and keychain env credentials are neve
     purpose: "use my gh here for repo work",
   });
   const sys2 = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
-  assert.match(sys2.reply ?? "", /STANDING grant .*use my gh here for repo work/);
-  assert.match(sys2.reply ?? "", new RegExp(`github:${cred.id}`));
+  assert.match(sys2.reply ?? "", new RegExp(`\`github:${cred.id}\` — github \\(AliceBell\\); env \`GITHUB_TOKEN\``));
+  assert.doesNotMatch(sys2.reply ?? "", /use my gh here for repo work|Not granted here/);
 
   mark = fakeSprites.execScripts().length;
   assert.equal((await built.app.turn(channelTurn("!run true", "U_ASKER", audience))).status, "ok");
   assert.ok(!execScriptsMention("export GITHUB_TOKEN=", mark), "standing grants are not ambient");
   assert.ok(!execScriptsMention("ghp_e2e", mark), "an unrequested command never receives the secret");
   const unchanged = await built.app.turn(channelTurn("!sysprompt", "U_ASKER", audience));
-  assert.doesNotMatch(unchanged.reply ?? "", /STANDING grant|## Credentials/);
+  const system = (reply?: string) => (reply ?? "").split("<environment>")[0];
+  assert.equal(system(unchanged.reply), system(sys2.reply));
 
   await selectDefaultSandbox(built, "U_OWNER", "personal:U_OWNER");
   mark = fakeSprites.execScripts().length;
@@ -1482,6 +1500,9 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
         entriesByOwner: new Map([["U1", await k.listByOwner("U1")]]),
         scopeGrants: [],
         scopeAsks: await k.listAsks({ requesterScopeId: "channel:C1" }),
+        execution: [
+          { credentialId: credential.id, ownerId: "U1", handle: credentialHandle(credential), description: "" },
+        ],
       },
       now,
     );
@@ -1490,7 +1511,7 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
     now += advance;
     assert.equal(await manifest(), first);
   }
-  assert.ok(first.includes(`expires at ${new Date(expiresAt).toISOString()}`));
+  assert.doesNotMatch(first, /expires at|\d{4}-\d{2}-\d{2}T/);
   assert.match(first, /waiting on U1's approval card/);
   now = ask.expiresAt;
   assert.equal(await manifest(), first);
@@ -1503,10 +1524,10 @@ test("manifest timestamps stay stable until credentials and pending asks actuall
     (e: KeychainError) => e.status === 410,
   );
   now = expiresAt;
-  assert.doesNotMatch(await manifest(), /EXPIRED — they must re-auth/);
+  assert.doesNotMatch(await manifest(), /; expired/);
   await k.materializeOwnById("U1", credential.id, "personal:U1");
   now++;
-  assert.match(await manifest(), /EXPIRED — they must re-auth/);
+  assert.match(await manifest(), /; expired/);
   await assert.rejects(
     k.materializeOwnById("U1", credential.id, "personal:U1"),
     (e: KeychainError) => e.status === 410,
@@ -1649,12 +1670,14 @@ test("manifest merges credential representations without conflating login identi
   };
   const rendered = renderKeychainManifest(input, 1000);
   assert.equal(rendered.split("### ").length - 1, 1);
-  assert.equal(rendered.split("connected app gmail.googleapis.com").length - 1, 1);
-  assert.match(rendered, /NEEDS RECONNECT/);
-  assert.match(rendered, /token expires at/);
-  assert.ok(rendered.includes("token in `$VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`"));
-  assert.match(rendered, /account work, EXPIRED/);
-  assert.match(rendered, /account personal, expires at/);
+  assert.equal(rendered.split("gmail.googleapis.com connector").length - 1, 1);
+  assert.match(
+    rendered,
+    /`connector:gmail\.googleapis\.com:default`, `[^`]+` — gmail\.googleapis\.com connector; expired/,
+  );
+  assert.match(rendered, /aws \(work\); expired/);
+  assert.match(rendered, /aws \(personal\); env `OTHER_AWS_TOKEN`/);
+  assert.doesNotMatch(rendered, /expires at|\d{4}-\d{2}-\d{2}T/);
   assert.notEqual(credentialHandle(first), credentialHandle(second));
   for (const secret of ["private-token", "first-secret", "second-secret"]) assert.ok(!rendered.includes(secret));
   input.execution!.reverse();
@@ -1686,10 +1709,15 @@ test("granted connector keeps account and refresh semantics when owner is absent
       members: [{ id: "U_ACTOR" }],
       entriesByOwner: new Map(),
       scopeGrants: [{ grant, credential }],
+      execution: [
+        { handle: credentialHandle(credential), ownerId: "U_OWNER", credentialId: credential.id, description: "" },
+      ],
     },
     1000,
   );
-  assert.match(rendered, /connected app gmail\.googleapis\.com, account company/);
-  assert.match(rendered, /STANDING grant/);
-  assert.doesNotMatch(rendered, /EXPIRED|NEEDS RECONNECT|refresh-token|old-token/);
+  assert.match(
+    rendered,
+    /### U_OWNER\n- `[^`]+` — gmail\.googleapis\.com connector \(company\); env `VAULT_TOKEN_GMAIL_GOOGLEAPIS_COM`$/,
+  );
+  assert.doesNotMatch(rendered, /expired|Not granted|refresh-token|old-token/);
 });
