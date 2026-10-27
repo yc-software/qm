@@ -115,6 +115,10 @@ window.addEventListener("DOMContentLoaded", () => {
     if (document.querySelector('dialog[open], [aria-modal="true"]:not(.sidebar)')) return;
     window.dispatchEvent(new CustomEvent("qm:cycle-tab", { detail: step }));
   });
+  ipcRenderer.on("qm:new-session", () => {
+    if (document.querySelector('dialog[open], [aria-modal="true"]:not(.sidebar)')) return;
+    window.dispatchEvent(new CustomEvent("qm:new-session"));
+  });
   window.addEventListener(
     "keydown",
     (event) => {

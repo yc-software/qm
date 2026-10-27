@@ -47,6 +47,7 @@ async function workspace(platform = "darwin") {
     add,
     key,
     cycle: (step) => listeners.get("qm:cycle-tab")({}, step),
+    newSession: () => listeners.get("qm:new-session")({}),
     close: () => {
       window.dispatchEvent(new window.Event("blur"));
       window.close();
@@ -164,6 +165,24 @@ test("cycle-tab commands reach the page unless a modal dialog is open", async ()
     dialog.remove();
     app.cycle(-1);
     assert.deepEqual(steps, [1, -1]);
+  } finally {
+    app.close();
+  }
+});
+
+test("new-session commands reach the page unless a modal dialog is open", async () => {
+  const app = await workspace();
+  try {
+    let count = 0;
+    app.window.addEventListener("qm:new-session", () => count++);
+    app.newSession();
+    const dialog = app.window.document.createElement("dialog");
+    dialog.open = true;
+    app.window.document.body.append(dialog);
+    app.newSession();
+    dialog.remove();
+    app.newSession();
+    assert.equal(count, 2);
   } finally {
     app.close();
   }
