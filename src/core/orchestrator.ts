@@ -2343,9 +2343,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const connectionsUrl = deps.publicWebUrl ? `${deps.publicWebUrl.replace(/\/$/, "")}/keychain` : undefined;
           turnContextBlocks["Connected apps"] = renderConnectedAppsBlock(status, configuredProviders, connectionsUrl);
         }
-        const mcpTools = await mcpToolsReady;
-        const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
-        if (connectorNote) systemPrompt += `\n\n${connectorNote}`;
         systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
         const stableSystemBytes = systemPrompt.length;
         if (swarmBinding)
@@ -3343,6 +3340,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 })
               : undefined;
           const goalInbox = swarmHandoff?.inbox;
+          const mcpTools = await mcpToolsReady;
+          const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
           const turnResult = await deps.harness.turns.runTurn({
             session,
             loadImage: artifactImageLoader(deps.files, mayReadArtifact),
@@ -3650,7 +3649,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (callKey) return consumeApproval(callKey);
               return securityPolicy.toolApprovals !== "all" || authorizeToolCall(tool);
             },
-            systemPrompt,
+            systemPrompt: connectorNote ? `${systemPrompt}\n\n${connectorNote}` : systemPrompt,
             history: continuation?.history ?? history,
             tools,
             ...(mcpTools ? { mcpTools } : {}),

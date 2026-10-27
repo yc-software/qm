@@ -1,7 +1,6 @@
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 
 const SEARCH_LIMIT = 5;
-const SUMMARY_CHARS = 200;
 const PURPOSE_CHARS = 100;
 
 export function mcpToolDescription(tool: McpToolDescriptor): string {
@@ -21,7 +20,7 @@ export function deferredMcpTools(
 function summary(description: string): string {
   const line = description.trim().split("\n")[0]!.trim();
   const end = line.indexOf(". ");
-  return (end < 0 ? line : line.slice(0, end + 1)).slice(0, SUMMARY_CHARS);
+  return end < 0 ? line : line.slice(0, end + 1);
 }
 
 export function searchMcpTools(tools: readonly McpToolDescriptor[], query: string): string {
