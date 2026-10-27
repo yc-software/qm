@@ -102,8 +102,8 @@ create OAuth apps for connections this source already provides. Do not infer tha
 or a native provider-not-configured error. Explicit app restrictions and account permissions
 still apply; never switch credentials to evade a denial.
 
-For direct OAuth, the catalog entries with `configured: true` (`GET $AGENT_API_URL/v1/connectors/catalog` (header `x-agent-capability: $AGENT_API_TOKEN`)) are the
-complete allowlist of providers configured by the admin. Offer direct OAuth links only for that list. If it is empty and
+For direct OAuth, the catalog entries with `configured: true` are the complete allowlist of
+providers configured by the admin. Offer direct OAuth links only for that list. If it is empty and
 no other authorized access path is available, skip account connection without advertising
 unsupported apps. For regular users, do not turn onboarding into provider configuration: do not ask
 for a Composio project key, new OAuth apps, or per-app auth configs just because access
