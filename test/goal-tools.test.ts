@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createGrindMeter } from "../src/harness/grind.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
+import { emptyEndingNote } from "../src/harness/pi-harness.ts";
 import {
   GovernorUndecided,
   supersedeGoal,
@@ -744,4 +745,20 @@ test("a swarm-paused worker's next tool result ends its reply", async () => {
   const result = (await get.execute("g1", {})) as { terminate?: boolean };
   assert.equal(result.terminate, true);
   assert.equal(received, 0, "a held worker's queued messages stay queued for when it resumes");
+  const endedEmpty = { getLastAssistantText: () => "", messages: [{ role: "assistant", stopReason: "stop" }] };
+  assert.equal(
+    emptyEndingNote({
+      wallClock: "ok",
+      userAborted: false,
+      cancelled: false,
+      surfaceTools: false,
+      pollFire: false,
+      ref: { ...ref, modelCalls: 3 },
+      session: endedEmpty as unknown as Parameters<typeof emptyEndingNote>[0]["session"],
+      turnWallClockMs: 0,
+      elapsedMs: 0,
+    }),
+    null,
+    "the empty reply a held worker ends on is not re-prompted",
+  );
 });

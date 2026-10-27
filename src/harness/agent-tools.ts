@@ -126,6 +126,7 @@ export interface ToolContextRef {
   shutdown?: AbortSignal;
   pollFire?: boolean;
   silentRequested?: boolean;
+  swarmHeld?: boolean;
 
   goal?: GoalRecord | null;
   saveGoal?: (goal: GoalRecord) => Promise<void>;
@@ -555,6 +556,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ? await takeGoalMessages(goalInbox, goal, ref.goalMeter).catch(swallowAs("goal: read the inbox", undefined))
           : undefined;
       if (held) {
+        ref.swarmHeld = true;
         (ret as { terminate?: boolean }).terminate = true;
         ret.content.push({ type: "text", text: GOAL_SWARM_HELD_NOTE });
         result += `\n\n${GOAL_SWARM_HELD_NOTE}`;

@@ -1023,6 +1023,7 @@ export function emptyEndingNote(opts: {
   ref: {
     runtimeHandoff?: unknown;
     silentRequested?: boolean;
+    swarmHeld?: boolean;
     pausedOnApproval?: boolean;
     pendingApprovals?: unknown[];
     modelCalls?: number;
@@ -1035,6 +1036,7 @@ export function emptyEndingNote(opts: {
   if (
     opts.ref.runtimeHandoff ||
     opts.ref.silentRequested ||
+    opts.ref.swarmHeld ||
     opts.ref.pausedOnApproval ||
     opts.ref.pendingApprovals?.length
   )
