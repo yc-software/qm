@@ -855,7 +855,11 @@ export function createSwarmService(deps: {
         const withdrawn = (
           await Promise.all(
             queued.map(async (item) =>
-              (await runs.withdraw(item.runId, { unstartedOnly: true }).catch(() => false)) ? [item] : [],
+              (await runs
+                .withdraw(item.runId, { unstartedOnly: true })
+                .catch(swallowAs("swarm: withdraw a paused run", false)))
+                ? [item]
+                : [],
             ),
           )
         ).flat();
@@ -878,10 +882,17 @@ export function createSwarmService(deps: {
         );
         await Promise.all(
           runIds.map(async (runId) => {
-            if (await runs.withdraw(runId, { unstartedOnly: true }).catch(() => false)) return;
+            if (
+              await runs
+                .withdraw(runId, { unstartedOnly: true })
+                .catch(swallowAs("swarm: withdraw a stopped run", false))
+            )
+              return;
             const run = await runs.get(runId);
             if (run?.status === "running")
-              await deps.signals?.send(runId, { kind: "abort", reason: "by the swarm" }).catch(() => false);
+              await deps.signals
+                ?.send(runId, { kind: "abort", reason: "by the swarm" })
+                .catch(swallowAs("swarm: abort a stopped run", false));
           }),
         );
       }
