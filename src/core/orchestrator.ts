@@ -1557,7 +1557,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   },
                 },
                 !healthy && operatorFallback
-                  ? `${host}, configured operator fallback; availability checked on use; env \`${envKey(host)}\``
+                  ? `${host}, configured operator fallback${status?.refreshError ? ` (own connection's refresh failed: ${status.refreshError})` : ""}; availability checked on use; env \`${envKey(host)}\``
                   : credentialLineText(connectorLine(host, accountType)),
                 healthy && status && "credentialId" in status ? status.credentialId : undefined,
                 actor.id,

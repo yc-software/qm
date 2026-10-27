@@ -91,3 +91,20 @@ test("scheduled work lists every title with a readable timing and no ids, owners
   assert.match(mixed, /Task 0 .*America\/Los_Angeles/);
   assert.match(mixed, /Task 1 .*Europe\/London/);
 });
+
+test("schedules the short form can't express fall back to cronstrue's wording", () => {
+  const cron = (expr: string): Cron => ({
+    id: "c",
+    ownerScopeId: "personal:U1",
+    owner: "U1",
+    createdBy: "U1",
+    createdAt: 0,
+    enabled: true,
+    title: "T",
+    action: "x",
+    schedule: { cron: expr, timezone: "UTC" },
+  });
+  assert.match(renderStandingObligations([cron("0 8 * * 1-5")], [], []), /- T — 8:00 AM Mon\/Tue\/Wed\/Thu\/Fri$/m);
+  assert.match(renderStandingObligations([cron("0 8 * * 1#2")], [], []), /second Monday/);
+  assert.match(renderStandingObligations([cron("0 8 1 * *")], [], []), /day 1 of the month/);
+});
