@@ -266,7 +266,11 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import { createConnectorStatusCache, type ConnectorStatusRecord } from "./credentials/connector-status.ts";
+import {
+  createConnectorStatusCache,
+  linkedConnectors,
+  type ConnectorStatusRecord,
+} from "./credentials/connector-status.ts";
 import {
   createFeatureFlagStore,
   externalAppSharingAllowed,
@@ -2631,6 +2635,7 @@ export function buildApp(
     crons,
     scheduler,
     enabled: config.suggestedActivitiesEnabled === true,
+    linkedSources: (principalId) => linkedConnectors(resolveClient, connectorStatusCache, connectorTokens, principalId),
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
   });
   cronChanged.notify = (id) => scheduler.notifyChanged(id);

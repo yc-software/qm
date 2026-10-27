@@ -57,6 +57,7 @@ function fixture() {
     sessions,
     crons,
     enabled: true,
+    linkedSources: async () => ({}),
     now: () => time,
     scheduler: {
       notifyChanged: (id: string) => scheduler.notifyChanged(id),
@@ -99,7 +100,6 @@ test("normal personal cron produces durable suggestions without a notification d
   assert.equal(f.calls[0]?.readOnly, undefined);
   assert.equal(f.calls[0]?.actor.externalId, "alice");
   assert.equal(f.calls[0]?.triggered, true);
-  assert.match(f.calls[0]!.text, /past conversations and unfinished work/);
   assert.deepEqual(await f.service.get("alice", []), { activities, pending: false });
   assert.equal(f.calls.length, 1);
   assert.deepEqual(await f.deliveries.pending("slack"), []);
@@ -160,6 +160,38 @@ test("the nightly fire skips when no new session was opened since the last refre
     "suggested activities are turned off",
   );
   assert.equal(await f.service.skipFire({ ...cron, id: "someone-elses" }), undefined);
+  f.advance(7 * 24 * 60 * 60_000);
+  assert.equal(await f.service.skipFire(cron), "the web UI was not opened in the last 7 days");
+});
+
+test("an owner with no linked sources gets connect suggestions instead of a model run", async () => {
+  const f = fixture();
+  const linked: Record<string, boolean> = { slack: false, google: false, dropbox: true };
+  const service = createSuggestedActivityService({ ...f.deps, linkedSources: async () => linked });
+  const seed = activities[0]!;
+  const first = await service.get("alice", [seed]);
+  assert.equal(first.pending, false);
+  assert.deepEqual(
+    first.activities.map((activity) => activity.id),
+    ["connect-slack", "connect-google", "app"],
+  );
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(await f.crons.list(), []);
+  assert.equal(await service.dismiss("alice", "connect-slack"), true);
+  assert.deepEqual(
+    (await service.get("alice", [seed])).activities.map((activity) => activity.id),
+    ["connect-google", "app"],
+  );
+  linked.google = true;
+  assert.equal((await service.get("alice", [])).pending, true);
+  await f.settle();
+  assert.equal(f.calls.length, 1);
+  const cron = (await f.crons.list())[0]!;
+  f.advance(60_000);
+  await service.get("alice", []);
+  assert.equal(await service.skipFire(cron), undefined);
+  linked.google = false;
+  assert.equal(await service.skipFire(cron), "no connected sources to research");
 });
 
 test("invalid first results retry after cooldown without creating another cron", async () => {

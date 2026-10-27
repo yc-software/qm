@@ -67,11 +67,7 @@ import {
   type KeychainManifestInput,
 } from "../credentials/keychain.ts";
 import { finishProcessCredentials } from "../credentials/execute-files.ts";
-import {
-  configuredConnectorProviders,
-  connectorStatusIsStale,
-  refreshConnectorStatus,
-} from "../credentials/connector-status.ts";
+import { configuredConnectorProviders, currentConnectorStatus } from "../credentials/connector-status.ts";
 import {
   environmentDelta,
   renderComputerBlock,
@@ -2331,11 +2327,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (!strictReadOnly && deps.resolveConnectorClient && conversation.kind === "dm") {
           let status = null;
           try {
-            status = deps.connectorStatusCache ? await deps.connectorStatusCache.get(actor.id) : null;
-            if (deps.connectorTokens && deps.connectorStatusCache && connectorStatusIsStale(status, Date.now())) {
-              status = await refreshConnectorStatus(deps.connectorTokens, actor.id, Date.now());
-              await deps.connectorStatusCache.put(status);
-            }
+            status = deps.connectorStatusCache
+              ? await currentConnectorStatus(deps.connectorStatusCache, deps.connectorTokens, actor.id, Date.now())
+              : null;
           } catch (e) {
             swallow("orchestrator: connected-app status", e);
           }
