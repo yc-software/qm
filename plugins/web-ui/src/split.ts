@@ -991,8 +991,6 @@ class PaneContent implements IContentRenderer {
     this.params = (p.params ?? {}) as PaneParams;
     this.element.dataset.paneId = this.panelId;
     focusComposerOnPaneClick(this.element, () => p.api.isActive);
-    this.element.classList.toggle("is-active", p.api.isActive);
-    p.api.onDidActiveChange((event) => this.element.classList.toggle("is-active", event.isActive));
     paneContents.set(this.panelId, this);
     this.resize.observe(this.element);
     this.syncZones();

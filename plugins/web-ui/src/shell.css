@@ -8055,7 +8055,7 @@ h3.ambient-field-label {
   scrollbar-color: transparent transparent;
 }
 
-.split-canvas:not(.single-pane) .split-pane-content.is-active .chat-scroll.user-scrolling {
+.split-canvas:not(.single-pane) .chat-scroll.user-scrolling {
   scrollbar-color: var(--muted-foreground) transparent;
 }
 
