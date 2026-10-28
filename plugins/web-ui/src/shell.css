@@ -2738,9 +2738,12 @@ qm-markdown .tok-in {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.work-thinking > .work-head .work-step,
+.work-working > .work-head .work-step {
   animation: work-step-in 420ms ease-out both;
 }
-.work-head .work-step-out {
+.work-head .work-step.work-step-out {
   position: absolute;
   inset: 0 auto 0 0;
   animation: work-step-out 420ms ease-out both;
@@ -2763,7 +2766,8 @@ qm-markdown .tok-in {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .work-head .work-step {
+  .work-thinking > .work-head .work-step,
+  .work-working > .work-head .work-step {
     animation: none;
   }
   .work-head .work-step-out {
