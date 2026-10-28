@@ -175,9 +175,45 @@ test("request byte budgets replace all native document wire formats with explici
   }
 });
 
+test("requests clearly under the byte budget are sent without serializing them", (t) => {
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(2_000_000) } },
+          { type: "input_file", file_data: `data:application/pdf;base64,${"B".repeat(500_000)}` },
+          { type: "text", text: "notes ".repeat(20_000) },
+        ],
+      },
+    ],
+  };
+  const stringify = t.mock.method(JSON, "stringify");
+  assert.equal(trimPayloadToByteBudget(payload, 3_400_000), payload);
+  assert.equal(stringify.mock.callCount(), 0);
+});
+
+test("escape-heavy text near the byte budget still sheds inline images", () => {
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "\u0001".repeat(300_000) },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(200_000) } },
+        ],
+      },
+    ],
+  };
+  const trimmed = JSON.stringify(trimPayloadToByteBudget(payload, 1_000_000));
+  assert.doesNotMatch(trimmed, /AAAA/);
+  assert.match(trimmed, /image removed/);
+});
+
+let stores = 0;
 function storeFor(data = Buffer.from("QUARTZ-731")) {
   const artifact = {
-    id: "doc1",
+    id: `doc${++stores}`,
     name: "sample.txt",
     mimetype: "text/plain",
     sizeBytes: data.length,
@@ -261,6 +297,22 @@ test("steered reuploads already in the turn do not consume another document slot
   assert.deepEqual(steered, { documents: [], notices: [], tokens: 0 });
   assert.deepEqual(checked, ["steered-upload"]);
   assert.equal(opens(), 1);
+});
+
+test("later turns reuse verified document bytes but still check current access", async () => {
+  const { store, meta, artifact, opens } = storeFor(Buffer.from("SAPPHIRE-204"));
+  const first = await loadDocumentInputs(store, [meta], () => true);
+  const second = await loadDocumentInputs(store, [meta], () => true);
+  assert.equal(opens(), 1);
+  assert.deepEqual(second, first);
+  assert.equal(Buffer.from(second.documents[0]!.dataBase64, "base64").toString(), "SAPPHIRE-204");
+  assert.deepEqual((await loadDocumentInputs(store, [meta], () => false)).documents, []);
+  store.get = async () => null;
+  assert.deepEqual((await loadDocumentInputs(store, [meta], () => true)).documents, []);
+  store.get = async () => ({ ...artifact, name: "renamed.txt" });
+  const renamed = await loadDocumentInputs(store, [meta], () => true);
+  assert.equal(renamed.documents[0]!.name, "renamed.txt");
+  assert.equal(opens(), 2);
 });
 
 test("document replay follows compaction boundaries", () => {

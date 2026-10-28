@@ -728,6 +728,48 @@ export function seedRawMessagesIntoSession(session: unknown, messages: readonly 
 }
 
 const LLM_REQUEST_TRIM_SLACK_BYTES = 3_000_000;
+
+function inlineBinaryData(b: unknown): string | undefined {
+  const block = b as {
+    type?: string;
+    source?: { type?: string; data?: unknown };
+    image_url?: unknown;
+    file_data?: unknown;
+    file?: { file_data?: unknown };
+    inlineData?: { data?: unknown };
+  };
+  if (
+    (block?.type === "image" || block?.type === "document") &&
+    block.source?.type === "base64" &&
+    typeof block.source.data === "string"
+  )
+    return block.source.data;
+  if (block?.type === "input_image" && typeof block.image_url === "string" && block.image_url.startsWith("data:"))
+    return block.image_url;
+  for (const data of [block?.file_data, block?.file?.file_data, block?.inlineData?.data])
+    if (typeof data === "string") return data;
+  return undefined;
+}
+
+function jsonBytesUpperBound(value: unknown, binary?: string): number {
+  if (typeof value === "string") {
+    if (value !== binary) return value.length * 6 + 2;
+    const header = value.startsWith("data:") ? value.indexOf(",") + 1 : 0;
+    return header * 6 + value.length - header + 2;
+  }
+  if (!value || typeof value !== "object") return 24;
+  let sum = 2;
+  if (Array.isArray(value)) {
+    for (const item of value) sum += jsonBytesUpperBound(item, binary) + 1;
+    return sum;
+  }
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") return Number.POSITIVE_INFINITY;
+  const data = inlineBinaryData(value) ?? binary;
+  for (const key of Object.keys(value))
+    sum += key.length * 6 + 4 + jsonBytesUpperBound((value as Record<string, unknown>)[key], data);
+  return sum;
+}
+
 export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX_LLM_REQUEST_BYTES): unknown {
   const p = payload as Record<string, unknown> | null;
   let listKey: "messages" | "input" | "contents" | undefined;
@@ -735,30 +777,11 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
   else if (Array.isArray(p?.input)) listKey = "input";
   else if (Array.isArray(p?.contents)) listKey = "contents";
   if (!p || !listKey) return payload;
+  if (jsonBytesUpperBound(payload) <= maxBytes) return payload;
   const totalBytes = Buffer.byteLength(JSON.stringify(payload));
   if (totalBytes <= maxBytes) return payload;
 
-  const inlineImageChars = (b: unknown): number => {
-    const block = b as {
-      type?: string;
-      source?: { type?: string; data?: unknown };
-      image_url?: unknown;
-      file_data?: string;
-      file?: { file_data?: string };
-      inlineData?: { data?: string };
-    };
-    if (
-      (block?.type === "image" || block?.type === "document") &&
-      block.source?.type === "base64" &&
-      typeof block.source.data === "string"
-    ) {
-      return block.source.data.length;
-    }
-    if (block?.type === "input_image" && typeof block.image_url === "string" && block.image_url.startsWith("data:")) {
-      return block.image_url.length;
-    }
-    return block?.file_data?.length ?? block?.file?.file_data?.length ?? block?.inlineData?.data?.length ?? 0;
-  };
+  const inlineImageChars = (b: unknown): number => inlineBinaryData(b)?.length ?? 0;
   const placeholder = (b: unknown) => {
     const block = b as { type?: string; cache_control?: unknown };
     const cache = block.cache_control !== undefined ? { cache_control: block.cache_control } : undefined;
@@ -1681,7 +1704,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           applyFastSpeed(payload, ref.fast, (model as { api?: string } | undefined)?.api);
           applyReasoningMode(payload, model as Model<Api>, ref.effortLevel);
           const result = prior ? await prior(payload, model) : payload;
-          const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
+          const capturedPayload = ref.llmCapture ? sanitizeLlmPayload(result ?? payload, model) : undefined;
           let finalPayload = await withDocumentInputs(
             result ?? payload,
             model as DocumentModel,
@@ -1701,9 +1724,9 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           } catch (e) {
             swallow("pi: request byte budget", e);
           }
-          if (captureRequests) {
+          if (capturedPayload) {
             try {
-              ref.llmCapture?.push(capturedPayload!);
+              ref.llmCapture?.push(capturedPayload);
             } catch (e) {
               swallow("pi: llm request capture", e);
             }
@@ -1878,7 +1901,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                   userEntry,
                 )
               : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
-          entry.ref.llmCapture = [];
+          entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
           entry.ref.modelCalls = 0;
           entry.ref.modelDispatch = [];
           entry.ref.pendingPrepareNextTurn = undefined;

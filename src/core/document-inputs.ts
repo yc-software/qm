@@ -1,6 +1,7 @@
 import { addAbortSignal } from "node:stream";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
+import { LRUCache } from "lru-cache";
 import type { AttachmentMeta, SessionEntry } from "../types.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
@@ -22,6 +23,11 @@ export interface DocumentInput {
   dataBase64: string;
   artifactId?: string;
 }
+
+const loadedDocuments = new LRUCache<string, DocumentInput>({
+  maxSize: 64_000_000,
+  sizeCalculation: (document) => document.dataBase64.length,
+});
 
 export function historicalDocumentMetas(history: readonly SessionEntry[]): AttachmentMeta[] {
   return forModelContext([...history]).flatMap((entry) => {
@@ -73,39 +79,45 @@ export async function loadDocumentInputs(
         notices.push(documentStub({ name: artifact.name, artifactId: artifact.id }));
         continue;
       }
-      const opened = await files.open(meta.artifactId);
-      if (!opened) {
-        notices.push(`${artifact.name}: document content is unavailable.`);
-        continue;
+      const cacheKey = JSON.stringify([artifact.id, artifact.sha256, artifact.name, artifact.mimetype]);
+      let document = loadedDocuments.get(cacheKey);
+      if (!document) {
+        const opened = await files.open(meta.artifactId);
+        if (!opened) {
+          notices.push(`${artifact.name}: document content is unavailable.`);
+          continue;
+        }
+        if (
+          opened.artifact.sha256 !== artifact.sha256 ||
+          opened.sizeBytes !== artifact.sizeBytes ||
+          opened.artifact.mimetype !== artifact.mimetype ||
+          opened.artifact.ownerScopeId !== artifact.ownerScopeId ||
+          opened.artifact.sizeBytes !== artifact.sizeBytes ||
+          !opened.artifact.enabled ||
+          !(await authorize(opened.artifact))
+        ) {
+          opened.stream.destroy();
+          notices.push(`${artifact.name}: document changed while being loaded; content withheld.`);
+          continue;
+        }
+        const stream = signal ? addAbortSignal(signal, opened.stream) : opened.stream;
+        const bytes = await collectBytes(stream, { maxBytes: Math.min(remaining, artifact.sizeBytes) });
+        if (bytes.sha256 !== artifact.sha256 || bytes.sizeBytes !== artifact.sizeBytes) {
+          notices.push(`${artifact.name}: document failed integrity verification; content withheld.`);
+          continue;
+        }
+        document = {
+          name: artifact.name,
+          mimeType: artifact.mimetype,
+          dataBase64: bytes.data.toString("base64"),
+          artifactId: artifact.id,
+        };
+        loadedDocuments.set(cacheKey, document);
       }
-      if (
-        opened.artifact.sha256 !== artifact.sha256 ||
-        opened.sizeBytes !== artifact.sizeBytes ||
-        opened.artifact.mimetype !== artifact.mimetype ||
-        opened.artifact.ownerScopeId !== artifact.ownerScopeId ||
-        opened.artifact.sizeBytes !== artifact.sizeBytes ||
-        !opened.artifact.enabled ||
-        !(await authorize(opened.artifact))
-      ) {
-        opened.stream.destroy();
-        notices.push(`${artifact.name}: document changed while being loaded; content withheld.`);
-        continue;
-      }
-      const stream = signal ? addAbortSignal(signal, opened.stream) : opened.stream;
-      const bytes = await collectBytes(stream, { maxBytes: Math.min(remaining, artifact.sizeBytes) });
-      if (bytes.sha256 !== artifact.sha256 || bytes.sizeBytes !== artifact.sizeBytes) {
-        notices.push(`${artifact.name}: document failed integrity verification; content withheld.`);
-        continue;
-      }
-      remaining -= bytes.sizeBytes;
+      remaining -= artifact.sizeBytes;
       usedTokens += tokens;
       loadedContent.add(contentKey);
-      documents.unshift({
-        name: artifact.name,
-        mimeType: artifact.mimetype,
-        dataBase64: bytes.data.toString("base64"),
-        artifactId: artifact.id,
-      });
+      documents.unshift(document);
     } catch {
       signal?.throwIfAborted();
       notices.push(`${meta.name}: document content is unavailable.`);
