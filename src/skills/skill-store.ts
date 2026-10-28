@@ -169,6 +169,11 @@ export function visibleSkillRows<T extends SkillSummary>(
 
 export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   const skills = opts.backing ?? createMemoryMap<Skill>();
+  const inScopes = async (scopes: readonly ScopeId[]): Promise<Skill[]> => {
+    const wanted = new Set<string>(scopes);
+    const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
+    return rows.filter((skill) => wanted.has(skill.scopeId));
+  };
   const secret = opts.signingSecret ?? randomUUID();
   const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
@@ -283,11 +288,11 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async resolve(name, orderedScopes) {
-      return resolveFromIndex(publishedByScopeAndName(await skills.all()), name, orderedScopes);
+      return resolveFromIndex(publishedByScopeAndName(await inScopes(orderedScopes)), name, orderedScopes);
     },
 
     async visibleFor(orderedScopes, granted) {
-      const all = await skills.all();
+      const all = await inScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
       return visibleSkillRows(all, orderedScopes, granted);
     },
 

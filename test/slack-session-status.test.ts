@@ -44,7 +44,7 @@ function fixture() {
         liveByScope: async (scope) =>
           jobs.filter((job) => job.scopeId === scope && job.status === "running" && job.expiresAt > at),
       },
-      monitors: { enabled: async () => watches.filter((watch) => watch.enabled) },
+      monitors: { ownedBy: async (scope) => watches.filter((watch) => watch.ownerScopeId === scope) },
       publicWebUrl: "https://qm.example.test/web-ui/",
       sessions: {
         getByThread: async (threadRef) => (threadRef === "ch:C1:1.0" ? ({ id: "canonical-uuid" } as Session) : null),

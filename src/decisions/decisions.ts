@@ -299,6 +299,8 @@ export const asError = (error: unknown): Error =>
         { cause: error },
       );
 
+export const classifierKey = (rule: DecisionRule): string => JSON.stringify([rule.model.provider, rule.model.model]);
+
 export async function runHook(
   rules: readonly DecisionRule[],
   hook: DecisionHook,
@@ -308,7 +310,7 @@ export async function runHook(
 ): Promise<{ decisive?: DecisionResult; results: DecisionResult[] }> {
   const groups = new Map<string, DecisionRule[]>();
   for (const rule of rules.filter((r) => r.hook === hook)) {
-    const key = JSON.stringify([rule.model.provider, rule.model.model]);
+    const key = classifierKey(rule);
     groups.set(key, [...(groups.get(key) ?? []), rule]);
   }
   const results = (await Promise.all([...groups.values()].map((g) => runGroup(g, state, backend, signal)))).flat();

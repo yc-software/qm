@@ -7,6 +7,7 @@ import {
   createDeduped,
   setTriggerEnabled,
   type CreateTriggerInput,
+  ownedBy,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
@@ -33,6 +34,7 @@ export interface WebhookStore {
   create(input: CreateWebhookInput): Promise<Webhook>;
   get(id: string): Promise<Webhook | null>;
   list(): Promise<Webhook[]>;
+  ownedBy(scopeId: string): Promise<Webhook[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   update(id: string, patch: { action: string }): Promise<Webhook | null>;
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
@@ -98,6 +100,7 @@ export function createWebhookStore(
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    ownedBy: (scopeId) => ownedBy(backing, scopeId),
     setEnabled(id, enabled) {
       return setTriggerEnabled(backing, id, enabled);
     },

@@ -43,6 +43,7 @@ export interface FeatureFlagStore {
   list(): Promise<FeatureFlagRecord[]>;
   get(featureName: FeatureName): Promise<FeatureFlagRecord | null>;
   enabled(featureName: FeatureName, scope: ScopeId): Promise<boolean>;
+  enabledFor(scope: ScopeId): Promise<ReadonlySet<FeatureName>>;
   setEnabled(featureName: FeatureName, scope: ScopeId, on: boolean, updatedBy: string): Promise<FeatureFlagRecord>;
 }
 
@@ -53,13 +54,18 @@ export function createFeatureFlagStore(
   const orgScope = scopeId("org", configOrgId());
   const now = opts.now ?? Date.now;
   const key = (featureName: FeatureName) => featureName;
+  const list = async () => (await backing.all()).filter((row) => FEATURE_NAMES.includes(row.featureName));
+  const enabledFor = async (scope: ScopeId): Promise<ReadonlySet<FeatureName>> =>
+    new Set(
+      (await list())
+        .filter((row) => row.enabledScopes.includes(orgScope) || row.enabledScopes.includes(scope))
+        .map((row) => row.featureName),
+    );
   return {
-    list: async () => (await backing.all()).filter((row) => FEATURE_NAMES.includes(row.featureName)),
+    list,
     get: (featureName) => backing.get(key(featureName)),
-    async enabled(featureName, scope) {
-      const row = await backing.get(key(featureName));
-      return row?.enabledScopes.includes(orgScope) === true || row?.enabledScopes.includes(scope) === true;
-    },
+    enabled: async (featureName, scope) => (await enabledFor(scope)).has(featureName),
+    enabledFor,
     async setEnabled(featureName, scope, on, updatedBy) {
       if (!updatedBy.trim()) throw new Error("feature flag updater must not be empty");
       const current = await backing.get(key(featureName));

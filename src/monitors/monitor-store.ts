@@ -6,6 +6,7 @@ import {
   buildTriggerBase,
   setTriggerEnabled,
   type CreateTriggerInput,
+  ownedBy,
 } from "../triggers/trigger-store.ts";
 
 interface CreateMonitorInput extends CreateTriggerInput {
@@ -23,6 +24,7 @@ export interface MonitorStore {
   create(input: CreateMonitorInput): Promise<Monitor>;
   get(id: string): Promise<Monitor | null>;
   list(): Promise<Monitor[]>;
+  ownedBy(scopeId: string): Promise<Monitor[]>;
   enabled(): Promise<Monitor[]>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
@@ -62,6 +64,7 @@ export function createMonitorStore(backing: DurableMap<Monitor> = createMemoryMa
     },
     get: (id) => backing.get(id),
     list: () => backing.all(),
+    ownedBy: (scopeId) => ownedBy(backing, scopeId),
     async enabled() {
       return (await backing.all()).filter((m) => m.enabled);
     },

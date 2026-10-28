@@ -165,7 +165,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
       return { monitorId, removed: true };
     },
     async list() {
-      return (await deps.store.list()).filter((m) => m.ownerScopeId === deps.ownerScopeId);
+      return deps.store.ownedBy(deps.ownerScopeId);
     },
   };
 }
