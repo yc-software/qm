@@ -31,6 +31,7 @@ import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
 import { guard } from "lit/directives/guard.js";
+import { keyed } from "lit/directives/keyed.js";
 import {
   Activity,
   Ban,
@@ -3002,23 +3003,27 @@ export function createChatSurface(
     return workedLabel(work.status === "working" ? "Working" : "Worked", secs);
   }
 
-  function currentStepLabel(timeline: TimelineItem[], work: WorkBlock): string | null {
+  function currentStep(timeline: TimelineItem[], work: WorkBlock): { icon: IconNode; label: string } | null {
+    // The newest item names the step; a finished tool keeps its name until the next one starts,
+    // so the line changes only when something new begins.
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i]!;
       if (item.kind === "thinking") {
-        return thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "").title;
+        const title = thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "").title;
+        return { icon: Brain, label: title };
       }
       if (item.kind !== "tool") continue;
-      if (toolRowKind(item.row, work.status) !== "running") continue;
-      const posting = postSpeechText(item.row, true);
-      if (posting) return "Posting message";
-      const session = sessionPresentation(item.row, work.status);
-      if (session) return [session.label, session.target].filter(Boolean).join(" ");
-      const semantic = activityLabel(item.row, work.status);
-      if (semantic) return semantic;
       const call = (item.row.call?.payload ?? {}) as ToolPayload;
       const result = (item.row.result?.payload ?? {}) as ToolPayload;
-      return (TOOL_META[toolCategory({ ...result, ...call })] ?? UNKNOWN_TOOL).active;
+      const meta = TOOL_META[toolCategory({ ...result, ...call })] ?? UNKNOWN_TOOL;
+      const posting = postSpeechText(item.row, true);
+      if (posting) return { icon: MessageSquare, label: "Posting message" };
+      const session = sessionPresentation(item.row, work.status);
+      if (session) return { icon: Bot, label: [session.label, session.target].filter(Boolean).join(" ") };
+      const category = activityDescription(call, result).category;
+      const stepIcon = { search: Search, read: BookOpen, execute: meta.icon, other: meta.icon }[category];
+      const inFlight = item.row.result ? { ...item.row, result: null } : item.row;
+      return { icon: stepIcon, label: activityLabel(inFlight, work.status) ?? meta.active };
     }
     return null;
   }
@@ -3058,9 +3063,9 @@ export function createChatSurface(
       const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
       const animating = active && last && !stopping;
       const oneStep = animating && !work.stale && !work.pendingApprovals?.length;
-      const step = oneStep ? currentStepLabel(timeline, work) : null;
+      const step = oneStep ? currentStep(timeline, work) : null;
       let label = last ? workLabel(work) : "Worked";
-      if (step) label = step;
+      if (step) label = step.label;
       if (stopping && last) label = "Stop requested";
       if (stopped && last) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
       const elapsed = step && workSeconds(work) > 0 ? goalElapsedLabel(0, workSeconds(work) * 1000) : "";
@@ -3080,7 +3085,12 @@ export function createChatSurface(
               }}
             >
               <summary class=${stopped && last ? "stopped-head" : "work-head"}>
-                ${sheenLabel(label, animating)}${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span
+                ${keyed(
+                  label,
+                  html`<span class="work-step"
+                    >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(label, animating)}</span
+                  >`,
+                )}${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span
                   class="activity-chevron"
                   >${icon(ChevronRight, 14)}</span
                 >

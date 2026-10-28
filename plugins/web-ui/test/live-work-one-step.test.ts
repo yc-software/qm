@@ -58,6 +58,7 @@ test("a live turn shows only the current step in a closed fold that remembers be
     assert.match(head()!.textContent!, /Run the test suite/);
     assert.doesNotMatch(head()!.textContent!, /Working for|Read files|Running commands/);
     assert.match(head()!.querySelector(".work-elapsed")?.textContent ?? "", /\d+s/);
+    assert.ok(head()!.querySelector(".work-step .tool-icon svg"), "the step's icon sits left of the label");
 
     fold.open = true;
     fold.dispatchEvent(new Event("toggle"));
