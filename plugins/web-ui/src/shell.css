@@ -12256,18 +12256,20 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   color: var(--foreground);
 }
 
+/* The wrapper draws no box of its own, so a steer that is the latest prompt sticks against the
+   scroller like any other prompt (a sticky row is confined to its parent's box) and releases
+   where the assistant turn it steered ends. */
 .inline-steer {
+  display: contents;
+}
+
+.message-stack .inline-steer > .user-row {
+  width: 100%;
   margin-block: 16px;
 }
 
-.message-stack .inline-steer .user-row {
-  width: 100%;
-  position: relative;
-  top: auto;
-  z-index: auto;
-  margin: 0;
-  padding-top: 0;
-  pointer-events: auto;
+.message-stack .inline-steer > .user-row.latest-prompt {
+  margin-top: 8px;
 }
 
 .inline-steer .user-row .message-meta {
