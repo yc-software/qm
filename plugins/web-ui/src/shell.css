@@ -2714,6 +2714,13 @@ qm-markdown .tok-in {
   color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
   font-variant-numeric: tabular-nums;
 }
+.work-head .work-step-slot {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
 .work-head .work-step {
   display: inline-flex;
   align-items: center;
@@ -2724,19 +2731,34 @@ qm-markdown .tok-in {
   white-space: nowrap;
   animation: work-step-in 420ms ease-out both;
 }
+.work-head .work-step-out {
+  position: absolute;
+  inset: 0 auto 0 0;
+  animation: work-step-out 420ms ease-out both;
+  pointer-events: none;
+}
 @keyframes work-step-in {
   from {
     opacity: 0;
-    transform: translateY(1.5px);
   }
   to {
     opacity: 1;
-    transform: none;
+  }
+}
+@keyframes work-step-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .work-head .work-step {
     animation: none;
+  }
+  .work-head .work-step-out {
+    display: none;
   }
 }
 .activity-chevron {

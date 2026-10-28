@@ -83,6 +83,9 @@ test("a live turn shows only the current step in a closed fold that remembers be
       },
     );
     await until(() => /Measure the diff/.test(head()?.textContent ?? ""));
+    const fading = head()!.querySelector(".work-step-out");
+    assert.match(fading?.textContent ?? "", /Run the test suite/, "the previous step fades out on top of the new one");
+    await until(() => !head()!.querySelector(".work-step-out"));
     assert.doesNotMatch(head()!.textContent!, /Run the test suite/);
   } finally {
     await h.close();

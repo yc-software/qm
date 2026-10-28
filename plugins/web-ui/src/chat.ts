@@ -439,6 +439,54 @@ export function createChatSurface(
   let workTicker: ReturnType<typeof setInterval> | null = null;
   let liveWorkExpanded = false;
   let liveFoldOpened = false;
+  // Crossfade state for the live work line: the step that just ended keeps fading out on top of
+  // the new one, and the line's width eases from the old label to the new instead of jumping.
+  let liveStep: { icon: IconNode; label: string } | null = null;
+  let fadingStep: { icon: IconNode; label: string } | null = null;
+  let fadingTimer: ReturnType<typeof setTimeout> | null = null;
+  let liveStepWidth = 0;
+  const STEP_FADE_MS = 420;
+  function resetLiveStep(): void {
+    liveStep = null;
+    fadingStep = null;
+    liveStepWidth = 0;
+    if (fadingTimer) clearTimeout(fadingTimer);
+    fadingTimer = null;
+  }
+  function trackLiveStep(step: { icon: IconNode; label: string } | null): void {
+    if (!step) {
+      resetLiveStep();
+      return;
+    }
+    if (liveStep && liveStep.label !== step.label) {
+      fadingStep = liveStep;
+      if (fadingTimer) clearTimeout(fadingTimer);
+      fadingTimer = setTimeout(() => {
+        fadingStep = null;
+        fadingTimer = null;
+        drawActiveChat();
+      }, STEP_FADE_MS);
+    }
+    liveStep = step;
+  }
+  const easeStepWidth = (el?: Element, deferred = false): void => {
+    if (!(el instanceof HTMLElement)) return;
+    // lit commits a keyed child's parts before inserting it, so measure once it is in the document.
+    if (!el.isConnected) {
+      if (!deferred) queueMicrotask(() => easeStepWidth(el, true));
+      return;
+    }
+    if (!el.parentElement) return;
+    const width = el.getBoundingClientRect().width;
+    const from = liveStepWidth;
+    liveStepWidth = width;
+    if (!from || !width || Math.abs(from - width) < 0.5) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    el.parentElement.animate?.([{ width: `${from}px` }, { width: `${width}px` }], {
+      duration: STEP_FADE_MS,
+      easing: "ease-out",
+    });
+  };
   const openThinking = new Set<string>();
 
   function notePendingSessionOnSend(): void {
@@ -2396,6 +2444,7 @@ export function createChatSurface(
     if (chatState.liveWork?.goal) chatState.goal = chatState.liveWork.goal;
     chatState.liveWork = null;
     liveFoldOpened = false;
+    resetLiveStep();
     chatState.pendingSend = null;
     syncWorkTicker();
   }
@@ -3069,6 +3118,7 @@ export function createChatSurface(
       if (stopping && last) label = "Stop requested";
       if (stopped && last) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
       const elapsed = step && workSeconds(work) > 0 ? goalElapsedLabel(0, workSeconds(work) * 1000) : "";
+      if (last) trackLiveStep(step);
       if (
         timeline.length === 1 &&
         !tail.trim() &&
@@ -3085,13 +3135,20 @@ export function createChatSurface(
               }}
             >
               <summary class=${stopped && last ? "stopped-head" : "work-head"}>
-                ${keyed(
-                  label,
-                  html`<span class="work-step"
-                    >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(label, animating)}</span
-                  >`,
-                )}${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span
-                  class="activity-chevron"
+                <span class="work-step-slot"
+                  >${
+                    step && fadingStep && last
+                      ? html`<span class="work-step work-step-out" aria-hidden="true"
+                          ><span class="tool-icon">${icon(fadingStep.icon, 15)}</span>${fadingStep.label}</span
+                        >`
+                      : nothing
+                  }${keyed(
+                    label,
+                    html`<span class="work-step" ${ref(easeStepWidth)}
+                      >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(label, animating)}</span
+                    >`,
+                  )}</span
+                >${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span class="activity-chevron"
                   >${icon(ChevronRight, 14)}</span
                 >
               </summary>
