@@ -50,6 +50,7 @@ import { seedRuntimeConfig } from "./runtime-config-store";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
 import { desktopHistoryNav } from "./desktop-history";
+import { historyWrite, navigateNext } from "./url-history";
 import { icon } from "./icons";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
@@ -87,6 +88,7 @@ import {
   revealSessionSurface,
   startNewChatInLastScope,
   startNewChat,
+  openNewChat,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
@@ -158,11 +160,6 @@ export const ADMIN_BASE = (() => {
 })();
 export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
 
-type Place = { view: string; thread: string | null; provisional: boolean };
-let restoringHistory = false;
-
-const placeOf = (state: unknown): Place | undefined => (state as { qmPlace?: Place } | null)?.qmPlace;
-
 export function syncUrlFromState(sessionOverride?: string | null): void {
   const chatState = mainConversation().state;
   const fromState =
@@ -172,34 +169,18 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
   const seq = messageLinkSeq(location.search);
   if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
-  const chats = appState.currentView === "chats";
-  const shown = splitState.active ? focusedPaneConversation()?.state : chatState;
-  const paneThread = shown?.threadRef ?? sessionId;
-  const place: Place = {
-    view: appState.currentView,
-    thread: chats ? paneThread : null,
-    provisional: chats && !sessionId,
-  };
-  const previous = placeOf(history.state);
-  const urlChanged = `${location.pathname}${location.search}` !== next;
-  const moved =
-    !restoringHistory &&
-    urlChanged &&
-    ((previous?.view ?? linked.view ?? "chats") !== place.view ||
-      (chats && !!previous && !previous.provisional && previous.thread !== place.thread));
-  const state = { ...(history.state as object | null), qmPlace: place };
-  if (moved) history.pushState(state, "", next);
-  else if (urlChanged || JSON.stringify(previous) !== JSON.stringify(place)) history.replaceState(state, "", next);
+  const write = historyWrite(`${location.pathname}${location.search}`, next);
+  if (write === "push") history.pushState(null, "", next);
+  else if (write === "replace") history.replaceState(null, "", next);
 }
 
 async function restoreChatsEntry(sessionId: string | null): Promise<void> {
-  const conversation = mainConversation();
   if (!sessionId) {
-    if (appState.currentView === "chats" && !splitState.active && conversation.state.sessionId === null) return;
-    exitSplitIfActive();
-    conversation.newChat();
+    if (appState.currentView !== "chats") switchView("chats", "replace");
+    else if (splitState.active ? singlePaneSessionId() : mainConversation().state.sessionId) openNewChat(null, null);
     return;
   }
+  const conversation = focusedPaneConversation() ?? mainConversation();
   if (appState.currentView === "chats" && conversation.state.sessionId === sessionId) return;
   const session =
     sessionsState.list.find((s) => s.id === sessionId) ??
@@ -729,13 +710,14 @@ function onNavClick(e: Event): void {
   closeSidebarOnNarrowView();
 }
 
-export function switchView(v: View): void {
+export function switchView(v: View, historyMode: "push" | "replace" = "push"): void {
   if (!canView(v)) v = "chats";
   closeSidebarOnNarrowView();
   if (appState.currentView === v) {
     refreshActiveView(v);
     return;
   }
+  if (historyMode === "push") navigateNext();
   appState.currentView = v;
   capturePageview(v);
   appState.viewRenderSeq++;
@@ -1027,14 +1009,8 @@ window.addEventListener("popstate", () => {
     else routeInboxHistory(item);
     return;
   }
-  restoringHistory = true;
-  const restored = () => {
-    restoringHistory = false;
-  };
-  if (view !== "chats") {
-    switchView(view);
-    restored();
-  } else void restoreChatsEntry(session).finally(restored);
+  if (view !== "chats") switchView(view, "replace");
+  else void restoreChatsEntry(session);
 });
 
 window.addEventListener("focus", () => {
@@ -1082,7 +1058,7 @@ async function showLinkedSession(
 ): Promise<void> {
   if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];
   revealSessionSurface(linked);
-  await openSession(linked, transcript, approvals);
+  await openSession(linked, transcript, approvals, "replace");
   if (seq !== null)
     requestAnimationFrame(() => {
       for (const conversation of allConversations())
@@ -1222,7 +1198,7 @@ export async function boot(): Promise<void> {
     if (match) {
       exitSplitIfActive();
       revealSessionSurface(match);
-      await openSession(match);
+      await openSession(match, undefined, undefined, "replace");
     } else {
       showConversationError(transcriptUnavailable);
     }
@@ -1276,7 +1252,7 @@ export async function boot(): Promise<void> {
   if (connectedProvider && sessionsState.list.length) {
     const recent = [...sessionsState.list].sort((a, b) => activityOf(b) - activityOf(a))[0]!;
     exitSplitIfActive();
-    await openSession(recent);
+    await openSession(recent, undefined, undefined, "replace");
   } else if (!(restoreLast && mountRestoredCanvas()) && !mainConversation().state.threadRef) {
     mainConversation().newChat();
   }

@@ -100,6 +100,7 @@ import {
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
+import { abandonNavigation, navigateNext } from "./url-history";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -532,6 +533,17 @@ export function startNewChat(
   threadRef?: string,
 ): Conversation | null {
   closeSidebarOnNarrowView();
+  const shown = (focusedPaneConversation() ?? mainConversation()).state.sessionId;
+  const destination = deepLinkPath(UI_BASE, "chats", null);
+  if (appState.currentView !== "chats" || shown) navigateNext(destination);
+  try {
+    return openNewChat(scopeId, name, threadRef);
+  } finally {
+    if (abandonNavigation(destination)) syncUrlFromState();
+  }
+}
+
+export function openNewChat(scopeId: string | null, name: string | null, threadRef?: string): Conversation | null {
   if (scopeId) sessionsState.collapsedProjectScopes.delete(scopeId);
   const pane = startNewChatInCanvas(scopeId ?? undefined, threadRef);
   if (pane) return pane;
@@ -1889,9 +1901,25 @@ export async function openSession(
   s: CoreSession,
   entriesPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
+  historyMode: "push" | "replace" = "push",
 ): Promise<void> {
   if (pendingForkThreads.has(s.threadRef)) return;
   if (keptUnreadId !== s.id) keptUnreadId = null;
+  const shown = (focusedPaneConversation() ?? mainConversation()).state.sessionId;
+  const destination = deepLinkPath(UI_BASE, "chats", s.id || null);
+  if (historyMode === "push" && (appState.currentView !== "chats" || shown !== s.id)) navigateNext(destination);
+  try {
+    await showSession(s, entriesPrefetch, approvalsPrefetch);
+  } finally {
+    if (abandonNavigation(destination)) syncUrlFromState();
+  }
+}
+
+async function showSession(
+  s: CoreSession,
+  entriesPrefetch?: Promise<TranscriptPage | null>,
+  approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
+): Promise<void> {
   if (appState.currentView !== "chats") {
     appState.currentView = "chats";
     appState.viewRenderSeq++;

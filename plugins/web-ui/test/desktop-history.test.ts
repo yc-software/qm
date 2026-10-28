@@ -58,7 +58,7 @@ test("switching conversations and views adds history entries that back/forward r
     h.switchView("settings");
     await settle();
     assert.equal(location.pathname, "/settings");
-    assert.equal(history.length, start + 2, "the unsent new chat entry is replaced, not kept");
+    assert.equal(history.length, start + 3);
     for (const expected of ["/s/sess-other", "/s/sess-deep"]) {
       const event = popped();
       history.back();
@@ -73,7 +73,7 @@ test("switching conversations and views adds history entries that back/forward r
     await settle();
     assert.equal(location.pathname, "/s/sess-other");
     assert.equal(h.visibleConversation().state.sessionId, "sess-other");
-    assert.equal(history.length, start + 2, "restoring an entry keeps the forward stack");
+    assert.equal(history.length, start + 3, "restoring an entry keeps the forward stack");
   } finally {
     await h.close();
   }
