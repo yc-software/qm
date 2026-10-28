@@ -13,6 +13,7 @@ export class SplitDropPreview {
     host.append(this.element);
     this.api = createDockview(this.element, {
       theme: splitTheme,
+      disableTabsOverflowList: true,
       disableDnd: true,
       singleTabMode: "fullwidth",
       createTabComponent: () => {
