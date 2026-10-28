@@ -218,6 +218,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
 
   function onScroll(): void {
     if (!scroller || contentUpdates.size > 0) return;
+    if (scroller.scrollTop !== lastTop) showScrollbar();
     const movingUp = scroller.scrollTop < lastTop;
     const atBottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1;
     const resumeFollowing = atBottom && (following || !movingUp);
@@ -275,19 +276,14 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
 
   function onWheel(event: WheelEvent): void {
     if (!scroller) return;
-    if (event.deltaY !== 0) showScrollbar();
     if (event.deltaY < 0) loadEarlier();
     if (event.deltaY < 0 && scroller.scrollTop > 0) cancelFollow();
   }
 
   function onKeyDown(event: KeyboardEvent): void {
-    if (
-      event.target === scroller &&
-      ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)
-    )
-      showScrollbar();
     if (event.target !== scroller || event.key !== "End" || event.shiftKey || event.altKey) return;
     event.preventDefault();
+    showScrollbar();
     follow(true);
   }
 
@@ -300,7 +296,6 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     scroller?.removeEventListener("qm-content-updating", onContentUpdating);
     scroller?.removeEventListener("scroll", onScroll);
     scroller?.removeEventListener("wheel", onWheel);
-    scroller?.removeEventListener("touchmove", showScrollbar);
     scroller?.removeEventListener("click", onClick);
     scroller?.removeEventListener("keydown", onKeyDown);
     scroller?.style.removeProperty("--chat-sticky-top");
@@ -324,7 +319,6 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
       scroller?.addEventListener("qm-content-updating", onContentUpdating);
       scroller?.addEventListener("scroll", onScroll, { passive: true });
       scroller?.addEventListener("wheel", onWheel, { passive: true });
-      scroller?.addEventListener("touchmove", showScrollbar, { passive: true });
       scroller?.addEventListener("click", onClick);
       scroller?.addEventListener("keydown", onKeyDown);
       if (typeof ResizeObserver !== "undefined") {

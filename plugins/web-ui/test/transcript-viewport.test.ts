@@ -1009,19 +1009,16 @@ test("an inline steer does not take the sticky prompt marker from the original r
   }
 });
 
-test("the scrollbar follows user scrolling and hides after idle or disposal", (t) => {
+test("the scrollbar follows scrolling without requiring wheel input or pane focus", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const f = fixture();
   try {
     assert.equal(f.s.classList.contains("user-scrolling"), false);
+    assert.notEqual(f.s.ownerDocument.activeElement, f.s);
     f.scroll(500);
-    assert.equal(f.s.classList.contains("user-scrolling"), false);
-    f.wheelUp();
-    f.scroll(400);
     assert.equal(f.s.classList.contains("user-scrolling"), true);
     t.mock.timers.tick(500);
-    f.wheelUp();
-    f.scroll(300);
+    f.scroll(400);
     t.mock.timers.tick(500);
     assert.equal(f.s.classList.contains("user-scrolling"), true);
     f.viewport.follow(true);
@@ -1029,10 +1026,28 @@ test("the scrollbar follows user scrolling and hides after idle or disposal", (t
     f.scroll(800);
     t.mock.timers.tick(500);
     assert.equal(f.s.classList.contains("user-scrolling"), false);
-    f.wheelUp();
+    f.scroll(300);
     f.viewport.dispose();
     assert.equal(f.s.classList.contains("user-scrolling"), false);
-    f.wheelUp();
+    f.scroll(200);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("the End key reveals the scrollbar for the user-requested jump", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  try {
+    f.scroll(300);
+    t.mock.timers.tick(1000);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.KeyboardEvent("keydown", { key: "End" }));
+    f.flush();
+    assert.equal(f.s.scrollTop, 800);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    t.mock.timers.tick(1000);
     assert.equal(f.s.classList.contains("user-scrolling"), false);
   } finally {
     f.close();
