@@ -523,7 +523,7 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
         aria-label=${triggerLabel}
-        ${tip(routedTip)}
+        ${tip(routedTip || triggerLabel)}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
         aria-controls=${loadoutMenuId}

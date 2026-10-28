@@ -1,0 +1,103 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { JSDOM } from "jsdom";
+
+const dom = new JSDOM("<main></main>", { pretendToBeVisual: true });
+for (const key of [
+  "window",
+  "document",
+  "HTMLElement",
+  "Element",
+  "Node",
+  "MutationObserver",
+  "getComputedStyle",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+] as const) {
+  Object.defineProperty(globalThis, key, { configurable: true, value: dom.window[key] });
+}
+Object.defineProperty(globalThis, "ResizeObserver", {
+  configurable: true,
+  value: class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+});
+const { createDockview } = await import("dockview-core");
+const { SplitDropPreview } = await import("../src/split-drop-preview.ts");
+
+for (const nested of [false, true])
+  test(`drop previews match ${nested ? "nested" : "column"} layouts without changing the live canvas`, () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const source = createDockview(host, {
+      theme: { name: "qm", className: "dockview-theme-qm" },
+      createComponent: () => ({ element: document.createElement("div"), init() {} }),
+    });
+    source.layout(1200, 800, true);
+    source.addPanel({ id: "a", component: "pane", title: "First" });
+    source.addPanel({
+      id: "b",
+      component: "pane",
+      title: "Second",
+      position: { referencePanel: "a", direction: "right" },
+    });
+    if (nested) {
+      source.addPanel({
+        id: "c",
+        component: "pane",
+        title: "Third",
+        position: { referencePanel: "b", direction: "below" },
+      });
+      source.getPanel("a")!.api.setSize({ width: 420 });
+    }
+    const preview = new SplitDropPreview(document.body);
+    const before = source.toJSON();
+    const sizes = (api: typeof source) =>
+      api.panels
+        .map((p) => ({ title: p.title, width: p.api.width, height: p.api.height }))
+        .sort((a, b) => a.title!.localeCompare(b.title!));
+    const shape = (api: typeof source) =>
+      JSON.stringify(api.toJSON().grid, (key, value) => {
+        if (key === "id") return undefined;
+        if (key === "views") return (value as string[]).map((id) => api.getPanel(id)?.title);
+        if (key === "activeView") return api.getPanel(value as string)?.title;
+        return value;
+      });
+    try {
+      for (const [edge, direction] of [
+        ["right", "right"],
+        ["left", "left"],
+        ["top", "above"],
+        ["bottom", "below"],
+        ["center", "within"],
+        ["tab", "within"],
+      ] as const) {
+        source.fromJSON(before);
+        preview.show(source, "a", edge, "Incoming");
+        assert.deepEqual(source.toJSON(), before, "hover leaves the live layout untouched");
+        source.addPanel({
+          id: "new",
+          component: "pane",
+          title: "Incoming",
+          position: { referencePanel: "a", direction },
+        });
+        if (edge === "center") source.removePanel(source.getPanel("a")!);
+        assert.deepEqual(sizes(preview.api), sizes(source), `${edge} preview matches the actual drop sizes`);
+        assert.equal(preview.api.groups.length, source.groups.length);
+        assert.equal(shape(preview.api), shape(source), `${edge} preview matches the pane order and geometry`);
+        assert.match(preview.element.textContent!, /Drop to/);
+        if (edge === "right" && !nested) {
+          assert.equal(preview.api.groups.length, 3);
+          assert.ok(preview.api.panels.every((p) => Math.abs(p.api.width - 400) < 2));
+        }
+      }
+      preview.hide();
+      assert.equal(preview.element.hidden, true);
+    } finally {
+      preview.dispose();
+      source.dispose();
+      host.remove();
+    }
+  });

@@ -2,6 +2,12 @@ export type DropEdge = "left" | "right" | "top" | "bottom" | "center";
 
 export type SplitEdge = Exclude<DropEdge, "center">;
 
+export function edgeToDirection(edge: SplitEdge): "left" | "right" | "above" | "below" {
+  if (edge === "top") return "above";
+  if (edge === "bottom") return "below";
+  return edge;
+}
+
 export const MAX_TILES = 16;
 
 export const MAX_PANES = 16;

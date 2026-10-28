@@ -13,15 +13,14 @@ import {
   Brain,
   Clock3,
   ChevronDown,
+  Columns2,
   Cog,
-  Expand,
   Files,
   KeyRound,
   Link,
   Maximize2,
-  MoreHorizontal,
-  Plus,
   Rocket,
+  Rows2,
   Shrink,
   X,
   type IconNode,
@@ -43,6 +42,7 @@ import {
 } from "dockview-core";
 import {
   dropAddsTile,
+  edgeToDirection,
   layoutNeedsSessionList,
   MAX_PANES,
   MAX_TILES,
@@ -53,6 +53,7 @@ import {
   type PaneSeed,
   type SplitEdge,
 } from "./split-layout";
+import { SplitDropPreview } from "./split-drop-preview";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
 import { attachTooltip, tip } from "./tooltip";
@@ -125,6 +126,7 @@ const paneTabs = new Set<PaneTab>();
 const groupActions = new Set<GroupActions>();
 const stripDrops = new Set<StripDrop>();
 let paneDrag: PaneDrag | null = null;
+let dropPreview: SplitDropPreview | null = null;
 let toastMsg = "";
 let toastTimer: number | null = null;
 let headerSignature = "";
@@ -203,7 +205,7 @@ function buildDock(): DockviewApi {
   toastEl.className = "split-toast-layer";
   host.appendChild(toastEl);
   const api = createDockview(dockEl, {
-    theme: { name: "qm", className: "dockview-theme-qm", gap: 1 },
+    theme: { name: "qm", className: "dockview-theme-qm" },
     createComponent: () => new PaneContent(),
     createTabComponent: () => new PaneTab(),
     createRightHeaderActionComponent: () => new GroupActions(),
@@ -290,6 +292,8 @@ function nativeDrop(api: DockviewApi, e: DockviewWillDropEvent): Parameters<type
 }
 
 function disposeDock(): void {
+  dropPreview?.dispose();
+  dropPreview = null;
   dockApi?.dispose();
   dockApi = null;
   paneContents.clear();
@@ -373,12 +377,6 @@ function seedFromV1(api: DockviewApi, seeds: PaneSeed[]): void {
     );
   }
   persist();
-}
-
-function edgeToDirection(edge: SplitEdge): "left" | "right" | "above" | "below" {
-  if (edge === "top") return "above";
-  if (edge === "bottom") return "below";
-  return edge;
 }
 
 onPhoneChange((phone) => {
@@ -654,11 +652,6 @@ export function startNewChatInCanvas(scopeId?: string, threadRef?: string): Conv
   return paneContents.get(fresh.id)?.conversation ?? null;
 }
 
-function paneSplitWithBlank(panel: IDockviewPanel): void {
-  const r = panel.group.element.getBoundingClientRect();
-  splitPane(panel.id, r.width >= r.height ? "right" : "bottom", {});
-}
-
 function closePanels(panels: IDockviewPanel[]): void {
   if (!dockApi) return;
   for (const p of panels) {
@@ -739,6 +732,8 @@ function drawStripDrops(): void {
 }
 
 export function endPaneDrag(): void {
+  dropPreview?.dispose();
+  dropPreview = null;
   if (!paneDrag) return;
   paneDrag = null;
   canvasHost?.classList.remove("session-dragging");
@@ -754,13 +749,25 @@ document.addEventListener("mousemove", (e) => {
   if (e.buttons === 0) endPaneDrag();
 });
 
-function zoneTpl(edge: DropEdge, label: string, onDrop: () => void): TemplateResult {
+function showDropPreview(paneId: string, edge: DropEdge | "tab"): void {
+  if (!dockApi || !canvasHost || !paneDrag || paneDrag.existing()) return;
+  dropPreview ??= new SplitDropPreview(canvasHost);
+  const session = sessionsState.list.find((s) => s.id === paneDrag?.params.sessionId);
+  const title = session ? sessionTitle(session) : paneSeedTitle(paneDrag.params);
+  dropPreview.show(dockApi, paneId, edge, title);
+}
+
+function zoneTpl(edge: DropEdge, label: string, onDrop: () => void, onOver?: () => void): TemplateResult {
   const over = (e: DragEvent): void => {
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
     (e.currentTarget as HTMLElement).classList.add("over");
+    onOver?.();
   };
-  const leave = (e: DragEvent): void => (e.currentTarget as HTMLElement).classList.remove("over");
+  const leave = (e: DragEvent): void => {
+    (e.currentTarget as HTMLElement).classList.remove("over");
+    dropPreview?.hide();
+  };
   const drop = (e: DragEvent): void => {
     e.preventDefault();
     onDrop();
@@ -770,10 +777,11 @@ function zoneTpl(edge: DropEdge, label: string, onDrop: () => void): TemplateRes
   </div>`;
 }
 
-function splitZonesTpl(act: (edge: DropEdge) => () => void): TemplateResult {
+function splitZonesTpl(paneId: string, act: (edge: DropEdge) => () => void): TemplateResult {
   return html`
-    ${zoneTpl("left", "Split left", act("left"))} ${zoneTpl("right", "Split right", act("right"))}
-    ${zoneTpl("top", "Split up", act("top"))} ${zoneTpl("bottom", "Split down", act("bottom"))}
+    ${(["left", "right", "top", "bottom"] as const).map((edge) =>
+      zoneTpl(edge, "", act(edge), () => showDropPreview(paneId, edge)),
+    )}
   `;
 }
 
@@ -790,7 +798,8 @@ function paneZonesTpl(paneId: string): TemplateResult | typeof nothing {
       : nothing;
   const act = paneZoneAct(paneId);
   const canSplit = dockApi.panels.length < MAX_PANES && dockApi.groups.length < MAX_TILES;
-  return html`${zoneTpl("center", "Replace pane", act("center"))} ${canSplit ? splitZonesTpl(act) : nothing}`;
+  return html`${zoneTpl("center", "", act("center"), () => showDropPreview(paneId, "center"))}
+  ${canSplit ? splitZonesTpl(paneId, act) : nothing}`;
 }
 
 function paneZoneAct(paneId: string): (edge: DropEdge) => () => void {
@@ -1344,13 +1353,21 @@ class StripDrop implements IHeaderActionsRenderer {
     const group = this.group;
     render(
       group && stripJoinable()
-        ? zoneTpl("center", "Open as tab", () => {
-            const drag = paneDrag;
-            endPaneDrag();
-            const anchor = group.activePanel ?? group.panels[0];
-            if (!drag || !anchor || focusExistingPane(drag.existing)) return;
-            tabIntoPane(anchor.id, drag.params);
-          })
+        ? zoneTpl(
+            "center",
+            "Open as tab",
+            () => {
+              const drag = paneDrag;
+              endPaneDrag();
+              const anchor = group.activePanel ?? group.panels[0];
+              if (!drag || !anchor || focusExistingPane(drag.existing)) return;
+              tabIntoPane(anchor.id, drag.params);
+            },
+            () => {
+              const anchor = group.activePanel ?? group.panels[0];
+              if (anchor) showDropPreview(anchor.id, "tab");
+            },
+          )
         : nothing,
       this.element,
     );
@@ -1418,14 +1435,14 @@ class GroupActions implements IHeaderActionsRenderer {
       this.draw();
       if (p) openPaneTool(p, tool);
     };
-    if (single) this.menuOpen = false;
     const closeMenu = (): void => {
       this.menuOpen = false;
       this.draw();
     };
-    const splitPane = (): void => {
+    const addSplit = (edge: SplitEdge): void => {
       const p = activePanel();
-      if (p) paneSplitWithBlank(p);
+      closeMenu();
+      if (p) splitPane(p.id, edge, {});
     };
     const menu = this.menuOpen
       ? html`
@@ -1434,25 +1451,18 @@ class GroupActions implements IHeaderActionsRenderer {
             role="menu"
             ${ref(this.placeMenu)}
             @click=${(e: Event) => e.stopPropagation()}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key !== "Escape") return;
+              e.stopPropagation();
+              closeMenu();
+              this.element.querySelector<HTMLButtonElement>(".split-tools-btn")?.focus();
+            }}
           >
-            ${PANE_TOOLS.map(
-              (t) => html`
-                <button class="session-menu-option" type="button" role="menuitem" @click=${() => runTool(t.tool)}>
-                  ${icon(t.glyph, 15)}<span>${t.label}</span>
-                </button>
-              `,
-            )}
-            <div class="split-tools-menu-sep" role="separator"></div>
-            <button
-              class="session-menu-option"
-              type="button"
-              role="menuitem"
-              @click=${() => {
-                closeMenu();
-                splitPane();
-              }}
-            >
-              ${icon(Plus, 15)}<span>Split with a new session</span>
+            <button class="session-menu-option" type="button" role="menuitem" @click=${() => addSplit("right")}>
+              ${icon(Columns2, 15)}<span>New pane to the right</span>
+            </button>
+            <button class="session-menu-option" type="button" role="menuitem" @click=${() => addSplit("bottom")}>
+              ${icon(Rows2, 15)}<span>New pane below</span>
             </button>
             <button
               class="session-menu-option"
@@ -1464,22 +1474,36 @@ class GroupActions implements IHeaderActionsRenderer {
                 else props.api.maximize();
               }}
             >
-              ${icon(maximized ? Shrink : Expand, 15)}<span
-                >${maximized ? "Restore to grid (Esc)" : "Focus over the grid"}</span
+              ${icon(maximized ? Shrink : Maximize2, 15)}<span
+                >${maximized ? "Restore split view (Esc)" : "Expand pane"}</span
               >
             </button>
+            ${
+              single
+                ? nothing
+                : html`
+                    <div class="split-tools-menu-sep" role="separator"></div>
+                    ${PANE_TOOLS.map(
+                      (t) => html`
+                        <button
+                          class="session-menu-option"
+                          type="button"
+                          role="menuitem"
+                          @click=${() => runTool(t.tool)}
+                        >
+                          ${icon(t.glyph, 15)}<span>${t.label}</span>
+                        </button>
+                      `,
+                    )}
+                  `
+            }
           </div>
         `
       : nothing;
     const buttons: { label: string; glyph: TemplateResult | SVGElement; cls?: string; run: () => void }[] = [
       {
-        label: "Split this pane with a new session",
-        glyph: icon(Plus, 15),
-        run: splitPane,
-      },
-      {
-        label: "Open full screen",
-        glyph: icon(Maximize2, 14),
+        label: maximized ? "Restore split view" : "Expand pane",
+        glyph: icon(maximized ? Shrink : Maximize2, 14),
         run: () => {
           const p = activePanel();
           if (!p) return;
@@ -1552,30 +1576,28 @@ class GroupActions implements IHeaderActionsRenderer {
                   </button>`;
                 })}
               </span>`
-            : html`<span class="split-tools">
-                <button
-                  class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
-                  type="button"
-                  ${tip("Tools")}
-                  aria-label="Tools"
-                  aria-haspopup="menu"
-                  aria-expanded=${this.menuOpen ? "true" : "false"}
-                  @click=${() => {
-                    tabMenu = null;
-                    this.menuOpen = !this.menuOpen;
-                    this.draw();
-                  }}
-                >
-                  ${icon(MoreHorizontal, 15)}
-                </button>
-                ${menu}
-              </span>`
+            : nothing
         }
+        <span class="split-tools">
+          <button
+            class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
+            type="button"
+            ${tip("Pane layout and tools")}
+            aria-label="Pane layout and tools"
+            aria-haspopup="menu"
+            aria-expanded=${this.menuOpen ? "true" : "false"}
+            @click=${() => {
+              tabMenu = null;
+              this.menuOpen = !this.menuOpen;
+              this.draw();
+            }}
+          >
+            ${icon(Columns2, 15)}
+          </button>
+          ${menu}
+        </span>
         ${sessionId ? sessionActions(sessionId, panel!.id, "split-group-session-action") : nothing}
-        <span class="split-pane-actions-wide"
-          >${single ? nothing : buttons.filter((b) => !b.cls).map(headerButton)}</span
-        >
-        ${single ? nothing : buttons.filter((b) => b.cls).map(headerButton)}${tabMenuTpl}`,
+        ${single ? nothing : buttons.map(headerButton)}${tabMenuTpl}`,
       this.element,
     );
   }
@@ -1602,6 +1624,10 @@ function notePaneSession(paneId: string, sessionId: string | null, threadRef: st
 }
 
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && paneDrag) {
+    endPaneDrag();
+    return;
+  }
   if (e.key === "Escape" && splitState.active && dockApi?.hasMaximizedGroup()) dockApi.exitMaximizedGroup();
 });
 

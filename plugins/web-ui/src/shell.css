@@ -6,6 +6,7 @@
   --app-serif: ui-serif, Georgia, "Times New Roman", Times, serif;
   --brand-font: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
   --sidebar-w: 280px;
+  --sidebar-bg: color-mix(in srgb, var(--secondary) 42%, var(--background));
   --text-scale: 1;
   --session-title-size: 13.5px;
   --work-fold-space: 18px;
@@ -42,11 +43,7 @@
   --cta: oklch(0.27 0.062 250);
   --cta-hover: oklch(0.33 0.07 250);
   --cta-foreground: oklch(0.99 0 0);
-  --conversation-hover: color-mix(
-    in srgb,
-    var(--foreground) 4%,
-    color-mix(in srgb, var(--secondary) 42%, var(--background))
-  );
+  --conversation-hover: color-mix(in srgb, var(--foreground) 4%, var(--sidebar-bg));
   --inbox-row-hover: color-mix(in srgb, var(--foreground) 4%, var(--background));
   --success: #1a7f37;
   --warning: #a66700;
@@ -151,7 +148,7 @@ body {
   flex-direction: column;
   overflow: hidden;
   padding: 10px 4px 10px 8px;
-  background: color-mix(in srgb, var(--secondary) 42%, var(--background));
+  background: var(--sidebar-bg);
   transition: width 0.18s ease;
 }
 /* Collapsed, the sidebar narrows to a rail that keeps its own toggle in flow — nothing
@@ -1247,6 +1244,16 @@ a.chat-row-open {
 }
 .split-canvas:not(.single-pane) .custom-chat-shell.in-pane.empty-chat {
   grid-template-rows: minmax(0, 1fr) auto;
+}
+.split-canvas:not(.single-pane) .empty-chat > .chat-scroll {
+  padding-block: var(--chat-scroll-pad-top);
+  scrollbar-gutter: stable both-edges;
+}
+.split-canvas:not(.single-pane) .empty-stack {
+  justify-content: center;
+}
+.split-canvas:not(.single-pane) .empty-chat .chat-cta {
+  margin-bottom: 0;
 }
 .drop-overlay {
   position: absolute;
@@ -7297,6 +7304,7 @@ h3.ambient-field-label {
 
 .split-canvas.single-pane .dockview-theme-qm {
   --dv-tabs-and-actions-container-height: 56px;
+  --split-tab-h: 34px;
 }
 
 .split-canvas.single-pane .dv-groupview {
@@ -7306,13 +7314,7 @@ h3.ambient-field-label {
 
 .split-canvas.single-pane .dockview-theme-qm .dv-groupview .dv-tabs-and-actions-container {
   --split-strip-line: color-mix(in srgb, var(--border) 68%, transparent);
-  --split-strip-bg: color-mix(in srgb, var(--background) 94%, var(--secondary));
   padding: 0 16px;
-}
-
-.split-canvas.single-pane .dockview-theme-qm .dv-groupview .dv-tabs-and-actions-container:not(.dv-single-tab) {
-  --split-strip-pad: 11px;
-  padding-top: var(--split-strip-pad);
 }
 
 .split-canvas.single-pane .dv-render-overlay {
@@ -7343,6 +7345,7 @@ h3.ambient-field-label {
 
 .dockview-theme-qm {
   --dv-tabs-and-actions-container-height: 35px;
+  --split-tab-h: 26px;
   --dv-separator-border: var(--border);
   --dv-floating-box-shadow: none;
   --dv-tabs-and-actions-container-font-size: var(--font-12-5);
@@ -7374,7 +7377,7 @@ h3.ambient-field-label {
 
 .dockview-theme-qm .dv-tabs-and-actions-container {
   --split-strip-line: var(--border);
-  --split-strip-bg: var(--secondary);
+  --split-strip-bg: var(--sidebar-bg);
   --split-strip-pad: 4px;
   position: relative;
   box-sizing: border-box;
@@ -7409,17 +7412,8 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) {
-  --dv-activegroup-visiblepanel-tab-background-color: var(--background);
-  --dv-inactivegroup-visiblepanel-tab-background-color: var(--background);
-  padding-bottom: 0;
-  border-bottom: 0;
-  background: linear-gradient(var(--split-strip-line), var(--split-strip-line)) bottom / 100% 1px no-repeat
-    var(--split-strip-bg);
-}
-
-.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tabs-container,
-.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-right-actions-container {
-  align-items: flex-start;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--secondary);
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--secondary);
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-group-session-action {
@@ -7448,11 +7442,7 @@ h3.ambient-field-label {
   display: inline-flex;
 }
 
-/* Multi-tab groups: inactive tabs are muted labels on the strip; the active tab shares the
-   body's surface and runs down onto it, carrying its own session actions. Tabs shrink to a
-   floor and then move into the strip's overflow menu; the active one keeps a higher floor. */
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
-  --split-tab-h: 34px;
   height: var(--split-tab-h);
   flex: 0 1 auto;
   min-width: 72px;
@@ -7460,20 +7450,17 @@ h3.ambient-field-label {
   padding: 0 8px 0 10px;
   display: flex;
   align-items: center;
-  border: 1px solid transparent;
-  margin-right: 2px;
+  border-radius: 6px;
+  margin-right: 4px;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab.dv-active-tab {
-  flex: 0 1 auto;
   min-width: 150px;
-  max-width: 320px;
-  align-self: stretch;
-  height: auto;
-  padding-bottom: var(--split-strip-pad);
-  border-color: var(--border);
-  border-bottom-color: transparent;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-title {
+  line-height: 18px;
+  font-weight: 500;
 }
 
 .dockview-theme-qm
@@ -7481,12 +7468,14 @@ h3.ambient-field-label {
   > .dv-tabs-and-actions-container:not(.dv-single-tab)
   .dv-tabs-container
   > .dv-tab:not(.dv-active-tab):hover {
-  background-color: color-mix(in srgb, var(--foreground) 7%, var(--secondary));
+  background-color: var(--secondary);
 }
 
-.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab:not(.dv-active-tab) .split-pane-title {
+.dockview-theme-qm
+  .dv-tabs-and-actions-container:not(.dv-single-tab)
+  .dv-tab:not(.dv-active-tab):not(:hover):not(:has(:focus-visible))
+  .split-pane-title {
   color: var(--muted-foreground);
-  font-weight: 500;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-group-close {
@@ -7507,7 +7496,8 @@ h3.ambient-field-label {
 
 .dockview-theme-qm .dv-tabs-overflow-dropdown-default:hover {
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--foreground) 7%, var(--secondary));
+  background: var(--secondary);
+  color: var(--foreground);
 }
 
 /* Its menu is anchored in a layer the pane render-overlays and the sashes (z-index 1 and
@@ -7557,9 +7547,7 @@ h3.ambient-field-label {
   transition: opacity 0.12s ease;
 }
 
-.dv-tab.dv-active-tab .split-tab-actions,
-.dv-tab:hover .split-tab-actions,
-.dv-tab:focus-within .split-tab-actions {
+.dv-tab:is(:hover, :focus-visible, :has(:focus-visible)) .split-tab-actions {
   opacity: 1;
   pointer-events: auto;
 }
@@ -7572,8 +7560,7 @@ h3.ambient-field-label {
   opacity: 0.55;
 }
 
-.dv-tab:hover .split-tab-actions .icon-btn,
-.dv-tab:focus-within .split-tab-actions .icon-btn {
+.dv-tab:is(:hover, :focus-visible, :has(:focus-visible)) .split-tab-actions .icon-btn {
   opacity: 0.8;
 }
 
@@ -7631,14 +7618,12 @@ h3.ambient-field-label {
   flex: 0 0 auto;
 }
 
-.split-pane-actions-wide {
-  display: contents;
-}
-
-/* A narrow pane keeps the tools menu, share, archive and the group close in its header;
-   split and focus fold into the menu. */
-@container pane-group (max-width: 560px) {
-  .split-pane-actions-wide {
+@media (hover: hover) {
+  .split-canvas:not(.single-pane)
+    .dv-tabs-and-actions-container:not(:hover):not(:has(:focus-visible, [aria-expanded="true"], .split-tab-menu))
+    .split-pane-actions
+    > :not(.split-group-close),
+  .dv-tab:not(:is(:hover, :focus-visible, :has(:focus-visible))) .split-tab-actions > :not(.split-tab-close) {
     display: none;
   }
 }
@@ -7685,6 +7670,7 @@ h3.ambient-field-label {
 /* In the strip the shared hover wash needs to differ from the strip's own background. */
 .dockview-theme-qm .dv-tabs-and-actions-container .icon-btn:hover {
   background: color-mix(in srgb, var(--foreground) 7%, var(--secondary));
+  color: var(--foreground);
 }
 
 .split-pane-content {
@@ -7722,12 +7708,6 @@ h3.ambient-field-label {
   width: 27px;
   height: 27px;
   min-width: 27px;
-  border-radius: 0;
-}
-
-.split-canvas:not(.single-pane) .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
-  --split-tab-h: 27px;
-  border-radius: 0;
 }
 
 .split-canvas.resizing .split-pane-chat {
@@ -7738,9 +7718,10 @@ h3.ambient-field-label {
   user-select: none;
 }
 
-/* ── Resize sashes: invisible at rest, the old divider's 3px accent bar on hover/drag. ── */
-.dockview-theme-qm .dv-sash {
-  position: relative;
+.dockview-theme-qm .dv-sash:not(.dv-disabled)::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
 }
 
 .dockview-theme-qm .dv-sash::after {
@@ -7749,24 +7730,24 @@ h3.ambient-field-label {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  border-radius: 2px;
-  background: transparent;
+  border-radius: 999px;
+  background: var(--border);
+  box-shadow: 0 0 0 2px var(--background);
   transition: background 0.12s ease;
 }
 
 .dockview-theme-qm .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash::after {
-  width: 3px;
-  height: calc(100% - 16px);
+  width: 4px;
+  height: min(32px, 50%);
 }
 
 .dockview-theme-qm .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash::after {
-  width: calc(100% - 16px);
-  height: 3px;
+  width: min(32px, 50%);
+  height: 4px;
 }
 
 .dockview-theme-qm .dv-sash:hover::after,
-.dockview-theme-qm .dv-sash.dv-active::after,
-.split-canvas.resizing .dv-sash::after {
+.dockview-theme-qm .dv-sash.dv-active::after {
   background: color-mix(in srgb, var(--primary) 60%, var(--border));
 }
 
@@ -7775,9 +7756,9 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-drop-target-dropzone .dv-drop-target-selection {
-  border: 2px dashed color-mix(in srgb, var(--primary) 55%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--foreground) 35%, var(--border));
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
   transition: opacity 0.12s ease;
 }
 
@@ -7796,6 +7777,8 @@ h3.ambient-field-label {
 }
 
 .split-zones {
+  --split-edge-x: min(22%, 88px);
+  --split-edge-y: min(22%, 88px);
   position: absolute;
   inset: 0;
   z-index: 6;
@@ -7808,34 +7791,36 @@ h3.ambient-field-label {
   align-items: center;
   justify-content: center;
   margin: 0;
-  border: 2px dashed color-mix(in srgb, var(--primary) 55%, var(--border));
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--primary) 6%, transparent);
   color: var(--muted-foreground);
-  font-size: var(--font-12-5);
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: center;
   pointer-events: auto;
-  transition:
-    background 0.12s ease,
-    color 0.12s ease;
 }
 
 .split-zone span {
+  position: relative;
+  box-sizing: border-box;
+  max-width: calc(100% - 16px);
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--popover);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.06);
   pointer-events: none;
 }
 
-.split-zone.over {
-  background: color-mix(in srgb, var(--primary) 20%, transparent);
-  color: var(--foreground);
+.split-zone.over span {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
 }
 
 .split-canvas.session-dragging .dv-tabs-and-actions-container {
-  outline: 2px solid color-mix(in srgb, var(--primary) 55%, var(--border));
-  outline-offset: -2px;
-  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  background: var(--secondary);
 }
 
-/* The strip's own drop target: the highlight above is only paint. */
 .strip-zones {
   position: absolute;
   inset: 0;
@@ -7844,58 +7829,126 @@ h3.ambient-field-label {
 
 .strip-zones .split-zone {
   inset: 0;
-  margin: 2px;
-  border-color: transparent;
-  background: transparent;
-  font-size: 11.5px;
 }
 
-.strip-zones .split-zone.over {
-  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
-  background: color-mix(in srgb, var(--primary) 14%, transparent);
+.strip-zones .split-zone span {
+  padding: 3px 8px;
+  border-radius: 5px;
+  box-shadow: none;
 }
 
 .zone-top {
-  left: 25%;
-  right: 25%;
+  left: var(--split-edge-x);
+  right: var(--split-edge-x);
   top: 0;
-  height: 25%;
+  height: var(--split-edge-y);
 }
 
 .zone-bottom {
-  left: 25%;
-  right: 25%;
+  left: var(--split-edge-x);
+  right: var(--split-edge-x);
   bottom: 0;
-  height: 25%;
+  height: var(--split-edge-y);
 }
 
 .zone-left {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 25%;
+  width: var(--split-edge-x);
 }
 
 .zone-right {
   right: 0;
   top: 0;
   bottom: 0;
-  width: 25%;
+  width: var(--split-edge-x);
 }
 
-/* Joining a tab strip is offered on the strip itself now, so the inner box is one target
-   again — the whole of it replaces what the pane is showing. */
 .zone-center {
-  left: 25%;
-  right: 25%;
-  top: 25%;
-  bottom: 25%;
+  left: var(--split-edge-x);
+  right: var(--split-edge-x);
+  top: var(--split-edge-y);
+  bottom: var(--split-edge-y);
 }
 
 .split-zones > .split-zone:only-child {
   inset: 0;
   width: auto;
   height: auto;
+}
+
+.split-zone span:empty {
+  display: none;
+}
+
+.split-canvas.session-dragging::after {
+  content: "Edge to split · Inside to replace · Header to add a tab · Esc to cancel";
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--popover);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.split-drop-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: var(--background);
+}
+
+.split-drop-preview,
+.split-drop-preview * {
+  pointer-events: none !important;
+}
+
+.split-canvas .split-drop-preview .dv-groupview {
+  transition: none;
+  background: var(--secondary);
+  opacity: 0.65;
+}
+
+.split-canvas .split-drop-preview .split-preview-destination {
+  opacity: 1;
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.split-preview-title {
+  overflow: hidden;
+  padding: 0 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-13);
+  font-weight: 500;
+}
+
+.split-preview-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 16px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: var(--font-13);
+  text-align: center;
+}
+
+.split-preview-incoming {
+  background: color-mix(in srgb, var(--primary) 8%, var(--background));
+  box-shadow: inset 0 0 0 2px var(--primary);
 }
 
 .split-toast {
@@ -7977,6 +8030,7 @@ h3.ambient-field-label {
 }
 
 .split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
+  --composer-control-size: 28px;
   --composer-font-size: 12px;
   --composer-pad-block: 10px;
   --composer-pad-inline: 10px;
@@ -7994,6 +8048,10 @@ h3.ambient-field-label {
   width: 34px;
   height: 34px;
   min-height: 34px;
+}
+.split-canvas:not(.single-pane) .composer-toolbar :is(.send-btn, .stop-btn) svg {
+  width: 14px;
+  height: 14px;
 }
 [data-density] .runtime-upgrade,
 [data-density] .attachment-strip,
@@ -10335,8 +10393,10 @@ h3.ambient-field-label {
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
   .empty-chat .chat-scroll {
-    display: flex;
-    flex-direction: column;
+    padding-block: var(--chat-scroll-pad-top);
+    scrollbar-gutter: stable both-edges;
+  }
+  .empty-chat .empty-stack {
     justify-content: center;
   }
   .empty-chat .chat-cta {
@@ -11820,6 +11880,21 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
 .split-canvas:not(.single-pane) .composer-wrap .composer-toolbar .menu-button.loadout-button {
   max-width: 180px;
 }
+.split-canvas:not(.single-pane) .composer-wrap .composer-toolbar :is(.icon-btn, .menu-button, .send-btn, .stop-btn) {
+  height: var(--composer-control-size);
+  min-height: var(--composer-control-size);
+  border-radius: var(--radius-sm);
+}
+.split-canvas:not(.single-pane) .composer-wrap .composer-toolbar :is(.icon-btn, .send-btn, .stop-btn) {
+  width: var(--composer-control-size);
+}
+.split-canvas:not(.single-pane) .composer-wrap .composer-attach {
+  transform: none;
+}
+.split-canvas:not(.single-pane) .composer-wrap .composer-attach svg {
+  width: 12px;
+  height: 12px;
+}
 
 @container split-pane (max-width: 470px) {
   .composer-wrap .loadout-button .menu-label,
@@ -11827,7 +11902,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
     display: none;
   }
   .composer-wrap .composer-toolbar .menu-button.loadout-button {
-    width: 34px;
+    width: var(--composer-control-size, 34px);
     padding: 0;
     justify-content: center;
   }
@@ -12363,12 +12438,6 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   min-width: 80px;
 }
 
-.split-canvas:not(.single-pane)
-  .dv-groupview:not(.dv-active-group):not(:hover):not(:focus-within)
-  :is(.dv-right-actions-container, .split-tab-actions) {
-  opacity: 0;
-  pointer-events: none;
-}
 .ui-canvas {
   position: fixed;
   inset: 0;
