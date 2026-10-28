@@ -154,7 +154,7 @@ export async function buildTurnTools(ctx: TurnCtx, turn: TurnToolsInput) {
 
 /** The turn's background-process and monitor brokers, when the sandbox supports process sessions. */
 function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
-  const { deps, actor, conversation, scopeId } = ctx;
+  const { deps, input, actor, conversation, scopeId } = ctx;
   const { memoryScopeId } = turn.context;
   const { defaultDestination } = turn.framed;
   const { provision, provisionJobSandbox } = turn.sandboxes;
@@ -176,6 +176,7 @@ function createProcessBrokers(ctx: TurnCtx, turn: TurnToolsInput) {
             ),
           scopeId: memoryScopeId,
           sessionRef: conversation.threadRef,
+          ...(input.runId ? { runId: input.runId } : {}),
           ...(deps.backgroundJobTtlMs !== undefined ? { ttlMs: deps.backgroundJobTtlMs } : {}),
           ...(deps.backgroundJobTtlMaxMs !== undefined ? { ttlMaxMs: deps.backgroundJobTtlMaxMs } : {}),
         })

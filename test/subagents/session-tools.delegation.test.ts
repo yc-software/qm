@@ -645,3 +645,24 @@ for (const surface of ["slack", "web"] as const) {
     assert.equal(await delegatedAuthorizationOrigin(next.request, r), undefined);
   });
 }
+
+test("a job-exit wake runs with the authority of the turn that started the job", async () => {
+  const r = await delegatedHumanRig();
+  const exitWake = (delegatingRunId: string, threadConversation: Conversation) => ({
+    actor,
+    conversation: threadConversation,
+    surface: "monitor",
+    origin: { kind: "automation" as const, screenData: "job output" },
+    text: "job exited",
+    delegatingRunId,
+  });
+  const childConversation = r.run.request.conversation;
+  assert.equal((await delegatedAuthorizationOrigin(exitWake(r.parent.id, conversation), r))?.kind, "human");
+  assert.equal((await delegatedAuthorizationOrigin(exitWake(r.run.id, childConversation), r))?.kind, "human");
+  assert.equal(await delegatedAuthorizationOrigin(exitWake(r.parent.id, childConversation), r), undefined);
+  const cron = await r.runs.enqueue({
+    sessionId: r.room.threadRef,
+    request: { actor, conversation, surface: "cron", origin: { kind: "automation" }, text: "nightly" },
+  });
+  assert.equal(await delegatedAuthorizationOrigin(exitWake(cron.run.id, conversation), r), undefined);
+});

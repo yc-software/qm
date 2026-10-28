@@ -54,6 +54,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "a
   errorNotice?: (noteOrStatus: string) => string;
   onClaimed?: () => Promise<void>;
   deferWhenBusy?: boolean;
+  delegatingRunId?: string;
 }
 
 export interface TriggerOutcome {
@@ -282,6 +283,7 @@ function fireRequest(
     ...(spec.model ? { model: spec.model } : {}),
     ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
     ...(spec.readOnly ? { readOnly: true } : {}),
+    ...(spec.delegatingRunId ? { spawned: true, delegatingRunId: spec.delegatingRunId } : {}),
     ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
     ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
     idempotencyKey: spec.fireKey,

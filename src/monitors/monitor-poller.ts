@@ -256,7 +256,9 @@ export function createMonitorPoller(deps: MonitorPollerDeps): MonitorPoller {
     event: { input: string; securityScreenData: string },
     withErrorNotice = false,
   ): Promise<TriggerOutcome> {
+    const runId = m.pattern === EXIT_ONLY_PATTERN ? (await deps.processes.get(m.processId))?.runId : undefined;
     return runTrigger(triggerDeps, {
+      ...(runId ? { delegatingRunId: runId } : {}),
       owner: m.owner,
       ownerScopeId: m.ownerScopeId,
       input: event.input,

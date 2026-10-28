@@ -24,19 +24,20 @@ export async function delegatedAuthorizationOrigin(
   const seen = new Set<string>();
   let current = request;
   for (let depth = 0; depth < 32; depth++) {
+    const jobExit = current.surface === "monitor";
     if (
-      current.origin.kind === "automation" ||
+      (current.origin.kind === "automation" && !jobExit) ||
       current.readOnly ||
       current.privateSessionMessage ||
       !current.delegatingRunId ||
-      !current.sessionSenderId ||
+      (!current.sessionSenderId && !jobExit) ||
       seen.has(current.delegatingRunId)
     )
       return;
     seen.add(current.delegatingRunId);
     const source = await deps.runs.get(current.delegatingRunId);
-    const sender = await deps.sessions.getForParticipant(current.sessionSenderId, request.actor.id);
     const child = await deps.sessions.getByThread(current.conversation.threadRef);
+    const sender = jobExit ? child : await deps.sessions.getForParticipant(current.sessionSenderId!, request.actor.id);
     if (!source || !sender || !child) return;
     const delegated =
       isSubagentThreadRef(child.threadRef) &&
@@ -51,7 +52,8 @@ export async function delegatedAuthorizationOrigin(
       !child.parentSessionId &&
       !isSubagentThreadRef(child.threadRef) &&
       source.sessionId === sender.threadRef;
-    if (!delegated && !continued && !started) return;
+    const resumed = jobExit && source.sessionId === child.threadRef;
+    if (!delegated && !continued && !started && !resumed) return;
     const parent = source.request;
     const audience = new Set([parent.actor.id, ...parent.conversation.audience.map((person) => person.id)]);
     if (
