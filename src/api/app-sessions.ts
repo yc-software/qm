@@ -621,9 +621,10 @@ export function createSessionMethods(
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const rows = await deps.sessions.sideChatsOf(sessionId);
       const visible = await Promise.all(rows.map((row) => sessionForViewer(row.id, principalId)));
-      return decorateSessions(
-        principalId,
-        visible.filter((row): row is Session => row !== null),
+      return Promise.all(
+        visible
+          .filter((row): row is Session => row !== null)
+          .map(async (row) => ({ ...row, canContinue: await canContinueOnWeb(principalId, row) })),
       );
     },
 

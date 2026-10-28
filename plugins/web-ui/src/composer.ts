@@ -1612,7 +1612,7 @@ ${draft}`
         if (skipped.length) throw new Error(skipped.map((file) => file.note).join(" "));
         await submit(text, { ...selection, ...(uploaded.length ? { attachments: uploaded } : {}) });
       } catch (error) {
-        restoreStagedOnFailure(text, attachments, errMessage(error, "Could not send message."));
+        restoreStagedOnFailure(draft, attachments, errMessage(error, "Could not send message."));
         persistDraft();
       } finally {
         submitting = false;
@@ -1636,8 +1636,8 @@ ${draft}`
       if (ctx.chat.state.normalStreamFn) agent.streamFn = ctx.chat.state.normalStreamFn;
       ctx.chat.scrollToBottom();
       await agent.prompt(userSendMessage(text, attachments.length ? attachments : undefined));
-      restoreBlockedSend(agent, sentFromThread, text, attachments);
-      restoreFailedAttachments(agent, text, attachments);
+      restoreBlockedSend(agent, sentFromThread, draft, attachments);
+      restoreFailedAttachments(agent, draft, attachments);
     } catch (err) {
       ctx.chat.state.pendingSend = null;
       if (ctx.chat.state.threadRef && ctx.chat.state.sessionId === null) dropPendingSession(ctx.chat.state.threadRef);

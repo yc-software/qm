@@ -12,6 +12,7 @@ import type { Conversation, ConvCtx } from "./conv-types";
 import { messageEntrySeqs } from "./message-link";
 import { icon } from "./icons";
 import { errMessage } from "../../chassis/src/errors";
+import { reportHandledError } from "./browser-errors";
 
 export function createSideChatController(ctx: ConvCtx) {
   let sourceId: string | null = null;
@@ -35,6 +36,7 @@ export function createSideChatController(ctx: ConvCtx) {
   const anchors = new Map<HTMLElement, { session: CoreSession; range: Range }[]>();
   const observedRows = new Map<HTMLElement, HTMLElement>();
   let hovered: string | undefined;
+  let choices = new Set<string>();
   const highlightResize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => paintHighlights());
   function paintHighlights() {
     for (const [host, entries] of anchors) {
@@ -84,10 +86,10 @@ export function createSideChatController(ctx: ConvCtx) {
       for (const element of existing.values()) element.remove();
     }
   }
-  function anchorAt(event: MouseEvent) {
+  function anchorsAt(event: MouseEvent) {
     return [...anchors.values()]
       .flat()
-      .find(({ range }) =>
+      .filter(({ range }) =>
         [...range.getClientRects()].some(
           (rect) =>
             event.clientX >= rect.left - 3 &&
@@ -99,8 +101,9 @@ export function createSideChatController(ctx: ConvCtx) {
   }
 
   function dismissSelection() {
-    if (!selected || busy) return;
+    if ((!selected && !choices.size) || busy) return;
     selected = null;
+    choices.clear();
     redraw();
   }
 
@@ -114,7 +117,7 @@ export function createSideChatController(ctx: ConvCtx) {
 
   function onKeydown(event: KeyboardEvent) {
     if (event.key !== "Escape" || event.defaultPrevented) return;
-    if (selected) {
+    if (selected || choices.size) {
       event.preventDefault();
       event.stopPropagation();
       dismissSelection();
@@ -139,6 +142,8 @@ export function createSideChatController(ctx: ConvCtx) {
   function close() {
     document.removeEventListener("pointerdown", outsidePointerDown, true);
     epoch++;
+    busy = false;
+    choices.clear();
     drag = null;
     moved = false;
     if (conversation) disposeConversation(conversation);
@@ -170,6 +175,7 @@ export function createSideChatController(ctx: ConvCtx) {
         redraw();
       },
       (cause) => {
+        reportHandledError("web:side_chat_list", cause);
         if (sourceId !== id) return;
         error = errMessage(cause, "Could not load side chats.");
         redraw();
@@ -178,6 +184,7 @@ export function createSideChatController(ctx: ConvCtx) {
   }
 
   function select(event: Event) {
+    if (event.target instanceof Element && event.target.closest("button, textarea, input, [contenteditable]")) return;
     const selection = window.getSelection();
     const host = event.currentTarget as HTMLElement;
     if (busy) return;
@@ -189,11 +196,15 @@ export function createSideChatController(ctx: ConvCtx) {
     ) {
       dismissSelection();
       if (event instanceof MouseEvent && event.type === "mouseup" && selection?.isCollapsed) {
-        const anchor = anchorAt(event);
+        const matching = anchorsAt(event);
+        const anchor = matching[0];
         if (anchor) {
           returnFocus = anchor.range.startContainer.parentElement?.closest<HTMLElement>(".message-row") ?? null;
           if (returnFocus) returnFocus.tabIndex = -1;
-          void show(anchor.session);
+          if (matching.length > 1) {
+            choices = new Set(matching.map(({ session }) => session.id));
+            redraw();
+          } else void show(anchor.session);
         }
       }
       return;
@@ -312,6 +323,7 @@ export function createSideChatController(ctx: ConvCtx) {
       await openSessionInto(conv, session);
       if (conversation === conv) conv.composer.focusComposerEnd();
     } catch (cause) {
+      reportHandledError("web:side_chat_open", cause);
       if (opening !== epoch) return;
       error = errMessage(cause, "Could not open side chat.");
       redraw();
@@ -347,6 +359,7 @@ export function createSideChatController(ctx: ConvCtx) {
       window.getSelection()?.removeAllRanges();
       await show(result.session);
     } catch (cause) {
+      reportHandledError("web:side_chat_create", cause);
       if (sourceId === id) error = errMessage(cause, "Could not start side chat.");
     } finally {
       if (sourceId === id) {
@@ -360,6 +373,7 @@ export function createSideChatController(ctx: ConvCtx) {
     if (!active || busy) return;
     busy = true;
     const session = active;
+    const expanding = epoch;
     redraw();
     try {
       const result = session.sideChat?.expanded
@@ -367,16 +381,22 @@ export function createSideChatController(ctx: ConvCtx) {
         : await api<{ session: CoreSession }>(`/api/sessions/${encodeURIComponent(session.id)}/expand`, {
             method: "POST",
           });
+      if (expanding !== epoch) return;
       const expanded = { ...session, ...result.session };
       chats = chats.map((chat) => (chat.id === session.id ? expanded : chat));
-      close();
       await refreshSessions({ silent: true });
+      if (expanding !== epoch) return;
+      close();
       await openSession(expanded);
     } catch (cause) {
+      reportHandledError("web:side_chat_expand", cause);
+      if (expanding !== epoch) return;
       error = errMessage(cause, "Could not expand side chat.");
     } finally {
-      busy = false;
-      redraw();
+      if (expanding === epoch) {
+        busy = false;
+        redraw();
+      }
     }
   }
 
@@ -401,7 +421,7 @@ export function createSideChatController(ctx: ConvCtx) {
       highlightResize?.disconnect();
     },
     hover(event: MouseEvent) {
-      const next = anchorAt(event)?.session.id;
+      const next = anchorsAt(event)[0]?.session.id;
       (event.currentTarget as HTMLElement).style.cursor = next ? "pointer" : "";
       if (next !== hovered) {
         hovered = next;
@@ -416,7 +436,7 @@ export function createSideChatController(ctx: ConvCtx) {
       const matches = chats.filter((chat) => chat.sideChat && seqs.includes(chat.sideChat.entrySeq));
       return matches.length
         ? html`<div
-            class="side-chat-markers"
+            class="side-chat-markers ${matches.some((chat) => choices.has(chat.id)) ? "choosing" : ""}"
             ${ref((element) => {
               if (!element) return;
               const host = element as HTMLElement;
@@ -450,9 +470,9 @@ export function createSideChatController(ctx: ConvCtx) {
             })}
           >
             ${matches.map(
-              (chat) =>
+              (chat, index) =>
                 html`<button
-                  class="side-chat-marker"
+                  class="side-chat-marker ${choices.has(chat.id) ? "choice" : ""}"
                   type="button"
                   aria-expanded=${active?.id === chat.id}
                   aria-controls=${active?.id === chat.id ? panelId : nothing}
@@ -464,7 +484,7 @@ export function createSideChatController(ctx: ConvCtx) {
                   ${tip(chat.sideChat!.quote)}
                 >
                   ${icon(MessageSquare, 14)}
-                  <span>Open side chat</span>
+                  <span>${choices.has(chat.id) ? `${index + 1}. ${chat.title || "Side chat"}` : "Open side chat"}</span>
                   ${chat.sideChat!.expanded ? icon(ArrowUpRight, 13) : nothing}
                 </button>`,
             )}

@@ -139,6 +139,13 @@
   overflow: hidden;
   clip-path: inset(50%);
 }
+.side-chat-markers.choosing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  height: auto;
+}
+.side-chat-marker.choice,
 .side-chat-marker:focus-visible {
   width: auto;
   height: auto;
@@ -146,6 +153,9 @@
   clip-path: none;
   background: var(--popover);
   z-index: 2;
+}
+.side-chat-marker.choice {
+  position: relative;
 }
 .side-chat-error {
   position: absolute;
