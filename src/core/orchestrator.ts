@@ -3655,15 +3655,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   input.runId && deps.turnStream
                     ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
                     : undefined;
-                if (input.runId && deps.runActivity) {
-                  const started = deps.runActivity.append(input.runId, {
+                const runId = input.runId;
+                const runActivity = deps.runActivity;
+                if (runId && runActivity) {
+                  const entry = {
                     seq: emittedEntries.at(-1)?.seq ?? 0,
                     parentSeq: null,
                     type: "text_start",
                     payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
                     createdAt: Date.now(),
-                  });
-                  await (phase ? started : started.catch(swallowAs("orchestrator: text-start activity", undefined)));
+                  };
+                  const started = mirrored.then(() => runActivity.append(runId, entry));
+                  mirrored = started.catch(swallowAs("orchestrator: text-start activity", undefined));
+                  await (phase ? started : mirrored);
                 }
               }
             },
