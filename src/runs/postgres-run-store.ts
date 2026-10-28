@@ -19,6 +19,7 @@ import {
   withTraceCarrier,
 } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { withTimeout } from "../util/async.ts";
 import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface PostgresRuntime {
@@ -58,6 +59,7 @@ function rowToRun(r: Record<string, unknown>): Run {
 }
 
 const FENCE_HOLD_MS = 600_000;
+const AVAILABILITY_IDLE_PROBE_MS = 5_000;
 
 export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
   const available = createPostgresNotifyBus<null>(connectionString, "qm_run_available", "run availability");
@@ -206,36 +208,65 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
 
   const availabilityListeners = new Map<() => void, number>();
   let availabilityTimer: ReturnType<typeof setTimeout> | undefined;
+  let availabilityDueAt = 0;
   let availabilityProbe: Promise<void> | null = null;
+  let availabilityStale = false;
   let availabilityClosed = false;
 
-  function watchAvailability(): void {
-    if (availabilityClosed || availabilityListeners.size === 0 || availabilityTimer || availabilityProbe) return;
-    availabilityTimer = setTimeout(
-      () => {
-        availabilityTimer = undefined;
-        availabilityProbe = q(
+  const availabilityFloorMs = (): number => Math.min(...availabilityListeners.values());
+
+  function watchAvailability(delayMs = availabilityFloorMs()): void {
+    if (availabilityClosed || availabilityListeners.size === 0) return;
+    if (availabilityProbe) {
+      availabilityStale = true;
+      return;
+    }
+    const dueAt = Date.now() + delayMs;
+    if (availabilityTimer && availabilityDueAt <= dueAt) return;
+    clearTimeout(availabilityTimer);
+    availabilityDueAt = dueAt;
+    availabilityTimer = setTimeout(probeAvailability, delayMs);
+    availabilityTimer.unref();
+  }
+
+  function probeAvailability(): void {
+    availabilityTimer = undefined;
+    availabilityStale = false;
+    const now = Date.now();
+    availabilityProbe = withTimeout(
+      () =>
+        q(
           `SELECT EXISTS (
           SELECT 1 FROM runs r WHERE r.status='pending' AND r.retry_after <= $1
           AND NOT EXISTS (
             SELECT 1 FROM runs blocked WHERE blocked.session_id=r.session_id
               AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
           )
-        ) AS available`,
-          [Date.now()],
-        )
-          .then(({ rows }) => {
-            if (rows[0]?.available) for (const listener of availabilityListeners.keys()) listener();
-          })
-          .catch((error: unknown) => swallow("run availability probe", error))
-          .finally(() => {
-            availabilityProbe = null;
-            watchAvailability();
-          });
-      },
-      Math.min(...availabilityListeners.values()),
-    );
-    availabilityTimer.unref();
+        ) AS available,
+        (SELECT min(retry_after) FROM runs WHERE status='pending' AND retry_after > $1) AS next_retry_at`,
+          [now],
+        ),
+      AVAILABILITY_IDLE_PROBE_MS,
+      "run availability probe",
+    )
+      .then(({ rows }) => {
+        if (rows[0]?.available) for (const listener of availabilityListeners.keys()) listener();
+        const nextRetryAt = rows[0]?.next_retry_at;
+        return nextRetryAt === null || nextRetryAt === undefined
+          ? AVAILABILITY_IDLE_PROBE_MS
+          : Number(nextRetryAt) - Date.now();
+      })
+      .catch((error: unknown) => {
+        swallow("run availability probe", error);
+        return 0;
+      })
+      .then((untilNextRetryMs) => {
+        availabilityProbe = null;
+        const floor = availabilityFloorMs();
+        watchAvailability(
+          availabilityStale ? floor : Math.max(floor, Math.min(untilNextRetryMs, AVAILABILITY_IDLE_PROBE_MS)),
+        );
+      });
   }
 
   async function getRun(id: string): Promise<Run | null> {
@@ -322,9 +353,17 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   const runs: RunStore = {
     subscribeAvailable(listener, options) {
       availabilityListeners.set(listener, options?.pollMs ?? 50);
-      clearTimeout(availabilityTimer);
-      availabilityTimer = undefined;
-      const off = available.subscribe(listener, options);
+      const signalled = (): void => {
+        listener();
+        watchAvailability();
+      };
+      const off = available.subscribe(signalled, {
+        ...options,
+        onResync: () => {
+          options?.onResync?.();
+          watchAvailability();
+        },
+      });
       watchAvailability();
       return () => {
         off();

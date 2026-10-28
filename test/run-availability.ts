@@ -353,3 +353,52 @@ test(
     }
   },
 );
+
+test(
+  "Postgres availability probes back off while idle and still wake exactly when a delayed retry falls due",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const { url, cleanup } = await isolatedPostgres();
+    const writer = createPostgresRunStore(url);
+    const reader = createPostgresRunStore(url);
+    const wakes: number[] = [];
+    let resyncs = 0;
+    const off = reader.runs.subscribeAvailable!(() => wakes.push(performance.now()), {
+      pollMs: 50,
+      onResync: () => resyncs++,
+    });
+    try {
+      await writer.runs.list();
+      await until(() => resyncs === 1);
+      const sessionId = randomUUID();
+      const { run } = await writer.runs.enqueue({ sessionId, request });
+      await until(() => wakes.length > 0);
+      await sleep(1_000);
+      assert.ok(
+        wakes.length <= 4,
+        `an unclaimed run is re-announced at the idle interval, not every probe (${wakes.length} wakes)`,
+      );
+      const claimed = await writer.runs.claimById(run.id, "test", 5_000);
+      assert.ok(claimed);
+      const retryAfterMs = 1_200;
+      const failedAt = performance.now();
+      await writer.runs.fail(claimed.id, claimed.leaseToken!, "retry later", { retryAfterMs });
+      const firstWakeAfterDue = async (): Promise<number> => {
+        const deadline = failedAt + retryAfterMs + 3_000;
+        for (;;) {
+          const due = wakes.find((at) => at >= failedAt + retryAfterMs);
+          if (due !== undefined) return due - failedAt;
+          assert.ok(performance.now() < deadline, "delayed retry announced before deadline");
+          await sleep(5);
+        }
+      };
+      const wokeAfter = await firstWakeAfterDue();
+      assert.ok(wokeAfter < retryAfterMs + 750, `delayed retry announced ${Math.round(wokeAfter)}ms after failing`);
+    } finally {
+      off();
+      await reader.close();
+      await writer.close();
+      await cleanup();
+    }
+  },
+);

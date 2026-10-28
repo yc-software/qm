@@ -174,10 +174,12 @@ export interface Worker {
 
 const STOP_DRAIN_MS = 2_000;
 
+const jittered = (ms: number): number => Math.round(ms * (0.75 + Math.random() * 0.5));
+
 export function createWorker(deps: WorkerDeps): Worker {
   const workerId = deps.workerId ?? `w-${randomUUID().slice(0, 8)}`;
   const pollMs = deps.pollMs ?? 50;
-  const recoveryPollMs = deps.recoveryPollMs ?? 5_000;
+  const recoveryPollMs = deps.recoveryPollMs ?? 30_000;
   const notifications = Boolean(deps.runs.subscribeAvailable);
   let generation = 0;
   let wake: (() => void) | null = null;
@@ -194,7 +196,7 @@ export function createWorker(deps: WorkerDeps): Worker {
         wake = null;
         resolve();
       };
-      const timer = setTimeout(done, notifications ? recoveryPollMs : pollMs);
+      const timer = setTimeout(done, notifications ? jittered(recoveryPollMs) : pollMs);
       wake = done;
     });
   }
