@@ -48,6 +48,7 @@ import {
   MAX_TILES,
   paneNeedsSessionList,
   serializedTileCount,
+  splitTheme,
   v1PaneSeeds,
   type DropEdge,
   type PaneSeed,
@@ -205,7 +206,7 @@ function buildDock(): DockviewApi {
   toastEl.className = "split-toast-layer";
   host.appendChild(toastEl);
   const api = createDockview(dockEl, {
-    theme: { name: "qm", className: "dockview-theme-qm" },
+    theme: splitTheme,
     createComponent: () => new PaneContent(),
     createTabComponent: () => new PaneTab(),
     createRightHeaderActionComponent: () => new GroupActions(),

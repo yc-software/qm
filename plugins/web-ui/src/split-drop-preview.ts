@@ -1,5 +1,5 @@
 import { createDockview, type DockviewApi } from "dockview-core";
-import { edgeToDirection, type DropEdge } from "./split-layout.ts";
+import { splitTheme, edgeToDirection, type DropEdge } from "./split-layout.ts";
 
 export class SplitDropPreview {
   readonly element = document.createElement("div");
@@ -12,7 +12,7 @@ export class SplitDropPreview {
     this.element.inert = true;
     host.append(this.element);
     this.api = createDockview(this.element, {
-      theme: { name: "qm", className: "dockview-theme-qm" },
+      theme: splitTheme,
       disableDnd: true,
       singleTabMode: "fullwidth",
       createTabComponent: () => {

@@ -7288,7 +7288,7 @@ h3.ambient-field-label {
   position: relative;
   flex: 1;
   min-height: 0;
-  background: var(--background);
+  background: var(--sidebar-bg);
 }
 
 .split-dock {
@@ -7346,14 +7346,14 @@ h3.ambient-field-label {
 .dockview-theme-qm {
   --dv-active-sash-color: transparent;
   --dv-active-sash-transition-delay: 0s;
-  --dv-tabs-and-actions-container-height: 35px;
-  --split-tab-h: 26px;
-  --dv-separator-border: var(--border);
+  --dv-tabs-and-actions-container-height: 39px;
+  --split-tab-h: 30px;
+  --dv-separator-border: transparent;
   --dv-floating-box-shadow: none;
   --dv-tabs-and-actions-container-font-size: var(--font-12-5);
   --dv-drag-over-background-color: color-mix(in srgb, var(--primary) 20%, transparent);
   --dv-drag-over-border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
-  --dv-group-view-background-color: var(--background);
+  --dv-group-view-background-color: var(--sidebar-bg);
   /* dockview paints tab bg/fg through these (an undefined one computes to transparent and
      beats plain overrides) — chromeless defaults here, the segmented-chip look scoped to
      multi-tab groups below. */
@@ -7370,8 +7370,8 @@ h3.ambient-field-label {
 
 .dockview-theme-qm .dv-groupview {
   box-sizing: border-box;
-  border: 0;
-  border-radius: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   background: var(--background);
   overflow: hidden;
   container: pane-group / inline-size;
@@ -7406,7 +7406,7 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-render-overlay {
-  border-radius: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
 .dockview-theme-qm .dv-void-container {
@@ -7414,7 +7414,7 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) {
-  --dv-activegroup-visiblepanel-tab-background-color: var(--secondary);
+  --dv-activegroup-visiblepanel-tab-background-color: var(--conversation-hover);
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--secondary);
 }
 

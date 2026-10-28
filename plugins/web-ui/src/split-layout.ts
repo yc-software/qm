@@ -1,3 +1,5 @@
+export const splitTheme = { name: "qm", className: "dockview-theme-qm", gap: 6 };
+
 export type DropEdge = "left" | "right" | "top" | "bottom" | "center";
 
 export type SplitEdge = Exclude<DropEdge, "center">;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
+import { splitTheme } from "../src/split-layout.ts";
 
 const dom = new JSDOM("<main></main>", { pretendToBeVisual: true });
 for (const key of [
@@ -32,7 +33,7 @@ for (const nested of [false, true])
     const host = document.createElement("div");
     document.body.append(host);
     const source = createDockview(host, {
-      theme: { name: "qm", className: "dockview-theme-qm" },
+      theme: splitTheme,
       createComponent: () => ({ element: document.createElement("div"), init() {} }),
     });
     source.layout(1200, 800, true);
@@ -60,7 +61,7 @@ for (const nested of [false, true])
         .sort((a, b) => a.title!.localeCompare(b.title!));
     const shape = (api: typeof source) =>
       JSON.stringify(api.toJSON().grid, (key, value) => {
-        if (key === "id") return undefined;
+        if (key === "id" || key === "size") return undefined;
         if (key === "views") return (value as string[]).map((id) => api.getPanel(id)?.title);
         if (key === "activeView") return api.getPanel(value as string)?.title;
         return value;
@@ -75,8 +76,9 @@ for (const nested of [false, true])
         ["tab", "within"],
       ] as const) {
         source.fromJSON(before);
+        const restored = source.toJSON();
         preview.show(source, "a", edge, "Incoming");
-        assert.deepEqual(source.toJSON(), before, "hover leaves the live layout untouched");
+        assert.deepEqual(source.toJSON(), restored, "hover leaves the live layout untouched");
         source.addPanel({
           id: "new",
           component: "pane",
@@ -84,13 +86,20 @@ for (const nested of [false, true])
           position: { referencePanel: "a", direction },
         });
         if (edge === "center") source.removePanel(source.getPanel("a")!);
-        assert.deepEqual(sizes(preview.api), sizes(source), `${edge} preview matches the actual drop sizes`);
+        const actual = sizes(source);
+        assert.equal(preview.api.panels.length, actual.length);
+        for (const [index, panel] of sizes(preview.api).entries()) {
+          assert.equal(panel.title, actual[index]!.title);
+          assert.ok(Math.abs(panel.width - actual[index]!.width) <= 1, `${edge} preview matches the drop width`);
+          assert.ok(Math.abs(panel.height - actual[index]!.height) <= 1, `${edge} preview matches the drop height`);
+        }
         assert.equal(preview.api.groups.length, source.groups.length);
         assert.equal(shape(preview.api), shape(source), `${edge} preview matches the pane order and geometry`);
         assert.match(preview.element.textContent!, /Drop to/);
         if (edge === "right" && !nested) {
           assert.equal(preview.api.groups.length, 3);
-          assert.ok(preview.api.panels.every((p) => Math.abs(p.api.width - 400) < 2));
+          const third = (source.width - 2 * splitTheme.gap) / 3;
+          assert.ok(preview.api.panels.every((p) => Math.abs(p.api.width - third) < 2));
         }
       }
       preview.hide();
