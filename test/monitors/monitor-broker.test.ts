@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMonitorBroker, readBackgroundOutputTail } from "../../src/monitors/monitor-broker.ts";
+import { createMonitorBroker, EXIT_ONLY_PATTERN, readBackgroundOutputTail } from "../../src/monitors/monitor-broker.ts";
 import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../../src/monitors/monitor-broker.ts";
 import { createMonitorStore } from "../../src/monitors/monitor-store.ts";
 import { scopeId } from "../../src/types.ts";
@@ -178,4 +178,15 @@ test("unwatch removes own monitors only", async () => {
   assert.ok(await store.get(other.id));
   assert.equal((await broker.unwatch(r.monitorId)).removed, true);
   assert.equal(await store.get(r.monitorId), null);
+});
+
+test("an automatic exit-only watch never overrides an explicit one, and an explicit watch upgrades it", async () => {
+  const { broker, store } = await harness();
+  const auto = armed(await broker.watch("p-1", { exitOnly: true }));
+  assert.equal((await store.get(auto.monitorId))?.pattern, EXIT_ONLY_PATTERN);
+  armed(await broker.watch("p-1", { instructions: "report progress" }));
+  assert.equal((await store.get(auto.monitorId))?.pattern, "");
+  armed(await broker.watch("p-1", { exitOnly: true }));
+  assert.equal((await store.get(auto.monitorId))?.pattern, "");
+  assert.equal((await store.list()).length, 1);
 });

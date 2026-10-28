@@ -15,6 +15,8 @@ import { sessionRunCancelled } from "./tree.ts";
 import { requiresDelegation } from "./delegation.ts";
 
 const CHILD_DONE_RECHECK_MS = 60_000;
+export const MAIL_WAKE_TEXT =
+  "New internal messages arrived for this session. Call subagents read with no target; the messages arrive with its result. Then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
 const MAIL_ERROR_CAP = 1_000;
 
 export type SubagentMailKind = "final_answer" | "no_reply" | "awaiting_input" | "errored" | "refused";
@@ -53,7 +55,7 @@ export interface SubagentMailDeps {
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
 }
 
-const UNINHERITED_REQUEST_KEYS = [
+export const UNINHERITED_REQUEST_KEYS = [
   "runId",
   "attempt",
   "runLeaseToken",
@@ -77,6 +79,7 @@ const UNINHERITED_REQUEST_KEYS = [
   "detectOpener",
   "conversationHeader",
   "wakeCause",
+  "desktopClientId",
 ] as const;
 
 function mailContent(run: Run): { kind: SubagentMailKind; body: string } {
@@ -166,8 +169,6 @@ async function wakeParent(
     await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
     return false;
   }
-  const wake =
-    "A delegated task finished. Check internal messages with subagents wait (timeoutMs: 0), then report any new result or blocker relevant to the user's request. If it was already handled or no message is available, end without posting.";
   await deps.runs.enqueue({
     sessionId: parent.threadRef,
     dedupKey: rewake ? `${dedupKey}:${rewake}` : dedupKey,
@@ -175,8 +176,8 @@ async function wakeParent(
       ...prepared,
       ...(surfaceTools ? { surfaceTools } : {}),
       ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
-      origin: sessionTurnOrigin(prepared.origin, wake),
-      text: wake,
+      origin: sessionTurnOrigin(prepared.origin, MAIL_WAKE_TEXT),
+      text: MAIL_WAKE_TEXT,
       displayText: "Delegated task completed",
       wakeCause: "child_done",
     },
@@ -221,6 +222,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const title = child.title?.trim() || child.id;
   const result = run.result;
   const { kind, body } = mailContent(run);
+  if (kind === "no_reply" && run.request.wakeCause === "child_done") return true;
   const text = renderSubagentMail({
     title,
     sessionId: child.id,
@@ -271,7 +273,5 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
-  if (!isSubagentThreadRef(parent.threadRef))
-    return wakeParent(deps, run, parent, prepared, meta, originalParent, initiatingRun);
-  return true;
+  return wakeParent(deps, run, parent, prepared, meta, originalParent, initiatingRun);
 }

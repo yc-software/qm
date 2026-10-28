@@ -11,6 +11,7 @@ import { projectIdFromGroupRef, type Project, type ProjectStore } from "../proje
 
 import { type AppDeps, type SessionPinView, type TranscriptWindow } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { EXIT_ONLY_PATTERN } from "../monitors/monitor-broker.ts";
 import { tenant } from "../tenant.ts";
 
 export interface SessionKit {
@@ -209,7 +210,9 @@ export async function decorateSessions(k: SessionKit, principalId: string, all: 
     ),
   );
   const watchCounts = tally(
-    ((await k.deps.monitors?.enabled()) ?? []).map((m) => (m.expiresAt > now ? m.threadRef : undefined)),
+    ((await k.deps.monitors?.enabled()) ?? []).map((m) =>
+      m.expiresAt > now && m.pattern !== EXIT_ONLY_PATTERN ? m.threadRef : undefined,
+    ),
   );
   const cronCounts = tally(
     (await k.deps.crons.list())

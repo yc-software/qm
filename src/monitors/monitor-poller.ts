@@ -10,7 +10,7 @@ import { ProcessSessionGoneError } from "../sandbox/exec-process-session.ts";
 import { runTrigger, type TriggerDeps, type TriggerOutcome } from "../triggers/run-trigger.ts";
 import { errMessage, swallow } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
-import { compileMonitorPattern } from "./monitor-broker.ts";
+import { compileMonitorPattern, EXIT_ONLY_PATTERN } from "./monitor-broker.ts";
 import { buildEventWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
 
 const MAX_EVENT_CHARS = 16_000;
@@ -165,7 +165,12 @@ async function pollMonitor(
   const raw = (m.tail ?? "") + read.chunks;
   let events = raw;
   let tail: string | undefined;
-  if (m.pattern) {
+  if (m.pattern === EXIT_ONLY_PATTERN && !exited && !expired) {
+    if (read.cursor !== m.cursor)
+      await deps.monitors.advance(m.id, { cursor: read.cursor, tail: raw.slice(-MAX_TAIL_CHARS) });
+    return false;
+  }
+  if (m.pattern && m.pattern !== EXIT_ONLY_PATTERN) {
     if (exited || expired) {
       events = filterLines(raw, m.pattern);
     } else {

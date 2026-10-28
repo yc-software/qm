@@ -3,7 +3,7 @@ import { createSessionMailbox, type SessionMessage } from "../../src/sessions/se
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { createSessionSyscalls } from "../../src/subagents/session-tools.ts";
-import { deliverSubagentMail } from "../../src/subagents/mail.ts";
+import { deliverSubagentMail, MAIL_WAKE_TEXT } from "../../src/subagents/mail.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../../src/subagents/delegation.ts";
 import { scopeId, type Conversation, type Principal } from "../../src/types.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
@@ -125,7 +125,7 @@ test("retrying an unqueued child preserves detachment and uses its current tree 
   assert.equal((await r.sessions.get(child.id))?.parentSessionId ?? null, null);
 });
 
-test("siblings and children send durable deduplicated messages without new turns", async () => {
+test("siblings and children send durable deduplicated messages; only an idle recipient wakes", async () => {
   const r = await rig();
   const parent = r.syscallsFor(r.room);
   const one = await parent.open({ task: "one", name: "one" });
@@ -150,8 +150,53 @@ test("siblings and children send durable deduplicated messages without new turns
   });
   await completeTurn(r.ledger, run.id, { status: "ok", reply: "ready" });
   assert.equal((await sender.write({ target: "parent", text: "progress" })).ok, true);
-  assert.equal((await parent.receive!()).length, 1);
-  assert.equal((await r.runs.inFlightForThread(r.room.threadRef)).length, 0);
+  assert.equal((await sender.write({ target: "parent", text: "more progress" })).ok, true);
+  assert.equal((await parent.receive!()).length, 2);
+  const wakes = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(wakes.length, 1, "one wake for an idle recipient; later mail rides it");
+  assert.equal(wakes[0]!.request.text, MAIL_WAKE_TEXT);
+});
+
+test("send_message wakes an idle recipient with the human authority of the work in either direction", async () => {
+  const r = await delegatedHumanRig({ desktopClientId: "desktop-1" });
+  await completeTurn(r.ledger, r.run.id, { status: "ok", reply: "child idle" });
+  assert.equal((await r.api.write({ target: r.child.id, text: "one more thing" })).ok, true);
+  const [down] = await r.runs.inFlightForThread(r.child.threadRef);
+  assert.equal(down!.request.text, MAIL_WAKE_TEXT);
+  assert.equal((await delegatedAuthorizationOrigin(down!.request, r))?.kind, "human");
+  await completeTurn(r.ledger, r.parent.id, { status: "ok", reply: "parent idle" });
+  const childApi = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.child,
+    scopeId: scope,
+    request: { ...down!.request, runId: down!.id },
+  });
+  assert.equal((await childApi.write({ target: "parent", text: "found it" })).ok, true);
+  const [up] = await r.runs.inFlightForThread(r.room.threadRef);
+  assert.equal(up!.request.wakeCause, "child_done");
+  assert.equal(up!.request.desktopClientId, undefined);
+  assert.equal((await delegatedAuthorizationOrigin(up!.request, r))?.kind, "human");
+});
+
+test("a finished grandchild wakes its subagent parent with the human authority that started the work", async () => {
+  const r = await delegatedHumanRig();
+  const coord = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({
+    session: r.child,
+    scopeId: scope,
+    request: { ...r.run.request, runId: r.run.id },
+  });
+  const opened = await coord.open({ task: "dig deeper" });
+  assert.ok(opened.ok);
+  await completeTurn(r.ledger, r.run.id, { status: "ok", reply: "worker is in flight" });
+  const worker = await freshSession(r.sessions, opened.sessionId);
+  const job = (await r.runs.inFlightForThread(worker.threadRef))[0]!;
+  await completeTurn(r.ledger, job.id, { status: "ok", reply: "worker finished" });
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(job.id))!), false);
+  const [wake] = await r.runs.inFlightForThread(r.child.threadRef);
+  assert.equal(wake!.dedupKey, `subagent-return:${job.id}`);
+  assert.equal((await delegatedAuthorizationOrigin(wake!.request, r))?.kind, "human");
+  await completeTurn(r.ledger, wake!.id, { status: "ok" });
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(wake!.id))!), true);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 0, "a wake that found nothing sends its parent nothing");
 });
 
 test("follow-up retries recover the accepted run before checking full capacity", async (t) => {

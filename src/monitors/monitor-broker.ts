@@ -34,13 +34,14 @@ export interface BackgroundUnwatchResult {
 export interface MonitorBroker {
   watch(
     processId: string,
-    opts?: { instructions?: string; pattern?: string; sinceCursor?: number },
+    opts?: { instructions?: string; pattern?: string; sinceCursor?: number; exitOnly?: boolean },
   ): Promise<BackgroundWatchResult>;
   unwatch(monitorId: string): Promise<BackgroundUnwatchResult>;
   list(): Promise<Monitor[]>;
 }
 
 const EXPIRY_GRACE_MS = 5 * 60_000;
+export const EXIT_ONLY_PATTERN = "(exit)";
 const MAX_PATTERN_CHARS = 256;
 const WATCH_COMPLETED_TAIL_BYTES = 4 * 1024;
 
@@ -134,10 +135,13 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
       const existing = (await deps.store.list()).find(
         (m) => m.enabled && m.processId === processId && m.threadRef === deps.threadRef,
       );
+      const pattern = opts?.exitOnly ? EXIT_ONLY_PATTERN : opts?.pattern;
       if (existing) {
+        if (opts?.exitOnly)
+          return { monitorId: existing.id, processId, reattached: true, expiresAt: existing.expiresAt };
         await deps.store.update(existing.id, {
           ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
-          ...(opts?.pattern !== undefined ? { pattern: opts.pattern } : {}),
+          ...(pattern !== undefined || existing.pattern === EXIT_ONLY_PATTERN ? { pattern: pattern ?? "" } : {}),
           ...(opts?.sinceCursor !== undefined ? { cursor: opts.sinceCursor } : {}),
         });
         return { monitorId: existing.id, processId, reattached: true, expiresAt: existing.expiresAt };
@@ -152,7 +156,7 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         ...(rec.purpose ? { purpose: rec.purpose } : {}),
         threadRef: deps.threadRef,
         ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
-        ...(opts?.pattern !== undefined ? { pattern: opts.pattern } : {}),
+        ...(pattern !== undefined ? { pattern } : {}),
         ...(opts?.sinceCursor !== undefined ? { cursor: opts.sinceCursor } : {}),
         expiresAt: rec.expiresAt + graceMs,
       });

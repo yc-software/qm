@@ -227,7 +227,7 @@ test("a finished child durably wakes its Slack parent exactly once and leaves th
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
   assert.equal(wakes[0]!.dedupKey, `subagent-return:${finished!.id}`);
-  assert.match(wakes[0]!.request.text, /Check internal messages/);
+  assert.match(wakes[0]!.request.text, /Call subagents read with no target/);
   assert.equal(wakes[0]!.request.surfaceTools, true);
 });
 
@@ -413,7 +413,7 @@ test("terminal children remain recoverable until their return is acknowledged", 
   const wakes = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(wakes.length, 1);
   assert.equal(wakes[0]!.dedupKey, `subagent-return:${pending!.id}`);
-  assert.match(wakes[0]!.request.text, /Check internal messages/);
+  assert.match(wakes[0]!.request.text, /Call subagents read with no target/);
   assert.equal(wakes[0]!.request.surfaceTools, true);
   await r.mailbox.acknowledge(r.room.id, [`subagent-mail-${pending!.id}`]);
   assert.equal(

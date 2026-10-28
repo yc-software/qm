@@ -14,6 +14,7 @@ import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../core/
 
 import { type App, type AppDeps, toFileItem, type SessionSearchHit } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { EXIT_ONLY_PATTERN } from "../monitors/monitor-broker.ts";
 import {
   type SessionKit,
   readTail,
@@ -315,7 +316,7 @@ function sessionActivityMethods(k: SessionKit) {
           expiresAt: r.expiresAt,
         }));
       const watches = ((await deps.monitors?.enabled()) ?? [])
-        .filter((m) => m.threadRef === session.threadRef && m.expiresAt > now)
+        .filter((m) => m.threadRef === session.threadRef && m.expiresAt > now && m.pattern !== EXIT_ONLY_PATTERN)
         .sort((a, b) => b.createdAt - a.createdAt)
         .map((m) => ({
           id: m.id,

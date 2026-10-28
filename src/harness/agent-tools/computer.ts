@@ -41,7 +41,7 @@ function executeShared(kit: ToolKit) {
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
     `Timeout default ${execTimeoutSec}s, max ${execCeilingSec}s: raise \`timeout_seconds\` for builds/installs/tests, lower it for quick commands. ` +
-    "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool. " +
+    "For anything longer, and for servers, use background:true (never a shell ampersand) and the background tool; its exit wakes this conversation, so end your turn instead of polling. " +
     "On hangs or unexplained transport errors use sandbox status/restart; if that fails twice, create a fresh sandbox, set it default, and recover work from git or Files.";
 
   const executeBaseParams = {
@@ -434,11 +434,12 @@ function backgroundTool(kit: ToolKit, { blockOnApproval }: Pick<ReturnType<typeo
     label: "background",
     description:
       "Manage a job started with execute background:true; it keeps running across turns. " +
+      "Its exit wakes this conversation once with the output tail, so never sleep or poll to wait for it: end your turn. " +
       "poll: new output and running/exited state (pass the last cursor as since_cursor; ~64KB per read). send_input: write to stdin. stop: terminate it. list: your jobs. " +
-      "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
+      "watch: also wake this conversation as a new turn on new output (optionally only lines matching `pattern`), to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
       `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
       `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a live turn.\n` +
-      "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
+      "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then end your turn (its exit wakes you); answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: backgroundParams(),
     execute: (callId, params) => runBackgroundAction(kit, blockOnApproval, callId, params),
   });

@@ -24,7 +24,7 @@ function subagentToolFor(kit: ToolKit) {
     description:
       "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
       "open: start one with `task`. followup_task: more work for an existing one; starts a turn if it is idle; active work is queued safely. " +
-      'send_message: inform a subagent, sibling or parent (target="parent") without starting a turn; interrupt:true stops its run. ' +
+      'send_message: inform a subagent, sibling or parent (target="parent"); a busy recipient reads it at its next tool call and an idle one wakes to it; interrupt:true stops its run. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
@@ -157,7 +157,7 @@ async function runSubagentAction(kit: ToolKit, callId: string, params: Static<Re
     const verbs = {
       steered: "steered into its running turn",
       queued_turn: "queued as a new turn",
-      queued_message: "queued internally without starting a turn",
+      queued_message: "delivered; a busy recipient reads it at its next tool call and an idle one wakes to it",
       interrupted: "sent an interrupt request — it stays re-taskable",
     } as const;
     const verb = verbs[result.delivered];
@@ -274,7 +274,7 @@ function sessionToolFor(kit: ToolKit) {
     description:
       "Work with sessions, the conversations in the web sidebar (subagents are not sessions). " +
       "search: entries across conversations visible to everyone here, with sessionId/seq references. list: sessions you can see here. read: a session's recent transcript. " +
-      "send_message: a private note delivered to another session as internal context, without starting a turn. " +
+      "send_message: a private note delivered to another session as internal context; an idle session wakes to read it. " +
       "new: a clean session starting with `text`. fork: copy this conversation's visible history into a new session, optionally running `text` there. " +
       "Create new/forked sessions only when the attending person asks (they appear under their name); refused on automated turns.",
     parameters: Type.Object({
@@ -364,7 +364,7 @@ function sessionToolFor(kit: ToolKit) {
             title: result.title,
             delivered: result.delivered,
           },
-          `Message to "${result.title}" queued internally without starting a turn.`,
+          `Message to "${result.title}" delivered; a busy recipient reads it at its next tool call and an idle one wakes to it.`,
         );
       }
       const result = await syscalls.read({

@@ -5,11 +5,13 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { Session, SpawnMeta } from "../types.ts";
+import type { Run } from "../runs/run-store.ts";
 import { turnSource } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { SUBAGENT_THREAD_PREFIX, isSubagentThreadRef } from "../sessions/thread-ref.ts";
 import { assertAudienceCompatible } from "./audience.ts";
+import { MAIL_WAKE_TEXT, UNINHERITED_REQUEST_KEYS } from "./mail.ts";
 import { sessionTreeRoot, sessionTreeRunCount, stopSessionTree } from "./tree.ts";
 import type { SessionOpenInput, SessionOpenResult, SessionWriteInput, SessionWriteResult } from "./types.ts";
 import type { TurnContext } from "./turn-context.ts";
@@ -24,7 +26,7 @@ function autoTitle(task: string): string {
 function renderSubagentTask(input: { title: string; parentTitle: string; task: string }): string {
   return [
     `<subagent-task session="${xmlAttrEscape(input.title)}">`,
-    `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". To message your parent use subagents send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. Your parent can change while you work; detached sessions have no automatic return. Use your judgment on details within the task's real limits; if an instruction seems to work against the goal, follow the goal and say so. Do not contact people, post to conversations, or change standing configuration unless the task says to. If you are blocked, end your turn saying exactly what you need.`,
+    `You are the subagent session "${input.title}", spawned from the conversation "${input.parentTitle}". To message your parent use subagents send_message with target="parent"; use an exact sibling title or sessionId for peers, never filesystem paths. When your turn ends, your final message is delivered to your current parent session — make it the result, stated plainly. If subagents or background jobs you started are still running, say what is in flight and end your turn instead of waiting or polling; each one wakes you when it finishes. Your parent can change while you work; detached sessions have no automatic return. Use your judgment on details within the task's real limits; if an instruction seems to work against the goal, follow the goal and say so. Do not contact people, post to conversations, or change standing configuration unless the task says to. If you are blocked, end your turn saying exactly what you need.`,
     "",
     "<task>",
     input.task.trim(),
@@ -157,6 +159,38 @@ export async function openSubagent(ctx: TurnContext, input: SessionOpenInput): P
   })().catch((error): SessionOpenResult => ({ ok: false, message: errMessage(error) }));
 }
 
+async function wakeIdleRecipient(
+  { deps, binding }: TurnContext,
+  target: Session,
+  previous: Run | null,
+  actorId: string,
+  messageId: string,
+): Promise<void> {
+  if (
+    !previous ||
+    previous.result?.stopped ||
+    previous.request.actor.id !== actorId ||
+    (await deps.runs.inFlightForThread(target.threadRef)).length
+  )
+    return;
+  const wake: OrchestratorInput = { ...previous.request };
+  for (const key of UNINHERITED_REQUEST_KEYS) delete wake[key];
+  Object.assign(wake, {
+    sessionSenderId: binding.session.id,
+    delegatingRunId: target.id === binding.session.parentSessionId ? previous.id : binding.request.runId,
+    origin: sessionTurnOrigin(wake.origin, MAIL_WAKE_TEXT),
+    text: MAIL_WAKE_TEXT,
+    displayText: "New internal message",
+    wakeCause: "child_done",
+  });
+  await deps.runs.enqueue({
+    sessionId: target.threadRef,
+    dedupKey: `session-message-wake:${messageId}`,
+    request: deps.prepareRequest ? await deps.prepareRequest(wake) : wake,
+    maxAttempts: deps.maxAttempts,
+  });
+}
+
 export async function writeSession(ctx: TurnContext, input: SessionWriteInput): Promise<SessionWriteResult> {
   const {
     deps,
@@ -246,10 +280,11 @@ export async function writeSession(ctx: TurnContext, input: SessionWriteInput): 
       const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
       if (!input.followup) {
         const sourceEntrySeq = await deps.sessions.latestItemSeq(binding.session.id);
+        const messageId = input.requestId
+          ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
+          : randomUUID();
         await deps.mailbox.send({
-          id: input.requestId
-            ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
-            : randomUUID(),
+          id: messageId,
           recipientId: target.id,
           senderId: binding.session.id,
           actor: caller.actor,
@@ -258,6 +293,7 @@ export async function writeSession(ctx: TurnContext, input: SessionWriteInput): 
           audience: caller.conversation.audience,
           createdAt: Date.now(),
         });
+        await wakeIdleRecipient(ctx, target, previous, caller.actor.id, messageId);
         return { ok: true, sessionId: target.id, title, delivered: "queued_message" };
       }
       if (input.followup && binding.request.privateSessionMessage)

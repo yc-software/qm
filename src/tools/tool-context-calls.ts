@@ -12,7 +12,7 @@ import type {
   BackgroundWriteResult,
   BackgroundJobSummary,
 } from "../connectors/background-exec-broker.ts";
-import { withCleanup } from "../util/errors.ts";
+import { swallow, withCleanup } from "../util/errors.ts";
 import type { SandboxHandle } from "../sandbox/sandbox.ts";
 import { type ToolContext, CONTROL_UNAVAILABLE } from "./primitives.ts";
 import { type ToolContextDeps } from "./tool-context.ts";
@@ -80,6 +80,9 @@ export function backgroundOps(
             opts?.ttlSeconds ? opts.ttlSeconds * 1000 : undefined,
             credentials,
           );
+          await deps.monitorBroker
+            ?.watch(started.processId, { exitOnly: true })
+            .catch((error: unknown) => swallow("background: exit watch", error));
           return scratchOnly ? { ...started, jobComputer: true } : started;
         },
         () => true,
