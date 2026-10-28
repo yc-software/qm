@@ -312,6 +312,9 @@ test("later turns reuse verified document bytes but still check current access",
   store.get = async () => ({ ...artifact, name: "renamed.txt" });
   const renamed = await loadDocumentInputs(store, [meta], () => true);
   assert.equal(renamed.documents[0]!.name, "renamed.txt");
+  assert.equal(opens(), 1);
+  store.get = async () => ({ ...artifact, sha256: "replaced" });
+  assert.deepEqual((await loadDocumentInputs(store, [meta], () => true)).documents, []);
   assert.equal(opens(), 2);
 });
 

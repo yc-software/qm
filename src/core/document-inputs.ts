@@ -1,9 +1,9 @@
 import { addAbortSignal } from "node:stream";
 import { createHash } from "node:crypto";
 import { Worker } from "node:worker_threads";
-import { LRUCache } from "lru-cache";
 import type { AttachmentMeta, SessionEntry } from "../types.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
+import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import { forModelContext } from "../harness/context-compaction.ts";
 import { collectBytes } from "../util/bytes.ts";
 import {
@@ -23,11 +23,6 @@ export interface DocumentInput {
   dataBase64: string;
   artifactId?: string;
 }
-
-const loadedDocuments = new LRUCache<string, DocumentInput>({
-  maxSize: 64_000_000,
-  sizeCalculation: (document) => document.dataBase64.length,
-});
 
 export function historicalDocumentMetas(history: readonly SessionEntry[]): AttachmentMeta[] {
   return forModelContext([...history]).flatMap((entry) => {
@@ -79,45 +74,37 @@ export async function loadDocumentInputs(
         notices.push(documentStub({ name: artifact.name, artifactId: artifact.id }));
         continue;
       }
-      const cacheKey = JSON.stringify([artifact.id, artifact.sha256, artifact.name, artifact.mimetype]);
-      let document = loadedDocuments.get(cacheKey);
-      if (!document) {
-        const opened = await files.open(meta.artifactId);
+      const dataBase64 = await cachedArtifactData("document", artifact, async () => {
+        const opened = await files.open(artifact.id);
         if (!opened) {
           notices.push(`${artifact.name}: document content is unavailable.`);
-          continue;
+          return undefined;
         }
         if (
           opened.artifact.sha256 !== artifact.sha256 ||
           opened.sizeBytes !== artifact.sizeBytes ||
           opened.artifact.mimetype !== artifact.mimetype ||
           opened.artifact.ownerScopeId !== artifact.ownerScopeId ||
-          opened.artifact.sizeBytes !== artifact.sizeBytes ||
           !opened.artifact.enabled ||
           !(await authorize(opened.artifact))
         ) {
           opened.stream.destroy();
           notices.push(`${artifact.name}: document changed while being loaded; content withheld.`);
-          continue;
+          return undefined;
         }
         const stream = signal ? addAbortSignal(signal, opened.stream) : opened.stream;
         const bytes = await collectBytes(stream, { maxBytes: Math.min(remaining, artifact.sizeBytes) });
         if (bytes.sha256 !== artifact.sha256 || bytes.sizeBytes !== artifact.sizeBytes) {
           notices.push(`${artifact.name}: document failed integrity verification; content withheld.`);
-          continue;
+          return undefined;
         }
-        document = {
-          name: artifact.name,
-          mimeType: artifact.mimetype,
-          dataBase64: bytes.data.toString("base64"),
-          artifactId: artifact.id,
-        };
-        loadedDocuments.set(cacheKey, document);
-      }
+        return bytes.data.toString("base64");
+      });
+      if (dataBase64 === undefined) continue;
       remaining -= artifact.sizeBytes;
       usedTokens += tokens;
       loadedContent.add(contentKey);
-      documents.unshift(document);
+      documents.unshift({ name: artifact.name, mimeType: artifact.mimetype, dataBase64, artifactId: artifact.id });
     } catch {
       signal?.throwIfAborted();
       notices.push(`${meta.name}: document content is unavailable.`);
