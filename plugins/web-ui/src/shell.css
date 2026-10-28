@@ -7298,8 +7298,8 @@ h3.ambient-field-label {
   box-sizing: border-box;
 }
 
-.split-canvas.single-pane .split-dock {
-  padding: 0;
+.split-canvas:not(.single-pane) :is(.split-dock, .split-drop-preview) {
+  inset: var(--split-gap);
 }
 
 .split-canvas.single-pane .dockview-theme-qm {

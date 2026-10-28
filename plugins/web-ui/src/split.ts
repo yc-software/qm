@@ -313,6 +313,7 @@ function ensureCanvas(): boolean {
   disposeDock();
   canvasHost = document.createElement("div");
   canvasHost.className = "split-canvas";
+  canvasHost.style.setProperty("--split-gap", `${splitTheme.gap}px`);
   appState.mainEl.replaceChildren(canvasHost);
   mainConversation().state.host = null;
   dockApi = buildDock();
