@@ -83,8 +83,23 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     },
     {
       id: "memory/vectors/0004-sketch-backfill",
+      prepare: [
+        `DO $memory_sketch_backfill$
+        DECLARE
+          batch tid[];
+        BEGIN
+          LOOP
+            SELECT array_agg(ctid) INTO batch
+              FROM (SELECT ctid FROM memory_fact_vectors WHERE embedding_bits IS NULL LIMIT 1000) pending;
+            EXIT WHEN batch IS NULL;
+            UPDATE memory_fact_vectors SET embedding_bits = binary_quantize(embedding)
+             WHERE ctid = ANY(batch) AND embedding_bits IS NULL;
+            COMMIT;
+          END LOOP;
+        END $memory_sketch_backfill$`,
+      ],
       statements: [
-        "UPDATE memory_fact_vectors SET embedding_bits = binary_quantize(embedding) WHERE embedding_bits IS NULL",
+        "SET LOCAL lock_timeout = '3s'",
         "ALTER TABLE memory_fact_vectors ALTER COLUMN embedding_bits SET NOT NULL",
       ],
     },
@@ -100,13 +115,18 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           FROM memory_fact_vectors
           WHERE scope_id = $1 AND model = $2 AND dimensions = $3
         ),
-        candidates AS (
-          SELECT f.id, f.updated_at, f.created_at, s.fact_id IS NULL AS unindexed
+        visible AS MATERIALIZED (
+          SELECT f.id, f.updated_at, f.created_at, s.approx
           FROM memory_facts f
           LEFT JOIN sketches s ON s.fact_id = f.id AND s.fact_hash = f.text_hash
           WHERE f.scope_id = $1 AND f.deleted_at IS NULL AND f.id = ANY($7::bigint[])
-          ORDER BY s.approx NULLS FIRST, f.id
-          LIMIT $8::integer * 4
+        ),
+        candidates AS (
+          (SELECT id, updated_at, created_at, false AS unindexed FROM visible
+            WHERE approx IS NOT NULL ORDER BY approx, id LIMIT $8::integer * 4)
+          UNION ALL
+          (SELECT id, updated_at, created_at, true FROM visible
+            WHERE approx IS NULL ORDER BY created_at DESC, id LIMIT $8)
         )
         SELECT id, updated_at, distance FROM (
           SELECT c.id, c.updated_at, c.created_at, c.unindexed,
