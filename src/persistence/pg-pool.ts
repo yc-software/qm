@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { Pool, PoolClient } from "pg";
+import type { ClientConfig, Pool, PoolClient } from "pg";
+import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep } from "../util/async.ts";
-import { errMessage, swallowAs } from "../util/errors.ts";
+import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
 
@@ -47,15 +48,11 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
   const max = { query: poolingConfig.queryMax ?? 10, session: poolingConfig.sessionMax ?? 32, migration: 1 }[kind];
   if (!Number.isInteger(max) || max < 1 || max > 100)
     throw new Error(`${setting} must be an integer between 1 and 100`);
-  let url = connectionString;
-  let ssl = pgCaOptions();
-  if (kind === "query" && connectionString === poolingConfig.poolUrl && poolingConfig.caCert) {
-    const parsed = new URL(connectionString);
-    for (const key of ["sslmode", "sslcert", "sslkey", "sslrootcert"]) parsed.searchParams.delete(key);
-    url = parsed.toString();
-    ssl = { ssl: { ca: poolingConfig.caCert } };
-  }
-  const pool = guardedPool(new pg.Pool({ connectionString: url, ...ssl, max, connectionTimeoutMillis: 10_000 }));
+  const connection = pgConnectionOptions(
+    connectionString,
+    kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
+  );
+  const pool = guardedPool(new pg.Pool({ ...connection, max, connectionTimeoutMillis: 10_000 }));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }
@@ -147,18 +144,29 @@ async function withStatementTimeout<T>(
   }
 }
 
+async function rollbackOrReport(client: PoolClient, context: string): Promise<Error | undefined> {
+  try {
+    await client.query("ROLLBACK");
+    return undefined;
+  } catch (error) {
+    swallow(context, error);
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 export async function withPgTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
+  let rollbackError: Error | undefined;
   try {
     await client.query("BEGIN");
     const result = await fn(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK");
+    rollbackError = await rollbackOrReport(client, "pg-pool: rollback transaction");
     throw error;
   } finally {
-    client.release();
+    client.release(rollbackError);
   }
 }
 
@@ -229,6 +237,7 @@ async function lockSchema(client: PoolClient, name: string): Promise<void> {
 export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigration[]): Promise<void> {
   if (!migrations.length) return;
   const client = await pool.connect();
+  let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-migrations");
     await client.query(
@@ -318,7 +327,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         ]);
         await client.query("COMMIT");
       } catch (error) {
-        await client.query("ROLLBACK").catch(swallowAs(`pg-pool: rollback migration ${migration.id}`, undefined));
+        discard = await rollbackOrReport(client, `pg-pool: rollback migration ${migration.id}`);
         throw error;
       }
     }
@@ -326,7 +335,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
     await client
       .query("SELECT pg_advisory_unlock(hashtext('qm:schema-migrations'))")
       .catch(swallowAs("pg-pool: schema-migrations unlock", undefined));
-    client.release();
+    client.release(discard);
   }
 }
 
@@ -361,8 +370,14 @@ export function configurePgCaTrust(opts: { cert?: string; certFile?: string }): 
   installedCaTrust = resolvePgCaTrust(opts);
 }
 
-export function pgCaOptions(): { ssl?: { ca: string } } {
-  return installedCaTrust;
+export function pgConnectionOptions(connectionString: string, ca = installedCaTrust.ssl?.ca): ClientConfig {
+  if (!ca) return { connectionString };
+  const url = new URL(connectionString);
+  url.searchParams.delete("ssl");
+  url.searchParams.delete("sslrootcert");
+  url.searchParams.set("sslmode", "verify-full");
+  const config = parseIntoClientConfig(url.toString());
+  return { ...config, ssl: { ...(typeof config.ssl === "object" ? config.ssl : {}), ca } };
 }
 
 const registeredMigrations = new Map<string, Map<string, PgMigration>>();
@@ -388,6 +403,7 @@ export function registeredPgMigrations(connectionString: string): readonly PgMig
 async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[]): Promise<void> {
   if (!maintenance.length) return;
   const client = await pool.connect();
+  let discard: Error | undefined;
   try {
     await lockSchema(client, "qm:schema-maintenance");
     for (const operation of maintenance) {
@@ -396,7 +412,7 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
         for (const statement of operation.statements) await client.query(statement);
         await client.query("COMMIT");
       } catch (error) {
-        await client.query("ROLLBACK").catch(swallowAs(`pg-pool: rollback maintenance ${operation.id}`, undefined));
+        discard = await rollbackOrReport(client, `pg-pool: rollback maintenance ${operation.id}`);
         throw error;
       }
     }
@@ -404,7 +420,7 @@ async function applyPgMaintenance(pool: Pool, maintenance: readonly PgMigration[
     await client
       .query("SELECT pg_advisory_unlock(hashtext('qm:schema-maintenance'))")
       .catch(swallowAs("pg-pool: schema-maintenance unlock", undefined));
-    client.release();
+    client.release(discard);
   }
 }
 
@@ -416,7 +432,7 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
     if (!registered?.size) continue;
     await migrationQueue(databaseUrl, async () => {
       const pg = (await import("pg")).default;
-      const pool = guardedPool(new pg.Pool({ connectionString: databaseUrl, ...pgCaOptions() }));
+      const pool = guardedPool(new pg.Pool(pgConnectionOptions(databaseUrl)));
       try {
         await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
         await applyPgMigrations(

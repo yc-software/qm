@@ -9,6 +9,7 @@ import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";
 import type { DirectoryMember, DirectoryStore, RecipientResolution } from "../directory/directory-store.ts";
 import { samePerson } from "../directory/person.ts";
+import { grantsStayWithOwner } from "../cron/authority.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { isProjectGroupRef } from "../projects/project-store.ts";
 import { reportFailureAs, swallowAs } from "../util/errors.ts";
@@ -61,6 +62,7 @@ export interface TriggerOutcome {
   ran: boolean;
   deferred?: boolean;
   status?: TurnResult["status"];
+  errorCode?: string;
   note?: string;
   userNote?: string;
   reply?: string;
@@ -245,6 +247,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
 
   let status: TurnResult["status"] | undefined;
+  let errorCode: string | undefined;
   let note: string | undefined;
   let userNote: string | undefined;
   let reply: string | undefined;
@@ -284,7 +287,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         text: typeof spec.input === "string" ? spec.input : spec.input(roster),
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
-        ...(ownerKind === "personal" && spec.unattendedGrants ? { unattendedGrants: spec.unattendedGrants } : {}),
+        ...(spec.unattendedGrants && grantsStayWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
         ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
         ...turnModelOptions({
           triggered: true,
@@ -304,6 +307,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       });
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
       status = res.status;
+      errorCode = res.errorCode;
       reply = res.reply;
       sessionId = res.sessionId;
       if (res.status === "silent") return;
@@ -348,6 +352,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ran,
     ...(deferred ? { deferred } : {}),
     ...(status ? { status } : {}),
+    ...(errorCode ? { errorCode } : {}),
     ...(note ? { note } : {}),
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),

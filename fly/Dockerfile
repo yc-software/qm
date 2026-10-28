@@ -1,4 +1,4 @@
-FROM node:24-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS node-runtime
+FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS node-runtime
 RUN npm install -g --allow-scripts=@anthropic-ai/claude-code \
       @anthropic-ai/claude-code@2.1.210 \
       @openai/codex@0.144.4
@@ -56,17 +56,14 @@ ENV VIRTUAL_ENV=/opt/agent-venv
 COPY fly/tools/x-api /usr/local/bin/x-api
 RUN chmod +x /usr/local/bin/x-api
 ARG INSTALL_BROWSER_ENGINE=0
-ARG BROWSER_USE_VERSION=0.12.9
+COPY skills-seed/browse/install-runtime.sh /tmp/install-browse-runtime.sh
 RUN if [ "$INSTALL_BROWSER_ENGINE" = "1" ]; then \
       set -eux; \
       apt-get update && apt-get install -y --no-install-recommends \
         chromium ca-certificates fontconfig \
         fonts-liberation fonts-noto-color-emoji fonts-noto-cjk fonts-freefont-ttf \
       && rm -rf /var/lib/apt/lists/*; \
-      python3 -m venv /opt/browser-engine/venv; \
-      /opt/browser-engine/venv/bin/pip install --no-cache-dir --upgrade pip; \
-      /opt/browser-engine/venv/bin/pip install --no-cache-dir "browser-use==${BROWSER_USE_VERSION}"; \
-      /opt/browser-engine/venv/bin/python -c "import browser_use; print('browser-use ok')"; \
+      sh /tmp/install-browse-runtime.sh; \
       /usr/bin/chromium --version; \
       : > /etc/machine-id; \
       : > /var/lib/dbus/machine-id; \

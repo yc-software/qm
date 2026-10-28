@@ -49,7 +49,7 @@ test("settings projections preserve values while excluding unrelated payloads", 
     if (["customize", "credentials", "connectors"].includes(view))
       assert.equal("modelsByHarness" in projected, false, view);
     if (view === "slack-settings") {
-      for (const key of ["externalSlackParticipants", "internalMemberOverrides", "channelHeaderPinDefault", "ackEmoji"])
+      for (const key of ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"])
         assert.equal(key in projected, true);
       assert.equal("orgAmbient" in projected, false);
     }

@@ -125,9 +125,7 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
         models: { "claude-opus-5": "router/opus" },
       },
       piCaptureRequests: false,
-      piSystemCacheSplit: true,
 
-      scratchExecEnabled: true,
       reachExecEnabled: true,
       signingSecret: "sek",
       apiBaseUrl: "https://core.test",
@@ -151,10 +149,7 @@ test("piHarnessConfigOptions maps every Config knob the harness consumes, field 
       models: { "claude-opus-5": "router/opus" },
     },
     captureRequests: false,
-    systemCacheSplit: true,
     sandboxResources: true,
-    scratchExec: true,
-    ownerAuthExec: true,
     reachExec: true,
     controlTools: true,
     turnWallClockMs: 111_000,
@@ -186,7 +181,7 @@ test("piHarnessConfigOptions leaves controlTools off unless a self-API (signing 
 
 test("piHarnessConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
   const opts = piHarnessConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
-  assert.equal(opts.defaultModelId, "gpt-5.6-sol");
+  assert.equal(opts.defaultModelId, "gpt-6.1-sol");
   assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
 });
 

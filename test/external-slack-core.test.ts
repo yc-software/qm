@@ -142,7 +142,7 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
   );
   await tools.execute("printf safe");
   assert.equal(runs, 1);
-  for (const opts of [{ scratch: true }, { ownerAuth: true }, { reachTarget: "private" }, { sandboxId: "private" }])
+  for (const opts of [{ scratch: true }, { reachTarget: "private" }, { sandboxId: "private" }])
     await assert.rejects(tools.execute("unsafe", opts), /private access/);
   for (const call of [
     () => tools.memoryRead(),

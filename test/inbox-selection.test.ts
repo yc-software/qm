@@ -391,7 +391,7 @@ test("the inbox feed reconciles selected owner Gmail loops before counting summa
     assert.equal(owner, "alice");
     for (const item of items) {
       refreshed.push(item.id);
-      await w.deps.items.recordAction(item.id, { kind: "replied", outcome: "dismissed", sourceAt: 2000 });
+      await w.deps.items.recordAction(item.id, { kind: "replied", outcome: "dismissed" });
     }
   });
   const loops = await ensureDefaultInboxLoops(w.deps.store, "alice");

@@ -9,10 +9,12 @@ import type { AclStore } from "../acl/acl-store.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import { principalEntitledToScope } from "./context-filter.ts";
 import { swallowAs } from "../util/errors.ts";
+import { tracePhase } from "../../plugins/chassis/src/error-reporting.ts";
 import { readContextFile } from "./context-files.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
+import type { MemoryFact } from "../memory/facts.ts";
 import { recallMemoryScopes, writableMemoryScope, type MemoryPolicy } from "../memory/policy.ts";
 import type { SkillStore, GrantedSkillRef } from "../skills/skill-store.ts";
 import { type Resolution, type ScopeId, type Principal } from "../types.ts";
@@ -82,17 +84,37 @@ export async function resolveTurnContext(input: ContextInput) {
     memoryAccess,
     memory,
     memoryLabels,
-    memorySnapshot: async (auditReads = true) => {
-      const notebooks = await Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) })));
-      if (auditReads) for (const { scope } of notebooks) recordRead(scope, "memory");
+    memorySnapshot: async () => {
+      const notebooks = await tracePhase(
+        "turn.memory_snapshot",
+        () => Promise.all(read.map(async (scope) => ({ scope, facts: await memory.facts?.(scope) }))),
+        { counts: (loaded) => ({ "qm.facts": loaded.reduce((sum, { facts }) => sum + (facts?.length ?? 0), 0) }) },
+      );
+      for (const { scope } of notebooks) recordRead(scope, "memory");
       return {
         held: new Map(notebooks.map(({ scope, facts }) => [scope, shownFacts(facts ?? [])])),
+        loaded: new Map(notebooks.flatMap(({ scope, facts }) => (facts?.length ? [[scope, facts] as const] : []))),
         facts: notebooks.flatMap(({ facts }) => facts ?? []),
         complete: notebooks.every(({ facts }) => !!facts),
       };
     },
-    recallMemory: (query: string) =>
-      recallAcrossScopes(memory, read, { query, actorId: input.actor.id, maxChars: RECALL_MAX_CHARS }, memoryLabels),
+    recallMemory: (query: string, disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>) =>
+      tracePhase(
+        "turn.memory_recall",
+        () =>
+          recallAcrossScopes(
+            memory,
+            read,
+            {
+              query,
+              actorId: input.actor.id,
+              maxChars: RECALL_MAX_CHARS,
+              ...(disclosedFacts ? { disclosedFacts } : {}),
+            },
+            memoryLabels,
+          ),
+        { counts: (recalled) => ({ "qm.recalled": recalled.length }) },
+      ),
     searchMemory: async (query: string, limit = 20, scope?: ScopeId): Promise<string[] | null> => {
       const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id);
       if (hits) for (const source of scope === undefined ? read : [scope]) recordRead(source, "memory");

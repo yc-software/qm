@@ -68,8 +68,15 @@ export interface LoopStore {
   editPlaybook(id: string, edit: PlaybookEdit): Promise<Loop | null>;
   setState(id: string, state: LoopState): Promise<Loop | null>;
   setHealth(id: string, health: LoopHealth, reason?: string, throttle?: boolean): Promise<Loop | null>;
-  recordFireOutcome(id: string, failed: boolean): Promise<Loop | null>;
+  recordFireOutcome(id: string, outcome: FireOutcome): Promise<Loop | null>;
   delete(id: string): Promise<void>;
+}
+
+export type FireOutcome = "ok" | "failed" | "transient";
+
+function nextFailedFires(previous: number, outcome: FireOutcome): number {
+  if (outcome === "ok") return 0;
+  return outcome === "failed" ? previous + 1 : previous;
 }
 
 const RUNNABLE_STATES: ReadonlySet<LoopState> = new Set<LoopState>(["enabled"]);
@@ -244,10 +251,10 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         ...(throttle ? { throttle: true } : { throttle: undefined }),
       });
     },
-    async recordFireOutcome(id, failed) {
+    async recordFireOutcome(id, outcome) {
       return atomicUpdate(id, (loop) => ({
         ...loop,
-        consecutiveFailedFires: failed ? (loop.consecutiveFailedFires ?? 0) + 1 : 0,
+        consecutiveFailedFires: nextFailedFires(loop.consecutiveFailedFires ?? 0, outcome),
         lastFiredAt: Date.now(),
       }));
     },

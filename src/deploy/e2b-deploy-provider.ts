@@ -159,7 +159,6 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
           timeoutMs: d.alwaysOn ? ALWAYS_ON_TIMEOUT_MS : idleTimeoutMs,
           autoPause: true,
           autoResume: true,
-          privateTraffic: true,
         });
         try {
           await install(d, session, version);

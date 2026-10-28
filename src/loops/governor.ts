@@ -10,6 +10,7 @@ export interface LoopVitals {
   decidedOutputs: number;
   returnedOutputs: number;
   undeclaredShipActions?: string[];
+  transientFailure?: string;
 }
 
 type GovernorActionType = "quarantine" | "throttle" | "ping";
@@ -78,6 +79,10 @@ export function evaluateGovernor(loop: Loop, vitals: LoopVitals, now: number): G
     raise("quarantined", why);
   } else if (failedFires >= 2) {
     raise("failing", `${failedFires} consecutive failed fires`);
+  }
+
+  if (vitals.transientFailure !== undefined) {
+    raise("degraded", `temporary failure, retrying on the next fire: ${vitals.transientFailure}`);
   }
 
   const rate = returnRate(vitals);

@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderComputerBlock } from "../src/core/environment-facts.ts";
+import { renderSandboxProviders } from "../src/core/environment-facts.ts";
 import { renderGatewayContext } from "../src/core/gateway-context.ts";
-import { sharedManifest } from "../src/core/attachments.ts";
+import { sharedFilesSystemSection } from "../src/core/attachments.ts";
 import {
   deliveryMenu,
   renderConversationRoster,
@@ -41,7 +41,7 @@ test("prompt inventories keep identical bytes across permutations, including cap
       fileId: id,
       permission: "read",
     })),
-    sharedManifest,
+    sharedFilesSystemSection,
   );
   const base = ids.map((id) => ({
     id,
@@ -67,12 +67,7 @@ test("prompt inventories keep identical bytes across permutations, including cap
 });
 
 test("environment and location facts are independent of discovery order", () => {
-  checkOrder(["python", "node", "ruby", "bash"], (items) =>
-    renderComputerBlock(
-      { os: "Linux", runtimes: items, tools: items, notInstalled: items },
-      { hasGlobal: false, teamCount: 0 },
-    ),
-  );
+  checkOrder(["sprites", "e2b", "modal", "smolmachines"], (items) => renderSandboxProviders(items, "modal"));
   checkOrder(
     [
       ["thread", "t"],

@@ -3,19 +3,19 @@ import type { KeychainApprovalView } from "../credentials/keychain-approval.ts";
 import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
+import { escapeSlackText } from "./mrkdwn.ts";
 import { findPostedByKey, postWithVerify, slackReplyArgs } from "./delivery.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { parseScopeId } from "../types.ts";
 
 const ACTIONS = ["keychain_allow_once", "keychain_allow_always", "keychain_deny"] as const;
-const escape = (text: string): string => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 export function keychainApprovalMessage(
   view: KeychainApprovalView,
   originUrl?: string,
 ): { text: string; blocks: Array<Record<string, unknown>> } {
   const { ask } = view;
-  const place = `in ${escape(view.conversation).replaceAll("|", "&#124;")}`;
+  const place = `in ${escapeSlackText(view.conversation).replaceAll("|", "&#124;")}`;
   const origin =
     originUrl && /^https?:\/\//.test(originUrl)
       ? `<${originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|${place}>`
@@ -27,7 +27,7 @@ export function keychainApprovalMessage(
   if (kind === "channel") audience = "this channel";
   const standing = `ongoing access across ${audience}`;
   const duration = pending ? ` (${ask.requestedMode === "once" ? "one-time access" : standing})` : "";
-  const summary = `Use your *${escape(view.service.slice(0, 150))}* credential ${origin}${duration}.`;
+  const summary = `Use your *${escapeSlackText(view.service.slice(0, 150))}* credential ${origin}${duration}.`;
   let status = "This request expired.";
   if (ask.status === "approved") status = `Approved — ${view.mode === "standing" ? standing : "one-time access"}.`;
   if (ask.status === "declined") status = "Denied.";

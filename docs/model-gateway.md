@@ -48,6 +48,31 @@ The managed browse runner needs browser-use 0.12.9 with
 `ChatOpenAI.default_headers` support. It never requests separate browser model
 credentials or falls back to them on account or gateway errors.
 
+## Sandbox code
+
+When a gateway is configured, code the agent runs in its sandbox reaches the gateway through core instead of
+holding a provider key. Internal turns outside strict posture get `MODEL_GATEWAY_URL`, which points at core's
+`/v1/sandbox-model` prefix, and `MODEL_GATEWAY_TOKEN`, a capability token bound to the turn's actor and
+conversation scope that expires with the turn's other sandbox tokens. The agent is told both are set. Scheduled and
+other unattended turns get them too, without a grant: the token authorizes gateway inference and nothing else.
+Strict posture issues neither. The gateway key never enters the sandbox.
+
+Core forwards any JSON request under the prefix to the same path on the gateway, so `$MODEL_GATEWAY_URL/v1/...`
+behaves as an OpenAI-compatible base URL. It accepts the token as `Authorization: Bearer`, `x-api-key`, or
+`x-agent-capability`, only on these routes, and passes on `accept`, `content-type`, `anthropic-version` and
+`anthropic-beta`. `GET /v1/models` lists the models the gateway offers by the same IDs the model picker uses.
+A body naming a `model` must use one of those IDs; core rewrites it to the gateway's upstream ID. Every JSON object
+body gets its end user (`user`, or `metadata.user_id` for `/v1/messages`) replaced with a keyed hash of the actor,
+so the gateway can attribute spend without receiving identities and the client cannot name someone else. Core adds the gateway key and streams the response back; a client disconnect
+cancels the upstream call. Strict posture and an exhausted per-actor QM budget refuse requests; the budget is
+checked but not charged, since the gateway meters spend. Upstream 401, 403 and 5xx responses are reported as 502;
+other errors keep their status and `retry-after`, with the gateway key redacted.
+
+The gateway key's permissions are the only control over which endpoints and models sandbox code can reach, since
+every path under the prefix is forwarded with that key. Give the gateway a key scoped to inference on the offered
+models, never a master or admin key, and keep client-side credentials and endpoint overrides disabled on it
+(LiteLLM's default). Without a gateway, neither variable is set and sandbox code needs its own credential.
+
 ## Ultrafast
 
 Pi offers `gpt-6-astra-ultrafast` and `gpt-6.1-sol-ultrafast`, each labeled

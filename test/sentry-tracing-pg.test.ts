@@ -8,7 +8,8 @@ import * as Sentry from "@sentry/node";
 import {
   flushErrorReporting,
   initializeErrorReporting,
-  markFirstToken,
+  startDispatchTrace,
+  tracePhase,
   traceQueued,
 } from "../plugins/chassis/src/error-reporting.ts";
 
@@ -94,8 +95,9 @@ test(
     try {
       await traceQueued(undefined, "long-run", {}, async () => {
         await Promise.all([pool.query("SELECT pg_sleep(0.02)"), pool.query("SELECT 'contended'")]);
+        const dispatch = startDispatchTrace();
         for (let i = 0; i < 700; i++) await pool.query("SELECT $1::int", [i]);
-        markFirstToken();
+        dispatch.firstToken();
         await pool.query("SELECT pg_sleep(0.02)");
       });
       for (let i = 0; i < 40 && !captured.some((event) => event.transaction === "long-run"); i++) {
@@ -189,4 +191,75 @@ test("only quick, successful, childless pool checkouts are left out", async () =
     "e",
   ]);
   assert.equal(run.contexts.trace.data?.["qm.truncated_spans"], undefined);
+});
+
+async function arrived(name: string): Promise<Record<string, any>> {
+  for (let i = 0; i < 40 && !captured.some((event) => event.transaction === name); i++) {
+    await flushErrorReporting();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const run = captured.find((event) => event.transaction === name);
+  assert.ok(run, "the transaction arrived");
+  return run;
+}
+
+function query(startTime: number, seconds: number): void {
+  Sentry.startInactiveSpan({ name: "SELECT", op: "db", startTime }).end(startTime + seconds);
+}
+
+test("a run past the span limit keeps its phases, model request, slow queries and first-token time", async () => {
+  await traceQueued(undefined, "busy-run", {}, async () => {
+    const start = Date.now() / 1000;
+    for (let i = 0; i < 600; i++) query(start + i / 10_000, 0.0005);
+    await tracePhase(
+      "turn.memory_snapshot",
+      async () => {
+        query(start + 0.1, 0.0005);
+        return [1, 2, 3];
+      },
+      { counts: (facts) => ({ "qm.facts": facts.length }) },
+    );
+    const dispatch = startDispatchTrace();
+    for (let i = 0; i < 300; i++) query(start + 0.2 + i / 10_000, 0.0005);
+    query(start + 0.3, 1.4);
+    Sentry.startInactiveSpan({ name: "POST https://model.example/v1/messages", op: "http.client" }).end();
+    dispatch.modelRequest();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    dispatch.firstToken();
+    dispatch.end();
+  });
+  const run = await arrived("busy-run");
+  const spans: Record<string, any>[] = run.spans;
+  assert.equal(spans.length, 500);
+  assert.equal(run.contexts.trace.data["qm.truncated_spans"], 405);
+  const ids = new Set([run.contexts.trace.span_id, ...spans.map((sent) => sent.span_id)]);
+  for (const sent of spans) assert.ok(ids.has(sent.parent_span_id), "every sent span's parent is sent");
+  const phase = spans.find((sent) => sent.op === "turn.memory_snapshot");
+  assert.equal(phase?.description, "turn.memory_snapshot");
+  assert.equal(phase?.data["qm.facts"], 3);
+  assert.ok(spans.some((sent) => sent.op === "turn.dispatch"));
+  assert.ok(spans.some((sent) => sent.op === "http.client"));
+  assert.ok(
+    spans.some((sent) => sent.op === "db" && sent.timestamp - sent.start_timestamp > 1),
+    "the slow late query survives the cut",
+  );
+  assert.ok(run.measurements.time_to_model_request.value > 0);
+  assert.ok(run.measurements.time_to_first_token.value >= run.measurements.time_to_model_request.value);
+});
+
+test("first-token time lands on the run even when the stream calls back outside the run's context", async () => {
+  const { EventEmitter } = await import("node:events");
+  const stream = new EventEmitter();
+  let first: (() => void) | undefined;
+  stream.on("delta", () => first?.());
+  const outside = new Promise<void>((resolve) => setTimeout(resolve, 30)).then(() => stream.emit("delta"));
+  await traceQueued(undefined, "detached-stream-run", {}, async () => {
+    const dispatch = startDispatchTrace();
+    first = () => dispatch.firstToken();
+    await outside;
+    dispatch.end();
+  });
+  const run = await arrived("detached-stream-run");
+  assert.ok(run.measurements.time_to_first_token.value >= 20);
+  assert.ok(run.spans.some((sent: { op: string }) => sent.op === "turn.dispatch"));
 });

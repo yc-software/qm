@@ -17,6 +17,8 @@ interface McpRequest {
   path: string;
   rpc?: string;
   authorization?: string;
+  actor?: string;
+  approval?: string;
 }
 
 export interface McpTestServer {
@@ -57,6 +59,8 @@ export async function startMcpTestServer(
     clients?: Record<string, string>;
     authorizationServer?: string;
     call?: (name: string, args: Record<string, unknown>, authorization?: string) => CallToolResult;
+    description?: string;
+    instructions?: string;
   } = {},
 ): Promise<McpTestServer> {
   const tools = opts.tools ?? DEFAULT_TOOLS;
@@ -67,7 +71,10 @@ export async function startMcpTestServer(
   const tokenRequests: string[] = [];
 
   function mcpServer(): Server {
-    const server = new Server({ name: "qm-test", version: "1.0.0" }, { capabilities: { tools: {} } });
+    const server = new Server(
+      { name: "qm-test", version: "1.0.0", ...(opts.description ? { description: opts.description } : {}) },
+      { capabilities: { tools: {} }, ...(opts.instructions ? { instructions: opts.instructions } : {}) },
+    );
     server.setRequestHandler(ListToolsRequestSchema, (req) => {
       const start = Number(req.params?.cursor ?? 0);
       const end = start + pageSize;
@@ -123,6 +130,8 @@ export async function startMcpTestServer(
       path,
       ...(parsed?.method ? { rpc: parsed.method } : {}),
       ...(authorization ? { authorization } : {}),
+      ...(typeof req.headers["x-qm-actor"] === "string" ? { actor: req.headers["x-qm-actor"] } : {}),
+      ...(typeof req.headers["x-qm-approval"] === "string" ? { approval: req.headers["x-qm-approval"] } : {}),
     });
     if (!authorized(authorization)) {
       return json(res, 401, { error: "unauthorized" }, { "www-authenticate": 'Bearer error="invalid_token"' });

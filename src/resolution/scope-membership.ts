@@ -267,6 +267,7 @@ export function createManagesArtifactHome(
     if (!principalId || !activePrincipal(deps, principalId)) return false;
     if (await canManageScope(principalId, homeScopeId)) return true;
     const { kind, ref } = parseScopeId(homeScopeId);
+    if (kind === "team") return teamMember(deps, principalId, ref);
     if (!samePerson(createdBy, principalId)) return false;
     if (kind === "personal") return true;
     if (kind === "channel")

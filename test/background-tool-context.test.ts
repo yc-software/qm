@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createToolContext, type ToolContextDeps, CommandDenied, NeedsApproval } from "../src/tools/primitives.ts";
 import { scopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { CommandPolicy } from "../src/types.ts";
-import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import type { SandboxHandle, Sandbox } from "../src/sandbox/sandbox.ts";
 import type { BackgroundExecBroker, BackgroundPollResult } from "../src/connectors/background-exec-broker.ts";
 
@@ -40,20 +39,6 @@ function recordingBroker() {
     },
   };
   return { broker, calls, setPollState: (s: "running" | "exited") => void (pollState = s) };
-}
-
-function memoryLedger() {
-  const store = new Map<string, string>();
-  const ledger: ToolLedger = {
-    async begin(runId, attempt, callIndex) {
-      const key = `${runId}:${attempt}:${callIndex}`;
-      return store.has(key) ? { cached: true, output: store.get(key)! } : { cached: false };
-    },
-    async record(runId, attempt, callIndex, output) {
-      store.set(`${runId}:${attempt}:${callIndex}`, output);
-    },
-  };
-  return { ledger, store };
 }
 
 function ctxFor(extra: Partial<ToolContextDeps>) {
@@ -119,86 +104,6 @@ test("an already-approved require_approval command DOES reach the broker", async
   });
   await ctx.backgroundStart("deploy prod", { purpose: "Run background tests" });
   assert.equal(calls.start, 1);
-});
-
-test("ledger replay: a start result is CACHED — a crash-replay returns the same handle, no second startProcess", async () => {
-  const { ledger } = memoryLedger();
-  const { broker, calls } = recordingBroker();
-  const run = "run-1";
-
-  const first = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test", {
-    purpose: "Run background tests",
-  });
-  assert.equal(calls.start, 1);
-
-  const replay = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStart("npm test", {
-    purpose: "Run background tests",
-  });
-  assert.equal(calls.start, 1, "no second startProcess on replay");
-  assert.deepEqual(replay, first);
-});
-
-test("ledger replay: a STILL-RUNNING poll is NOT cached (replay reattaches + re-reads)", async () => {
-  const { ledger } = memoryLedger();
-  const { broker, calls, setPollState } = recordingBroker();
-  const run = "run-2";
-  setPollState("running");
-
-  await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
-  assert.equal(calls.poll, 1);
-
-  setPollState("exited");
-  const replay = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
-  assert.equal(calls.poll, 2, "a still-running poll is not cached → replay re-reads");
-  assert.equal(replay.status.state, "exited");
-});
-
-test("ledger replay: a TERMINAL (exited) poll IS cached — replay returns final output, no re-read", async () => {
-  const { ledger } = memoryLedger();
-  const { broker, calls, setPollState } = recordingBroker();
-  const run = "run-3";
-  setPollState("exited");
-
-  const first = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
-  assert.equal(calls.poll, 1);
-  assert.equal(first.status.state, "exited");
-
-  const replay = await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundPoll("p-1");
-  assert.equal(calls.poll, 1, "a terminal poll is cached → no re-read on replay");
-  assert.deepEqual(replay, first);
-});
-
-test("ledger replay: a stop result IS cached (idempotent)", async () => {
-  const { ledger } = memoryLedger();
-  const { broker, calls } = recordingBroker();
-  const run = "run-4";
-
-  await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStop("p-1");
-  await ctxFor({ backgroundBroker: broker, ledger, runId: run }).backgroundStop("p-1");
-  assert.equal(calls.stop, 1, "the cached stop replays without re-signalling");
-});
-
-test("callIndex advances on every once() — a non-cached poll between two cached calls keeps keys deterministic", async () => {
-  const { ledger } = memoryLedger();
-  const { broker, calls, setPollState } = recordingBroker();
-  const run = "run-5";
-
-  const ctx1 = ctxFor({ backgroundBroker: broker, ledger, runId: run });
-  await ctx1.backgroundStart("npm test", { purpose: "Run background tests" });
-  setPollState("running");
-  await ctx1.backgroundPoll("p-1");
-  setPollState("exited");
-  await ctx1.backgroundPoll("p-1");
-  assert.equal(calls.start, 1);
-  assert.equal(calls.poll, 2);
-
-  setPollState("exited");
-  const ctx2 = ctxFor({ backgroundBroker: broker, ledger, runId: run });
-  await ctx2.backgroundStart("npm test", { purpose: "Run background tests" });
-  await ctx2.backgroundPoll("p-1");
-  await ctx2.backgroundPoll("p-1");
-  assert.equal(calls.start, 1, "start stayed cached across replay (deterministic key)");
-  assert.equal(calls.poll, 3, "only the previously-uncached running poll re-ran");
 });
 
 test("off-Fly degradation: with NO broker the four mutating methods throw the 'use execute' guidance (never fake a success the agent misreads as done); list is empty", async () => {

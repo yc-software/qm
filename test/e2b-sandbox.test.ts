@@ -1,6 +1,6 @@
 import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
-import { test, after, beforeEach } from "node:test";
+import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +52,7 @@ const nativeClient = (): typeof fake.client => ({
     return { state: current.state, expiresAtMs: Date.now() + 60_000, onTimeout: "pause" };
   },
 });
-after(() => fake?.cleanup());
+afterEach(() => fake.cleanup());
 
 test("provision runs commands with env and cwd", async () => {
   const h = await sandbox.provision(layers, { env: { MY_VAR: "v1" } });
@@ -515,6 +515,24 @@ test("recovery snapshots follow the native interval and supersede the previous c
 
   await eager.destroyScope!(scope);
   assert.deepEqual(fake.snapshots(), [], "destroying the scope deletes its snapshot");
+});
+
+test("a job computer on native E2B gets no recovery snapshot and no portable checkpoint", async () => {
+  const store = createMemoryMap<StoredE2bSandbox>();
+  const counting = instrumentedSnapshotStore();
+  const s = make({
+    client: { ...fake.client, nativePause: true },
+    store,
+    snapshots: counting.store,
+    nativeSnapshotIntervalMs: 0,
+  });
+  const jobScope = "job-1234";
+  const h = await s.provision([{ scopeId: jobScope, mountPath: "/", mode: "rw" }]);
+  await s.teardown(h);
+  await s.teardown(await s.provision([{ scopeId: jobScope, mountPath: "/", mode: "rw" }]), { keepWarm: true });
+  assert.deepEqual(fake.snapshots(), []);
+  assert.equal(counting.puts(), 0);
+  assert.equal((await store.get(jobScope))?.recoverySnapshotId, undefined);
 });
 
 test("legacy keepWarm teardown still takes its portable checkpoint", async () => {

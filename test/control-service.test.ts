@@ -35,11 +35,12 @@ function claims(
   scope: ScopeId = scopeId("personal", actorId),
   extra: Partial<CapabilityClaims> = {},
 ): CapabilityClaims {
+  const dm = { ...D1, audienceScopeId: scopeId("personal", actorId) };
   return {
     actorId,
     scopeId: scope,
-    destination: { type: D1.type, target: D1.target, audienceScopeId: D1.audienceScopeId },
-    destinations: [D1, ROOM],
+    destination: { type: dm.type, target: dm.target, audienceScopeId: dm.audienceScopeId },
+    destinations: [dm, ROOM],
     defaultDestinationKey: D1.key,
     exp: Date.now() + CAPABILITY_TTL_MS,
     ...extra,
@@ -121,23 +122,60 @@ test("unattended cron grants require a live org-admin owner and protect later pa
   assert.deepEqual(cleared.ok ? cleared.cron.unattendedGrants : undefined, []);
 });
 
-test("all five unattended read grant types are accepted on create", async () => {
+test("every unattended read grant type is accepted on create", async () => {
   const { control } = setup();
-  const created = await control.createCron(
-    {
-      schedule: { everyMs: 3_600_000 },
-      action: "nightly usage analysis",
-      unattendedGrants: ["admin.sessions.read", "admin.audit.read", "admin.egress.read", "admin.files.read"],
-    },
-    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
-  );
-  assert.ok(created.ok, JSON.stringify(created));
-  assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, [
+  const grants = [
     "admin.sessions.read",
     "admin.audit.read",
     "admin.egress.read",
     "admin.files.read",
+    "admin.spend.read",
+    "admin.crons.read",
+  ];
+  const created = await control.createCron(
+    { schedule: { everyMs: 3_600_000 }, action: "nightly usage analysis", unattendedGrants: grants },
+    claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true }),
+  );
+  assert.ok(created.ok, JSON.stringify(created));
+  assert.deepEqual(created.ok ? created.cron.unattendedGrants : undefined, grants);
+});
+
+test("a grant-carrying cron delivers only to its owner: shared or third-party destinations are refused at create and retarget", async () => {
+  const { built, control } = setup();
+  await built.app.upsertDirectory([
+    { principalId: "admin-alice", displayName: "Alice", type: "internal" },
+    { principalId: "U2", displayName: "User Two", type: "internal" },
   ]);
+  await built.app.upsertChannels(
+    [{ channelId: "C-spend", name: "spend", isPrivate: false }],
+    [{ channelId: "C-spend", principalId: "admin-alice" }],
+  );
+  const live = claims("admin-alice", scopeId("personal", "admin-alice"), { liveActor: true });
+  const request = {
+    schedule: { cron: "0 8 * * 1-5", timezone: "America/Los_Angeles" },
+    action: "daily spend review",
+    unattendedGrants: ["admin.spend.read"],
+  };
+
+  for (const elsewhere of [{ channel: "spend" }, { recipient: "User Two" }, { destinationKey: ROOM.key }]) {
+    const refused = await control.createCron({ ...request, ...elsewhere }, live);
+    assert.equal(refused.ok, false, JSON.stringify(elsewhere));
+    assert.match(refused.ok ? "" : refused.message, /delivers only to them/);
+  }
+
+  const own = await control.createCron(request, live);
+  assert.ok(own.ok, JSON.stringify(own));
+  assert.equal(own.cron.ownerScopeId, scopeId("personal", "admin-alice"));
+
+  const retarget = await control.retargetCron(own.cron.id, ROOM.key, live);
+  assert.equal(retarget.ok, false);
+  assert.match(retarget.ok ? "" : retarget.message, /delivers only to them/);
+
+  const cleared = await control.patchCron(own.cron.id, { unattendedGrants: [] }, claims("admin-alice"));
+  assert.ok(cleared.ok, "removing grants only narrows access, so it needs no live admin turn");
+  assert.deepEqual(cleared.ok ? cleared.cron.unattendedGrants : undefined, []);
+  const moved = await control.retargetCron(own.cron.id, ROOM.key, live);
+  assert.ok(moved.ok, "once grants are gone the cron can deliver anywhere");
 });
 
 test("a raw unreaffirmed cron patch strips unattended grants; a live-owner patch reaffirms them", async () => {

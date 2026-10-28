@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
+import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from "../core/turn-error.ts";
 
 // Classifies a failed pi-ai AssistantMessage from structured fields only: providerError (HTTP status
 // plus the provider's documented error type/code, from our vendored pi-ai, see vendor/pi-ai/) and
@@ -10,7 +10,7 @@ const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error
 const CONTEXT_CODES = new Set(["context_length_exceeded"]);
 const QUOTA_CODES = new Set(["insufficient_quota"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
-const RETRYABLE_CODES = new Set<ProviderErrorCode>(["rate_limit", "transient", "unknown"]);
+const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
 
 /** Last known prompt size vs. the model's window, for Anthropic's untyped over-window 400. */
 export interface ContextUsage {

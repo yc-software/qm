@@ -54,6 +54,7 @@ export function run(
     });
     child.on("close", (code) => done(code ?? -1));
     if (opts.input !== undefined) {
+      child.stdin?.on("error", () => {});
       child.stdin?.write(opts.input);
       child.stdin?.end();
     }

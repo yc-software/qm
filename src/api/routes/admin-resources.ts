@@ -428,35 +428,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     ),
   },
   {
-    id: "internal-member-overrides",
-    kind: "string-list",
-    target: "org",
-    clearable: true,
-    label:
-      "Members listed here (lowercased emails or Slack user ids) are treated as internal even if Slack marks them guest/restricted or the directory sync removed them; use it for contractor accounts that are genuinely internal.",
-    readKey: "internalMemberOverrides",
-    get: (deps) => deps.config!.getInternalMemberOverrides(),
-    apply: async (ctx, actor, scope) => {
-      const bad = orgOnly(scope, "internal member overrides are org-wide");
-      if (bad) return bad;
-      const raw = (ctx.body as { members?: unknown }).members;
-      if (!Array.isArray(raw)) return { error: "internal-member-overrides requires { members: string[] }" };
-      if (raw.length > 500) return { error: "internal-member-overrides accepts at most 500 entries" };
-      if (raw.some((m) => typeof m !== "string" || !m.trim() || m.length > 320))
-        return { error: "each member must be a non-empty string of at most 320 characters" };
-      const before = ctx.deps.config!.getInternalMemberOverrides();
-      await ctx.deps.config!.setInternalMemberOverrides(raw as string[]);
-      const after = ctx.deps.config!.getInternalMemberOverrides();
-      audit(ctx.deps, {
-        principalId: actor.id,
-        action: "identity.internal-override.update",
-        resource: `${before.length}->${after.length}: ${after.join(", ")}`,
-        scopeLabel: scope,
-      });
-      return { ok: true };
-    },
-  },
-  {
     id: "channel-header-pin-default",
     kind: "boolean",
     target: "org",
@@ -729,29 +700,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { value: unique.length ? unique : null };
       },
       (deps, scope, ids) => deps.config!.setWebuiModels(scope, ids),
-    ),
-  },
-  {
-    id: "people-directory-url",
-    kind: "string",
-    target: "org",
-    clearable: true,
-    readKey: "peopleDirectoryUrl",
-    get: (deps, scope) => deps.config!.getPeopleDirectoryUrl(scope),
-    apply: generic<string | null>(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "the people directory is org-wide");
-        if (bad) return bad;
-        const raw = (body as { url?: unknown }).url;
-        if (raw !== undefined && raw !== null && typeof raw !== "string") {
-          return { error: "people-directory-url requires { url: string } (empty string clears it)" };
-        }
-        const url = typeof raw === "string" ? raw.trim() : "";
-        if (url && !/^https?:\/\//.test(url))
-          return { error: "people-directory-url must start with http:// or https://" };
-        return { value: url || null };
-      },
-      (deps, scope, url) => deps.config!.setPeopleDirectoryUrl(scope, url),
     ),
   },
   {

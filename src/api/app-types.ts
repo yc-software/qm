@@ -368,6 +368,8 @@ export interface App {
   unpinConversationItem(threadRef: string, pinId: string): Promise<boolean | null>;
   listSessions(principalId: string): Promise<Session[]>;
   listSessionPage(principalId: string, query: SessionPageQuery): Promise<SessionPageResult>;
+  sideChats(principalId: string, sessionId: string): Promise<Session[] | null>;
+  expandSideChat(principalId: string, sessionId: string): Promise<Session | null>;
   sessionChildren(principalId: string, sessionId: string): Promise<Session[] | null>;
   sessionRow(principalId: string, ref: { id?: string; threadRef?: string }): Promise<Session | null>;
   searchResources(
@@ -417,7 +419,7 @@ export interface App {
   forkSession(
     sessionId: string,
     principalId: string,
-    opts?: { upToSeq?: number },
+    opts?: { upToSeq?: number; sideChat?: { entrySeq: number; quote: string; occurrence: number } },
   ): Promise<{ session: Session; entries: SessionEntry[] } | null>;
   listFilesForViewer(principalId: string, opts?: ListOwnedOptions, inScope?: ScopeId): Promise<FileListPage>;
   uploadFileForViewer(
@@ -633,6 +635,10 @@ export interface App {
   attachScope(input: { scopeId: ScopeId; environmentId: string; actorId: string }): Promise<void>;
 }
 
+interface DeploymentGitPrincipals {
+  authorizes(deployment: Deployment, principalId: string, permission: "read" | "write"): Promise<boolean | undefined>;
+}
+
 export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
@@ -681,6 +687,7 @@ export interface AppDeps {
   projects?: ProjectStore;
   deploy: DeployService;
   deployAppsDomain?: string;
+  deploymentGitPrincipals?: DeploymentGitPrincipals;
   deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
   approvals?: DurableMap<PendingApprovalRecord>;
@@ -783,6 +790,13 @@ export class SoulUpdateDeniedError extends Error {
   constructor() {
     super("not authorized to update SOUL for this scope");
     this.name = "SoulUpdateDeniedError";
+  }
+}
+
+export class SideChatAnchorError extends Error {
+  constructor() {
+    super("sideChat needs a nonempty quote and an entrySeq inside the forked range");
+    this.name = "SideChatAnchorError";
   }
 }
 

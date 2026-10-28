@@ -36,7 +36,6 @@ const MAX_ITEMS_PER_INGEST = 50;
 const MAX_SOURCE_PAYLOAD_BYTES = 64_000;
 const MAX_PROPOSAL_BYTES = 32_000;
 const MAX_FOLLOWUP_CHARS = 4_000;
-const MAX_EXTERNAL_REPLY_CHARS = 500;
 
 function jsonSize(value: unknown): number {
   return JSON.stringify(value)?.length ?? 0;
@@ -350,20 +349,6 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   if (kind === "reopen") {
     const next = await deps.items.reopen(item.id);
     if (!next) return sendJson(ctx.res, 409, { error: "conflict", message: "this item is not dismissed" });
-    return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
-  }
-
-  if (kind === "replied") {
-    const text = typeof args.text === "string" ? args.text.trim().slice(0, MAX_EXTERNAL_REPLY_CHARS) : "";
-    const next = await deps.items.recordAction(item.id, {
-      kind,
-      outcome: "dismissed",
-      ...(typeof args.sourceAt === "number" ? { sourceAt: args.sourceAt } : {}),
-      ...(text ? { result: text } : {}),
-    });
-    if (!next) {
-      return sendJson(ctx.res, 409, { error: "conflict", message: "this item was already actioned from here" });
-    }
     return sendJson(ctx.res, 200, { item: ledgerItemView(next, loop, !!ctx.capability) });
   }
 

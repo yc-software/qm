@@ -67,7 +67,7 @@ test("a new personal DM offers onboarding through the skills index", async () =>
     text: "!sysprompt",
   } as TurnRequest);
 
-  assert.match(sys.reply ?? "", /\*\*onboarding\*\*/);
+  assert.match(sys.reply ?? "", /^- onboarding — /m);
 });
 
 test("the opener defers Slack setup until status can be checked without requiring provider configuration", () => {

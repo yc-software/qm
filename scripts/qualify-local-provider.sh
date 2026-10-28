@@ -2,7 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 candidate="${1:?usage: qualify-local-provider.sh <candidate.json>}"
-: "${ANTHROPIC_API_KEY:?a live model credential is required}"
+if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${MODEL_GATEWAY_URL:-}" ]]; then
+  echo "a live model credential or model gateway is required" >&2
+  exit 1
+fi
 core_image="$(node --input-type=module - "$candidate" <<'JS'
 import { readFileSync } from 'node:fs';
 const candidate = JSON.parse(readFileSync(process.argv[2], 'utf8'));
@@ -33,11 +36,13 @@ trap cleanup EXIT
 socket_group="$(node -e 'console.log(require("node:fs").statSync("/var/run/docker.sock").gid)')"
 printf 'core=%s\nsource=%s\nlocal=%s\n' "$core_image" "$source_sha" "$local_image"
 docker run --rm --name "$container" --group-add "$socket_group" \
+  --add-host host.docker.internal:host-gateway \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD/test/live-slack/local-provider.ts:/app/test/live-slack/local-provider.ts:ro" \
   -v "$PWD/test/live-slack/scenarios-sandbox-providers.ts:/app/test/live-slack/scenarios-sandbox-providers.ts:ro" \
   -e ANTHROPIC_API_KEY -e NODE_ENV=development \
+  -e MODEL_GATEWAY_URL -e MODEL_GATEWAY_API_KEY -e MODEL_GATEWAY_API_KEY_HEADER -e MODEL_GATEWAY_MODELS \
   -e "EXPECTED_SOURCE_SHA=$source_sha" -e "QM_CORE_CONTAINER=$container" \
   -e "LOCAL_SANDBOX_IMAGE=$local_image" -e LOCAL_SANDBOX_CPUS=2 -e LOCAL_SANDBOX_MEMORY_MB=2048 \
-  -e PI_MODEL=claude-haiku-4-5-20251001 \
+  -e PI_MODEL=claude-haiku-4-5 \
   "$core_image" node test/live-slack/local-provider.ts

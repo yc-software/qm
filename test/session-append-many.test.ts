@@ -73,3 +73,77 @@ for (const backend of ["memory", "postgres"] as const) {
     },
   );
 }
+
+test(
+  "a postgres append holds the lease and writes in five statements, and concurrent appends keep distinct sequences",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const store = createPostgresSessionStore(process.env.DATABASE_URL!);
+    const scope = scopeId("personal", "batch-test");
+    const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
+    const { lease } = await store.acquireLease(session.id);
+    assert.ok(lease);
+    await store.append(lease, { type: "user", payload: { text: "warm" }, scopeLabel: scope });
+    const query = pg.Client.prototype.query;
+    let statements = 0;
+    pg.Client.prototype.query = function (this: pg.Client, ...args: Parameters<typeof query>) {
+      statements++;
+      return query.apply(this, args);
+    } as typeof query;
+    try {
+      await store.append(lease, { type: "assistant", payload: { text: "counted" }, scopeLabel: scope });
+    } finally {
+      pg.Client.prototype.query = query;
+    }
+    assert.equal(statements, 5);
+    const appended = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        store.append(lease, { type: "assistant", payload: { text: `parallel ${i}` }, scopeLabel: scope }),
+      ),
+    );
+    assert.deepEqual(
+      appended.map((entry) => entry.seq).sort((a, b) => a - b),
+      [2, 3, 4, 5, 6, 7, 8, 9],
+    );
+    await store.releaseLease(lease);
+  },
+);
+
+test(
+  "an empty-session cleanup waits for an in-flight append instead of deleting its entry",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const store = createPostgresSessionStore(process.env.DATABASE_URL!);
+    const ahead = createPostgresSessionStore(process.env.DATABASE_URL!, { now: () => Date.now() + 10 * 60_000 });
+    const scope = scopeId("personal", "batch-test");
+    const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
+    const { lease } = await store.acquireLease(session.id);
+    assert.ok(lease);
+    const query = pg.Client.prototype.query;
+    const reachedCommit = Promise.withResolvers<void>();
+    const releaseCommit = Promise.withResolvers<void>();
+    let held = false;
+    pg.Client.prototype.query = function (this: pg.Client, ...args: Parameters<typeof query>) {
+      if (args[0] === "COMMIT" && !held) {
+        held = true;
+        reachedCommit.resolve();
+        return releaseCommit.promise.then(() => query.apply(this, args));
+      }
+      return query.apply(this, args);
+    } as typeof query;
+    try {
+      const appending = store.append(lease, { type: "user", payload: { text: "first" }, scopeLabel: scope });
+      await reachedCommit.promise;
+      pg.Client.prototype.query = query;
+      const deleting = ahead.deleteSessionIfEmpty(session.id);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      releaseCommit.resolve();
+      await appending;
+      assert.equal(await deleting, false);
+    } finally {
+      pg.Client.prototype.query = query;
+      releaseCommit.resolve();
+    }
+    assert.equal((await store.getEntries(session.id)).length, 1);
+  },
+);

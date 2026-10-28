@@ -10,7 +10,6 @@ import { createControlService } from "../src/api/control-service.ts";
 import { createToolContext, type ToolContextDeps, CONTROL_UNAVAILABLE } from "../src/tools/primitives.ts";
 import { scopeId, type WorkspaceLayer } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools } from "../src/harness/agent-tools.ts";
@@ -19,20 +18,6 @@ import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orc
 
 const SECRET = "control-tool-ctx";
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
-
-function memoryLedger() {
-  const store = new Map<string, string>();
-  const ledger: ToolLedger = {
-    async begin(runId, attempt, callIndex) {
-      const key = `${runId}:${attempt}:${callIndex}`;
-      return store.has(key) ? { cached: true, output: store.get(key)! } : { cached: false };
-    },
-    async record(runId, attempt, callIndex, output) {
-      store.set(`${runId}:${attempt}:${callIndex}`, output);
-    },
-  };
-  return { ledger };
-}
 
 function build() {
   const built = buildApp(
@@ -82,6 +67,54 @@ test("createToolContext.cronCreate creates a real cron through the shared servic
   assert.equal(stored.title, "digest");
 });
 
+test("the cron tool lets a live org-admin owner attach unattended admin-read grants and shows them back", async () => {
+  const { built } = build();
+  const control = createControlService(built.app, built.scheduler, built.admin);
+  const ctx = ctxFor({ control, controlClaims: { ...claims("admin-alice"), liveActor: true } });
+  const cron = createAgentTools({ current: ctx }, { controlTools: true }).find((t) => t.name === "cron")!;
+  const run = async (params: Record<string, unknown>) =>
+    (
+      (await cron.execute("call", params as never, undefined, undefined, {} as never)) as {
+        content: Array<{ text: string }>;
+      }
+    ).content[0]!.text;
+
+  const created = await run({
+    action: "create",
+    title: "Spend review",
+    schedule: { everyMs: 3_600_000 },
+    task: "review spend",
+    unattendedGrants: ["admin.spend.read", "admin.crons.read"],
+  });
+  const id = /Created cron (\S+)/.exec(created)?.[1];
+  assert.ok(id, created);
+  assert.deepEqual((await built.app.getCron(id))?.unattendedGrants, ["admin.spend.read", "admin.crons.read"]);
+  assert.match(await run({ action: "get", id }), /unattended grants: admin\.spend\.read, admin\.crons\.read/);
+
+  await run({ action: "patch", id, unattendedGrants: ["admin.spend.read"] });
+  assert.deepEqual((await built.app.getCron(id))?.unattendedGrants, ["admin.spend.read"]);
+
+  const nonAdmin = createAgentTools(
+    { current: ctxFor({ control, controlClaims: { ...claims("U1"), liveActor: true } }) },
+    { controlTools: true },
+  ).find((t) => t.name === "cron")!;
+  const refused = (
+    (await nonAdmin.execute(
+      "call",
+      {
+        action: "create",
+        schedule: { everyMs: 3_600_000 },
+        task: "review spend",
+        unattendedGrants: ["admin.spend.read"],
+      } as never,
+      undefined,
+      undefined,
+      {} as never,
+    )) as { content: Array<{ text: string }> }
+  ).content[0]!.text;
+  assert.match(refused, /\[error\].*current org admin/);
+});
+
 test("webhook registration through the tool requires a live person and leaves refused calls without effects", async () => {
   const { built, control } = build();
   const request = { action: "handle the event", verification: { scheme: "hmac-sha256" as const, secret: "secret" } };
@@ -118,68 +151,6 @@ test("webhook registration through the tool requires a live person and leaves re
   assert.equal(result.ok ? undefined : result.code, "forbidden");
   assert.deepEqual(await built.app.listWebhooks(), disabled);
   assert.deepEqual(await built.auditLog.events(), auditAfter);
-});
-
-test("ledger replay: a cron create is CACHED — a crash-replay does NOT create a second cron", async () => {
-  const { built, control } = build();
-  const { ledger } = memoryLedger();
-  const run = "run-cron";
-
-  const first = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).cronCreate({
-    title: "once",
-    schedule: { everyMs: 3_600_000 },
-    action: "x",
-  });
-  assert.ok(first.ok);
-
-  const replay = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).cronCreate({
-    title: "once",
-    schedule: { everyMs: 3_600_000 },
-    action: "x",
-  });
-  assert.ok(replay.ok);
-  assert.deepEqual(replay, first, "replay returns the prior result, not a fresh create");
-
-  const all = await built.app.listCrons();
-  assert.equal(all.length, 1, "exactly ONE cron exists despite the replay (no duplicate)");
-});
-
-test("ledger replay: a FAILED create is not cached, so a retry can succeed", async () => {
-  const { built, control } = build();
-  const { ledger } = memoryLedger();
-  const run = "run-fail";
-
-  const bad = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).cronCreate({
-    schedule: { everyMs: 3_600_000 },
-    action: "x",
-    destinationKey: "nope",
-  });
-  assert.equal(bad.ok, false);
-
-  const good = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).cronCreate({
-    schedule: { everyMs: 3_600_000 },
-    action: "x",
-  });
-  assert.ok(good.ok, JSON.stringify(good));
-  assert.equal((await built.app.listCrons()).length, 1);
-});
-
-test("ledger replay: a soul write is CACHED — a crash-replay does NOT bump the version again", async () => {
-  const { built, control } = build();
-  const { ledger } = memoryLedger();
-  const run = "run-soul";
-
-  const first = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).soulWrite("First.");
-  assert.ok("ok" in first && first.ok);
-  const versionAfterFirst = built.app.getSoul(scopeId("personal", "U1")).soulVersion;
-
-  const replay = await ctxFor({ control, controlClaims: claims("U1"), ledger, runId: run }).soulWrite("First.");
-  assert.deepEqual(replay, first, "replay returns the cached write result");
-  assert.equal(
-    built.app.getSoul(scopeId("personal", "U1")).soulVersion,
-    versionAfterFirst,
-    "the version did NOT bump a second time",
-  );
 });
 
 test("createToolContext.soulWrite then soulRead reflect the new SOUL", async () => {

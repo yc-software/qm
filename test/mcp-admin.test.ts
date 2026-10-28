@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -87,6 +88,39 @@ test("MCP admin validates and preserves credential scope, without returning secr
   assert.equal((await store.get("crm"))?.credentialScope, "shared");
   assert.equal((await store.get("crm"))?.credentialHost, undefined);
   assert.equal((await store.get("crm"))?.credentialAccountType, undefined);
+  assert.equal((await put({ approval: "sometimes" })).status, 400);
+  assert.equal((await put({ approval: "all" })).status, 200);
+  assert.equal((await store.get("crm"))?.approval, "all");
+  assert.equal((await put({})).status, 200);
+  assert.equal((await store.get("crm"))?.approval, "all", "an update that omits the policy keeps it");
+  assert.equal((await put({ approval: "annotations" })).status, 200);
+  assert.equal((await store.get("crm"))?.approval, undefined);
+  assert.equal((await put({ attestActor: true })).status, 400);
+  assert.equal(
+    (await put({ catalog: true, attestActor: true })).status,
+    400,
+    "an unauthenticated upstream cannot trust the actor",
+  );
+  assert.equal(
+    (
+      await put({
+        catalog: true,
+        attestActor: true,
+        auth: "bearer",
+        bearerToken: "t",
+        credentialScope: "per-user",
+        credentialHost: "accounts.example.com",
+      })
+    ).status,
+    400,
+    "a per-person token could otherwise assert someone else",
+  );
+  assert.equal(
+    (await put({ catalog: true, attestActor: true, auth: "bearer", bearerToken: "t", credentialScope: "shared" }))
+      .status,
+    200,
+  );
+  assert.deepEqual([(await store.get("crm"))?.catalog, (await store.get("crm"))?.attestActor], [true, true]);
 });
 
 test("production wiring never uses operator fallback tokens for per-user MCP calls", async (t) => {
@@ -206,4 +240,33 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadat
     "explicit endpoints skip discovery",
   );
   assert.deepEqual((await store.get("manual"))!.oauthScopes, ["a", "b"]);
+});
+
+test("MCP admin save stores the server's own description from the probe", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "mcp-admin-about-"));
+  const built = buildApp(testConfig({ dataDir: dir }));
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  const remote = await startMcpTestServer(t, { instructions: "Search and update CRM records.\nAlways query first." });
+  const server = createInsecureTestServer(built.app, {
+    admin: built.admin,
+    auditLog: built.auditLog,
+    mcpServers: store,
+    mcpToolService: service,
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(async () => {
+    service.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  });
+  const res = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/mcp-servers/crm`, {
+    method: "PUT",
+    headers: ADMIN,
+    body: JSON.stringify({ url: `${remote.url}/mcp` }),
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(((await res.json()) as { tools: string[] }).tools, ["query", "update"]);
+  assert.equal((await store.get("crm"))!.about, "Search and update CRM records.\nAlways query first.");
 });

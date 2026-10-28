@@ -7,13 +7,12 @@ import {
   leaseLapsed,
   releasesDedupKey,
   runPriority,
+  stopErrorCode,
   withTraceCarrier,
 } from "./run-store.ts";
-import type { LedgerBegin, ToolLedger } from "./tool-ledger.ts";
 
 export interface MemoryRuntime {
   runs: RunStore;
-  ledger: ToolLedger;
 }
 
 const FENCE_HOLD_MS = 600_000;
@@ -23,7 +22,6 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   const runs = new Map<string, Run>();
   const retryAfter = new Map<string, number>();
   const byKey = new Map<string, string>();
-  const ledger = new Map<string, string>();
   const events = new EventEmitter();
   events.setMaxListeners(0);
   const returned = new Set<string>();
@@ -409,21 +407,11 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
       !opts?.countsAsError && overClaimed && retry && run.errorAttempts < run.maxAttempts
         ? `run parked after ${countedClaims(run)} claims without completing (suspected crash loop)`
         : error;
-    run.result = { status: "failed", sessionId: run.sessionId, reason };
+    run.result = { status: "failed", sessionId: run.sessionId, reason, ...stopErrorCode(opts?.stop) };
     run.finishedAt = Date.now();
     settle(run);
     return { requeued: false, applied: true };
   }
 
-  const toolLedger: ToolLedger = {
-    async begin(runId, attempt, callIndex): Promise<LedgerBegin> {
-      const output = ledger.get(`${runId}:${attempt}:${callIndex}`);
-      return output !== undefined ? { cached: true, output } : { cached: false };
-    },
-    async record(runId, attempt, callIndex, output) {
-      ledger.set(`${runId}:${attempt}:${callIndex}`, output);
-    },
-  };
-
-  return { runs: store, ledger: toolLedger };
+  return { runs: store };
 }

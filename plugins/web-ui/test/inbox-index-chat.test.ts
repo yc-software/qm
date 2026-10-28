@@ -150,3 +150,31 @@ test("shared sidebar prompts follow thread state and whole inbox context", async
     await close();
   }
 });
+
+test("inbox assistant panel hides, reopens, and remembers the choice", async () => {
+  const { dom, vite, host, close } = await createInboxFixture();
+  try {
+    globalThis.fetch = async (url) =>
+      Response.json(String(url).includes("runtime-config") ? inboxRuntime : { items: [], selected: [], available: [] });
+    await vite.ssrLoadModule("/src/shell.ts");
+    const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
+    appState.me = { user: "taylor@example.com", permissions: ["inbox"] };
+    appState.currentView = "inbox";
+    appState.mainEl = host;
+    const { drawAll } = await vite.ssrLoadModule("/src/inbox.ts");
+    drawAll();
+    const toggle = () => host.querySelector<HTMLButtonElement>(".inbox-assistant-toggle")!;
+    assert.ok(host.querySelector("qm-inbox-chat"));
+    assert.equal(toggle().getAttribute("aria-label"), "Hide assistant");
+    toggle().click();
+    assert.equal(host.querySelector("qm-inbox-chat"), null);
+    assert.equal(toggle().getAttribute("aria-label"), "Show assistant");
+    assert.equal(dom.window.localStorage.getItem("web-ui:inbox-assistant-hidden"), "1");
+    toggle().click();
+    assert.ok(host.querySelector("qm-inbox-chat"));
+    assert.equal(dom.window.localStorage.getItem("web-ui:inbox-assistant-hidden"), "0");
+  } finally {
+    host.replaceChildren();
+    await close();
+  }
+});

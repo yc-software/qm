@@ -66,8 +66,8 @@ export function slackWireToPlain(text: string): string {
     .join("");
 }
 
-const REACTION_DIRECTIVE = /\[\[react:[^\]]*\]\]/gi;
-const TRAILING_OPEN_REACTION = /\[\[react:[^\]]*$/i;
+const REACTION_DIRECTIVE = /\[\[react:[^[\]]*\]\]/gi;
+const TRAILING_OPEN_REACTION = /\[\[react:[^[\]]*$/i;
 const ANY_DIRECTIVE = /\[\[react:/i;
 const CODE_REGION = /```[\s\S]*?```|`[^`\n]*`/g;
 const CODE_PLACEHOLDER = /\u0000CODE(\d+)\u0000/g;

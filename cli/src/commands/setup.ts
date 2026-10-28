@@ -107,6 +107,10 @@ const PLAYBOOKS: Readonly<Record<string, readonly string[]>> = {
     "Copy the Slack workspace ID from the workspace About dialog or the team_id",
     "returned after installing the Slack sign-in app.",
   ],
+  RENDER_API_KEY: [
+    "Create an API key at https://dashboard.render.com/u/settings#api-keys.",
+    "The key must have access to the configured Render workspace.",
+  ],
   PUBLIC_API_URL: [
     "The public URL agent sandboxes use to reach core's self-API. For docker this",
     "is usually a tunnel or LAN address; for fly/aws it matches your apiUrl when",

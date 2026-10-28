@@ -75,7 +75,7 @@ export function redactCommand(command: string, env?: Record<string, string>): st
   );
   return redactPipedIntoWithToken(flagsRedacted)
     .replace(
-      /(export\s+\w*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|IDENTIFIER|CREDENTIAL|PROXY_USER)\w*=')[^']*'/gi,
+      /(export\s+(?=\w*(?:PASS|PASSWORD|SECRET|TOKEN|KEY|IDENTIFIER|CREDENTIAL|PROXY_USER))\w+=')[^']*'/gi,
       "$1<redacted>'",
     )
     .slice(0, 500);

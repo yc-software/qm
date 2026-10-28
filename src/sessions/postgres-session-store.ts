@@ -126,6 +126,7 @@ export function rowToSession(r: Record<string, unknown>): Session {
     createdAt: Number(r.created_at),
     ...(r.title != null ? { title: r.title as string } : {}),
     ...(r.channel_name != null ? { channelName: r.channel_name as string } : {}),
+    ...(r.side_chat ? { sideChat: r.side_chat as Session["sideChat"] } : {}),
     ...(r.forked_from_session_id != null && r.fork_boundary_seq != null
       ? {
           forkedFrom: {
@@ -165,12 +166,6 @@ function rowToLlmRequest(r: Record<string, unknown>): LlmRequestRecord {
     promptHash: r.prompt_hash == null ? null : (r.prompt_hash as string),
     ...(r.prompt_body != null ? { promptEnvelope: JSON.parse(r.prompt_body as string) } : {}),
     truncated: Boolean(r.truncated),
-    ttftMs: r.ttft_ms == null ? null : Number(r.ttft_ms),
-    durationMs: r.duration_ms == null ? null : Number(r.duration_ms),
-    stepGapMs: r.step_gap_ms == null ? null : Number(r.step_gap_ms),
-    toolWallMs: r.tool_wall_json != null ? (JSON.parse(r.tool_wall_json as string) as number[]) : null,
-    gapPhases:
-      r.gap_phases_json != null ? (JSON.parse(r.gap_phases_json as string) as LlmRequestRecord["gapPhases"]) : null,
     usage: r.usage_json != null ? (JSON.parse(r.usage_json as string) as LlmRequestRecord["usage"]) : null,
     transport:
       r.transport_json != null ? (JSON.parse(r.transport_json as string) as LlmRequestRecord["transport"]) : null,
@@ -207,7 +202,7 @@ const ITEM_FIELDS = `i.session_id, i.seq, ${ITEM_COLUMNS.map(([column, key]) => 
 const ITEM_FROM = "items i JOIN sessions ts ON ts.id = i.session_id";
 const TENANT = "qm_tenant_id()";
 const LIST_COLUMNS = `s.id, s.type, s.scope_id, s.thread_ref, s.surface, s.created_at, s.title, s.channel_name,
-  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id`;
+  s.forked_from_session_id, s.forked_from_title, s.fork_boundary_seq, s.parent_session_id, s.side_chat`;
 const USER_ACTIVITY = "COALESCE(s.last_user_activity, s.created_at)";
 const AUTOMATION_SURFACES = "('cron', 'webhook', 'loop')";
 
@@ -355,6 +350,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const where: string[] = [
       "p.principal_id = $1",
       "s.parent_session_id IS NULL",
+      "(s.side_chat IS NULL OR s.side_chat->>'expanded' = 'true')",
       `(s.surface IS NULL OR s.surface NOT IN ${AUTOMATION_SURFACES})`,
       HAS_CONTENT,
     ];
@@ -1066,7 +1062,14 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         statements: [],
       },
       {
-        id: "sessions/store/0045-spend-days-cron-rebuild",
+        id: "sessions/store/0045-side-chats",
+        statements: [
+          `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS side_chat JSONB`,
+          `CREATE INDEX IF NOT EXISTS sessions_side_chat_origin ON sessions (forked_from_session_id) WHERE side_chat IS NOT NULL`,
+        ],
+      },
+      {
+        id: "sessions/store/0046-spend-days-cron-rebuild",
         statements: [`INSERT INTO session_spend_dirty(day) SELECT day FROM session_spend_days ON CONFLICT DO NOTHING`],
       },
     ],
@@ -1090,15 +1093,12 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
   const withLease = async <T>(lease: Lease, invalidMsg: string, fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pool(), async (client) => {
-      await lockSession(client, lease.sessionId);
-      const held = await client.query("SELECT token, expires_at FROM session_leases WHERE session_id = $1 FOR UPDATE", [
-        lease.sessionId,
-      ]);
-      if (held.rows[0]?.token !== lease.token || Number(held.rows[0]!.expires_at) <= now()) throw new Error(invalidMsg);
-      await client.query("UPDATE session_leases SET expires_at = $2 WHERE session_id = $1", [
-        lease.sessionId,
-        now() + leaseTtlMs,
-      ]);
+      const t = now();
+      const held = await client.query(
+        "UPDATE session_leases SET expires_at = $3 WHERE session_id = $1 AND token = $2 AND expires_at > $4",
+        [lease.sessionId, lease.token, t + leaseTtlMs, t],
+      );
+      if (!held.rowCount) throw new Error(invalidMsg);
       return fn(client);
     });
 
@@ -1148,11 +1148,36 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     const lastUser = userTurns[userTurns.length - 1];
     await client
       .query(
-        `INSERT INTO items(tenant_id, session_id, seq, ${ITEM_COLUMNS.map(([column]) => column).join(",")}, created_at)
-       SELECT ${TENANT}, $1, i.seq, ${ITEM_COLUMNS.map(([column, key]) => (column === "blob_sha" ? `decode(i."${key}", 'hex')` : `i."${key}"`)).join(",")}, ${tsOf("$3::bigint")}
-       FROM jsonb_to_recordset($2::jsonb) AS i(seq bigint, ${ITEM_COLUMNS.map(([, key, type]) => `"${key}" ${type}`).join(",")})
-       ORDER BY i.seq`,
-        [sessionId, jsonbStringify(items), createdAt],
+        `WITH inserted AS (
+           INSERT INTO items(tenant_id, session_id, seq, ${ITEM_COLUMNS.map(([column]) => column).join(",")}, created_at)
+           SELECT ${TENANT}, $1, i.seq, ${ITEM_COLUMNS.map(([column, key]) => (column === "blob_sha" ? `decode(i."${key}", 'hex')` : `i."${key}"`)).join(",")}, ${tsOf("$2::bigint")}
+           FROM jsonb_to_recordset($9::jsonb) AS i(seq bigint, ${ITEM_COLUMNS.map(([, key, type]) => `"${key}" ${type}`).join(",")})
+           ORDER BY i.seq)
+         UPDATE sessions
+            SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
+                                     THEN last_activity
+                                     ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
+                messages = $3,
+                turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
+                             THEN (SELECT COUNT(*) FROM items t WHERE t.tenant_id = ${TENANT} AND t.session_id = $1 AND ${userTurn("t")}) + $4
+                             ELSE turns + $4 END,
+                first_user_preview = CASE WHEN first_user_preview IS NULL AND turns = 0 AND messages = $5
+                                          THEN $6 ELSE first_user_preview END,
+                last_user_preview = COALESCE($7, last_user_preview),
+                last_user_activity = CASE WHEN $8::boolean THEN GREATEST(COALESCE(last_user_activity, 0), $2::bigint)
+                                          ELSE last_user_activity END
+          WHERE id = $1`,
+        [
+          sessionId,
+          createdAt,
+          startSeq + full.length,
+          userTurns.length,
+          startSeq,
+          firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
+          lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
+          items.some((item) => USER_ITEM_KINDS.includes(item.kind)),
+          jsonbStringify(items),
+        ],
       )
       .catch((err: unknown) => {
         const e = err as { code?: unknown; constraint?: unknown };
@@ -1163,32 +1188,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           { cause: err },
         );
       });
-    await client.query(
-      `UPDATE sessions
-          SET last_activity = CASE WHEN last_activity >= $2::bigint - ${LAST_ACTIVITY_DEBOUNCE_MS}
-                                   THEN last_activity
-                                   ELSE GREATEST(COALESCE(last_activity, 0), $2::bigint) END,
-              messages = $3,
-              turns = CASE WHEN turns IS NULL OR messages IS DISTINCT FROM $5
-                           THEN (SELECT COUNT(*) FROM items t WHERE t.tenant_id = ${TENANT} AND t.session_id = $1 AND ${userTurn("t")})
-                           ELSE turns + $4 END,
-              first_user_preview = CASE WHEN first_user_preview IS NULL AND turns = 0 AND messages = $5
-                                        THEN $6 ELSE first_user_preview END,
-              last_user_preview = COALESCE($7, last_user_preview),
-              last_user_activity = CASE WHEN $8::boolean THEN GREATEST(COALESCE(last_user_activity, 0), $2::bigint)
-                                        ELSE last_user_activity END
-        WHERE id = $1`,
-      [
-        sessionId,
-        createdAt,
-        startSeq + full.length,
-        userTurns.length,
-        startSeq,
-        firstUser ? storedPreview(firstUser.payload, FIRST_PREVIEW_LEN) : null,
-        lastUser ? storedPreview(lastUser.payload, LAST_PREVIEW_LEN) : null,
-        items.some((item) => USER_ITEM_KINDS.includes(item.kind)),
-      ],
-    );
     return full;
   };
 
@@ -1252,10 +1251,31 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       await q("UPDATE sessions SET title = $2 WHERE id = $1", [sessionId, title]);
     },
 
+    async sideChatsOf(sessionId) {
+      const rows = await q(
+        "SELECT * FROM sessions WHERE forked_from_session_id = $1 AND side_chat IS NOT NULL ORDER BY created_at",
+        [sessionId],
+      );
+      return rows.map(rowToSession);
+    },
+
+    async expandSideChat(sessionId) {
+      await q(
+        "UPDATE sessions SET side_chat = jsonb_set(side_chat, '{expanded}', 'true') WHERE id = $1 AND side_chat IS NOT NULL",
+        [sessionId],
+      );
+    },
+
     async updateForkProvenance(sessionId, provenance): Promise<void> {
       await q(
-        "UPDATE sessions SET forked_from_session_id = $2, forked_from_title = $3, fork_boundary_seq = $4 WHERE id = $1",
-        [sessionId, provenance.forkedFrom.sessionId, provenance.forkedFrom.title ?? null, provenance.forkBoundarySeq],
+        "UPDATE sessions SET forked_from_session_id = $2, forked_from_title = $3, fork_boundary_seq = $4, side_chat = $5 WHERE id = $1",
+        [
+          sessionId,
+          provenance.forkedFrom.sessionId,
+          provenance.forkedFrom.title ?? null,
+          provenance.forkBoundarySeq,
+          provenance.sideChat ? JSON.stringify(provenance.sideChat) : null,
+        ],
       );
     },
 
@@ -1491,16 +1511,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         promptHash: envelope?.hash ?? null,
         ...(rec.promptEnvelope !== undefined ? { promptEnvelope: rec.promptEnvelope } : {}),
         truncated: rec.truncated ?? false,
-        ttftMs: rec.ttftMs ?? null,
-        durationMs: rec.durationMs ?? null,
-        stepGapMs: rec.stepGapMs ?? null,
-        toolWallMs: rec.toolWallMs ?? null,
-        gapPhases: rec.gapPhases ?? null,
         usage: rec.usage ?? null,
         transport: rec.transport ?? null,
       };
       await q(
-        "INSERT INTO session_llm_requests(id, session_id, turn_seq, step, model, scope_label, prompt_hash, truncated, created_at, ttft_ms, duration_ms, step_gap_ms, tool_wall_json, usage_json, transport_json, gap_phases_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
+        "INSERT INTO session_llm_requests(id, session_id, turn_seq, step, model, scope_label, prompt_hash, truncated, created_at, usage_json, transport_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
         [
           full.id,
           full.sessionId,
@@ -1511,13 +1526,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           full.promptHash,
           full.truncated,
           full.createdAt,
-          full.ttftMs,
-          full.durationMs,
-          full.stepGapMs,
-          full.toolWallMs ? JSON.stringify(full.toolWallMs) : null,
           full.usage ? JSON.stringify(full.usage) : null,
           full.transport ? JSON.stringify(full.transport) : null,
-          full.gapPhases ? JSON.stringify(full.gapPhases) : null,
         ],
         { signal },
       );
@@ -1526,7 +1536,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async listLlmRequests(sessionId, opts): Promise<LlmRequestRecord[]> {
       const cols = opts?.omitRequest
-        ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.ttft_ms, r.duration_ms, r.step_gap_ms, r.tool_wall_json, r.usage_json, r.transport_json, r.gap_phases_json"
+        ? "r.id, r.session_id, r.turn_seq, r.step, r.model, r.scope_label, r.created_at, r.truncated, r.prompt_hash, r.usage_json, r.transport_json"
         : "r.*, e.body AS prompt_body";
       const from = opts?.omitRequest
         ? "session_llm_requests r"
@@ -1656,6 +1666,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async deleteSessionIfEmpty(sessionId): Promise<boolean> {
       return withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
+        await client.query("SELECT 1 FROM session_leases WHERE session_id = $1 FOR UPDATE", [sessionId]);
         const gone = await client.query(
           `DELETE FROM sessions
             WHERE id = $1

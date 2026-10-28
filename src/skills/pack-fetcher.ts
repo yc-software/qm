@@ -7,6 +7,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { credentialRequestHeaders, type CredentialInjection } from "../credentials/keychain.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { commitShaPrefixSchema } from "../util/ids.ts";
 import { isPrivateNetworkIp } from "../util/network.ts";
 import { isProbablyBinary } from "./seed.ts";
 import type { FetchedRepo, RepoFile } from "./ingest.ts";
@@ -139,7 +140,6 @@ export async function resolvePackAuth(
   return undefined;
 }
 
-const SHA_RE = /^[0-9a-f]{7,40}$/;
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 
 const execFileP = promisify(execFile);
@@ -250,7 +250,8 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
   return {
     async fetch(pack) {
       const ref = (pack.ref ?? "").trim();
-      if (ref && !SHA_RE.test(ref) && !BRANCH_RE.test(ref)) throw new Error(`invalid skill pack ref: ${ref}`);
+      if (ref && !commitShaPrefixSchema.safeParse(ref).success && !BRANCH_RE.test(ref))
+        throw new Error(`invalid skill pack ref: ${ref}`);
       const repo = await validateRepoUrl(pack.url, allowLocalRepos, lookup);
       const auth = opts.resolveAuth ? await opts.resolveAuth(pack) : undefined;
 
@@ -269,10 +270,11 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
 
     async resolveRef(pack) {
       const ref = (pack.ref ?? "").trim();
-      if (ref && !SHA_RE.test(ref) && !BRANCH_RE.test(ref)) throw new Error(`invalid skill pack ref: ${ref}`);
+      if (ref && !commitShaPrefixSchema.safeParse(ref).success && !BRANCH_RE.test(ref))
+        throw new Error(`invalid skill pack ref: ${ref}`);
       const repo = await validateRepoUrl(pack.url, allowLocalRepos, lookup);
       const auth = opts.resolveAuth ? await opts.resolveAuth(pack) : undefined;
-      const target = ref && BRANCH_RE.test(ref) && !SHA_RE.test(ref) ? ref : "HEAD";
+      const target = ref && BRANCH_RE.test(ref) && !commitShaPrefixSchema.safeParse(ref).success ? ref : "HEAD";
       const work = await mkdtemp(join(tmpdir(), "qm-skill-ref-"));
       try {
         const out = await git(["ls-remote", repo.url, target], work, auth, repo.gitConfig);
@@ -282,7 +284,8 @@ export function createGitFetcher(opts: GitFetcherOptions = {}): SkillPackFetcher
             .map((l) => l.trim())
             .filter(Boolean)[0]
             ?.split(/\s+/)[0] ?? "";
-        if (!SHA_RE.test(sha)) throw new Error(`could not resolve ref "${target}" for skill pack`);
+        if (!commitShaPrefixSchema.safeParse(sha).success)
+          throw new Error(`could not resolve ref "${target}" for skill pack`);
         return sha;
       } finally {
         await rm(work, { recursive: true, force: true }).catch(swallowAs("skill pack: remove temp clone", undefined));

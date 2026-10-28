@@ -36,20 +36,31 @@ test("mcp client lists every page of tools and calls one over JSON and SSE respo
   for (const json of [true, false]) {
     const mcp = await startMcpTestServer(t, { tools, pageSize: 1, json });
     const client = createMcpClient({ url: `${mcp.url}/mcp`, auth: { mode: "none" } });
-    assert.deepEqual(await client.listTools(), [
-      { name: "a", description: "tool a", inputSchema: { type: "object" } },
-      { name: "b", description: "tool b", inputSchema: { type: "object" } },
-      { name: "c", description: "tool c", inputSchema: { type: "object" } },
-    ]);
+    assert.deepEqual(await client.listTools(), {
+      tools: [
+        { name: "a", description: "tool a", inputSchema: { type: "object" } },
+        { name: "b", description: "tool b", inputSchema: { type: "object" } },
+        { name: "c", description: "tool c", inputSchema: { type: "object" } },
+      ],
+    });
     assert.equal(mcpResultText(await client.callTool("b", {})), "ran b");
     assert.equal(mcp.openSessions(), 0, "each operation ends its session");
   }
 });
 
+test("mcp client keeps the server's own description, else its instructions", async (t) => {
+  const both = await startMcpTestServer(t, { description: "Track orders.", instructions: "Call search first." });
+  const listed = await createMcpClient({ url: both.url, auth: { mode: "none" } }).listTools();
+  assert.equal(listed.about, "Track orders.");
+  const told = await startMcpTestServer(t, { instructions: "  Call search first.\nThen update.  " });
+  const about = (await createMcpClient({ url: told.url, auth: { mode: "none" } }).listTools()).about;
+  assert.equal(about, "Call search first.\nThen update.");
+});
+
 test("mcp client caps a server's tool list", async (t) => {
   const tools = Array.from({ length: 100 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: "object" as const } }));
   const mcp = await startMcpTestServer(t, { tools, pageSize: 40 });
-  const listed = await createMcpClient({ url: mcp.url, auth: { mode: "none" } }).listTools();
+  const listed = (await createMcpClient({ url: mcp.url, auth: { mode: "none" } }).listTools()).tools;
   assert.equal(listed.length, 64);
   assert.equal(listed.at(-1)?.name, "t63");
   assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2);
@@ -79,7 +90,7 @@ test("mcp client starts a fresh session after the server forgets its sessions", 
 test("mcp client sends bearer auth", async (t) => {
   const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer sekret" });
   const good = createMcpClient({ url: mcp.url, auth: { mode: "bearer", token: "sekret" } });
-  assert.equal((await good.listTools()).length, 2);
+  assert.equal((await good.listTools()).tools.length, 2);
   const bad = createMcpClient({ url: mcp.url, auth: { mode: "none" } });
   await assert.rejects(bad.listTools(), /^Error: mcp tools\/list failed \(HTTP 401\)$/);
 });
@@ -107,7 +118,7 @@ test("mcp client mints client-credentials tokens on the server's origin and reus
     url: `${mcp.url}/mcp`,
     auth: { mode: "client-credentials", clientId: "id", clientSecret: "secret" },
   });
-  assert.equal((await client.listTools()).length, 2);
+  assert.equal((await client.listTools()).tools.length, 2);
   assert.equal(mcpResultText(await client.callTool("query", {})), "ran query");
   assert.deepEqual(mcp.tokenRequests, ["id"]);
   mcp.revokeTokens();
@@ -141,16 +152,117 @@ test("server id validation", () => {
 });
 
 test("tool service exposes namespaced tools and calls through", async (t) => {
-  const mcp = await startMcpTestServer(t);
+  const mcp = await startMcpTestServer(t, { description: "CRM records" });
   const store = createMcpServerStore(createMemoryMap<McpServer>());
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
   const defs = service.toolDefs();
   assert.deepEqual(defs.map((d) => d.name).sort(), ["crm_query", "crm_update"]);
-  assert.ok(defs.every((d) => d.readOnly));
+  assert.ok(defs.every((d) => d.readOnly && d.serverAbout === "CRM records"));
   const out = await service.call("crm_query", { q: "hello" }, "internal:U1");
   assert.equal(out, "ran query");
+  service.close();
+});
+
+test("destructive annotations mark MCP tools for approval unless the server overrides the policy", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      { name: "read", inputSchema: { type: "object" }, annotations: { readOnlyHint: true, destructiveHint: true } },
+      { name: "drop", inputSchema: { type: "object" }, annotations: { destructiveHint: true } },
+      { name: "plain", inputSchema: { type: "object" } },
+    ],
+  });
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  const approvals = async (partial: Partial<McpServer>) => {
+    await store.put(server({ url: mcp.url, ...partial }));
+    await service.refresh();
+    return Object.fromEntries(service.toolDefs().map((d) => [d.remoteName, d.needsApproval]));
+  };
+  assert.deepEqual(await approvals({}), { read: false, drop: true, plain: false });
+  assert.deepEqual(await approvals({ approval: "all" }), { read: true, drop: true, plain: true });
+  assert.deepEqual(await approvals({ approval: "none" }), { read: false, drop: false, plain: false });
+  service.close();
+});
+
+test("a catalog server is one tool that searches, describes, and invokes as the attested person", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    tools: [
+      { name: "find-record", description: "Find a record by name", inputSchema: { type: "object" } },
+      {
+        name: "send-message",
+        description: "Send a message to a contact\nLong detail",
+        inputSchema: { type: "object", properties: { to: { type: "string" } } },
+        annotations: { destructiveHint: true },
+      },
+    ],
+    call: (name, args) => ({ content: [{ type: "text", text: `${name} ${JSON.stringify(args)}` }] }),
+  });
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
+  await service.refresh();
+  assert.deepEqual(
+    service.toolDefs().map((d) => [d.name, d.catalog]),
+    [["records", true]],
+  );
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 0, "a catalog is listed per person on use");
+  assert.equal(
+    await service.call("records", { operation: "search", query: "message" }, "alice@example.com"),
+    "- send-message (needs approval): Send a message to a contact",
+  );
+  assert.match(
+    await service.call("records", { operation: "describe", tool: "send-message" }, "alice@example.com"),
+    /"needsApproval":true/,
+  );
+  assert.equal(
+    await service.needsApproval("records", { operation: "invoke", tool: "send-message" }, "alice@example.com"),
+    true,
+  );
+  assert.equal(
+    await service.needsApproval("records", { operation: "invoke", tool: "find-record" }, "alice@example.com"),
+    false,
+  );
+  assert.equal(await service.needsApproval("records", { operation: "search" }, "alice@example.com"), false);
+  await assert.rejects(
+    service.needsApproval("records", { operation: "invoke", tool: "send_message" }, "alice@example.com"),
+    /Unknown Records tool: send_message\. Search for it first/,
+  );
+  await assert.rejects(
+    service.call("records", { operation: "invoke", tool: "send-message", arguments: { to: "x" } }, "alice@example.com"),
+    /needs the person's approval/,
+    "an approval-requiring tool never goes out without an approval",
+  );
+  assert.equal(
+    await service.call(
+      "records",
+      { operation: "invoke", tool: "send-message", arguments: { to: "x" } },
+      "alice@example.com",
+      "tool-call:abc",
+    ),
+    'send-message {"to":"x"}',
+  );
+  assert.deepEqual(
+    mcp.requests.filter((r) => r.rpc === "tools/call").map((r) => [r.actor, r.approval]),
+    [["alice@example.com", "tool-call:abc"]],
+  );
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 1, "the catalog is cached per person");
+  await service.call("records", { operation: "search" }, "bob@example.com");
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2, "each person gets their own catalog");
+  assert.ok(mcp.requests.every((r) => r.actor === "alice@example.com" || r.actor === "bob@example.com"));
+  await assert.rejects(service.call("records", { operation: "search" }), /needs a signed-in person/);
+  await service.refresh();
+  const lists = mcp.requests.filter((r) => r.rpc === "tools/list").length;
+  await Promise.all([
+    service.call("records", { operation: "search" }, "alice@example.com"),
+    service.call("records", { operation: "search" }, "alice@example.com"),
+  ]);
+  assert.equal(
+    mcp.requests.filter((r) => r.rpc === "tools/list").length,
+    lists + 1,
+    "refresh drops the cache and parallel lookups share one listing",
+  );
   service.close();
 });
 
@@ -206,7 +318,10 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
     }),
   );
   await service.refresh();
-  assert.deepEqual(await service.probe((await store.get("crm"))!), ["query", "update"]);
+  assert.deepEqual(
+    (await service.probe((await store.get("crm"))!)).tools.map((tool) => tool.name),
+    ["query", "update"],
+  );
   assert.ok(authFor("tools/list").length > 0);
   assert.ok(authFor("tools/list").every((auth) => auth === "Bearer catalog-only"));
   assert.deepEqual(

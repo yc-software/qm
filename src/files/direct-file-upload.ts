@@ -41,6 +41,7 @@ export interface DirectFileUploads {
     },
   ): Promise<FileUpload>;
   get(id: string): Promise<FileUpload | null>;
+  list(actorId: string): Promise<FileUpload[]>;
   sign(id: string, partNumber: number): Promise<{ url: string; headers: Record<string, string>; expiresAt: number }>;
   complete(id: string): Promise<FileArtifact>;
   abort(id: string): Promise<void>;
@@ -157,6 +158,7 @@ export function createDirectFileUploads(options: {
         uploadId: "",
         state: "pending",
         createdAt: now(),
+        lastActivityAt: now(),
         expiresAt: now() + UPLOAD_TTL_MS,
       };
       const matches = (existing: FileUpload) =>
@@ -194,6 +196,7 @@ export function createDirectFileUploads(options: {
       return row;
     },
     get: (id) => store.get(id),
+    list: (actorId) => store.active(actorId, now()),
     async sign(id, partNumber) {
       const row = await requireRow(id);
       if (row.state !== "pending" || row.expiresAt <= now())
@@ -203,6 +206,7 @@ export function createDirectFileUploads(options: {
       const length = Math.min(row.partSize, row.sizeBytes - (partNumber - 1) * row.partSize);
       const expiresIn = Math.min(URL_TTL_SECONDS, Math.floor((row.expiresAt - now()) / 1000));
       if (expiresIn < 1) throw new FileUploadError("upload expired", 409);
+      if (!(await store.touch(id, now()))) throw new FileUploadError("upload is not pending or has expired", 409);
       const checksum = row.checksums[partNumber - 1]!;
       const url = await presign(
         new UploadPartCommand({

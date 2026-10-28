@@ -180,6 +180,9 @@ export interface HomeSnapshotOpsOptions<S> {
   timeoutMs?: number;
 }
 
+export const JOB_COMPUTER_SCOPE_PREFIX = "job-";
+export const isJobComputerScope = (scope: string): boolean => scope.startsWith(JOB_COMPUTER_SCOPE_PREFIX);
+
 export interface HomeSnapshotOps<S> {
   snapshotHome(scope: string, session: S): Promise<void>;
   hydrateHome(scope: string, session: S): Promise<boolean>;
@@ -286,6 +289,7 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
 
   return {
     async snapshotHome(scope, session): Promise<void> {
+      if (isJobComputerScope(scope)) return;
       const left = startClock();
       const prune = prunePaths.length
         ? `\\( ${prunePaths.map((p) => `-path ${shq(p)}`).join(" -o ")} \\) -prune -o `
@@ -313,6 +317,7 @@ export function createHomeSnapshotOps<S>(opts: HomeSnapshotOpsOptions<S>): HomeS
     },
 
     async hydrateHome(scope, session): Promise<boolean> {
+      if (isJobComputerScope(scope)) return false;
       const left = startClock();
       const stored = await withTimeout(() => store.open(scope), left(), `${label} hydrate open`);
       if (!stored) return false;

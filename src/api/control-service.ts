@@ -25,8 +25,9 @@ import {
   SHARED_SKILL_TRIGGER_REFUSAL,
   type ShareArtifactRequest,
   type ShareArtifactResult,
+  isMultiMemberSkillScope,
 } from "./artifact-share.ts";
-import { actsAsScope, isSharedScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
+import { actsAsScope, parseScopeId, type Permission, type ScopeId } from "../types.ts";
 import { cronRef, encodeRef } from "../acl/resource-ref.ts";
 import type { App, VisibleCron } from "./app.ts";
 
@@ -322,6 +323,8 @@ export const UNATTENDED_ADMIN_GRANTS = [
   "admin.audit.read",
   "admin.egress.read",
   "admin.files.read",
+  "admin.spend.read",
+  "admin.crons.read",
 ] as const;
 
 function validateUnattendedGrants(grants: string[]): string | null {
@@ -451,11 +454,11 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         destination = resolved.destination;
       }
 
-      if (req.unattendedGrants !== undefined) {
+      if (req.unattendedGrants?.length) {
         const refusal = await unattendedGrantRefusal(
           app,
           admin,
-          { owner: capability.actorId, ownerScopeId },
+          { owner: capability.actorId, ownerScopeId, ...(destination ? { destination } : {}) },
           capability,
         );
         if (refusal) return { ok: false, ...refusal };
@@ -543,7 +546,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (req.unattendedGrants !== undefined) patch.unattendedGrants = req.unattendedGrants;
       else if ((before.unattendedGrants?.length ?? 0) > 0) patch.unattendedGrants = before.unattendedGrants;
       if (!cronPatchChanges(before, patch)) return { ok: true, cron: before };
-      if ((before.unattendedGrants?.length ?? 0) > 0 || req.unattendedGrants !== undefined) {
+      if ((patch.unattendedGrants?.length ?? 0) > 0) {
         const refusal = await unattendedGrantRefusal(app, admin, before, capability);
         if (refusal) return { ok: false, ...refusal };
       }
@@ -682,10 +685,6 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
       if (!cron) return { ok: false, code: "not_found", message: `no cron ${id}` };
       if (!(await canAdministerCron(app, cron, capability.actorId)))
         return { ok: false, code: "forbidden", message: "not your cron" };
-      if ((cron.unattendedGrants?.length ?? 0) > 0) {
-        const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
-        if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
-      }
       const resolved = resolveCapabilityDestination(capability, destinationKey);
       if (!resolved.ok) {
         return {
@@ -693,6 +692,15 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           code: "unknown_destination",
           message: "destinationKey is not one of the destinations available for this conversation",
         };
+      }
+      if ((cron.unattendedGrants?.length ?? 0) > 0) {
+        const refusal = await unattendedGrantRefusal(
+          app,
+          admin,
+          { ...cron, destination: resolved.destination },
+          capability,
+        );
+        if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
       if (isDeepStrictEqual(cron.destination, resolved.destination)) return { ok: true, cron };
       const updated = await app.setCronDestination(id, resolved.destination);
@@ -873,7 +881,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           if (
             req.type === "skill" &&
             !livePersonCapability(capability) &&
-            (isSharedScope(home.ownerScopeId) || isSharedScope(toScope))
+            (isMultiMemberSkillScope(home.ownerScopeId) || isMultiMemberSkillScope(toScope))
           ) {
             return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
           }

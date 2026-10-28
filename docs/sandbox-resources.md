@@ -23,7 +23,31 @@ Commands use `execute(command, sandbox_id?, credentials?, background?)`. Set
 with the job and displayed instead of the command; the raw command remains available
 in expanded output. `timeout_seconds` is the foreground wall-clock timeout or the
 background job lifetime. Background jobs require scoped, durable execution; disposable
-scratch, owner-auth and reached-room routing remain foreground-only.
+scratch and reached-room routing remain foreground-only.
+
+In a shared conversation (anything other than the acting person's personal scope, or a
+personal scope whose environment another conversation is attached to), a
+command that names a personal, granted, connector, role-broker or org environment
+credential runs on the turn's scratch computer instead of the conversation's computer,
+including when it asked for the scoped computer or a `sandbox_id`. The scratch computer
+is the ordinary per-turn one: same image, the turn's environment and capability tokens,
+Files, skills and global mounts, but none of the shared workspace's files. Only that
+turn's commands run there. The result tells the model the command moved. Brokered org
+service handles (`AGENT_CREDENTIAL_TOKEN`) carry no raw secret and stay on the requested
+computer. Personal conversations stage credentials on their own computer.
+
+A background job in a shared conversation that names such a credential starts on its own
+job computer: a sandbox record marked job-only, created on the conversation's provider. It
+is not listed in the sandbox inventory, cannot be targeted with `sandbox_id` by execute,
+files, apps or skills, cannot be made a default, and refuses `send_input`. Only the job's
+own controls reach it: poll, stop, watch, the reaper and the web output pane, including
+from a later deploy. The process reaper's sweep settles the job's exit and credential
+write-back, then destroys the computer and deletes its record. A failed destroy, and a
+computer left provisioning for over fifteen minutes, are retried every five minutes; a retire
+is skipped if the computer's state changed after the sweep looked. A job computer's backing scope
+is named `job-<id>`, and home snapshots and provider checkpoints skip those scopes, so nothing a
+job writes to its home outlives the computer. A provider that cannot retire computers (Porter today) refuses such
+jobs; the command must run in the foreground.
 
 The `background` tool controls existing jobs with `poll`, `send_input`, `stop`, `list`,
 `watch`, and `unwatch`. Process IDs retain their durable saved target even after the
@@ -45,6 +69,6 @@ The old routing table is retained only as upgrade input. It is never read when s
 
 Before upgrading from a release without resource-aware readers, drain its cores and workers. Rollback must use a resource-aware release that honors the permanent completion marker. A missing default after import means no default, not permission to recreate an old scoped computer.
 
-Scoped commands require an explicit target or selected default. Disposable scratch and owner-auth computers use the selected computer's provider without reusing its disk or resource identity; with no selection they use the installation provider, without creating a default. An unavailable selected provider fails explicitly rather than substituting another provider.
+Scoped commands require an explicit target or selected default. Disposable scratch computers use the selected computer's provider without reusing its disk or resource identity; with no selection they use the installation provider, without creating a default. An unavailable selected provider fails explicitly rather than substituting another provider.
 
 To move work between providers, create a computer, restore the required work from git or Files, verify it, and select it as the new default. Selection does not copy files or migrate running jobs.

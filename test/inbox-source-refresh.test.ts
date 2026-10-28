@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createInboxSourceRefresh } from "../src/loops/inbox-source-refresh.ts";
+import { createInboxSourceRefresh as createRefresh } from "../src/loops/inbox-source-refresh.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
+import type { IngressEntry } from "../src/loops/ingress.ts";
 
 async function fixture(source = "gmail", meta: Record<string, unknown> = { threadId: "t1" }) {
   const items = createLoopItemLedger();
@@ -18,6 +19,18 @@ async function fixture(source = "gmail", meta: Record<string, unknown> = { threa
   return { items, item: (await items.byLoop("inbox"))[0]! };
 }
 const featureFlags = { enabled: async () => true };
+const createInboxSourceRefresh = (
+  deps: Omit<Parameters<typeof createRefresh>[0], "enqueue"> & {
+    enqueue?: Parameters<typeof createRefresh>[0]["enqueue"];
+  },
+) => createRefresh({ enqueue: async () => undefined, ...deps });
+function recorder() {
+  const events: unknown[] = [];
+  const enqueue = async (_loop: unknown, entries: IngressEntry[]) => {
+    events.push(...entries.map((entry) => entry.sourcePayload?.latestEvent));
+  };
+  return { events, enqueue };
+}
 const tokens = { connectorAccessToken: async () => "synthetic-token" };
 const json = (body: unknown) => Response.json(body);
 const ALEX = "https://avatars.slack-edge.com/alex.png";
@@ -35,12 +48,14 @@ function directoryOf(
 }
 const directory = directoryOf({ U1: { displayName: "Alex", avatarUrl: ALEX }, U2: { displayName: "Taylor" } });
 
-test("Gmail reply sent outside QM closes the card, ignores drafts and recognizes send-as aliases", async () => {
+test("Gmail reply sent outside QM becomes an owner event, ignoring drafts and recognizing send-as aliases", async () => {
   const { items, item } = await fixture();
   let reads = 0;
+  const queue = recorder();
   const refresh = createInboxSourceRefresh({
     featureFlags,
     items,
+    enqueue: queue.enqueue,
     tokens,
     directory,
     fetchImpl: async (url) => {
@@ -57,12 +72,8 @@ test("Gmail reply sent outside QM closes the card, ignores drafts and recognizes
   });
   await Promise.all([refresh("owner@example.com", [item]), refresh("owner@example.com", [item])]);
   await refresh("owner@example.com", [item]);
-  const after = (await items.get(item.id))!;
-  assert.equal(after.status, "skipped");
-  assert.equal(after.actionKind, "replied");
-  assert.equal(after.sourceAt, 2000);
-  assert.equal(after.actionResult, "Handled elsewhere");
-  assert.equal(after.proposal?.data.body, "Keep my edit");
+  assert.deepEqual(queue.events, [{ author: "owner", at: 2000, text: "Handled elsewhere" }]);
+  assert.equal((await items.get(item.id))!.proposal?.data.body, "Keep my edit");
   assert.equal(reads, 1);
 });
 
@@ -76,14 +87,16 @@ test("an old sent message or a newer inbound message does not close a Gmail item
     [{ internalDate: "2000", labelIds: ["DRAFT"] }],
   ]) {
     const { items, item } = await fixture();
+    const queue = recorder();
     await createInboxSourceRefresh({
       featureFlags,
       items,
+      enqueue: queue.enqueue,
       tokens,
       directory,
       fetchImpl: async () => json({ messages }),
     })("owner", [item]);
-    assert.equal((await items.get(item.id))!.status, "ready");
+    assert.deepEqual(queue.events, []);
   }
 });
 
@@ -184,28 +197,32 @@ test("top-level/private-channel mentions fetch just their root and replies, neve
 test("Slack detects group DMs by conversation metadata, including C-prefixed IDs", async () => {
   const { items, item } = await fixture("slack", { channelId: "C_GROUP_DM", ts: "1.0" });
   const calls: string[] = [];
+  const queue = recorder();
   await createInboxSourceRefresh({
     featureFlags,
     items,
+    enqueue: queue.enqueue,
     tokens,
     directory,
     fetchImpl: slackFetch(calls, { direct: true, own: true }),
   })("owner", [item]);
   assert.ok(calls.some((p) => p.includes("conversations.history")));
-  assert.equal((await items.get(item.id))!.actionKind, "replied");
+  assert.deepEqual(queue.events, [{ author: "owner", at: 2000, text: "Thread reply" }]);
 });
 
 test("a partial Slack thread is displayed as partial but cannot resolve an item", async () => {
   const { items, item } = await fixture("slack", { channelId: "C1", ts: "1.0" });
+  const queue = recorder();
   await createInboxSourceRefresh({
     featureFlags,
     items,
+    enqueue: queue.enqueue,
     tokens,
     directory,
     fetchImpl: slackFetch([], { partial: true, own: true }),
   })("owner", [item]);
   const after = (await items.get(item.id))!;
-  assert.equal(after.status, "ready");
+  assert.deepEqual(queue.events, []);
   assert.equal(after.sourcePayload!.sourceContextPartial, true);
 });
 

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import type { EmailTransport, ModelProvider, QmConfig } from "./config.ts";
+import { renderSource, type EmailTransport, type ModelProvider, type QmConfig } from "./config.ts";
 import type { Target } from "./providers.ts";
 import { declaredVariables, terraformVars } from "./terraform.ts";
 
@@ -10,7 +10,12 @@ interface ScaffoldFile {
 }
 
 export interface ProviderScaffold {
-  renderConfig(orgId: string, modelProvider: ModelProvider, emailTransport: EmailTransport): string;
+  renderConfig(
+    orgId: string,
+    modelProvider: ModelProvider,
+    emailTransport: EmailTransport,
+    source?: { repo: string; branch: string },
+  ): string;
   ignores: readonly string[];
   agentsAppendix: string;
   files(config: QmConfig): ScaffoldFile[];
@@ -48,8 +53,9 @@ function renderConfig(orgId: string, values: ConfigValues): string {
   // "botName": "straylight",
   // "orgName": "Acme Corp",
 
-  // Where to deploy: "docker" runs local containers, "fly" deploys Fly apps,
-  // and "aws" runs the control plane on ECS and agent computers on Lambda MicroVMs.
+  // Where to deploy: "docker" runs local containers, "fly" deploys Fly apps, "aws" runs
+  // the control plane on ECS and agent computers on Lambda MicroVMs, and "render" builds
+  // Render services from Git with native Render Sandboxes as agent computers.
   "target": ${JSON.stringify(values.target)},
 
   // The vendor supplying the base model: "anthropic", "openai", or "openrouter"
@@ -283,4 +289,122 @@ export const awsScaffold: ProviderScaffold = {
   configurationHint: "aws: finish the account, region, public edge, GitHub OIDC, and identity gate fields before setup",
   finalCommand: "terraform -chdir=infra init && terraform -chdir=infra apply",
   finalWhy: "create inert infrastructure; finish the edge + portal steps in AGENTS.md before up",
+};
+
+export const renderScaffold: ProviderScaffold = {
+  renderConfig: (orgId, modelProvider, emailTransport, source) =>
+    renderConfig(orgId, {
+      target: "render",
+      modelProvider,
+      publicUrl: `https://${orgId}-portal.onrender.com`,
+      providerFields: `
+  // The core API address. Render assigns both URLs and qm up rewrites them here.
+  // Set your own HTTPS origins instead to use custom domains; see the Render reference.
+  "apiUrl": ${JSON.stringify(`https://${orgId}-core.onrender.com`)},
+
+  "render": {
+    "workspaceId": "tea-replaceme",
+    "source": ${JSON.stringify(renderSource(source, "Render initialization"))},
+    "region": "oregon",
+    "corePlan": "2c-4g",
+    "servicePlan": "0.5c-512mb",
+    "postgresPlan": "0.5c-1g",
+    "postgresDiskSizeGB": 10,
+    "storage": { "plan": "0.5c-512mb", "diskSizeGB": 10 }
+  },
+`,
+      services: ["core", "slack", "web-ui", "admin", "portal", "auth"],
+      env: `{ "core": { "HARNESS": "pi", "SANDBOX_BACKEND": "render", "DEPLOY_PROVIDER": "render", "SNAPSHOT_STORE": "s3", "TRANSFER_STORE": "s3" }, "slack": { "SLACK_IDENTITY_EMAIL": "1" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
+      secretEnv: `,
+
+  // The initial admin seed is kept in the provider secret store, never in config.
+  "secretEnv": { "core": { "ADMIN_GRANTS": "ADMIN_GRANTS" } }`,
+      sandbox: `,
+
+  // Agent computers run as native Render Sandboxes in this workspace.
+  "sandbox": { "backend": "render" }`,
+    }),
+  ignores: [
+    ".env",
+    "node_modules/",
+    ".generated/",
+    ".render.lock/",
+    ".render.lock-*/",
+    "render.resources.json",
+    "render.resources.json.tmp",
+  ],
+  agentsAppendix: `
+## Render deployment
+
+Render builds QM services from render.source in Git; no local Docker or image
+publication is involved. qm up creates one project with a production environment
+for core, web UI, portal, Render Postgres, and bundled MinIO, then
+uploads the deployment layer. Later qm up runs retain the selected MinIO
+source commit. Use qm up --upgrade-minio to upgrade MinIO explicitly.
+Native Render Sandboxes are workspace resources.
+Each published app has a persistent disk at /data and uses SQLite at
+/data/app.db. Litestream backs up the SQLite file to scoped object storage.
+App updates stop the old process before the new process starts. qm down
+retains Postgres and MinIO data, and qm rollback restores the prior QM service
+builds without reversing database migrations.
+
+.codex/skills/deploy-qm/references/render.md is the Render reference: setup,
+configuration keys, commands, and the agent-computer proof.
+`,
+  files: () => [
+    {
+      segments: ["sandbox", "skills", "render-platform", "SKILL.md"],
+      content: `---
+name: render-platform
+description: Build and publish apps on this QM Render deployment. Use with the publish skill when an app needs persistent data, background work, or a deployment update.
+---
+Use the built-in deployment tools to publish, update, archive, and restore apps.
+The platform creates app services in this deployment's Render project,
+each with one persistent disk in its own network-isolated environment.
+Each update stops the old process before the new process starts. Listen on PORT, bind the server to 0.0.0.0, and
+bind only after initialization succeeds. Handle SIGTERM to stop new work and
+finish current requests. Core proxies app traffic through an authenticated
+gateway; other apps cannot connect to the app port.
+
+Use SQLite at DATA_DIR/app.db for relational data. DATA_DIR is /data on the
+persistent disk. Litestream continuously backs up this SQLite database to the app's
+object prefix and restores it before startup only when the local SQLite file is
+missing. Use WAL mode and a busy timeout. Other paths are not backed
+up by Litestream. Backups are asynchronous; a disk loss can lose recent writes.
+Run schema changes before the server starts. A rollback restores code only,
+so schema changes must work with the previous and the new code.
+
+Use an S3 client for files with AWS_ENDPOINT_URL_S3, AWS_REGION,
+AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, and S3_PREFIX from the
+environment. Enable path-style requests and prepend S3_PREFIX to every object
+key and list prefix; the credentials reach only that prefix. Keep
+AWS_REQUEST_CHECKSUM_CALCULATION=WHEN_REQUIRED, which QM sets to avoid checksum
+trailers on streaming uploads. For the AWS SDK for JavaScript, set endpoint,
+region, forcePathStyle: true, and requestChecksumCalculation: "WHEN_REQUIRED"
+on S3Client.
+
+Files under /data survive deploys and archive or restore. Files outside /data
+are temporary. Only /data/app.db has a Litestream backup; store other durable
+files in object storage before you return their links.
+Keep app credentials inside the app environment and never send them to a
+browser. Never give an app the Render API key, the core database URL, or MinIO
+administrator credentials.
+
+Apps build from an immutable QM Git commit. Keep dependency installation in the
+entrypoint when the app needs packages. Update an app by its existing name.
+Archive suspends the service and revokes its source access. Restore resumes the
+same service with new source access, repaired storage access, its retained disk,
+and its object prefix.
+Verify a record and an object after create, update, rollback, and archive or restore.
+
+The agent executes in native Render Sandboxes. Save useful workspace changes
+before an operation that replaces a sandbox. Sandboxes are workspace resources;
+App services and MinIO belong to this deployment's project.
+Do not create infrastructure outside that project or change DNS or Cloudflare rules.
+`,
+    },
+  ],
+  configurationHint: "render: set workspaceId, region, and the email access gate before setup",
+  finalCommand: "npm exec qm -- up",
+  finalWhy: "provision Render services and upload the QM deployment layer",
 };

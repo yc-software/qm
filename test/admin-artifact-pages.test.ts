@@ -100,6 +100,35 @@ test("per-kind artifact reads are scope-filtered, authz-gated, and audited", asy
   }
 });
 
+test("an admin cannot repoint a grant-carrying cron; only its owner can", async () => {
+  const s = start();
+  try {
+    const cron = await s.built.app.createCron({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      action: "review spend",
+      unattendedGrants: ["admin.spend.read"],
+    });
+    const put = (destination: unknown) =>
+      fetch(`${s.base}/v1/admin/crons/${encodeURIComponent(cron.id)}/destination?scope=personal:U1`, {
+        method: "PUT",
+        headers: { ...ALICE_ADMIN, "content-type": "application/json" },
+        body: JSON.stringify({ destination }),
+      });
+    assert.equal((await put({ type: "slack", target: "C9", audienceScopeId: "channel:C9" })).status, 409);
+    assert.equal(
+      (await put({ type: "slack", target: "C9", audienceScopeId: "personal:U1" })).status,
+      409,
+      "a caller-supplied audience cannot launder a room destination",
+    );
+    assert.equal((await s.built.app.getCron(cron.id))?.destination, undefined);
+  } finally {
+    await s.close();
+  }
+});
+
 test("an admin can edit and clear a cron destination inside the administered scope", async () => {
   const s = start();
   try {

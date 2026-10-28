@@ -40,6 +40,28 @@ legacy source-built first-party candidates without that record require an explic
 architecture matching the image, or regeneration with the current CLI. Candidate
 deployment and migration reject platform mismatches before accessing AWS.
 
+## Render
+
+```bash
+npm exec qm -- init . --org acme --target render \
+  --repo https://github.com/acme/qm --branch main
+npm install
+npm exec qm -- setup
+npm exec qm -- check
+npm exec qm -- plan
+npm exec qm -- up
+npm exec qm -- check --live
+```
+
+Render initialization requires `--repo` and `--branch` for a source checkout that
+contains Render support. Set `render.workspaceId` and the email access gate before setup. Render builds
+every service from Git and creates one project for the QM services, Postgres,
+and bundled MinIO; no AWS account or external object store is needed. Normal
+`qm up` runs keep the selected MinIO source commit. Use
+`qm up --upgrade-minio` to upgrade MinIO to the selected source commit.
+The [Render runbook](templates/deployment/references/render.md) covers updates,
+rollback, custom domains, archive and restore, and permanent cleanup.
+
 ## Deployment directory
 
 ```text
@@ -185,7 +207,7 @@ through `secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN`.
 ## Commands
 
 ```text
-init [dir] [--org id] [--target docker|fly|aws]
+init [dir] [--org id] [--target docker|fly|aws|render] [--model-provider anthropic|openai|openrouter] [--repo url --branch name]
 check [--json] [--live]
 doctor
 infra render|build-image|delete-image|delete-task-definitions

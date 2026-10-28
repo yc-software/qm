@@ -5,7 +5,7 @@ import {
   type CoreSession,
   type SessionBackgroundView,
 } from "./core-bridge.ts";
-import { descendantsOf, subagentCounts } from "./subagent-activity.ts";
+import { descendantsOf } from "./subagent-activity.ts";
 import { goalFloorLabel, goalWorkedLabel } from "./goal-strip.ts";
 import { relTime } from "./ui.ts";
 
@@ -44,7 +44,10 @@ export function automationRunLabel(s: Pick<CoreSession, "surface">): string | nu
 }
 
 export function sidebarSessions(sessions: readonly CoreSession[]): CoreSession[] {
-  return sessions.filter((session) => !session.parentSessionId && !automationRunLabel(session));
+  return sessions.filter(
+    (session) =>
+      !session.parentSessionId && (!session.sideChat || session.sideChat.expanded) && !automationRunLabel(session),
+  );
 }
 
 export function splitPinned<T extends Pick<CoreSession, "pinned">>(sessions: readonly T[]): { pinned: T[]; rest: T[] } {
@@ -275,13 +278,9 @@ export function watchActivityLabel(w: { lastFiredAt?: number }): string {
   return w.lastFiredAt ? `still watching · last check ${relTime(w.lastFiredAt)}` : "still watching";
 }
 
-export function rowIndicators(
-  s: CoreSession,
-  liveThreads: ReadonlySet<string> | string | null,
-  list: readonly CoreSession[] = [],
-): RowIndicators {
+export function rowIndicators(s: CoreSession, liveThreads: ReadonlySet<string> | string | null): RowIndicators {
   const live = typeof liveThreads === "string" ? new Set([liveThreads]) : (liveThreads ?? new Set<string>());
-  const children = !s.subagents || descendantsOf(list, s.id).length ? subagentCounts(list, s.id) : s.subagents;
+  const children = s.subagents ?? { running: 0, waiting: 0 };
   return {
     working: Boolean(s.working) || (Boolean(s.threadRef) && live.has(s.threadRef)),
     awaiting: Boolean(s.awaitingInput) || children.waiting > 0,
@@ -302,7 +301,7 @@ export function conversationBackground(
   threadRef: string | null,
 ): RowIndicators["background"] {
   const row = list.find((s) => (sessionId ? s.id === sessionId : Boolean(threadRef) && s.threadRef === threadRef));
-  return row ? rowIndicators(row, null, list).background : null;
+  return row ? rowIndicators(row, null).background : null;
 }
 
 export function shouldStartProactiveOpener(state: {

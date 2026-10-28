@@ -129,8 +129,6 @@ export const MAX_OUTBOUND_FILES = 20;
 
 export const MAX_INBOUND_FILES = 10;
 
-export const MAX_SHARED_FILES_LISTED = 25;
-
 export interface ArtifactRegistration {
   store: FileArtifactStore;
   ownerScopeId: ScopeId;
@@ -206,24 +204,20 @@ function shownToModel(meta: AttachmentMeta): boolean {
   return isVisionAttachment(meta) && meta.sizeBytes > 0 && meta.sizeBytes <= MAX_VISION_IMAGE_BYTES;
 }
 
-export function inboundManifest(metas: AttachmentMeta[], inboxDir = INBOX_DIR, unstaged?: Set<string>): string {
-  if (!metas.length) return "";
-  const list = metas
-    .map(
-      (m) =>
-        `- ${inboxDir}/${m.name} (${m.mimetype}, ${m.sizeBytes} bytes)${m.author ? ` — shared by ${m.author}` : ""}${
-          unstaged?.has(m.name)
-            ? ` — saved as file ${m.artifactId}, not yet on a computer (no default sandbox); send it directly with {file_id: "${m.artifactId}"}; if you need it on disk, choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)} to a path you choose`
-            : ""
-        }`,
-    )
+export function inboundManifest(
+  metas: AttachmentMeta[],
+  inboxDir = INBOX_DIR,
+  unstaged?: Set<string>,
+  sharer?: string,
+): string {
+  return metas
+    .map((m) => {
+      const where = unstaged?.has(m.name)
+        ? `Files ID ${m.artifactId}, not yet on a computer: send it with {file_id: "${m.artifactId}"}, or choose a sandbox_id for execute and download ${fileContentRequest(m.artifactId!)}`
+        : `./${inboxDir}/${m.name}`;
+      return `${m.author ?? sharer ?? "The user"} shared ${m.name} (${where}).`;
+    })
     .join("\n");
-  const noun = metas.length === 1 ? "file" : "files";
-  const where = unstaged?.size ? `for ./${inboxDir}/` : `available in ./${inboxDir}/`;
-  const lead = metas.some((m) => m.author)
-    ? `${metas.length} ${noun} shared in this conversation, ${where}:`
-    : `The user shared ${metas.length} ${noun}, ${where}:`;
-  return `${lead}\n${list}`;
 }
 
 export function inboundIssuesNote(issues: readonly string[]): string {
@@ -252,29 +246,10 @@ export function inboundIssueList(opts: {
   return issues;
 }
 
-export function sharedManifest(handles: readonly GrantedHandle[]): string {
-  const seen = new Set<string>();
-  const lines: string[] = [];
-  for (const h of handles) {
-    if (seen.has(h.handlePath)) continue;
-    seen.add(h.handlePath);
-    lines.push(`- ${h.handlePath}${h.permission === "write" ? " (writable)" : ""}`);
-  }
-  if (!lines.length) return "";
-  const total = lines.length;
-  const shown = lines.sort().slice(0, MAX_SHARED_FILES_LISTED);
-  const omitted = total - shown.length;
-  if (omitted > 0) {
-    shown.push(`…and ${omitted} more (read shared/<name> to fetch)`);
-  }
-  const noun = total === 1 ? "file" : "files";
-  return `${total} ${noun} shared with you — read a path below to fetch that file on demand:\n${shown.join("\n")}`;
-}
-
 export function sharedFilesSystemSection(handles: readonly GrantedHandle[]): string {
-  const body = sharedManifest(handles);
-  if (!body) return "";
-  return `## Files shared with you\n${body}`;
+  const total = new Set(handles.map((h) => h.handlePath)).size;
+  if (!total) return "";
+  return `## Files\n${total} ${total === 1 ? "file is" : "files are"} shared with you; list and read them with the \`files\` tool.`;
 }
 
 export function environmentNote(text: string): string {

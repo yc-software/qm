@@ -313,7 +313,7 @@ test("org members' agents get a deployment credential by broker only, as if gran
   };
   await selectDefaultSandbox(built, "U1", "personal:U1");
   const prompt = await built.app.turn(dm("!sysprompt"));
-  assert.match(prompt.reply ?? "", /search.*Web search.*api\.search\.example.*POST.*\/search/s);
+  assert.match(prompt.reply ?? "", /`search` — Web search; proxy api\.search\.example/);
   const res = await built.app.turn(dm(`!execute ${JSON.stringify({ command: "echo hi", credentials: ["search"] })}`));
   assert.equal(res.status, "ok", res.reason);
   assert.ok(executed?.AGENT_CREDENTIAL_TOKEN, "expected a broker token");

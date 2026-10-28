@@ -4,10 +4,9 @@ export const SWARM_DEFAULTS = {
   contextBytes: 8_192,
   textBytes: 8_192,
   waitMs: 10_000,
-  turnMs: 600_000,
 };
 
-const SWARM_CAPS = ["messages", "notifications", "spawnRequests", "lifetimeMs"] as const;
+const SWARM_CAPS = ["messages", "notifications", "spawnRequests", "lifetimeMs", "turnMs"] as const;
 
 export type SwarmSettings = typeof SWARM_DEFAULTS & Partial<Record<(typeof SWARM_CAPS)[number], number>>;
 

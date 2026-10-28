@@ -7,7 +7,13 @@ const activities = [
   { id: "app", title: "Build a home for my projects", prompt: "Build a private project tracker.", icon: "app" },
 ];
 let generatedRequest: unknown;
+let generation = false;
 const core = createServer(async (req, res) => {
+  if (req.method === "GET" && req.url?.startsWith("/v1/suggested-activities?")) {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ enabled: generation }));
+    return;
+  }
   if (req.method === "POST" && req.url?.startsWith("/v1/suggested-activities")) {
     let body = "";
     for await (const chunk of req) body += chunk;
@@ -49,4 +55,15 @@ test("generation requires sign-in and derives identity and seeds server-side", a
   });
   assert.equal(result.status, 200);
   assert.deepEqual(generatedRequest, { principalId: "alice", seeds: activities });
+});
+
+test("with generation on, the page load leaves fallback suggestions to the generation request so dismissed ones never flash", async () => {
+  generation = true;
+  try {
+    const body = await (await fetch(`${base}/me`, { headers: { cookie: "webuiuser=alice" } })).json();
+    assert.equal(body.suggestedActivitiesGeneration, true);
+    assert.equal(body.suggestedActivities, undefined);
+  } finally {
+    generation = false;
+  }
 });

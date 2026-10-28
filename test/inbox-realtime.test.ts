@@ -6,8 +6,9 @@ import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { slackConversationRef } from "../src/loops/sources/slack.ts";
 import type { LedgerEvent } from "../src/loops/ledger-events.ts";
 import type { Loop } from "../src/types.ts";
+import type { IngressEntry } from "../src/loops/ingress.ts";
 
-const LOOP = { id: "loop-inbox", owner: "josh@example.com", surface: "inbox" } as unknown as Loop;
+const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox" } as unknown as Loop;
 
 function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
   return {
@@ -17,8 +18,8 @@ function slackEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
     summary: "any update?",
     sourcePayload: {
       source: "slack",
-      title: "DM with Mark",
-      from: "Mark",
+      title: "DM with Sam",
+      from: "Sam",
       snippet: "any update?",
       slack: { channelId: "D123", ts: "1000.100", isDirectMessage: true },
     },
@@ -45,15 +46,22 @@ function gmailEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
   };
 }
 
-function realtime(items: ReturnType<typeof createLoopItemLedger>, requestFire?: (loopId: string) => void) {
-  return createInboxRealtime({
+function realtime(items: ReturnType<typeof createLoopItemLedger>) {
+  const calls: IngressEntry[][] = [];
+  const rt = createInboxRealtime({
     loops: { list: async () => [LOOP] },
     items,
-    ...(requestFire ? { requestFire } : {}),
+    enqueue: async (_loop, entries) => {
+      calls.push(entries);
+    },
   });
+  return Object.assign(rt, { calls });
 }
 
-test("the owner's own reply resolves the matching open card as replied", async () => {
+const latest = (entries: IngressEntry[] | undefined) =>
+  entries?.map((entry) => [entry.dedupeKey, entry.sourcePayload?.latestEvent]);
+
+test("the owner's own reply is queued as an owner event for the card's conversation", async () => {
   const items = createLoopItemLedger();
   await items.ingest([slackEntry()]);
   const rt = realtime(items);
@@ -62,41 +70,59 @@ test("the owner's own reply resolves the matching open card as replied", async (
     conversationRef: "D123",
     at: 2_000_000,
     text: "on it!",
-    senderEmail: "Josh@Example.com",
+    senderEmail: "Owner@Example.com",
   });
-  const [item] = await items.byLoop(LOOP.id);
-  assert.equal(item!.status, "skipped");
-  assert.equal(item!.actionKind, "replied");
-  assert.equal(item!.actionResult, "on it!");
+  assert.deepEqual(latest(rt.calls[0]), [["D123", { author: "owner", at: 2_000_000, text: "on it!" }]]);
+  assert.equal(rt.calls[0]![0]!.merge, true);
+  assert.equal(rt.calls[0]![0]!.sourceAt, 2_000_000);
 });
 
-test("someone else's message bumps the card and requests a debounced fire", async () => {
+test("someone else's messages are queued as other events with their sender", async () => {
   const items = createLoopItemLedger();
-  await items.ingest([slackEntry()]);
-  const fires: string[] = [];
-  const rt = realtime(items, (loopId) => fires.push(loopId));
+  await items.ingest([slackEntry(), gmailEntry()]);
+  const rt = realtime(items);
   await rt.onConversationEvent({
     source: "slack",
     conversationRef: "D123",
     at: 3_000_000,
-    text: "also, when works?",
-    senderEmail: "mark@example.com",
+    text: "ping",
+    senderEmail: "sam@example.com",
   });
   await rt.onConversationEvent({
-    source: "slack",
-    conversationRef: "D123",
+    source: "gmail",
+    conversationRef: "t-1",
     at: 3_001_000,
-    text: "ping",
-    senderEmail: "mark@example.com",
+    text: "any word?",
+    senderEmail: "ada@example.com",
   });
-  const [item] = await items.byLoop(LOOP.id);
-  assert.equal(item!.status, "queued");
-  assert.equal(item!.sourceAt, 3_001_000);
-  assert.equal(item!.sourceSummary, "ping");
-  assert.equal(fires.length, 1);
+  assert.deepEqual(
+    rt.calls.map((entries) => entries.map((entry) => [entry.dedupeKey, entry.sourcePayload])),
+    [
+      [
+        [
+          "D123",
+          {
+            latestEvent: { author: "other", at: 3_000_000, from: "sam@example.com" },
+            receivedAt: 3_000_000,
+            snippet: "ping",
+          },
+        ],
+      ],
+      [
+        [
+          "gmail:t-1",
+          {
+            latestEvent: { author: "other", at: 3_001_000, from: "ada@example.com" },
+            receivedAt: 3_001_000,
+            snippet: "any word?",
+          },
+        ],
+      ],
+    ],
+  );
 });
 
-test("events in unrelated conversations or other sources leave the ledger alone", async () => {
+test("events in unrelated conversations or other sources queue nothing", async () => {
   const items = createLoopItemLedger();
   await items.ingest([
     slackEntry({
@@ -109,21 +135,30 @@ test("events in unrelated conversations or other sources leave the ledger alone"
         slack: { channelId: "C9", ts: "100.1", threadTs: "100.1" },
       },
     }),
+    slackEntry({
+      dedupeKey: "D124",
+      sourcePayload: { slack: { channelId: "D124", ts: "2.0", isDirectMessage: true } },
+    }),
     gmailEntry(),
   ]);
   const rt = realtime(items);
-
-  await rt.onConversationEvent({ source: "slack", conversationRef: "C9:200.2", at: 2_000_000, text: "chatter" });
-  await rt.onConversationEvent({ source: "slack", conversationRef: "D999", at: 2_000_000, text: "other dm" });
-
-  await rt.onConversationEvent({ source: "slack", conversationRef: "t-1", at: 2_000_000, text: "collide" });
-  for (const item of await items.byLoop(LOOP.id)) {
-    assert.equal(item.status, "queued");
-    assert.equal(item.sourceAt, 1_000_100);
-  }
+  for (const [source, conversationRef] of [
+    ["slack", "C9:200.2"],
+    ["slack", "D999"],
+    ["slack", "t-1"],
+    ["gmail", "t-other"],
+    ["slack", "D124:1.0"],
+  ])
+    await rt.onConversationEvent({
+      source: source!,
+      conversationRef: conversationRef!,
+      at: 2_000_000,
+      senderEmail: LOOP.owner,
+    });
+  assert.deepEqual(rt.calls, []);
 });
 
-test("a thread reply resolves a channel card anchored at the thread root", async () => {
+test("a thread reply reaches a channel card anchored at the thread root", async () => {
   const items = createLoopItemLedger();
   await items.ingest([
     slackEntry({
@@ -143,54 +178,9 @@ test("a thread reply resolves a channel card anchored at the thread root", async
     conversationRef: "C9:100.1",
     at: 2_000_000,
     text: "done",
-    senderEmail: "josh@example.com",
+    senderEmail: LOOP.owner,
   });
-  const [item] = await items.byLoop(LOOP.id);
-  assert.equal(item!.status, "skipped");
-  assert.equal(item!.actionKind, "replied");
-});
-
-test("a gmail event matches cards by threadId only", async () => {
-  const items = createLoopItemLedger();
-  await items.ingest([gmailEntry()]);
-  const rt = realtime(items);
-  await rt.onConversationEvent({
-    source: "gmail",
-    conversationRef: "t-other",
-    at: 2_000_000,
-    senderEmail: "josh@example.com",
-  });
-  let [item] = await items.byLoop(LOOP.id);
-  assert.equal(item!.status, "queued");
-  await rt.onConversationEvent({
-    source: "gmail",
-    conversationRef: "t-1",
-    at: 2_000_000,
-    text: "sent, thanks",
-    senderEmail: "josh@example.com",
-  });
-  [item] = await items.byLoop(LOOP.id);
-  assert.equal(item!.status, "skipped");
-  assert.equal(item!.actionResult, "sent, thanks");
-});
-
-test("someone else's gmail reply bumps the card for a redraft", async () => {
-  const items = createLoopItemLedger();
-  await items.ingest([gmailEntry()]);
-  const fires: string[] = [];
-  const rt = realtime(items, (loopId) => fires.push(loopId));
-  await rt.onConversationEvent({
-    source: "gmail",
-    conversationRef: "t-1",
-    at: 3_000_000,
-    text: "bumping this — any word?",
-    senderEmail: "ada@example.com",
-  });
-  const [item] = await items.byLoop(LOOP.id);
-  assert.equal(item!.status, "queued");
-  assert.equal(item!.sourceAt, 3_000_000);
-  assert.equal(item!.sourceSummary, "bumping this — any word?");
-  assert.deepEqual(fires, [LOOP.id]);
+  assert.deepEqual(latest(rt.calls[0]), [["C9:100.1", { author: "owner", at: 2_000_000, text: "done" }]]);
 });
 
 test("slack conversation refs key DMs by channel and channel asks by thread root", () => {
@@ -217,56 +207,6 @@ test("ledger mutations emit change events", async () => {
 
 test("private-channel mentions stay anchored to their thread, not the channel tail", () => {
   assert.equal(slackConversationRef("GPRIVATE", "200.2", "100.1", false), "GPRIVATE:100.1");
-});
-
-test("an old own reply cannot close a newer unanswered message", async () => {
-  const items = createLoopItemLedger();
-  await items.ingest([gmailEntry({ sourceAt: 3_000_000 })]);
-  await realtime(items).onConversationEvent({
-    source: "gmail",
-    conversationRef: "t-1",
-    at: 2_000_000,
-    senderEmail: LOOP.owner,
-  });
-  assert.notEqual((await items.byLoop(LOOP.id))[0]!.status, "skipped");
-});
-
-test("reply closure advances the source watermark so an older scan cannot resurrect it", async () => {
-  const items = createLoopItemLedger();
-  await items.ingest([gmailEntry()]);
-  await realtime(items).onConversationEvent({
-    source: "gmail",
-    conversationRef: "t-1",
-    at: 3_000_000,
-    senderEmail: LOOP.owner,
-  });
-  await items.ingest([gmailEntry({ sourceAt: 2_000_000 })]);
-  assert.equal((await items.byLoop(LOOP.id))[0]!.status, "skipped");
-});
-
-test("replying in an unrelated DM thread cannot dismiss an unthreaded ask", async () => {
-  const items = createLoopItemLedger();
-  await items.ingest([
-    slackEntry({ sourcePayload: { slack: { channelId: "D123", ts: "2.0", isDirectMessage: true } } }),
-  ]);
-  await realtime(items).onConversationEvent({
-    source: "slack",
-    conversationRef: "D123:1.0",
-    at: 3_000_000,
-    senderEmail: LOOP.owner,
-  });
-  assert.notEqual((await items.byLoop(LOOP.id))[0]!.status, "skipped");
-});
-
-test("a new inbound message keeps its full text on the card", async () => {
-  const items = createLoopItemLedger();
-  await items.ingest([gmailEntry()]);
-  const rt = realtime(items);
-  const text = `Thanks for the demo. ${"Here is everything we tried last week. ".repeat(12)}The one feature that I needed was model routing.`;
-  await rt.onConversationEvent({ source: "gmail", conversationRef: "t-1", at: 2_000_000, text });
-  const [item] = await items.byLoop(LOOP.id);
-  assert.equal(item!.sourcePayload!.snippet, text);
-  assert.ok(item!.sourceSummary!.length <= 200);
 });
 
 test("the inbox sync task asks for the full waiting message", () => {

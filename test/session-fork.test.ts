@@ -1,11 +1,16 @@
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
+import type { AddressInfo } from "node:net";
+import { createServer } from "../src/api/server.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
+import { SideChatAnchorError } from "../src/api/app-types.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -113,4 +118,126 @@ test("a stranger cannot fork someone else's conversation", async () => {
   const r = await app.turn(dm("Private planning", "web:U1:f4"));
   assert.equal(await app.forkSession(r.sessionId!, "intruder"), null);
   assert.equal(await app.forkSession("does-not-exist", "U1"), null);
+});
+
+test("side chats preserve their anchor, stay out of session pages, and expand in place", async () => {
+  const { app, sessions } = freshApp();
+  const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat"));
+  const source = (await app.getSession(result.sessionId!))!;
+  const entry = source.entries[0]!;
+  const fork = await app.forkSession(source.session.id, "U1", {
+    upToSeq: source.entries.at(-1)!.seq,
+    sideChat: { entrySeq: entry.seq, quote: "shared queues", occurrence: 0 },
+  });
+  assert.ok(fork);
+  assert.deepEqual(fork.session.sideChat, {
+    entrySeq: entry.seq,
+    quote: "shared queues",
+    occurrence: 0,
+    expanded: false,
+  });
+  assert.equal((await app.sideChats("U1", source.session.id))![0]!.id, fork.session.id);
+  assert.equal(await app.sideChats("stranger", source.session.id), null);
+  assert.equal(await app.expandSideChat("stranger", fork.session.id), null);
+  const page = await app.listSessionPage("U1", { limit: 50 });
+  assert.ok(!page.sessions.some((session) => session.id === fork.session.id));
+  const before = await sessions.getEntries(fork.session.id);
+  const expanded = await app.expandSideChat("U1", fork.session.id);
+  assert.equal(expanded?.id, fork.session.id);
+  assert.equal(expanded?.sideChat?.expanded, true);
+  assert.deepEqual(await sessions.getEntries(fork.session.id), before);
+  assert.ok(
+    (await app.listSessionPage("U1", { limit: 50 })).sessions.some((session) => session.id === fork.session.id),
+  );
+  assert.equal((await app.sideChats("U1", source.session.id))![0]!.sideChat?.expanded, true);
+});
+
+test("side chats reject missing anchors and anchors beyond the fork boundary", async () => {
+  const { app } = freshApp();
+  const result = await app.turn(dm("Explain shared queues", "web:U1:bad-side-chat"));
+  const source = (await app.getSession(result.sessionId!))!;
+  const last = source.entries.at(-1)!.seq;
+  for (const occurrence of [undefined, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(
+      app.forkSession(source.session.id, "U1", {
+        sideChat: { entrySeq: 0, quote: "shared queues", occurrence: occurrence as number },
+      }),
+      SideChatAnchorError,
+    );
+  }
+  await assert.rejects(
+    app.forkSession(source.session.id, "U1", {
+      upToSeq: last,
+      sideChat: { entrySeq: last + 1, quote: "not visible", occurrence: 0 },
+    }),
+    SideChatAnchorError,
+  );
+  await assert.rejects(
+    app.forkSession(source.session.id, "U1", {
+      upToSeq: last,
+      sideChat: { entrySeq: 0, quote: " ", occurrence: 0 },
+    }),
+    SideChatAnchorError,
+  );
+});
+
+test("side-chat reads bind the query principal to the authenticated portal identity", async () => {
+  const { app } = freshApp();
+  const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat-auth"));
+  const fork = await app.forkSession(result.sessionId!, "U1", {
+    sideChat: { entrySeq: 0, quote: "shared queues", occurrence: 0 },
+  });
+  assert.ok(fork);
+  const sourceSecret = "side-chat-source-secret-for-http-tests";
+  const identitySecret = "side-chat-identity-secret-for-http-tests";
+  const server = createServer(app, {
+    signingSecret: sourceSecret,
+    capabilitySecret: "side-chat-capability-secret-for-http-tests",
+    portalIdentitySecret: identitySecret,
+    production: true,
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const read = async (principal: string, actor?: string) => {
+    const path = `/v1/sessions/${result.sessionId}/side-chats?principalId=${principal}&nonce=${crypto.randomUUID()}`;
+    return fetch(base + path, {
+      headers: {
+        ...signedRequestHeaders(sourceSecret, "GET", path),
+        ...(actor
+          ? { "x-portal-identity": await mintSignedPayload({ p: actor, exp: Date.now() + 60_000 }, identitySecret) }
+          : {}),
+      },
+    });
+  };
+  try {
+    const response = await read("U1", "U1");
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { sessions: { id: string }[] };
+    assert.deepEqual(
+      body.sessions.map((session) => session.id),
+      [fork.session.id],
+    );
+    assert.equal((await read("U1", "U2")).status, 403);
+    assert.equal((await read("U1")).status, 401);
+    assert.equal((await read("U2", "U2")).status, 404);
+    const forkPath = `/v1/sessions/${result.sessionId}/fork?nonce=${crypto.randomUUID()}`;
+    const forkBody = JSON.stringify({
+      principalId: "U1",
+      sideChat: { entrySeq: 999, quote: "shared queues", occurrence: 0 },
+    });
+    const rejected = await fetch(base + forkPath, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...signedRequestHeaders(sourceSecret, "POST", forkPath, forkBody),
+        "x-portal-identity": await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, identitySecret),
+      },
+      body: forkBody,
+    });
+    assert.equal(rejected.status, 400);
+    assert.match(((await rejected.json()) as { message: string }).message, /forked range/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

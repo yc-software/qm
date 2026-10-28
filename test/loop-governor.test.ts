@@ -52,6 +52,13 @@ test("consecutive failed fires quarantine by arithmetic alone", async () => {
   assert.deepEqual(typesOf(verdict.actions), ["quarantine"]);
 });
 
+test("a transient fire failure degrades the loop without quarantining it", async () => {
+  const verdict = evaluateGovernor(await loop(), { ...quiet, transientFailure: "provider rate limit" }, Date.now());
+  assert.equal(verdict.health, "degraded");
+  assert.deepEqual(verdict.actions, []);
+  assert.match(verdict.reason ?? "", /provider rate limit/);
+});
+
 test("two failed fires grade the loop failing without stopping it yet", async () => {
   const verdict = evaluateGovernor({ ...(await loop()), consecutiveFailedFires: 2 }, quiet, Date.now());
   assert.equal(verdict.health, "failing");

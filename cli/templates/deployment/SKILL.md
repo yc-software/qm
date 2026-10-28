@@ -1,6 +1,6 @@
 ---
 name: deploy-qm
-description: Deploy the QM package from an organization-owned deployment repository to Fly.io or AWS, onboard an administrator, configure connectors, and optionally activate Slack.
+description: Deploy the QM package from an organization-owned deployment repository to Fly.io, AWS, or Render, onboard an administrator, configure connectors, and optionally activate Slack.
 ---
 
 # Deploy QM

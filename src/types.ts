@@ -76,6 +76,12 @@ export interface Conversation {
 
 export type SessionType = "dm" | "channel" | "group";
 
+export interface SurfaceBriefing {
+  name: string;
+  state?: string;
+  instructions?: string;
+}
+
 export interface SpawnMeta {
   slackSource?: TurnRequest["slackSource"];
   externalSlack?: TurnRequest["externalSlack"];
@@ -114,6 +120,7 @@ export interface Session {
   unread?: boolean;
   forkedFrom?: { sessionId: string; title?: string | null };
   forkBoundarySeq?: number;
+  sideChat?: { entrySeq: number; quote: string; occurrence: number; expanded: boolean };
   parentSessionId?: string;
   spawnMeta?: SpawnMeta;
   lastActivityAt?: number;
@@ -528,6 +535,7 @@ export interface SurfaceContextQuery {
   viewer?: string;
   before?: string;
   match?: string;
+  live?: boolean;
   searchAll?: string;
   viewerToken?: string;
   file?: { ts: string; threadTs?: string; name?: string };
@@ -729,6 +737,7 @@ export interface TurnRequest {
   redeliveryKey?: string;
   async?: boolean;
   clientTools?: ClientToolDeclaration[];
+  surfaceBriefing?: SurfaceBriefing;
 }
 
 export interface ActorAssertion {
@@ -800,6 +809,7 @@ export interface TurnResult {
   reactions?: string[];
   reason?: string;
   refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
+  errorCode?: string;
   adminUrl?: string;
   runId?: string;
   steered?: true;

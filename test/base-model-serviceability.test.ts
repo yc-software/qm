@@ -71,7 +71,7 @@ test("ChatGPT OAuth stays separate from OpenAI API-key availability on Pi", () =
 test("a deployment that declares a provider runs that provider's base model", async () => {
   for (const [modelProvider, key, expected] of [
     ["anthropic", "anthropicApiKey", "claude-opus-5"],
-    ["openai", "openaiApiKey", "gpt-5.6-sol"],
+    ["openai", "openaiApiKey", "gpt-6.1-sol"],
     ["openrouter", "openrouterApiKey", "openrouter/auto"],
   ] as const) {
     const srv = start({ modelProvider, [key]: `deployment-${modelProvider}-key` });
@@ -125,8 +125,8 @@ test("company ChatGPT-only deployments offer their plain GPT default through man
       modelsByHarness: Record<string, string[]>;
       unavailableReason?: string;
     };
-    assert.equal(body.effective.modelId, "gpt-5.6-sol");
-    assert.ok(body.modelsByHarness.pi?.includes("gpt-5.6-sol"));
+    assert.equal(body.effective.modelId, "gpt-6.1-sol");
+    assert.ok(body.modelsByHarness.pi?.includes("gpt-6.1-sol"));
     assert.equal(body.unavailableReason, undefined);
   } finally {
     await srv.close();

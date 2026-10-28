@@ -46,11 +46,13 @@ async function runTurnEnforcingGoal(
   let saved: GoalRecord | undefined;
   const startedAt = Date.now();
   const meter = createGrindMeter(startedAt);
+  let segment = { goal: input.goal ?? undefined, assignedAt: input.goal?.createdAt };
+  const replacedThisSegment = () => !!segment.goal && segment.goal.createdAt !== segment.assignedAt;
   const dispatched: HarnessTurnInput = {
     ...input,
     goalMeter: meter,
     recordLlmRequest: (rec, signal) => {
-      meterGrindSpend(meter, rec.usage ?? null);
+      if (!replacedThisSegment()) meterGrindSpend(meter, rec.usage ?? null);
       return input.recordLlmRequest?.(rec, signal);
     },
     emit: async (entry) => {
@@ -67,6 +69,7 @@ async function runTurnEnforcingGoal(
   const goal: GoalRecord | null = saved ?? input.goal ?? null;
   if (!goal) return result;
   const account = () => {
+    if (replacedThisSegment()) return;
     meter.turns += result.modelCalls ?? 1;
     const tokens = inputTokens(result);
     meter.tokens += tokens;
@@ -100,11 +103,13 @@ async function runTurnEnforcingGoal(
             }),
         }
       : {}),
+    ...(input.goalInbox ? { inbox: input.goalInbox } : {}),
     beforePrompt: () => {
       console.error(`[goal] continuation session=${input.session.id} harness=${harnessId} turns=${meter.turns}`);
     },
     prompt: async (note) => {
       const remaining = remainingWallMs();
+      segment = { goal, assignedAt: goal.createdAt };
       result = await adapter.turns.runTurn({
         ...dispatched,
         continueTurn: undefined,

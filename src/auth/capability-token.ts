@@ -23,6 +23,7 @@ export function parseSandboxCapabilityTtlMs(value: string | undefined): number {
 export const SANDBOX_CAPABILITY_TTL_MS = parseSandboxCapabilityTtlMs(undefined);
 
 export const BROWSER_MODEL_AUD = "browser-model";
+export const SANDBOX_MODEL_AUD = "sandbox-model";
 
 export const CONTROL_PLANE_AUD = "control-plane";
 export const OAUTH_CONSENT_AUD = "oauth-consent";
@@ -164,7 +165,11 @@ export async function verifyCapabilityToken(
     return null;
   if (claims.deployment !== undefined && (typeof claims.deployment !== "string" || !claims.deployment)) return null;
   if (claims.exp === 0) {
-    if (![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, EGRESS_PROXY_AUD].includes(claims.aud ?? ""))
+    if (
+      ![CONTROL_PLANE_AUD, OAUTH_CONSENT_AUD, CREDENTIAL_BROKER_AUD, EGRESS_PROXY_AUD, SANDBOX_MODEL_AUD].includes(
+        claims.aud ?? "",
+      )
+    )
       return null;
   } else if (!Number.isSafeInteger(claims.exp) || now >= claims.exp) return null;
   return claims;

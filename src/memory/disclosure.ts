@@ -83,18 +83,14 @@ function memoryDisclosurePolicy(input: MemoryDisclosure) {
         return false;
       }
     },
-    async allows(home: ScopeId, record: MemoryProvenance): Promise<boolean> {
-      try {
+    allows(home: ScopeId, record: MemoryProvenance): Promise<boolean> {
+      const { sensitivity, sourceUnknown, sources } = record;
+      return once(`allows:${home}:${JSON.stringify([sensitivity, sourceUnknown, sources])}`, async () => {
         const homeAllowed = async () => (await narrow(home)) || (await sourceAllowed(home, "unknown"));
-        if ((record.sourceUnknown || record.sensitivity === "unknown") && !(await homeAllowed())) return false;
-        if (!record.sources.length) return record.sourceUnknown && (await homeAllowed());
-        return (await Promise.all(record.sources.map((source) => sourceAllowed(source, record.sensitivity)))).every(
-          Boolean,
-        );
-      } catch (e) {
-        swallow("memory disclosure: allows", e);
-        return false;
-      }
+        if ((sourceUnknown || sensitivity === "unknown") && !(await homeAllowed())) return false;
+        if (!sources.length) return sourceUnknown && (await homeAllowed());
+        return (await Promise.all(sources.map((source) => sourceAllowed(source, sensitivity)))).every(Boolean);
+      });
     },
   };
 }

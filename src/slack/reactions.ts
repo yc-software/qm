@@ -3,8 +3,8 @@ import { sleep } from "./util.ts";
 import { extractDirectives } from "./directives.ts";
 import { slackErrorCode } from "./payloads.ts";
 
-const REACTION_DIRECTIVE = /\[\[react:([^\]]*)\]\]/gi;
-const TRAILING_OPEN_DIRECTIVE = /\[\[react:[^\]]*$/i;
+const REACTION_DIRECTIVE = /\[\[react:([^[\]]*)\]\]/gi;
+const TRAILING_OPEN_DIRECTIVE = /\[\[react:[^[\]]*$/i;
 const REACTION_TS = /^\d{6,}\.\d{1,}$/;
 const REACTION_ID = /^~([0-9a-z]+)$/;
 

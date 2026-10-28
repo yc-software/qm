@@ -1474,8 +1474,8 @@ const apiRoutes: readonly WebRoute[] = [
         impersonatedBy: resolveIdentity(req)?.impersonator ?? null,
         displayName: resolveIdentity(req)?.name ?? null,
         ...(welcomeCohort ? { welcomeCohort } : {}),
-        ...(suggestedActivities.length ? { suggestedActivities } : {}),
         ...(activityConfig ? { suggestedActivitiesGeneration: true } : {}),
+        ...(suggestedActivities.length && !activityConfig ? { suggestedActivities } : {}),
         permissions,
       });
     },
@@ -1721,12 +1721,36 @@ const apiRoutes: readonly WebRoute[] = [
     method: "POST",
     path: "/api/suggested-activities",
     handle: async (c) => {
-      const input = JSON.parse((await readBody(c.req)) || "{}") as { timezone?: unknown; poll?: unknown };
+      const input = JSON.parse((await readBody(c.req)) || "{}") as {
+        timezone?: unknown;
+        poll?: unknown;
+        refresh?: unknown;
+      };
       const response = await coreFetch(
         "POST",
         "/v1/suggested-activities",
-        JSON.stringify({ principalId: c.user, seeds: suggestedActivities, timezone: input.timezone, poll: input.poll }),
+        JSON.stringify({
+          principalId: c.user,
+          seeds: suggestedActivities,
+          timezone: input.timezone,
+          poll: input.poll,
+          refresh: input.refresh,
+        }),
         60_000,
+      );
+      return json(c.res, response.status, JSON.parse(response.text));
+    },
+  },
+  {
+    method: "POST",
+    path: "/api/suggested-activities/dismiss",
+    handle: async (c) => {
+      const input = JSON.parse((await readBody(c.req)) || "{}") as { id?: unknown };
+      const response = await coreFetch(
+        "POST",
+        "/v1/suggested-activities/dismiss",
+        JSON.stringify({ principalId: c.user, id: input.id }),
+        15_000,
       );
       return json(c.res, response.status, JSON.parse(response.text));
     },
@@ -2038,19 +2062,40 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/sessions/:id/side-chats",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/side-chats?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/expand",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/expand`,
+        JSON.stringify({ principalId: c.user }),
+      ),
+  },
+  {
     method: "POST",
     path: "/api/sessions/:id/fork",
     handle: async (c) => {
       const { req, res, user } = c;
       const id = c.params.id!;
-      const p = await readJson<{ upToSeq?: unknown }>(req, res);
+      const p = await readJson<{ upToSeq?: unknown; sideChat?: unknown }>(req, res);
       if (!p) return;
       const upToSeq = typeof p.upToSeq === "number" ? p.upToSeq : undefined;
       return relayCore(
         res,
         "POST",
         `/v1/sessions/${encodeURIComponent(id)}/fork`,
-        JSON.stringify({ principalId: user, ...(upToSeq !== undefined ? { upToSeq } : {}) }),
+        JSON.stringify({ principalId: user, upToSeq, sideChat: p.sideChat }),
       );
     },
   },
@@ -2595,6 +2640,8 @@ const apiRoutes: readonly WebRoute[] = [
       let desktopClientId: string | undefined;
       let proactiveOpener = false;
       let idempotencyKey: string | undefined;
+      let clientTools: unknown[] | undefined;
+      let surfaceBriefing: Record<string, unknown> | undefined;
       try {
         const p = JSON.parse(await readBody(req));
         text = String(p.text ?? "");
@@ -2629,6 +2676,9 @@ const apiRoutes: readonly WebRoute[] = [
         if (typeof p.thinkingLevel === "string") thinkingLevel = p.thinkingLevel;
         if (typeof p.fastMode === "boolean") fastMode = p.fastMode;
         if (typeof p.timezone === "string" && p.timezone.trim()) timezone = p.timezone.trim().slice(0, 64);
+        if (Array.isArray(p.clientTools)) clientTools = p.clientTools;
+        if (p.surfaceBriefing && typeof p.surfaceBriefing === "object" && !Array.isArray(p.surfaceBriefing))
+          surfaceBriefing = p.surfaceBriefing;
         if (Array.isArray(p.attachments)) {
           for (const raw of p.attachments as unknown[]) {
             if (!raw || typeof raw !== "object") continue;
@@ -2651,6 +2701,8 @@ const apiRoutes: readonly WebRoute[] = [
       const resolved = await resolveWebConversation(user, threadRef, scope, channelName);
       if ("error" in resolved) return json(res, 403, resolved);
 
+      const privateConversation = threadRef.startsWith(ownPrefix) && resolved.conversation.kind === "dm";
+
       const turn = {
         ...(await webTurnBase(req, user, resolved.conversation, threadRef, text)),
         ...(harness ? { harness } : {}),
@@ -2658,6 +2710,8 @@ const apiRoutes: readonly WebRoute[] = [
         ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         ...(timezone ? { timezone } : {}),
+        ...(privateConversation && clientTools ? { clientTools } : {}),
+        ...(privateConversation && surfaceBriefing !== undefined ? { surfaceBriefing } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(approval ? { approval } : {}),
         ...(proactiveOpener ? { proactiveOpener: true } : {}),

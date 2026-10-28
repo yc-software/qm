@@ -32,7 +32,6 @@ test("personal account choice persists across instances without changing anyone 
 
 test("account API binds choice to the signed-in person, preserves connections, and fails closed after disconnect", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-account-")) }));
-  await built.config.setInternalMemberOverrides(["alice@default-org", "bob@default-org"]);
   const server = createServer(built.app, {
     signingSecret: SECRET,
     requireSignedPortalIdentity: true,

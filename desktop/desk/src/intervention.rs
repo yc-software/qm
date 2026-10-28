@@ -1,3 +1,4 @@
+use crate::activity::Registry;
 use crate::focus_protocol::{Decision, Scope, PROCESS_NOTIFICATION};
 use crate::protocol::{ErrorCode, Failure};
 use core_foundation::base::TCFType;
@@ -12,7 +13,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 type ReleaseKeyFocus = unsafe extern "C" fn(u32) -> i32;
 type GetKeyFocus = unsafe extern "C" fn(*mut ProcessSerialNumber, *mut u8) -> i32;
@@ -95,6 +96,7 @@ enum TapKind {
 struct TapContext {
     context: Option<Arc<Context>>,
     retained: Option<Arc<RetainedState>>,
+    activity: Option<Arc<Registry>>,
     kind: TapKind,
 }
 
@@ -107,7 +109,7 @@ struct Tap {
 
 impl Tap {
     fn new(context: Arc<Context>, kind: TapKind) -> Result<Self, String> {
-        Self::create(TapContext { context: Some(context), retained: None, kind })
+        Self::create(TapContext { context: Some(context), retained: None, activity: None, kind })
     }
 
     fn create(callback: TapContext) -> Result<Self, String> {
@@ -186,6 +188,26 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
     if let Some(retained) = &callback.retained {
         return retained.receive(callback.kind, kind, unsafe { event.as_ref() }, event.as_ptr());
     }
+    if let Some(activity) = &callback.activity {
+        if kind.0 >= u32::MAX - 1 {
+            activity_failure().store(true, Ordering::Release);
+            return event.as_ptr();
+        }
+        let value = unsafe { event.as_ref() };
+        let source = CGEvent::integer_value_field(Some(value), CGEventField::EventSourceUnixProcessID) as i32;
+        if source != std::process::id() as i32 && matches!(kind.0, 1 | 3 | 25 | 22 | 10) {
+            let destination = CGEvent::integer_value_field(Some(value), CGEventField::EventTargetUnixProcessID) as i32;
+            let window = CGEvent::integer_value_field(Some(value), CGEventField(51));
+            let pid = u32::try_from(window)
+                .ok()
+                .filter(|id| *id != 0)
+                .and_then(crate::mac::input_window_geometry)
+                .map(|(owner, _)| owner)
+                .unwrap_or(destination);
+            activity.record(pid, Instant::now());
+        }
+        return event.as_ptr();
+    }
     let context = callback.context.as_ref().unwrap();
     let original = event.as_ptr();
     if kind.0 >= u32::MAX - 1 {
@@ -213,8 +235,6 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
             i32::try_from(field(FOCUS_SUBJECT_PID)).unwrap_or(-1),
             field(FOCUS_THEFT_ID),
         )
-    } else if matches!(callback.kind, TapKind::Intervention) {
-        scope.observe_user_event(kind.0, source, destination)
     } else if matches!(callback.kind, TapKind::Keyboard(pid) if pid == destination) {
         if matches!(kind.0, 10..=12) {
             scope.keyboard(source, destination)
@@ -244,10 +264,6 @@ unsafe extern "C-unwind" fn receive(_: CGEventTapProxy, kind: CGEventType, event
             context.fail(message);
             original
         }
-        Decision::Intervened => {
-            context.fail("User interacted with the target or requested an app switch; stopped");
-            original
-        }
     }
 }
 
@@ -267,6 +283,17 @@ pub fn include_target(pid: i32) {
         Ok(Err(error)) => context.fail(error),
         Err(_) => context.fail("Focus protection target registration did not complete within 350 ms"),
     }
+}
+
+pub fn refresh_focus(foreground: i32) -> Result<i32, Failure> {
+    let keyboard_owner = keyboard_focus_pid()?;
+    let context = ACTIVE
+        .lock()
+        .ok()
+        .and_then(|active| active.clone())
+        .ok_or_else(|| Failure::new(ErrorCode::ActionFailed, "Focus protection is unavailable"))?;
+    let mut scope = context.scope.lock().map_err(|_| Failure::new(ErrorCode::ActionFailed, "Focus protection state is unavailable"))?;
+    Ok(scope.refresh(foreground, keyboard_owner))
 }
 
 pub struct ActivationTransition {
@@ -311,20 +338,71 @@ impl Drop for ActivationTransition {
     fn drop(&mut self) {
         if let Ok(mut scope) = self.context.scope.lock() {
             scope.end_activation();
-            if scope.interrupted() {
-                self.context.fail("User typed during activation; input was returned to its original owner and automation stopped");
-            }
         }
     }
 }
 
-pub fn permits_foreground(pid: i32) -> bool {
-    ACTIVE
-        .lock()
-        .ok()
-        .and_then(|active| active.clone())
-        .and_then(|context| context.scope.lock().ok().map(|scope| scope.permits_foreground(pid)))
-        .unwrap_or(false)
+static ACTIVITY_FAILURE: AtomicBool = AtomicBool::new(false);
+
+fn activity_failure() -> &'static AtomicBool {
+    &ACTIVITY_FAILURE
+}
+
+pub struct ActivityWatcher {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl ActivityWatcher {
+    pub fn begin(activity: Arc<Registry>) -> Result<Self, Failure> {
+        ACTIVITY_FAILURE.store(false, Ordering::Release);
+        let stop = Arc::new(AtomicBool::new(false));
+        let quit = Arc::clone(&stop);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let thread = thread::spawn(move || {
+            let tap = Tap::create(TapContext { context: None, retained: None, activity: Some(activity), kind: TapKind::Intervention });
+            let Ok(_tap) = tap else {
+                let _ = ready_tx.send(Err(tap.err().unwrap()));
+                return;
+            };
+            if ready_tx.send(Ok(())).is_ok() {
+                while !quit.load(Ordering::Acquire) {
+                    CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(30), false);
+                }
+            }
+        });
+        match ready_rx.recv_timeout(Duration::from_millis(350)) {
+            Ok(Ok(())) => Ok(Self { stop, thread: Some(thread) }),
+            result => {
+                stop.store(true, Ordering::Release);
+                let _ = thread.join();
+                Err(Failure::new(
+                    ErrorCode::ActionFailed,
+                    match result {
+                        Ok(Err(message)) => message,
+                        _ => "Focus protection did not start within 350 ms".into(),
+                    },
+                ))
+            }
+        }
+    }
+
+    pub fn check(&self) -> Result<(), Failure> {
+        if ACTIVITY_FAILURE.load(Ordering::Acquire) {
+            Err(Failure::new(ErrorCode::ActionFailed, "Focus protection event tap was disabled; stopped"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for ActivityWatcher {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 pub struct Intervention {
@@ -355,7 +433,7 @@ impl Intervention {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let thread = thread::spawn(move || {
             let mut taps = Vec::new();
-            for kind in [TapKind::Notifications, TapKind::Intervention, TapKind::Keyboard(target)] {
+            for kind in [TapKind::Notifications, TapKind::Keyboard(target)] {
                 match Tap::new(Arc::clone(&callback_context), kind) {
                     Ok(tap) => taps.push(tap),
                     Err(error) => {
@@ -637,8 +715,14 @@ impl Retained {
             if let Ok(mut runloop) = callback.runloop.lock() {
                 *runloop = Some(CFRunLoop::get_current());
             }
-            let create =
-                |pid| Tap::create(TapContext { context: None, retained: Some(Arc::clone(&callback)), kind: TapKind::Retained(pid) });
+            let create = |pid| {
+                Tap::create(TapContext {
+                    context: None,
+                    retained: Some(Arc::clone(&callback)),
+                    activity: None,
+                    kind: TapKind::Retained(pid),
+                })
+            };
             let Some(_observer) = crate::mac::menu_observer(pid, Arc::clone(&callback)) else {
                 let _ = send.send(Err("Cannot observe target menu lifecycle".to_string()));
                 return;

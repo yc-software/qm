@@ -252,7 +252,7 @@ const SETTINGS_RESOURCES = {
     "orgAmbient",
   ],
   customize: ["soul", "branding", "featureFlags", "decisions"],
-  "slack-settings": ["externalSlackParticipants", "internalMemberOverrides", "channelHeaderPinDefault", "ackEmoji"],
+  "slack-settings": ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"],
   models: [
     "baseModel",
     "runtime",

@@ -7,7 +7,7 @@ import { recallText } from "./support/recall-text.ts";
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {
     async listTools() {
-      return [];
+      return { tools: [] };
     },
     async callTool(tool, args) {
       calls.push({ tool, args });
@@ -58,7 +58,7 @@ test("MCP recall is locally bounded and times out", async () => {
 
   const hanging: McpClient = {
     async listTools() {
-      return [];
+      return { tools: [] };
     },
     async callTool() {
       return new Promise(() => {});

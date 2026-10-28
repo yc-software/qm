@@ -1902,7 +1902,7 @@ test("a file posted in a GROUP conversation is granted read to the conversation 
   assert.equal(fileHandle!.ownerScopeId, scopeId("personal", "U1"));
 });
 
-test("a file shared with the session is LISTED in the cached system prompt — without provisioning a sandbox", async () => {
+test("a file shared with the session is counted, not named, in the system prompt — without provisioning a sandbox", async () => {
   const built = freshApp();
   const { app, acl } = built;
   const boxes = spyProvisioning(built.sandbox);
@@ -1925,9 +1925,9 @@ test("a file shared with the session is LISTED in the cached system prompt — w
   });
   const res = await app.turn(dm("!sysprompt"));
   assert.equal(res.status, "ok");
-  assert.match(res.reply ?? "", /## Files shared with you/);
-  assert.match(res.reply ?? "", /shared\/budget\.csv/);
-  assert.match(res.reply ?? "", /read a path below to fetch that file on demand/);
+  const system = (res.reply ?? "").split("<environment>")[0]!;
+  assert.match(system, /\n1 file is shared with you; /);
+  assert.doesNotMatch(res.reply ?? "", /budget\.csv/);
   assert.equal(boxes.provisioned, 0, "listing shared files must not provision a box");
 });
 
@@ -2278,7 +2278,7 @@ test("turn file context leads the environment block before the conversation head
 
   const res = await app.turn(
     channel("what should I do with this?", {
-      conversationHeader: "You are in #eng. People here: @Alice, @Bob. You are replying to a top-level message.",
+      conversationHeader: "You are in #eng. You are replying to a top-level message.",
       attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: blob.sizeBytes, blobId: blob.blobId }],
     }),
   );
@@ -2287,7 +2287,7 @@ test("turn file context leads the environment block before the conversation head
   const reply = res.reply ?? "";
   const requestAt = reply.indexOf("what should I do with this?");
   const envAt = reply.indexOf("<environment>");
-  const inboxAt = reply.indexOf("The user shared 1 file");
+  const inboxAt = reply.indexOf("shared notes.txt (");
   const headerAt = reply.indexOf("You are in #eng");
   const envEndAt = reply.indexOf("</environment>");
   assert.notEqual(requestAt, -1, "expected live user request");
@@ -2305,13 +2305,13 @@ test("the situational conversationHeader rides in the <environment> block, not a
   const { app } = freshApp();
   const res = await app.turn(
     channel("@agent is this possible?", {
-      conversationHeader: "You are in #design. People here: @U2, @U3. You are replying in a thread @U2 started.",
+      conversationHeader: "You are in #design. You are replying in a thread @U2 started.",
       priorTurns: [{ role: "user", name: "U2", text: "here's the original idea that started this thread" }],
     }),
   );
   assert.equal(res.status, "ok");
   assert.match(res.reply ?? "", /<environment>/);
-  assert.match(res.reply ?? "", /People here: @U2, @U3/);
+  assert.match(res.reply ?? "", /You are replying in a thread @U2 started\./);
   const found = await app.getSession(res.sessionId!);
   const userEntry = found!.entries.find((e) => e.type === "user");
   const userText = (userEntry!.payload as { text: string }).text;
@@ -2761,6 +2761,42 @@ test("disabling a grant mode suspends existing grants until it is re-enabled", a
   await config.setApprovalGrantModes(org, { session: true, always: true });
   const restored = await app.turn(dm("!run git push --force origin release"));
   assert.equal(restored.status, "ok", "re-enabling the mode restores the grant without re-approval");
+});
+
+test("a tool that declares approval runs once for the exact approved arguments", async () => {
+  const { app, sessions } = freshApp();
+  const call = '!declared {"to":"a@example.com","body":"hi"}';
+  const first = await app.turn(dm(call));
+  assert.equal(first.status, "pending_approval");
+  const pending = first.pendingApprovals![0]!;
+  assert.match(pending.approvalKey ?? "", /^tool-call:[0-9a-f]{64}$/);
+
+  const always = await app.turn(
+    dm(call, { approval: { requestId: pending.requestId, approved: true, scope: "always" } }),
+  );
+  assert.equal(always.status, "pending_approval", "a per-call approval offers no standing grant");
+
+  const approved = await app.turn(dm(call, { approval: { requestId: pending.requestId, approved: true } }));
+  assert.equal(approved.status, "ok");
+  assert.equal(approved.reply, 'sent {"to":"a@example.com","body":"hi"}');
+
+  const again = await app.turn(dm(call));
+  assert.equal(again.status, "pending_approval", "the approval was consumed by the one call");
+  const changed = await app.turn(dm('!declared {"body":"hi","to":"b@example.com"}'));
+  assert.equal(changed.status, "pending_approval", "different arguments need their own approval");
+
+  const denied = await app.turn(
+    dm(call, { approval: { requestId: again.pendingApprovals![0]!.requestId, approved: false } }),
+  );
+  assert.equal(denied.status, "refused");
+  const notes = (await sessions.getEntries(denied.sessionId!)).filter(
+    (e) => e.type === "user" && (e.payload as { hidden?: boolean }).hidden,
+  );
+  assert.ok(
+    notes.some((e) =>
+      /denied this pending operation, so it did not run: example_send/.test((e.payload as { text: string }).text),
+    ),
+  );
 });
 
 test("Strict posture gates tool actions behind HiLO and honors a session grant", async () => {
@@ -3710,15 +3746,10 @@ test("a turn that PAUSED on an approval blocks the thread even when it carried r
   assert.equal(blocked.pendingApprovals?.[0]?.requestId, pending!.requestId);
 });
 
-test("a conversational turn never provisions a sandbox (lazy); execute/write/read do", async () => {
-  const built = freshApp({ eagerProvisionEnabled: false });
+test("execute and write provision a sandbox that is released after the turn", async () => {
+  const built = freshApp();
   const { app } = built;
   const boxes = spyProvisioning(built.sandbox);
-
-  const chat = await app.turn(dm("hello there"));
-  assert.equal(chat.status, "ok");
-  assert.equal(boxes.provisioned, 0, "chat turn must not provision");
-  assert.equal(boxes.live, 0);
 
   const run = await app.turn(dm("!run echo sandbox-works"));
   assert.equal(run.status, "ok");
@@ -3727,9 +3758,6 @@ test("a conversational turn never provisions a sandbox (lazy); execute/write/rea
 
   await app.turn(dm("!write notes.md hi"));
   assert.equal(boxes.provisioned, 2, "write must provision");
-
-  await app.turn(dm("just chatting"));
-  assert.equal(boxes.provisioned, 2, "second chat turn must not provision");
 });
 
 test("thinking always reaches the run activity feed, with the model-bound signature stripped", async () => {
@@ -3798,8 +3826,8 @@ test("environments: an unattached scope provisions through its own scope (today'
   assert.equal(rwScope, env.id, "the attachment redirects the rw layer (machine/volume/backup) to the environment id");
 });
 
-test("EAGER_PROVISION warms the box on a tool-using session's next turn and still reclaims it", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+test("eager provisioning warms the box on a tool-using session's next turn and still reclaims it", async () => {
+  const built = freshApp();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok");
@@ -3811,16 +3839,16 @@ test("EAGER_PROVISION warms the box on a tool-using session's next turn and stil
   assert.equal(boxes.live, 0, "an eagerly provisioned box is still reclaimed at turn end");
 });
 
-test("EAGER_PROVISION never grows a computer for a chat-only session", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+test("eager provisioning never grows a computer for a chat-only session", async () => {
+  const built = freshApp();
   const boxes = spyProvisioning(built.sandbox);
   const res = await built.app.turn(dm("hello there"));
   assert.equal(res.status, "ok");
   assert.equal(boxes.provisioned, 0, "a session with no tool history must stay lazy");
 });
 
-test("EAGER_PROVISION single-flights with the first tool call — one provision per turn, not two", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+test("eager provisioning single-flights with the first tool call — one provision per turn, not two", async () => {
+  const built = freshApp();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok");
@@ -3830,7 +3858,7 @@ test("EAGER_PROVISION single-flights with the first tool call — one provision 
 });
 
 test("a failed eager provision clears the slot — the tool call retries instead of inheriting the error", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+  const built = freshApp();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok");
@@ -3866,14 +3894,6 @@ test("a preamble failure after the machine boots still reclaims it", async () =>
   };
   await built.app.turn(dm("!run echo hi")).catch(() => null);
   assert.equal(boxes.live, 0, "a machine whose preamble threw must not stay booted");
-});
-
-test("eager provisioning stays off by default — a toolless turn provisions nothing", async () => {
-  const built = freshApp();
-  const boxes = spyProvisioning(built.sandbox);
-  const res = await built.app.turn(dm("hello there"));
-  assert.equal(res.status, "ok");
-  assert.equal(boxes.provisioned, 0);
 });
 
 test("Door 2: an envelopeWrapped request on its own skips the overheard seed (replay preserves topic-scope)", async () => {
@@ -4152,7 +4172,7 @@ test("Auto screens oversize external output in chunks, so an injection buried pa
 });
 
 test("activated resource defaults preserve an existing computer and stop eager provisioning after unset", async () => {
-  const built = freshApp({ eagerProvisionEnabled: true });
+  const built = freshApp();
   noDefaultSandbox.add(built);
   await selectComputer(built, "U1", scopeId("personal", "U1"));
   await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
@@ -4433,22 +4453,30 @@ for (const [securityPosture, securityScreen] of [
   });
 }
 
-test("environment inventories are incremental across real turns with a durable full-snapshot anchor", async () => {
-  const { app, sessions } = freshApp();
-  const first = await app.turn(dm("first", { timezone: "America/Los_Angeles" }));
-  assert.equal(first.status, "ok");
-  assert.match(first.reply ?? "", /## Sandbox provider/);
-  const second = await app.turn(dm("second", { timezone: "America/Los_Angeles" }));
-  assert.equal(second.status, "ok");
-  assert.doesNotMatch(second.reply ?? "", /## Sandboxes|## Sandbox provider/);
-  assert.match(second.reply ?? "", /## The user's local time/);
-  const entries = await sessions.getEntries(first.sessionId!);
-  const users = entries.filter((entry) => entry.type === "user");
-  const firstSnapshot = (users[0]!.payload as { environmentSnapshot: { hashes: Record<string, string> } })
-    .environmentSnapshot;
-  assert.ok(Object.keys(firstSnapshot.hashes).some((key) => key.startsWith("Sandbox provider")));
-  const secondSnapshot = (users[1]!.payload as { environmentSnapshot: { anchorSeq: number } }).environmentSnapshot;
-  assert.equal(secondSnapshot.anchorSeq, users[0]!.seq);
+test("only a conversation where several people can speak names the sender of each message", async () => {
+  const { app } = freshApp();
+  const ada = { externalId: "U1", displayName: "Ada" };
+  const environmentOf = (reply?: string) => (reply ?? "").split("<environment>")[1] ?? "";
+  const direct = await app.turn(dm("!sysprompt", { actor: ada }));
+  assert.doesNotMatch(environmentOf(direct.reply), /This message is from/);
+  const room = await app.turn(
+    channel("!sysprompt", {
+      actor: ada,
+      conversation: { kind: "channel", threadRef: "ch:C1:sender", channelRef: "C1", audience: [ada] },
+    }),
+  );
+  assert.match(environmentOf(room.reply), /This message is from @Ada\./);
+});
+
+test("inventories ride a byte-stable system prompt; a warm turn's environment carries only the clock", async () => {
+  const { app } = freshApp();
+  const first = await app.turn(dm("!sysprompt", { timezone: "America/Los_Angeles" }));
+  const second = await app.turn(dm("!sysprompt", { timezone: "America/Los_Angeles" }));
+  const [system1, environment1] = (first.reply ?? "").split("<environment>");
+  const [system2, environment2] = (second.reply ?? "").split("<environment>");
+  assert.equal(system2, system1);
+  assert.match(environment2!, /^\nLocal time: \S+ \d\d:\d\d P[SD]T \(America\/Los_Angeles\)\n<\/environment>$/);
+  assert.doesNotMatch(environment1!, /## /);
 });
 
 test("an isolated channel environment does not disclose the actor's private sandbox", async () => {
@@ -4479,16 +4507,11 @@ test("an isolated channel environment does not disclose the actor's private sand
       channelRef: "C1",
       audience: [{ externalId: "U1" }, { externalId: "U2" }],
     },
-    text: "hello",
+    text: "!sysprompt",
   };
   const result = await built.app.turn(request);
   assert.equal(result.status, "ok");
-  const session = await built.sessions.getByThread(request.conversation.threadRef);
-  const entries = await built.sessions.getEntries(session!.id);
-  const environment = (entries.find((entry) => entry.type === "user")!.payload as { environment: string }).environment;
-  assert.match(environment, /## Sandbox provider sprites/);
-  for (const content of [environment, result.reply ?? ""]) {
-    assert.ok(!content.includes(privateName), "the private sandbox name must not reach the shared turn");
-    assert.ok(!content.includes(personal.id), "the private sandbox ID must not reach the shared turn");
-  }
+  assert.match(result.reply ?? "", /## Sandboxes\nsprites/);
+  assert.ok(!(result.reply ?? "").includes(privateName), "the private sandbox name must not reach the shared turn");
+  assert.ok(!(result.reply ?? "").includes(personal.id), "the private sandbox ID must not reach the shared turn");
 });

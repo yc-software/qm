@@ -1,16 +1,25 @@
-import { safeChunks } from "./safe-cut.ts";
+import { xmlEscape } from "../util/message-tag.ts";
+import { safeChunks, safeCutIndex } from "./safe-cut.ts";
+export function escapeSlackText(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
 export function decodeSlackEntities(text: string): string {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
 
+const SLACK_MENTION = /(?<!<)<+@([A-Z0-9]+)(?:\|([^<>]*))?(?:>|(?=<))/g;
+
 export function resolveMentionsInText(text: string, lookup: (id: string) => string | undefined): string {
-  return text.replace(/<@(U\w+)(?:\|([^>]*))?>/g, (_m, id: string, label?: string) => {
+  return text.replace(SLACK_MENTION, (_m, id: string, label?: string) => {
     const name = (label && label.trim()) || lookup(id);
     return name ? `@${name}` : `@${id}`;
   });
 }
 
-const SLACK_MENTION = /<@([A-Z0-9]+)(?:\|[^>]*)?>/g;
+export function mentionedUserIds(text: string): string[] {
+  return [...text.matchAll(SLACK_MENTION)].map((m) => m[1]!);
+}
 
 export function resolveMentions(text: string, nameById: ReadonlyMap<string, string> | undefined): string {
   if (!nameById || !text.includes("<@")) return text;
@@ -23,7 +32,7 @@ export function resolveMentions(text: string, nameById: ReadonlyMap<string, stri
 const BOLD_SENTINEL = String.fromCharCode(1);
 const STASH_OPEN = String.fromCharCode(0);
 
-const MASS_MENTION = /<!(here|channel|everyone)(?:\|[^>]*)?>/gi;
+const MASS_MENTION = /(?<!<)<+!(here|channel|everyone)(?:\|[^<>]*)?(?:>|(?=<))/gi;
 export function neutralizeMassMentions(text: string): string {
   return text.replace(MASS_MENTION, (_m, word: string) => `@\u200b${word.toLowerCase()}`);
 }
@@ -38,7 +47,7 @@ export function setMentionIndex(index: ReadonlyMap<string, string>): void {
   for (const [name, id] of index) if (!byId.has(id)) byId.set(id, name);
   mentionNameById = byId;
 }
-const WIRE_MENTION = /<(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^>]*))?>/gi;
+const WIRE_MENTION = /(?<!<)<+(@[UW]\w+|!(?:here|channel|everyone|subteam\^\w+))(?:\|([^<>]*))?(?:>|(?=<))/gi;
 
 function neutralizedMention(kind: string, label: string | undefined): string {
   const name = label?.trim().replace(/^@/, "") || "";
@@ -100,9 +109,13 @@ function stashFencedBlocks(text: string, keep: (s: string) => string): string {
   let out = "";
   let i = 0;
   let tildesExhausted = !text.includes("~~~");
+  let tilde: { start: number; end: number } | undefined;
   while (i < text.length) {
     const backtick = text.indexOf("```", i);
-    const tilde = tildesExhausted ? undefined : nextLineMatch(text, i, TILDE_OPENER);
+    if (!tildesExhausted && (tilde === undefined || tilde.start < i)) {
+      tilde = nextLineMatch(text, i, TILDE_OPENER);
+      tildesExhausted = tilde === undefined;
+    }
     if (tilde === undefined && backtick < 0) break;
     if (backtick >= 0 && (tilde === undefined || backtick < tilde.start)) {
       const close = text.indexOf("```", backtick + 3);
@@ -115,6 +128,7 @@ function stashFencedBlocks(text: string, keep: (s: string) => string): string {
     const closer = opener.end < text.length ? nextLineMatch(text, opener.end + 1, TILDE_CLOSER) : undefined;
     if (closer === undefined) {
       tildesExhausted = true;
+      tilde = undefined;
       continue;
     }
     const info = text.slice(opener.start, opener.end).replace(/^[ \t]*~+/, "");
@@ -140,7 +154,7 @@ export function toSlackMrkdwn(md: string): string {
 
   text = reformatTables(text, keep);
 
-  text = text.replace(/!?\[([^\]]*)\]\(\s*<?([^()\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_m, label, url) =>
+  text = text.replace(/!?\[([^[\]\n]*)\]\(\s*<?([^()\s>]+)>?(?:\s+"[^"]*")?\s*\)/g, (_m, label, url) =>
     keep(label ? `<${url}|${label}>` : `<${url}>`),
   );
 
@@ -154,14 +168,14 @@ export function toSlackMrkdwn(md: string): string {
 
   text = text.replace(/^[ \t]*([-*_])\1{2,}[ \t]*$/gm, "──────────");
 
-  text = text.replace(/\*\*(?!\s)([^\n]+?)(?<!\s)\*\*/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
-  text = text.replace(/__(?!\s)([^\n]+?)(?<!\s)__/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
+  text = text.replace(/\*\*(?!\s)((?:[^*\n]|\*(?!\*))+?)(?<!\s)\*\*/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
+  text = text.replace(/__(?!\s)((?:[^_\n]|_(?!_))+?)(?<!\s)__/g, `${BOLD_SENTINEL}$1${BOLD_SENTINEL}`);
 
-  text = text.replace(/~~(?!\s)([^\n]+?)(?<!\s)~~/g, "~$1~");
+  text = text.replace(/~~(?!\s)((?:[^~\n]|~(?!~))+?)(?<!\s)~~/g, "~$1~");
 
   text = text.replace(
-    /^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*$/gm,
-    (_m, h) => `${BOLD_SENTINEL}${(h as string).replaceAll(BOLD_SENTINEL, "")}${BOLD_SENTINEL}`,
+    /^[ \t]*#{1,6}[ \t]+(.+)$/gm,
+    (_m, h: string) => `${BOLD_SENTINEL}${headingTitle(h).replaceAll(BOLD_SENTINEL, "")}${BOLD_SENTINEL}`,
   );
 
   text = text.replace(/^([ \t]*)[-*+][ \t]+/gm, "$1• ");
@@ -174,26 +188,30 @@ export function toSlackMrkdwn(md: string): string {
   return text;
 }
 
+function headingTitle(rest: string): string {
+  const trimmed = rest.trimEnd();
+  let end = trimmed.length;
+  while (end > 0 && trimmed[end - 1] === "#") end--;
+  if (end === trimmed.length || (end > 0 && trimmed[end - 1] !== " " && trimmed[end - 1] !== "\t")) return trimmed;
+  return trimmed.slice(0, end).trimEnd() || trimmed;
+}
+
+const URL_CLOSER_OPENER: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+const URL_BRACKETS = new Set([...Object.keys(URL_CLOSER_OPENER), ...Object.values(URL_CLOSER_OPENER)]);
+
 function trimUrlTail(url: string): string {
-  const openerOf: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+  const counts = new Map<string, number>();
+  for (const ch of url) {
+    if (URL_BRACKETS.has(ch)) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  }
   let end = url.length;
   while (end > 0) {
     const ch = url[end - 1]!;
-    if ("*_~.,;:!?'\"".includes(ch)) {
-      end--;
-      continue;
-    }
-    const opener = openerOf[ch];
-    if (opener) {
-      const head = url.slice(0, end);
-      const opens = head.split(opener).length - 1;
-      const closes = head.split(ch).length - 1;
-      if (closes > opens) {
-        end--;
-        continue;
-      }
-    }
-    break;
+    const opener = URL_CLOSER_OPENER[ch];
+    const unbalanced = opener !== undefined && (counts.get(ch) ?? 0) > (counts.get(opener) ?? 0);
+    if (!"*_~.,;:!?'\"".includes(ch) && !unbalanced) break;
+    if (opener !== undefined) counts.set(ch, counts.get(ch)! - 1);
+    end--;
   }
   return url.slice(0, end);
 }
@@ -243,6 +261,16 @@ function reformatTables(text: string, keep: (s: string) => string): string {
   return out.join("\n");
 }
 
-export function slackSectionBlocks(text: string): Array<Record<string, unknown>> {
-  return safeChunks(text, 2_900).map((chunk) => ({ type: "section", text: { type: "mrkdwn", text: chunk } }));
+export function slackSectionBlocks(text: string, opts?: { code?: boolean }): Array<Record<string, unknown>> {
+  if (!opts?.code)
+    return safeChunks(text, 2_900).map((chunk) => ({ type: "section", text: { type: "mrkdwn", text: chunk } }));
+  const blocks: Array<Record<string, unknown>> = [];
+  let rest = text.replace(/`/g, "'");
+  while (rest) {
+    let cut = rest.length > 2_800 ? safeCutIndex(rest, 2_800) : rest.length;
+    while (xmlEscape(rest.slice(0, cut)).length > 2_990) cut = safeCutIndex(rest, Math.floor(cut * 0.8));
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: `\`\`\`${xmlEscape(rest.slice(0, cut))}\`\`\`` } });
+    rest = rest.slice(cut);
+  }
+  return blocks;
 }

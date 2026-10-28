@@ -7,7 +7,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { DirectFileUploads } from "../src/files/direct-file-upload.ts";
-import type { FileUpload } from "../src/files/file-upload-store.ts";
+import { FileUploadError, type FileUpload } from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -27,6 +27,7 @@ const upload: FileUpload = {
   state: "pending",
   expiresAt: Date.now() + 60_000,
   createdAt: Date.now(),
+  lastActivityAt: Date.now(),
 };
 let server: Server;
 let base: string;
@@ -38,6 +39,9 @@ const fake: DirectFileUploads = {
   },
   async get(id) {
     return id === upload.id ? upload : null;
+  },
+  async list(actorId) {
+    return [upload, { ...upload, id: "b".repeat(32), scopeId: channel }].filter((u) => u.actorId === actorId);
   },
   async sign() {
     calls++;
@@ -66,7 +70,7 @@ before(async () => {
   const built = buildApp(testConfig({ signingSecret: secret }));
   built.app.belongsToScope = async () => true;
   built.app.authorizesCapabilityScope = async () => true;
-  server = createServer(built.app, { signingSecret: secret, fileUploads: fake, filesDirectUploadsEnabled: true });
+  server = createServer(built.app, { signingSecret: secret, fileUploads: fake });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   base = `http://localhost:${(server.address() as AddressInfo).port}`;
 });
@@ -118,35 +122,59 @@ test("owner can retrieve status and executable publisher with no credentials emb
   assert.ok(!text.includes(cap));
 });
 
-test("disabled initiation preserves existing session recovery", async () => {
+test("listing shows only the caller's unfinished uploads in the token scope and counts the rest", async () => {
+  type Listing = { uploads: FileUpload[]; elsewhere: number };
+  const body = async (cap: string) => (await (await call("/v1/files/uploads", cap)).json()) as Listing;
+  assert.deepEqual(await body(await token("U1")), {
+    uploads: [
+      {
+        id: upload.id,
+        name: upload.name,
+        sizeBytes: 1,
+        state: "pending",
+        createdAt: upload.createdAt,
+        lastActivityAt: upload.lastActivityAt,
+        expiresAt: upload.expiresAt,
+      },
+    ],
+    elsewhere: 1,
+  });
+  assert.deepEqual(
+    (await body(await token("U1", channel))).uploads.map((u) => u.id),
+    ["b".repeat(32)],
+  );
+  assert.deepEqual(await body(await token("U2", scopeId("personal", "U2"))), { uploads: [], elsewhere: 0 });
+});
+
+test("a quota refusal tells the caller which of its uploads hold the quota", async () => {
   const built = buildApp(testConfig({ signingSecret: secret }));
   built.app.belongsToScope = async () => true;
   built.app.authorizesCapabilityScope = async () => true;
-  const recovery = createServer(built.app, {
+  const full = createServer(built.app, {
     signingSecret: secret,
     fileUploads: {
       ...fake,
-      async complete() {
-        return { id: upload.id, path: upload.name } as never;
+      async begin() {
+        throw new FileUploadError("quota", 429, "upload_quota");
       },
     },
   });
-  await new Promise<void>((resolve) => recovery.listen(0, resolve));
-  const origin = `http://localhost:${(recovery.address() as AddressInfo).port}`;
-  const cap = await token("U1");
+  await new Promise<void>((resolve) => full.listen(0, resolve));
   try {
-    for (const [method, path, expected] of [
-      ["GET", "/v1/files/upload-client", 200],
-      ["POST", "/v1/files/uploads", 503],
-      ["GET", `/v1/files/uploads/${upload.id}`, 200],
-      ["POST", `/v1/files/uploads/${upload.id}/parts/1`, 200],
-      ["POST", `/v1/files/uploads/${upload.id}/complete`, 200],
-      ["DELETE", `/v1/files/uploads/${upload.id}`, 200],
-    ] as const) {
-      const response = await fetch(origin + path, { method, headers: { "x-agent-capability": cap } });
-      assert.equal(response.status, expected, `${method} ${path}`);
-    }
+    const response = await fetch(`http://localhost:${(full.address() as AddressInfo).port}/v1/files/uploads`, {
+      method: "POST",
+      headers: { "x-agent-capability": await token("U1"), "content-type": "application/json" },
+      body: JSON.stringify({ name: "next.txt" }),
+    });
+    assert.equal(response.status, 429);
+    const result = (await response.json()) as { error: string; uploads: FileUpload[]; elsewhere: number };
+    assert.equal(result.error, "upload_quota");
+    assert.deepEqual(
+      result.uploads.map((u) => u.name),
+      ["private.txt"],
+    );
+    assert.equal(result.elsewhere, 1);
   } finally {
-    await new Promise<void>((resolve) => recovery.close(() => resolve()));
+    await new Promise<void>((resolve) => full.close(() => resolve()));
   }
 });

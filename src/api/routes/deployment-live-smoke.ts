@@ -2,6 +2,7 @@ import { sendJson } from "../http.ts";
 import type { BackgroundOwnership } from "../../runs/background-ownership.ts";
 import { requireDeploymentControl } from "./background-work.ts";
 import { isObj } from "./shared.ts";
+import { uuidSchema } from "../../util/ids.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const running = new WeakSet<object>();
@@ -18,7 +19,7 @@ async function deploymentLiveSmoke(ctx: ApiCtx): Promise<void> {
     !isObj(body) ||
     !Object.keys(body).every((key) => ["requestId", "expectedDeploymentId"].includes(key)) ||
     typeof body.requestId !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.requestId) ||
+    !uuidSchema.safeParse(body.requestId).success ||
     body.expectedDeploymentId !== control.deploymentId
   )
     return sendJson(ctx.res, 400, { error: "invalid_deployment_smoke_request" });

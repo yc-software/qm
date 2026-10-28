@@ -61,21 +61,6 @@ type RosterKind = { plural: string; authz: string; item: string; limit?: number;
 
 const MEMBERS_PAGE_LIMIT = 200;
 const ROSTER_FETCH_CONCURRENCY = 4;
-const NO_INTERNAL_OVERRIDES: ReadonlySet<string> = new Set();
-
-function withInternalOverride(
-  actor: ActorAssertion,
-  email: string | undefined,
-  overrides: ReadonlySet<string>,
-): ActorAssertion {
-  if (!actor.isExternalGuest || overrides.size === 0) return actor;
-  const mail = (email ?? "").trim().toLowerCase();
-  if (overrides.has(actor.externalId.toLowerCase()) || (mail && overrides.has(mail))) {
-    return { ...actor, isExternalGuest: false };
-  }
-  return actor;
-}
-
 export interface Directory {
   getUserSnapshot(client: any): Promise<{ byId: Map<string, CachedUser>; fetchedAt: number } | undefined>;
   forceDirectorySync(client: any, invalidateChannelId?: string, invalidatePrincipalId?: string): Promise<void>;
@@ -112,13 +97,10 @@ export function createDirectory(deps: {
   syncRetryMs?: number;
   maxPrivateChannels?: number;
   userCacheTtlMs?: number;
-  internalOverrides?: () => Promise<ReadonlySet<string>>;
   coreSingleton?: boolean;
 }): Directory {
   const { core, ids } = deps;
   const CORE_SINGLETON = deps.coreSingleton !== false;
-  const internalOverrides = async (): Promise<ReadonlySet<string>> =>
-    !deps.externalAccess && deps.internalOverrides ? await deps.internalOverrides() : NO_INTERNAL_OVERRIDES;
   const USER_SNAPSHOT_TTL_MS = deps.userSnapshotTtlMs ?? 5 * 60_000;
   const CHANNEL_MEMBERS_TTL_MS = deps.channelMembersTtlMs ?? 30 * 60_000;
   const SYNC_RETRY_MS = deps.syncRetryMs ?? 30_000;
@@ -145,17 +127,12 @@ export function createDirectory(deps: {
       mentionIndex.set(key, id);
     };
     let missingEmails = 0;
-    const overrides = await internalOverrides();
     for await (const res of client.paginate("users.list", { limit: 1000 }) as AsyncIterable<any>) {
       for (const u of (res.members ?? []) as SlackUser[]) {
         if (!u?.id || u.id === ids.botUserId) continue;
-        const actor = withInternalOverride(
-          deps.externalAccess
-            ? companySlackActor(u, deps.externalAccess)
-            : classifyUser(u, ids.ownTeamId, ids.identityMode),
-          u.profile?.email,
-          overrides,
-        );
+        const actor = deps.externalAccess
+          ? companySlackActor(u, deps.externalAccess)
+          : classifyUser(u, ids.ownTeamId, ids.identityMode);
         if (ids.identityMode === "email" && !u.is_bot && actor.externalId === u.id && u.team_id === ids.ownTeamId)
           missingEmails++;
         const timezone = slackUserTimezone(u);
@@ -593,13 +570,9 @@ export function createDirectory(deps: {
     if (fromSnapshot) return { ...fromSnapshot, ok: true };
     try {
       const user = (await client.users.info({ user: userId })).user as SlackUser | undefined;
-      const actor = withInternalOverride(
-        deps.externalAccess
-          ? companySlackActor(user, deps.externalAccess)
-          : classifyUser(user, ids.ownTeamId, ids.identityMode),
-        user?.profile?.email,
-        await internalOverrides(),
-      );
+      const actor = deps.externalAccess
+        ? companySlackActor(user, deps.externalAccess)
+        : classifyUser(user, ids.ownTeamId, ids.identityMode);
       const timezone = slackUserTimezone(user);
       const classified = { actor, ...(timezone ? { timezone } : {}) };
       if (ids.ownTeamId && userId !== undefined) userCache.set(userId, classified);

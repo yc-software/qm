@@ -13,6 +13,7 @@ import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
+import { connectorHostLabel } from "../connectors/oauth.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -348,6 +349,7 @@ interface ConnectorMeta {
   expiresAt?: number;
   connected: boolean;
   needsReconnect?: boolean;
+  refreshError?: string;
 }
 
 export interface ConnectorTokenStore {
@@ -552,6 +554,10 @@ function defaultEnvKey(service: string): string {
 }
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function isPersonalCredentialEnvKey(envKey: string): boolean {
+  return ENV_KEY_RE.test(envKey) && !envKey.startsWith("AGENT_");
+}
 
 function legacyUsernameEnvKey(passwordEnvKey: string): string {
   const base = passwordEnvKey.replace(/_(PASSWORD|PASS|TOKEN|SECRET|API_KEY|KEY)$/i, "");
@@ -933,8 +939,8 @@ export function createKeychain(deps: {
         ? input.fields.map((f) => ({ envKey: f.envKey.trim(), value: f.value, secret: f.secret !== false }))
         : undefined;
     if (fields) {
-      if (fields.some((f) => !ENV_KEY_RE.test(f.envKey)))
-        throw new KeychainError(400, "each credential field needs a valid environment-variable envKey");
+      if (fields.some((f) => !isPersonalCredentialEnvKey(f.envKey)))
+        throw new KeychainError(400, "each credential field needs a valid environment-variable envKey outside AGENT_*");
       if (fields.some((f) => !f.value || !f.value.trim()))
         throw new KeychainError(400, "each credential field needs a value");
       if (new Set(fields.map((f) => f.envKey)).size !== fields.length)
@@ -945,8 +951,8 @@ export function createKeychain(deps: {
     else if (fields) secret = JSON.stringify(Object.fromEntries(fields.map((f) => [f.envKey, f.value])));
     if (!secret || !secret.trim()) throw new KeychainError(400, "empty secret");
     const envKey = kind === "env" && !fields ? input.envKey?.trim() || defaultEnvKey(service) : undefined;
-    if (envKey && !ENV_KEY_RE.test(envKey))
-      throw new KeychainError(400, "envKey must be a valid environment-variable name");
+    if (envKey && !isPersonalCredentialEnvKey(envKey))
+      throw new KeychainError(400, `envKey ${envKey} must be a valid environment-variable name outside AGENT_*`);
     const fieldsMeta = fields?.map((f) => ({ envKey: f.envKey, secret: f.secret }));
     const targets = files?.map((f) => f.path);
     const t = now();
@@ -1660,35 +1666,60 @@ export interface KeychainManifestInput {
     ownerId: string;
     credentialId?: string;
     description: string;
-    scope: "scoped" | "owner";
   }>;
   detectedByOwner?: Map<string, string[]>;
-  scopeAsks?: KeychainAsk[];
 }
 
-function expiryNote(c: KeychainCredentialMeta, now: number, own: boolean): string {
-  if (c.kind === "file" || typeof c.expiresAt !== "number") return "";
-  if (c.expiresAt < now) {
-    return own
-      ? ", EXPIRED — they must re-auth before it can be used"
-      : ", EXPIRED — ask the owner to re-auth before requesting a grant";
+interface CredentialLine {
+  label: string;
+  use: string;
+  expired: boolean;
+  refreshError?: string;
+}
+
+export const credentialLineText = (line: CredentialLine): string => {
+  if (!line.expired) return `${line.label}; ${line.use}`;
+  return `${line.label}; expired${line.refreshError ? ` (refresh failed: ${line.refreshError})` : ""}`;
+};
+
+export const connectorHandle = (host: string, accountType?: string): string =>
+  `connector:${host}:${accountType ?? "default"}`;
+
+export function connectorLine(
+  host: string,
+  accountType?: string,
+  expired = false,
+  refreshError?: string,
+): CredentialLine {
+  const account = accountType && accountType !== "default" ? ` (${accountType})` : "";
+  return {
+    label: `${connectorHostLabel(host)}${account}`,
+    use: `env \`${envKey(host)}\``,
+    expired,
+    ...(expired && refreshError ? { refreshError } : {}),
+  };
+}
+
+function credentialLine(c: KeychainCredentialMeta, now: number): CredentialLine {
+  if (c.managed === "connector") {
+    const meta = connectorMeta(c, now);
+    return connectorLine(meta.host, meta.accountType, meta.needsReconnect, meta.refreshError);
   }
-  return `, expires at ${new Date(c.expiresAt).toISOString()}`;
-}
-
-function credentialDescription(c: KeychainCredentialMeta, now: number, own: boolean): string {
-  if (c.managed === "connector") return connectorDescription(connectorMeta(c, now));
   if (isBackendCredential(c))
-    return "Composio backend access — use the composio skill; cannot be loaded into a computer";
-  const slot =
+    return { label: "Composio backend access", use: "use the composio skill", expired: false };
+  const use =
     c.kind === "env"
-      ? (c.fields?.map((f) => f.envKey) ?? [c.envKey])
+      ? `env ${(c.fields?.map((f) => f.envKey) ?? [c.envKey])
           .filter(Boolean)
           .sort()
           .map((key) => `\`${key}\``)
-          .join(" + ")
-      : `files ${(c.targets ?? [c.target]).filter(Boolean).sort().join(", ")}`;
-  return `${c.service} (${slot}${c.accountLabel ? `, account ${c.accountLabel}` : ""}${expiryNote(c, now, own)})`;
+          .join(" + ")}`
+      : "files in $HOME";
+  return {
+    label: `${c.service}${c.accountLabel ? ` (${c.accountLabel})` : ""}`,
+    use,
+    expired: c.kind !== "file" && typeof c.expiresAt === "number" && c.expiresAt < now,
+  };
 }
 
 const oauthExpired = (rec: KeychainCredentialMeta, t: number, oauthSkew: number) =>
@@ -1706,13 +1737,8 @@ function connectorMeta(rec: KeychainCredentialMeta, t: number, oauthSkew = 60_00
     ...(rec.expiresAt !== undefined ? { expiresAt: rec.expiresAt } : {}),
     connected: true,
     ...(tokenExpired && (!hasRefresh || refreshFailed) ? { needsReconnect: true } : {}),
+    ...(tokenExpired && refreshFailed && rec.refresh?.refreshError ? { refreshError: rec.refresh.refreshError } : {}),
   };
-}
-
-function connectorDescription(cm: ConnectorMeta): string {
-  return `connected app ${cm.host}, account ${cm.accountType ?? "default"}${
-    cm.needsReconnect ? ", NEEDS RECONNECT — owner must reconnect the app before use" : ""
-  }${typeof cm.expiresAt === "number" ? `, token expires at ${new Date(cm.expiresAt).toISOString()}` : ""}`;
 }
 
 export const MAX_CREDENTIAL_FILES = 500;
@@ -1732,107 +1758,80 @@ function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
   return !c.managed && c.kind !== "broker";
 }
 
+const ORGANIZATION_OWNER_KEY = personKey("Organization");
+
 export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {
-  const groups = new Map<string, Map<string, { text: string; note: string; purpose?: string }>>();
-  const put = (ownerId: string, id: string, text: string, note = "", purpose?: string): void => {
+  const groups = new Map<string, Set<string>>();
+  const ownerNames = new Map<string, string>();
+  const add = (ownerId: string, text: string): void => {
     const owner = personKey(ownerId);
     let rows = groups.get(owner);
-    if (!rows) groups.set(owner, (rows = new Map()));
-    rows.set(id, { text, note, ...(purpose ? { purpose } : {}) });
+    if (!rows) groups.set(owner, (rows = new Set()));
+    rows.add(text);
+    if (!ownerNames.has(owner))
+      ownerNames.set(owner, input.members.find((member) => samePerson(member.id, ownerId))?.displayName ?? ownerId);
   };
-  const ownPersonal = input.scopeId === toScopeId("personal", input.actorId);
-  const openSpeaker = input.openSpeakerKeychain === true && input.conversationKind !== "dm";
-  const isOwn = (ownerId: string): boolean => (ownPersonal || openSpeaker) && samePerson(ownerId, input.actorId);
-  const grants = new Map(input.scopeGrants.map(({ grant, credential }) => [credential.id, grant]));
   const execution = input.execution ?? [];
-  const scopeCounts = new Map<string, number>();
-  for (const entry of execution) scopeCounts.set(entry.scope, (scopeCounts.get(entry.scope) ?? 0) + 1);
-  const common = [...scopeCounts].sort(([a, x], [b, y]) => y - x || a.localeCompare(b))[0]?.[0];
-  const handle = (entry: (typeof execution)[number]): string =>
-    `\`${entry.handle}\`${entry.scope === common ? "" : ` (execute scope \`${entry.scope}\`)`}`;
-  const access = (ownerId: string, id: string): [string, string?] => {
-    const grant = grants.get(id);
-    if (grant)
-      return [
-        `${grant.mode === "standing" ? "STANDING" : "one-time"} grant \`${grant.id}\`${
-          grant.expiresAt === undefined ? "" : `, expires at ${new Date(grant.expiresAt).toISOString()}`
-        }`,
-        grant.purpose,
-      ];
-    if (!isOwn(ownerId)) return ["no grant for this conversation"];
-    return [
-      openSpeaker
-        ? "own; Open live turn only, isolated owner execution"
-        : "own; no grant needed (including background turns)",
-    ];
-  };
+  const handleNames = new Set(execution.map((entry) => entry.handle));
   const handles = (credentialId: string): string =>
     execution
       .filter((entry) => entry.credentialId === credentialId)
-      .map(handle)
+      .map((entry) => `\`${entry.handle}\``)
       .sort()
-      .join(", ") || `credential id \`${credentialId}\``;
+      .join(", ");
+  const rows = new Map<string, { ownerId: string; line: CredentialLine; connector?: string }>();
   const entries = new Map(input.scopeGrants.map(({ credential }) => [credential.id, credential]));
   for (const member of input.members)
     for (const credential of input.entriesByOwner.get(member.id) ?? []) entries.set(credential.id, credential);
   for (const credential of entries.values())
-    put(
-      credential.ownerId,
-      credential.id,
-      `- ${handles(credential.id)} — ${credentialDescription(credential, now, isOwn(credential.ownerId))}`,
-      ...access(credential.ownerId, credential.id),
-    );
+    rows.set(credential.id, { ownerId: credential.ownerId, line: credentialLine(credential, now) });
   for (const member of input.members) {
     for (const connector of input.connectorsByOwner?.get(member.id) ?? [])
-      put(
-        member.id,
-        connector.credentialId,
-        `- ${handles(connector.credentialId)} — ${connectorDescription(connector)}`,
-        ...access(member.id, connector.credentialId),
-      );
+      rows.set(connector.credentialId, {
+        ownerId: member.id,
+        line: connectorLine(connector.host, connector.accountType, connector.needsReconnect, connector.refreshError),
+        connector: connectorHandle(connector.host, connector.accountType),
+      });
     const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service.toLowerCase()));
     for (const service of input.detectedByOwner?.get(member.id) ?? [])
       if (!registered.has(service.toLowerCase()))
-        put(member.id, `detected:${service}`, `- ${service} — detected on their computer, NOT registered or grantable`);
+        add(member.id, `- ${service} — detected on their computer, NOT registered or grantable`);
   }
-  for (const entry of execution) {
-    if (entry.credentialId && groups.get(personKey(entry.ownerId))?.has(entry.credentialId)) continue;
-    put(entry.ownerId, entry.handle, `- ${handle(entry)} — ${entry.description}`);
+  for (const [credentialId, { ownerId, line, connector }] of rows) {
+    const shown = handles(credentialId);
+    if (shown) add(ownerId, `- ${shown} — ${credentialLineText(line)}`);
+    else if (connector && line.expired && !handleNames.has(connector)) add(ownerId, `- ${credentialLineText(line)}`);
   }
+  for (const entry of execution)
+    if (!entry.credentialId || !rows.has(entry.credentialId))
+      add(entry.ownerId, `- \`${entry.handle}\` — ${entry.description}`);
   const lines = [
     "## Credentials",
-    `Execution handles are shown in backticks${common ? ` and run in execute scope \`${common}\` unless marked` : ""}; select them in execute.credentials. Credential IDs identify entries for access requests, not execution handles.`,
+    "Select handles in execute.credentials. Send tokens yourself (connectors as `Authorization: Bearer`); proxy handles via the use-shared-credential skill.",
   ];
-  for (const [ownerId, group] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
-    const member = input.members.find((member) => personKey(member.id) === ownerId);
-    const rows = [...group.values()].sort((a, b) => a.text.localeCompare(b.text));
-    const notes = new Set(rows.map((row) => row.note));
-    const shared = notes.size === 1 && rows.every((row) => !row.purpose) ? rows[0]!.note : "";
-    const purposes = new Set<string>();
-    lines.push(
-      "",
-      `### ${member?.displayName ? `${member.displayName} (${ownerId})` : ownerId}${shared ? ` — ${shared}` : ""}`,
-      ...rows.map((row) => {
-        const said = row.purpose !== undefined && purposes.has(row.purpose);
-        if (row.purpose) purposes.add(row.purpose);
-        const purpose = row.purpose ? ` (purpose: ${said ? "as above" : `"${row.purpose}"`})` : "";
-        return `${row.text}${row.note && !shared ? `; ${row.note}` : ""}${purpose}`;
-      }),
-    );
-  }
-  if (!groups.size) lines.push("", "No credentials available.");
-  const asks = (input.scopeAsks ?? []).flatMap((ask) => {
-    if (ask.status === "pending") return [`- waiting on ${ask.ownerId}'s approval card`];
-    if (ask.resolvedAt !== undefined && now - ask.resolvedAt < 24 * 3_600_000)
-      return [`- request to ${ask.ownerId}: ${ask.status}`];
-    return [];
-  });
-  if (asks.length) lines.push("", "Asks sent from this conversation:", ...asks.sort());
-  lines.push(
-    "",
-    "Grants: Use of private credentials outside of a 1:1 DM with that person requires an explicit grant. The exception is the live speaker's isolated owner execution in an Open shared conversation, not continuing room or background access. Otherwise use the `request-access` skill; consider whether one-time, standing or time-bound access fits the request.",
-    "Secret drop: for a credential nobody has saved, mint a one-time link with the `secret-drop` skill; never collect secrets in chat or send people to the keychain page. Keys enter the submitter's private keychain; in a shared channel they are shared for use in that channel alone.",
-    "Device code or CLI logins: read the `interactive-login` skill from the first step. It logs in under a temporary home and saves the result. Never log in against this computer's $HOME; only keychain entries are durable and grantable.",
+  const owners = [...groups.keys()].sort(
+    (a, b) => Number(b === ORGANIZATION_OWNER_KEY) - Number(a === ORGANIZATION_OWNER_KEY) || a.localeCompare(b),
+  );
+  for (const owner of owners) lines.push(`### ${ownerNames.get(owner)}`, ...[...(groups.get(owner) ?? [])].sort());
+  if (!owners.length) lines.push("No credentials available.");
+  return lines.join("\n");
+}
+
+export async function askResolutionEvents(
+  asks: readonly KeychainAsk[],
+  since: number,
+  ownerName: (ownerId: string) => string,
+  credential: (id: string) => Promise<KeychainCredentialMeta | null>,
+): Promise<string> {
+  const resolved = asks
+    .filter((ask) => ask.status !== "pending" && ask.resolvedAt !== undefined && ask.resolvedAt > since)
+    .toSorted((a, b) => a.resolvedAt! - b.resolvedAt!);
+  const lines = await Promise.all(
+    resolved.map(async (ask) => {
+      const service = (await credential(ask.credentialId))?.service;
+      const what = service ? `\`${service}\`` : `deleted credential \`${ask.credentialId}\``;
+      return `Access request to ${ownerName(ask.ownerId)} for ${what} was ${ask.status}.`;
+    }),
   );
   return lines.join("\n");
 }

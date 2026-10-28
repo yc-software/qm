@@ -52,7 +52,7 @@ test("README names the frameworks the shipped surfaces use", () => {
 });
 
 test("Strict posture describes its approval gate, exemptions, and direct-mutation boundary", () => {
-  assert.match(agentTools, /TOOL_APPROVAL_EXEMPT = new Set\(\["finish_silently"\]\)/);
+  assert.match(agentTools, /TOOL_APPROVAL_EXEMPT = new Set\(\["finish_silently", "tool_search", "mcp_call"\]\)/);
   assert.doesNotMatch(server, /Strict posture permits observation only/);
   assert.doesNotMatch(adminUi, /every tool call/i);
 });

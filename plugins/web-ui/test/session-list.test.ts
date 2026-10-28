@@ -185,13 +185,12 @@ test("children of a root are replaced by what the server returns", () => {
   assert.deepEqual(next.map((s) => s.id).sort(), ["b", "other", "root"]);
 });
 
-test("a row uses the server's subagent counts until its children are loaded", () => {
+test("a row's subagent indicators come from the server's counts, whatever children are cached", () => {
   const row = at("root", "web:u:root", 9, { subagents: { running: 2, waiting: 1 } });
-  assert.equal(rowIndicators(row, null, [row]).awaiting, true);
-  assert.equal(rowIndicators(row, null, [row]).background?.subagents, 3);
-  const loaded = [row, at("c", "subagent:root:c", 1, { parentSessionId: "root", working: true })];
-  assert.equal(rowIndicators(row, null, loaded).awaiting, false, "loaded children are fresher than the rollup");
-  assert.equal(rowIndicators(row, null, loaded).background?.subagents, 1);
+  const cached = [row, at("c", "subagent:root:c", 1, { parentSessionId: "root" })];
+  assert.equal(rowIndicators(row, null).awaiting, true);
+  assert.equal(conversationBackground(cached, "root", null)?.subagents, 3);
+  assert.equal(rowIndicators(at("idle", "web:u:idle", 9), null).background, null);
 });
 
 test("upsertSessions replaces rows by id and keeps the rest", () => {

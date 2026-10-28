@@ -103,7 +103,6 @@ export function createTurnMethods(
   }
   return {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
-      const startedAt = performance.now();
       const historicalSlack = Object.keys(deps.externalSlackPolicies ?? {}).length
         ? (await deps.sessions.getByThread(req.conversation.threadRef))?.surface === "slack"
         : false;
@@ -647,15 +646,9 @@ export function createTurnMethods(
           maxAttempts: deps.maxAttempts,
           ...(dedupKey ? { dedupKey } : {}),
         });
-      const enqueueStartedAt = performance.now();
       const enqueued = await withCurrentProjectRoster(enqueue);
       if (!enqueued) return { status: "refused", reason: "project membership changed; retry from the current project" };
       const { run, deduped } = enqueued;
-      console.info("[turn] queued", {
-        runId: run.id,
-        preEnqueueMs: Math.round(enqueueStartedAt - startedAt),
-        enqueueMs: Math.round(performance.now() - enqueueStartedAt),
-      });
       if (deduped && redeliveryKey && run.dedupKey === redeliveryKey) return { status: "silent" };
       if (spineRouted && !deduped) markTriggerHandled(input as OrchestratorInput);
       if (spineRouted) deps.engaged?.engage(conversation.threadRef);

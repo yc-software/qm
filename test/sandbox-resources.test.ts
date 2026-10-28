@@ -127,6 +127,19 @@ test("provisioning a running computer does not wait behind a long-running comman
   await running;
 });
 
+test("a command on a computer reads its inventory record once", async () => {
+  const { records, router, layers } = fixture();
+  const handle = await router.provision(layers);
+  let reads = 0;
+  const get = records.get.bind(records);
+  records.get = async (id) => {
+    reads++;
+    return get(id);
+  };
+  assert.equal((await router.run(handle, "pwd")).stdout, handle.id);
+  assert.equal(reads, 1);
+});
+
 test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
   const { backend, options } = fixture();
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
@@ -230,10 +243,8 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
-    ownerAuthAvailable: false,
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
-    emitGapWork: () => {},
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const old = await turn.provision();
@@ -889,10 +900,8 @@ test("two concurrent turns on one parking computer: only the last turn to finish
       turnSessionDir: `turn/${sessionId}`,
       turnFilesDir: `turn/${sessionId}/${runId}`,
       connectorEnv: {},
-      ownerAuthAvailable: false,
       visibleSkills: [],
       visibleSkillsForTurn: async () => [],
-      emitGapWork: () => {},
       perf: { credsMs: 0 },
     } as unknown as TurnSandboxContext);
   const a = await start("sa");
@@ -924,8 +933,6 @@ test("same-name skills from distinct sources keep their materialized assets sepa
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
-    ownerAuthAvailable: false,
-    emitGapWork: () => {},
     visibleSkillsForTurn: async (sources: readonly string[] = ["org:example", "personal:alice"]) =>
       sources.map((source) => ({
         skill: {
@@ -949,4 +956,70 @@ test("same-name skills from distinct sources keep their materialized assets sepa
   const handle = await turn.provision();
   assert.equal(await router.readFile(handle, `${a.dir!.replace("/workspace/", "")}/value.py`), "org:example");
   assert.equal(await router.readFile(handle, `${b.dir!.replace("/workspace/", "")}/value.py`), "personal:alice");
+});
+
+test("a job computer is invisible and untargetable for everyone, and only the job sweep retires it", async () => {
+  const { resources, router, layers } = fixture();
+  const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
+  assert.ok(!(await resources.list("alice", "personal:alice")).sandboxes.some((s) => s.id === job.id));
+  const refusal = /belongs to a background job that uses private credentials/;
+  for (const actor of ["alice", "admin"]) {
+    await assert.rejects(resources.access(actor, job.id), refusal);
+    await assert.rejects(resources.status(actor, job.id), refusal);
+    await assert.rejects(resources.restart(actor, job.id), refusal);
+    await assert.rejects(resources.retire(actor, job.id), refusal);
+  }
+  await assert.rejects(resources.setDefault("alice", "personal:alice", job.id), refusal);
+  const handle = await router.provision(layers, { sandboxId: job.id });
+  assert.equal(handle.resourceId, job.id);
+  assert.deepEqual(
+    (await resources.jobComputers()).map((s) => s.id),
+    [job.id],
+  );
+  await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
+  assert.deepEqual(await resources.jobComputers(), []);
+  await assert.rejects(router.provision(layers, { sandboxId: job.id }), /sandbox not found/);
+});
+
+test("retiring a job computer is skipped when its state moved on, and its backing scope is marked as a job's", async () => {
+  const { resources } = fixture();
+  const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
+  assert.ok(job.backingScopeId.startsWith("job-"));
+  await resources.retireJobComputer(job.id, "provisioning");
+  assert.deepEqual(
+    (await resources.jobComputers()).map((s) => s.id),
+    [job.id],
+    "a box that became ready since the sweep looked is left alone",
+  );
+  await resources.retireJobComputer(job.id, "ready");
+  assert.deepEqual(await resources.jobComputers(), []);
+  const room = await resources.create("alice", "personal:alice", "local", "room");
+  assert.ok(room.backingScopeId.startsWith("sandbox-"));
+});
+
+test("a job computer whose destroy fails keeps its record for retry, and is refused where it cannot be retired", async () => {
+  let failures = 1;
+  const { resources } = fixture((backend) => {
+    const destroy = backend.destroyScope!.bind(backend);
+    backend.destroyScope = async (id) => {
+      if (failures-- > 0) throw new Error("provider unavailable");
+      await destroy(id);
+    };
+  });
+  const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
+  await assert.rejects(resources.retireJobComputer(job.id, "ready"), /provider unavailable/);
+  assert.deepEqual(
+    (await resources.jobComputers()).map((s) => [s.id, s.state, Boolean(s.error)]),
+    [[job.id, "retired", true]],
+  );
+  await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
+  assert.deepEqual(await resources.jobComputers(), []);
+  await assert.rejects(resources.get(job.id), /sandbox not found/);
+  const { resources: cannotRetire } = fixture((backend) => {
+    delete backend.destroyScope;
+  });
+  await assert.rejects(
+    cannotRetire.create("alice", "personal:alice", "local", "background job", undefined, true),
+    /need a computer that local can retire/,
+  );
 });

@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import { outermostJsonObject } from "../util/text.ts";
 import type { MemoryStrategy, MemoryStrategyKind } from "./strategy.ts";
 
 export interface BenchConversation {
@@ -86,9 +87,9 @@ function clampScore(n: unknown): number {
 }
 
 export function parseJudgeVerdict(out: string): JudgeVerdict {
-  const match = /\{[\s\S]*\}/.exec(out);
-  if (!match) throw new Error(`judge output had no JSON object: ${out.slice(0, 200)}`);
-  const o = JSON.parse(match[0]) as Partial<JudgeVerdict>;
+  const object = outermostJsonObject(out);
+  if (!object) throw new Error(`judge output had no JSON object: ${out.slice(0, 200)}`);
+  const o = JSON.parse(object) as Partial<JudgeVerdict>;
   return {
     signalToNoise: clampScore(o.signalToNoise),
     staleness: clampScore(o.staleness),

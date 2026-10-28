@@ -1,4 +1,4 @@
-import { resolvePgCaTrust } from "../persistence/pg-pool.ts";
+import { pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
@@ -284,14 +284,13 @@ async function checkDatabase(config: PostdeployConfig): Promise<void> {
   if (!databaseUrl) throw new Error("postdeploy smoke requires DATABASE_URL");
   const pg = (await import("pg")).default;
   const client = new pg.Client({
-    connectionString: databaseUrl,
+    ...pgConnectionOptions(
+      databaseUrl,
+      resolvePgCaTrust({ cert: config.databaseCaCert, certFile: config.databaseCaCertFile }).ssl?.ca,
+    ),
     connectionTimeoutMillis: 30_000,
     query_timeout: 30_000,
     statement_timeout: 30_000,
-    ...resolvePgCaTrust({
-      ...(config.databaseCaCert ? { cert: config.databaseCaCert } : {}),
-      ...(config.databaseCaCertFile ? { certFile: config.databaseCaCertFile } : {}),
-    }),
   });
   await client.connect();
   try {

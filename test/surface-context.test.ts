@@ -128,6 +128,14 @@ describe("surface-context pulls", async () => {
     assert.deepEqual((pending as any).requests, []);
   });
 
+  it("passes an explicit live read through the authorized context route", async () => {
+    const asking = post("/v1/surface-context", { live: true }, { "x-agent-capability": await cap() });
+    const query = await fulfillNext(() => ({ messages: [] }));
+    assert.equal(query.live, true);
+    assert.equal(query.conversationTarget, "C9:1700.0001");
+    assert.equal((await asking).status, 200);
+  });
+
   it("only live capabilities supply the original requester target, ignoring body overrides", async () => {
     for (const path of ["/v1/surface-context", "/v1/surface-file"]) {
       for (const liveActor of [true, false]) {

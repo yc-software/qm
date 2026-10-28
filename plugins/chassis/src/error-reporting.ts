@@ -30,7 +30,11 @@ const KEPT_TRACE_DATA = new Set([
   "messaging.message.receive.latency",
   "qm.surface",
   "qm.origin",
+  "qm.facts",
+  "qm.recalled",
+  "qm.skills",
 ]);
+const RUN_TAGS = ["messaging.message.id", "qm.surface", "qm.origin"];
 const SENT_ROOTS = new Set(["http.server", "queue.process"]);
 const SQL_VERBS = new Set(
   "SELECT INSERT UPDATE DELETE WITH BEGIN COMMIT ROLLBACK SAVEPOINT RELEASE CREATE ALTER DROP TRUNCATE SET RESET SHOW LISTEN UNLISTEN NOTIFY COPY LOCK VACUUM ANALYZE EXPLAIN DO CALL PREPARE EXECUTE DEALLOCATE DISCARD".split(
@@ -42,6 +46,7 @@ const POOL_SPANS = new Set(["pg.connect", POOL_CHECKOUT]);
 const MAX_SENT_SPANS = 500;
 const IDLE_CHECKOUT_SECONDS = 0.001;
 const HTTP_METHODS = new Set("GET HEAD POST PUT PATCH DELETE OPTIONS CONNECT TRACE".split(" "));
+type SamplingContext = Parameters<NonNullable<Sentry.NodeOptions["tracesSampler"]>>[0];
 let client: typeof Sentry | undefined;
 let tracing = false;
 
@@ -86,7 +91,7 @@ function scrubDescription(
     if (typeof statement !== "string" && description && POOL_SPANS.has(description)) return description;
     return firstWord(typeof statement === "string" ? statement : undefined, SQL_VERBS) ?? "query";
   }
-  return op;
+  return op === "step.tool" ? description : op;
 }
 
 function scrubTraceContext<T extends TransactionEvent | ErrorEvent>(event: T): T {
@@ -123,6 +128,27 @@ function orderedSpans(spans: SpanJSON[]): SpanJSON[] {
   return spans.filter((span) => !idleCheckout(span, parents)).sort((a, b) => a.start_timestamp - b.start_timestamp);
 }
 
+function duration(span: SpanJSON): number {
+  return (span.timestamp ?? span.start_timestamp) - span.start_timestamp;
+}
+
+function budgetedSpans(ordered: SpanJSON[]): SpanJSON[] {
+  if (ordered.length <= MAX_SENT_SPANS) return ordered;
+  const byId = new Map(ordered.map((span) => [span.span_id, span]));
+  const kept = new Set<string>();
+  const priority = ordered.toSorted((a, b) =>
+    a.op === "db" && b.op === "db" ? duration(b) - duration(a) : Number(a.op === "db") - Number(b.op === "db"),
+  );
+  for (const span of priority) {
+    if (kept.size >= MAX_SENT_SPANS) break;
+    const chain: string[] = [];
+    for (let at: SpanJSON | undefined = span; at && !kept.has(at.span_id); at = byId.get(at.parent_span_id ?? ""))
+      chain.push(at.span_id);
+    if (kept.size + chain.length <= MAX_SENT_SPANS) for (const id of chain) kept.add(id);
+  }
+  return ordered.filter((span) => kept.has(span.span_id));
+}
+
 function scrubTransaction(event: TransactionEvent): TransactionEvent | null {
   const trace = event.contexts?.trace;
   if (!SENT_ROOTS.has(trace?.op ?? "") || trace?.data?.["sentry.parent_span_already_sent"]) return null;
@@ -132,9 +158,9 @@ function scrubTransaction(event: TransactionEvent): TransactionEvent | null {
   scrubData(trace?.data as SpanData | undefined);
   if (event.spans) {
     const spans = orderedSpans(event.spans);
-    if (spans.length > MAX_SENT_SPANS)
-      trace!.data = { ...trace!.data, "qm.truncated_spans": spans.length - MAX_SENT_SPANS };
-    event.spans = spans.slice(0, MAX_SENT_SPANS);
+    event.spans = budgetedSpans(spans);
+    if (spans.length > event.spans.length)
+      trace!.data = { ...trace!.data, "qm.truncated_spans": spans.length - event.spans.length };
   }
   for (const span of event.spans ?? []) {
     const { statement } = scrubData(span.data);
@@ -163,6 +189,11 @@ function internalTraceTargets(env: NodeJS.ProcessEnv): RegExp[] {
     }
   }
   return [...origins].map((origin) => new RegExp(`^${origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(/|$)`));
+}
+
+function sampler(rate: number) {
+  return ({ attributes, inheritOrSampleWith }: SamplingContext): number =>
+    attributes?.["qm.origin"] === "human" ? 1 : inheritOrSampleWith(rate);
 }
 
 export function initializeErrorReporting(
@@ -204,7 +235,7 @@ export function initializeErrorReporting(
     registerEsmLoaderHooks: false,
     ...(traced
       ? {
-          tracesSampleRate,
+          tracesSampler: sampler(tracesSampleRate),
           beforeSendTransaction: scrubTransaction,
           beforeSend: scrubTraceContext,
         }
@@ -267,26 +298,94 @@ export function traceQueued<T>(
   if (!client || !tracing) return work();
   const sdk = client;
   const begin = (): Promise<T> =>
-    sdk.startSpan({ op: "queue.process", name, forceTransaction: true, attributes }, async (span) => {
-      const result = await work();
-      if (cancelled(result)) span.setStatus({ code: SPAN_STATUS_ERROR, message: "cancelled" });
-      return result;
+    sdk.withScope((scope) => {
+      for (const key of RUN_TAGS) if (attributes[key] !== undefined) scope.setTag(key, attributes[key]);
+      return sdk.startSpan({ op: "queue.process", name, forceTransaction: true, attributes }, async (span) => {
+        const result = await work();
+        if (cancelled(result)) span.setStatus({ code: SPAN_STATUS_ERROR, message: "cancelled" });
+        return result;
+      });
     });
   return carrier
     ? sdk.continueTrace({ sentryTrace: carrier.sentryTrace, baggage: undefined }, begin)
     : sdk.startNewTrace(begin);
 }
 
-export function markFirstToken(): void {
-  if (!client || !tracing) return;
+export type Phase = Sentry.Span;
+
+export function tracePhase<T>(
+  op: string,
+  work: () => Promise<T>,
+  opts: { counts?: (result: T) => Record<string, number>; name?: string; parent?: Phase } = {},
+): Promise<T> {
+  if (!client || !tracing || !(opts.parent ?? client.getActiveSpan())) return work();
+  return client.startSpan(
+    { op, name: opts.name ?? op, onlyIfParent: true, ...(opts.parent ? { parentSpan: opts.parent } : {}) },
+    async (span) => {
+      const result = await work();
+      if (opts.counts) span.setAttributes(opts.counts(result));
+      return result;
+    },
+  );
+}
+
+export function startPhase(op: string): Phase | undefined {
+  if (!client || !tracing || !client.getActiveSpan()) return undefined;
+  return client.startInactiveSpan({ op, name: op, onlyIfParent: true });
+}
+
+export interface DispatchTrace {
+  modelRequest(): void;
+  firstToken(): void;
+  end(): void;
+}
+
+const UNTRACED_DISPATCH: DispatchTrace = { modelRequest() {}, firstToken() {}, end() {} };
+
+export function startDispatchTrace(): DispatchTrace {
+  if (!client || !tracing) return UNTRACED_DISPATCH;
+  const sdk = client;
   try {
-    const active = client.getActiveSpan();
-    if (!active) return;
-    const root = client.getRootSpan(active);
-    const startedMs = client.spanToJSON(root).start_timestamp * 1000;
-    client.setMeasurement("time_to_first_token", Math.max(0, Date.now() - startedMs), "millisecond", root);
+    const active = sdk.getActiveSpan();
+    if (!active) return UNTRACED_DISPATCH;
+    const root = sdk.getRootSpan(active);
+    const startedMs = sdk.spanToJSON(root).start_timestamp * 1000;
+    const dispatch = sdk.startInactiveSpan({ op: "turn.dispatch", name: "turn.dispatch", onlyIfParent: true });
+    let dispatched = false;
+    let firstToken = false;
+    let ended = false;
+    const measure = (name: string): void => {
+      try {
+        sdk.setMeasurement(name, Math.max(0, Date.now() - startedMs), "millisecond", root);
+      } catch (error) {
+        swallow("tracing", error);
+      }
+    };
+    const endDispatch = (): void => {
+      if (dispatched) return;
+      dispatched = true;
+      dispatch.end();
+    };
+    return {
+      modelRequest() {
+        if (ended || dispatched) return;
+        endDispatch();
+        measure("time_to_model_request");
+      },
+      firstToken() {
+        if (ended || firstToken) return;
+        firstToken = true;
+        endDispatch();
+        measure("time_to_first_token");
+      },
+      end() {
+        endDispatch();
+        ended = true;
+      },
+    };
   } catch (error) {
     swallow("tracing", error);
+    return UNTRACED_DISPATCH;
   }
 }
 

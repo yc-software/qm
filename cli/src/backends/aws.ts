@@ -4676,7 +4676,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     else delete process.env[name];
   }
   try {
-    await doctorCommon(config, runtimeSecrets, { configDir, requiredSecretValues: true });
+    await doctorCommon(config, runtimeSecrets, { configDir });
   } finally {
     for (const name of runtimeNames) {
       const prior = priorRuntime.get(name);

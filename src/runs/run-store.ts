@@ -44,6 +44,10 @@ export type RunStop =
 
 export const PARKED: RunStop = { kind: "parked" };
 
+export function stopErrorCode(stop: RunStop | undefined): { errorCode?: string } {
+  return stop?.kind === "error" && stop.code ? { errorCode: stop.code } : {};
+}
+
 export function handbackStop(shutdown: AbortSignal): RunStop {
   return shutdown.reason === PARKED ? PARKED : { kind: "shutdown" };
 }
@@ -91,7 +95,7 @@ export interface EnqueueResult {
 export interface RunStore {
   readonly maxClaims?: number;
 
-  subscribeAvailable?(listener: () => boolean | void, options?: SubscribeOptions & { pollMs?: number }): () => void;
+  subscribeAvailable?(listener: () => void, options?: SubscribeOptions & { pollMs?: number }): () => void;
 
   enqueue(input: EnqueueInput): Promise<EnqueueResult>;
   getByDedupKey(dedupKey: string): Promise<Run | null>;

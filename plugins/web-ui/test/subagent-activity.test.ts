@@ -5,7 +5,6 @@ import {
   ackKey,
   descendantsOf,
   peekLines,
-  subagentCounts,
   subagentRows,
   subagentSummary,
   visibleSubagents,
@@ -57,16 +56,18 @@ test("descendants keep list order across parents and follow a replaced list", ()
     ["p", "q", "q1", "p1"],
   );
   const before = [row("root"), row("a", "root")];
-  assert.deepEqual(subagentCounts(before, "root"), { running: 0, waiting: 0 });
   const after = [...before, row("b", "root", { working: true })];
-  assert.deepEqual(subagentCounts(after, "root"), { running: 1, waiting: 0 }, "a new list array sees its new children");
+  assert.deepEqual(
+    descendantsOf(after, "root").map(({ session }) => session.id),
+    ["a", "b"],
+    "a new list array sees its new children",
+  );
 });
 
-test("running and waiting counts feed the sidebar and tab badge", () => {
-  assert.deepEqual(subagentCounts(list, "root"), { running: 2, waiting: 1 });
-  assert.deepEqual(subagentCounts(list, "other"), { running: 0, waiting: 0 });
-  assert.equal(rowIndicators(list[0]!, null, list).awaiting, true, "a child waiting on approval lights the parent");
-  assert.deepEqual(conversationBackground(list, "root", null), {
+test("the server's running and waiting counts feed the sidebar and tab badge", () => {
+  const rolled = list.map((s) => (s.id === "root" ? { ...s, subagents: { running: 2, waiting: 1 } } : s));
+  assert.equal(rowIndicators(rolled[0]!, null).awaiting, true, "a child waiting on approval lights the parent");
+  assert.deepEqual(conversationBackground(rolled, "root", null), {
     jobs: 0,
     watches: 0,
     crons: 0,

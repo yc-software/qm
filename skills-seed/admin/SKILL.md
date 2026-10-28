@@ -42,10 +42,11 @@ Limits the API enforces (don't offer what it will refuse):
   Open reads can expose private data to everyone in the conversation: retrieve and
   report only what the request needs. Two other exceptions: org-targeted
   memory/config reads work anywhere (org content is ambient to every conversation), and
-  a cron can carry **unattended read grants** (`unattendedGrants` on the cron:
-  `admin.sessions.read`, `admin.audit.read`, `admin.egress.read`, `admin.files.read`)
-  — set only on a live turn by the cron's owner, who must be a current org admin, on a
-  personal-scope cron running as its owner. Each grant opens exactly its own GET
+  a cron can carry **unattended read grants** (`unattendedGrants` on the cron tool;
+  see [Scheduling admin-reading work](#scheduling-admin-reading-work)) — set only on a
+  live turn by the cron's owner, who must be a current org admin, on a cron that lives
+  in and delivers only to their own DM (never a channel, group or another person).
+  Each grant opens exactly its own GET
   routes to that cron's autonomous fires, audited as the owner
   (re-checked live — revoking their admin grant closes it). Other mutations work
   anywhere; the room sees what changed, by design.
@@ -77,15 +78,14 @@ still have a key they are not granted. To check the org, read
 `enabled: true`, `hasSecret: true`, `delivery: "env"` and `envKey: "COMPOSIO_API_KEY"`
 means Composio is configured.
 
-**Own OAuth apps.** The live Connected apps block reflects the providers configured with
-client credentials, from Admin → Connectors or deployment secrets. The line "No direct
-OAuth app connections are configured" means none are, even if MCP apps appear under
-"Connected". Without that line, at least one provider is configured.
+**Own OAuth apps.** `GET $AGENT_API_URL/v1/connectors/catalog` (header `x-agent-capability: $AGENT_API_TOKEN`) marks each provider
+configured with client credentials, from Admin → Connectors or deployment secrets, with
+`configured: true`. No such entry means none are.
 `GET /v1/admin/scopes/<org scope>?view=connectors` shows only apps added in Admin →
 Connectors, not ones set by deployment secrets, so it cannot prove absence.
 
 Composio is absent only when the toolkits read fails and the org check finds no such
-credential. If either source exists, skip silently. If the block is missing or a read
+credential. If either source exists, skip silently. If a read
 fails, treat it as unknown, not absent, and do not offer setup. Only when both are
 confirmed absent, send one short message:
 
@@ -99,10 +99,8 @@ confirmed absent, send one short message:
   `<web origin>/v1/connectors/oauth/<provider>/callback`, which the Connectors page also
   shows.
 
-Links: the web origin is the origin of the Connection page URL in the Connected apps
-block (`<web origin>/keychain`). Link `<web origin>/admin/credentials` and
-`<web origin>/admin/connectors`. If that line is absent, name the pages without links and
-offer the drop link. Never invent URLs or ask for keys or client secrets in chat. Never
+Name the pages (Admin → Credentials, Admin → Connectors) without links and offer the drop
+link. Never invent URLs or ask for keys or client secrets in chat. Never
 ask regular users to configure a source.
 
 ## Guide Slack installation
@@ -233,12 +231,35 @@ Not available through you: who governs the org changes only in the admin dashboa
 where the admin acts directly. If asked, point them there — don't try the API
 (`POST/DELETE /v1/admin/grants` refuses agent tokens).
 
+## Scheduling admin-reading work
+
+Cron fires are autonomous, so the admin plane refuses them unless the cron carries
+the grant each route needs (webhooks can't carry grants). When an admin asks for scheduled work that
+reads admin data, settle the grants at creation, not after the first fire fails:
+
+1. Work out which admin tool actions or admin API routes the task will call.
+2. Fetch the live mapping with the admin tool's `unattended_grants` action
+   (`GET /v1/admin/unattended-grants`, org admins on a live turn only). It is built
+   from the routes themselves: each entry gives the grant, method, path, summary and,
+   where one exists, the admin tool action. Reads it doesn't list have no grant.
+3. Create the cron from a live turn in the admin's own DM, delivering to that DM, with
+   exactly the grants those reads need in `unattendedGrants`.
+4. If a needed action or route has no grant, or the cron can't carry grants (not the
+   owner's own DM, not a live turn by a current org admin, or delivery to a channel,
+   group or another person), tell the admin plainly before or at creation which part
+   won't work unattended. Don't create a cron that will fail on its first fire without
+   saying so.
+5. After creating it, confirm the grants appear in the cron's details (the create
+   result or `get`).
+
 ## Failure modes
 
 - `403 admin grant required for this scope` — the user isn't an org admin (or was just
   revoked). Say so; don't retry or work around it.
 - `403 … require a turn the admin started themselves` — this is an autonomous run
-  (cron/webhook); admin actions only ride turns the admin personally initiated. Say so.
+  (cron/webhook) without the unattended grant the route needs. Report it where the run
+  delivers — never finish silently — naming the grant the message cites so the owner can
+  add it from their DM.
 - `403 … returns private content — ask the agent in a DM` — the shared room does not have effective Open access for this live admin turn;
   tell the admin to ask again in a DM with you (or, for reads they want recurring
   on a schedule, to put an unattended read grant on a personal-scope cron — from

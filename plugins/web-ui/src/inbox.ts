@@ -25,6 +25,8 @@ import {
   ChevronRight,
   Inbox as InboxGlyph,
   MoreHorizontal,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RefreshCw,
   Undo2,
@@ -137,6 +139,7 @@ export interface InboxItem {
   dismissedAt?: number;
   repliedAt?: number;
   externalReplyText?: string;
+  noReplyNeeded?: { reason?: string };
   reactions?: string[];
   probablyResolved?: boolean;
   automated?: boolean;
@@ -458,6 +461,9 @@ export function toInboxItem(entry: LedgerItem): InboxItem {
     ...(resolved === "dismissed" && entry.actedAt !== undefined ? { dismissedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actedAt !== undefined ? { repliedAt: entry.actedAt } : {}),
     ...(resolved === "replied" && entry.actionResult ? { externalReplyText: entry.actionResult } : {}),
+    ...(entry.actionKind === "no_reply_needed"
+      ? { noReplyNeeded: entry.actionResult ? { reason: entry.actionResult } : {} }
+      : {}),
   };
 }
 
@@ -1452,7 +1458,7 @@ function reactionChipTpl(name: string): TemplateResult {
 function handledStateLabel(item: InboxItem): string {
   if (item.status === "sent") return "Sent";
   if (item.status === "replied") return "Replied";
-  return "Dismissed";
+  return item.noReplyNeeded ? "No reply needed" : "Dismissed";
 }
 
 function itemSideMark(item: InboxItem, handled: boolean): TemplateResult | typeof nothing {
@@ -1484,8 +1490,14 @@ export function handledNoteTpl(item: InboxItem): TemplateResult {
       ${item.externalReplyText ? html`<div class="inbox-replied-text">${slackTextTpl(item, item.externalReplyText)}</div>` : nothing}
     </div>`;
   }
+  const label = `${handledStateLabel(item)} ${item.dismissedAt ? relTime(item.dismissedAt) : ""}`;
+  if (item.noReplyNeeded?.reason)
+    return html`<div class="inbox-handled-note inbox-replied-note">
+      <div class="inbox-handled-line">${icon(X, 13)}<span>${label}</span> ${reopenButtonTpl(item)}</div>
+      <div class="inbox-replied-text">${item.noReplyNeeded.reason}</div>
+    </div>`;
   return html`<div class="inbox-handled-note">
-    ${icon(X, 13)}<span>Dismissed ${item.dismissedAt ? relTime(item.dismissedAt) : ""}</span>
+    ${icon(X, 13)}<span>${label}</span>
     ${reopenButtonTpl(item)}
   </div>`;
 }
@@ -1748,6 +1760,37 @@ function syncLoops(viewId: string) {
   return inboxState.selected.filter(
     (loop) => loop.source && (viewId === "all" || loop.id === viewId || loop.source === viewId),
   );
+}
+
+const ASSISTANT_HIDDEN_KEY = "web-ui:inbox-assistant-hidden";
+let assistantHidden = ((): boolean => {
+  try {
+    return localStorage.getItem(ASSISTANT_HIDDEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+})();
+
+function assistantToggleTpl(): TemplateResult {
+  const label = assistantHidden ? "Show assistant" : "Hide assistant";
+  return html`<button
+    class="icon-btn compact subtle inbox-assistant-toggle"
+    type="button"
+    aria-label=${label}
+    aria-expanded=${String(!assistantHidden)}
+    ${tip(label)}
+    @click=${() => {
+      assistantHidden = !assistantHidden;
+      try {
+        localStorage.setItem(ASSISTANT_HIDDEN_KEY, assistantHidden ? "1" : "0");
+      } catch {
+        void 0;
+      }
+      drawAll();
+    }}
+  >
+    ${icon(assistantHidden ? PanelRightOpen : PanelRightClose, 17)}
+  </button>`;
 }
 
 function syncLineTpl(surface: InboxSurface): TemplateResult | typeof nothing {
@@ -2082,7 +2125,7 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         </h1>
         ${sub ? html`<div class="pane-subtitle">${sub}</div>` : nothing}
       </div>
-      ${triageControlsTpl(item)} ${dismissItemTpl(item)}
+      ${triageControlsTpl(item)} ${dismissItemTpl(item)} ${item.detailLoaded ? assistantToggleTpl() : nothing}
     </div>
     <div class="inbox-surface inbox-item-surface">
       <div class="inbox-scroll inbox-item-thread">
@@ -2090,7 +2133,11 @@ function itemPageTpl(item: InboxItem): TemplateResult {
         ${detail}
       </div>
     </div>
-    ${item.detailLoaded ? html`<aside class="inbox-item-aside" aria-label="Conversation assistant">${chatTpl(item)}</aside>` : nothing}
+    ${
+      item.detailLoaded && !assistantHidden
+        ? html`<aside class="inbox-item-aside" aria-label="Conversation assistant">${chatTpl(item)}</aside>`
+        : nothing
+    }
   `;
 }
 
@@ -2175,7 +2222,7 @@ function drawFull(): void {
   }
   syncInboxUrl(openSentEmail?.id ?? fullSurface.selectedId);
   const host = fullSurface.host;
-  host.classList.toggle("inbox-thread-page", Boolean(openItem?.detailLoaded));
+  host.classList.toggle("inbox-thread-page", Boolean(openItem?.detailLoaded) && !assistantHidden);
   const surface = fullSurface;
   let page: TemplateResult | typeof nothing;
   if (openItem) page = itemPageTpl(openItem);
@@ -2192,16 +2239,24 @@ function drawFull(): void {
         <div class="inbox-index-feed">
           <div class="pane-head">
             <h1 class="pane-title">Inbox</h1>
-            <div class="pane-head-actions">${syncLineTpl(surface)}</div>
+            <div class="pane-head-actions">${syncLineTpl(surface)} ${assistantToggleTpl()}</div>
           </div>
           ${surfaceTpl(surface)}
         </div>
-        ${inboxChat({
-          kind: "inbox",
-          hasEmail: inboxState.selected.some((loop) => loop.sources?.includes("gmail") || loop.source === "gmail"),
-          hasSlack: inboxState.selected.some((loop) => loop.sources?.includes("slack") || loop.source === "slack"),
-          hasDrafts: inboxState.items.some((item) => Boolean(item.draft) && item.status === "open"),
-        })}
+        ${
+          assistantHidden
+            ? nothing
+            : inboxChat({
+                kind: "inbox",
+                hasEmail: inboxState.selected.some(
+                  (loop) => loop.sources?.includes("gmail") || loop.source === "gmail",
+                ),
+                hasSlack: inboxState.selected.some(
+                  (loop) => loop.sources?.includes("slack") || loop.source === "slack",
+                ),
+                hasDrafts: inboxState.items.some((item) => Boolean(item.draft) && item.status === "open"),
+              })
+        }
       </div>
     `;
   keepingChatLogsPinned(host, () => render(page, host));

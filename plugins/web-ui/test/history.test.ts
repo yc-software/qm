@@ -565,6 +565,34 @@ test("user entries carry the stored speaker identity, name and slack ts onto the
   assert.equal(web?.ts, undefined);
 });
 
+test("the agent's own Slack posts replayed as overheard entries never become user messages", () => {
+  const reply = "gpt-image-1.5, through the image-edit tool, and yes, it grew him a third arm.";
+  const echo = { overheard: true, sourceRole: "agent", text: reply, name: "Alice Example" };
+  const entries: SessionEntry[] = [
+    { type: "user", seq: 1, createdAt: 1, payload: { text: "what model was used?", name: "Alice Example" } },
+    { type: "assistant", seq: 2, createdAt: 2, payload: { text: reply } },
+    { type: "user", seq: 3, createdAt: 3, payload: { ...echo, ts: "3.0" } },
+    { type: "user", seq: 4, createdAt: 4, payload: { ...echo, ts: "4.0", text: "", files: ["dance.gif"] } },
+    { type: "user", seq: 5, createdAt: 5, payload: { overheard: true, ts: "5.0", text: "nice", name: "Bob Example" } },
+    { type: "user", seq: 6, createdAt: 6, payload: { text: "can you expand?", name: "Alice Example" } },
+    { type: "assistant", seq: 7, createdAt: 7, payload: { text: "Outpainting him downward." } },
+  ];
+  const messages = entriesToMessages(entries, MODEL);
+  assert.deepEqual(
+    messages.map((m) => [m.role, (m as { speaker?: string }).speaker, (m as { entrySeq?: number }).entrySeq]),
+    [
+      ["user", "Alice Example", 1],
+      ["assistant", undefined, undefined],
+      ["user", "Bob Example", 5],
+      ["user", "Alice Example", 6],
+      ["assistant", undefined, undefined],
+    ],
+  );
+  assert.equal(messages.filter((m) => JSON.stringify(m).includes(reply)).length, 1);
+  const live = [...entriesToMessages(entries.slice(0, 2), MODEL), { role: "user", content: "nice" } as AgentMessage];
+  assert.equal(forkCutSeq(entries, live, 2), 5);
+});
+
 test("a message_revision marker renders as a system note and badges the original bubble", () => {
   const entries: SessionEntry[] = [
     { type: "user", payload: { text: "original", name: "Alice Example", ts: "100.1" }, createdAt: 100 },
@@ -592,6 +620,46 @@ test("a message_revision marker renders as a system note and badges the original
   assert.equal(note.speaker, "Alice Example");
   assert.equal(note.timestamp, 120);
   assert.equal((msgs[3] as { action?: string }).action, "deleted");
+});
+
+test("a revision of the agent's own Slack message is attributed to the agent, not the person", () => {
+  const msgs = entriesToMessages(
+    [
+      { type: "user", seq: 1, createdAt: 1, payload: { text: "hi", name: "Alice Example", ts: "1.0" } },
+      { type: "assistant", seq: 2, createdAt: 2, payload: { text: "reply" } },
+      {
+        type: "system",
+        seq: 3,
+        createdAt: 3,
+        payload: { kind: "message_revision", action: "edited", ts: "2.0", text: "reply, fixed", sourceRole: "agent" },
+      },
+    ],
+    MODEL,
+  );
+  const note = msgs[2] as { role?: string; byAgent?: boolean; speaker?: string; content?: string };
+  assert.equal(note.role, "system-note");
+  assert.equal(note.byAgent, true);
+  assert.equal(note.speaker, undefined);
+  assert.equal(note.content, "reply, fixed");
+});
+
+test("an agent echo closes a turn that ended without a reply, like any later message does", () => {
+  const msgs = entriesToMessages([
+    { type: "user", seq: 1, createdAt: 1, payload: { text: "start" } },
+    { type: "tool_call", seq: 2, createdAt: 2, payload: { tool: "execute", callId: "a", command: "ls" } },
+    { type: "user", seq: 3, createdAt: 3, payload: { overheard: true, sourceRole: "agent", ts: "3.0", text: "hello" } },
+    { type: "user", seq: 4, createdAt: 4, payload: { text: "wake", hidden: true } },
+    { type: "tool_call", seq: 5, createdAt: 5, payload: { tool: "execute", callId: "b", command: "pwd" } },
+    { type: "assistant", seq: 6, createdAt: 6, payload: { text: "done" } },
+  ]);
+  assert.deepEqual(
+    msgs.map((m) => [m.role, (m as AssistantWork).work?.activity.map((a) => a.seq)]),
+    [
+      ["user", undefined],
+      ["assistant", [2]],
+      ["assistant", [5]],
+    ],
+  );
 });
 
 test("a revision marker whose original message is outside the window still renders as a note", () => {

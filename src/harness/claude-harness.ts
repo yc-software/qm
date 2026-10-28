@@ -35,7 +35,7 @@ import { swallow, swallowAs } from "../util/errors.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
 import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "./pi-harness.ts";
-import { coreToolOptions } from "./agent-tools.ts";
+import { coreToolOptions, endedOnPurpose } from "./agent-tools.ts";
 import {
   bridgedTools,
   nativeChildToolAllowed,
@@ -354,7 +354,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         );
         try {
           const result = await definition.execute(callId, args);
-          if (result.terminate || ref.pausedOnApproval || ref.silentRequested) setImmediate(terminateProvider);
+          if (result.terminate || endedOnPurpose(ref)) setImmediate(terminateProvider);
           return { content: bridgedToolContent(result) };
         } catch (error) {
           return {
@@ -590,8 +590,6 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           promptEnvelope: recordedEnvelope,
           truncated: false,
           transport: { modelId: model },
-          ttftMs: message.subtype === "success" ? (message.ttft_ms ?? null) : null,
-          durationMs: message.duration_ms ?? null,
           usage: sawCalls
             ? {
                 input: stepUsage.input,
@@ -715,7 +713,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           await recordStep(message);
           await flushThinking();
           if (interrupted) break;
-          const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
+          const terminal = endedOnPurpose(ref);
           const text = message.subtype === "success" && !terminal ? message.result.trim() : "";
           if (text) {
             await turn.emit({ type: "assistant", payload: { text }, scopeLabel: turn.scopeLabel });
@@ -747,13 +745,13 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       }
       const finalResult = result as SDKResultMessage | null;
       const stoppedPartial = async (): Promise<HarnessTurnResult> => {
-        const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
+        const terminal = endedOnPurpose(ref);
         const reply = terminal ? "" : streamedText.trim();
         await flushThinking();
         if (!terminal) await recordStoppedTurn(turn, reply, stopped ? stopReason : "because the run was cancelled");
         return {
           reply,
-          ...(!ref.runtimeHandoff || stopped ? { stopped: true as const } : {}),
+          ...(!(ref.runtimeHandoff || ref.swarmHeld) || stopped ? { stopped: true as const } : {}),
           ...(stopped ? { stoppedByUser: true as const } : {}),
           ...(ref.runtimeHandoff ? { runtimeHandoff: ref.runtimeHandoff } : {}),
           ...(ref.silentRequested ? { silent: true } : {}),
@@ -768,7 +766,14 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
         throw new Error("Claude Agent SDK ended without a result");
       }
       if (finalResult.subtype !== "success") {
-        if (stopped || ref.runtimeHandoff) return stoppedPartial();
+        if (stopped || endedOnPurpose(ref)) {
+          if (!stopped)
+            swallow(
+              "claude harness: SDK result after a deliberate ending",
+              finalResult.errors.join("; ") || finalResult.subtype,
+            );
+          return stoppedPartial();
+        }
         throw new Error(finalResult.errors.join("; ") || `Claude Agent SDK failed: ${finalResult.subtype}`);
       }
       if (
@@ -777,7 +782,7 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
       ) {
         throw new Error(`Claude utility response did not complete (${finalResult.stop_reason ?? "error"})`);
       }
-      const terminal = ref.runtimeHandoff || ref.silentRequested || ref.pausedOnApproval;
+      const terminal = endedOnPurpose(ref);
       const reply = terminal ? "" : finalResult.result.trim();
       const usageTotals = [...callUsage.values()].reduce(
         (acc, usage) => {

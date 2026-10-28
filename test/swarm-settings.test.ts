@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { loadConfig } from "../src/config.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { resolveSwarmSettings, SWARM_DEFAULTS } from "../src/swarms/swarm-settings.ts";
-import { processRun } from "../src/runs/worker.ts";
-import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 
 test("backend defaults validate every setting and preserve unspecified defaults", () => {
@@ -126,37 +124,6 @@ test("unknown and unsupported providers reject before creating a swarm", async (
   };
   await assert.rejects(f.service.spawn(f.caller, { requestId: "bad", text: "work" }), /retiring/);
   assert.equal(await f.store.get(f.root.id), null);
-});
-
-test("worker cancellation honors the persisted override instead of the backend default", async (context) => {
-  const f = await swarmFixture();
-  await f.service.spawn(f.caller, { requestId: "pool", text: "work", settings: { turnMs: 250 } });
-  await f.service.sweep();
-  const pending = (await f.runs.list()).find((r) => r.request.swarm)!;
-  const run = (await f.runs.claimById(pending.id, "deadline-test", 60_000))!;
-  context.mock.timers.enable({ apis: ["setTimeout"] });
-  let cancelled = false;
-  const orchestrator = {
-    async handleTurn(input) {
-      await new Promise<void>((resolve) =>
-        input.cancel!.addEventListener(
-          "abort",
-          () => {
-            cancelled = true;
-            resolve();
-          },
-          { once: true },
-        ),
-      );
-      return { status: "silent" };
-    },
-  } as Orchestrator;
-  const work = processRun({ runs: f.runs, orchestrator, leaseTtlMs: 60_000 }, run);
-  context.mock.timers.tick(249);
-  assert.equal(cancelled, false);
-  context.mock.timers.tick(1);
-  await work;
-  assert.equal(cancelled, true);
 });
 
 test("failed initial persistence leaves no configuration and a complete pool can be retried", async () => {

@@ -64,7 +64,6 @@ interface RecordActionInput {
   result?: string;
   actorId?: string;
   outcome: "actioned" | "dismissed";
-  sourceAt?: number;
 }
 
 export interface LoopItemLedger {
@@ -490,18 +489,12 @@ export function createLoopItemLedger(
       let applied = false;
       const after = await update(id, (item) => {
         if (item.status === "shipped") return item;
-        if (
-          input.sourceAt !== undefined &&
-          (!Number.isFinite(input.sourceAt) || input.sourceAt <= (item.sourceAt ?? 0) || isResolved(item))
-        )
-          return item;
         applied = true;
         const now = Date.now();
         return {
           ...item,
           status: input.outcome === "actioned" ? "shipped" : "skipped",
           actionKind: input.kind,
-          ...(input.sourceAt !== undefined ? { sourceAt: input.sourceAt } : {}),
           actedAt: now,
           claimedAt: undefined,
           claimToken: undefined,

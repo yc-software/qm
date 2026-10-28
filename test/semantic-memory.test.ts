@@ -236,3 +236,18 @@ test("fallback reloads current disclosed facts after an edit races the index que
   assert.match(result[0]!.text, /current fact/);
   assert.doesNotMatch(result[0]!.text, /old private/);
 });
+
+test("recall drops index matches for facts changed after the notebook was loaded", async (t) => {
+  const { base, embedder } = await fixture(t);
+  await base.capture("personal:a", ["browser preference", "browser history"], AT);
+  const [first, second] = await base.facts!("personal:a");
+  const memory = createSemanticMemoryService(base, async () => embedder, {
+    async search() {
+      return [
+        { factId: first!.id, updatedAt: first!.updatedAt, score: 0.9 },
+        { factId: second!.id, updatedAt: second!.updatedAt + 1, score: 0.8 },
+      ];
+    },
+  });
+  assert.equal(await recall(memory, "personal:a", { query: "verify" }), "- (2026-10-01) browser preference");
+});

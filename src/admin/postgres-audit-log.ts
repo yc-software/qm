@@ -99,7 +99,7 @@ export function createPostgresAuditLog(connectionString: string): AuditLog {
       }
       if (action !== undefined) {
         params.push(action);
-        conds.push(`action = $${params.length}`);
+        conds.push(typeof action === "string" ? `action = $${params.length}` : `action = ANY($${params.length})`);
       }
       if (since !== undefined) {
         params.push(since);

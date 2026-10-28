@@ -713,6 +713,18 @@ test("destroying a scope exports the home to the snapshot store first and a repl
   assert.equal(typeof make().persistHomeSnapshot, "undefined");
 });
 
+test("a job computer's home is never snapshotted, on teardown or destroy", async () => {
+  const snapshots = createMemorySnapshotStore();
+  const s = make({ snapshots });
+  const jobScope = "job-1234";
+  const jobLayers = [{ scopeId: jobScope, mode: "rw" as const, mountPath: "" }];
+  const h = await s.provision(jobLayers);
+  await s.run(h, 'printf secret > "$HOME/notes.txt"');
+  await s.teardown(h, { keepWarm: true });
+  await s.destroyScope!(jobScope);
+  assert.ok(!fake.names().includes(h.id), "the sprite is gone");
+  assert.equal(await snapshots.open(jobScope), null);
+});
 test("a failed export refuses to destroy the sprite", async () => {
   const snapshots = createMemorySnapshotStore();
   const s = make({ snapshots });
@@ -773,6 +785,25 @@ test("control retries share an elapsed-time budget across backoff and SDK reques
     { name: "TimeoutError" },
   );
   assert.equal(calls, 2);
+});
+
+test("control calls retry the SDK's lost-connection error and stop at a programming error", async () => {
+  let calls = 0;
+  const result = await retrySpritesControl(async () => {
+    if (calls++ === 0) throw new Error("Network error: fetch failed");
+    return "reconnected";
+  });
+  assert.equal(result, "reconnected");
+  assert.equal(calls, 2);
+  calls = 0;
+  await assert.rejects(
+    retrySpritesControl(async () => {
+      calls++;
+      throw new TypeError("raw.map is not a function");
+    }),
+    /raw\.map is not a function/,
+  );
+  assert.equal(calls, 1);
 });
 
 for (const outcome of ["healthy", "unknown", "403", "503"]) {

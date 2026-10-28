@@ -303,7 +303,7 @@ app.click(target, {mouseButton: left|right|middle, clickCount, key: "cmd+shift",
   A real click on an id scrolls it into view first and fails if it stays offscreen or something covers it.
   While a menu is open, click its items by id or press Escape; other clicks and pointer actions fail.
   Input uses app-local activation rather than automatically bringing the app to the front.
-  If the foreground app changes or you interact with the target app, the action stops.
+  If you use the target app yourself, actions on it wait for a quiet moment and then fail so it can be observed again.
 app.drag([x, y], [x, y]) screenshot pixels.
 app.scroll(target | null, up|down|left|right, pages = 1 | {pixels})
 app.selectText(id, text, {prefix, suffix, selectionType: text|cursor_before|cursor_after}) Use native text or an exact observed Markdown body excerpt without tree indentation; prefix/suffix pick among repeats.

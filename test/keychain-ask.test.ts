@@ -14,7 +14,7 @@ import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
   createKeychain,
-  renderKeychainManifest,
+  askResolutionEvents,
   KeychainError,
   ASK_TTL_MS,
   ASK_PRUNE_AFTER_MS,
@@ -509,7 +509,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
   assert.deepEqual(await texts(ok), ["done"], "just the turn's reply, no fallback");
 });
 
-test("manifest: the requester-side ledger names no ask ids or purposes, and asks go through one route", async () => {
+test("an ask's resolution is one event line, shown only to the first turn after it resolved", async () => {
   const now = Date.now();
   const pending: KeychainAsk = {
     id: "a1b2c3d4e5f6",
@@ -529,54 +529,24 @@ test("manifest: the requester-side ledger names no ask ids or purposes, and asks
     note: "not for prod",
     resolvedAt: now - 60_000,
   };
-
-  const channel = renderKeychainManifest({
-    scopeId: "channel:C1",
-    conversationKind: "channel",
-    actorId: "U_BOB",
-    members: [{ id: "U_BOB" }],
-    entriesByOwner: new Map(),
-    scopeGrants: [],
-    scopeAsks: [pending, declined],
-  });
-  assert.match(channel, /Asks sent from this conversation:/);
-  assert.match(channel, /- waiting on U_ALICE's approval card/);
-  assert.match(channel, /- request to U_ALICE: declined/);
-  assert.match(channel, /`request-access` skill/, "the manifest names the request skill");
-  assert.match(channel, /approval card/);
-  assert.match(channel, /requires an explicit grant/);
-  assert.ok(!channel.includes("/v1/keychain/grants"), "no approval-by-POST ladder");
-  for (const leak of [pending.id, declined.id, pending.purpose, "not for prod"])
-    assert.ok(!channel.includes(leak), `manifest leaks ${leak}`);
-
-  const dm = renderKeychainManifest({
-    scopeId: scopeId("personal", "U_ALICE"),
-    conversationKind: "dm",
-    actorId: "U_ALICE",
-    members: [{ id: "U_ALICE" }],
-    entriesByOwner: new Map([
-      [
-        "U_ALICE",
-        [
-          {
-            id: "cred1",
-            ownerId: "U_ALICE",
-            service: "github",
-            kind: "env",
-            envKey: "GITHUB_TOKEN",
-            accountLabel: "alice-acme",
-            fingerprint: "f",
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-      ],
-    ]),
-    scopeGrants: [],
-    scopeAsks: [pending, declined],
-  });
-  assert.ok(!dm.includes("Asks waiting on you"), "the owner answers on the card, not in chat");
-  for (const leak of [pending.id, pending.purpose, "/decline", "/v1/keychain/grants"]) assert.ok(!dm.includes(leak));
+  const events = (since: number) =>
+    askResolutionEvents(
+      [pending, declined],
+      since,
+      () => "alice",
+      async () => ({ service: "github" }) as never,
+    );
+  assert.equal(await events(now - 120_000), "Access request to alice for `github` was declined.");
+  assert.equal(await events(now - 60_000), "");
+  assert.equal(
+    await askResolutionEvents(
+      [declined],
+      0,
+      () => "alice",
+      async () => null,
+    ),
+    "Access request to alice for deleted credential `cred1` was declined.",
+  );
 });
 
 describe("/v1/keychain/asks — card approval end to end", async () => {
@@ -657,6 +627,40 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
   });
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("an ask names the owner and service; the server resolves the credential or returns the candidates", async () => {
+    const alice = await capFor("U_ALICE");
+    const save = async (service: string, accountLabel?: string, envKey?: string) =>
+      (
+        (await (
+          await post("/v1/keychain/credentials", { service, secret: "s", accountLabel, envKey }, alice)
+        ).json()) as any
+      ).credential;
+    const deploy = await save("named-deploy");
+    await save("named-twin", "work", "TWIN_WORK");
+    await save("named-twin", "home", "TWIN_HOME");
+    const bob = await bobInInfra();
+    const ask = (body: Record<string, unknown>) =>
+      post("/v1/keychain/asks", { purpose: "run the deploy", ...body }, bob);
+
+    const resolved = await ask({ owner: "alice", service: "Named-Deploy" });
+    assert.equal(resolved.status, 200);
+    assert.equal(((await resolved.json()) as any).ask.credentialId, deploy.id);
+
+    const ambiguous = await ask({ owner: "U_ALICE", service: "named-twin" });
+    assert.equal(ambiguous.status, 409);
+    const { candidates } = (await ambiguous.json()) as any;
+    assert.deepEqual(candidates.map((c: any) => [c.service, c.account]).sort(), [
+      ["named-twin", "home"],
+      ["named-twin", "work"],
+    ]);
+    assert.equal((await ask({ credential: candidates[0].credential })).status, 200);
+
+    const unknown = await ask({ owner: "Alice", service: "nope" });
+    assert.equal(unknown.status, 404);
+    assert.ok(((await unknown.json()) as any).candidates.some((c: any) => c.service === "named-deploy"));
+    assert.equal((await ask({ owner: "Nobody", service: "named-deploy" })).status, 404);
   });
 
   it("the web approval route decides through the same card path, owner only, never by capability", async () => {
@@ -865,12 +869,19 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     const resolution = await waitFor(() => resumeTurns(session!.id, /The credential owner approved access/));
     assert.equal(resolution.length, 1, "exactly one resolution turn, in the original thread's session");
     const { text: prompt, environment } = resolution[0]!.payload as { text: string; environment: string };
+    const systems = (await built.sessions.listLlmRequests(session!.id)).map(
+      (r) => (r.promptEnvelope as { system: string }).system,
+    );
     assert.ok(
       !prompt.includes(ask.id) && !prompt.includes(grant.id) && !prompt.includes(gh.id),
       "no ids in the resume text",
     );
-    assert.ok(environment.includes(`github:${gh.id}`), "the credential handle belongs in the inventory");
-    assert.ok(environment.includes(grant.id), "the inventory includes the approved grant");
+    assert.ok(!systems[0]!.includes(`\`github:${gh.id}\``), "no handle before the approval");
+    assert.ok(systems.at(-1)!.includes(`\`github:${gh.id}\``), "the approved handle reaches the system prompt");
+    assert.ok(
+      !environment.includes(grant.id) && !systems.at(-1)!.includes(grant.id),
+      "grant ids stay out of the prompt",
+    );
     assert.ok(!prompt.includes("clone acme/payments"), "no purpose text in the resume text");
 
     await waitFor(async () =>

@@ -208,6 +208,8 @@ export function createDeploymentMethods(
     async authorizesDeploymentGitAccess(id, principalId, permission) {
       const d = await deps.deploy.getDeployment(id);
       if (!d) return false;
+      const external = await deps.deploymentGitPrincipals?.authorizes(d, principalId, permission);
+      if (external !== undefined) return external;
       const current = await principalGitPermission(d, principalId);
       return permission === "write" ? current === "write" : current !== null;
     },

@@ -35,7 +35,13 @@ import {
   type E2bSession,
   runE2bScript,
 } from "./e2b-client.ts";
-import { createHomeSnapshotOps, HOME_SNAPSHOT_PRUNE, snapshotDue, type HomeSnapshotStore } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  HOME_SNAPSHOT_PRUNE,
+  isJobComputerScope,
+  snapshotDue,
+  type HomeSnapshotStore,
+} from "./home-snapshot.ts";
 import type {
   AgentComputerProfile,
   ComputerStatus,
@@ -373,6 +379,7 @@ export function createE2bSandbox(workspace: WorkspaceStore, opts: E2bSandboxOpti
       : Promise.resolve();
 
   async function captureRecoverySnapshot(scope: string, session: E2bSession, previous?: string): Promise<void> {
+    if (isJobComputerScope(scope)) return;
     try {
       const { snapshotId } = await session.createSnapshot();
       await store.merge(scope, {

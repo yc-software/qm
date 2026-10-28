@@ -1,6 +1,8 @@
 import assert from "node:assert";
 import { SlackClient, sleep, type SlackMessage } from "./slack.ts";
 import { CoreClient } from "./core.ts";
+import { modelGatewayFromEnv } from "../../src/config.ts";
+import { modelGatewayRequest } from "../../src/model/provider-endpoints.ts";
 
 export interface Scenario {
   name: string;
@@ -42,12 +44,33 @@ export interface Env {
   botUserId: string;
   qaUserId: string;
   teamId: string;
-  anthropicApiKey: string;
-  judgeModel: string;
+  judge: JudgeEndpoint;
   targetChannel?: string;
   sandbox: boolean;
   actors: Map<string, Actor>;
   twin?: import("./arga.ts").TwinAdmin;
+}
+
+export interface JudgeEndpoint {
+  url: string;
+  headers: Record<string, string>;
+  model: string;
+}
+
+export function judgeEndpoint(env: NodeJS.ProcessEnv, model: string): JudgeEndpoint {
+  const gateway = modelGatewayFromEnv(env);
+  if (gateway) {
+    const request = modelGatewayRequest(gateway, { id: model, baseUrl: gateway.url, api: "anthropic-messages" });
+    if (!request) throw new Error(`MODEL_GATEWAY_MODELS has no route for judge model ${model}`);
+    return {
+      url: `${request.model.baseUrl}/v1/messages`,
+      headers: request.headers,
+      model: request.target,
+    };
+  }
+  const apiKey = env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY or MODEL_GATEWAY_URL is required");
+  return { url: "https://api.anthropic.com/v1/messages", headers: { "x-api-key": apiKey }, model };
 }
 
 export interface Actor {
@@ -364,15 +387,15 @@ export class Ctx {
   }
 
   async judge(question: string, content: string): Promise<void> {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch(this.env.judge.url, {
       method: "POST",
       headers: {
-        "x-api-key": this.env.anthropicApiKey,
+        ...this.env.judge.headers,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: this.env.judgeModel,
+        model: this.env.judge.model,
         max_tokens: 300,
         thinking: { type: "disabled" },
         system: `You are a strict test judge for an AI assistant's Slack replies. Today's date is ${new Date().toISOString().slice(0, 10)}. Answer with exactly PASS or FAIL on the first line, then a one-sentence reason. Judge only what is asked; tone and verbosity are irrelevant unless the question asks about them.`,

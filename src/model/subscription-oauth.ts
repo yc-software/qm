@@ -1,4 +1,4 @@
-import { codeChallengeS256, generateCodeVerifier } from "../connectors/oauth.ts";
+import { codeChallengeS256, generateCodeVerifier, oauthFailure } from "../connectors/oauth.ts";
 import { chatgptAccountIdFromToken, tokenExpiry } from "./chatgpt-auth-file.ts";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
 
@@ -36,7 +36,7 @@ export async function refreshChatGPTTokens(refreshToken: string): Promise<UserOA
     }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!res.ok) throw new Error(`chatgpt refresh failed (${res.status})`);
+  if (!res.ok) throw await oauthFailure("chatgpt refresh", res);
   const raw = (await res.json()) as {
     access_token?: string;
     refresh_token?: string;
@@ -88,7 +88,7 @@ export async function completeClaudeLogin(pastedCode: string, verifier: string):
     }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!res.ok) throw new Error(`claude token exchange failed (${res.status})`);
+  if (!res.ok) throw await oauthFailure("claude token exchange", res);
   const raw = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
   if (!raw.access_token) throw new Error("claude token response missing access_token");
   return {
@@ -105,7 +105,7 @@ export async function refreshClaudeTokens(refreshToken: string): Promise<UserOAu
     body: JSON.stringify({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: CLAUDE_CLIENT_ID }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!res.ok) throw new Error(`claude refresh failed (${res.status})`);
+  if (!res.ok) throw await oauthFailure("claude refresh", res);
   const raw = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
   if (!raw.access_token) throw new Error("claude refresh missing access_token");
   return {

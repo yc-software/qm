@@ -49,6 +49,6 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
-    "nodemailer": "^10.1.0"
+    "nodemailer": "^10.2.1"
   }
 }

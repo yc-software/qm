@@ -1,4 +1,6 @@
 import {
+  connectorHandle,
+  credentialHandle,
   KeychainError,
   renderAskNotice,
   type CredentialFieldInput,
@@ -15,6 +17,8 @@ import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { audit, resolveCapabilityDestination } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
+import { connectorHostLabel } from "../../connectors/oauth.ts";
+import type { DirectoryMember } from "../../directory/directory-store.ts";
 
 async function resolveScopeNames(
   app: ApiCtx["app"],
@@ -203,27 +207,106 @@ const revokeGrant = keychainRoute(async ({ res, deps, params }, kc, { actorId, s
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
 });
 
+type KeychainStore = NonNullable<ApiCtx["deps"]["keychain"]>;
+
+async function askableCredentials(
+  kc: KeychainStore,
+  ownerId: string,
+): Promise<Array<{ credential: string; service: string; account?: string; handle: string }>> {
+  const [entries, connectors] = await Promise.all([kc.listByOwners([ownerId]), kc.listConnectorsByOwners([ownerId])]);
+  return [
+    ...(entries.get(ownerId) ?? []).map((c) => ({
+      credential: c.id,
+      service: c.service,
+      ...(c.accountLabel ? { account: c.accountLabel } : {}),
+      handle: credentialHandle(c),
+    })),
+    ...(connectors.get(ownerId) ?? []).map((c) => ({
+      credential: c.credentialId,
+      service: connectorHostLabel(c.host),
+      ...(c.accountType ? { account: c.accountType } : {}),
+      handle: connectorHandle(c.host, c.accountType),
+    })),
+  ];
+}
+
+async function resolveAskTarget(
+  ctx: ApiCtx,
+  kc: KeychainStore,
+  scopeId: string,
+  owner: string,
+  service: string,
+): Promise<{ credentialId: string } | { status: number; body: Record<string, unknown> }> {
+  const found = await ctx.app.resolveRecipient(owner);
+  let people: DirectoryMember[] = [];
+  if (found.kind === "one") people = [found.member];
+  else if (found.kind === "ambiguous") people = found.candidates;
+  const inScope = await Promise.all(people.map((person) => ctx.app.belongsToScope(person.principalId, scopeId)));
+  const present = people.filter((_, i) => inScope[i]);
+  if (present.length !== 1)
+    return {
+      status: present.length ? 409 : 404,
+      body: {
+        error: present.length ? "ambiguous_owner" : "unknown_owner",
+        message: present.length
+          ? "More than one person in this conversation matches that owner; retry with one principalId."
+          : "No one in this conversation matches that owner.",
+        ...(present.length
+          ? { owners: present.map((p) => ({ principalId: p.principalId, name: p.displayName })) }
+          : {}),
+      },
+    };
+  const candidates = await askableCredentials(kc, present[0]!.principalId);
+  const wanted = service.trim().toLowerCase();
+  const matches = candidates.filter((c) => [c.service, c.handle].some((name) => name.toLowerCase() === wanted));
+  if (matches.length === 1) return { credentialId: matches[0]!.credential };
+  return {
+    status: matches.length ? 409 : 404,
+    body: {
+      error: matches.length ? "ambiguous_credential" : "unknown_credential",
+      message: matches.length
+        ? "Several of their credentials match; retry with the chosen candidate's credential id."
+        : "None of their credentials matches that service; pick one of the candidates.",
+      candidates: matches.length ? matches : candidates,
+    },
+  };
+}
+
 const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const { res, app, deps, body } = ctx;
   const actorId = capability.actorId;
-  const b = body as { credential?: unknown; purpose?: unknown; requestedMode?: unknown; expiresAt?: unknown };
+  const b = body as {
+    credential?: unknown;
+    owner?: unknown;
+    service?: unknown;
+    purpose?: unknown;
+    requestedMode?: unknown;
+    expiresAt?: unknown;
+  };
   const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
   if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
+  const named = typeof b.owner === "string" && typeof b.service === "string";
   if (
-    typeof b.credential !== "string" ||
+    (typeof b.credential !== "string" && !named) ||
     typeof b.purpose !== "string" ||
     (b.requestedMode !== undefined && b.requestedMode !== "once" && b.requestedMode !== "standing")
   ) {
     return sendJson(res, 400, {
       error: "bad_request",
-      message: 'expected { credential, purpose, requestedMode?: "once"|"standing" }',
+      message: 'expected { owner, service, purpose, requestedMode?: "once"|"standing" } or { credential, purpose, … }',
     });
   }
   const scope = parseScopeId(capability.scopeId);
   if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
     return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
   }
-  const cred = await kc.getCredential(b.credential);
+  let credentialId = typeof b.credential === "string" ? b.credential : undefined;
+  if (credentialId === undefined) {
+    const target = await resolveAskTarget(ctx, kc, capability.scopeId, b.owner as string, b.service as string);
+    if ("status" in target) return sendJson(res, target.status, target.body);
+    credentialId = target.credentialId;
+  }
+  const cred = await kc.getCredential(credentialId);
   if (!cred) return sendJson(res, 404, { error: "not_found", message: "unknown credential" });
   const requester = await app.directoryMember(actorId);
   if (

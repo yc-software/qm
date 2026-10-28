@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../src/commands/init.ts";
@@ -411,6 +411,26 @@ test("init merges every AWS secret and generated-state ignore into an existing f
     ])
       assert.ok(rules.includes(rule), `${rule} is ignored`);
     assert.equal(rules.filter(Boolean).at(-1), ".env", ".env is the final matching rule");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Render init ignores the state file and its interrupted-write temporary file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-init-render-ignore-"));
+  try {
+    execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+    quiet(() => runInit({ dir, org: "acme", target: "render", repo: "https://github.com/acme/qm", branch: "main" }));
+    for (const name of ["render.resources.json", "render.resources.json.tmp"]) {
+      writeFileSync(join(dir, name), "{}");
+      assert.equal(execFileSync("git", ["check-ignore", name], { cwd: dir, encoding: "utf8" }).trim(), name);
+    }
+    for (const name of [".render.lock", ".render.lock-123"]) {
+      mkdirSync(join(dir, name));
+      const owner = `${name}/owner`;
+      writeFileSync(join(dir, owner), "123");
+      assert.equal(execFileSync("git", ["check-ignore", owner], { cwd: dir, encoding: "utf8" }).trim(), owner);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

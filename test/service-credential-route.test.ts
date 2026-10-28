@@ -1221,7 +1221,7 @@ test("the system prompt advertises an entitled credential (host/methods/paths) s
   const res = await built.app.turn(dm("!sysprompt"));
   const reply = res.reply ?? "";
   assert.match(reply, /### Organization/);
-  assert.match(reply, /x-firehose.*X firehose.*api\.x\.com.*GET.*\/2\/tweets\/search\//s);
+  assert.match(reply, /`x-firehose` — X firehose; proxy api\.x\.com\n/);
   assert.match(reply, /use-shared-credential/);
   assert.doesNotMatch(reply, /curl -fsS -X POST.*credentials\/broker/);
 });
@@ -1361,7 +1361,7 @@ test("usage summaries authorize before reads and include only the requested scop
   assert.doesNotMatch(JSON.stringify(body), /private|unlisted|U2/);
 });
 
-test("credential inventory and policy reordering do not resend unchanged credentials", async () => {
+test("credential inventory and policy reordering leave the system prompt byte-identical", async () => {
   const { built } = buildWithCapture();
   for (const slug of ["z-service", "a-service"]) {
     await built.serviceCreds.setServiceCredential("org:default-org", {
@@ -1394,8 +1394,8 @@ test("credential inventory and policy reordering do not resend unchanged credent
     }));
   const second = await built.app.turn(dm("!sysprompt"));
   assert.equal(second.status, "ok");
-  assert.match(second.reply ?? "", /<environment>/);
-  assert.doesNotMatch(second.reply ?? "", /## Credentials|No longer included: Credentials|service_[az]-service/);
+  const system = (reply?: string) => (reply ?? "").split("<environment>")[0];
+  assert.equal(system(second.reply), system(first.reply));
 });
 
 test("broker accepts no-expiry sandbox tokens but still enforces credential disablement", async () => {

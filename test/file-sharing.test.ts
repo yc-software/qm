@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { NoDefaultSandboxError } from "../src/sandbox/sandbox-routing.ts";
-import type { GrantedHandle, IncomingAttachment } from "../src/types.ts";
+import { scopeId, type GrantedHandle, type IncomingAttachment } from "../src/types.ts";
+import { createToolContext } from "../src/tools/primitives.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
@@ -17,7 +18,6 @@ import {
 import {
   MAX_OUTBOUND_FILES,
   MAX_INBOUND_FILES,
-  MAX_SHARED_FILES_LISTED,
   MAX_ATTACHMENT_BYTES,
   environmentNote,
   inboundIssueList,
@@ -29,7 +29,6 @@ import {
   safeAttachmentName,
   senderNote,
   sharedFilesSystemSection,
-  sharedManifest,
   turnFileId,
 } from "../src/core/attachments.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
@@ -93,14 +92,17 @@ test("mimeFromName maps known extensions, defaults to octet-stream", () => {
   assert.equal(mimeFromName("noext"), "application/octet-stream");
 });
 
-test("inboundManifest lists files under ./inbox/", () => {
+const m0 = () => ({ name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" as const });
+
+test("inboundManifest gives each file one line with its sharer and inbox path", () => {
   const m = inboundManifest([
     { name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" },
-    { name: "b.csv", mimetype: "text/csv", sizeBytes: 9, direction: "in" },
+    { name: "b.csv", mimetype: "text/csv", sizeBytes: 9, direction: "in", author: "eve" },
   ]);
-  assert.match(m, /shared 2 files/);
-  assert.match(m, /inbox\/a\.txt/);
-  assert.match(m, /inbox\/b\.csv/);
+  const [first, second] = m.split("\n");
+  assert.match(first!, /^The user shared a\.txt .*\.\/inbox\/a\.txt/);
+  assert.match(second!, /^eve shared b\.csv .*\.\/inbox\/b\.csv/);
+  assert.match(inboundManifest([m0()], "inbox", undefined, "ada"), /^ada shared a\.txt/);
   assert.equal(inboundManifest([]), "");
 });
 
@@ -129,80 +131,41 @@ test("inboundIssuesNote names the files that did not reach the inbox and is empt
   assert.match(text, /x\.png/);
 });
 
-test("inboundManifest attributes each file to its poster when the author is known", () => {
-  const m = inboundManifest([
-    { name: "selfie.jpg", mimetype: "image/jpeg", sizeBytes: 5, direction: "in", author: "taylor" },
-    { name: "poster.png", mimetype: "image/png", sizeBytes: 7, direction: "in", author: "eve" },
-  ]);
-  assert.match(m, /inbox\/selfie\.jpg \(image\/jpeg, 5 bytes\) — shared by taylor/);
-  assert.match(m, /inbox\/poster\.png \(image\/png, 7 bytes\) — shared by eve/);
-  assert.doesNotMatch(m, /The user shared/);
-});
-
-test("inboundManifest leaves a file unattributed when its author is unknown (mixed case)", () => {
-  const m = inboundManifest([
-    { name: "a.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in", author: "eve" },
-    { name: "b.txt", mimetype: "text/plain", sizeBytes: 3, direction: "in" },
-  ]);
-  assert.match(m, /inbox\/a\.txt \(text\/plain, 3 bytes\) — shared by eve/);
-  assert.match(m, /^- inbox\/b\.txt \(text\/plain, 3 bytes\)$/m);
-});
-
-test("sharedManifest lists shared/<name> handles, flags writable, dedups, and reads nothing", () => {
+test("shared files render as one count line without file names, '' when nothing is shared", () => {
   const handles: GrantedHandle[] = [
     { handlePath: "shared/report.txt", ownerScopeId: "personal:U2", fileId: "1".repeat(32), permission: "read" },
     { handlePath: "shared/budget.xlsx", ownerScopeId: "personal:U3", fileId: "2".repeat(32), permission: "write" },
     { handlePath: "shared/report.txt", ownerScopeId: "personal:U4", fileId: "1".repeat(32), permission: "read" },
   ];
-  const m = sharedManifest(handles);
-  assert.match(m, /shared\/report\.txt/);
-  assert.match(m, /shared\/budget\.xlsx \(writable\)/);
-  assert.doesNotMatch(m, /report\.txt \(writable\)/);
-  assert.equal((m.match(/shared\/report\.txt/g) ?? []).length, 1, "deduped by handlePath");
-  assert.equal(sharedManifest([]), "");
-});
-
-test("sharedManifest caps the listing at MAX_SHARED_FILES_LISTED with a '…and N more' tail", () => {
-  const total = MAX_SHARED_FILES_LISTED + 7;
-  const handles: GrantedHandle[] = Array.from({ length: total }, (_, i) => ({
-    handlePath: `shared/file-${i}.txt`,
-    ownerScopeId: "personal:U2",
-    fileId: i.toString(16).padStart(32, "0"),
-    permission: "read" as const,
-  }));
-  const m = sharedManifest(handles);
-  assert.equal((m.match(/^- shared\//gm) ?? []).length, MAX_SHARED_FILES_LISTED, "only the cap is listed");
-  assert.match(m, /…and 7 more \(read shared\/<name> to fetch\)/);
-  assert.match(m, new RegExp(`^${total} files shared with you`));
-  const sortedPaths = handles.map((h) => h.handlePath).sort();
-  assert.deepEqual(
-    m.split("\n").filter((line) => line.startsWith("- ")),
-    sortedPaths.slice(0, MAX_SHARED_FILES_LISTED).map((path) => `- ${path}`),
-  );
-  assert.equal(sharedManifest(handles.toReversed()), m);
-});
-
-test("sharedManifest at exactly the cap lists every file with no '…and N more' tail", () => {
-  const handles: GrantedHandle[] = Array.from({ length: MAX_SHARED_FILES_LISTED }, (_, i) => ({
-    handlePath: `shared/f${i}.txt`,
-    ownerScopeId: "personal:U2",
-    fileId: i.toString(16).padStart(32, "0"),
-    permission: "read" as const,
-  }));
-  const m = sharedManifest(handles);
-  assert.equal((m.match(/^- shared\//gm) ?? []).length, MAX_SHARED_FILES_LISTED);
-  assert.doesNotMatch(m, /…and \d+ more/);
-});
-
-test("sharedFilesSystemSection wraps the listing in a ## heading, '' when nothing is shared", () => {
-  const handles: GrantedHandle[] = [
-    { handlePath: "shared/report.txt", ownerScopeId: "personal:U2", fileId: "1".repeat(32), permission: "read" },
-  ];
   const s = sharedFilesSystemSection(handles);
-  assert.match(s, /^## Files shared with you\n/);
-  assert.match(s, /shared\/report\.txt/);
-  assert.match(s, /read a path below to fetch that file on demand/);
+  assert.equal(s, "## Files\n2 files are shared with you; list and read them with the `files` tool.");
+  assert.match(sharedFilesSystemSection(handles.slice(0, 1)), /^## Files\n1 file is shared with you; /);
   assert.equal(sharedFilesSystemSection([]), "");
+});
+
+test("reading shared/ lists the files shared with you without touching a computer", async () => {
+  const handle = (handlePath: string): GrantedHandle => ({
+    handlePath,
+    ownerScopeId: scopeId("personal", "U2"),
+    fileId: "1".repeat(32),
+    permission: "read",
+  });
+  const tc = createToolContext({
+    sandbox: {} as Sandbox,
+    provision: async () => {
+      throw new Error("must not provision");
+    },
+    layers: [{ scopeId: scopeId("personal", "U1"), mountPath: "", mode: "rw" }],
+    commandPolicy: () => ({ mode: "denylist", rules: [] }),
+    authorizeCommand: () => false,
+    grantedHandles: [handle("shared/report.txt"), handle("shared/budget.xlsx"), handle("shared/report.txt")],
+    workspace: {} as never,
+    deploy: {} as never,
+    acl: {} as never,
+    createdBy: "U1",
+  });
+  assert.equal((await tc.read("shared/")).content, "shared/budget.xlsx\nshared/report.txt");
+  assert.equal((await tc.read("shared")).content, "shared/budget.xlsx\nshared/report.txt");
 });
 
 test("environmentNote wraps turn-scoped notes in an <environment> block ('' for empty input)", () => {

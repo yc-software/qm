@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createExecFileOps, posixJoin } from "../src/sandbox/exec-file-ops.ts";
+import { createExecFileOps, posixJoin, workspacePathOf } from "../src/sandbox/exec-file-ops.ts";
 
 const exec = promisify(execFile);
 
@@ -76,6 +76,21 @@ test("posixJoin rejects parent path segments", () => {
   assert.equal(posixJoin("/root/workspace/", "/a/./b.txt"), "/root/workspace/a/./b.txt");
   assert.throws(() => posixJoin("/root/workspace", "../x"), /must stay inside the workspace/);
   assert.throws(() => posixJoin("/root/workspace", "a/../../x"), /must stay inside the workspace/);
+});
+
+test("posixJoin resolves an absolute path inside the workspace instead of nesting it", () => {
+  assert.equal(posixJoin("/root/workspace", "/root/workspace/a/b.txt"), "/root/workspace/a/b.txt");
+  assert.equal(posixJoin("/root/workspace/", "/root/workspace/a.txt"), "/root/workspace/a.txt");
+  assert.equal(posixJoin("/root/workspace", "/root/workspaces/a.txt"), "/root/workspace/root/workspaces/a.txt");
+  assert.throws(() => posixJoin("/root/workspace", "/root/workspace/../x"), /must stay inside the workspace/);
+});
+
+test("workspacePathOf maps only paths that normalize into the workspace", () => {
+  assert.equal(workspacePathOf("/root/workspace/", "/root/workspace/./a/b.txt"), "a/b.txt");
+  assert.equal(workspacePathOf("/root/workspace", "/root/workspaces/a.txt"), null);
+  assert.equal(workspacePathOf("/root/workspace", "/root/workspace/../x"), null);
+  assert.equal(workspacePathOf("/root/workspace", "/root/workspace"), null);
+  assert.equal(workspacePathOf("/", "/etc/x"), "etc/x");
 });
 
 test("concurrent imports keep separate archives through extraction and cleanup", { timeout: 10_000 }, async () => {

@@ -46,7 +46,6 @@ export function actorAssertionActive(
 export function createIdentityService(
   backing?: DurableMap<DeactivationRecord>,
   opts: {
-    isOverridden?: (externalId: string) => boolean;
     directorySyncProtected?: readonly string[];
     externalMembers?: DurableMap<ExternalMember>;
     principalLinks?: { refresh(force?: boolean): Promise<void> };
@@ -86,7 +85,6 @@ export function createIdentityService(
 
   function classify(externalId: string, isExternalGuest?: boolean): Principal {
     const id = canonicalPerson(externalId);
-    if (opts.isOverridden?.(externalId)) return { id, type: "internal" };
     const key = personKey(externalId);
     const record = deactivated.get(key);
     const external = externals.get(key);

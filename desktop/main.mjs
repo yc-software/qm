@@ -396,6 +396,22 @@ async function start() {
           { role: "quit" },
         ],
       },
+      {
+        label: "File",
+        submenu: [
+          {
+            label: "New Session",
+            accelerator: "CmdOrCtrl+N",
+            click: () => {
+              const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
+              if (window && !window.isDestroyed() && workspaceWindows.has(window)) {
+                window.show();
+                window.webContents.send("qm:new-session");
+              }
+            },
+          },
+        ],
+      },
       { role: "editMenu" },
       {
         label: "View",

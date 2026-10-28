@@ -3,9 +3,49 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolvePgCaTrust } from "../src/persistence/pg-pool.ts";
+import pg from "pg";
+import { configurePgCaTrust, pgConnectionOptions, resolvePgCaTrust } from "../src/persistence/pg-pool.ts";
 
 const PEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n";
+
+test("configured CA trust reaches the Postgres client when the URL specifies SSL settings", (t) => {
+  configurePgCaTrust({ cert: PEM });
+  t.after(() => configurePgCaTrust({}));
+  for (const query of [
+    "sslmode=verify-full",
+    "sslmode=require",
+    "sslmode=disable",
+    "sslmode=no-verify",
+    "ssl=0",
+    "ssl=true",
+    "ssl=no-verify",
+    "sslnegotiation=direct",
+  ]) {
+    const client = new pg.Client(pgConnectionOptions(`postgres://user:password@localhost/core?${query}`));
+    assert.deepEqual(client.ssl, { ca: PEM });
+  }
+});
+
+test("configured CA trust preserves the Postgres client certificate and key", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pgca-client-"));
+  const cert = join(dir, "client.crt");
+  const key = join(dir, "client.key");
+  writeFileSync(cert, "client-certificate");
+  writeFileSync(key, "client-key");
+  const url = new URL("postgres://user:password@localhost/core?sslmode=verify-full");
+  url.searchParams.set("sslcert", cert);
+  url.searchParams.set("sslkey", key);
+  configurePgCaTrust({ cert: PEM });
+  t.after(() => configurePgCaTrust({}));
+  const client = new pg.Client(pgConnectionOptions(url.toString()));
+  assert.deepEqual(client.ssl, { ca: PEM, cert: "client-certificate" });
+  assert.equal(Object.getOwnPropertyDescriptor(client.ssl, "key")?.value, "client-key");
+});
+
+test("Postgres URL SSL settings remain effective without a configured CA", () => {
+  const client = new pg.Client(pgConnectionOptions("postgres://user:password@localhost/core?sslmode=disable"));
+  assert.equal(client.ssl, false);
+});
 
 test("no CA configured → no ssl override (connection string semantics untouched)", () => {
   assert.deepEqual(resolvePgCaTrust({}), {});

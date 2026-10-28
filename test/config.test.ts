@@ -218,32 +218,22 @@ test("boolEnv: one vocabulary for every boolean env knob", () => {
 test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   const off = loadConfig({
     SEED_SKILLS: "off",
-    EXECUTE_SCRATCH: "off",
     REACH_EXEC: "off",
     PI_CAPTURE_REQUESTS: "off",
-    EAGER_PROVISION: "off",
   });
   assert.equal(off.seedSkills, false);
-  assert.equal(off.eagerProvisionEnabled, false);
-  assert.equal(off.scratchExecEnabled, false);
   assert.equal(off.reachExecEnabled, false);
   assert.equal(off.piCaptureRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
-    EXECUTE_SCRATCH: "on",
     REACH_EXEC: "1",
-    PI_SYSTEM_CACHE_SPLIT: "on",
   });
   assert.equal(on.seedSkills, true);
-  assert.equal(on.scratchExecEnabled, true);
   assert.equal(on.reachExecEnabled, true);
-  assert.equal(on.piSystemCacheSplit, true);
 
   const unset = loadConfig({});
   assert.equal(unset.piCaptureRequests, true, "capture defaults on");
-  assert.equal(unset.piSystemCacheSplit, false, "cache split defaults off");
-  assert.equal(unset.eagerProvisionEnabled, true, "eager provision defaults on");
 });
 
 test("numEnv: empty and non-numeric values fall back instead of poisoning config with NaN", () => {
@@ -256,10 +246,10 @@ test("numEnv: empty and non-numeric values fall back instead of poisoning config
 test("a set-but-unparseable env value refuses to boot instead of silently taking the default", () => {
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
-  assert.throws(() => loadConfig({ EXECUTE_SCRATCH: "2" }), /EXECUTE_SCRATCH="2" is not a recognized boolean/);
+  assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
-  assert.equal(loadConfig({ EXECUTE_SCRATCH: "" }).scratchExecEnabled, false);
+  assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
 });
 
 test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
@@ -277,6 +267,40 @@ test("sandbox backend is parsed once before production backend guards", () => {
     () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "bogus" }),
     /SANDBOX_BACKEND="bogus" is not recognized/,
   );
+});
+
+for (const primary of ["render", "local"] as const) {
+  test(`production requires durable Render recovery when the primary backend is ${primary}`, () => {
+    const env = {
+      ...productionEnv,
+      SANDBOX_BACKEND: primary,
+      WORKSPACE_STORE: "postgres",
+      RENDER_API_KEY: "test-key",
+      RENDER_WORKSPACE_ID: "tea-test",
+    };
+    for (const database of [undefined, "", "  "])
+      assert.throws(() => loadConfig({ ...env, DATABASE_URL: database }), /required core secrets: DATABASE_URL/);
+    const config = loadConfig({ ...env, DATABASE_URL: "postgres://qm@localhost/qm" });
+    assert.ok(enabledSandboxBackends(config).includes("render"));
+    assert.equal(config.databaseUrl, "postgres://qm@localhost/qm");
+    assert.ok(enabledSandboxBackends(loadConfig({ ...env, NODE_ENV: "development" })).includes("render"));
+  });
+
+  test(`Render timeout limits apply when the primary backend is ${primary}`, () => {
+    const env = {
+      SANDBOX_BACKEND: primary,
+      WORKSPACE_STORE: "postgres",
+      RENDER_API_KEY: "test-key",
+      RENDER_WORKSPACE_ID: "tea-test",
+    };
+    for (const timeout of ["86340", "86400"])
+      assert.throws(() => loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: timeout }), /SANDBOX_TIMEOUT_SEC must stay/);
+    assert.equal(loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: "86339" }).renderSandbox.defaultTimeoutSec, 86339);
+  });
+}
+
+test("Render guards do not limit an unconfigured sandbox backend", () => {
+  assert.equal(loadConfig({ ...productionEnv, SANDBOX_TIMEOUT_SEC: "86400" }).sandboxBackend, "local");
 });
 
 test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
@@ -852,15 +876,13 @@ test("retired brain environment does not configure a runtime integration and war
   assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
 });
 
-test("Modal native retention and interval configuration are independent of legacy portable checkpoint throttling", () => {
+test("Modal native retention and interval configuration are parsed into Config", () => {
   const config = loadConfig({
     MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC: "60",
     MODAL_SNAPSHOT_RETENTION_SEC: "86400",
-    MODAL_SNAPSHOT_INTERVAL_SEC: "315360000",
   });
   assert.equal(config.modalSandbox.nativeSnapshotIntervalSec, 60);
   assert.equal(config.modalSandbox.snapshotRetentionSec, 86400);
-  assert.equal(config.modalSandbox.snapshotIntervalSec, 315360000);
 });
 
 test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config", () => {
@@ -879,20 +901,6 @@ test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config"
   assert.equal(bare.smolmachinesSandbox.autoStopSec, undefined);
   assert.equal(bare.smolmachinesSandbox.snapshotS3Bucket, undefined);
   assert.throws(() => loadConfig({ SMOLMACHINES_AUTOSTOP_SEC: "soon" }), /SMOLMACHINES_AUTOSTOP_SEC/);
-});
-
-test("Modal native activation is default-off and uses strict boolean configuration", () => {
-  assert.equal(loadConfig({}).modalSandbox.nativeSnapshotsEnabled, false);
-  for (const value of ["true", "on", "1"])
-    assert.equal(loadConfig({ MODAL_NATIVE_SNAPSHOTS_ENABLED: value }).modalSandbox.nativeSnapshotsEnabled, true);
-  assert.throws(() => loadConfig({ MODAL_NATIVE_SNAPSHOTS_ENABLED: "enable" }), /not a recognized boolean/);
-});
-
-test("direct Files initiation defaults off and requires explicit activation", () => {
-  assert.equal(loadConfig({}).filesDirectUploadsEnabled, false);
-  assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "true" }).filesDirectUploadsEnabled, true);
-  assert.equal(loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "false" }).filesDirectUploadsEnabled, false);
-  assert.throws(() => loadConfig({ FILES_DIRECT_UPLOADS_ENABLED: "maybe" }));
 });
 
 test("suggestion generation defaults on and can be explicitly disabled", () => {
@@ -995,7 +1003,7 @@ test("sandbox capability TTL is deployment-configurable with a 48-hour default",
 
 test("a subscription-only company ChatGPT deployment defaults pi to the plain Codex model id", () => {
   const base = { ...loadConfig({}), harness: "pi" as const };
-  assert.equal(configuredModelForHarness({ ...base, codexAuthCredential: "cred-1" }, "pi"), "gpt-5.6-sol");
+  assert.equal(configuredModelForHarness({ ...base, codexAuthCredential: "cred-1" }, "pi"), "gpt-6.1-sol");
   assert.equal(
     configuredModelForHarness({ ...base, codexAuthCredential: "cred-1", anthropicApiKey: "k" }, "pi"),
     undefined,
@@ -1005,4 +1013,39 @@ test("a subscription-only company ChatGPT deployment defaults pi to the plain Co
     "claude-opus-5",
   );
   assert.equal(configuredModelForHarness(base, "pi"), undefined);
+});
+
+test("Render app region defaults to the core region and accepts a separate creation region", () => {
+  assert.equal(loadConfig({}).renderDeploy.appRegion, "oregon");
+  assert.equal(loadConfig({ RENDER_REGION: "ohio" }).renderDeploy.appRegion, "ohio");
+  const config = loadConfig({ RENDER_REGION: "oregon", RENDER_APP_REGION: " virginia " });
+  assert.equal(config.renderDeploy.region, "oregon");
+  assert.equal(config.renderDeploy.appRegion, "virginia");
+});
+
+test("Render app publishing needs a complete source, project, and environment", () => {
+  const env = {
+    DEPLOY_PROVIDER: "render",
+    RENDER_API_KEY: "rnd_key",
+    RENDER_WORKSPACE_ID: "tea-test",
+    RENDER_DEPLOY_REPO: "https://github.com/acme/qm.git",
+    RENDER_DEPLOY_BRANCH: "main",
+    RENDER_MINIO_SERVICE_ID: "srv-minio",
+    RENDER_PROJECT_ID: "prj-test",
+    RENDER_ENVIRONMENT_ID: "evm-test",
+    GIT_SHA: "a".repeat(40),
+  };
+  const source = loadConfig(env).renderDeploy.source;
+  assert.deepEqual(source, { repo: "https://github.com/acme/qm", branch: "main", commit: "a".repeat(40) });
+  assert.throws(
+    () => loadConfig({ ...env, GIT_SHA: "main" }),
+    /requires RENDER_DEPLOY_REPO, RENDER_DEPLOY_BRANCH, and GIT_SHA/,
+  );
+  assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
+});
+
+test("The Render sandbox backend needs the Postgres workspace store", () => {
+  const env = { SANDBOX_BACKEND: "render", RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
+  assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
+  assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
 });

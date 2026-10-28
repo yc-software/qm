@@ -26,6 +26,7 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { uuidSchema } from "../util/ids.ts";
 
 export interface DeployFile {
   path: string;
@@ -152,7 +153,6 @@ export interface DeployServiceDeps {
 }
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function assertAppSize(sizes: readonly number[], maxBytes: number | undefined): void {
   if (!maxBytes) return;
@@ -168,7 +168,7 @@ const fileSizes = (files: readonly DeployFile[] | undefined): number[] =>
   (files ?? []).map((f) => (typeof f.data === "string" ? Buffer.byteLength(f.data) : f.data.byteLength));
 
 function validateName(name: string): void {
-  if (UUID_RE.test(name)) throw new Error(`invalid deployment name (looks like an id): ${name}`);
+  if (uuidSchema.safeParse(name).success) throw new Error(`invalid deployment name (looks like an id): ${name}`);
   if (!NAME_RE.test(name)) {
     throw new Error(
       `invalid deployment name "${name}": use 2-40 chars, lowercase letters/digits/hyphens, no leading/trailing hyphen`,
@@ -252,8 +252,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
     await deps.deployStore.setAppliedVersion(id, version);
   };
 
-  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint> => {
-    if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint!;
+  const liveEndpoint = async (d: Deployment): Promise<DeployEndpoint | null> => {
+    if (!deps.provider.resolveEndpoint || d.endpoint == null) return d.endpoint;
     const version = currentVersionOf(d);
     if (!version) return d.endpoint;
     const resolved = await deps.provider.resolveEndpoint(d, version);
@@ -262,7 +262,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       return resolved;
     }
     return withDeployLock(d.id, async () => {
-      const cur = (await deps.deployStore.get(d.id)) ?? d;
+      const cur = await deps.deployStore.get(d.id);
+      if (cur?.status !== "running") return null;
       const v = currentVersionOf(cur) ?? version;
       const again = await deps.provider.resolveEndpoint!(cur, v);
       if (again) {
@@ -593,8 +594,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
             if (await deps.provider.rotationDue?.(cur)) {
               await rotateDeployment(cur.id);
               maintained++;
-            } else if (cur.alwaysOn) {
-              await liveEndpoint(cur);
+            } else if (cur.alwaysOn && (await liveEndpoint(cur))) {
               maintained++;
             }
           } catch (e) {
@@ -611,6 +611,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       if (!d || d.status !== "running" || d.endpoint == null) return { status: "not_found" };
       if (!opts.bypassAcl && !(await reachAllowed(d, principalId))) return { status: "denied" };
       const endpoint = await liveEndpoint(d);
+      if (!endpoint) return { status: "not_found" };
       await deps.deployStore.touch(d.id, Date.now()).catch((e) => swallow("deploy reach touch", e));
       return { status: "ok", id: d.id, endpoint };
     },

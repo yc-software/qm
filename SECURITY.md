@@ -93,10 +93,12 @@ is limited to 100 recent sessions and 200 files, and binary files require explic
 before being copied into a different conversation's computer. Organization, personal, room, and source-room policy compose fail-closed, with
 Isolated winning. These reads are labelled and audited, but model output is not a disclosure
 control. In an Open shared conversation, the authenticated internal speaker can use their
-own keychain through isolated owner execution without creating a room grant. Credentials
-are supplied only to a separate disposable computer, which is destroyed at turn end, not
-the shared workspace. Each owner command rechecks composed sharing policy and current
-membership. Other people's credentials and automated or ambient turns still require grants.
+own keychain without creating a room grant. In any shared conversation, commands that name
+a credential other than a brokered org service run on the turn's scratch computer, which
+only that turn's commands use and which is destroyed at turn end, never on the shared
+workspace. A background job naming them runs on its own job-only computer that no command,
+file operation or input can reach, which the reaper destroys after the job ends. Each use of the
+speaker's own credential rechecks composed sharing policy and current membership. Other people's credentials and automated or ambient turns still require grants.
 The raw keychain-use endpoint remains personal-or-grant-only. Command approvals remain in
 force; code can still disclose secrets while using them, so this is not an output filter.
 Open does not change transcript audience filtering, writes or memory capture,

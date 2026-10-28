@@ -1,5 +1,5 @@
 import { isEmbeddingModel, type EmbeddingModel } from "./model-overlay.ts";
-import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { gatewayRoot, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
 import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
 
@@ -73,7 +73,7 @@ function parseModel(value: unknown, allowed: Set<string>, baseUrl: string): Gate
     name: info.model_group,
     provider: GATEWAY_PROVIDER,
     api,
-    baseUrl: anthropic ? baseUrl.replace(/\/v1$/, "") : baseUrl,
+    baseUrl: anthropic ? gatewayRoot(baseUrl) : baseUrl,
     reasoning: (anthropic || openai) && info.supports_reasoning === true,
     input: info.supports_vision === true ? ["text", "image"] : ["text"],
     contextWindow,
@@ -144,7 +144,7 @@ export function createGatewayCatalog(
   fetcher: typeof fetch = fetch,
   now: () => number = Date.now,
 ) {
-  const root = config.url.replace(/\/v1$/, "");
+  const root = gatewayRoot(config.url);
   const baseUrl = `${root}/v1`;
   let routes: Readonly<Record<string, string>> = { ...config.models };
   let discovered = false;

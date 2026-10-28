@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { setTimeout as wait } from "node:timers/promises";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import { jitteredBackoffMs, retryAfterMs, withAbort, withTimeout } from "../util/async.ts";
+import { retryAfterMs, retryOperation, withTimeout } from "../util/async.ts";
 import { swallow, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { createExecProcessSessions, processSessionDir, type ExecProcessIo } from "./exec-process-session.ts";
@@ -82,25 +81,16 @@ export function spritesErrorDetail(e: unknown): string {
   return parts.join("; ");
 }
 
-export async function retrySpritesControl<T>(operation: () => Promise<T>, timeoutMs = 60_000): Promise<T> {
-  const signal = AbortSignal.timeout(timeoutMs);
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await withAbort(operation, signal);
-    } catch (error) {
-      signal.throwIfAborted();
-      if (!(error instanceof APIError) || ![429, 500, 502, 503, 504].includes(error.statusCode ?? 0) || attempt >= 4)
-        throw error;
-      const seconds = error.getRetryAfterSeconds();
-      const delay = seconds === undefined ? undefined : retryAfterMs(new Headers({ "retry-after": String(seconds) }));
-      try {
-        await wait(delay ?? jitteredBackoffMs(attempt), undefined, { signal });
-      } catch (error) {
-        signal.throwIfAborted();
-        throw error;
-      }
-    }
-  }
+export function retrySpritesControl<T>(operation: () => Promise<T>, timeoutMs = 60_000): Promise<T> {
+  return retryOperation(operation, "idempotent", {
+    timeoutMs,
+    statusOf: (error) => (error instanceof APIError ? error.statusCode : undefined),
+    networkError: (error) => error instanceof Error && error.message.startsWith("Network error: "),
+    retryAfterMsOf: (error) => {
+      const seconds = error instanceof APIError ? error.getRetryAfterSeconds() : undefined;
+      return seconds === undefined ? undefined : retryAfterMs(new Headers({ "retry-after": String(seconds) }));
+    },
+  });
 }
 
 const isMissing = (e: unknown): boolean => e instanceof APIError && e.statusCode === 404;

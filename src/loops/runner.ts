@@ -1,12 +1,13 @@
 import type { Loop, LoopItem, LoopOutput } from "../types.ts";
 import type { LoopItemLedger } from "./item-ledger.ts";
 import { unresolvedOutput, type CaptureOutputInput, type LoopOutputStore } from "./output-store.ts";
-import type { LoopStore } from "./loop-store.ts";
+import type { FireOutcome, LoopStore } from "./loop-store.ts";
 import { isRunnable } from "./loop-store.ts";
 import { decideShip, outputCandidate, undeclaredShipActions } from "./ship-gate.ts";
 import type { SuccessVerdict } from "./success-evaluation.ts";
 import type { ShipGrant } from "../types.ts";
 import { workOrder } from "./triage.ts";
+import { isTransientFailure } from "../core/turn-error.ts";
 
 export interface IntakeCandidate {
   sourceKey: string;
@@ -42,6 +43,7 @@ export interface FireSummary {
   continued: string[];
   undeclaredShipActions: string[];
   failures: string[];
+  persistentFailures: number;
   throttled?: string;
 }
 
@@ -61,7 +63,18 @@ function emptySummary(loop: Loop, ran: boolean): FireSummary {
     continued: [],
     undeclaredShipActions: [],
     failures: [],
+    persistentFailures: 0,
   };
+}
+
+function recordFailure(summary: FireSummary, label: string, error: unknown): void {
+  summary.failures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+  if (!isTransientFailure(error)) summary.persistentFailures += 1;
+}
+
+export function fireOutcome(summary: FireSummary): FireOutcome {
+  if (summary.failures.length === 0) return "ok";
+  return summary.persistentFailures > 0 ? "failed" : "transient";
 }
 
 export function fireNeedsAttention(summary: FireSummary): boolean {
@@ -119,7 +132,7 @@ export async function runLoopFire(
   );
   if (budget.full) {
     summary.throttled = budget.reason();
-    await stores.loops.recordFireOutcome(loop.id, false);
+    await stores.loops.recordFireOutcome(loop.id, "ok");
     return summary;
   }
 
@@ -130,7 +143,7 @@ export async function runLoopFire(
     }
   } catch (error) {
     if (error instanceof DuplicateLoopFireError) throw error;
-    summary.failures.push(`intake: ${error instanceof Error ? error.message : String(error)}`);
+    recordFailure(summary, "intake", error);
   }
 
   await effects.triage?.(loop);
@@ -264,7 +277,7 @@ export async function runLoopFire(
         } catch (error) {
           if (autoShippedCount === 0) openedOutputs = 0;
           const reason = error instanceof Error ? error.message : String(error);
-          summary.failures.push(`${item.sourceKey}: ${reason}`);
+          recordFailure(summary, item.sourceKey, error);
           if (autoShippedCount > 0) {
             const partialReason = `partial auto-ship: ${autoShippedCount} of ${autoOutputCount} actions completed before failure — needs human review`;
             await stores.items.park(item.id, partialReason);
@@ -290,6 +303,6 @@ export async function runLoopFire(
   for (const worker of workers) if (worker.status === "rejected") throw worker.reason;
   if (capped && !drained) summary.throttled ??= budget.reason();
 
-  await stores.loops.recordFireOutcome(loop.id, summary.failures.length > 0);
+  await stores.loops.recordFireOutcome(loop.id, fireOutcome(summary));
   return summary;
 }

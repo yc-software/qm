@@ -1,15 +1,15 @@
-FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS wireproxy-build
+FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS wireproxy-build
 
 RUN apk add --no-cache go \
   && CGO_ENABLED=0 GOBIN=/out go install github.com/windtf/wireproxy/cmd/wireproxy@v1.1.2
 
-FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS connector-sdk-build
+FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS connector-sdk-build
 WORKDIR /app
 COPY deploy/connector-sdk ./deploy/connector-sdk
 RUN npm ci --prefix deploy/connector-sdk --ignore-scripts --no-audit --no-fund \
   && node deploy/connector-sdk/build.mjs
 
-FROM node:24-alpine@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd
+FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
 
 RUN apk add --no-cache ca-certificates curl git git-daemon docker-cli
 
@@ -23,7 +23,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm run audit:prod \
 
 COPY --from=connector-sdk-build /app/.generated/connector-sdk ./.generated/connector-sdk
 COPY src ./src
-COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts ./cli/src/
+COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/render-job-command.ts cli/src/render-source.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts ./cli/src/
 COPY cli/templates/slack-manifest.json ./cli/templates/slack-manifest.json
 COPY skills-seed ./skills-seed
 COPY plugins/onboarding ./plugins/onboarding

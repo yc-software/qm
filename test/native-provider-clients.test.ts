@@ -391,7 +391,7 @@ test("E2B sends explicit pause lifecycle, reads state without connect, and surfa
   const createOpts = e2bCalls[0]![2] as { lifecycle: unknown; timeoutMs: number; network?: unknown };
   assert.deepEqual(createOpts.lifecycle, { onTimeout: "pause", autoResume: false });
   assert.equal(createOpts.timeoutMs, 3600_000 + E2B_EXEC_MARGIN_MS, "default TTL covers the longest command");
-  assert.equal(createOpts.network, undefined, "no egress proxy means no network rules");
+  assert.deepEqual(createOpts.network, { allowPublicTraffic: false }, "ports need the traffic token");
   const info = await client.info!(session.sandboxId);
   assert.equal(info.state, "paused");
   assert.equal(info.cpuCount, 2);
@@ -474,7 +474,7 @@ test("E2B turns the egress proxy into host-level network rules on create and on 
   const client = createSdkE2bClient({ apiKey: "test", egressProxyUrl: "https://egress.example.com" });
   const rules = { allowOut: ["egress.example.com"], denyOut: ["0.0.0.0/0"] };
   await client.create({ metadata: {}, autoPause: true });
-  assert.deepEqual((e2bCalls.at(-1)![2] as { network: unknown }).network, rules);
+  assert.deepEqual((e2bCalls.at(-1)![2] as { network: unknown }).network, { ...rules, allowPublicTraffic: false });
   await client.connect("e2b-native");
   assert.deepEqual(e2bCalls.at(-1), ["updateNetwork", rules]);
   assert.deepEqual(e2bEgressNetwork("http://10.0.0.5:3128"), { allowOut: ["10.0.0.5"], denyOut: ["0.0.0.0/0"] });

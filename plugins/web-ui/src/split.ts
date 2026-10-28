@@ -920,7 +920,7 @@ function paneIsWorking(panel: IDockviewPanel): boolean {
 
 function paneAwaitsInput(panel: IDockviewPanel): boolean {
   const session = paneSession(panel);
-  return session ? rowIndicators(session, null, sessionsState.list).awaiting : false;
+  return session ? rowIndicators(session, null).awaiting : false;
 }
 
 function paneBackground(panel: IDockviewPanel): RowIndicators["background"] {

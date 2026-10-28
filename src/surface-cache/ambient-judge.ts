@@ -1,4 +1,5 @@
 import { resolveMentions } from "../slack/mrkdwn.ts";
+import { outermostJsonObject } from "../util/text.ts";
 import type { CachedMessage } from "./surface-cache.ts";
 
 const AMBIENT_JUDGE_SYSTEM = `You are the ambient mind for a chat container — a thin, cheap observer that decides whether the
@@ -85,10 +86,10 @@ export function renderAmbientPrompt(batch: AmbientBatch): string {
 
 export function parseAmbientDecision(raw: string | undefined): AmbientDecision {
   if (!raw) return { act: false };
-  const m = /\{[\s\S]*\}/.exec(raw);
-  if (!m) return { act: false };
+  const object = outermostJsonObject(raw);
+  if (!object) return { act: false };
   try {
-    const parsed = JSON.parse(m[0]) as { act?: unknown; reason?: unknown; asked_by?: unknown };
+    const parsed = JSON.parse(object) as { act?: unknown; reason?: unknown; asked_by?: unknown };
     if (parsed.act !== true) return { act: false };
     const askedBy = typeof parsed.asked_by === "string" ? parsed.asked_by.trim().replace(/^\[|\]$/g, "") : "";
     return {

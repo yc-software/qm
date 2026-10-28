@@ -5,7 +5,13 @@ import { syncDeploymentLayer, type DeploymentLayerTransport } from "../deploymen
 import { TARGET_ENV_DEFAULTS, type TargetEnvDefaults } from "../target-env-defaults.ts";
 import { renderTerraformVars } from "../terraform.ts";
 import { buildAwsMicrovmImage, deleteAwsMicrovmImage, deleteAwsTaskDefinitions } from "../commands/infra.ts";
-import { awsScaffold, dockerScaffold, flyScaffold, type ProviderScaffold } from "../provider-scaffold.ts";
+import {
+  awsScaffold,
+  dockerScaffold,
+  flyScaffold,
+  renderScaffold,
+  type ProviderScaffold,
+} from "../provider-scaffold.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
 import { runnableServices, serviceHost } from "../services.ts";
 import {
@@ -20,8 +26,14 @@ import {
   awsUp,
   awsDeploymentLayerTransport,
 } from "./aws.ts";
-import { dockerDeploymentLayerTransport, dockerDown, dockerLogs, dockerStatus, dockerUp } from "./docker.ts";
-import { doctorCommon, localDoctorSecrets } from "./doctor.ts";
+import {
+  dockerDeploymentLayerTransport,
+  dockerDoctor,
+  dockerDown,
+  dockerLogs,
+  dockerStatus,
+  dockerUp,
+} from "./docker.ts";
 import {
   flyCheckLive,
   flyDoctor,
@@ -34,6 +46,7 @@ import {
   flyDeploymentLayerTransport,
 } from "./fly.ts";
 import type { Backend, BackendUpOptions } from "./types.ts";
+import { createRenderBackend, renderConfigErrors, renderDeploymentLayerTransport } from "./render.ts";
 
 export interface DeployContext {
   config: QmConfig;
@@ -132,11 +145,7 @@ const docker: HostingProvider = {
     rollback: () => {
       throw new CliError("rollback is not implemented for target docker");
     },
-    doctor: () =>
-      doctorCommon(ctx.config, localDoctorSecrets(ctx.configDir, ctx.envFile), {
-        requiredSecretValues: true,
-        configDir: ctx.configDir,
-      }),
+    doctor: () => dockerDoctor(ctx.config, ctx.configDir, ctx.envFile),
     secretsPush: () => {
       note("docker reads .env directly; no secret upload is needed");
     },
@@ -340,7 +349,19 @@ const aws: HostingProvider = {
   },
 };
 
-export const HOSTING_PROVIDERS = { docker, fly, aws } satisfies Record<Target, HostingProvider>;
+const render: HostingProvider = {
+  id: "render",
+  deploymentLayerTransport: renderDeploymentLayerTransport,
+  envDefaults: TARGET_ENV_DEFAULTS.render,
+  scaffold: renderScaffold,
+  upFlags: ["upgrade-minio"],
+  upOptions: (_ctx, flags, dryRun) => ({ dryRun, upgradeMinio: flags["upgrade-minio"] === true }),
+  createBackend: createRenderBackend,
+  coordinates: (config) => ({ accountOrOrganization: config.render?.workspaceId, region: config.render?.region }),
+  validateConfig: renderConfigErrors,
+};
+
+export const HOSTING_PROVIDERS = { docker, fly, aws, render } satisfies Record<Target, HostingProvider>;
 
 export const hostingProvider = (target: Target): HostingProvider => HOSTING_PROVIDERS[target];
 

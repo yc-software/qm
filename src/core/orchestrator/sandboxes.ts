@@ -3,9 +3,12 @@ import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
-import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
-import { accessConversationSandbox, type SandboxAccessPlan } from "../../sandbox/sandbox-resources.ts";
+import {
+  accessConversationSandbox,
+  type SandboxAccessPlan,
+  type SandboxResource,
+} from "../../sandbox/sandbox-resources.ts";
 import { reconcileProcesses } from "../../processes/reconcile.ts";
 import { leaseLapsed } from "../../runs/run-store.ts";
 import { finishProcessCredentials } from "../../credentials/execute-files.ts";
@@ -23,6 +26,7 @@ import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
+import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
@@ -42,11 +46,8 @@ export interface TurnSandboxContext {
   connectorEnv: Record<string, string>;
   egressTokenForTurn: string | undefined;
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
-  openSpeakerKeychain?: boolean;
   openResourceAccess?: boolean;
-  ownerAuthAvailable: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
-  emitGapWork: (phase: GapPhase, start: number, end: number) => void;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -64,45 +65,16 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     connectorEnv,
     egressTokenForTurn,
     egressTokenForPolicy,
-    openSpeakerKeychain,
     openResourceAccess,
-    ownerAuthAvailable,
     visibleSkillsForTurn,
-    emitGapWork,
   } = ctx;
 
-  let ownerAuthCommand: ((command: string, env?: Record<string, string>) => string) | undefined;
-  const brokerEnvKeys = [
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "AWS_REGION",
-    "AWS_DEFAULT_REGION",
-  ];
-  const unsetBrokerEnv = (env: Record<string, string>): string => {
-    const keys = brokerEnvKeys.filter((key) => !(key in env));
-    return keys.length ? `unset ${keys.join(" ")}; ` : "";
-  };
-  if (ownerAuthAvailable) {
-    ownerAuthCommand = (command, env = {}) => {
-      if (openSpeakerKeychain)
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "keychain.open_speaker_use",
-          resource: "isolated owner execution",
-          scopeLabel: scopeId,
-        });
-      return `unset AGENT_API_TOKEN AGENT_OAUTH_CONSENT_TOKEN AGENT_CREDENTIAL_TOKEN; ${unsetBrokerEnv(env)}${command}`;
-    };
-  }
   const box: {
     handle: SandboxHandle | null;
     pending: SandboxHandle | null;
     used: boolean;
-    provisionMs?: number;
   } = { handle: null, pending: null, used: false };
-  const scratchBox: { handle: SandboxHandle | null; pending: SandboxHandle | null; provisionMs?: number } = {
+  const scratchBox: { handle: SandboxHandle | null; pending: SandboxHandle | null } = {
     handle: null,
     pending: null,
   };
@@ -128,16 +100,10 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         sandboxId: handle?.id,
         startedAt: scratchStartedAt,
         readyAt: scratchReadyAt,
-        provisionMs: scratchBox.provisionMs,
         ...extra,
       }),
     });
   };
-  const ownerAuthBox: { handle: SandboxHandle | null; pending: SandboxHandle | null } = {
-    handle: null,
-    pending: null,
-  };
-  let ownerAuthProvisionInFlight: Promise<SandboxHandle> | null = null;
   const destroyEphemeralHandle = async (handle: SandboxHandle): Promise<void> => {
     const errors: unknown[] = [];
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -185,14 +151,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const provision = (eager = false): Promise<SandboxHandle> => {
     if (!eager) box.used = true;
-    provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork, eager).catch((err) => {
+    provisionInFlight ??= tracePhase("sandbox.provision", () => doProvision(eager)).catch((err) => {
       provisionInFlight = null;
       throw err;
     });
     return provisionInFlight;
   };
-  const doProvision = async (emit: typeof emitGapWork, eager: boolean): Promise<SandboxHandle> => {
-    const provisionStart = Date.now();
+  const doProvision = async (eager: boolean): Promise<SandboxHandle> => {
     if (input.externalSlack) {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
@@ -207,8 +172,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     });
     box.pending = handle;
     await holdResource(handle);
-    emit("provision", provisionStart, Date.now());
-    box.provisionMs = Date.now() - provisionStart;
     deps.auditLog?.record({
       at: Date.now(),
       principalId: actor.id,
@@ -220,16 +183,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         sessionId: session.id,
         backend: handle.backend,
         sandboxId: handle.id,
-        provisionMs: box.provisionMs,
         coldStart: handle.coldStart,
         eager,
       }),
     });
-    const dirCleanupStart = Date.now();
     await prepareTurnFiles(handle);
-    emit("dir_cleanup", dirCleanupStart, Date.now());
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
-      const procReconcileStart = Date.now();
       try {
         await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
           finishProcessCredentials(
@@ -253,8 +212,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           },
           err,
         );
-      } finally {
-        emit("proc_reconcile", procReconcileStart, Date.now());
       }
     }
     box.handle = handle;
@@ -266,7 +223,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution): Promise<void> => {
     const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(r), r)}`;
     if (laidTrees.has(treeKey)) return;
-    const start = Date.now();
     try {
       const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
       await laySkillTree(deps.sandbox, handle, skillsRoot(r), r, bundles);
@@ -283,8 +239,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         err,
       );
       throw err;
-    } finally {
-      emitGapWork("skills_materialize", start, Date.now());
     }
   };
   const useSkill = async (name: string, file: string, sandboxId?: string, source?: string): Promise<SkillResult> => {
@@ -363,6 +317,22 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(credentialScopeId ? { credentialScopeId } : {}),
     };
   };
+  const jobComputerPlan = (resource: SandboxResource): SandboxAccessPlan => ({
+    resource,
+    crossScope: false,
+    egress: resolution.egress,
+    commandPolicy: null,
+  });
+  const provisionJobComputer = async (): Promise<SandboxHandle> => {
+    const resources = deps.sandboxResources!;
+    const backend = (await resources.resolve(memoryScopeId))?.backend ?? resources.defaultBackend();
+    const resource = await resources.create(actor.id, memoryScopeId, backend, "background job", undefined, true);
+    return provisionResource(jobComputerPlan(resource));
+  };
+  const provisionJobSandbox = async (id: string): Promise<SandboxHandle> => {
+    const resource = await deps.sandboxResources!.get(id);
+    return resource.jobOnly ? provisionResource(jobComputerPlan(resource)) : provisionResource(id);
+  };
   const provisionResource = async (
     input: string | SandboxAccessPlan,
     authorize?: (access: SandboxAccessPlan) => void,
@@ -418,8 +388,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return Promise.reject(new Error("Disposable sandbox initialization cleanup is still pending"));
     if (scratchBox.handle) return Promise.resolve(scratchBox.handle);
     scratchProvisionInFlight ??= (async () => {
-      const provisionStart = Date.now();
-      scratchStartedAt = provisionStart;
+      scratchStartedAt = Date.now();
       recordScratchLifecycle("provision_started");
       const handle = await deps.sandbox.provision(
         resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
@@ -432,7 +401,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
         },
       );
-      scratchBox.provisionMs = Date.now() - provisionStart;
       scratchBox.handle = handle;
       scratchReadyAt = Date.now();
       recordScratchLifecycle("provision_ready", handle);
@@ -445,59 +413,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     });
     return scratchProvisionInFlight;
   };
-  const provisionOwnerAuth = ownerAuthAvailable
-    ? async (): Promise<SandboxHandle> => {
-        // Recheck each command, including commands reusing this turn's isolated computer.
-        if (
-          openSpeakerKeychain &&
-          (!(await deps.isCurrentSharedScopeMember?.(actor.id, scopeId)) ||
-            (await deps.config?.resolveSharingPostureDurable(personalScope(actor.id), scopeId)) !== "open")
-        )
-          throw new Error("Open speaker keychain access is no longer authorized");
-        if (ownerAuthBox.handle) return ownerAuthBox.handle;
-        if (ownerAuthBox.pending && !ownerAuthProvisionInFlight) {
-          return Promise.reject(new Error("owner-auth box initialization failed and cleanup is still pending"));
-        }
-        ownerAuthProvisionInFlight ??= (async () => {
-          const handle = await deps.sandbox.provision(
-            resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
-            {
-              egress: resolution.egress,
-              ...(egressTokenForTurn ? { egressToken: egressTokenForTurn } : {}),
-              scratch: { key: `owner-auth:${session.id}:${transferId}` },
-              routeScopeId: memoryScopeId,
-              ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
-            },
-          );
-          ownerAuthBox.pending = handle;
-          ownerAuthBox.handle = handle;
-          return handle;
-        })().catch(async (err) => {
-          ownerAuthProvisionInFlight = null;
-          if (err instanceof SandboxProvisionCleanupError) ownerAuthBox.pending = err.handle;
-          const pendingHandle = ownerAuthBox.pending;
-          if (pendingHandle) {
-            try {
-              await destroyEphemeralHandle(pendingHandle);
-              if (ownerAuthBox.pending === pendingHandle) ownerAuthBox.pending = null;
-            } catch (cleanupErr) {
-              deps.errors?.record(
-                {
-                  category: "sandbox",
-                  code: "owner_auth_init_cleanup_failed",
-                  message: errMessage(cleanupErr),
-                  scopeLabel: scopeId,
-                  sessionId: session.id,
-                },
-                cleanupErr,
-              );
-            }
-          }
-          throw err;
-        });
-        return ownerAuthProvisionInFlight;
-      }
-    : undefined;
   const reachBoxes = new Map<ScopeId, SandboxHandle>();
   const provisionForReach = async (target: ScopeId): Promise<SandboxHandle> => {
     const cached = reachBoxes.get(target);
@@ -578,11 +493,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     return (await deps.processes.listLive()).some((process) => process.sandboxId === handle.resourceId);
   };
   const reclaimBox = async (): Promise<void> => {
-    let ownerCleanupError: unknown;
     let scratchCleanupError: unknown;
-    if (ownerAuthProvisionInFlight)
-      await ownerAuthProvisionInFlight.catch(swallowAs("orchestrator: owner auth provision", undefined));
-    ownerAuthProvisionInFlight = null;
     const reachHandles = [...reachBoxes.values()];
     reachBoxes.clear();
     await Promise.all(
@@ -605,26 +516,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         await deps.sandbox.teardown(h).catch(swallowAs("orchestrator: teardown", undefined));
       }),
     );
-    const ownerHandle = ownerAuthBox.handle ?? ownerAuthBox.pending;
-    if (ownerHandle) {
-      try {
-        await destroyEphemeralHandle(ownerHandle);
-        ownerAuthBox.handle = null;
-        ownerAuthBox.pending = null;
-      } catch (err) {
-        ownerCleanupError = err;
-        deps.errors?.record(
-          {
-            category: "sandbox",
-            code: "owner_auth_destroy_failed",
-            message: errMessage(err),
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          },
-          err,
-        );
-      }
-    }
     if (scratchProvisionInFlight)
       await scratchProvisionInFlight.catch(swallowAs("orchestrator: scratch provision", undefined));
     scratchProvisionInFlight = null;
@@ -692,7 +583,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.handle = null;
     box.pending = null;
     if (!handle) {
-      if (ownerCleanupError) throw ownerCleanupError;
       if (scratchCleanupError) throw scratchCleanupError;
       return;
     }
@@ -710,19 +600,17 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ...(keepWarm ? { keepWarm: true } : {}),
       ...(box.used ? {} : { homeUnchanged: true }),
     });
-    if (ownerCleanupError) throw ownerCleanupError;
     if (scratchCleanupError) throw scratchCleanupError;
   };
 
   return {
     scratchBox,
-    ownerAuthBox,
-    ownerAuthCommand,
     provision,
     provisionScratch,
+    provisionJobComputer,
+    provisionJobSandbox,
     accessResource,
     provisionResource,
-    provisionOwnerAuth,
     useSkill,
     provisionForReach,
     reclaimBox,

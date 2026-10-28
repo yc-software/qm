@@ -47,7 +47,7 @@ function fixture(fail?: Error) {
       },
     },
   };
-  const readHistory = createSlackHistoryReader({ core, ids, source: "mirror", historyClient });
+  const readHistory = createSlackHistoryReader({ core, ids, historyClient });
   return { cache, calls, notes, readHistory };
 }
 

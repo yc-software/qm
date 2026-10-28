@@ -9,7 +9,10 @@ import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
 async function main(): Promise<void> {
-  assert.ok(process.env.ANTHROPIC_API_KEY, "a live model credential is required");
+  assert.ok(
+    process.env.ANTHROPIC_API_KEY || process.env.MODEL_GATEWAY_URL,
+    "a live model credential or model gateway is required",
+  );
   assert.ok(process.env.LOCAL_SANDBOX_IMAGE?.startsWith("sha256:"), "use an immutable local sandbox image ID");
   assert.ok(process.env.QM_CORE_CONTAINER, "the candidate core container name is required");
   assert.ok(process.env.EXPECTED_SOURCE_SHA, "the expected source pin is required");

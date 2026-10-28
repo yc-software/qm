@@ -5,6 +5,7 @@ import { CoreClient } from "./core.ts";
 import {
   Ctx,
   isLiveStatusText,
+  judgeEndpoint,
   liveRunExitCode,
   releaseBlockers,
   slug,
@@ -55,8 +56,7 @@ async function buildEnv(): Promise<Env> {
     botUserId,
     qaUserId: qaAuth.userId,
     teamId: qaAuth.teamId,
-    anthropicApiKey: requireEnv("ANTHROPIC_API_KEY"),
-    judgeModel: process.env.LIVE_E2E_JUDGE_MODEL ?? "claude-haiku-5-5",
+    judge: judgeEndpoint(process.env, process.env.LIVE_E2E_JUDGE_MODEL ?? "claude-haiku-5-5"),
     ...(process.env.LIVE_E2E_TARGET_CHANNEL ? { targetChannel: process.env.LIVE_E2E_TARGET_CHANNEL } : {}),
     sandbox:
       process.env.LIVE_E2E_SANDBOX_AVAILABLE === "1" ||

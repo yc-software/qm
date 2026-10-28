@@ -8,8 +8,12 @@ import type { RecipientResolution } from "../directory/directory-store.ts";
 export const SHARED_SKILL_TRIGGER_REFUSAL =
   "a skill in a shared scope can only be changed by a person, not an automated trigger";
 
+export function isMultiMemberSkillScope(scope: ScopeId): boolean {
+  return isSharedScope(scope) || parseScopeId(scope).kind === "team";
+}
+
 export function triggerBlocksSharedSkill(homeScope: ScopeId, liveActor: boolean): boolean {
-  return isSharedScope(homeScope) && !liveActor;
+  return isMultiMemberSkillScope(homeScope) && !liveActor;
 }
 
 export function livePersonCapability(c: { liveActor?: boolean; liveAuthor?: boolean } | undefined): boolean {

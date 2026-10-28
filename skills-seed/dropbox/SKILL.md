@@ -20,7 +20,8 @@ cached credential would):
 
 Both carry the **same** Dropbox token (one OAuth grant spans every host), so if a
 host-specific var is empty, `$VAULT_TOKEN_API_DROPBOXAPI_COM` works as the bearer for any
-Dropbox host. Pass it as `-H "Authorization: Bearer $VAULT_TOKEN_..."`. Never ask the user
+Dropbox host. Pass it as `-H "Authorization: Bearer $VAULT_TOKEN_..."` on every call;
+nothing on the network path adds it for you. Never ask the user
 for a token, log it, or use another principal's credential or a service fallback.
 
 If `$VAULT_TOKEN_API_DROPBOXAPI_COM` is **empty**: per-user connector tokens are injected
@@ -29,7 +30,13 @@ they're absent by design, even for a fully-connected user. So don't tell a chann
 reconnect; ask them to DM you to run this. Only if it's empty inside a DM does it mean they
 haven't connected Dropbox — then point them to the Connectors page.
 
-On **401**: the token is expired/invalid → have them reconnect — _unless_ the error body's
+On **400 `Invalid authorization value`**: the header was missing or empty, so Dropbox
+never checked the token. Fix your command (`echo ${#VAULT_TOKEN_API_DROPBOXAPI_COM}` shows
+the variable is set) and retry; this says nothing about the user's connection. Before
+telling a user Dropbox is broken, confirm with `users/get_current_account` below.
+
+On **401** (`invalid_access_token`, `expired_access_token`): the token was sent and
+rejected → have them reconnect — _unless_ the error body's
 `.tag` is `missing_scope`, in which case the app lacks a permission; name the `required_scope`
 it returns (the connected app grants account_info.read, files.metadata.read,
 files.content.read/write, sharing.read/write).

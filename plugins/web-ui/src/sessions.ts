@@ -55,6 +55,15 @@ import {
 } from "./core-bridge";
 import { deepLinkPath, isPlainLeftClick, sessionLink, UI_BASE } from "./deep-link";
 import {
+  cachedTranscript,
+  clearTranscriptCache,
+  dropTranscript,
+  pageAnchor,
+  storeTranscript,
+  transcriptChanged,
+} from "./transcript-cache";
+import { reportHandledError } from "./browser-errors";
+import {
   activityOf,
   automationRunLabel,
   chatBrowseStatusMatches,
@@ -109,6 +118,7 @@ import {
   splitState,
 } from "./split";
 import { liveTurnThreadRef } from "./working-dot";
+import { reportSessionSwitch } from "./browser-errors.ts";
 import { emptySelection, pruneSelection, selectionClick, type SessionSelection } from "./session-select";
 
 export const sessionsState = {
@@ -216,6 +226,7 @@ export function resetSessionsState(): void {
   sessionsState.openMenuId = null;
   sessionsState.renamingId = null;
   sessionsState.openingKey = null;
+  clearTranscriptCache();
   sessionsState.collapsedProjectScopes.clear();
   renameDraft = "";
   refreshingTitleIds.clear();
@@ -769,7 +780,7 @@ function sessionWorking(s: CoreSession): boolean {
 }
 
 function statusMarks(s: CoreSession): TemplateResult {
-  const ind = rowIndicators(s, liveThreads(), sessionsState.list);
+  const ind = rowIndicators(s, liveThreads());
   return html`${ind.working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}${
     ind.awaiting ? html`<span class="awaiting-dot" aria-label="Waiting for your reply"></span>` : nothing
   }${
@@ -1444,7 +1455,6 @@ async function commitRename(s: CoreSession): Promise<void> {
   await persistSessionPatch(s.id, { title: desired });
 }
 
-/** Archive a session by id — closes any surface showing it and updates the Recents list immediately. */
 export function archiveSessionById(sessionId: string): void {
   const s = sessionsState.list.find((x) => x.id === sessionId);
   if (s && !s.archived) {
@@ -1796,13 +1806,15 @@ async function runSessionsRefresh(
   try {
     const surface = sessionsState.webOnly ? "web" : undefined;
     const roots = [...new Set(openConversationIds())];
-    const [page, children] = await Promise.all([
+    const nested = roots.filter((id) => sessionsState.list.some((row) => row.id === id && row.parentSessionId));
+    const [page, children, nestedRows] = await Promise.all([
       fetchSessionPage({ limit: SESSION_BATCH_SIZE, ...(surface ? { surface } : {}) }),
       Promise.all(
         roots.map(
           async (id) => [id, await fetchSessionChildren(id).catch(swallowAs("web-ui: load subagents", null))] as const,
         ),
       ),
+      Promise.all(nested.map((id) => fetchSessionRow({ id }).catch(swallowAs("web-ui: refresh subagent", null)))),
     ]);
     if (seq !== sessionRefreshSeq) return sessionsState.loaded || ((await newerRun()) ?? false);
     if (patchEpoch !== sessionPatchEpoch) {
@@ -1821,6 +1833,10 @@ async function runSessionsRefresh(
       openConversationIds(),
     );
     for (const [id, rows] of children) if (rows) list = mergeChildren(list, id, rows);
+    list = upsertSessions(
+      list,
+      nestedRows.filter((row) => row !== null),
+    );
     sessionsState.list = list;
     sessionsState.hasArchived = Boolean(page.hasArchived);
     if (!activePaged) activeCursor = page.nextCursor;
@@ -1908,9 +1924,32 @@ export async function openSessionInto(
     return;
   }
   if (s.id === conv.state.sessionId && !entriesPrefetch) return;
+  const started = Date.now();
 
   refreshSessionsOnOpen();
   void loadSessionNeighbors(s);
+
+  const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
+  if (cached) {
+    if (!isLiveConversation(conv)) return;
+    if (tracked) sessionsState.openingKey = null;
+    conv.mountLoadingPane();
+    const approvals = s.canContinue === true ? fetchSessionApprovals(s.id) : null;
+    mountTranscript(conv, s, cached, approvals);
+    renderList();
+    reportSwitchPainted(started, {
+      fetchedMs: started,
+      loaded: true,
+      prefetched: false,
+      cached: true,
+      tracked,
+      entries: cached.entries?.length ?? 0,
+    });
+    void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
+      reportHandledError("web:transcript_reconcile", error),
+    );
+    return;
+  }
 
   const opening = s.id;
   if (tracked) {
@@ -1923,11 +1962,25 @@ export async function openSessionInto(
   const fetchEntries = (): Promise<TranscriptPage | null> =>
     fetchTranscript(s.id, { tailTurns: TAIL_TURNS }).catch(swallowAs("web-ui: load session transcript", null));
   const continuable = s.canContinue === true;
-  // Approvals load alongside the transcript but never hold up the first draw:
-  // the chat mounts as soon as entries arrive, and cards attach when this settles.
   const approvals = continuable ? (approvalsPrefetch ?? fetchSessionApprovals(s.id)) : null;
-  const entriesRes = await (entriesPrefetch ? entriesPrefetch.then((r) => r ?? fetchEntries()) : fetchEntries());
+  let prefetched = false;
+  const entriesRes = await (entriesPrefetch
+    ? entriesPrefetch.then((r) => {
+        prefetched = r !== null;
+        return r ?? fetchEntries();
+      })
+    : fetchEntries());
   if (!isLiveConversation(conv) || !isCurrent()) return;
+  const fetched = Date.now();
+  const reportPainted = () =>
+    reportSwitchPainted(started, {
+      fetchedMs: fetched,
+      loaded: entriesRes !== null,
+      prefetched,
+      cached: false,
+      tracked,
+      entries: entriesRes?.entries?.length ?? 0,
+    });
 
   if (tracked) {
     if (sessionsState.openingKey !== opening) return;
@@ -1939,25 +1992,78 @@ export async function openSessionInto(
   }
 
   if (!entriesRes) {
+    dropTranscript(s.id);
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
+    reportPainted();
     return;
   }
 
-  const split = inheritedTranscript(s, entriesRes.entries ?? []);
-  const messages = entriesToMessages(split.current, transcriptModel());
-  const inheritedMessages = entriesToMessages(split.inherited, transcriptModel());
-  const earlier = currentEarlierCount(s, entriesRes.earlierEntries ?? 0);
-  const anchorSeq = entriesRes.entries?.[0]?.seq ?? null;
-  if (continuable) {
-    conv.mountContinuable(s.threadRef, s.id, s.scopeId, messages, s.channelName ?? null, s, inheritedMessages);
-    conv.setTranscriptWindow(anchorSeq, earlier, (entriesRes.earlierEntries ?? 0) > 0);
-    if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
-  } else {
-    conv.mountReadOnly(s, messages, earlier, anchorSeq, inheritedMessages);
-  }
-  conv.setPins(entriesRes.pins ?? []);
-  conv.setGoal(entriesRes.goal ?? null);
-  conv.setTurnRuntime(entriesRes.runtime ?? null);
+  storeTranscript(s.id, entriesRes);
+  mountTranscript(conv, s, entriesRes, approvals);
   renderList();
+  reportPainted();
+}
+
+function reportSwitchPainted(
+  started: number,
+  result: {
+    fetchedMs: number;
+    loaded: boolean;
+    prefetched: boolean;
+    cached: boolean;
+    tracked: boolean;
+    entries: number;
+  },
+): void {
+  if (document.visibilityState !== "visible") return;
+  requestAnimationFrame(() => setTimeout(() => reportSessionSwitch(started, { ...result, endMs: Date.now() })));
+}
+
+function mountTranscript(
+  conv: Conversation,
+  s: CoreSession,
+  page: TranscriptPage,
+  approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
+): void {
+  if (s.canContinue === true) {
+    const split = inheritedTranscript(s, page.entries ?? []);
+    conv.mountContinuable(
+      s.threadRef,
+      s.id,
+      s.scopeId,
+      entriesToMessages(split.current, transcriptModel()),
+      s.channelName ?? null,
+      s,
+      entriesToMessages(split.inherited, transcriptModel()),
+    );
+    const rawEarlier = page.earlierEntries ?? 0;
+    conv.setTranscriptWindow(pageAnchor(page), currentEarlierCount(s, rawEarlier), rawEarlier > 0);
+    if (approvals) conv.attachApprovalsWhenLoaded(s.id, approvals);
+    conv.setPins(page.pins ?? []);
+  } else {
+    conv.mountReadOnlyPage(s, page);
+  }
+  conv.setGoal(page.goal ?? null);
+  conv.setTurnRuntime(page.runtime ?? null);
+}
+
+async function reconcileCachedTranscript(
+  conv: Conversation,
+  s: CoreSession,
+  cached: TranscriptPage,
+  approvals: Promise<{ approvals: PendingApproval[] } | null> | null,
+  mountedAnchor: number | null,
+): Promise<void> {
+  let page: TranscriptPage;
+  try {
+    page = await fetchTranscript(s.id, { tailTurns: TAIL_TURNS });
+  } catch (error) {
+    dropTranscript(s.id);
+    throw error;
+  }
+  if (!transcriptChanged(cached, page)) return;
+  storeTranscript(s.id, page);
+  if (isLiveConversation(conv) && conv.state.sessionId === s.id)
+    await conv.applyTranscript(s, page, approvals, mountedAnchor);
 }

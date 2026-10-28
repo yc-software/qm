@@ -456,38 +456,29 @@ test("thread broadcast snapshots retain broadcast membership through metadata up
   assert.equal(f.events[1].broadcast, undefined);
 });
 
-test("real message handler checks prior stake before ingesting the current reply without a shadow miss", async (t) => {
+test("real message handler checks prior stake in the mirror before ingesting the current reply", async () => {
   const cache = createMemorySurfaceCache();
   await cache.ingest([
     { container: "C1", ts: "1.000001", text: "root", authorId: "U1" },
     { container: "C1", ts: "2.000001", sub: "1.000001", text: "prior reply", authorId: "UBOT", self: true },
   ]);
-  const calls: any[] = [];
-  const records: any[] = [];
-  t.mock.method(console, "info", (text: string) => {
-    records.push(JSON.parse(text));
-  });
   const currentTs = "3.000001";
+  const currentStoredAtRead: boolean[] = [];
   const client = {
     conversations: {
-      replies: async (args: any) => {
-        calls.push(args);
-        assert.deepEqual(args, { channel: "C1", ts: "1.000001", limit: 200, latest: currentTs, inclusive: false });
-        assert.equal((await cache.readMessages("C1", { at: currentTs })).length, 0);
-        return {
-          messages: [
-            { ts: "1.000001", user: "U1", text: "root" },
-            { ts: "2.000001", thread_ts: "1.000001", user: "UBOT", text: "prior reply" },
-          ],
-          has_more: false,
-        };
+      replies: async () => {
+        throw new Error("unexpected Slack read");
       },
     },
   };
   const reader = createSlackHistoryReader({
-    source: "shadow",
     ids,
-    core: { readSurfaceMessages: (channel: string, opts: any) => cache.readMessages(channel, opts) } as any,
+    core: {
+      readSurfaceMessages: async (channel: string, opts: any) => {
+        currentStoredAtRead.push((await cache.readMessages("C1", { at: currentTs })).length > 0);
+        return cache.readMessages(channel, opts);
+      },
+    } as any,
     historyClient: client as never,
   });
   const threads = createThreadTracker();
@@ -509,14 +500,8 @@ test("real message handler checks prior stake before ingesting the current reply
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.dispatches.length, 1);
-  assert.equal(calls.length, 1);
-  assert.equal(records.length, 1);
-  assert.equal(records[0].liveMessages, 2);
-  assert.equal(records[0].matchingMessages, 2);
-  assert.equal(records[0].liveMessagesMissingFromStorage, 0);
-  assert.equal(records[0].liveMessagesMissingFromMirror, 0);
+  assert.equal(currentStoredAtRead[0], false);
   assert.equal(await handler.botHasStakeInThread(client, "C1", "1.000001", "4.000001"), true);
-  assert.equal(calls.length, 1);
 });
 
 test("stake fallback bounds Slack replies while omitted cutoff and negative tracking remain unchanged", async () => {

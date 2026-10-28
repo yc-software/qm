@@ -20,7 +20,6 @@ mock.module("./support/mock-harness.ts", {
         if (!match) return run(turn);
         const command = JSON.parse(match[1]!) as {
           id?: string;
-          ownerAuth?: boolean;
           command: string;
           credentials?: string[];
         };
@@ -29,7 +28,6 @@ mock.module("./support/mock-harness.ts", {
         try {
           const out = await turn.tools.execute(command.command, {
             ...(command.id ? { sandboxId: command.id } : {}),
-            ...(command.ownerAuth ? { ownerAuth: true } : {}),
             ...(command.credentials ? { credentials: command.credentials } : {}),
           });
           reply = out.stdout.trim() || out.stderr.trim();
@@ -233,7 +231,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
   const created = await b.request("POST", "/v1/crons", owner, {
     title: "Owner keychain proof",
     schedule: { everyMs: 3600000 },
-    task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
+    task: `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_PROOF_TOKEN" = "synthetic-owner-sentinel" && printf owner-credential-present' })}`,
   });
   assert.equal(created.status, 200, JSON.stringify(created.body));
   const id = created.body.cron.id;
@@ -276,7 +274,7 @@ for (const isPrivate of [false, true]) {
       const response = await b.request("POST", "/v1/crons", await b.cap("alice"), {
         title: "Opt-out proof",
         schedule: { everyMs: 3600000 },
-        task: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
+        task: `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_VETO_TOKEN" = "synthetic-veto-sentinel" && printf veto-credential-present' })}`,
       });
       assert.equal(response.status, 200, JSON.stringify(response.body));
       const id = response.body.cron.id;
@@ -322,7 +320,7 @@ test("HTTP private channel cron runs without its owner's keychain once the conve
     createdBy: "alice",
     ownerScopeId: "channel:public-room",
     schedule: { everyMs: 3600000 },
-    action: `!proof ${JSON.stringify({ ownerAuth: true, credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_ISOLATED_TOKEN" = "synthetic-isolated-sentinel" && printf isolated-credential-present' })}`,
+    action: `!proof ${JSON.stringify({ credentials: [credentialHandle(credential)], command: 'test "$CONTINUITY_ISOLATED_TOKEN" = "synthetic-isolated-sentinel" && printf isolated-credential-present' })}`,
     destination: { type: "slack", target: "public-room", audienceScopeId: "channel:public-room" },
   });
   const fired = await b.scheduler.runNow(cron.id);

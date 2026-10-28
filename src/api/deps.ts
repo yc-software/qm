@@ -77,6 +77,7 @@ import type { UiStateStore } from "../surfaces/ui-state.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { ConnectorTokenSource, SlackUserClient } from "../loops/sources/adapter.ts";
 import type { RateLimiter } from "../ratelimit/rate-limiter.ts";
+import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
@@ -86,7 +87,7 @@ import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 export interface ServerDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
-  browserModelGateway?: ModelGatewayTransportConfig;
+  modelGatewayTransport?: ModelGatewayTransportConfig;
   resolveBrowserCompanyKeys?: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   slackAccounts?: DurableMap<SlackAccountLink>;
   composioReturns?: DurableMap<ComposioReturn>;
@@ -152,6 +153,7 @@ export interface ServerDeps {
   emailAuthDomain?: string;
   slackAllowFrom?: readonly string[];
   rateLimiter?: RateLimiter;
+  budget?: BudgetTracker;
   sessions?: SessionStore;
   screenSecurity?: SecurityScreenProbe;
   auditLog?: AuditLog;
@@ -164,7 +166,6 @@ export interface ServerDeps {
   workspace?: WorkspaceStore;
   files?: FileArtifactStore;
   fileUploads?: DirectFileUploads;
-  filesDirectUploadsEnabled?: boolean;
   memory?: MemoryService;
   sandboxBackend?: string;
   egressDeclaredEnforcement?: EgressEnforcement;

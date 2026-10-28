@@ -36,8 +36,35 @@ export const suggestedActivityRoutes: Route[] = [
       return sendJson(
         res,
         200,
-        await deps.suggestedActivities.get(body.principalId, seeds, timezone, body.poll === true),
+        await deps.suggestedActivities.get(body.principalId, seeds, {
+          timezone,
+          poll: body.poll === true,
+          refresh: body.refresh === true,
+        }),
       );
+    },
+  },
+  {
+    method: "POST",
+    path: "/v1/suggested-activities/dismiss",
+    auth: "source",
+    handle: async ({ res, deps, body, actor }) => {
+      if (!deps.suggestedActivities) return sendJson(res, 404, { error: "not_found" });
+      if (
+        !isObj(body) ||
+        typeof body.principalId !== "string" ||
+        !body.principalId ||
+        body.principalId.length > 200 ||
+        typeof body.id !== "string" ||
+        body.id.length > 64
+      ) {
+        return sendJson(res, 400, { error: "bad_request" });
+      }
+      if (actor && actor.p !== body.principalId) return sendJson(res, 403, { error: "forbidden" });
+      if (!(await deps.suggestedActivities.dismiss(body.principalId, body.id))) {
+        return sendJson(res, 404, { error: "not_found" });
+      }
+      return sendJson(res, 200, { dismissed: true });
     },
   },
 ];

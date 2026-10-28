@@ -103,7 +103,6 @@ function buildOrchestrator(
   sandbox: Sandbox,
   errors?: ErrorLog,
   harness = createMockHarness(),
-  eagerProvision = false,
   surfaceCache?: SurfaceCache,
 ) {
   const config = createMemoryConfigStore(ORG);
@@ -134,7 +133,6 @@ function buildOrchestrator(
     memory: createMemoryService(workspace),
     deploy,
     acl,
-    eagerProvision,
     ...(errors ? { errors } : {}),
     ...(surfaceCache ? { surfaceCache } : {}),
   });
@@ -209,7 +207,7 @@ test("spine-routed titles use visible text instead of the internal wake envelope
 
 test("background: a turn that never used its eagerly provisioned box returns before teardown and marks the home unchanged", async () => {
   const g = gatedSandbox();
-  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), true);
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: "r4", background: true });
   assert.equal(first.status, "ok");
@@ -232,6 +230,35 @@ test("background: a turn that never used its eagerly provisioned box returns bef
   assert.equal(g.teardownFinished, 2);
 });
 
+test("background: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
+  const g = gatedSandbox();
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
+
+  const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7", background: true });
+  assert.equal(first.status, "ok");
+  for (let i = 0; i < 200 && g.teardownStarted === 0; i++) await tick();
+  g.release();
+  for (let i = 0; i < 200 && g.teardownFinished === 0; i++) await tick();
+
+  const turn = orch.handleTurn({ ...dm("dm:U1:t7", "!finish-silent-paused"), runId: "r8", background: true });
+  const paused = await Promise.race([turn, new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000))]);
+  assert.ok(paused, "the paused turn returned while the teardown was still gated");
+  assert.equal(paused.status, "pending_approval");
+  assert.equal(paused.pendingApprovals?.length, 1);
+  assert.equal(g.provisioned, 2, "the box was provisioned eagerly for the paused turn");
+  assert.equal(g.teardownFinished, 1, "the approval card returned without waiting for that box's teardown");
+
+  const { lease } = await sessions.acquireLease(paused.sessionId!);
+  assert.ok(lease, "the resumed turn can claim the session while the box is still being reclaimed");
+  await sessions.releaseLease(lease!);
+
+  for (let i = 0; i < 200 && g.teardownStarted < 2; i++) await tick();
+  assert.equal(g.teardownStarted, 2, "the detached tail still reclaims the box");
+  g.release();
+  for (let i = 0; i < 200 && g.teardownFinished < 2; i++) await tick();
+  assert.equal(g.teardownFinished, 2);
+});
+
 test("background: the message edit catch-up still runs before the lease is released", async () => {
   const g = gatedSandbox();
   let asked = 0;
@@ -244,7 +271,7 @@ test("background: the message edit catch-up still runs before the lease is relea
           }
         : async () => [],
   }) as unknown as SurfaceCache;
-  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), false, surfaceCache);
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), surfaceCache);
   const result = await orch.handleTurn({
     ...dm("ch:C1:t1", "!run echo hi"),
     surface: "slack",

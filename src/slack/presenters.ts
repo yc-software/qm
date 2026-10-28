@@ -1,3 +1,4 @@
+import { escapeSlackText } from "./mrkdwn.ts";
 import { swallow } from "../util/errors.ts";
 
 export const DEFAULT_ACK_REACTIONS = ["eyes", "mag", "hourglass_flowing_sand", "telescope", "saluting_face"] as const;
@@ -149,7 +150,7 @@ export function renderGoalNotice(goal: GoalNoticeView): string {
     .replace(/\s+/g, " ")
     .trim();
   const bounded = oneLine.length > 140 ? `${oneLine.slice(0, 139)}…` : oneLine;
-  const objective = bounded.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const objective = escapeSlackText(bounded);
   if (goal.status === "complete") return `✓ Goal complete: ${objective}`;
   if (goal.status === "cancelled") return `✕ Goal cancelled: ${objective}`;
   if (goal.status === "paused") return `⏸ Goal paused: ${objective}`;

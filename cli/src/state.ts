@@ -1,7 +1,21 @@
+import { randomUUID } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { CliError } from "./log.ts";
+import { sleep } from "./util.ts";
 
 const xdgConfigHome = (): string => process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 
@@ -14,43 +28,61 @@ function ensureDir(dir: string): string {
 
 export const deploymentDir = (orgId: string): string => join(cliStateDir(), "deployments", orgId);
 
-const pause = (ms: number): void => {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-};
-
-export function withDeploymentLock<T>(orgId: string, fn: () => T): T {
-  const dir = ensureDir(deploymentDir(orgId));
-  const lock = join(dir, "up.lock");
-  const deadline = Date.now() + 30_000;
-  for (;;) {
-    try {
-      mkdirSync(lock);
-      writeFileSync(join(lock, "pid"), String(process.pid));
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      let stale = false;
-      try {
-        const pid = Number(readFileSync(join(lock, "pid"), "utf8"));
-        if (!Number.isInteger(pid) || pid <= 0) stale = Date.now() - statSync(lock).mtimeMs > 5_000;
-        else process.kill(pid, 0);
-      } catch (probe) {
-        const code = (probe as NodeJS.ErrnoException).code;
-        stale =
-          code === "ESRCH" || (code === "ENOENT" && existsSync(lock) && Date.now() - statSync(lock).mtimeMs > 5_000);
-      }
-      if (stale) {
-        rmSync(lock, { recursive: true, force: true });
-        continue;
-      }
-      if (Date.now() >= deadline) throw new CliError(`another qm up is already running for org ${orgId}`);
-      pause(50);
-    }
-  }
+function releaseLock(lock: string, owner?: string): void {
+  if (owner) rmSync(join(lock, owner), { force: true });
   try {
-    return fn();
+    rmdirSync(lock);
+  } catch (error) {
+    if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  }
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function reclaimStaleLock(lock: string): void {
+  try {
+    const [owner, ...others] = readdirSync(lock);
+    if (!owner || others.length) return;
+    const pid = Number(readFileSync(join(lock, owner), "utf8"));
+    const held = Number.isInteger(pid) && pid > 0 ? alive(pid) : Date.now() - statSync(lock).mtimeMs <= 5_000;
+    if (!held) releaseLock(lock, owner);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+export async function withDeploymentLock<T>(lock: string, fn: () => Promise<T>): Promise<T> {
+  ensureDir(dirname(lock));
+  const candidate = mkdtempSync(`${lock}-`);
+  const owner = `owner-${randomUUID()}`;
+  const deadline = Date.now() + 30_000;
+  let acquired = false;
+  try {
+    writeFileSync(join(candidate, owner), String(process.pid));
+    for (;;) {
+      reclaimStaleLock(lock);
+      try {
+        renameSync(candidate, lock);
+        acquired = true;
+        break;
+      } catch (error) {
+        if (!["EEXIST", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      }
+      if (Date.now() >= deadline)
+        throw new CliError(`Another qm operation holds ${lock}; wait for it to finish and retry`);
+      await sleep(50);
+    }
+    return await fn();
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    if (acquired) releaseLock(lock, owner);
+    else rmSync(candidate, { recursive: true, force: true });
   }
 }
 

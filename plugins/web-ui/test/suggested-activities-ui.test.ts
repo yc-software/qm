@@ -87,7 +87,11 @@ test("activity selection fills and persists an editable draft without sending or
     const agent = { state: agentState } as unknown as Agent;
     const draw = () =>
       render(
-        html`${suggestedActivities(appState.me.suggestedActivities, (activity: SuggestedActivity) => composer!.fillSuggestedPrompt(activity.prompt, agent), Boolean(composer!.state.draft || composer!.state.attachments.length))}${composer!.composerForm(agent)}`,
+        html`${suggestedActivities(appState.me.suggestedActivities, {
+          onSelect: (activity: SuggestedActivity) => composer!.fillSuggestedPrompt(activity.prompt, agent),
+          redraw: draw,
+          collapsed: Boolean(composer!.state.draft || composer!.state.attachments.length),
+        })}${composer!.composerForm(agent)}`,
         host,
       );
     const ctx = {

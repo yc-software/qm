@@ -13,7 +13,7 @@ export interface WorkspaceStore {
   list(scopeId: ScopeId, opts?: { limit: number }): Promise<string[]>;
 }
 
-function safeJoin(baseDir: string, relPath: string): string {
+export function safeJoin(baseDir: string, relPath: string): string {
   const target = resolve(baseDir, relPath);
   const rel = relative(baseDir, target);
   if (rel.startsWith("..") || isAbsolute(rel)) {

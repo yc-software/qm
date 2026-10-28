@@ -489,3 +489,15 @@ test("a react directive followed by a huge whitespace run strips in linear time"
   extractReactions("[[react: eyes]] tail" + " ".repeat(100000) + "no newline");
   assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 200);
 });
+
+test("extractReactions stays linear-time on a flood of unterminated directives", () => {
+  const opener = "[[react:";
+  const flood = opener.repeat(16_000);
+  const started = performance.now();
+  const r = extractReactions(flood);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 1_000, `flood took ${Math.round(elapsed)}ms`);
+  assert.deepEqual(r.reactions, []);
+  assert.equal(r.text, flood.slice(0, -opener.length), "only the trailing unterminated directive is stripped");
+  assert.deepEqual(extractReactions("[[react: eyes [[react: tada]]").reactions, [{ names: ["tada"] }]);
+});

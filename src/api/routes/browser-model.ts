@@ -1,4 +1,5 @@
 import { modelRequestOverrides } from "../../model/pi-models.ts";
+import { gatewayRoot } from "../../model/provider-endpoints.ts";
 import { orgId } from "../../config.ts";
 import { scopeId } from "../../types.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
@@ -27,7 +28,7 @@ const REQUEST_FIELDS = new Set([
 
 async function browserModel(ctx: ApiCtx): Promise<void> {
   const { capability, deps, body, res } = ctx;
-  const gateway = deps.browserModelGateway;
+  const gateway = deps.modelGatewayTransport;
   if (!capability?.browserModel) return sendJson(res, 403, { error: "browser model grant required" });
   if (deps.config && (await deps.config.getSecurityPostureDurable(capability.scopeId)) === "strict")
     return sendJson(res, 403, { error: "browser model requests are disabled in strict posture" });
@@ -89,7 +90,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
     await gateway.refresh?.();
     const target = gateway.models[capability.browserModel];
     if (!target) return sendJson(res, 503, { error: "browser model unavailable" });
-    const response = await fetch(`${gateway.url.replace(/\/+$/, "").replace(/\/v1$/, "")}/v1/chat/completions`, {
+    const response = await fetch(`${gatewayRoot(gateway.url)}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", [gateway.apiKeyHeader]: gateway.apiKey },
       body: JSON.stringify({ ...input, model: target, stream: false }),

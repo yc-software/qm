@@ -1,6 +1,7 @@
 import { isOwnStatusCard } from "./message-gating.ts";
 import { swallow } from "../util/errors.ts";
 import { decodeSlackEntities, mentionsBot } from "./lib.ts";
+import { mentionedUserIds } from "./mrkdwn.ts";
 import { messageWithForwardedContent } from "./forwards.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
@@ -91,8 +92,7 @@ export function createMirror(deps: {
   }
 
   async function resolveMentionNames(client: any, text: string): Promise<Record<string, string>> {
-    const mentionIds = new Set<string>();
-    for (const match of text.matchAll(/<@(U\w+)(?:\|[^>]*)?>/g)) mentionIds.add(match[1] as string);
+    const mentionIds = new Set(mentionedUserIds(text));
     const names = new Map<string, string>();
     await Promise.all(
       [...mentionIds].slice(0, MAX_NAME_LOOKUPS).map(async (id) => {
