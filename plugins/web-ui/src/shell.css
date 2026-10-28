@@ -7397,6 +7397,10 @@ h3.ambient-field-label {
   display: none;
 }
 
+.dockview-theme-qm .dv-pre-actions-container:has(> .strip-zones) {
+  display: contents;
+}
+
 .dockview-theme-qm .dv-tabs-container {
   align-items: center;
 }
@@ -7414,6 +7418,7 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) {
+  padding-left: var(--split-strip-pad);
   --dv-activegroup-visiblepanel-tab-background-color: var(--conversation-hover);
   --dv-inactivegroup-visiblepanel-tab-background-color: var(--secondary);
 }
