@@ -2710,6 +2710,10 @@ qm-markdown .tok-in {
 .work-head .icon {
   color: inherit;
 }
+.work-head .work-elapsed {
+  color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
+  font-variant-numeric: tabular-nums;
+}
 .activity-chevron {
   display: inline-flex;
   flex: 0 0 auto;

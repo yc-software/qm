@@ -437,6 +437,7 @@ export function createChatSurface(
   let ctaText = CHAT_CTAS[0]!;
   let workTicker: ReturnType<typeof setInterval> | null = null;
   let liveWorkExpanded = false;
+  let liveFoldOpened = false;
   const openThinking = new Set<string>();
 
   function notePendingSessionOnSend(): void {
@@ -2393,6 +2394,7 @@ export function createChatSurface(
   function clearLiveWork(): void {
     if (chatState.liveWork?.goal) chatState.goal = chatState.liveWork.goal;
     chatState.liveWork = null;
+    liveFoldOpened = false;
     chatState.pendingSend = null;
     syncWorkTicker();
   }
@@ -3000,6 +3002,27 @@ export function createChatSurface(
     return workedLabel(work.status === "working" ? "Working" : "Worked", secs);
   }
 
+  function currentStepLabel(timeline: TimelineItem[], work: WorkBlock): string | null {
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const item = timeline[i]!;
+      if (item.kind === "thinking") {
+        return thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "").title;
+      }
+      if (item.kind !== "tool") continue;
+      if (toolRowKind(item.row, work.status) !== "running") continue;
+      const posting = postSpeechText(item.row, true);
+      if (posting) return "Posting message";
+      const session = sessionPresentation(item.row, work.status);
+      if (session) return [session.label, session.target].filter(Boolean).join(" ");
+      const semantic = activityLabel(item.row, work.status);
+      if (semantic) return semantic;
+      const call = (item.row.call?.payload ?? {}) as ToolPayload;
+      const result = (item.row.result?.payload ?? {}) as ToolPayload;
+      return (TOOL_META[toolCategory({ ...result, ...call })] ?? UNKNOWN_TOOL).active;
+    }
+    return null;
+  }
+
   function timelineKey(item: TimelineItem): string {
     if (item.kind === "tool") return `tool:${item.row.call?.seq ?? item.row.result?.seq ?? item.row.approval?.seq}`;
     if (item.kind === "approval") return `approval:${item.approval.requestId}`;
@@ -3034,9 +3057,13 @@ export function createChatSurface(
       const tail = active && last ? streamedAnswer(text, work) : "";
       const stopping = isStreaming && runSlot.stopGeneration === runSlot.generation;
       const animating = active && last && !stopping;
+      const oneStep = animating && !work.stale && !work.pendingApprovals?.length;
+      const step = oneStep ? currentStepLabel(timeline, work) : null;
       let label = last ? workLabel(work) : "Worked";
+      if (step) label = step;
       if (stopping && last) label = "Stop requested";
       if (stopped && last) label = `You stopped after ${goalElapsedLabel(0, workSeconds(work) * 1000)}`;
+      const elapsed = step && workSeconds(work) > 0 ? goalElapsedLabel(0, workSeconds(work) * 1000) : "";
       if (
         timeline.length === 1 &&
         !tail.trim() &&
@@ -3047,10 +3074,16 @@ export function createChatSurface(
         timeline.length || tail.trim() || (last && (active || work.pendingApprovals?.length))
           ? html`<details
               class=${stopped && last ? "stopped-work" : `work work-fold work-${work.status}`}
-              ?open=${last && (active || !!work.pendingApprovals?.length)}
+              ?open=${last && (oneStep ? liveFoldOpened : active || !!work.pendingApprovals?.length)}
+              @toggle=${(event: Event) => {
+                if (oneStep) liveFoldOpened = (event.currentTarget as HTMLDetailsElement).open;
+              }}
             >
               <summary class=${stopped && last ? "stopped-head" : "work-head"}>
-                ${sheenLabel(label, animating)}<span class="activity-chevron">${icon(ChevronRight, 14)}</span>
+                ${sheenLabel(label, animating)}${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span
+                  class="activity-chevron"
+                  >${icon(ChevronRight, 14)}</span
+                >
               </summary>
               ${stopped && last ? nothing : html`<div class="work-divider"></div>`}
               <div class="work-rows">
