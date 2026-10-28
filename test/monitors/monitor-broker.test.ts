@@ -66,6 +66,15 @@ test("watching the same job in the same thread twice reattaches instead of doubl
   assert.equal(second.reattached, true);
   assert.equal(second.monitorId, first.monitorId);
   assert.equal((await store.list()).length, 1);
+  await broker.seenExit("p-1");
+  assert.equal((await store.list()).length, 1, "an explicit watch survives a seen exit");
+});
+
+test("an exit the agent already saw drops the automatic exit-only watch", async () => {
+  const { broker, store } = await harness();
+  armed(await broker.watch("p-1", { exitOnly: true }));
+  await broker.seenExit("p-1");
+  assert.equal((await store.list()).length, 0);
 });
 
 test("a repeat watch re-arms with the new settings instead of silently keeping stale ones", async () => {
@@ -189,4 +198,13 @@ test("an automatic exit-only watch never overrides an explicit one, and an expli
   armed(await broker.watch("p-1", { exitOnly: true }));
   assert.equal((await store.get(auto.monitorId))?.pattern, "");
   assert.equal((await store.list()).length, 1);
+  await broker.seenExit("p-1");
+  assert.equal((await store.list()).length, 1, "an explicit watch survives a seen exit");
+});
+
+test("an exit the agent already saw drops the automatic exit-only watch", async () => {
+  const { broker, store } = await harness();
+  armed(await broker.watch("p-1", { exitOnly: true }));
+  await broker.seenExit("p-1");
+  assert.equal((await store.list()).length, 0);
 });

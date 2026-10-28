@@ -160,24 +160,31 @@ export async function openSubagent(ctx: TurnContext, input: SessionOpenInput): P
 }
 
 async function wakeIdleRecipient(
-  { deps, binding }: TurnContext,
+  { deps, binding, cap }: TurnContext,
   target: Session,
+  root: Session,
   previous: Run | null,
   actorId: string,
   messageId: string,
 ): Promise<void> {
+  const toParent = target.id === binding.session.parentSessionId;
+  const edge = toParent || target.parentSessionId === binding.session.id;
+  const depth = (binding.request.sessionMessageDepth ?? 0) + 1;
   if (
     !previous ||
     previous.result?.stopped ||
     previous.request.actor.id !== actorId ||
-    (await deps.runs.inFlightForThread(target.threadRef)).length
+    (!edge && depth > SESSION_MESSAGE_DEPTH_CAP) ||
+    (await deps.runs.inFlightForThread(target.threadRef)).length ||
+    (await sessionTreeRunCount(deps.sessions, deps.runs, root)) >= cap
   )
     return;
   const wake: OrchestratorInput = { ...previous.request };
   for (const key of UNINHERITED_REQUEST_KEYS) delete wake[key];
   Object.assign(wake, {
+    ...(edge ? {} : { privateSessionMessage: true, sessionMessageDepth: depth, readOnly: true }),
     sessionSenderId: binding.session.id,
-    delegatingRunId: target.id === binding.session.parentSessionId ? previous.id : binding.request.runId,
+    delegatingRunId: toParent ? previous.id : binding.request.runId,
     origin: sessionTurnOrigin(wake.origin, MAIL_WAKE_TEXT),
     text: MAIL_WAKE_TEXT,
     displayText: "New internal message",
@@ -293,7 +300,7 @@ export async function writeSession(ctx: TurnContext, input: SessionWriteInput): 
           audience: caller.conversation.audience,
           createdAt: Date.now(),
         });
-        await wakeIdleRecipient(ctx, target, previous, caller.actor.id, messageId);
+        await wakeIdleRecipient(ctx, target, root, previous, caller.actor.id, messageId);
         return { ok: true, sessionId: target.id, title, delivered: "queued_message" };
       }
       if (input.followup && binding.request.privateSessionMessage)

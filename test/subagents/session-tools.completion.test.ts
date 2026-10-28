@@ -201,7 +201,7 @@ for (const addressed of [true, false]) {
     assert.equal(wake.request.delegatingRunId, r.parent.id);
     assert.equal(wake.request.sessionSenderId, r.child.id);
     assert.equal(wake.request.origin.kind, "human");
-    assert.match(wake.request.text, /delegated task finished/i);
+    assert.match(wake.request.text, /New internal messages arrived/);
     assert.equal(wake.request.displayText, "Delegated task completed");
     assert.equal(wake.request.envelopeWrapped, true);
   });

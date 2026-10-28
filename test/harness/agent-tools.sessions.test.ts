@@ -205,7 +205,7 @@ test("subagents followup_task takes its instruction in task, like open", async (
   );
   assert.match(
     textOut(await call(session, { action: "send_message", target: "child", text: "fyi" })),
-    /queued internally/,
+    /delivered; a busy recipient/,
   );
   assert.match(
     textOut(await call(session, { action: "followup_task", target: "child", task: "stop?", interrupt: true })),

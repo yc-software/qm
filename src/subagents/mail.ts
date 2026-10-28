@@ -222,7 +222,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   const title = child.title?.trim() || child.id;
   const result = run.result;
   const { kind, body } = mailContent(run);
-  if (kind === "no_reply" && run.request.wakeCause === "child_done") return true;
+  if (kind === "no_reply" && (run.request.wakeCause === "child_done" || run.request.surface === "monitor")) return true;
   const text = renderSubagentMail({
     title,
     sessionId: child.id,

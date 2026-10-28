@@ -13,6 +13,7 @@ import { conversationWebUrl } from "../util/conversation-links.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { slackErrorCode } from "./payloads.ts";
+import { EXIT_ONLY_PATTERN } from "../monitors/monitor-broker.ts";
 
 const CARD_GONE_ERRORS = new Set([
   "channel_not_found",
@@ -135,7 +136,10 @@ export function createSlackSessionStatus(
           optedIn && threadRef
             ? ((await activity.monitors?.enabled()) ?? []).filter(
                 (monitor) =>
-                  monitor.ownerScopeId === scope && monitor.threadRef === threadRef && monitor.expiresAt > now(),
+                  monitor.ownerScopeId === scope &&
+                  monitor.threadRef === threadRef &&
+                  monitor.expiresAt > now() &&
+                  monitor.pattern !== EXIT_ONLY_PATTERN,
               )
             : [];
         const ongoing = active.length > 0 || jobs.length > 0 || monitors.length > 0;

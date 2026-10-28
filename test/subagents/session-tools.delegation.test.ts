@@ -177,6 +177,28 @@ test("send_message wakes an idle recipient with the human authority of the work 
   assert.equal((await delegatedAuthorizationOrigin(up!.request, r))?.kind, "human");
 });
 
+test("a message to an idle session outside the parent-child edge wakes it privately and read-only", async () => {
+  const r = await rig();
+  const peer = await r.sessions.getOrCreateByThread("web:U1:peer", "dm", scope);
+  await r.sessions.addParticipant(peer.id, actor.id);
+  const { run } = await r.runs.enqueue({
+    sessionId: peer.threadRef,
+    request: {
+      actor,
+      conversation: { ...conversation, threadRef: peer.threadRef },
+      origin: { kind: "human" },
+      text: "hi",
+    },
+  });
+  await completeTurn(r.ledger, run.id, { status: "ok", reply: "hello" });
+  assert.equal((await r.syscallsFor(r.room).write({ target: peer.id, text: "fyi" })).ok, true);
+  const [wake] = await r.runs.inFlightForThread(peer.threadRef);
+  assert.equal(wake!.request.privateSessionMessage, true);
+  assert.equal(wake!.request.readOnly, true);
+  assert.equal(wake!.request.sessionMessageDepth, 1);
+  assert.equal(await delegatedAuthorizationOrigin(wake!.request, r), undefined);
+});
+
 test("a finished grandchild wakes its subagent parent with the human authority that started the work", async () => {
   const r = await delegatedHumanRig();
   const coord = createSessionSyscalls({ ...r, maxAttempts: 3 }).forTurn({

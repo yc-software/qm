@@ -539,5 +539,6 @@ test("an exit-only watch stays silent through output and quiet stretches, then w
   assert.equal(h.calls.length, 1);
   assert.match(h.calls[0]?.text ?? "", /exited with code 0/);
   assert.match(h.calls[0]?.text ?? "", /still compiling\ntests passed/);
+  assert.match(h.calls[0]?.text ?? "", /If nobody is waiting on this result and nothing needs doing, finish silently/);
   assert.equal((await h.monitors.get(m.id))?.enabled, false);
 });

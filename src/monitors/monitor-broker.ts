@@ -38,6 +38,7 @@ export interface MonitorBroker {
   ): Promise<BackgroundWatchResult>;
   unwatch(monitorId: string): Promise<BackgroundUnwatchResult>;
   list(): Promise<Monitor[]>;
+  seenExit(processId: string): Promise<void>;
 }
 
 const EXPIRY_GRACE_MS = 5 * 60_000;
@@ -142,7 +143,9 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
         await deps.store.update(existing.id, {
           ...(opts?.instructions !== undefined ? { instructions: opts.instructions } : {}),
           ...(pattern !== undefined || existing.pattern === EXIT_ONLY_PATTERN ? { pattern: pattern ?? "" } : {}),
-          ...(opts?.sinceCursor !== undefined ? { cursor: opts.sinceCursor } : {}),
+          ...(opts?.sinceCursor !== undefined || existing.pattern === EXIT_ONLY_PATTERN
+            ? { cursor: opts?.sinceCursor ?? existing.cursor }
+            : {}),
         });
         return { monitorId: existing.id, processId, reattached: true, expiresAt: existing.expiresAt };
       }
@@ -170,6 +173,11 @@ export function createMonitorBroker(deps: MonitorBrokerDeps): MonitorBroker {
     },
     async list() {
       return (await deps.store.list()).filter((m) => m.ownerScopeId === deps.ownerScopeId);
+    },
+    async seenExit(processId) {
+      for (const m of await deps.store.list())
+        if (m.processId === processId && m.threadRef === deps.threadRef && m.pattern === EXIT_ONLY_PATTERN)
+          await deps.store.delete(m.id);
     },
   };
 }
