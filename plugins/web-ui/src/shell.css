@@ -2710,66 +2710,6 @@ qm-markdown .tok-in {
 .work-head .icon {
   color: inherit;
 }
-.work-head .work-elapsed {
-  color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
-  font-variant-numeric: tabular-nums;
-}
-.work-prestep > .work-head {
-  cursor: default;
-}
-.work-prestep > .work-head .activity-chevron {
-  visibility: hidden;
-}
-.work-working:not(.work-prestep) > .work-head .activity-chevron {
-  animation: work-step-in 420ms ease-out both;
-}
-.work-head .work-step-slot {
-  position: relative;
-  display: inline-flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-}
-.work-head .work-step {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  animation: work-step-in 420ms ease-out both;
-}
-.work-head .work-step-out {
-  position: absolute;
-  inset: 0 auto 0 0;
-  animation: work-step-out 420ms ease-out both;
-  pointer-events: none;
-}
-@keyframes work-step-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-@keyframes work-step-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .work-head .work-step {
-    animation: none;
-  }
-  .work-head .work-step-out {
-    display: none;
-  }
-}
 .activity-chevron {
   display: inline-flex;
   flex: 0 0 auto;
