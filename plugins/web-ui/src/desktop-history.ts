@@ -54,7 +54,6 @@ function mount(element: Element | undefined): void {
   paint();
 }
 
-/** Back/forward buttons for the desktop app's title bar; the browser has its own. */
 export function desktopHistoryNav(): TemplateResult | typeof nothing {
   if (!inDesktopApp()) return nothing;
   return html`<div class="history-nav" ${ref(mount)}></div>`;

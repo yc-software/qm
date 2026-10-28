@@ -158,12 +158,8 @@ export const ADMIN_BASE = (() => {
 })();
 export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
 
-/** Where a history entry points: the view, plus the conversation thread when it is the chats view. */
-type Place = { view: string; thread: string | null };
+type Place = { view: string; thread: string | null; provisional: boolean };
 let restoringHistory = false;
-// One user action can sync the URL several times as panes rearrange (a pane swap briefly shows two
-// panes and no session). The first move in a task pushes; later syncs in that task update that entry.
-let pushedThisTask = false;
 
 const placeOf = (state: unknown): Place | undefined => (state as { qmPlace?: Place } | null)?.qmPlace;
 
@@ -179,29 +175,23 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const chats = appState.currentView === "chats";
   const shown = splitState.active ? focusedPaneConversation()?.state : chatState;
   const paneThread = shown?.threadRef ?? sessionId;
-  const place: Place = { view: appState.currentView, thread: chats ? paneThread : null };
+  const place: Place = {
+    view: appState.currentView,
+    thread: chats ? paneThread : null,
+    provisional: chats && !sessionId,
+  };
   const previous = placeOf(history.state);
   const urlChanged = `${location.pathname}${location.search}` !== next;
-  // A new view or a different conversation is a new history entry, so back/forward can return to it;
-  // refinements of the same place (a new chat getting its session id, a message anchor) replace it.
   const moved =
     !restoringHistory &&
-    !pushedThisTask &&
     urlChanged &&
     ((previous?.view ?? linked.view ?? "chats") !== place.view ||
-      (chats && !!previous && previous.thread !== place.thread));
+      (chats && !!previous && !previous.provisional && previous.thread !== place.thread));
   const state = { ...(history.state as object | null), qmPlace: place };
-  if (moved) {
-    history.pushState(state, "", next);
-    pushedThisTask = true;
-    setTimeout(() => {
-      pushedThisTask = false;
-    }, 0);
-  } else if (urlChanged || previous?.view !== place.view || previous?.thread !== place.thread)
-    history.replaceState(state, "", next);
+  if (moved) history.pushState(state, "", next);
+  else if (urlChanged || JSON.stringify(previous) !== JSON.stringify(place)) history.replaceState(state, "", next);
 }
 
-/** Back/forward to a chats entry: reopen its conversation without adding history. */
 async function restoreChatsEntry(sessionId: string | null): Promise<void> {
   const conversation = mainConversation();
   if (!sessionId) {
@@ -211,14 +201,11 @@ async function restoreChatsEntry(sessionId: string | null): Promise<void> {
     return;
   }
   if (appState.currentView === "chats" && conversation.state.sessionId === sessionId) return;
-  const known =
+  const session =
     sessionsState.list.find((s) => s.id === sessionId) ??
     (await fetchSessionRow({ id: sessionId }).catch(swallowAs("web-ui: restore history entry", null)));
-  if (known) {
-    if (!sessionsState.list.some((s) => s.id === known.id)) sessionsState.list = [known, ...sessionsState.list];
-    revealSessionSurface(known);
-    await openSession(known);
-  } else showConversationError(false);
+  if (session) await showLinkedSession(session);
+  else showConversationError(false);
 }
 
 const appEl = document.getElementById("app");
@@ -1032,7 +1019,7 @@ window.addEventListener("popstate", () => {
   if (!appState.me) return;
   const routed = ["crons", "webhooks", "inbox", "skills"];
   const { view: linkedView, session, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
-  const view = isView(linkedView) && canView(linkedView) ? linkedView : "chats";
+  const view = isView(linkedView) ? linkedView : "chats";
   if (view === appState.currentView && routed.includes(view)) {
     if (view === "crons") routeCronsHistory(item);
     else if (view === "webhooks") routeWebhooksHistory(item);
@@ -1040,7 +1027,6 @@ window.addEventListener("popstate", () => {
     else routeInboxHistory(item);
     return;
   }
-  // Restoring an entry must not push a new one, or it would wipe the forward stack.
   restoringHistory = true;
   const restored = () => {
     restoringHistory = false;
@@ -1090,8 +1076,8 @@ export async function bootSafely(): Promise<void> {
 
 async function showLinkedSession(
   linked: CoreSession,
-  transcript: Promise<TranscriptPage | null>,
-  seq: number | null,
+  transcript?: Promise<TranscriptPage | null>,
+  seq: number | null = null,
   approvals?: Promise<{ approvals: PendingApproval[] } | null>,
 ): Promise<void> {
   if (!sessionsState.list.some((s) => s.id === linked.id)) sessionsState.list = [linked, ...sessionsState.list];

@@ -266,7 +266,6 @@ body.resizing-sidebar {
   letter-spacing: 0;
   line-height: 1;
 }
-/* Desktop app only: the window has no browser chrome, so the title bar carries back/forward. */
 .history-nav {
   display: flex;
   align-items: center;
