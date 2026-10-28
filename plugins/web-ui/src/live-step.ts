@@ -129,7 +129,7 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
         >${keyed(
           label,
           html`<span
-            class="work-step work-step-icon-${iconEntry}"
+            class="work-step ${step ? `work-step-enter-${iconEntry}` : ""}"
             data-step=${label}
             ${ref(step ? easeWidth : undefined)}
             >${

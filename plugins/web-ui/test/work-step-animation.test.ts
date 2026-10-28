@@ -10,7 +10,7 @@ style.textContent = readFileSync(new URL("../src/shell.css", import.meta.url), "
 document.head.append(style);
 
 function mount(status: string, entry = "roll"): void {
-  document.body.innerHTML = `<details class="work work-fold work-${status}"><summary class="work-head"><span class="work-step-slot"><span class="work-step work-step-icon-${entry}"><span class="work-step-icon"><span class="tool-icon work-step-out"><svg></svg></span><span class="tool-icon"><svg></svg></span></span><span class="work-step-label"><span class="work-step-out" aria-hidden="true">Reading</span>Worked</span></span></span></summary></details>`;
+  document.body.innerHTML = `<details class="work work-fold work-${status}"><summary class="work-head"><span class="work-step-slot"><span class="work-step work-step-enter-${entry}"><span class="work-step-icon"><span class="tool-icon work-step-out"><svg></svg></span><span class="tool-icon"><svg></svg></span></span><span class="work-step-label"><span class="work-step-out" aria-hidden="true">Reading</span><span class="sheen-label">Worked</span></span></span></span></summary></details>`;
 }
 
 function animation(selector: string): string {
@@ -20,7 +20,7 @@ function animation(selector: string): string {
 test("only the live work head animates its step label and icon", () => {
   for (const status of ["working", "thinking"]) {
     mount(status);
-    assert.match(animation(".work-step-label"), /work-step-in/);
+    assert.match(animation(".work-step-label > .sheen-label"), /work-step-in/);
     assert.match(animation(".work-step-label .work-step-out"), /work-step-out/);
     assert.match(animation(".work-step-icon .tool-icon:not(.work-step-out)"), /work-icon-in/);
     assert.match(animation(".work-step-icon .tool-icon.work-step-out"), /work-icon-out/);
@@ -31,7 +31,7 @@ test("only the live work head animates its step label and icon", () => {
   }
   for (const status of ["complete", "failed"]) {
     mount(status);
-    assert.doesNotMatch(animation(".work-step-label"), /work-step-in/);
+    assert.doesNotMatch(animation(".work-step-label > .sheen-label"), /work-step-in/);
     assert.doesNotMatch(animation(".work-step-icon .tool-icon:not(.work-step-out)"), /work-/);
   }
 });

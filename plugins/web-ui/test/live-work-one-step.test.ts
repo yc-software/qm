@@ -86,7 +86,7 @@ test("a live turn shows only the current step in a closed fold that remembers be
     const fading = head()!.querySelector(".work-step-label .work-step-out");
     assert.match(fading?.textContent ?? "", /Run the test suite/, "the previous label fades out on top of the new one");
     assert.equal(head()!.querySelector(".work-step-icon .work-step-out"), null, "an unchanged icon does not roll");
-    assert.ok(head()!.querySelector(".work-step.work-step-icon-still"));
+    assert.ok(head()!.querySelector(".work-step.work-step-enter-still"));
     await until(() => !head()!.querySelector(".work-step-out"));
     assert.doesNotMatch(head()!.textContent!, /Run the test suite/);
 
@@ -107,7 +107,7 @@ test("a live turn shows only the current step in a closed fold that remembers be
       },
     );
     await until(() => /notes\.md/.test(head()?.textContent ?? ""));
-    assert.ok(head()!.querySelector(".work-step.work-step-icon-roll"), "a new icon rolls in");
+    assert.ok(head()!.querySelector(".work-step.work-step-enter-roll"), "a new icon rolls in");
     assert.ok(head()!.querySelector(".work-step-icon .work-step-out svg"), "the old icon rolls out beside it");
     assert.match(head()!.querySelector(".work-step-label .work-step-out")?.textContent ?? "", /Measure the diff/);
     await until(() => !head()!.querySelector(".work-step-out"));
