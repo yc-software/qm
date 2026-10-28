@@ -1059,6 +1059,13 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         prepare: [LAST_USER_ACTIVITY_BACKFILL_SQL],
         statements: [],
       },
+      {
+        id: "sessions/store/0045-drop-llm-request-timing",
+        statements: [
+          `SET LOCAL lock_timeout = '15s'`,
+          `ALTER TABLE session_llm_requests DROP COLUMN IF EXISTS ttft_ms, DROP COLUMN IF EXISTS duration_ms, DROP COLUMN IF EXISTS step_gap_ms, DROP COLUMN IF EXISTS tool_wall_json, DROP COLUMN IF EXISTS gap_phases_json`,
+        ],
+      },
     ],
     [
       {

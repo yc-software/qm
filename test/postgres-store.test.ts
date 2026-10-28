@@ -3202,7 +3202,7 @@ test("pg LLM capture retention drops old prompt envelopes and keeps request rows
     assert.equal(
       (
         await raw.query(
-          "SELECT count(*) AS n FROM information_schema.columns WHERE table_name = 'session_llm_requests' AND column_name = 'request'",
+          "SELECT count(*) AS n FROM information_schema.columns WHERE table_name = 'session_llm_requests' AND column_name IN ('request', 'ttft_ms', 'duration_ms', 'step_gap_ms', 'tool_wall_json', 'gap_phases_json')",
         )
       ).rows[0].n,
       "0",
