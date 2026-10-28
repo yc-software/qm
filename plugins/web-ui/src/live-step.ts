@@ -13,7 +13,7 @@ export interface LiveStep {
   label: string;
 }
 
-export const STEP_FADE_MS = 420;
+const STEP_FADE_MS = 420;
 
 export function preStepWork(work: WorkBlock | null | undefined): work is WorkBlock {
   return Boolean(
