@@ -170,6 +170,9 @@ test("send_message wakes an idle recipient with the human authority of the work 
     scopeId: scope,
     request: { ...down!.request, runId: down!.id },
   });
+  await completeTurn(r.ledger, down!.id, { status: "ok" });
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(down!.id))!), true);
+  assert.equal((await r.mailbox.pending(r.room.id)).length, 0, "a wake that found nothing sends its parent nothing");
   assert.equal((await childApi.write({ target: "parent", text: "found it" })).ok, true);
   const [up] = await r.runs.inFlightForThread(r.room.threadRef);
   assert.equal(up!.request.wakeCause, "child_done");
@@ -216,9 +219,11 @@ test("a finished grandchild wakes its subagent parent with the human authority t
   const [wake] = await r.runs.inFlightForThread(r.child.threadRef);
   assert.equal(wake!.dedupKey, `subagent-return:${job.id}`);
   assert.equal((await delegatedAuthorizationOrigin(wake!.request, r))?.kind, "human");
-  await completeTurn(r.ledger, wake!.id, { status: "ok" });
-  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(wake!.id))!), true);
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 0, "a wake that found nothing sends its parent nothing");
+  await completeTurn(r.ledger, wake!.id, { status: "ok", reply: "coord final: worker finished" });
+  assert.equal(await deliverSubagentMail({ ...r, maxAttempts: 3 }, (await r.runs.get(wake!.id))!), false);
+  const rootWake = (await r.runs.inFlightForThread(r.room.threadRef)).find((run) => run.request.wakeCause);
+  assert.equal(rootWake!.dedupKey, `subagent-return:${wake!.id}`);
+  assert.equal((await delegatedAuthorizationOrigin(rootWake!.request, r))?.kind, "human");
 });
 
 test("follow-up retries recover the accepted run before checking full capacity", async (t) => {

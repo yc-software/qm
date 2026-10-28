@@ -160,10 +160,7 @@ async function wakeParent(
   const rewake = existing && (existing.status === "done" || existing.status === "failed") ? existing.id : null;
   const inFlight = await deps.runs.inFlightForThread(parent.threadRef);
   const sharedWake = inFlight.some(
-    (turn) =>
-      turn.status === "queued" &&
-      turn.request.wakeCause === "child_done" &&
-      turn.request.actor.id === prepared.actor.id,
+    (turn) => turn.request.wakeCause === "child_done" && turn.request.actor.id === prepared.actor.id,
   );
   if (sharedWake) {
     await deps.runs.deferReturn(run.id, CHILD_DONE_RECHECK_MS);
@@ -200,8 +197,14 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
   if (!parent) return true;
   const latestParent = await deps.runs.latestForThread?.(parent.threadRef, { excludePrivateMessages: true });
   if (parent.scopeId !== child.scopeId) throw new Error("parent and child contexts no longer match");
-  const initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
+  let initiatingRun = run.request.delegatingRunId ? await deps.runs.get?.(run.request.delegatingRunId) : undefined;
   if (run.request.delegatingRunId && !initiatingRun) throw new Error("the delegation's originating run is unavailable");
+  for (
+    let hop = 0;
+    hop < 32 && initiatingRun?.sessionId === run.sessionId && initiatingRun.request.delegatingRunId;
+    hop++
+  )
+    initiatingRun = await deps.runs.get?.(initiatingRun.request.delegatingRunId);
   const initiatingContext = initiatingRun?.request ?? child.spawnMeta;
   const currentContext = latestParent?.request ?? parent.spawnMeta;
   const originalParent = parent.threadRef === initiatingContext.conversation.threadRef;
