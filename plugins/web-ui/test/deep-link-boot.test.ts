@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CoreSession } from "../src/core-bridge.ts";
-import { harness, SESSION, type Harness } from "./deep-link-boot-fixture.ts";
+import { harness, savedCanvas, SESSION, type Harness } from "./deep-link-boot-fixture.ts";
 
 test("a share link paints its conversation from the transcript, without waiting for the session list", async () => {
   const h = await harness({ path: "/s/sess-deep" });
@@ -219,15 +219,7 @@ test("returning from Settings waits for the saved remote canvas before creating 
     path: "/settings",
     holdRemoteSplit: true,
     listSessions: [SESSION],
-    remoteCanvas: {
-      v: 1,
-      active: true,
-      root: {
-        kind: "split",
-        a: { kind: "leaf", sessionId: SESSION.id, threadRef: SESSION.threadRef },
-        b: { kind: "leaf" },
-      },
-    },
+    remoteCanvas: savedCanvas([{ sessionId: SESSION.id, threadRef: SESSION.threadRef }, {}]),
   });
   try {
     await h.boot();
@@ -248,20 +240,12 @@ test("returning from Settings waits for the saved remote canvas before creating 
   }
 });
 
-test("a delayed legacy canvas waits for its session lookup and respects later navigation", async () => {
+test("a delayed saved canvas waits for its session lookup and respects later navigation", async () => {
   const h = await harness({
     path: "/settings",
     holdRemoteSplit: true,
     listSessions: [SESSION],
-    remoteCanvas: {
-      v: 1,
-      active: true,
-      root: {
-        kind: "split",
-        a: { kind: "leaf", threadRef: SESSION.threadRef },
-        b: { kind: "leaf" },
-      },
-    },
+    remoteCanvas: savedCanvas([{ threadRef: SESSION.threadRef }, {}]),
   });
   try {
     await h.boot();
