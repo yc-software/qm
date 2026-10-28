@@ -11,7 +11,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
   const root = read("cli/templates/deployment/deployment.md");
   for (const phrase of [
     "Before cloud mutation",
-    "Fly.io, AWS, or Porter",
+    "Fly.io, AWS, Render, or Porter",
     "deployment repository",
     "npm ci",
     "slack render",
@@ -37,6 +37,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
     ".codex/skills/deploy-qm/references/fly.md",
     ".codex/skills/deploy-qm/references/aws.md",
     ".codex/skills/deploy-qm/references/porter.md",
+    ".codex/skills/deploy-qm/references/render.md",
     ".codex/skills/deploy-qm/references/slack.md",
     ".codex/skills/deploy-qm/references/email.md",
   ]) {
@@ -49,6 +50,7 @@ test("package-consumer deployment skill covers both self-owned providers and the
     "cli/templates/deployment/references/fly.md",
     "cli/templates/deployment/references/aws.md",
     "cli/templates/deployment/references/porter.md",
+    "cli/templates/deployment/references/render.md",
     "cli/templates/deployment/references/slack.md",
     "cli/templates/deployment/references/email.md",
   ]) {

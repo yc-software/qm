@@ -174,6 +174,11 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       const sessionId = decodeURIComponent(path.split("/")[3] ?? "");
       return Response.json({ approvals: opts.approvals?.(sessionId) ?? [] });
     }
+    if (path.startsWith("/api/sessions/") && path.endsWith("/side-chats")) {
+      const sourceId = decodeURIComponent(path.split("/")[3] ?? "");
+      const all = (opts.listSessions ?? []) as CoreSession[];
+      return Response.json({ sessions: all.filter((row) => row.sideChat && row.forkedFrom?.sessionId === sourceId) });
+    }
     if (path.startsWith("/api/sessions/") && path.endsWith("/children")) {
       const all = (opts.listSessions ?? []) as CoreSession[];
       const below = new Set([decodeURIComponent(path.split("/")[3] ?? "")]);

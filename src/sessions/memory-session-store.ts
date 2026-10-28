@@ -167,6 +167,15 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (s) s.title = title;
     },
 
+    async sideChatsOf(sessionId) {
+      return [...sessions.values()].filter((s) => s.forkedFrom?.sessionId === sessionId && s.sideChat);
+    },
+
+    async expandSideChat(sessionId) {
+      const s = sessions.get(sessionId);
+      if (s?.sideChat) s.sideChat = { ...s.sideChat, expanded: true };
+    },
+
     async updateForkProvenance(sessionId, provenance) {
       const s = sessions.get(sessionId);
       if (s) Object.assign(s, provenance);
@@ -387,11 +396,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         createdAt: now(),
         promptHash: envelope?.hash ?? null,
         truncated: rec.truncated ?? false,
-        ttftMs: rec.ttftMs ?? null,
-        durationMs: rec.durationMs ?? null,
-        stepGapMs: rec.stepGapMs ?? null,
-        toolWallMs: rec.toolWallMs ?? null,
-        gapPhases: rec.gapPhases ?? null,
         usage: rec.usage ?? null,
         transport: rec.transport ?? null,
       };
@@ -539,6 +543,7 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         .filter(
           (s) =>
             !s.parentSessionId &&
+            (!s.sideChat || s.sideChat.expanded) &&
             !(s.surface && automation.has(s.surface)) &&
             ((entries.get(s.id)?.length ?? 0) > 0 || Boolean(s.title?.trim())) &&
             Boolean(s.archived) === (query.archived === true) &&

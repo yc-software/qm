@@ -877,6 +877,36 @@ test("wait is cancelled and disabled actors cannot open or send", async () => {
   assert.equal((await api.write({ target: "any", text: "forbidden" })).ok, false);
 });
 
+test("an empty mailbox check skips sender validation and a delivered message still validates", async () => {
+  const r = await rig();
+  let checks = 0;
+  const factory = createSessionSyscalls({
+    ...r,
+    maxAttempts: 3,
+    enabled: async () => {
+      checks++;
+      return true;
+    },
+  });
+  const api = factory.forTurn({ session: r.room, scopeId: scope, request: { actor, conversation } });
+  assert.deepEqual(await api.receive!(), []);
+  assert.equal(checks, 0);
+  const one = await api.open({ task: "one", name: "one" });
+  const two = await api.open({ task: "two", name: "two" });
+  assert.ok(one.ok && two.ok);
+  const sender = r.syscallsFor(await freshSession(r.sessions, one.sessionId));
+  assert.equal((await sender.write({ target: "two", text: "shared finding" })).ok, true);
+  const peer = factory.forTurn({
+    session: await freshSession(r.sessions, two.sessionId),
+    scopeId: scope,
+    request: { actor, conversation },
+  });
+  checks = 0;
+  const mail = await peer.receive!();
+  assert.equal(mail.length, 1);
+  assert.equal(checks, 1);
+});
+
 test("queued results recheck source-entry visibility after participant tenure changes", async () => {
   const r = await rig();
   const other: Principal = { id: "U2", type: "internal" };

@@ -3,7 +3,6 @@ import path from "node:path";
 import { assert, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
 import { assertRuntimeHandoff } from "./runtime-handoff.ts";
-import { succeededWithStdout } from "./scenarios-sandbox-providers.ts";
 import { multiUserScenarios } from "./scenarios-multiuser.ts";
 import { twinScenarios } from "./scenarios-twin.ts";
 import { deployAccessScenarios } from "./scenarios-deploy-access.ts";
@@ -17,10 +16,6 @@ const RAW_MARKDOWN_ARTIFACTS: Array<[string, RegExp]> = [
 
 const SANDBOX_TIMEOUT = 6 * 60_000;
 const POSTER_TIMEOUT = 9 * 60_000;
-
-const GLUE_BUDGET_MS = 1_500;
-const PROVISION_BUDGET_MS = 4_000;
-const AUTH_PROBE_BUDGET_MS = 500;
 
 export const scenarios: Scenario[] = [
   {
@@ -156,75 +151,6 @@ export const scenarios: Scenario[] = [
       assert.ok(
         ran,
         "core transcript has no execute tool_result with Linux output — reply was not from a real sandbox run",
-      );
-    },
-  },
-  {
-    name: "perf-budget",
-    lane: "exclusive",
-    tags: ["sandbox"],
-    timeoutMs: SANDBOX_TIMEOUT,
-    async run(ctx) {
-      const ch = await ctx.freshChannel();
-      const marker = ctx.marker("executed");
-      const root = await ch.mention(
-        `Run \`printf '%s%s\\n' '${marker.slice(0, -8)}' '${marker.slice(-8)}'\` in your sandbox and paste the exact output.`,
-      );
-      await ch.waitForBotReply(root, { match: new RegExp(marker), timeoutMs: SANDBOX_TIMEOUT - 30_000 });
-
-      const session = await ctx.core.findSessionByThread(ch.id, root);
-      assert.ok(session, "no core session found for the thread");
-      const ran = session.entries.some(
-        (e: any) =>
-          e.type === "tool_result" &&
-          (e.payload?.tool === "execute" || (e.payload?.tool === "sandbox" && e.payload.action === "exec")) &&
-          succeededWithStdout(e.payload, `${marker}\n`),
-      );
-      assert.ok(ran, "core transcript has no successful command execution — cannot evaluate performance");
-
-      for (let attempt = 0; ; attempt++) {
-        const { entries } = await ctx.core.getSession(session.id);
-        if (entries.some((e: any) => e.type === "assistant" && typeof e.payload?.workFinishedAt === "number")) break;
-        assert.ok(attempt < 30, "turn did not finish recording its performance metrics");
-        await sleep(1000);
-      }
-      const { requests } = (await ctx.core.getSessionLlm(session.id)) as {
-        requests: Array<{ stepGapMs: number | null; gapPhases: Record<string, number> | null }>;
-      };
-      const instrumented = requests.filter((r) => r.gapPhases && r.stepGapMs != null);
-      assert.ok(
-        instrumented.length > 0,
-        "no instrumented LLM steps (gapPhases/stepGapMs) — the latency instrumentation isn't recording; perf can't be guarded",
-      );
-
-      let platformMs = 0;
-      let provisionMs = 0;
-      let authProbeMs = 0;
-      const breakdown: string[] = [];
-      for (const r of instrumented) {
-        const p = r.gapPhases!;
-        const stepPlatform = Math.max(0, (r.stepGapMs ?? 0) - (p.model_dispatch ?? 0) - (p.residual ?? 0));
-        platformMs += stepPlatform;
-        provisionMs += p.provision ?? 0;
-        authProbeMs += p.auth_probe ?? 0;
-        breakdown.push(`gap=${r.stepGapMs} platform=${Math.round(stepPlatform)} ${JSON.stringify(p)}`);
-      }
-      const glueMs = Math.max(0, platformMs - provisionMs);
-      console.log(
-        `[perf-budget] glue=${Math.round(glueMs)}ms provision=${Math.round(provisionMs)}ms auth_probe=${Math.round(authProbeMs)}ms\n  ${breakdown.join("\n  ")}`,
-      );
-
-      assert.ok(
-        authProbeMs <= AUTH_PROBE_BUDGET_MS,
-        `auth_probe back on the hot path: ${Math.round(authProbeMs)}ms in step gaps (budget ${AUTH_PROBE_BUDGET_MS}ms). The liveness probe must stay fire-and-forget, awaited only after the reply.`,
-      );
-      assert.ok(
-        glueMs <= GLUE_BUDGET_MS,
-        `platform glue on a trivial turn = ${Math.round(glueMs)}ms (budget ${GLUE_BUDGET_MS}ms, excl. sandbox boot). A glue phase regressed; see the per-step breakdown above.`,
-      );
-      assert.ok(
-        provisionMs <= PROVISION_BUDGET_MS,
-        `sandbox cold boot = ${Math.round(provisionMs)}ms (budget ${PROVISION_BUDGET_MS}ms). Provision regressed; see the per-step breakdown above.`,
       );
     },
   },

@@ -590,8 +590,6 @@ export function createClaudeHarness(opts: ClaudeHarnessOptions = {}): Harness {
           promptEnvelope: recordedEnvelope,
           truncated: false,
           transport: { modelId: model },
-          ttftMs: message.subtype === "success" ? (message.ttft_ms ?? null) : null,
-          durationMs: message.duration_ms ?? null,
           usage: sawCalls
             ? {
                 input: stepUsage.input,

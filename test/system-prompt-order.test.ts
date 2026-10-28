@@ -1202,7 +1202,7 @@ test("scheduled-work changes update the next turn's system block without rewriti
   await crons.setEnabled(cron.id, false);
   assert.equal((await orchestrator.handleTurn({ ...input, text: "third" })).status, "ok");
   delete sandbox.profile.spec;
-  crons.list = async () => {
+  crons.ownedBy = async () => {
     throw new Error("inventory unavailable");
   };
   assert.equal((await orchestrator.handleTurn({ ...input, text: "fourth" })).status, "ok");

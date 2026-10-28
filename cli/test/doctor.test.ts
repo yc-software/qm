@@ -10,6 +10,7 @@ import {
   slackManifestBotScopes,
 } from "../src/backends/doctor.ts";
 import { flyDoctor, verifyLocalFlyTokens } from "../src/backends/fly.ts";
+import { dockerDoctor } from "../src/backends/docker.ts";
 import { validatePortalTrust, type QmConfig } from "../src/config.ts";
 
 const config: QmConfig = {
@@ -26,14 +27,17 @@ const config: QmConfig = {
 };
 
 test("Docker doctor rejects missing and placeholder required secrets before external probes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-doctor-required-"));
+  writeFileSync(join(dir, ".env"), "CORE_SIGNING_SECRET=replace-me\n");
   const prior = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "";
   try {
     await assert.rejects(
-      doctorCommon(config, new Map([["CORE_SIGNING_SECRET", "replace-me"]]), { requiredSecretValues: true }),
+      dockerDoctor(config, dir),
       /CAPABILITY_SECRET, CONNECTOR_SECRET_KEY, CORE_SIGNING_SECRET, PORTAL_IDENTITY_SECRET, PUBLIC_API_URL, SKILL_SIGNING_SECRET/,
     );
   } finally {
+    rmSync(dir, { recursive: true, force: true });
     if (prior === undefined) delete process.env.ANTHROPIC_API_KEY;
     else process.env.ANTHROPIC_API_KEY = prior;
   }
@@ -55,11 +59,9 @@ test("doctor allows deferred Slack setup but rejects a partial token pair", asyn
     ["PORTAL_IDENTITY_SECRET", "d".repeat(64)],
     ["SKILL_SIGNING_SECRET", "e".repeat(64)],
   ]);
-  await assert.doesNotReject(doctorCommon(deferredConfig, required, { requiredSecretValues: true }));
+  await assert.doesNotReject(doctorCommon(deferredConfig, required));
   await assert.rejects(
-    doctorCommon(deferredConfig, new Map([...required, ["SLACK_BOT_TOKEN", "xoxb-only"]]), {
-      requiredSecretValues: true,
-    }),
+    doctorCommon(deferredConfig, new Map([...required, ["SLACK_BOT_TOKEN", "xoxb-only"]])),
     /both SLACK_BOT_TOKEN and SLACK_APP_TOKEN/,
   );
 });
@@ -135,7 +137,7 @@ test("remote doctor keeps missing local email values distinct from disabled emai
       const output: string[] = [];
       console.log = (...values: unknown[]): void => void output.push(values.join(" "));
       console.warn = (...values: unknown[]): void => void output.push(values.join(" "));
-      await assert.doesNotReject(doctorCommon(brokerConfig, secrets));
+      await assert.doesNotReject(doctorCommon(brokerConfig, secrets, { allowMissingValues: true }));
       assert.match(output.join("\n"), /RESEND_API_KEY is not available locally/);
       assert.doesNotMatch(output.join("\n"), /sign-in email: disabled/);
     }
@@ -147,6 +149,40 @@ test("remote doctor keeps missing local email values distinct from disabled emai
     if (priorSender === undefined) delete process.env.AUTH_EMAIL_FROM;
     else process.env.AUTH_EMAIL_FROM = priorSender;
   }
+});
+
+test("doctor requires portal identity and email sender values by default", async () => {
+  await assert.rejects(
+    doctorCommon(
+      {
+        ...config,
+        services: ["core", "portal"],
+        env: { portal: { OIDC_ALLOWED_EMAIL_DOMAIN: "example.com" } },
+      },
+      new Map(),
+    ),
+    /requires a non-placeholder OIDC_CLIENT_ID/,
+  );
+  await assert.rejects(
+    doctorCommon(
+      {
+        ...config,
+        services: ["core", "portal", "auth"],
+        env: {
+          auth: {
+            AUTH_EMAIL_TRANSPORT: "resend",
+            AUTH_EMAIL_FROM: "invalid",
+            AUTH_ALLOWED_EMAIL_DOMAIN: "example.com",
+          },
+        },
+      },
+      new Map([
+        ["RESEND_API_KEY", "re_test"],
+        ["AUTH_EMAIL_FROM", "invalid"],
+      ]),
+    ),
+    /AUTH_EMAIL_FROM must be a verified sender address/,
+  );
 });
 
 test("Fly doctor requires the signing secret for source plugins absent from config", async () => {
@@ -587,7 +623,6 @@ test("doctor treats a missing sandbox block as info (no Fly checks), not a failu
         ["PORTAL_IDENTITY_SECRET", "identity-value"],
         ["SKILL_SIGNING_SECRET", "skill-value".repeat(4)],
       ]),
-      { requiredSecretValues: true },
     );
     assert.ok(
       lines.some((line) => line.includes("sandbox: not configured")),
@@ -686,18 +721,15 @@ test("doctor without required local values warns-and-skips the live Slack check 
   const warned: string[] = [];
   console.warn = (...parts: unknown[]): void => void warned.push(parts.join(" "));
   try {
-    await doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), { configDir: dir });
+    await doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), {
+      configDir: dir,
+      allowMissingValues: true,
+    });
     assert.ok(
       warned.some((line) => line.includes("skipping the live Slack check")),
       `warned: ${warned.join(" | ")}`,
     );
-    await assert.rejects(
-      doctorCommon({ ...config, services: ["core", "slack"] }, new Map(), {
-        requiredSecretValues: true,
-        configDir: dir,
-      }),
-      /required secrets are missing/,
-    );
+    await assert.rejects(dockerDoctor({ ...config, services: ["core", "slack"] }, dir), /required secrets are missing/);
   } finally {
     console.warn = warnLog;
     if (priorFly === undefined) delete process.env.FLY_BIN;

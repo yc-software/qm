@@ -125,7 +125,6 @@ function fixture(
     turnFilesDir: "turn/session/fire",
     visibleSkills: [roomSkill],
     visibleSkillsForTurn: async () => [roomSkill],
-    emitGapWork: () => {},
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const tools = createToolContext({

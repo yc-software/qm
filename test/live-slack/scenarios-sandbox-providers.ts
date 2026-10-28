@@ -16,12 +16,13 @@ const providerCoverage: Record<SandboxBackendName, true> = {
   porter: true,
   agent37: true,
   superserve: true,
+  render: true,
   "do-managed-agents": true,
 };
 
 export const sandboxProviders = Object.keys(providerCoverage) as SandboxBackendName[];
 
-export function succeededWithStdout(p: Record<string, unknown>, stdout: string): boolean {
+function succeededWithStdout(p: Record<string, unknown>, stdout: string): boolean {
   const structured = "code" in p || "timedOut" in p || "action" in p;
   return (
     p.isError === false && p.result === `${stdout}\n[exit 0]` && (!structured || (p.code === 0 && p.timedOut === false))

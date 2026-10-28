@@ -32,7 +32,7 @@ interface StatusClient {
 export interface SlackStatusActivity {
   sessions?: Pick<SessionStore, "getByThread">;
   processes?: Pick<ProcessRegistry, "liveByScope">;
-  monitors?: Pick<MonitorStore, "enabled">;
+  monitors?: Pick<MonitorStore, "ownedBy">;
   publicWebUrl?: string;
 }
 
@@ -101,9 +101,8 @@ export function createSlackSessionStatus(
               : [];
           const monitors =
             optedIn && threadRef
-              ? ((await activity.monitors?.enabled()) ?? []).filter(
-                  (monitor) =>
-                    monitor.ownerScopeId === scope && monitor.threadRef === threadRef && monitor.expiresAt > now(),
+              ? ((await activity.monitors?.ownedBy(scope!)) ?? []).filter(
+                  (monitor) => monitor.enabled && monitor.threadRef === threadRef && monitor.expiresAt > now(),
                 )
               : [];
           const ongoing = active.length > 0 || jobs.length > 0 || monitors.length > 0;

@@ -18,12 +18,15 @@ export function workSeconds(work: WorkBlock): number {
   return Math.max(0, (end - start) / 1000);
 }
 
-export function workedLabel(prefix: string, secs: number): string {
-  if (secs <= 0) return prefix;
+export function workDuration(secs: number): string {
   const centiseconds = Math.floor(Math.round(secs * 1000) / 10);
   const minutes = Math.floor(centiseconds / 6000);
   const seconds = ((centiseconds % 6000) / 100).toFixed(2);
-  return `${prefix} for ${minutes ? `${minutes}m ${seconds.padStart(5, "0")}` : seconds}s`;
+  return `${minutes ? `${minutes}m ${seconds.padStart(5, "0")}` : seconds}s`;
+}
+
+export function workedLabel(prefix: string, secs: number): string {
+  return secs > 0 ? `${prefix} for ${workDuration(secs)}` : prefix;
 }
 
 interface GoalTurn {

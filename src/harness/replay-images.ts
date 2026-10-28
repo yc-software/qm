@@ -1,4 +1,4 @@
-import { LRUCache } from "lru-cache";
+import { cachedArtifactData } from "../files/artifact-data-cache.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { isVisionAttachment, MAX_VISION_IMAGE_BYTES } from "../core/attachments.ts";
 import { downscaleVisionImage } from "../core/image-downscale.ts";
@@ -19,8 +19,6 @@ export type ReplayImageLoader = (
   remainingBytes: number,
 ) => Promise<LoadedImage | "over-budget" | null>;
 
-const visionBytes = new LRUCache<string, string>({ maxSize: 64_000_000, sizeCalculation: (data) => data.length });
-
 export function artifactImageLoader(
   files: FileArtifactStore,
   authorize: (artifact: FileArtifact) => boolean | Promise<boolean>,
@@ -37,20 +35,18 @@ export function artifactImageLoader(
     )
       return null;
     if (artifact.sizeBytes > MAX_VISION_IMAGE_BYTES || artifact.sizeBytes > remainingBytes) return "over-budget";
-    const key = `${artifact.id}:${artifact.sha256}`;
-    const cached = visionBytes.get(key);
-    if (cached !== undefined) return { data: cached, sizeBytes: artifact.sizeBytes };
-    const opened = await files.open(ref.artifactId);
-    if (!opened) return null;
-    if (opened.sizeBytes !== artifact.sizeBytes || opened.artifact.sha256 !== artifact.sha256) {
-      opened.stream.destroy();
-      return null;
-    }
-    const bytes = await collectBytes(opened.stream, { maxBytes: artifact.sizeBytes });
-    if (bytes.sha256 !== artifact.sha256) return null;
-    const data = Buffer.from(await downscaleVisionImage(bytes.data, artifact.mimetype)).toString("base64");
-    visionBytes.set(key, data);
-    return { data, sizeBytes: bytes.sizeBytes };
+    const data = await cachedArtifactData("vision", artifact, async () => {
+      const opened = await files.open(ref.artifactId);
+      if (!opened) return undefined;
+      if (opened.sizeBytes !== artifact.sizeBytes || opened.artifact.sha256 !== artifact.sha256) {
+        opened.stream.destroy();
+        return undefined;
+      }
+      const bytes = await collectBytes(opened.stream, { maxBytes: artifact.sizeBytes });
+      if (bytes.sha256 !== artifact.sha256) return undefined;
+      return Buffer.from(await downscaleVisionImage(bytes.data, artifact.mimetype)).toString("base64");
+    });
+    return data === undefined ? null : { data, sizeBytes: artifact.sizeBytes };
   };
 }
 

@@ -1,3 +1,4 @@
+import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
@@ -19,7 +20,7 @@ import {
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
-import { SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
+import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
 import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
@@ -110,14 +111,41 @@ async function cancelSessionGoal(ctx: ApiCtx): Promise<void> {
 async function forkSession(ctx: ApiCtx): Promise<void> {
   const { res, app, body } = ctx;
   const id = ctx.params.id!;
-  const b = body as { principalId?: unknown; upToSeq?: unknown };
+  const b = body as {
+    principalId?: unknown;
+    upToSeq?: unknown;
+    sideChat?: { entrySeq?: unknown; quote?: unknown; occurrence?: unknown };
+  };
   if (typeof b.principalId !== "string" || !b.principalId) {
     return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   }
   if (b.upToSeq !== undefined && (typeof b.upToSeq !== "number" || !Number.isInteger(b.upToSeq) || b.upToSeq < 0)) {
     return sendJson(res, 400, { error: "bad_request", message: "upToSeq must be a non-negative integer" });
   }
-  const out = await app.forkSession(id, b.principalId, b.upToSeq !== undefined ? { upToSeq: b.upToSeq } : undefined);
+  let sideChat: { entrySeq: number; quote: string; occurrence: number } | undefined;
+  if (b.sideChat !== undefined) {
+    if (!isSideChatAnchor(b.sideChat)) {
+      return sendJson(res, 400, {
+        error: "bad_request",
+        message: "sideChat requires a saved entry and a nonempty quote",
+      });
+    }
+    sideChat = {
+      entrySeq: b.sideChat.entrySeq,
+      quote: b.sideChat.quote,
+      occurrence: b.sideChat.occurrence,
+    };
+  }
+  let out: Awaited<ReturnType<typeof app.forkSession>>;
+  try {
+    out = await app.forkSession(id, b.principalId, {
+      ...(b.upToSeq !== undefined ? { upToSeq: b.upToSeq } : {}),
+      ...(sideChat ? { sideChat } : {}),
+    });
+  } catch (e) {
+    if (e instanceof SideChatAnchorError) return sendJson(res, 400, { error: "bad_request", message: e.message });
+    throw e;
+  }
   if (!out) return sendJson(res, 404, { error: "not_found" });
   return sendJson(res, 200, out);
 }
@@ -523,6 +551,20 @@ function parseSessionCursor(raw: string | null): { activity: number; id: string 
   const activity = Number(raw.slice(0, dot));
   const id = raw.slice(dot + 1);
   return dot > 0 && Number.isSafeInteger(activity) && id ? { activity, id } : null;
+}
+
+async function listSideChats(ctx: ApiCtx): Promise<void> {
+  const principalId = ctx.url.searchParams.get("principalId");
+  if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request" });
+  const sessions = await ctx.app.sideChats(principalId, ctx.params.id!);
+  return sessions ? sendJson(ctx.res, 200, { sessions }) : sendJson(ctx.res, 404, { error: "not_found" });
+}
+
+async function expandSideChat(ctx: ApiCtx): Promise<void> {
+  const principalId = (ctx.body as { principalId?: unknown }).principalId;
+  if (typeof principalId !== "string" || !principalId) return sendJson(ctx.res, 400, { error: "bad_request" });
+  const session = await ctx.app.expandSideChat(principalId, ctx.params.id!);
+  return session ? sendJson(ctx.res, 200, { session }) : sendJson(ctx.res, 404, { error: "not_found" });
 }
 
 async function listSessionChildren(ctx: ApiCtx): Promise<void> {
@@ -1414,6 +1456,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/soul", actor: "body.actorId", auth: "either", handle: postSoul },
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
+    { method: "POST", path: "/v1/sessions/:id/expand", auth: "source", handle: expandSideChat },
     { method: "POST", path: "/v1/sessions/:id/fork", auth: "source", handle: forkSession },
     { method: "POST", path: "/v1/sessions/:id/detach", auth: "source", handle: detachSession },
     { method: "POST", path: "/v1/sessions/:id/goal/cancel", auth: "source", handle: cancelSessionGoal },
@@ -1427,6 +1470,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/skills/:id/restore", auth: "either", allowedInStrict: true, handle: restoreSkill },
   ]),
   ...withActor("query.principalId", [
+    { method: "GET", path: "/v1/sessions/:id/side-chats", auth: "source", handle: listSideChats },
     { method: "GET", path: "/v1/resources/search", auth: "source", handle: searchResources },
     { method: "GET", path: "/v1/sessions/search", auth: "source", handle: searchSessions },
     { method: "GET", path: "/v1/sessions", auth: "source", handle: listSessions },

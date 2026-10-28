@@ -44,7 +44,10 @@ export function automationRunLabel(s: Pick<CoreSession, "surface">): string | nu
 }
 
 export function sidebarSessions(sessions: readonly CoreSession[]): CoreSession[] {
-  return sessions.filter((session) => !session.parentSessionId && !automationRunLabel(session));
+  return sessions.filter(
+    (session) =>
+      !session.parentSessionId && (!session.sideChat || session.sideChat.expanded) && !automationRunLabel(session),
+  );
 }
 
 export function splitPinned<T extends Pick<CoreSession, "pinned">>(sessions: readonly T[]): { pinned: T[]; rest: T[] } {

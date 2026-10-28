@@ -113,15 +113,20 @@ test("a grant redundant with scope visibility does not self-shadow", async () =>
   assert.deepEqual(rows[0]!.shadowed, []);
 });
 
-test("visibleFor takes one snapshot instead of one per published name", async () => {
+test("visibleFor reads only the requested scopes in one query instead of one per published name", async () => {
   const backing = createMemoryMap<Skill>();
   let allCalls = 0;
   let getCalls = 0;
+  let selects: string[][] = [];
   const counted: DurableMap<Skill> = {
     ...backing,
     all: () => {
       allCalls += 1;
       return backing.all();
+    },
+    select: (query) => {
+      selects.push([...(query.where?.anyOfFold ?? [])]);
+      return backing.select(query);
     },
     get: (id) => {
       getCalls += 1;
@@ -136,9 +141,14 @@ test("visibleFor takes one snapshot instead of one per published name", async ()
 
   allCalls = 0;
   getCalls = 0;
+  selects = [];
   const rows = await store.visibleFor([ERIC, ORG], [{ id: granted.id, ownerScopeId: JOSH }]);
-  assert.equal(allCalls, 1);
+  assert.equal(allCalls, 0);
   assert.equal(getCalls, 0);
+  assert.deepEqual(
+    selects.map((scopes) => scopes.sort()),
+    [[ERIC, JOSH, ORG].map((scope) => scope.toLowerCase()).sort()],
+  );
 
   const byName = new Map(rows.map((r) => [r.skill!.manifest.name, r]));
   assert.deepEqual([...byName.keys()].sort(), ["alpha-skill", "beta-skill", "delta-skill", "gamma-skill"]);

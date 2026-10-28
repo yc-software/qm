@@ -73,19 +73,21 @@ async function gitUrl(base: string, deploymentId: string, permission: "read" | "
   return url.toString();
 }
 
-async function pushStatus(url: string): Promise<number> {
+async function gitPost(url: string, service: string, body: Buffer): Promise<Response> {
   const parsed = new URL(url);
   const authorization = `Basic ${Buffer.from(`${decodeURIComponent(parsed.username)}:${decodeURIComponent(parsed.password)}`).toString("base64")}`;
   parsed.username = "";
   parsed.password = "";
-  parsed.pathname += "/git-receive-pack";
-  return (
-    await fetch(parsed, {
-      method: "POST",
-      headers: { authorization, "content-type": "application/x-git-receive-pack-request" },
-      body: Buffer.alloc(0),
-    })
-  ).status;
+  parsed.pathname += `/${service}`;
+  return fetch(parsed, {
+    method: "POST",
+    headers: { authorization, "content-type": `application/x-${service}-request` },
+    body,
+  });
+}
+
+async function pushStatus(url: string): Promise<number> {
+  return (await gitPost(url, "git-receive-pack", Buffer.alloc(0))).status;
 }
 
 const capFor = (actorId: string, scope?: string) =>
@@ -126,6 +128,24 @@ test("a read token can clone but cannot push (403 on receive-pack)", async () =>
 
     const after = await f.deploy.listDeployments();
     assert.equal(after[0]!.versions.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a git request whose body the backend stops reading completes and leaves the endpoint working", async () => {
+  const f = fixture();
+  try {
+    const d = await f.app.deploy({
+      ownerScopeId: scopeId("personal", "U1"),
+      createdBy: "U1",
+      entrypoint: "node server.js",
+      files: [{ path: "server.js", data: "console.log('v1')" }],
+    });
+    const url = await gitUrl(f.base, d.id, "read");
+    await (await gitPost(url, "git-upload-pack", Buffer.alloc(16 * 1024 * 1024, "z"))).arrayBuffer();
+    const work = mkdtempSync(join(tmpdir(), "git-rw-clone-"));
+    await execFileP("git", ["clone", "--quiet", url, work], { env: GIT_ENV });
   } finally {
     await f.close();
   }

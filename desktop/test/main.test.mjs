@@ -61,7 +61,11 @@ test(
       },
       fetch: (url, options) => new Promise((resolve) => requests.push({ url, options, resolve })),
     };
+    let menu = [];
     class BrowserWindow extends EventEmitter {
+      static getFocusedWindow() {
+        return windows.at(-1);
+      }
       constructor(options) {
         super();
         this.options = options;
@@ -105,7 +109,12 @@ test(
         autoUpdater: {},
         BrowserWindow,
         ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
-        Menu: { buildFromTemplate: (template) => template, setApplicationMenu() {} },
+        Menu: {
+          buildFromTemplate: (template) => template,
+          setApplicationMenu: (template) => {
+            menu = template;
+          },
+        },
         shell: {
           openExternal: async (url) => {
             opened.push(url);
@@ -167,6 +176,10 @@ test(
       input("Tab", true);
       assert.equal(reserved, true);
       assert.deepEqual(sent, [["qm:cycle-tab", 1]]);
+      const newSession = menu.flatMap((item) => item.submenu ?? []).find((item) => item.label === "New Session");
+      assert.equal(newSession.accelerator, "CmdOrCtrl+N");
+      newSession.click();
+      assert.deepEqual(sent.at(-1), ["qm:new-session"]);
       const frame = { url: "https://old.example/", origin: "https://old.example" };
       windows[0].webContents.mainFrame = frame;
       const browserEvent = { sender: windows[0].webContents, senderFrame: frame };

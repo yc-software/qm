@@ -26,6 +26,7 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { uuidSchema } from "../util/ids.ts";
 
 export interface DeployFile {
   path: string;
@@ -152,7 +153,6 @@ export interface DeployServiceDeps {
 }
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function assertAppSize(sizes: readonly number[], maxBytes: number | undefined): void {
   if (!maxBytes) return;
@@ -168,7 +168,7 @@ const fileSizes = (files: readonly DeployFile[] | undefined): number[] =>
   (files ?? []).map((f) => (typeof f.data === "string" ? Buffer.byteLength(f.data) : f.data.byteLength));
 
 function validateName(name: string): void {
-  if (UUID_RE.test(name)) throw new Error(`invalid deployment name (looks like an id): ${name}`);
+  if (uuidSchema.safeParse(name).success) throw new Error(`invalid deployment name (looks like an id): ${name}`);
   if (!NAME_RE.test(name)) {
     throw new Error(
       `invalid deployment name "${name}": use 2-40 chars, lowercase letters/digits/hyphens, no leading/trailing hyphen`,

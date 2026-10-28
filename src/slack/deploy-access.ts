@@ -7,6 +7,7 @@ import type { Directory } from "./directory.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import { updateSlackMessage } from "./messaging.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
+import { uuidSchema } from "../util/ids.ts";
 
 const ACTIONS = ["deploy_access_approve", "deploy_access_decline"] as const;
 type Request = NonNullable<Destination["deploymentAccess"]>;
@@ -18,7 +19,7 @@ export function parseDeployAccess(value: string): Request {
     !r ||
     Object.keys(r).length !== 2 ||
     typeof r.deploymentId !== "string" ||
-    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(r.deploymentId) ||
+    !uuidSchema.safeParse(r.deploymentId).success ||
     typeof r.requesterId !== "string" ||
     !/^[^\s\p{Cc}<>|:]{1,320}$/u.test(r.requesterId)
   )

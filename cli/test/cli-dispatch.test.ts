@@ -509,6 +509,7 @@ test("destructive commands reject extra positionals and boolean flags never cons
   for (const argv of [
     ["up", "unexpected"],
     ["up", "--dry-run", "unexpected"],
+    ["up", "--upgrade-minio", "unexpected"],
     ["sandbox", "build", "unexpected"],
     ["down", "--purge", "unexpected"],
     ["rollback", "unexpected"],
@@ -523,6 +524,9 @@ test("destructive commands reject extra positionals and boolean flags never cons
   const valuedBoolean = await run(["sandbox", "build", "--dry-run=false"]);
   assert.equal(valuedBoolean.exitCode, 2, valuedBoolean.out);
   assert.match(valuedBoolean.out, /--dry-run does not take a value/);
+  const valuedUpgrade = await run(["up", "--upgrade-minio=true"]);
+  assert.equal(valuedUpgrade.exitCode, 2, valuedUpgrade.out);
+  assert.match(valuedUpgrade.out, /--upgrade-minio does not take a value/);
 });
 
 test("unknown dev subcommands validate flags and extra arguments before reporting usage", async () => {

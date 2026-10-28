@@ -2062,19 +2062,40 @@ const apiRoutes: readonly WebRoute[] = [
     },
   },
   {
+    method: "GET",
+    path: "/api/sessions/:id/side-chats",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "GET",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/side-chats?principalId=${encodeURIComponent(c.user)}`,
+      ),
+  },
+  {
+    method: "POST",
+    path: "/api/sessions/:id/expand",
+    handle: async (c) =>
+      relayCore(
+        c.res,
+        "POST",
+        `/v1/sessions/${encodeURIComponent(c.params.id!)}/expand`,
+        JSON.stringify({ principalId: c.user }),
+      ),
+  },
+  {
     method: "POST",
     path: "/api/sessions/:id/fork",
     handle: async (c) => {
       const { req, res, user } = c;
       const id = c.params.id!;
-      const p = await readJson<{ upToSeq?: unknown }>(req, res);
+      const p = await readJson<{ upToSeq?: unknown; sideChat?: unknown }>(req, res);
       if (!p) return;
       const upToSeq = typeof p.upToSeq === "number" ? p.upToSeq : undefined;
       return relayCore(
         res,
         "POST",
         `/v1/sessions/${encodeURIComponent(id)}/fork`,
-        JSON.stringify({ principalId: user, ...(upToSeq !== undefined ? { upToSeq } : {}) }),
+        JSON.stringify({ principalId: user, upToSeq, sideChat: p.sideChat }),
       );
     },
   },

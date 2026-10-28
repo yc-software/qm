@@ -50,6 +50,12 @@ export async function setTriggerEnabled<T extends TriggerBase>(
   await backing.merge(id, { enabled } as Partial<T>);
 }
 
+export async function ownedBy<T extends TriggerBase>(backing: DurableMap<T>, scopeId: string): Promise<T[]> {
+  const field = "ownerScopeId" as Extract<keyof T, string>;
+  const rows = await backing.select({ where: { field, anyOfFold: [scopeId] } });
+  return rows.filter((row) => row.ownerScopeId === scopeId);
+}
+
 export const DROP_RECIPIENT_CONSENT_MIGRATION = {
   id: "durable-map/triggers/0001-drop-recipient-consent",
   statements: ["crons", "webhooks", "loops"].flatMap((table) => [

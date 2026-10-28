@@ -101,7 +101,7 @@ test("an invalid --target is rejected before anything is written", () => {
   try {
     const r = runCli(["init", dir, "--target", "kubernetes"]);
     assert.equal(r.code, 1);
-    assert.match(r.out, /--target must be docker, fly, or aws/);
+    assert.match(r.out, /--target must be docker, fly, aws, or render/);
     assert.ok(!existsSync(join(dir, CONFIG_FILENAME)), "no config on a rejected target");
   } finally {
     rmDir(dir);

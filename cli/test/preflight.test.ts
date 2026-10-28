@@ -217,7 +217,12 @@ test("doctor reports an SMTP relay reachable when it answers and unreachable whe
     ...CONFIG,
     env: { auth: { AUTH_EMAIL_TRANSPORT: "smtp", SMTP_PORT: String(port) } },
   });
-  const secrets = new Map([["SMTP_HOST", "127.0.0.1"]]);
+  const secrets = new Map([
+    ["SMTP_HOST", "127.0.0.1"],
+    ["SMTP_USERNAME", "user"],
+    ["SMTP_PASSWORD", "right"],
+    ["AUTH_EMAIL_FROM", "noreply@example.com"],
+  ]);
   try {
     const lines = await quietAsync(() => doctorCommon(relay(smtp.port), secrets));
     assert.ok(lines.some((line) => line.includes(`SMTP relay 127.0.0.1:${smtp.port}: reachable`)));

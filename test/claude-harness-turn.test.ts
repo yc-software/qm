@@ -376,7 +376,7 @@ test("model calls are counted per API response and charged their real input toke
   assert.deepEqual(result.cacheUsage, { cacheRead: 128_750, cacheWrite: 500, uncachedInput: 3 });
 });
 
-test("recorded LLM requests carry real timing and usage instead of a hardcoded truncation flag", async () => {
+test("recorded LLM requests carry real usage instead of a hardcoded truncation flag", async () => {
   currentScript = async function* (prompts) {
     await prompts[Symbol.asyncIterator]().next();
     yield assistantMessage("msg_A", "hello", {
@@ -396,8 +396,6 @@ test("recorded LLM requests carry real timing and usage instead of a hardcoded t
   const record = llmRequests[0]!;
   assert.equal(record.step, 0);
   assert.equal(record.truncated, false);
-  assert.equal(record.ttftMs, 1234);
-  assert.equal(record.durationMs, 5678);
   assert.deepEqual(record.usage, {
     input: 12,
     output: 7,

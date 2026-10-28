@@ -25,6 +25,7 @@ import type { ConnectorTokenStore } from "../src/credentials/keychain.ts";
 import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { FEATURE_NAMES } from "../src/feature-flags.ts";
 
 const ORG = "default-org";
 
@@ -293,7 +294,9 @@ test("session search guidance follows the callable surface and feature gate", as
       ]) {
         const orchestrator = await buildOrchestrator({
           sessionSyscalls: { forTurn: () => ({}) } as unknown as OrchestratorDeps["sessionSyscalls"],
-          featureFlags: { enabled: async () => enabled } as unknown as OrchestratorDeps["featureFlags"],
+          featureFlags: {
+            enabledFor: async () => new Set(enabled ? FEATURE_NAMES : []),
+          } as unknown as OrchestratorDeps["featureFlags"],
         });
         const prompt = await sysprompt(
           orchestrator,

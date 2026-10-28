@@ -15,10 +15,10 @@ import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
-import type { GapWork } from "../sessions/session-store.ts";
+import { tracePhase, type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
-import { deferredMcpTools, mcpToolDescription, searchMcpTools } from "./deferred-tools.ts";
+import { deferredMcpTools, mcpToolDescription, searchMcpTools, visibleMcpTools } from "./deferred-tools.ts";
 import { splitToScope } from "../api/artifact-share.ts";
 import { errMessage, reportFailure, swallowAs } from "../util/errors.ts";
 import { MemoryFactsMissing } from "../memory/facts.ts";
@@ -112,16 +112,9 @@ export interface ToolContextRef {
     transport?: { modelId?: string; headers?: Record<string, string> };
   }>;
   modelCalls?: number;
-  modelDispatch?: Array<{
-    start: number;
-    first?: number;
-    streamStart?: number;
-    prepareNextTurn?: number;
-    transformContext?: number;
-  }>;
-  pendingPrepareNextTurn?: number;
-  pendingTransformContext?: number;
-  onGapWork?: (work: GapWork) => void;
+  stepPhase?: Phase;
+  firstTokenPhase?: Phase;
+  onModelRequest?: () => void;
   fast?: boolean;
   abortSignal?: AbortSignal;
   shutdown?: AbortSignal;
@@ -625,7 +618,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     ),
     purpose: Type.String({
       description:
-        "Intent label, at most 4 words, describing the purpose not the code; shown in activity and approval requests.",
+        'Intent label, at most 4 words, starting with an -ing verb (e.g. "Checking disk space"), describing the purpose not the code; shown in activity and approval requests.',
     }),
     timeout_seconds: Type.Optional(
       Type.Integer({
@@ -3916,7 +3909,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     },
   });
 
-  const mcpDefs = deferredMcpTools(opts?.mcpTools, opts?.readOnly);
+  const mcpDefs = visibleMcpTools(opts?.mcpTools, opts?.readOnly);
   const mcpCandidates = mcpDefs.map((d) => ({
     ...defineTool({
       name: d.name,
@@ -3957,9 +3950,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
       : d.needsApproval === true,
   }));
-  const deferredTools = new Map(
-    mcpCandidates.map((t) => [t.name, withToolApprovalGate(t, ref, { recordCall, recordResult })]),
-  );
   const toolSearch = defineTool({
     name: "tool_search",
     label: "tool_search",
@@ -3970,27 +3960,37 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     }),
     async execute(callId, params) {
       await recordCall(callId, { tool: "tool_search", query: params.query });
-      return recordResult(callId, { tool: "tool_search" }, text(searchMcpTools(mcpDefs, params.query)));
+      return recordResult(callId, { tool: "tool_search" }, text(searchMcpTools(searchable, params.query)));
     },
   });
   const mcpCall = defineTool({
     name: "mcp_call",
     label: "mcp_call",
-    description: "Run a connector tool found with tool_search.",
+    description: "Run a connector tool listed under ## Connectors or found with tool_search.",
     parameters: Type.Object({
-      tool: Type.String({ description: "Exact tool name from tool_search." }),
+      server: Type.Optional(Type.String({ description: "Server id, as shown in brackets or by tool_search." })),
+      tool: Type.String({ description: "Tool name on that server." }),
       args: Type.Optional(
         Type.Object({}, { additionalProperties: true, description: "Arguments matching that tool's input schema." }),
       ),
     }),
     async execute(callId, params, ...rest) {
-      const target = deferredTools.get(params.tool);
+      const target =
+        params.server === undefined
+          ? callableTools.get(params.tool)
+          : toolsByServer.get(params.server)?.get(params.tool);
       if (target) return target.execute(callId, params.args ?? {}, ...rest);
-      await recordCall(callId, { tool: "mcp_call", target: params.tool, args: params.args });
+      const named = params.server === undefined ? `"${params.tool}"` : `"${params.tool}" on server "${params.server}"`;
+      await recordCall(callId, {
+        tool: "mcp_call",
+        server: params.server,
+        target: params.tool,
+        args: params.args,
+      });
       return recordResult(
         callId,
         { tool: "mcp_call", failed: true },
-        text(`[error] unknown tool "${params.tool}"; use tool_search to find connector tools.`),
+        text(`[error] unknown tool ${named}; use tool_search to find connector tools.`),
         true,
       );
     },
@@ -4174,8 +4174,29 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     context,
     ...clientTools,
   ];
-  const connectorTools: ToolDefinition[] = deferredTools.size ? [toolSearch, mcpCall] : [];
-  tools.push(...connectorTools);
+  const searchable = deferredMcpTools(opts?.mcpTools, opts?.readOnly);
+  const deferredNames = new Set(searchable.map((d) => d.name));
+  const nativeNames = new Set(tools.map((t) => t.name));
+  const inlineTools = mcpCandidates.filter((t) => {
+    if (deferredNames.has(t.name)) return false;
+    if (!nativeNames.has(t.name)) return true;
+    console.warn(`[mcp] ${t.name} is hidden because a built-in tool has the same name`);
+    return false;
+  });
+  const inline = new Set(inlineTools.map((t) => t.name));
+  const callableTools = new Map(
+    mcpCandidates
+      .filter((t) => deferredNames.has(t.name) || inline.has(t.name))
+      .map((t) => [t.name, withToolApprovalGate(t, ref, { recordCall, recordResult })]),
+  );
+  const toolsByServer = new Map<string, Map<string, ToolDefinition>>();
+  for (const d of searchable)
+    toolsByServer.set(
+      d.serverId,
+      (toolsByServer.get(d.serverId) ?? new Map()).set(d.remoteName, callableTools.get(d.name)!),
+    );
+  const connectorTools: ToolDefinition[] = searchable.length ? [toolSearch, mcpCall] : [];
+  tools.push(...inlineTools, ...connectorTools);
   const operationFields: Record<string, Record<string, string[]>> = {
     sandbox: {
       status: ["sandbox_id"],
@@ -4247,12 +4268,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     };
   };
   const active = opts?.readOnly
-    ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || connectorTools.includes(t))
+    ? tools.filter((t) => READ_ONLY_TOOL_NAMES.has(t.name) || inline.has(t.name) || connectorTools.includes(t))
     : tools;
   const clientNames = new Set(clientTools.map((tool) => tool.name));
   return active.map((tool) => {
     const wrapped = withRuntimeBarrier(
-      withToolBodyTiming(withToolApprovalGate(validateSandboxTool(tool), ref, { recordCall, recordResult }), ref),
+      withToolSpan(withToolApprovalGate(validateSandboxTool(tool), ref, { recordCall, recordResult }), ref),
       ref,
     );
     return clientNames.has(tool.name) ? wrapped : withRetrySafety(wrapped, retryMarks);
@@ -4452,22 +4473,11 @@ function withToolApprovalGate(
   } as ToolDefinition;
 }
 
-function withToolBodyTiming(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
-  const inner = tool.execute.bind(tool);
+function withToolSpan(tool: ToolDefinition, ref: ToolContextRef): ToolDefinition {
   return {
     ...tool,
-    async execute(callId: string, params: unknown) {
-      const start = Date.now();
-      try {
-        return await (inner as (callId: string, params: unknown) => unknown)(callId, params);
-      } finally {
-        try {
-          ref.onGapWork?.({ phase: "tool_body", tool: tool.name, start, end: Date.now() });
-        } catch (error) {
-          void error;
-        }
-      }
-    },
+    execute: (...args: Parameters<ToolDefinition["execute"]>) =>
+      tracePhase("step.tool", () => tool.execute(...args), { name: tool.name, parent: ref.stepPhase }),
   } as ToolDefinition;
 }
 

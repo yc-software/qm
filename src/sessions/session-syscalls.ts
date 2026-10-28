@@ -590,8 +590,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
           const deadline = Date.now() + Math.min(60_000, Math.max(0, timeoutMs));
           do {
             binding.request.cancel?.throwIfAborted();
-            const caller = await currentCaller();
             const messages = await deps.mailbox.pending(binding.session.id);
+            if (!messages.length && !timeoutMs) return [];
+            const caller = await currentCaller();
             const visible: SessionMessage[] = [];
             for (const message of messages) {
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);

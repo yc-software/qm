@@ -7,6 +7,7 @@ import { type QmConfig } from "../src/config.ts";
 import { ENV_DEFAULTS } from "../src/target-env-defaults.ts";
 import {
   computedSecrets,
+  missingRequiredSecrets,
   serviceSecretValue,
   renderEnvExample,
   runtimeSecretNames,
@@ -36,6 +37,32 @@ function secretByName(config: QmConfig, name: string): ComputedSecret {
   assert.ok(secret, `computed secret ${name} exists`);
   return secret;
 }
+
+test("required secret validation uses the selected values without ambient credentials", () => {
+  const config = makeConfig({ target: "aws" });
+  const database = secretByName(config, "DATABASE_URL");
+  const prior = process.env.DATABASE_URL;
+  process.env.DATABASE_URL = "postgres://local/db";
+  try {
+    for (const value of [undefined, "", "replace-me"]) {
+      assert.deepEqual(
+        missingRequiredSecrets([database], () => value),
+        ["DATABASE_URL"],
+      );
+    }
+    assert.deepEqual(
+      missingRequiredSecrets([database], () => "postgres://deployed/db"),
+      [],
+    );
+    assert.deepEqual(
+      missingRequiredSecrets([{ ...database, required: false }], () => undefined),
+      [],
+    );
+  } finally {
+    if (prior === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = prior;
+  }
+});
 
 test("a dual-role secret (sandbox.secretEnv + virtual service) needs BOTH names on core", () => {
   const config = makeConfig({

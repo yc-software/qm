@@ -26,7 +26,8 @@ export type SandboxBackendName =
   | "porter"
   | "agent37"
   | "superserve"
-  | "do-managed-agents";
+  | "do-managed-agents"
+  | "render";
 
 export class NoDefaultSandboxError extends Error {
   constructor() {

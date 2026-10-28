@@ -3,7 +3,6 @@ import type { Principal, Resolution, ScopeId, Session } from "../../types.ts";
 import { personalScope } from "../../types.ts";
 import { intersectEgressPolicies } from "../../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../../resolution/sharing-access.ts";
-import type { GapPhase } from "../../sessions/session-store.ts";
 import { type SandboxHandle, supportsProcessSessions, SandboxProvisionCleanupError } from "../../sandbox/sandbox.ts";
 import {
   accessConversationSandbox,
@@ -27,6 +26,7 @@ import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
+import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { loadActiveBundles } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
@@ -48,7 +48,6 @@ export interface TurnSandboxContext {
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
-  emitGapWork: (phase: GapPhase, start: number, end: number) => void;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -68,16 +67,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     egressTokenForPolicy,
     openResourceAccess,
     visibleSkillsForTurn,
-    emitGapWork,
   } = ctx;
 
   const box: {
     handle: SandboxHandle | null;
     pending: SandboxHandle | null;
     used: boolean;
-    provisionMs?: number;
   } = { handle: null, pending: null, used: false };
-  const scratchBox: { handle: SandboxHandle | null; pending: SandboxHandle | null; provisionMs?: number } = {
+  const scratchBox: { handle: SandboxHandle | null; pending: SandboxHandle | null } = {
     handle: null,
     pending: null,
   };
@@ -103,7 +100,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         sandboxId: handle?.id,
         startedAt: scratchStartedAt,
         readyAt: scratchReadyAt,
-        provisionMs: scratchBox.provisionMs,
         ...extra,
       }),
     });
@@ -155,14 +151,13 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   };
   const provision = (eager = false): Promise<SandboxHandle> => {
     if (!eager) box.used = true;
-    provisionInFlight ??= doProvision(eager ? () => {} : emitGapWork, eager).catch((err) => {
+    provisionInFlight ??= tracePhase("sandbox.provision", () => doProvision(eager)).catch((err) => {
       provisionInFlight = null;
       throw err;
     });
     return provisionInFlight;
   };
-  const doProvision = async (emit: typeof emitGapWork, eager: boolean): Promise<SandboxHandle> => {
-    const provisionStart = Date.now();
+  const doProvision = async (eager: boolean): Promise<SandboxHandle> => {
     if (input.externalSlack) {
       const resource = await deps.sandboxResources?.resolve(memoryScopeId);
       if (resource && resource.ownerScopeId !== scopeId) throw new Error("External Slack requires its own sandbox.");
@@ -177,8 +172,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     });
     box.pending = handle;
     await holdResource(handle);
-    emit("provision", provisionStart, Date.now());
-    box.provisionMs = Date.now() - provisionStart;
     deps.auditLog?.record({
       at: Date.now(),
       principalId: actor.id,
@@ -190,16 +183,12 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         sessionId: session.id,
         backend: handle.backend,
         sandboxId: handle.id,
-        provisionMs: box.provisionMs,
         coldStart: handle.coldStart,
         eager,
       }),
     });
-    const dirCleanupStart = Date.now();
     await prepareTurnFiles(handle);
-    emit("dir_cleanup", dirCleanupStart, Date.now());
     if (deps.processes && supportsProcessSessions(deps.sandbox)) {
-      const procReconcileStart = Date.now();
       try {
         await reconcileProcesses(deps.sandbox, handle, deps.processes, memoryScopeId, (exited, processId) =>
           finishProcessCredentials(
@@ -223,8 +212,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           },
           err,
         );
-      } finally {
-        emit("proc_reconcile", procReconcileStart, Date.now());
       }
     }
     box.handle = handle;
@@ -236,7 +223,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution): Promise<void> => {
     const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(r), r)}`;
     if (laidTrees.has(treeKey)) return;
-    const start = Date.now();
     try {
       const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
       await laySkillTree(deps.sandbox, handle, skillsRoot(r), r, bundles);
@@ -253,8 +239,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         err,
       );
       throw err;
-    } finally {
-      emitGapWork("skills_materialize", start, Date.now());
     }
   };
   const useSkill = async (name: string, file: string, sandboxId?: string, source?: string): Promise<SkillResult> => {
@@ -404,8 +388,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       return Promise.reject(new Error("Disposable sandbox initialization cleanup is still pending"));
     if (scratchBox.handle) return Promise.resolve(scratchBox.handle);
     scratchProvisionInFlight ??= (async () => {
-      const provisionStart = Date.now();
-      scratchStartedAt = provisionStart;
+      scratchStartedAt = Date.now();
       recordScratchLifecycle("provision_started");
       const handle = await deps.sandbox.provision(
         resolution.layers.filter((l) => l.mode === "ro" && l.mountPath === "global"),
@@ -418,7 +401,6 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
           ...(onSandboxStatus ? { onStatus: onSandboxStatus } : {}),
         },
       );
-      scratchBox.provisionMs = Date.now() - provisionStart;
       scratchBox.handle = handle;
       scratchReadyAt = Date.now();
       recordScratchLifecycle("provision_ready", handle);

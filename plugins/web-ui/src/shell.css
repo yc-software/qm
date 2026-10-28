@@ -2711,6 +2711,70 @@ qm-markdown .tok-in {
 .work-head .icon {
   color: inherit;
 }
+.work-head .work-elapsed {
+  color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.work-prestep > .work-head {
+  cursor: default;
+}
+.work-prestep > .work-head .activity-chevron {
+  visibility: hidden;
+}
+.work-working:not(.work-prestep) > .work-head .activity-chevron {
+  animation: work-step-in 420ms ease-out both;
+}
+.work-head .work-step-slot {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.work-head .work-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-thinking > .work-head .work-step,
+.work-working > .work-head .work-step {
+  animation: work-step-in 420ms ease-out both;
+}
+.work-head .work-step.work-step-out {
+  position: absolute;
+  inset: 0 auto 0 0;
+  animation: work-step-out 420ms ease-out both;
+  pointer-events: none;
+}
+@keyframes work-step-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes work-step-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-thinking > .work-head .work-step,
+  .work-working > .work-head .work-step {
+    animation: none;
+  }
+  .work-head .work-step-out {
+    display: none;
+  }
+}
 .activity-chevron {
   display: inline-flex;
   flex: 0 0 auto;
@@ -12197,18 +12261,20 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   color: var(--foreground);
 }
 
+/* The wrapper draws no box of its own, so a steer that is the latest prompt sticks against the
+   scroller like any other prompt (a sticky row is confined to its parent's box) and releases
+   where the assistant turn it steered ends. */
 .inline-steer {
+  display: contents;
+}
+
+.message-stack .inline-steer > .user-row {
+  width: 100%;
   margin-block: 16px;
 }
 
-.message-stack .inline-steer .user-row {
-  width: 100%;
-  position: relative;
-  top: auto;
-  z-index: auto;
-  margin: 0;
-  padding-top: 0;
-  pointer-events: auto;
+.message-stack .inline-steer > .user-row.latest-prompt {
+  margin-top: 8px;
 }
 
 .inline-steer .user-row .message-meta {

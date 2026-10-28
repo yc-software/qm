@@ -9,8 +9,8 @@ import {
   type QmConfig,
 } from "../config.ts";
 import { CliError, errMessage, step, warn } from "../log.ts";
-import { capture, deploymentSecretValue, flyBin, isInvalidSecret, readEnvFile, which } from "../util.ts";
-import { computedSecrets, serviceSecretValue } from "../secrets.ts";
+import { capture, deploymentSecretValue, flyBin, readEnvFile, which } from "../util.ts";
+import { serviceSecretValue } from "../secrets.ts";
 import { emailTransportConfigured, smtpTlsMode, smtpTransport } from "../preflight.ts";
 
 export function slackManifestBotScopes(manifest: string): string[] {
@@ -143,23 +143,12 @@ export function requireFlyAuth(): void {
 export async function doctorCommon(
   config: QmConfig,
   secrets: Map<string, string>,
-  opts: { requiredSecretValues?: boolean; configDir?: string } = {},
+  opts: { allowMissingValues?: boolean; configDir?: string } = {},
 ): Promise<void> {
-  if (opts.requiredSecretValues) {
-    const missing = computedSecrets(config)
-      .filter((secret) => secret.required)
-      .filter((secret) => {
-        const value = deploymentSecretValue(secret.name, secrets.get(secret.name));
-        return isInvalidSecret(secret.name, value);
-      });
-    if (missing.length)
-      throw new CliError(
-        `required secrets are missing or placeholders: ${missing.map((secret) => secret.name).join(", ")}`,
-      );
-    step("required local secret values: ok");
-  }
   if (localSandboxActive(config)) {
     step("local Docker sandbox: configured");
+  } else if (config.target === "render") {
+    step("Render sandbox: configured");
   } else if (config.target === "aws") {
     step("AWS Lambda MicroVM sandbox: configured");
   } else if (config.sandbox) {
@@ -180,37 +169,25 @@ export async function doctorCommon(
     if (httpEvents && app && !bot) {
       throw new CliError("Slack HTTP events setup needs SLACK_BOT_TOKEN, or no Slack tokens when setup is deferred");
     }
-    if (bot && (httpEvents || app)) {
+    if (bot) {
       const botApiUrl = deploymentSecretValue("SLACK_API_URL", secrets.get("SLACK_API_URL"));
       await slackCheck(bot, httpEvents ? undefined : app, opts.configDir, botApiUrl);
-      if (opts.requiredSecretValues) {
-        step("Slack tokens and manifest scopes: ok");
-      } else if (config.target === "aws") {
-        step("Slack tokens and manifest scopes: ok (verified the stored AWS secret values)");
-      } else {
-        step(
-          "Slack tokens and manifest scopes: ok (verified the local .env values — Fly's staged secrets are write-only and may differ)",
-        );
-      }
-    } else if (opts.requiredSecretValues) {
-      step("Slack setup: deferred to the admin connector page");
+      step("Slack tokens and manifest scopes: ok");
+    } else if (opts.allowMissingValues) {
+      warn("SLACK_BOT_TOKEN/SLACK_APP_TOKEN values are not available locally — skipping the live Slack check");
     } else {
-      warn(
-        config.target === "aws"
-          ? "SLACK_BOT_TOKEN/SLACK_APP_TOKEN are not in the AWS secret store yet — skipping the live Slack check"
-          : "SLACK_BOT_TOKEN/SLACK_APP_TOKEN values are not available locally — skipping the live Slack check (secret names were verified on the Fly apps)",
-      );
+      step("Slack setup: deferred to the admin connector page");
     }
   }
   if (config.services.includes("portal")) {
-    validatePortalTrust(config, "config", opts.requiredSecretValues ? secrets : undefined);
+    validatePortalTrust(config, "config", opts.allowMissingValues ? undefined : secrets);
     step(
       config.services.includes("auth")
         ? "built-in sign-in broker and email trust boundary: ok"
         : "portal OIDC client and tenant trust boundary: ok",
     );
   }
-  if (config.services.includes("auth")) await authBrokerCheck(config, secrets, opts.requiredSecretValues === true);
+  if (config.services.includes("auth")) await authBrokerCheck(config, secrets, !opts.allowMissingValues);
   await baseModelCheck(config, secrets);
 }
 

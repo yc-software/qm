@@ -127,6 +127,19 @@ test("provisioning a running computer does not wait behind a long-running comman
   await running;
 });
 
+test("a command on a computer reads its inventory record once", async () => {
+  const { records, router, layers } = fixture();
+  const handle = await router.provision(layers);
+  let reads = 0;
+  const get = records.get.bind(records);
+  records.get = async (id) => {
+    reads++;
+    return get(id);
+  };
+  assert.equal((await router.run(handle, "pwd")).stdout, handle.id);
+  assert.equal(reads, 1);
+});
+
 test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
   const { backend, options } = fixture();
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
@@ -232,7 +245,6 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
-    emitGapWork: () => {},
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const old = await turn.provision();
@@ -890,7 +902,6 @@ test("two concurrent turns on one parking computer: only the last turn to finish
       connectorEnv: {},
       visibleSkills: [],
       visibleSkillsForTurn: async () => [],
-      emitGapWork: () => {},
       perf: { credsMs: 0 },
     } as unknown as TurnSandboxContext);
   const a = await start("sa");
@@ -922,7 +933,6 @@ test("same-name skills from distinct sources keep their materialized assets sepa
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
-    emitGapWork: () => {},
     visibleSkillsForTurn: async (sources: readonly string[] = ["org:example", "personal:alice"]) =>
       sources.map((source) => ({
         skill: {

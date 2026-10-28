@@ -2,7 +2,14 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sleep, createKeyedQueue, fetchWithRetry, jitteredBackoffMs, retryAfterMs } from "../src/util/async.ts";
+import {
+  sleep,
+  createKeyedQueue,
+  fetchWithRetry,
+  jitteredBackoffMs,
+  retryAfterMs,
+  retryOperation,
+} from "../src/util/async.ts";
 
 test("sleep resolves after roughly the given delay", async () => {
   const t0 = Date.now();
@@ -289,4 +296,136 @@ test("fetchWithRetry shares a deadline across attempts and backoff", async () =>
   assert.equal(signals.length, 2);
   assert.equal(signals[0], signals[1]);
   assert.equal(signals[1]!.aborted, true);
+});
+
+class StatusError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`status ${status}`);
+    this.status = status;
+  }
+}
+const statusOf = (error: unknown): number | undefined => (error instanceof StatusError ? error.status : undefined);
+
+test("retryOperation retries statuses of its class and idempotent transport failures, honors the given wait, and stops at other errors", async () => {
+  const run = async (retry: "idempotent" | "refused", failures: unknown[]) => {
+    let calls = 0;
+    const waits: number[] = [];
+    const result = await retryOperation(
+      async () => {
+        calls++;
+        const failure = failures.shift();
+        if (failure) throw failure;
+        return "done";
+      },
+      retry,
+      { statusOf, retryAfterMsOf: () => (waits.push(0), 0) },
+    ).catch((error: unknown) => error);
+    return { result, calls, waits: waits.length };
+  };
+  assert.deepEqual(await run("idempotent", [new StatusError(429), new StatusError(503)]), {
+    result: "done",
+    calls: 3,
+    waits: 2,
+  });
+  assert.deepEqual(await run("refused", [new StatusError(429)]), { result: "done", calls: 2, waits: 1 });
+  const refused = await run("refused", [new StatusError(503)]);
+  assert.equal((refused.result as StatusError).status, 503);
+  assert.equal(refused.calls, 1);
+  assert.deepEqual(await run("idempotent", [new TypeError("fetch failed"), new TypeError("terminated")]), {
+    result: "done",
+    calls: 3,
+    waits: 2,
+  });
+  const unsent = await run("refused", [new TypeError("fetch failed")]);
+  assert.equal((unsent.result as Error).message, "fetch failed");
+  assert.equal(unsent.calls, 1);
+  const bug = await run("idempotent", [new TypeError("raw.map is not a function")]);
+  assert.equal((bug.result as Error).message, "raw.map is not a function");
+  assert.equal(bug.calls, 1);
+  const aborted = await run("idempotent", [Object.assign(new Error("aborted"), { name: "AbortError" })]);
+  assert.equal((aborted.result as Error).name, "AbortError");
+  assert.equal(aborted.calls, 1);
+  const rejected = await run("idempotent", [new Error("Failed to get network policy (status 404)")]);
+  assert.equal((rejected.result as Error).message, "Failed to get network policy (status 404)");
+  assert.equal(rejected.calls, 1);
+  const exhausted = await run(
+    "idempotent",
+    [500, 502, 503, 504].map((status) => new StatusError(status)),
+  );
+  assert.equal((exhausted.result as StatusError).status, 504);
+  assert.equal(exhausted.calls, 4);
+});
+
+test("retryOperation retries the network errors that a caller names for its SDK only in the idempotent class", async () => {
+  const run = async (retry: "idempotent" | "refused") => {
+    let calls = 0;
+    const result = await retryOperation(
+      async () => {
+        if (calls++ === 0) throw new Error("Network error: fetch failed");
+        return "done";
+      },
+      retry,
+      { statusOf, networkError: (error) => (error as Error).message.startsWith("Network error: "), baseDelayMs: 1 },
+    ).catch((error: unknown) => error);
+    return { result, calls };
+  };
+  assert.deepEqual(await run("idempotent"), { result: "done", calls: 2 });
+  const refused = await run("refused");
+  assert.equal((refused.result as Error).message, "Network error: fetch failed");
+  assert.equal(refused.calls, 1);
+});
+
+test("retryOperation hands a result that arrives after its deadline to the late handler", async () => {
+  const late = Promise.withResolvers<string>();
+  await assert.rejects(
+    retryOperation(() => new Promise<string>((resolve) => setTimeout(() => resolve("created"), 60)), "refused", {
+      statusOf,
+      timeoutMs: 20,
+      onLate: async (value) => late.resolve(value),
+    }),
+    { name: "TimeoutError" },
+  );
+  assert.equal(await late.promise, "created");
+  const afterRetry = Promise.withResolvers<string>();
+  let attempts = 0;
+  await assert.rejects(
+    retryOperation(
+      async () => {
+        attempts++;
+        if (attempts === 1) throw new StatusError(429);
+        return new Promise<string>((resolve) => setTimeout(() => resolve(`attempt ${attempts}`), 60));
+      },
+      "refused",
+      { statusOf, retryAfterMsOf: () => 0, timeoutMs: 20, onLate: async (value) => afterRetry.resolve(value) },
+    ),
+    { name: "TimeoutError" },
+  );
+  assert.equal(await afterRetry.promise, "attempt 2");
+  let lateCalls = 0;
+  await assert.rejects(
+    retryOperation(
+      () => new Promise<string>((_, reject) => setTimeout(() => reject(new Error("late failure")), 40)),
+      "refused",
+      {
+        statusOf,
+        timeoutMs: 20,
+        onLate: async () => {
+          lateCalls++;
+        },
+      },
+    ),
+    { name: "TimeoutError" },
+  );
+  await sleep(60);
+  assert.equal(lateCalls, 0);
+  await retryOperation(async () => "on time", "refused", {
+    statusOf,
+    timeoutMs: 1_000,
+    onLate: async () => {
+      lateCalls++;
+    },
+  });
+  await sleep(10);
+  assert.equal(lateCalls, 0);
 });

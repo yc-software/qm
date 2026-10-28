@@ -8,7 +8,6 @@ import { createDeployStore, type DeployStore, type Deployment } from "../src/dep
 import { createDeployService, type DeployService, type DeployOrUpdateInput } from "../src/deploy/deploy-service.ts";
 import { createAclStore, type AclStore } from "../src/acl/acl-store.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import { CapabilityUnsupportedError } from "../src/sandbox/sandbox.ts";
 import type { AgentComputerExportEntry, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
@@ -47,7 +46,6 @@ interface CtxOpts {
   files?: Array<{ path: string; data: Uint8Array }>;
   sandbox?: Sandbox;
   provision?: () => Promise<SandboxHandle>;
-  ledger?: ToolLedger;
   runId?: string;
   rw?: boolean;
   splitEnv?: Record<string, string>;
@@ -82,7 +80,6 @@ function ctx(deploy: DeployService, opts: CtxOpts = {}) {
     deploy,
     acl: {} as never,
     createdBy: "U1",
-    ...(opts.ledger ? { ledger: opts.ledger } : {}),
     ...(opts.runId ? { runId: opts.runId } : {}),
     ...(opts.splitEnv
       ? { actingSlackUserId: "U1", layerAuth: { credentialPaths: [], splitEnvTemplates: [opts.splitEnv] } }
@@ -486,35 +483,6 @@ test("publish: rollbackTo flips the named deployment's pointer", async () => {
 
   await ctx(s.deploy).publish({ name: "roll", rollbackTo: 1 });
   assert.equal((await s.deployStore.getByName("roll"))!.currentVersion, 1);
-});
-
-test("publish is ledgered (G6): a crash-replay returns the cached result, not a second deploy", async () => {
-  const s = svc();
-  const seen = new Map<string, string>();
-  const ledger: ToolLedger = {
-    async begin(runId, attempt, i) {
-      const key = `${runId}:${attempt}:${i}`;
-      return seen.has(key) ? { cached: true, output: seen.get(key)! } : { cached: false };
-    },
-    async record(runId, attempt, i, output) {
-      seen.set(`${runId}:${attempt}:${i}`, output);
-    },
-  };
-  const files = [{ path: "app/s.js", data: bytes("x") }];
-  const r1 = await ctx(s.deploy, { files, ledger, runId: "r1" }).publish({
-    dir: "app",
-    entrypoint: "x",
-    name: "once-app",
-  });
-  const r2 = await ctx(s.deploy, { files, ledger, runId: "r1" }).publish({
-    dir: "app",
-    entrypoint: "x",
-    name: "once-app",
-  });
-
-  assert.deepEqual(r2, r1, "replay returns the cached PublishResult");
-  assert.equal((await s.deployStore.list()).length, 1, "no second deployment created");
-  assert.equal(s.starts, 1, "the container was started exactly once");
 });
 
 test("publish never copies resident credentials into the deployment", async () => {

@@ -1,4 +1,4 @@
-export const HOSTING_PROVIDER_IDS = ["docker", "fly", "aws"] as const;
+export const HOSTING_PROVIDER_IDS = ["docker", "fly", "aws", "render"] as const;
 
 export type Target = (typeof HOSTING_PROVIDER_IDS)[number];
 
@@ -12,6 +12,7 @@ export const SANDBOX_BACKENDS = {
   agent37: "",
   superserve: "Superserve sandboxes",
   e2b: "E2B sandboxes",
+  render: "Render Sandboxes",
 } as const;
 
 export type SandboxBackendId = keyof typeof SANDBOX_BACKENDS;
@@ -31,6 +32,7 @@ export const SANDBOX_BACKEND_POLICY: Record<Target, SandboxBackendPolicy> = {
   docker: { allowed: ["local", "sprites", "agent37", "superserve", "e2b"], requireExplicit: false },
   fly: { allowed: ["sprites", "agent37", "superserve", "e2b"], requireExplicit: false },
   aws: { allowed: ["sprites", "aws", "agent37", "superserve", "e2b"], requireExplicit: true },
+  render: { allowed: ["render"], requireExplicit: false },
 };
 
 export const targetsAllowingSandboxBackend = (backend: SandboxBackendId): Target[] =>

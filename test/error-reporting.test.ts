@@ -38,7 +38,7 @@ async function runReporting(body: string, enabled = true, env: Record<string, st
       "-e",
       `
     import * as Sentry from '@sentry/node';
-    import { initializeErrorReporting, reportBackendError, flushErrorReporting, nameRequest, traceCarrier, traceQueued, markFirstToken } from './plugins/chassis/src/error-reporting.ts';
+    import { initializeErrorReporting, reportBackendError, flushErrorReporting, nameRequest, traceCarrier, traceQueued, startDispatchTrace } from './plugins/chassis/src/error-reporting.ts';
     initializeErrorReporting(Sentry, 'test');
     ${body}
   `,
@@ -204,8 +204,10 @@ const TRACED_REQUESTS = `
   await fetch(base + '/healthz');
   await fetch(base + '/v1/runs/private-id/events');
   await traceQueued(carrier, 'run', { 'messaging.message.id': 'run-1', 'qm.surface': 'web', private: 'private-attribute' }, async () => {
+    const dispatch = startDispatchTrace();
     await new Promise((resolve) => setTimeout(resolve, 20));
-    markFirstToken();
+    dispatch.firstToken();
+    dispatch.end();
   });
   await traceQueued(undefined, 'stopped-run', {}, async () => ({ stopped: true }), (result) => result.stopped);
   await new Promise((resolve) => setTimeout(resolve, 300));
@@ -285,7 +287,12 @@ test("sampled requests and queued runs become scrubbed, connected transactions",
   assert.equal(run.contexts.trace.data["qm.surface"], "web");
   assert.equal(run.measurements.time_to_first_token.unit, "millisecond");
   assert.ok(run.measurements.time_to_first_token.value >= 15);
-  assert.deepEqual(run.tags, { service: "test", deployment: "test-deployment" });
+  assert.deepEqual(run.tags, {
+    service: "test",
+    deployment: "test-deployment",
+    "messaging.message.id": "run-1",
+    "qm.surface": "web",
+  });
   assert.equal(run.release, "test-release");
   assert.equal(run.environment, "verification");
 });
@@ -344,4 +351,41 @@ test("sandbox cleanup errors send both original failures and their stacks", asyn
     const value = values.find((entry: { value: string }) => entry.value === message);
     assert.ok(value?.stacktrace.frames.length, message);
   }
+});
+
+test("human turns are always traced while other runs follow the configured rate", async () => {
+  const sampled = await runReporting(
+    `
+    const { createServer } = await import('node:http');
+    let declined;
+    const server = createServer((req, res) => { declined = traceCarrier(); res.end('ok'); });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    await fetch('http://127.0.0.1:' + server.address().port + '/v1/things', { headers: { 'sentry-trace': 'fedcba9876543210fedcba9876543210-fedcba9876543210-0' } });
+    server.close();
+    for (let i = 0; i < 20; i++) {
+      await traceQueued(undefined, 'human-run', { 'messaging.message.id': 'run-' + i, 'qm.surface': 'slack', 'qm.origin': 'human' }, async () => {});
+      await traceQueued(undefined, 'cron-run', { 'qm.surface': 'cron', 'qm.origin': 'automation' }, async () => {});
+      await traceQueued(undefined, 'subagent-run', { 'qm.origin': 'direct' }, async () => {});
+    }
+    await traceQueued(declined, 'human-after-unsampled-request', { 'qm.origin': 'human' }, async () => {});
+    await traceQueued(declined, 'cron-after-unsampled-request', { 'qm.origin': 'automation' }, async () => {});
+    await flushErrorReporting();
+  `,
+    true,
+    { SENTRY_TRACES_SAMPLE_RATE: "0.000001" },
+  );
+  assert.equal(sampled.code, 0);
+  const names = sampled.transactions.map((event) => event.transaction);
+  assert.equal(names.filter((name) => name === "human-run").length, 20);
+  assert.ok(names.includes("human-after-unsampled-request"));
+  assert.deepEqual(
+    names.filter((name) => !name.startsWith("human-")),
+    [],
+    "automation, direct and request transactions keep the configured rate and inherited decisions",
+  );
+  const human = sampled.transactions.find((event) => event.transaction === "human-run")!;
+  assert.equal(human.contexts.trace.data["sentry.sample_rate"], 1);
+  assert.equal(human.tags["qm.origin"], "human");
+  assert.equal(human.tags["qm.surface"], "slack");
+  assert.match(human.tags["messaging.message.id"], /^run-\d+$/);
 });

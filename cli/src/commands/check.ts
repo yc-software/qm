@@ -30,6 +30,8 @@ export function runChecks(
   const configError = (message: string, clause = "config.v1"): void => void configErrors.push({ clause, message });
   const provider = hostingProvider(config.target);
   configErrors.push(...provider.validateConfig(config, plugins));
+  if (config.target === "render" && layer.hasDockerfile)
+    configError("Render Sandboxes use the Render base image; sandbox/Dockerfile is not supported");
   for (const skill of config.skills) {
     const path = resolve(configDir, skill);
     let isDirectory: boolean;

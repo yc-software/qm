@@ -923,7 +923,6 @@ test("the orchestrator sandbox path selects worker storage without changing auth
     quarantinedServices: [],
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
-    emitGapWork: () => {},
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const handle = await turn.provision();

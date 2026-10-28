@@ -2,10 +2,9 @@ import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 import { workPausedForApproval, type WorkBlock } from "./core-bridge.ts";
 import { currentTextPhase } from "./timeline.ts";
-import { sheenLabel } from "./ui.ts";
-import { workedLabel, workSeconds } from "./work-duration.ts";
+import { workDuration, workSeconds } from "./work-duration.ts";
 
-class LiveWorkLabel extends AsyncDirective {
+class LiveWorkDuration extends AsyncDirective {
   private timer: ReturnType<typeof setInterval> | undefined;
   private work!: WorkBlock;
 
@@ -13,7 +12,7 @@ class LiveWorkLabel extends AsyncDirective {
     this.work = work;
     const ticking =
       this.isConnected &&
-      work.status === "working" &&
+      (work.status === "working" || work.status === "thinking") &&
       !work.stale &&
       !workPausedForApproval(work) &&
       currentTextPhase(work)?.phase !== "final_answer";
@@ -23,7 +22,7 @@ class LiveWorkLabel extends AsyncDirective {
   }
 
   private label() {
-    return sheenLabel(workedLabel("Working", workSeconds(this.work)), true);
+    return workDuration(workSeconds(this.work));
   }
 
   protected disconnected() {
@@ -36,4 +35,4 @@ class LiveWorkLabel extends AsyncDirective {
   }
 }
 
-export const liveWorkLabel = directive(LiveWorkLabel);
+export const liveWorkDuration = directive(LiveWorkDuration);

@@ -105,72 +105,45 @@ for (const name of ["context-pull-cross-channel", "channel-reach"]) {
   });
 }
 
-for (const [name, tool] of [
-  ["execute-turn", "execute"],
-  ["perf-budget", "execute"],
-  ["perf-budget", "sandbox"],
-]) {
-  test(`${name} waits past an acknowledgment for successful ${tool} output`, async (t) => {
-    t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 100_000 });
-    const { scenario, qa, ctx } = context(name!);
-    const output = name === "execute-turn" ? "Linux test 6.1.0-test" : ctx.marker("executed");
-    qa.replies = async () => [
-      { ts: "2", user: "BOT", text: "I'll run that now." },
-      ...(Date.now() >= 120_000 ? [{ ts: "3", user: "BOT", text: output }] : []),
-    ];
-    ctx.env.core = {
-      findSessionByThread: async () => ({
-        id: "session",
-        entries: [
-          {
-            type: "tool_result",
-            payload: {
-              tool,
-              action: "exec",
-              code: 0,
-              isError: false,
-              timedOut: false,
-              result: `${output}\n\n[exit 0]`,
-            },
-          },
-        ],
-      }),
-      getSession: async () => ({
-        entries: Date.now() >= 130_000 ? [{ type: "assistant", payload: { workFinishedAt: 130_000 } }] : [],
-      }),
-      getSessionLlm: async () => {
-        assert.ok(Date.now() >= 130_000, "metrics must be read after the turn finishes");
-        return { requests: [{ stepGapMs: 1, gapPhases: {} }] };
-      },
-    } as never;
-    let settled = false;
-    const result = scenario.run(ctx).then(() => {
-      settled = true;
-    });
-    await setImmediate();
-    for (let i = 0; i < 3; i++) {
-      t.mock.timers.tick(2500);
-      await setImmediate();
-    }
-    assert.equal(settled, false);
-    for (let i = 0; i < 12; i++) {
-      t.mock.timers.tick(2500);
-      await setImmediate();
-    }
-    await result;
-  });
-}
-
-test("performance check rejects failed execution before evaluating timing", async () => {
-  const { scenario, ctx } = context("perf-budget");
-  ctx.freshChannel = async () =>
-    ({ id: "CHANNEL", mention: async () => "1", waitForBotReply: async () => ({}) }) as never;
+test("execute-turn waits past an acknowledgment for successful execute output", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 100_000 });
+  const { scenario, qa, ctx } = context("execute-turn");
+  const output = "Linux test 6.1.0-test";
+  qa.replies = async () => [
+    { ts: "2", user: "BOT", text: "I'll run that now." },
+    ...(Date.now() >= 120_000 ? [{ ts: "3", user: "BOT", text: output }] : []),
+  ];
   ctx.env.core = {
     findSessionByThread: async () => ({
       id: "session",
-      entries: [{ type: "tool_result", payload: { tool: "execute", isError: true } }],
+      entries: [
+        {
+          type: "tool_result",
+          payload: {
+            tool: "execute",
+            action: "exec",
+            code: 0,
+            isError: false,
+            timedOut: false,
+            result: `${output}\n\n[exit 0]`,
+          },
+        },
+      ],
     }),
-    getSessionLlm: async () => ({ requests: [{ stepGapMs: 1, gapPhases: {} }] }),
   } as never;
-  await assert.rejects(scenario.run(ctx), /successful.*execut/);
+  let settled = false;
+  const result = scenario.run(ctx).then(() => {
+    settled = true;
+  });
+  await setImmediate();
+  for (let i = 0; i < 3; i++) {
+    t.mock.timers.tick(2500);
+    await setImmediate();
+  }
+  assert.equal(settled, false);
+  for (let i = 0; i < 12; i++) {
+    t.mock.timers.tick(2500);
+    await setImmediate();
+  }
+  await result;
 });

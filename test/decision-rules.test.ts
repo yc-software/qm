@@ -410,6 +410,39 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
   );
 });
 
+test("observe-only rules do not hold up the turn and are still audited", async () => {
+  const { createDecisionHooks } = await import("../src/decisions/hooks.ts");
+  const records: { resource?: string; status?: string }[] = [];
+  const audit = { record: (e: (typeof records)[number]) => void records.push(e) } as never;
+  const shadowModel = { provider: "anthropic", model: "shadow-model" };
+  const store = {
+    rules: async () => [route(), { ...route(), id: "shadow", mode: "observe" as const, model: shadowModel }],
+  } as never;
+  const shadowAnswer = Promise.withResolvers<void>();
+  const backend: DecisionBackend = {
+    async choose({ questions, model }) {
+      if (model.model === shadowModel.model) await shadowAnswer.promise;
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, { keep: 0.2, deep: 0.8 }]));
+    },
+  };
+  const decide = createDecisionHooks(store, backend, audit);
+  const verdict = await decide("turn_start", "refactor the scheduler", { scopeLabel: "personal:a", sessionId: "s1" });
+  assert.equal(verdict?.ruleId, "router");
+  assert.deepEqual(
+    records.map((r) => r.resource),
+    ["router"],
+  );
+  shadowAnswer.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    records.map((r) => [r.resource, r.status]),
+    [
+      ["router", "use_runtime"],
+      ["shadow", "use_runtime"],
+    ],
+  );
+});
+
 test("turn_start rules see the turn's context alongside the message", () => {
   const state = turnStartState({
     input: "Audit our session cookies",

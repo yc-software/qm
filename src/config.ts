@@ -1,9 +1,12 @@
 import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/chatgpt-auth-file.ts";
+import { githubRepoUrl, isGitBranchName } from "../cli/src/render-source.ts";
+import { RENDER_SANDBOX_TTL_SEC } from "./sandbox/render-limits.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
 } from "./credentials/deployment-credentials.ts";
 import { errMessage } from "./util/errors.ts";
+import { commitShaSchema } from "./util/ids.ts";
 import type { ExternalSlackPolicies } from "./resolution/external-slack.ts";
 import { isBearerSecret, isStrongSigningSecret } from "./auth/source-auth.ts";
 import { parseSandboxCapabilityTtlMs } from "./auth/capability-token.ts";
@@ -75,7 +78,7 @@ export interface Config {
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   sandboxBackend: SandboxBackendName;
   sandboxSecondaryBackend?: SandboxBackendName;
-  deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b";
+  deployProvider: "docker" | "aws" | "fly" | "porter" | "e2b" | "render";
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
@@ -151,8 +154,10 @@ export interface Config {
   layerEnv?: Readonly<Record<string, string | undefined>>;
   snapshotStore: "local" | "s3";
   transferStore: "local" | "s3";
+  workspaceStore: "local" | "postgres";
   s3Bucket?: string;
   s3Region?: string;
+  s3Endpoint?: string;
   s3Prefix?: string;
   deployIdleTtlMs?: number;
   deployGitDir: string;
@@ -199,6 +204,8 @@ export interface Config {
   managedAgentsSandbox: ManagedAgentsSandboxEnv;
   modalSandbox: ModalSandboxEnv;
   porterSandbox: PorterSandboxEnv;
+  renderSandbox: RenderSandboxEnv;
+  renderDeploy: RenderDeployEnv;
   porterDeploy: PorterDeployEnv;
   awsDeploy: AwsDeployEnv;
   deployAppsDomain?: string;
@@ -422,6 +429,74 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
+  };
+}
+
+interface RenderSandboxEnv {
+  apiKey?: string;
+  workspaceId?: string;
+  defaultTimeoutSec?: number;
+}
+
+function renderSandboxEnv(env: NodeJS.ProcessEnv): RenderSandboxEnv {
+  const defaultTimeoutSec = numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC);
+  return {
+    ...(env.RENDER_API_KEY?.trim() ? { apiKey: env.RENDER_API_KEY.trim() } : {}),
+    ...(env.RENDER_WORKSPACE_ID?.trim() ? { workspaceId: env.RENDER_WORKSPACE_ID.trim() } : {}),
+    ...(defaultTimeoutSec !== undefined ? { defaultTimeoutSec } : {}),
+  };
+}
+
+function renderRegion(env: NodeJS.ProcessEnv): string {
+  return env.RENDER_REGION?.trim() || "oregon";
+}
+
+interface RenderDeployEnv {
+  projectId: string;
+  environmentId?: string;
+  apiKey: string;
+  workspaceId: string;
+  minioServiceId: string;
+  source?: { repo: string; branch: string; commit: string };
+  region: string;
+  appRegion: string;
+}
+
+function renderDeployEnv(env: NodeJS.ProcessEnv): RenderDeployEnv {
+  const rawRepo = env.RENDER_DEPLOY_REPO?.trim();
+  const repo = rawRepo ? githubRepoUrl(rawRepo) : undefined;
+  const branch = env.RENDER_DEPLOY_BRANCH?.trim();
+  const commit = env.GIT_SHA?.trim();
+  const minioServiceId = env.RENDER_MINIO_SERVICE_ID?.trim() || "";
+  if (Boolean(rawRepo) !== Boolean(branch))
+    throw new Error("RENDER_DEPLOY_REPO and RENDER_DEPLOY_BRANCH must be set together");
+  if (rawRepo && !repo)
+    throw new Error("RENDER_DEPLOY_REPO must be an HTTPS GitHub repository URL without credentials");
+  if (branch && !isGitBranchName(branch)) throw new Error("RENDER_DEPLOY_BRANCH must be a valid Git branch name");
+  if (env.DEPLOY_PROVIDER === "render" && (!repo || !branch || !commitShaSchema.safeParse(commit).success))
+    throw new Error("DEPLOY_PROVIDER=render requires RENDER_DEPLOY_REPO, RENDER_DEPLOY_BRANCH, and GIT_SHA");
+  if (env.DEPLOY_PROVIDER === "render" && !/^srv-[a-z0-9]+$/.test(minioServiceId))
+    throw new Error("DEPLOY_PROVIDER=render requires RENDER_MINIO_SERVICE_ID");
+  const projectId = env.RENDER_PROJECT_ID?.trim() || "";
+  if (env.DEPLOY_PROVIDER === "render" && !projectId)
+    throw new Error("DEPLOY_PROVIDER=render requires RENDER_PROJECT_ID");
+  if (projectId && !/^prj-[a-z0-9]+$/.test(projectId))
+    throw new Error("RENDER_PROJECT_ID must be a project ID (prj-...)");
+  const environmentId = env.RENDER_ENVIRONMENT_ID?.trim();
+  if (env.DEPLOY_PROVIDER === "render" && !environmentId)
+    throw new Error("DEPLOY_PROVIDER=render requires RENDER_ENVIRONMENT_ID");
+  if (environmentId && !/^evm-[a-z0-9]+$/.test(environmentId))
+    throw new Error("RENDER_ENVIRONMENT_ID must be an environment ID (evm-...)");
+  const region = renderRegion(env);
+  return {
+    projectId,
+    ...(environmentId ? { environmentId } : {}),
+    apiKey: env.RENDER_API_KEY?.trim() || "",
+    workspaceId: env.RENDER_WORKSPACE_ID?.trim() || "",
+    minioServiceId,
+    ...(repo && branch && commit ? { source: { repo, branch, commit } } : {}),
+    region,
+    appRegion: env.RENDER_APP_REGION?.trim() || region,
   };
 }
 
@@ -1020,6 +1095,7 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
     aws: Boolean(config.awsSandbox?.s3Bucket),
     porter: Boolean(config.porterSandbox?.token),
+    render: Boolean(config.renderSandbox?.apiKey && config.renderSandbox?.workspaceId),
   };
   const enabled = new Set<Config["sandboxBackend"]>([config.sandboxBackend]);
   for (const [name, on] of Object.entries(credentialed)) {
@@ -1041,11 +1117,12 @@ function sandboxBackendEnvStrict(value: string | undefined, name = "SANDBOX_BACK
     backend === "agent37" ||
     backend === "superserve" ||
     backend === "do-managed-agents" ||
-    backend === "porter"
+    backend === "porter" ||
+    backend === "render"
   )
     return backend;
   throw new Error(
-    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, or do-managed-agents, or unset it.`,
+    `${name}=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, or render, or unset it.`,
   );
 }
 
@@ -1181,6 +1258,25 @@ function resolveStoreKinds(env: NodeJS.ProcessEnv): Pick<Config, "sessionStore" 
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const s3Endpoint = env.AWS_ENDPOINT_URL_S3?.trim();
+  if (s3Endpoint) {
+    let endpoint: URL;
+    try {
+      endpoint = new URL(s3Endpoint);
+    } catch {
+      throw new Error("AWS_ENDPOINT_URL_S3 must be an HTTP or HTTPS URL");
+    }
+    if (
+      !["http:", "https:"].includes(endpoint.protocol) ||
+      endpoint.username ||
+      endpoint.password ||
+      endpoint.search ||
+      endpoint.hash
+    )
+      throw new Error(
+        "AWS_ENDPOINT_URL_S3 must be an HTTP or HTTPS URL without credentials, query parameters, or a fragment",
+      );
+  }
   const token = env.SPEND_EXPORT_TOKEN;
   if (token) {
     const reused = Object.entries(env).some(([name, value]) => name !== "SPEND_EXPORT_TOKEN" && value === token);
@@ -1306,10 +1402,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
     throw new Error(
-      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, aws, or local.",
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, render, aws, or local.",
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
+  if (sandboxBackend === "render" || env.DEPLOY_PROVIDER === "render") {
+    if (!env.RENDER_WORKSPACE_ID?.trim()) throw new Error("Render providers require RENDER_WORKSPACE_ID");
+  }
+  if (sandboxBackend === "render" && env.WORKSPACE_STORE !== "postgres")
+    throw new Error("SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres");
+  const renderSandboxEnabled =
+    sandboxBackend === "render" || Boolean(env.RENDER_API_KEY?.trim() && env.RENDER_WORKSPACE_ID?.trim());
+  if (renderSandboxEnabled) {
+    if ((numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) ?? 600) + 60 >= RENDER_SANDBOX_TTL_SEC)
+      throw new Error(
+        `SANDBOX_TIMEOUT_SEC must stay more than 60 seconds below the ${RENDER_SANDBOX_TTL_SEC} second Render sandbox lifetime`,
+      );
+  }
   const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
   if (env.SANDBOX_SCOPE_BACKENDS) {
     const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
@@ -1406,10 +1515,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     deployProvider !== "docker" &&
     deployProvider !== "fly" &&
     deployProvider !== "porter" &&
-    deployProvider !== "e2b"
+    deployProvider !== "e2b" &&
+    deployProvider !== "render"
   ) {
     throw new Error(
-      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, fly, porter, or e2b)`,
+      `DEPLOY_PROVIDER=${JSON.stringify(deployProvider)} is not recognized (expected aws, docker, fly, porter, e2b, or render)`,
     );
   }
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
@@ -1620,9 +1730,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { memoryCaptureMaxTurns: numEnvStrict("MEMORY_CAPTURE_MAX_TURNS", env.MEMORY_CAPTURE_MAX_TURNS) }
       : {}),
     snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
+    workspaceStore: env.WORKSPACE_STORE === "postgres" ? "postgres" : "local",
     transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
+    ...(s3Endpoint ? { s3Endpoint } : {}),
     ...(env.S3_PREFIX ? { s3Prefix: env.S3_PREFIX } : {}),
     ...(numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) !== undefined
       ? { deployIdleTtlMs: numEnvStrict("DEPLOY_IDLE_TTL_MS", env.DEPLOY_IDLE_TTL_MS) }
@@ -1662,6 +1774,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     agent37Sandbox: agent37SandboxEnv(env),
     superserveSandbox: superserveSandboxEnv(env),
     porterSandbox: porterSandboxEnv(env),
+    renderSandbox: renderSandboxEnv(env),
+    renderDeploy: renderDeployEnv(env),
     porterDeploy: porterDeployEnv(env),
     e2bSandbox: e2bSandboxEnv(env),
     managedAgentsSandbox: managedAgentsSandboxEnv(env),

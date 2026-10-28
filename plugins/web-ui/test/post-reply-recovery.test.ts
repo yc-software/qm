@@ -430,7 +430,7 @@ test("post replies remain visible in new and continuing conversations", async (t
       await until(() => FakeEventSource.instances.length > before);
       const run = FakeEventSource.instances.findLast((es) => es.url === "/api/runs/r1/events")!;
       await settle();
-      const label = () => host.querySelector(".live-work-label")?.textContent;
+      const label = () => host.querySelector(".work-prestep .work-step, .live-work-label")?.textContent;
       assert.match(label() ?? "", /Thinking/);
       const rafBefore = globalThis.requestAnimationFrame;
       const frames: FrameRequestCallback[] = [];

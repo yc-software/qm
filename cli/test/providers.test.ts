@@ -5,7 +5,7 @@ import { HOSTING_PROVIDER_IDS, hostingProviderChoices, isTarget } from "../src/p
 
 test("the hosting provider registry owns target discovery and lifecycle capabilities", () => {
   assert.deepEqual(Object.keys(HOSTING_PROVIDERS), [...HOSTING_PROVIDER_IDS]);
-  assert.equal(hostingProviderChoices(), "docker, fly, or aws");
+  assert.equal(hostingProviderChoices(), "docker, fly, aws, or render");
   assert.equal(isTarget("fly"), true);
   assert.equal(isTarget("kubernetes"), false);
   for (const id of HOSTING_PROVIDER_IDS) {
@@ -30,6 +30,7 @@ test("the hosting provider registry owns target discovery and lifecycle capabili
     "inactive",
     "restart",
     "build-concurrency",
+    "upgrade-minio",
   ]);
 });
 

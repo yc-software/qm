@@ -2,6 +2,7 @@ import type { LogOpts } from "../services.ts";
 
 export interface BackendUpOptions {
   dryRun: boolean;
+  upgradeMinio?: boolean;
   yes?: boolean;
   buildFrom?: boolean;
   buildFromPath?: string;

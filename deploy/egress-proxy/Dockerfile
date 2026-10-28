@@ -11,7 +11,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
 COPY src ./src
-COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts ./cli/src/
+COPY cli/src/canonical-json.ts cli/src/credential-paths.ts cli/src/render-source.ts cli/src/scope-storage-key.ts cli/src/tool-descriptor.ts ./cli/src/
 COPY plugins/chassis ./plugins/chassis
 COPY tsconfig.json ./
 RUN node --input-type=module -e "await import('./src/egress-authz-main.ts')"

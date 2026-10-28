@@ -6,6 +6,7 @@ import {
   CONFIG_FILENAME,
   configPathInDir,
   loadConfigAt,
+  renderSource,
   validOrgId,
   type EmailTransport,
   type ModelProvider,
@@ -246,7 +247,13 @@ function scaffoldDeploymentSkill(dir: string): void {
     ["deployment.md"],
     [".codex", "skills", "deploy-qm", "SKILL.md"],
     [".codex", "skills", "deploy-qm", "agents", "openai.yaml"],
-    ...["fly", "aws", "slack", "email"].map((name) => [".codex", "skills", "deploy-qm", "references", `${name}.md`]),
+    ...["fly", "aws", "render", "slack", "email"].map((name) => [
+      ".codex",
+      "skills",
+      "deploy-qm",
+      "references",
+      `${name}.md`,
+    ]),
   ];
   for (const segments of files) {
     const source =
@@ -262,11 +269,19 @@ export function runInit(opts: {
   target?: Target;
   modelProvider?: ModelProvider;
   emailTransport?: EmailTransport;
+  repo?: string;
+  branch?: string;
   dir?: string;
 }): void {
   assertNodeEngine();
   const orgId = opts.org ?? "default-org";
   if (!validOrgId(orgId)) die(`--org must be a lowercase DNS label (a-z, 0-9, and hyphens between)`);
+  const target: Target = opts.target ?? "docker";
+  if ((opts.repo !== undefined) !== (opts.branch !== undefined)) die(`--repo and --branch must be given together`);
+  if (opts.repo !== undefined && target !== "render") die(`--repo and --branch require --target render`);
+  if (target === "render" && opts.repo === undefined) die(`--target render requires --repo and --branch`);
+  const source =
+    opts.repo !== undefined ? renderSource({ repo: opts.repo, branch: opts.branch }, "render.source") : undefined;
   const dir = opts.dir ?? process.cwd();
   const configPath = join(dir, CONFIG_FILENAME);
   const existingConfigPath = configPathInDir(dir);
@@ -278,11 +293,10 @@ export function runInit(opts: {
     die(`${join(dir, ".env")} is tracked by Git — refusing to generate signing keys into it`);
   }
 
-  const target: Target = opts.target ?? "docker";
   const modelProvider: ModelProvider = opts.modelProvider ?? "anthropic";
   const emailTransport: EmailTransport = opts.emailTransport ?? "resend";
   const provider = hostingProvider(target);
-  writeFileSync(configPath, provider.scaffold.renderConfig(orgId, modelProvider, emailTransport));
+  writeFileSync(configPath, provider.scaffold.renderConfig(orgId, modelProvider, emailTransport, source));
   ok(`wrote ${CONFIG_FILENAME} (orgId=${orgId}, target=${target}, modelProvider=${modelProvider})`);
 
   const config = loadConfigAt(configPath).config;
@@ -299,7 +313,11 @@ export function runInit(opts: {
   for (const file of provider.scaffold.files(config)) writeIfAbsent(dir, file.segments, file.content);
 
   note("");
-  note(`CLI ${cliVersion()} selects immutable runtime image digests from its release manifest.`);
+  note(
+    config.render?.source
+      ? `Render builds ${config.render.source.repo} branch ${config.render.source.branch} on each qm up.`
+      : `CLI ${cliVersion()} selects immutable runtime image digests from its release manifest.`,
+  );
   note(`AGENTS.md explains this directory and how to customize the deployment.`);
   note("");
   note("Next:");

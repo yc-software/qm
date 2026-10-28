@@ -40,7 +40,7 @@ export function reportFailureAs<T>(context: string, fallback: T, detail?: string
   };
 }
 
-const REQUEST_ID_HEADERS = ["x-request-id", "x-amzn-requestid", "fly-request-id"];
+const REQUEST_ID_HEADERS = ["x-request-id", "x-amzn-requestid", "fly-request-id", "render-request-id"];
 
 export function withRequestId(message: string, headers: Headers): string {
   for (const name of REQUEST_ID_HEADERS) {
