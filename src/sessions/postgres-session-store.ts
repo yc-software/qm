@@ -1632,6 +1632,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async deleteSessionIfEmpty(sessionId): Promise<boolean> {
       return withPgTransaction(await pool(), async (client) => {
         await lockSession(client, sessionId);
+        await client.query("SELECT 1 FROM session_leases WHERE session_id = $1 FOR UPDATE", [sessionId]);
         const gone = await client.query(
           `DELETE FROM sessions
             WHERE id = $1

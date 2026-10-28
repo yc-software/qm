@@ -3282,7 +3282,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               }
             }
-            mirrored = mirrored.then(() => mirrorRunActivity(appended));
+            mirrored = mirrored
+              .then(() => mirrorRunActivity(appended))
+              .catch(swallowAs("orchestrator: run-activity mirror", undefined));
             return appended;
           };
           const initialDocuments = [...documentInputs.documents];
@@ -3725,6 +3727,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               { history: resumedHistory },
             );
           }
+          await mirrored;
           return {
             ...segment,
             ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
@@ -3736,7 +3739,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
-        await mirrored;
         if (
           input.addressed &&
           !strictReadOnly &&
