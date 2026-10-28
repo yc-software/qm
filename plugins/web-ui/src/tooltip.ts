@@ -1,6 +1,8 @@
 import { nothing } from "lit";
 import { AsyncDirective, directive, type ElementPart, type PartInfo, PartType } from "lit/async-directive.js";
 
+type TooltipText = string | ((target: Element) => string);
+
 let tipEl: HTMLDivElement | null = null;
 let anchor: Element | null = null;
 
@@ -19,8 +21,9 @@ function hoverless(): boolean {
   return typeof window?.matchMedia === "function" && window.matchMedia("(hover: none)").matches;
 }
 
-function showTooltip(target: Element, text: string): void {
+function showTooltip(target: Element, content: TooltipText): void {
   hideTooltip();
+  const text = typeof content === "function" ? content(target) : content;
   if (!text || hoverless()) return;
   anchor = target;
   target.setAttribute("data-qm-tooltip-anchor", "");
@@ -42,12 +45,12 @@ export function hideTooltip(target?: Element): void {
 const attached = new WeakMap<Element, TooltipBinding>();
 
 interface TooltipBinding {
-  text: string;
+  text: TooltipText;
   enter: () => void;
   leave: () => void;
 }
 
-export function attachTooltip(el: Element, text: string): void {
+export function attachTooltip(el: Element, text: TooltipText): void {
   const existing = attached.get(el);
   if (existing) {
     existing.text = text;
@@ -81,18 +84,18 @@ function detachTooltip(el: Element): void {
 
 class TipDirective extends AsyncDirective {
   private el: Element | null = null;
-  private text = "";
+  private text: TooltipText = "";
 
   constructor(partInfo: PartInfo) {
     super(partInfo);
     if (partInfo.type !== PartType.ELEMENT) throw new Error("tip() belongs on an element, not an attribute");
   }
 
-  render(_text: string): typeof nothing {
+  render(_text: TooltipText): typeof nothing {
     return nothing;
   }
 
-  override update(part: ElementPart, [text]: [string]): typeof nothing {
+  override update(part: ElementPart, [text]: [TooltipText]): typeof nothing {
     this.text = text ?? "";
     this.el = part.element;
     attachTooltip(this.el, this.text);

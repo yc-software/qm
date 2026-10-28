@@ -95,3 +95,22 @@ test("hoverless devices do not create a visible tooltip or anchor", () => {
   assert.equal(pane.hasAttribute("data-qm-tooltip-anchor"), false);
   Reflect.deleteProperty(dom.window, "matchMedia");
 });
+
+test("conditional tooltip text is resolved again on hover and keyboard focus", () => {
+  let labelVisible = true;
+  attachTooltip(pane, (target) => {
+    assert.equal(target, pane);
+    return labelVisible ? "" : "Selected model";
+  });
+  pane.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  assert.equal(pane.hasAttribute("data-qm-tooltip-anchor"), false);
+  labelVisible = false;
+  pane.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+  assert.equal(document.querySelector(".qm-tooltip")!.textContent, "Selected model");
+  assert.equal(pane.hasAttribute("data-qm-tooltip-anchor"), true);
+  pane.dispatchEvent(new dom.window.Event("blur"));
+  labelVisible = true;
+  pane.dispatchEvent(new dom.window.Event("focus"));
+  assert.equal(pane.hasAttribute("data-qm-tooltip-anchor"), false);
+  hideTooltip();
+});
