@@ -199,7 +199,8 @@ test("escape-heavy text near the byte budget still sheds inline images", () => {
       {
         role: "user",
         content: [
-          { type: "text", text: "\u0001".repeat(300_000) },
+          { type: "text", text: "\u0001".repeat(10_000) },
+          { type: "toolCall", id: "call", name: "upload", arguments: { file_data: "\u0001".repeat(500_000) } },
           { type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(200_000) } },
         ],
       },
@@ -208,6 +209,19 @@ test("escape-heavy text near the byte budget still sheds inline images", () => {
   const trimmed = JSON.stringify(trimPayloadToByteBudget(payload, 1_000_000));
   assert.doesNotMatch(trimmed, /AAAA/);
   assert.match(trimmed, /image removed/);
+  assert.match(trimmed, /"upload"/);
+});
+
+test("empty documents restore as empty content on every turn", async () => {
+  const { store, meta } = storeFor(Buffer.alloc(0));
+  for (let turn = 0; turn < 2; turn++) {
+    const result = await loadDocumentInputs(store, [meta], () => true);
+    assert.deepEqual(
+      result.documents.map((document) => document.dataBase64),
+      [""],
+    );
+    assert.deepEqual(result.notices, []);
+  }
 });
 
 let stores = 0;

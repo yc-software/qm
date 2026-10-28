@@ -736,7 +736,7 @@ function inlineBinaryData(b: unknown): string | undefined {
     image_url?: unknown;
     file_data?: unknown;
     file?: { file_data?: unknown };
-    inlineData?: { data?: unknown };
+    inlineData?: { mimeType?: unknown; data?: unknown };
   };
   if (
     (block?.type === "image" || block?.type === "document") &&
@@ -746,8 +746,10 @@ function inlineBinaryData(b: unknown): string | undefined {
     return block.source.data;
   if (block?.type === "input_image" && typeof block.image_url === "string" && block.image_url.startsWith("data:"))
     return block.image_url;
-  for (const data of [block?.file_data, block?.file?.file_data, block?.inlineData?.data])
-    if (typeof data === "string") return data;
+  if (block?.type === "input_file" && typeof block.file_data === "string") return block.file_data;
+  if (block?.type === "file" && typeof block.file?.file_data === "string") return block.file.file_data;
+  if (typeof block?.inlineData?.mimeType === "string" && typeof block.inlineData.data === "string")
+    return block.inlineData.data;
   return undefined;
 }
 

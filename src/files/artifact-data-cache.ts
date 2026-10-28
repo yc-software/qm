@@ -1,7 +1,7 @@
 import { LRUCache } from "lru-cache";
 import type { FileArtifact } from "./file-artifact-store.ts";
 
-const verifiedData = new LRUCache<string, string>({ maxSize: 64_000_000, sizeCalculation: (data) => data.length });
+const verifiedData = new LRUCache<string, string>({ maxSize: 64_000_000, sizeCalculation: (data) => data.length || 1 });
 
 export async function cachedArtifactData(
   use: "document" | "vision",
