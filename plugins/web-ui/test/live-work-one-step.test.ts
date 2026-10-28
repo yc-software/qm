@@ -83,10 +83,34 @@ test("a live turn shows only the current step in a closed fold that remembers be
       },
     );
     await until(() => /Measure the diff/.test(head()?.textContent ?? ""));
-    const fading = head()!.querySelector(".work-step-out");
-    assert.match(fading?.textContent ?? "", /Run the test suite/, "the previous step fades out on top of the new one");
+    const fading = head()!.querySelector(".work-step-label .work-step-out");
+    assert.match(fading?.textContent ?? "", /Run the test suite/, "the previous label fades out on top of the new one");
+    assert.equal(head()!.querySelector(".work-step-icon .work-step-out"), null, "an unchanged icon does not roll");
+    assert.ok(head()!.querySelector(".work-step.work-step-icon-still"));
     await until(() => !head()!.querySelector(".work-step-out"));
     assert.doesNotMatch(head()!.textContent!, /Run the test suite/);
+
+    activity.push(
+      {
+        seq: 7,
+        parentSeq: null,
+        type: "tool_result",
+        createdAt: startedAt + 5000,
+        payload: { tool: "execute", callId: "c3", code: 0, result: "ok" },
+      },
+      {
+        seq: 8,
+        parentSeq: null,
+        type: "tool_call",
+        createdAt: startedAt + 6000,
+        payload: { tool: "files", action: "read", callId: "c4", path: "docs/notes.md" },
+      },
+    );
+    await until(() => /notes\.md/.test(head()?.textContent ?? ""));
+    assert.ok(head()!.querySelector(".work-step.work-step-icon-roll"), "a new icon rolls in");
+    assert.ok(head()!.querySelector(".work-step-icon .work-step-out svg"), "the old icon rolls out beside it");
+    assert.match(head()!.querySelector(".work-step-label .work-step-out")?.textContent ?? "", /Measure the diff/);
+    await until(() => !head()!.querySelector(".work-step-out"));
   } finally {
     await h.close();
   }
