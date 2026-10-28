@@ -302,9 +302,10 @@ test("unindexed facts never crowd indexed matches out of the candidate pool", { 
   t.after(() => index.close());
   await base.capture(
     scope,
-    Array.from({ length: 12 }, (_, i) => `pending fact ${i}`),
+    Array.from({ length: 11 }, (_, i) => `pending fact ${i}`),
     1000,
   );
+  await base.capture(scope, ["newest pending fact"], 2000);
   const facts = await base.facts!(scope);
   await write(index, scope, [facts[0]!], "pending-model", () => [1, 0, 0]);
   await write(index, scope, [facts[1]!], "pending-model", () => [0.5, 1, 1]);
@@ -317,7 +318,7 @@ test("unindexed facts never crowd indexed matches out of the candidate pool", { 
   const strict = await search(0.9);
   assert.deepEqual(
     strict.map((row) => row.factId),
-    [facts[0]!.id, facts[2]!.id],
+    [facts[0]!.id, facts[11]!.id],
   );
   assert.ok(Math.abs(strict[1]!.score - 0.2) < 1e-9);
 });
