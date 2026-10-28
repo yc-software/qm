@@ -220,7 +220,6 @@ export interface BuiltApp {
   userModelCredentials: UserModelCredentialStore;
   refreshModels: () => Promise<void>;
   customProviders: CustomProviderStore;
-  refreshCustomProviders: () => Promise<void>;
   mcpServers: McpServerStore;
   mcpToolService: McpToolService;
   acl: AclStore;
@@ -452,7 +451,6 @@ export function serverDeps(
       userModelCredentials: built.userModelCredentials,
       refreshModels: built.refreshModels,
       customProviders: built.customProviders,
-      refreshCustomProviders: built.refreshCustomProviders,
       mcpServers: built.mcpServers,
       mcpToolService: built.mcpToolService,
       ...(subscriptionAuth ? { companySubscriptionAuth: subscriptionAuth } : {}),

@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { HarnessModule } from "./harness.ts";
 import type { RunsModule } from "./runs.ts";
 import type { OutboundModule } from "./outbound.ts";
@@ -80,14 +81,21 @@ export function buildApiApp(deps: ApiAppInputs) {
     contextViewerTokenKey: viewerTokenKey,
   });
   late.app = app;
-  every("deploy-maintenance", 5 * 60_000, () => app.maintainDeployments());
-  every("orphaned-signals", config.reaperIntervalMs, async () => {
-    for (const runId of await runSignals.pendingRunIds()) {
-      const run = await runs.get(runId);
-      if (!run || isTerminal(run.status))
-        await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
-    }
+  every("deploy-maintenance", 5 * 60_000, () => app.maintainDeployments(), {
+    due: hasRows("deployments", "w.status = 'running'"),
   });
+  every(
+    "orphaned-signals",
+    config.reaperIntervalMs,
+    async () => {
+      for (const runId of await runSignals.pendingRunIds()) {
+        const run = await runs.get(runId);
+        if (!run || isTerminal(run.status))
+          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
+      }
+    },
+    { due: hasRows("run_signals", "w.consumed_at IS NULL") },
+  );
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
     const recorded = await runs.latestForThread(req.conversation.threadRef);
@@ -150,7 +158,7 @@ function appDepsHead(deps: ApiAppInputs) {
   const { admittedWork, gates, late, overrides } = deps;
   const { orchestrator, skillFetcher } = deps.orchestrator;
   const { runs, maxAttempts, turnStream, runStreamEvents, runActivity } = deps.runs;
-  const { runSignals, modelCredentials, refreshModels, customProviders, refreshCustomProviders } = deps.harness;
+  const { runSignals, modelCredentials, refreshModels, customProviders } = deps.harness;
   const { modelGateway, userModelCredentials, mcpToolService } = deps.credentials;
   const { mcpServers, acl } = deps.files;
   const { auditLog } = deps.deploymentLayer;
@@ -178,7 +186,6 @@ function appDepsHead(deps: ApiAppInputs) {
     userModelCredentials,
     refreshModels,
     customProviders,
-    refreshCustomProviders,
     mcpServers,
     mcpToolService,
     ...(overrides.modelCredentialFetch ? { modelCredentialFetch: overrides.modelCredentialFetch } : {}),

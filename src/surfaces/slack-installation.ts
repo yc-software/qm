@@ -1,4 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { createPostgresNotifyBus } from "../persistence/postgres-notify-bus.ts";
 import { cols, mapToTableMigration, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { ErrorCode } from "@slack/web-api";
@@ -81,6 +82,8 @@ export interface SlackInstallationStore {
   }): Promise<boolean>;
   disableManaged(installId: string): Promise<boolean>;
   enableManaged(): Promise<boolean>;
+  onChange(cb: () => void): () => void;
+  close(): Promise<void>;
 }
 
 const SLACK_INSTALLATION: TableSpec = {
@@ -97,26 +100,36 @@ export const SLACK_INSTALLATION_MIGRATION = mapToTableMigration(
   SLACK_INSTALLATION,
 );
 
+const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
+  record && !record.disabled
+    ? {
+        configured: true,
+        managed: true,
+        ...(record.teamId ? { teamId: record.teamId } : {}),
+        ...(record.teamName ? { teamName: record.teamName } : {}),
+        updatedAt: record.updatedAt,
+        updatedBy: record.updatedBy,
+        version: record.version,
+      }
+    : { configured: false, managed: record !== null };
+
 export function createSlackInstallationStore(
   databaseUrl: string,
   keyMaterial: () => Buffer | string,
 ): SlackInstallationStore {
   const keys = perTenant(() => deriveConnectorKey(keyMaterial(), "slack-installation"));
   const pg = createPgPool(databaseUrl, [SLACK_INSTALLATION_MIGRATION]);
-  const { get: read, modify } = typedTable<StoredSlackInstallation>(pg, SLACK_INSTALLATION);
-  const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
-    record && !record.disabled
-      ? {
-          configured: true,
-          managed: true,
-          ...(record.teamId ? { teamId: record.teamId } : {}),
-          ...(record.teamName ? { teamName: record.teamName } : {}),
-          updatedAt: record.updatedAt,
-          updatedBy: record.updatedBy,
-          version: record.version,
-        }
-      : { configured: false, managed: record !== null };
+  const table = typedTable<StoredSlackInstallation>(pg, SLACK_INSTALLATION);
+  const read = table.get;
+  const changed = createPostgresNotifyBus<null>(databaseUrl, "slack_installation", "slack installation");
+  const modify: typeof table.modify = async (...args) => {
+    const result = await table.modify(...args);
+    changed.emit(null);
+    return result;
+  };
   return {
+    onChange: (cb) => changed.subscribe(cb, { onResync: cb }),
+    close: async () => changed.close?.(),
     async get() {
       const key = keys();
       const record = await read(tenant().orgId);

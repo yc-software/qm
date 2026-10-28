@@ -295,11 +295,7 @@ test("a tenant whose preparation fails is unavailable while every other tenant i
   try {
     await assert.rejects(failing.byHost("acme.example.test"), /hydrate failed/);
     assert.equal((await failing.byHost("gamma.example.test"))?.id, GAMMA);
-    assert.deepEqual(
-      (await failing.active()).map((t) => t.id ?? null),
-      [null, GAMMA],
-    );
-    await assert.rejects(failing.byHost("acme.example.test"), /hydrate failed/);
+    await assert.rejects(failing.byHost("acme.example.test"), /preparation failed recently/);
     clock += 30_000;
     assert.equal((await failing.byHost("acme.example.test"))?.id, ACME);
     assert.equal(attempts, 2);

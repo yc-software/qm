@@ -45,7 +45,7 @@ import type { RuntimeChoice } from "../harness/harness.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../inbox/sources/adapter.ts";
 import { slackConversationRef } from "../inbox/sources/slack.ts";
-import { perTenant, tenant } from "../tenant.ts";
+import { pinnedPerTenant, tenant } from "../tenant.ts";
 
 interface SlackRunHooks {
   onReplying?(): void;
@@ -175,7 +175,7 @@ const RUN_FALLBACK_POLL_MS = 1_000;
 const RUN_STALL_BUDGET_MS = 300_000;
 
 function slackUpkeepRegistry(): SlackCoreClient["upkeep"] {
-  const attached = perTenant(() => new Map<SlackUpkeep, Set<Promise<unknown>>>());
+  const attached = pinnedPerTenant(() => new Map<SlackUpkeep, Set<Promise<unknown>>>());
   return {
     attach(upkeep) {
       const upkeeps = attached();

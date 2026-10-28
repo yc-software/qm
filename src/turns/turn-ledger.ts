@@ -248,6 +248,7 @@ async function releaseClaim(
 
 async function requeue(client: PoolClient, queue: TurnQueue, absurdRunId: string, at: Date): Promise<void> {
   await scheduleRun(client, queue, absurdRunId, at);
+  if (at.getTime() > Date.now()) return;
   await client.query("SELECT pg_notify($1, $2)", [TURN_READY_CHANNEL, noticePayload(JSON.stringify(queue))]);
 }
 

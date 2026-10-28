@@ -61,15 +61,8 @@ function builtAppHead(deps: BuiltAppInputs) {
     mcpToolService,
   } = deps.credentials;
   const { runs, turnLedger, sessionStateBus, ledgerEventBus } = deps.runs;
-  const {
-    runSignals,
-    gatewayTransport,
-    resolveBrowserCompanyKeys,
-    modelCredentials,
-    refreshModels,
-    customProviders,
-    refreshCustomProviders,
-  } = deps.harness;
+  const { runSignals, gatewayTransport, resolveBrowserCompanyKeys, modelCredentials, refreshModels, customProviders } =
+    deps.harness;
   const { runtime } = deps.background;
   const { budget, mcpServers, acl } = deps.files;
   const { scheduler } = deps.scheduler;
@@ -107,7 +100,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     userModelCredentials,
     refreshModels,
     customProviders,
-    refreshCustomProviders,
     mcpServers,
     mcpToolService,
     acl,

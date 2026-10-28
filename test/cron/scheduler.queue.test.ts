@@ -227,10 +227,15 @@ test(
     const runs: number[] = [];
     const workers = [createJobWorker(URL!), createJobWorker(URL!)];
     for (const worker of workers)
-      worker.every(name, 1000, () => {
-        runs.push(Date.now());
-        if (runs.length === 1) throw new Error("first run fails");
-      });
+      worker.every(
+        name,
+        1000,
+        () => {
+          runs.push(Date.now());
+          if (runs.length === 1) throw new Error("first run fails");
+        },
+        { due: "true" },
+      );
     try {
       await Promise.all(workers.map((worker) => worker.start()));
       await until(() => runs.length >= 3, 20_000);
@@ -250,7 +255,7 @@ test(
     const name = `immediate-${Date.now()}`;
     let runs = 0;
     const worker = createJobWorker(URL!);
-    worker.every(name, 60 * 60_000, () => void runs++, { immediate: true });
+    worker.every(name, 60 * 60_000, () => void runs++, { immediate: true, due: "true" });
     try {
       await worker.start();
       await until(() => runs >= 1, 15_000);

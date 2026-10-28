@@ -1,6 +1,6 @@
 import { xmlEscape } from "../util/message-tag.ts";
 import { safeChunks, safeCutIndex } from "./safe-cut.ts";
-import { perTenant } from "../tenant.ts";
+import { pinnedPerTenant } from "../tenant.ts";
 export function escapeSlackText(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
@@ -30,7 +30,7 @@ const RESERVED_MENTION_NAMES = new Set(["here", "channel", "everyone"]);
 const MASS_MENTION_KEYS = new Set([...RESERVED_MENTION_NAMES].map((name) => `!${name}`));
 export const neutralizeMassMentions = (text: string): string => neutralizeMentions(text, MASS_MENTION_KEYS);
 
-const mentionIndex = perTenant(() => ({
+const mentionIndex = pinnedPerTenant(() => ({
   idByName: new Map() as ReadonlyMap<string, string>,
   nameById: new Map() as ReadonlyMap<string, string>,
 }));

@@ -224,7 +224,10 @@ export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
   const idleTimeoutMs = wholeSeconds(Math.min(opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, sandboxTimeoutMs));
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
   const network = opts.egressProxyUrl ? modalEgressAllowlist(opts.egressProxyUrl) : {};
-  const ctxByTenant = perTenant(() => ({ ctx: null as Promise<Ctx> | null }));
+  const ctxByTenant = perTenant(
+    () => ({ ctx: null as Promise<Ctx> | null }),
+    (slot) => slot.ctx?.then(({ client }) => client.close()).catch(() => {}),
+  );
   const buildCtx = async (): Promise<Ctx> => {
     let sdk: ModalSdk;
     try {

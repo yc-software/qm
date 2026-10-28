@@ -131,7 +131,7 @@ async function closeEventStores(deps: BackgroundInputs): Promise<void> {
     runActivity,
     runStreamEvents,
   } = deps.runs;
-  const { runSignals } = deps.harness;
+  const { runSignals, customProvidersChanged } = deps.harness;
   const { turnReady, turnCancels, turnYields } = deps.workers;
   const { deploymentLayerChanged } = deps.deploymentLayer;
   const { errors } = deps.files;
@@ -148,6 +148,7 @@ async function closeEventStores(deps: BackgroundInputs): Promise<void> {
       sessionStateBus.close?.(),
       ledgerEventBus.close?.(),
       deploymentLayerChanged.close?.(),
+      customProvidersChanged.close?.(),
       runActivity.close?.(),
       runStreamEvents.close?.(),
     ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),

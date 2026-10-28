@@ -15,7 +15,6 @@ test("Slack runtime activates, reloads, and removes durable admin configuration"
         },
       };
     },
-    intervalMs: 60_000,
   });
   runtime.start();
   await runtime.reconcile();
@@ -123,7 +122,6 @@ test("Slack stop fences a pending load and repeated starts leave no polling time
       starts++;
       return { stop: async () => {} };
     },
-    intervalMs: 5,
   });
   runtime.start();
   runtime.start();

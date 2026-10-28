@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { RunsModule } from "./runs.ts";
 import type { Head } from "./late.ts";
 import { createIdempotencyStore } from "../idempotency/idempotency-store.ts";
@@ -59,7 +60,7 @@ export function buildOutbound(deps: OutboundInputs) {
     outbound,
     turn: (request) => late.app.turn(request),
   });
-  every("queued-post-retry", 30_000, () => outbound.retryQueued());
+  every("queued-post-retry", 30_000, () => outbound.retryQueued(), { due: hasRows("queued_posts") });
   return { outbound, chatSurfaces, recentDmPosts, slackSurface, idempotency };
 }
 

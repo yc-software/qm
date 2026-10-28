@@ -31,6 +31,7 @@ export interface DurableByteStore {
   put(source: ByteSource, opts?: PutBytesOptions): Promise<PutBytesResult>;
   open(blobKey: string): Promise<OpenBytes | null>;
   delete(blobKey: string): Promise<void>;
+  close?(): void;
 }
 
 export class ByteSourceTooLargeError extends Error {
@@ -125,6 +126,7 @@ export function createS3DurableByteStore(options: S3DurableByteOptions): Durable
   const client = options._client ?? s3Client(options.region);
 
   return {
+    close: () => client.destroy?.(),
     async put(source, opts) {
       const dir = await mkdtemp(join(tmpdir(), "qm-files-"));
       const path = join(dir, "upload");

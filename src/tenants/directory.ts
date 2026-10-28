@@ -3,7 +3,7 @@ import { normalizeHost, routeForHost, type HostRoute } from "../../plugins/chass
 import { tenantSandboxPrefix } from "../../plugins/chassis/src/tenant-settings.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
-import { registerTenantSettings, tenant, tenantFor, withTenant, type Tenant } from "../tenant.ts";
+import { perTenant, registerTenantSettings, tenant, tenantFor, withTenant, type Tenant } from "../tenant.ts";
 import { reportFailure, reportFailureAs } from "../util/errors.ts";
 import { homeTenantId, listTenants, type TenantRecord } from "./registry.ts";
 
@@ -17,7 +17,7 @@ export interface TenantDirectory {
   byHost(host: string | undefined): Promise<Tenant | undefined>;
   homeHosts(): HomeHosts;
   active(): Promise<Tenant[]>;
-  exists(id: string): Promise<boolean>;
+  owner(id: string | undefined, wait?: boolean): Promise<Tenant | "retired" | undefined>;
   watch(listener: (active: Tenant[]) => void): void;
   close(): Promise<void>;
 }
@@ -27,6 +27,8 @@ interface Snapshot {
   home: HomeHosts;
   routes: HostRoute<Tenant>[];
   tenants: Tenant[];
+  homeId: string;
+  byId: Map<string, Tenant>;
 }
 
 interface DirectoryOptions {
@@ -67,47 +69,53 @@ function servable(records: TenantRecord[], homeId: string, opts: DirectoryOption
   return kept;
 }
 
+function tenantPreparation(prepare: (() => Promise<void>) | undefined, now: () => number) {
+  const readiness = perTenant(() => ({
+    done: false,
+    pending: undefined as Promise<void> | undefined,
+    failedAt: -Infinity,
+  }));
+  const isReady = (t: Tenant) => !prepare || t.id === undefined || withTenant(t, () => readiness().done);
+  const ready = (t: Tenant): Promise<void> => {
+    if (!prepare || isReady(t)) return Promise.resolve();
+    return withTenant(t, () => {
+      const r = readiness();
+      if (r.pending) return r.pending;
+      if (now() - r.failedAt < PREPARE_RETRY_MS)
+        return Promise.reject(new Error(`tenant ${t.slug ?? t.id}: preparation failed recently`));
+      r.pending = Promise.resolve()
+        .then(prepare)
+        .then(
+          () => {
+            r.done = true;
+          },
+          (error: unknown) => {
+            r.failedAt = now();
+            reportFailure(`tenant ${t.slug ?? t.id}: preparation failed`, error);
+            throw error;
+          },
+        )
+        .finally(() => {
+          r.pending = undefined;
+        });
+      return r.pending;
+    });
+  };
+  return { isReady, ready };
+}
+
 export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
   const now = opts.now ?? Date.now;
   let current: Snapshot | undefined;
   let loading: Promise<Snapshot> | null = null;
-  const preparing = new Map<string, Promise<void>>();
-  const prepared = new Set<string>();
-  const failed = new Map<string, number>();
   const listeners: Array<(active: Tenant[]) => void> = [];
 
-  const isReady = (t: Tenant) => !opts.prepare || t.id === undefined || prepared.has(t.id);
-  const readyTenants = () => (current?.tenants ?? [opts.home]).filter(isReady);
   const notify = () => {
-    const active = readyTenants();
+    const active = current?.tenants ?? [opts.home];
     for (const listener of listeners) listener(active);
   };
 
-  function ready(t: Tenant): Promise<void> {
-    const id = t.id;
-    if (id === undefined || !opts.prepare || prepared.has(id)) return Promise.resolve();
-    const failedAt = failed.get(id);
-    if (failedAt !== undefined && now() - failedAt >= PREPARE_RETRY_MS) {
-      failed.delete(id);
-      preparing.delete(id);
-    }
-    let pending = preparing.get(id);
-    if (!pending) {
-      pending = withTenant(t, opts.prepare);
-      preparing.set(id, pending);
-      pending.then(
-        () => {
-          prepared.add(id);
-          notify();
-        },
-        (error: unknown) => {
-          failed.set(id, now());
-          reportFailure(`tenant ${t.slug ?? id}: preparation failed`, error);
-        },
-      );
-    }
-    return pending;
-  }
+  const { isReady, ready } = tenantPreparation(opts.prepare, now);
 
   async function load(): Promise<Snapshot> {
     const [homeId, records] = await Promise.all([homeTenantId(opts.pool), listTenants(opts.pool, opts.secretsKey)]);
@@ -128,6 +136,8 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
       home,
       routes: [{ ...home, target: opts.home }, ...routes],
       tenants: [opts.home, ...others.map(({ t }) => t)],
+      homeId,
+      byId: new Map([[homeId, opts.home], ...others.map(({ rec, t }) => [rec.id, t] as const)]),
     };
   }
 
@@ -147,7 +157,6 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
     return (loading ??= load()
       .then((next) => {
         current = next;
-        for (const t of next.tenants) void ready(t).catch(() => {});
         notify();
         return next;
       })
@@ -192,11 +201,22 @@ export function createTenantDirectory(opts: DirectoryOptions): TenantDirectory {
       return current?.home ?? homeHostsOf([]);
     },
     async active() {
-      await snapshot();
-      return readyTenants();
+      return (await snapshot()).tenants;
     },
-    async exists(id) {
-      return (await opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])).length > 0;
+    async owner(id, wait = false) {
+      const found = id === undefined ? opts.home : ((await snapshot()).byId.get(id) ?? (await fresher()).byId.get(id));
+      if (!found) {
+        if (id === undefined) return undefined;
+        return (await opts.pool.q("SELECT 1 FROM tenants WHERE id = $1::uuid", [id])).length > 0
+          ? undefined
+          : "retired";
+      }
+      if (isReady(found)) return found;
+      const preparing = ready(found).then(
+        () => found,
+        () => undefined,
+      );
+      return wait ? preparing : undefined;
     },
     watch(listener) {
       listeners.push(listener);
@@ -243,10 +263,9 @@ export function isHomeTenant(t: Tenant): boolean {
   return t.id === undefined;
 }
 
-export async function taskTenant(id: string | undefined): Promise<Tenant | "retired" | undefined> {
-  const owner = (await activeTenants()).find((t) => t.id === id);
-  if (owner || id === undefined || !directory || (await directory.exists(id))) return owner;
-  return "retired";
+export async function taskTenant(id: string | undefined, wait = false): Promise<Tenant | "retired" | undefined> {
+  if (directory) return directory.owner(id, wait);
+  return id === undefined ? tenant() : undefined;
 }
 
 export function retiredTenantReason(id: string | undefined): string {

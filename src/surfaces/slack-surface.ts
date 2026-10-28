@@ -1,6 +1,6 @@
 import type { ExternalSlackAccess } from "../slack/external-access.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { perTenant } from "../tenant.ts";
+import { pinnedPerTenant } from "../tenant.ts";
 import type { SurfaceSender } from "./outbound.ts";
 import { surfaceProfile, type Surface } from "./surface.ts";
 
@@ -25,7 +25,7 @@ export interface SlackSurface extends Surface {
 }
 
 export function createSlackSurface(): SlackSurface {
-  const state = perTenant(() => ({
+  const state = pinnedPerTenant(() => ({
     accounts: new Map<string, SlackAccountHandle>(),
     senders: [] as SurfaceSender[],
     events: new Map<string, SlackEventsHandler>(),

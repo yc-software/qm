@@ -52,7 +52,6 @@ export async function putCustomProvider(ctx: ApiCtx): Promise<RouteResult> {
   } catch (e) {
     throw refusal(400, "bad_request", e);
   }
-  await ctx.deps.refreshCustomProviders?.();
   authz.audit("custom-providers.update", id);
   const status = (await store.statuses()).find((item) => item.id === id);
   return ok({ ok: true, status });
@@ -63,7 +62,6 @@ export async function deleteCustomProvider(ctx: ApiCtx): Promise<RouteResult> {
   const id = ctx.params.provider;
   if (!ctx.deps.customProviders || !id) throw notFound();
   if (!(await ctx.deps.customProviders.delete(id, authz.actor.id))) throw notFound();
-  await ctx.deps.refreshCustomProviders?.();
   authz.audit("custom-providers.delete", id);
   return ok({ ok: true });
 }

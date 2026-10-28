@@ -414,8 +414,8 @@ test("per-user connectors select an explicit account slot without falling back t
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
 
-test("background MCP refresh contains registry failures at startup, on change, and on its timer", async (t) => {
-  t.mock.timers.enable({ apis: ["setInterval"] });
+test("background MCP refresh contains registry failures at startup, on change, and when read stale", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
   const store = createMcpServerStore(testDatabaseUrl());
   const mcp = await startMcpTestServer(t);
   const list = t.mock.method(store, "list", async () => {
@@ -431,6 +431,7 @@ test("background MCP refresh contains registry failures at startup, on change, a
   await tick();
   assert.equal(list.mock.callCount(), 2);
   t.mock.timers.tick(100);
+  service.toolDefs();
   await tick();
   assert.equal(list.mock.callCount(), 3);
   assert.equal(errors.mock.callCount(), 3);

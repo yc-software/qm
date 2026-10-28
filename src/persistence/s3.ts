@@ -9,6 +9,7 @@ import { Readable } from "node:stream";
 
 export interface S3Send {
   send(command: unknown): Promise<unknown>;
+  destroy?(): void;
 }
 
 export function s3Client(region?: string): S3Send {

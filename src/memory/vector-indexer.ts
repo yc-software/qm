@@ -70,18 +70,21 @@ export function createMemoryVectorIndexer(opts: {
       if (!signal.aborted) await store.prune(embedder.id, 200, s.dimensions, signal).catch(onError);
     }
   }
+  const indexing = new Set<ReturnType<typeof state>>();
   return {
     async stop(): Promise<void> {
-      for (const s of state.all()) s.active?.abort();
-      await Promise.all(state.all().map((s) => s.pending));
+      for (const s of indexing) s.active?.abort();
+      await Promise.all([...indexing].map((s) => s.pending));
     },
     tick(): Promise<void> {
       const s = state();
+      indexing.add(s);
       s.pending ??= run()
         .catch(onError)
         .finally(() => {
           s.pending = undefined;
           s.active = undefined;
+          indexing.delete(s);
         });
       return s.pending;
     },

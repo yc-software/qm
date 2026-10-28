@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { OutboundModule } from "./outbound.ts";
 import type { DeploymentLayerModule } from "./deployment-layer.ts";
 import type { RunsModule } from "./runs.ts";
@@ -343,7 +344,9 @@ function buildSessionSyscalls(deps: OrchestratorInputs) {
   const sessionMailbox = createSessionMailbox(databaseUrl);
   const swarmBoard = createPostgresSwarmBoard(databaseUrl);
   const swarmNotices = createSwarmNoticeSweep({ board: swarmBoard, mailbox: sessionMailbox, sessions, runs });
-  every("swarm-notice-sweep", 60_000, () => swarmNotices.sweep());
+  every("swarm-notice-sweep", 60_000, () => swarmNotices.sweep(), {
+    due: hasRows("swarm_board_posts", "w.notify_pending"),
+  });
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     board: swarmBoard,
@@ -432,7 +435,12 @@ function buildAppServices(deps: OrchestratorInputs) {
           },
         })
     : undefined;
-  every("run-result-sweep", 60_000, () => runResultRecovery.sweep());
+  every("run-result-sweep", 60_000, () => runResultRecovery.sweep(), {
+    due: hasRows(
+      "runs",
+      "w.status IN ('done','failed') AND (w.delivery_state IS NULL OR NOT (w.delivery_state::jsonb ? 'settledAt'))",
+    ),
+  });
   return {
     skillFetcher,
     screenSecurity,

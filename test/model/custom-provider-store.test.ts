@@ -64,7 +64,6 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -171,7 +170,6 @@ test("QA: openai-responses custom provider serves a real turn through the genera
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -281,7 +279,6 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
   });
@@ -394,7 +391,6 @@ test("QA: a custom model named like a built-in registers and sends its own model
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
   });

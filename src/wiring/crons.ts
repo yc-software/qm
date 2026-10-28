@@ -1,4 +1,5 @@
 import type { RunsModule } from "./runs.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { StoresModule } from "./stores.ts";
 import type { OutboundModule } from "./outbound.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
@@ -80,8 +81,14 @@ export function buildCrons(deps: CronsInputs) {
       timeoutMs: config.securityScreenTimeoutMs,
     });
   }
-  every("monitor:retention:sweep", 24 * 60 * 60_000, () => monitors.deleteDefunct(Date.now()), { immediate: true });
-  every("approval-deliveries", 30_000, () => approvals.deliverPending(), { immediate: true });
+  every("monitor:retention:sweep", 24 * 60 * 60_000, () => monitors.deleteDefunct(Date.now()), {
+    immediate: true,
+    shared: true,
+  });
+  every("approval-deliveries", 30_000, () => approvals.deliverPending(), {
+    immediate: true,
+    due: hasRows("approvals"),
+  });
   return { securityScreener, approvals, monitors, crons, webhooks, inboxItems, recordInboxEvent };
 }
 

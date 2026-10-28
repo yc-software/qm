@@ -51,7 +51,11 @@ function directoryOf(
 ): TenantDirectory {
   return {
     active,
-    exists,
+    async owner(id) {
+      const found = (await active()).find((t) => t.id === id);
+      if (found || id === undefined) return found;
+      return (await exists(id)) ? undefined : "retired";
+    },
     byHost: () => Promise.resolve(undefined),
     homeHosts: () => ({ hosts: [] }),
     watch: () => {},
@@ -218,7 +222,7 @@ test(
       return "done";
     });
     const visits: Array<string | undefined> = [];
-    jobs.every("tenant-visits", 60_000, () => visits.push(tenant().id));
+    jobs.every("tenant-visits", 60_000, () => visits.push(tenant().id), { due: "true" });
     const sharedVisits: Array<string | undefined> = [];
     jobs.every("shared-visits", 60_000, () => sharedVisits.push(scopedTenant()?.id), { shared: true });
     await withTenant(acme, () => jobs.spawn("probe", { name: "acme" }, "probe:1"));
@@ -238,7 +242,7 @@ test(
         { job: "beta", tenant: beta.id },
       ],
     );
-    assert.deepEqual(visits, [acme.id, beta.id]);
+    assert.deepEqual(visits.toSorted(), [acme.id, beta.id].toSorted());
     assert.deepEqual(sharedVisits, [undefined]);
     const keys = await rls.q("SELECT idempotency_key FROM absurd.t_jobs WHERE task_name = 'probe' ORDER BY 1");
     assert.deepEqual(
@@ -259,7 +263,7 @@ test(
       ran.push("orphan");
       return Promise.resolve("done");
     });
-    jobs.every("spin-probe", 60_000, () => ran.push("every"));
+    jobs.every("spin-probe", 60_000, () => ran.push("every"), { due: "true" });
     await withTenant(acme, () => jobs.spawn("orphan", {}, "orphan:1"));
     await jobs.start();
     try {

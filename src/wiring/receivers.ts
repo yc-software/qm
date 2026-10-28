@@ -1,4 +1,5 @@
 import type { SandboxModule } from "./sandbox.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { RunsModule } from "./runs.ts";
 import type { CredentialsModule } from "./credentials.ts";
 import type { CronsModule } from "./crons.ts";
@@ -46,7 +47,8 @@ export function buildReceivers(deps: ReceiversInputs) {
     ...triggerDeps,
     jobs,
   });
-  if (monitorPoller) every("monitor:poll", MONITOR_POLL_MS, () => monitorPoller.tick());
+  if (monitorPoller)
+    every("monitor:poll", MONITOR_POLL_MS, () => monitorPoller.tick(), { due: hasRows("monitors", "w.enabled") });
   return { finishCredentials, webhookReceiver };
 }
 

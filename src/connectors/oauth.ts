@@ -5,7 +5,7 @@ import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
 import { swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
-import { perTenant } from "../tenant.ts";
+import { pinnedPerTenant } from "../tenant.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -514,7 +514,7 @@ export interface PublicOAuthClient {
   label: string;
 }
 
-const publicOAuth = perTenant(() => ({
+const publicOAuth = pinnedPerTenant(() => ({
   clients: new Map<string, PublicOAuthClient>(),
   providers: new Map<string, OAuthProviderConfig>(),
 }));

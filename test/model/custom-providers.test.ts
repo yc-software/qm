@@ -244,7 +244,6 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
   const built = buildApp(config, { modelCredentialFetch: async () => new Response(null, { status: 200 }) });
   const deps = serverDeps(config, built);
   assert.equal(deps.customProviders, built.customProviders);
-  assert.equal(deps.refreshCustomProviders, built.refreshCustomProviders);
   assert.equal(deps.baseModelDefault, "custom/acme-gateway/acme-large");
 
   const server = createInsecureTestServer(built.app, deps);

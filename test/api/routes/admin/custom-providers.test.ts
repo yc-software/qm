@@ -27,7 +27,6 @@ function start(modelCredentialFetch: typeof fetch = async () => new Response(nul
     config: built.config,
     modelCredentials: built.modelCredentials,
     customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
     modelCredentialFetch,
     providerKeys: { anthropic: true, openai: false, openrouter: false },
     admin: built.admin,

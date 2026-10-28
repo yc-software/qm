@@ -1,8 +1,8 @@
 import type { StoresModule } from "./stores.ts";
 import type { Head } from "./late.ts";
-import { loadDeploymentLayer, emptyDeploymentLayer } from "../deployment/load-layer.ts";
+import { loadDeploymentLayer, emptyDeploymentLayer, type DeploymentLayerRuntime } from "../deployment/load-layer.ts";
 import { resolve } from "node:path";
-import { tenant } from "../tenant.ts";
+import { perTenant, tenant } from "../tenant.ts";
 import { createPostgresAuditLog } from "../admin/postgres-audit-log.ts";
 import {
   createDeploymentLayerStore,
@@ -20,9 +20,9 @@ export function buildDeploymentLayer(deps: DeploymentLayerInputs) {
   const { config } = deps;
   const { databaseUrl, skills, skillBundles, advisoryLock } = deps.stores;
 
-  const deploymentLayer = config.deploymentLayerDir
-    ? loadDeploymentLayer(config.deploymentLayerDir)
-    : emptyDeploymentLayer();
+  const deploymentLayer = tenantDeploymentLayer(
+    config.deploymentLayerDir ? loadDeploymentLayer(config.deploymentLayerDir) : emptyDeploymentLayer(),
+  );
   const layerSkillsDir = config.deploymentLayerDir ? resolve(deploymentLayer.dir, "skills") : undefined;
   const brokeredTools = deploymentLayer.brokeredTools;
   const auditLog = createPostgresAuditLog(databaseUrl);
@@ -79,3 +79,42 @@ export function buildDeploymentLayer(deps: DeploymentLayerInputs) {
 }
 
 export type DeploymentLayerModule = ReturnType<typeof buildDeploymentLayer>;
+
+type LayerList = Exclude<keyof DeploymentLayerRuntime, "dir">;
+const LAYER_LISTS: LayerList[] = [
+  "tools",
+  "advertisedTools",
+  "hints",
+  "credentialPaths",
+  "splitEnvTemplates",
+  "brokeredTools",
+  "commandRules",
+  "installFiles",
+];
+
+function tenantDeploymentLayer(base: DeploymentLayerRuntime): DeploymentLayerRuntime {
+  const layers = perTenant((): DeploymentLayerRuntime => ({
+    ...base,
+    ...Object.fromEntries(LAYER_LISTS.map((key) => [key, [...base[key]]])),
+  }));
+  const list = (key: LayerList) =>
+    new Proxy([], {
+      get: (_target, property) => Reflect.get(layers()[key], property),
+      set: (_target, property, value) => Reflect.set(layers()[key], property, value),
+      deleteProperty: (_target, property) => Reflect.deleteProperty(layers()[key], property),
+      has: (_target, property) => Reflect.has(layers()[key], property),
+    });
+  const view = Object.fromEntries(LAYER_LISTS.map((key) => [key, list(key)])) as unknown as Omit<
+    DeploymentLayerRuntime,
+    "dir"
+  >;
+  return {
+    ...view,
+    get dir() {
+      return layers().dir;
+    },
+    set dir(dir: string) {
+      layers().dir = dir;
+    },
+  };
+}

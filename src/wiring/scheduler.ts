@@ -1,4 +1,5 @@
 import type { MemoryModule } from "./memory.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { CronsModule } from "./crons.ts";
 import type { StoresModule } from "./stores.ts";
 import type { ApiAppModule } from "./api-app.ts";
@@ -89,16 +90,29 @@ export function buildScheduler(deps: SchedulerInputs) {
     },
     app,
   );
-  every("cron:repair", 60_000, () => scheduler.repair(), { immediate: true });
-  every("cron:asks", 5_000, () => sweepAsks(Date.now()));
-  every("cron:stranded-fires", 10 * 60_000, async () => {
-    const swept = await crons.sweepStrandedFires(Date.now());
-    if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
+  every("cron:repair", 60_000, () => scheduler.repair(), {
+    immediate: true,
+    due: hasRows("crons", "w.enabled AND w.archived IS NOT TRUE"),
   });
-  every("cron:fire-gc", 6 * 60 * 60_000, async () => {
-    const pruned = await crons.pruneFires(Date.now());
-    if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
-  });
+  every("cron:asks", 5_000, () => sweepAsks(Date.now()), { due: hasRows("keychain_asks", "w.notified_at IS NULL") });
+  every(
+    "cron:stranded-fires",
+    10 * 60_000,
+    async () => {
+      const swept = await crons.sweepStrandedFires(Date.now());
+      if (swept > 0) console.warn(`[scheduler] closed ${swept} stranded running fire(s) as failed`);
+    },
+    { shared: true },
+  );
+  every(
+    "cron:fire-gc",
+    6 * 60 * 60_000,
+    async () => {
+      const pruned = await crons.pruneFires(Date.now());
+      if (pruned > 0) console.log(`[scheduler] pruned ${pruned} old cron fire row(s)`);
+    },
+    { due: hasRows("cron_fires") },
+  );
   return { scheduler, suggestedActivities };
 }
 

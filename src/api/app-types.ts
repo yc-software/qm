@@ -612,7 +612,6 @@ export interface AppDeps {
   modelCredentialFetch?: typeof fetch;
   refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
-  refreshCustomProviders?: () => Promise<void>;
   acl: AclStore;
   admin?: AdminService;
   skills: SkillStore;

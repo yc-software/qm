@@ -131,7 +131,6 @@ export interface ServerDeps {
   modelCredentialFetch?: typeof fetch;
   refreshModels?: () => Promise<void>;
   customProviders?: CustomProviderStore;
-  refreshCustomProviders?: () => Promise<void>;
   brandingDefault?: OrgBranding;
   companySubscriptionAuth?: ModelProvider;
   admin?: AdminService;

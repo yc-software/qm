@@ -114,7 +114,7 @@ async function servingMany(fn: () => Promise<void>): Promise<void> {
     byHost: async () => undefined,
     homeHosts: () => ({ hosts: [] }),
     active: async () => [tenant()],
-    exists: async () => true,
+    owner: async (id) => (id === undefined ? tenant() : undefined),
     watch() {},
     close: async () => {},
   });

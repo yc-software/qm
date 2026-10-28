@@ -1,4 +1,5 @@
 import type { CronsModule } from "./crons.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { CredentialsModule } from "./credentials.ts";
 import type { ApiAppModule } from "./api-app.ts";
 import type { StoresModule } from "./stores.ts";
@@ -89,12 +90,15 @@ export function buildSlackCore(deps: SlackCoreInputs) {
     brandingDefault: () => tenantConfig(config).brandingDefault,
     ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
   });
-  every("slack:envelope-replay", 60_000, () => slackCore.upkeep.run("replayEnvelopes"));
-  every("slack:session-status", 60_000, () => slackCore.upkeep.run("reconcileStatus"));
-  every("slack:task-acks", 60_000, () => slackCore.upkeep.run("reconcileTaskAcks"));
-  every("slack:emoji-catalog", 6 * 60 * 60_000, () => slackCore.upkeep.run("publishEmojiCatalog"));
+  const slack = { due: `t.id = (SELECT id FROM qm_tenant) OR ${hasRows("slack_installation")}` };
+  every("slack:envelope-replay", 60_000, () => slackCore.upkeep.run("replayEnvelopes"), slack);
+  every("slack:session-status", 60_000, () => slackCore.upkeep.run("reconcileStatus"), slack);
+  every("slack:task-acks", 60_000, () => slackCore.upkeep.run("reconcileTaskAcks"), slack);
+  every("slack:emoji-catalog", 6 * 60 * 60_000, () => slackCore.upkeep.run("publishEmojiCatalog"), slack);
   const handledEventCutoff = () => Date.now() - 24 * 60 * 60_000;
-  every("slack:handled-events", 60 * 60_000, () => slackHandledEvents.deleteBefore(handledEventCutoff()));
+  every("slack:handled-events", 60 * 60_000, () => slackHandledEvents.deleteBefore(handledEventCutoff()), {
+    shared: true,
+  });
   return { slackCore, keychainApprovals };
 }
 

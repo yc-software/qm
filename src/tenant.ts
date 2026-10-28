@@ -3,6 +3,7 @@ import { processOrgId, processTenantSettings } from "./config.ts";
 import { configurePgTenantSource } from "./persistence/pg-pool.ts";
 import type { TenantSettings } from "./tenants/registry.ts";
 import { scopeId, type ScopeId } from "./types.ts";
+import { reportFailureAs } from "./util/errors.ts";
 
 export interface Tenant {
   readonly id?: string;
@@ -12,8 +13,12 @@ export interface Tenant {
 }
 
 const current = new AsyncLocalStorage<Tenant>();
+const everyTenant = new AsyncLocalStorage<boolean>();
 
-configurePgTenantSource(() => current.getStore()?.id);
+configurePgTenantSource(
+  () => current.getStore()?.id,
+  () => everyTenant.getStore() === true,
+);
 
 export function tenantFor(orgId: string, id?: string, slug?: string): Tenant {
   return { orgId, orgScope: scopeId("org", orgId), ...(id ? { id } : {}), ...(slug ? { slug } : {}) };
@@ -34,7 +39,11 @@ export function scopedTenant(): Tenant | undefined {
 }
 
 export function withTenant<T>(t: Tenant, fn: () => T): T {
-  return current.run(t, fn);
+  return everyTenant.run(false, () => current.run(t, fn));
+}
+
+export function withEveryTenant<T>(fn: () => T): T {
+  return everyTenant.run(true, () => current.exit(fn));
 }
 
 export function withoutTenant<T>(fn: () => T): T {
@@ -63,9 +72,74 @@ export function tenantSettings(t: Tenant = tenant()): TenantSettings {
   return home.settings;
 }
 
-export function perTenant<T>(create: () => T): (() => T) & { all(): T[] } {
+const IDLE_MS = 30 * 60_000;
+const SWEEP_MS = 60_000;
+type Slot = { dispose?: (state: never) => unknown };
+const cached = new Map<
+  string,
+  { tenant: Tenant; at: number; holds: number; evictable: boolean; slots: Map<Slot, unknown> }
+>();
+let sweptAt = 0;
+
+function drop(key: string): void {
+  const entry = cached.get(key);
+  if (!entry) return;
+  cached.delete(key);
+  for (const [slot, state] of entry.slots)
+    if (slot.dispose)
+      void Promise.resolve()
+        .then(() => withTenant(entry.tenant, () => slot.dispose!(state as never)))
+        .catch(reportFailureAs("tenant cache: dispose", undefined, `tenant=${key}`));
+}
+
+export function evictTenant(t: Tenant): void {
+  drop(t.id ?? t.orgId);
+}
+
+function cachedEntry(t: Tenant) {
+  const key = t.id ?? t.orgId;
+  const now = Date.now();
+  if (now - sweptAt >= SWEEP_MS) {
+    sweptAt = now;
+    for (const [id, entry] of cached) if (entry.evictable && entry.holds === 0 && now - entry.at >= IDLE_MS) drop(id);
+  }
+  let entry = cached.get(key);
+  if (!entry)
+    cached.set(key, (entry = { tenant: t, at: now, holds: 0, evictable: t.id !== undefined, slots: new Map() }));
+  entry.at = now;
+  return entry;
+}
+
+export function holdTenant(t: Tenant): () => void {
+  const entry = cachedEntry(t);
+  entry.holds++;
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    entry.holds--;
+    entry.at = Date.now();
+  };
+}
+
+export function cachedTenantCount(): number {
+  return cached.size;
+}
+
+export function perTenant<T>(create: () => T, dispose?: (state: T) => unknown): () => T {
+  const slot: Slot = dispose ? { dispose } : {};
+  return () => {
+    const { slots } = cachedEntry(tenant());
+    if (slots.has(slot)) return slots.get(slot) as T;
+    const state = create();
+    slots.set(slot, state);
+    return state;
+  };
+}
+
+export function pinnedPerTenant<T>(create: () => T): () => T {
   const states = new Map<string, T>();
-  const current = () => {
+  return () => {
     const t = tenant();
     const key = t.id ?? t.orgId;
     let state = states.get(key);
@@ -75,5 +149,4 @@ export function perTenant<T>(create: () => T): (() => T) & { all(): T[] } {
     }
     return state;
   };
-  return Object.assign(current, { all: () => [...states.values()] });
 }

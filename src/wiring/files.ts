@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { Head } from "./late.ts";
 import { tenantConfig } from "../tenants/tenant-config.ts";
 import { perTenant } from "../tenant.ts";
@@ -59,10 +60,20 @@ export function buildFiles(deps: FilesInputs) {
     },
   });
   const blobTransfer: BlobTransferStore = config.s3Bucket
-    ? tenantBlobTransfer(perTenant(() => createS3BlobTransferStore(s3Options(""))))
+    ? tenantBlobTransfer(
+        perTenant(
+          () => createS3BlobTransferStore(s3Options("")),
+          (store) => store.close?.(),
+        ),
+      )
     : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
   const s3Bytes = (prefix: string): DurableByteStore =>
-    tenantBytes(perTenant(() => createS3DurableByteStore(s3Options(prefix))));
+    tenantBytes(
+      perTenant(
+        () => createS3DurableByteStore(s3Options(prefix)),
+        (store) => store.close?.(),
+      ),
+    );
   const byteStore = (prefix: string, localDir: string): DurableByteStore =>
     config.s3Bucket ? s3Bytes(prefix) : createLocalDurableByteStore(join(config.dataDir, localDir));
   const fileBytes = byteStore("", "docstore");
@@ -78,8 +89,16 @@ export function buildFiles(deps: FilesInputs) {
     pool: pgPool,
     bytesFor: (prefix) => byteStore(prefix, prefix),
   });
-  if (fileUploads) every("file-uploads", 60_000, () => fileUploads.sweep(), { immediate: true });
-  every("blob-transfer", 30 * 60_000, () => blobTransfer.sweep(6 * 60 * 60_000));
+  if (fileUploads)
+    every("file-uploads", 60_000, () => fileUploads.sweep(), { immediate: true, due: hasRows("file_uploads") });
+  every(
+    "blob-transfer",
+    30 * 60_000,
+    () => blobTransfer.sweep(6 * 60 * 60_000),
+    config.s3Bucket
+      ? { due: hasRows("runs", "w.created_at > extract(epoch FROM now()) * 1000 - 48 * 3600 * 1000") }
+      : { shared: true },
+  );
   return {
     toolOutput,
     errors,

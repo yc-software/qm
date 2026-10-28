@@ -1,4 +1,5 @@
 import type { RunsModule } from "./runs.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { ApiAppModule } from "./api-app.ts";
 import type { StoresModule } from "./stores.ts";
 import type { OrchestratorModule } from "./orchestrator.ts";
@@ -104,5 +105,13 @@ export function buildSessionReturns(deps: SessionReturnsInputs) {
           keychain.connectorAccessToken("slack.com", viewer, "company"))
         : null,
   });
-  every("session-return-sweep", 1_000, sweepSessionReturns);
+  every("session-return-sweep", 1_000, sweepSessionReturns, {
+    due: `${hasRows(
+      "runs",
+      "w.status IN ('done','failed') AND w.returned_at IS NULL AND w.session_id LIKE 'agent:main:subagent:%'",
+    )} OR ${hasRows(
+      "runs",
+      "w.status IN ('pending','queued') AND w.attempts = 0 AND w.idempotency_key LIKE 'subagent-return:%'",
+    )}`,
+  });
 }

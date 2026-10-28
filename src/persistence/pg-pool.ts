@@ -29,9 +29,11 @@ let poolingConfig: PgPoolingConfig = {};
 // The tenant whose rows a checked-out connection may see. tenant.ts installs a reader for the
 // AsyncLocalStorage tenant; undefined means the database's own singleton tenant (single-tenant mode).
 let tenantSource: () => string | undefined = () => undefined;
+let everyTenantSource: () => boolean = () => false;
 
-export function configurePgTenantSource(source: () => string | undefined): void {
+export function configurePgTenantSource(source: () => string | undefined, everyTenant: () => boolean): void {
   tenantSource = source;
+  everyTenantSource = everyTenant;
 }
 
 export function pgTenantId(): string | undefined {
@@ -56,12 +58,17 @@ function tenantScopedPool(pool: Pool): Pool {
   const scoped = (
     callback?: (err: Error | undefined, client?: PoolClient, done?: (release?: unknown) => void) => void,
   ) => {
-    const want = tenancyEnabled ? (tenantSource() ?? "") : "";
+    const every = tenancyEnabled && everyTenantSource();
+    const id = tenancyEnabled && !every ? (tenantSource() ?? "") : "";
+    const want = every ? "*" : id;
     const ready = connect().then(async (raw) => {
       const client = raw as TenantTracked;
       if ((client[TENANT_GUC] ?? "") !== want) {
         try {
-          await client.query("SELECT set_config('qm.tenant_id', $1, false)", [want]);
+          await client.query(
+            "SELECT set_config('qm.tenant_id', $1, false), set_config('qm.tenant_bypass', $2, false)",
+            [id, every ? "on" : ""],
+          );
         } catch (error) {
           client.release(error instanceof Error ? error : new Error(String(error)));
           throw error;

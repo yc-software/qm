@@ -1,4 +1,5 @@
 import type { StoresModule } from "./stores.ts";
+import { hasRows } from "../jobs/job-worker.ts";
 import type { RunsModule } from "./runs.ts";
 import type { OrchestratorModule } from "./orchestrator.ts";
 import type { FilesModule } from "./files.ts";
@@ -109,13 +110,18 @@ export function buildWorkers(deps: WorkersInputs) {
   const deepIdleMachineMs = 3 * 24 * 60 * 60_000;
   const devIdleMachineMs = 2 * 60 * 60_000;
   const reapDeepIdle = deepIdleMachineMs > 0 || devIdleMachineMs > 0 ? sandbox.reapDeepIdle : undefined;
-  if (processReaper) every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep());
+  if (processReaper)
+    every("processes:reaper", PROCESS_REAPER_INTERVAL_MS, () => processReaper.sweep(), {
+      due: hasRows("process_sessions", "w.status = 'running'"),
+    });
   every("Composio consent returns", 30 * 60_000, () => composioReturns.deleteExpired(Date.now()), {
     immediate: true,
+    shared: true,
   });
   if (reapDeepIdle)
     every("sandbox:deep-idle-reaper", 5 * 60_000, () => reapDeepIdle(deepIdleMachineMs, devIdleMachineMs), {
       immediate: true,
+      due: hasRows("modal_sandbox_bodies"),
     });
   return { composioReturns, drain, turnRunner, turnReady, turnCancels, turnYields, backgroundOwnership };
 }
