@@ -7344,6 +7344,8 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm {
+  --dv-active-sash-color: transparent;
+  --dv-active-sash-transition-delay: 0s;
   --dv-tabs-and-actions-container-height: 35px;
   --split-tab-h: 26px;
   --dv-separator-border: var(--border);
@@ -7586,6 +7588,7 @@ h3.ambient-field-label {
 }
 
 .split-pane-title {
+  cursor: default;
   display: flex;
   align-items: center;
   min-width: 0;
@@ -7731,9 +7734,10 @@ h3.ambient-field-label {
   top: 50%;
   transform: translate(-50%, -50%);
   border-radius: 999px;
-  background: var(--border);
+  background: var(--primary);
   box-shadow: 0 0 0 2px var(--background);
-  transition: background 0.12s ease;
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
 
 .dockview-theme-qm .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash::after {
@@ -7746,9 +7750,27 @@ h3.ambient-field-label {
   height: 4px;
 }
 
-.dockview-theme-qm .dv-sash:hover::after,
+.dockview-theme-qm .dv-sash:not(.dv-disabled):hover,
+.dockview-theme-qm .dv-sash.dv-active {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--primary) 30%, transparent),
+    color-mix(in srgb, var(--primary) 30%, transparent)
+  );
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.dockview-theme-qm .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash {
+  background-size: 1px 100%;
+}
+
+.dockview-theme-qm .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash {
+  background-size: 100% 1px;
+}
+
+.dockview-theme-qm .dv-sash:not(.dv-disabled):hover::after,
 .dockview-theme-qm .dv-sash.dv-active::after {
-  background: color-mix(in srgb, var(--primary) 60%, var(--border));
+  opacity: 1;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:has(.dv-drop-target-dropzone) {
@@ -8027,6 +8049,14 @@ h3.ambient-field-label {
 }
 [data-density="strip"] .chat-bottom-dock {
   display: none;
+}
+
+.split-canvas:not(.single-pane) .chat-scroll {
+  scrollbar-color: transparent transparent;
+}
+
+.split-canvas:not(.single-pane) .split-pane-content.is-active .chat-scroll.user-scrolling {
+  scrollbar-color: var(--muted-foreground) transparent;
 }
 
 .split-canvas:not(.single-pane) .custom-chat-shell > .chat-bottom-dock {

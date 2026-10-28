@@ -1008,3 +1008,33 @@ test("an inline steer does not take the sticky prompt marker from the original r
     f.close();
   }
 });
+
+test("the scrollbar follows user scrolling and hides after idle or disposal", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  try {
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.scroll(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.wheelUp();
+    f.scroll(400);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    t.mock.timers.tick(500);
+    f.wheelUp();
+    f.scroll(300);
+    t.mock.timers.tick(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    f.viewport.follow(true);
+    f.flush();
+    f.scroll(800);
+    t.mock.timers.tick(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.wheelUp();
+    f.viewport.dispose();
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.wheelUp();
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});

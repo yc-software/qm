@@ -31,6 +31,7 @@ const NEAR_TOP = 400;
 
 export function createTranscriptViewport(options: { pinPrompt?: () => boolean } = {}) {
   let scroller: HTMLElement | null = null;
+  let scrollIdle: ReturnType<typeof setTimeout> | undefined;
   let pins: HTMLElement | null = null;
   let prompt: HTMLElement | null = null;
   let stack: HTMLElement | null = null;
@@ -202,6 +203,19 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     else prompt.style.removeProperty("--pin-content-max");
   }
 
+  function hideScrollbar(): void {
+    clearTimeout(scrollIdle);
+    scrollIdle = undefined;
+    scroller?.classList.remove("user-scrolling");
+  }
+
+  function showScrollbar(): void {
+    if (!scroller || scroller.scrollHeight <= scroller.clientHeight) return;
+    scroller.classList.add("user-scrolling");
+    clearTimeout(scrollIdle);
+    scrollIdle = setTimeout(hideScrollbar, 700);
+  }
+
   function onScroll(): void {
     if (!scroller || contentUpdates.size > 0) return;
     const movingUp = scroller.scrollTop < lastTop;
@@ -261,17 +275,24 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
 
   function onWheel(event: WheelEvent): void {
     if (!scroller) return;
+    if (event.deltaY !== 0) showScrollbar();
     if (event.deltaY < 0) loadEarlier();
     if (event.deltaY < 0 && scroller.scrollTop > 0) cancelFollow();
   }
 
   function onKeyDown(event: KeyboardEvent): void {
+    if (
+      event.target === scroller &&
+      ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)
+    )
+      showScrollbar();
     if (event.target !== scroller || event.key !== "End" || event.shiftKey || event.altKey) return;
     event.preventDefault();
     follow(true);
   }
 
   function dispose(): void {
+    hideScrollbar();
     if (frame !== null) cancelAnimationFrame(frame);
     frame = null;
     observer?.disconnect();
@@ -279,6 +300,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
     scroller?.removeEventListener("qm-content-updating", onContentUpdating);
     scroller?.removeEventListener("scroll", onScroll);
     scroller?.removeEventListener("wheel", onWheel);
+    scroller?.removeEventListener("touchmove", showScrollbar);
     scroller?.removeEventListener("click", onClick);
     scroller?.removeEventListener("keydown", onKeyDown);
     scroller?.style.removeProperty("--chat-sticky-top");
@@ -302,6 +324,7 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
       scroller?.addEventListener("qm-content-updating", onContentUpdating);
       scroller?.addEventListener("scroll", onScroll, { passive: true });
       scroller?.addEventListener("wheel", onWheel, { passive: true });
+      scroller?.addEventListener("touchmove", showScrollbar, { passive: true });
       scroller?.addEventListener("click", onClick);
       scroller?.addEventListener("keydown", onKeyDown);
       if (typeof ResizeObserver !== "undefined") {
