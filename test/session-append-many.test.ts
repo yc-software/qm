@@ -73,3 +73,38 @@ for (const backend of ["memory", "postgres"] as const) {
     },
   );
 }
+
+test(
+  "a postgres append holds the lease and writes in five statements, and concurrent appends keep distinct sequences",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const store = createPostgresSessionStore(process.env.DATABASE_URL!);
+    const scope = scopeId("personal", "batch-test");
+    const session = await store.getOrCreateByThread(`web:batch-test:${randomUUID()}`, "dm", scope);
+    const { lease } = await store.acquireLease(session.id);
+    assert.ok(lease);
+    await store.append(lease, { type: "user", payload: { text: "warm" }, scopeLabel: scope });
+    const query = pg.Client.prototype.query;
+    let statements = 0;
+    pg.Client.prototype.query = function (this: pg.Client, ...args: Parameters<typeof query>) {
+      statements++;
+      return query.apply(this, args);
+    } as typeof query;
+    try {
+      await store.append(lease, { type: "assistant", payload: { text: "counted" }, scopeLabel: scope });
+    } finally {
+      pg.Client.prototype.query = query;
+    }
+    assert.equal(statements, 5);
+    const appended = await Promise.all(
+      Array.from({ length: 8 }, (_, i) =>
+        store.append(lease, { type: "assistant", payload: { text: `parallel ${i}` }, scopeLabel: scope }),
+      ),
+    );
+    assert.deepEqual(
+      appended.map((entry) => entry.seq).sort((a, b) => a - b),
+      [2, 3, 4, 5, 6, 7, 8, 9],
+    );
+    await store.releaseLease(lease);
+  },
+);

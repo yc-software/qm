@@ -263,51 +263,6 @@ test("background jobs with private credentials start on their own job computer",
   assert.ok(!events.includes("scratch") && !events.includes("resource"));
 });
 
-test("replay returns cached masked bytes without resolving a consumed single-use credential", async () => {
-  let stored: string | undefined;
-  let available = true;
-  let resolutions = 0;
-  const events: string[] = [];
-  const extra: Partial<ToolContextDeps> = {
-    runId: "once-replay",
-    attempt: 1,
-    ledger: {
-      begin: async () => (stored === undefined ? { cached: false } : { cached: true, output: stored }),
-      record: async (_run, _attempt, _index, output) => {
-        stored = output;
-      },
-    } as ToolContextDeps["ledger"],
-    resolveCommandCredentials: async () => {
-      resolutions++;
-      return available
-        ? [
-            {
-              handle: "single",
-              resolve: async () => ({
-                env: [{ key: "TOKEN", value: "synthetic-secret" }],
-                singleUse: true,
-                commit: async () => {
-                  available = false;
-                },
-              }),
-            },
-          ]
-        : [];
-    },
-    sandbox: {
-      run: async () => ({ stdout: "value=synthetic-secret", stderr: "", code: 0, timedOut: false }),
-    } as unknown as Sandbox,
-  };
-  const first = await context(events, [], extra).ctx.execute("print token", { credentials: ["single"] });
-  assert.equal(first.stdout, "value=<redacted:credential>");
-  assert.ok(!stored?.includes("synthetic-secret"));
-  events.length = 0;
-  const replay = await context(events, [], extra).ctx.execute("print token", { credentials: ["single"] });
-  assert.deepEqual(replay, first);
-  assert.equal(resolutions, 1);
-  assert.deepEqual(events, []);
-});
-
 test("the model and transcript see when a command moved to the scratch computer", async () => {
   const entries: Array<Record<string, unknown>> = [];
   let available = true;

@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
-import type { ToolLedger } from "../src/runs/tool-ledger.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal } from "../src/types.ts";
 
@@ -17,7 +16,7 @@ function turn(text: string, surface?: string): OrchestratorInput {
   };
 }
 
-type Backend = { name: string; make: () => { runs: RunStore; ledger: ToolLedger } };
+type Backend = { name: string; make: () => { runs: RunStore } };
 const backends: Backend[] = [{ name: "memory", make: () => createMemoryRunStore() }];
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -462,28 +461,6 @@ for (const backend of backends) {
     assert.deepEqual(seen, [`${ok.id}:done`, `${retried.id}:failed`], "exhausted attempts park the run and fire");
   });
 
-  test(`[${backend.name}] ledger caches a side effect's output by (runId, attempt, callIndex)`, async () => {
-    const { ledger } = backend.make();
-    assert.equal((await ledger.begin("run1", 1, 0)).cached, false);
-    await ledger.record("run1", 1, 0, JSON.stringify({ ok: true }));
-    const again = await ledger.begin("run1", 1, 0);
-    assert.equal(again.cached, true);
-    assert.deepEqual(JSON.parse(again.output ?? "null"), { ok: true });
-    assert.equal((await ledger.begin("run1", 1, 1)).cached, false);
-  });
-
-  test(`[${backend.name}] ledger keys on attempt: attempt 2's call 0 does NOT see attempt 1's call-0 output`, async () => {
-    const { ledger } = backend.make();
-    await ledger.record("run1", 1, 0, JSON.stringify({ cmd: "attempt-1" }));
-    const fresh = await ledger.begin("run1", 2, 0);
-    assert.equal(fresh.cached, false, "attempt 2 call 0 must not read attempt 1 call 0");
-    await ledger.record("run1", 2, 0, JSON.stringify({ cmd: "attempt-2" }));
-    const replay = await ledger.begin("run1", 2, 0);
-    assert.equal(replay.cached, true, "same-attempt replay dedupes");
-    assert.deepEqual(JSON.parse(replay.output ?? "null"), { cmd: "attempt-2" });
-    const a1 = await ledger.begin("run1", 1, 0);
-    assert.deepEqual(JSON.parse(a1.output ?? "null"), { cmd: "attempt-1" });
-  });
   test(`[${backend.name}] noteTurnUserSeq records the turn boundary once and never overwrites it`, async () => {
     const { runs } = backend.make();
     const run = (await runs.enqueue({ sessionId: "sSeq", request: turn("go") })).run;

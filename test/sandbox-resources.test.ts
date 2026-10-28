@@ -127,6 +127,19 @@ test("provisioning a running computer does not wait behind a long-running comman
   await running;
 });
 
+test("a command on a computer reads its inventory record once", async () => {
+  const { records, router, layers } = fixture();
+  const handle = await router.provision(layers);
+  let reads = 0;
+  const get = records.get.bind(records);
+  records.get = async (id) => {
+    reads++;
+    return get(id);
+  };
+  assert.equal((await router.run(handle, "pwd")).stdout, handle.id);
+  assert.equal(reads, 1);
+});
+
 test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
   const { backend, options } = fixture();
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };

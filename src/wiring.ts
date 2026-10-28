@@ -1673,7 +1673,6 @@ export function buildApp(
       : undefined;
   const productAnalytics = createProductAnalytics(config.orgId, config.productAnalytics);
   runs.onTerminal((run) => void productAnalytics.responseFinished(run));
-  const ledger = runStore.ledger;
 
   let processes: ProcessRegistry | undefined;
   if (supportsProcessSessions(sandbox)) {
@@ -2209,7 +2208,6 @@ export function buildApp(
     skillsReady,
     advisoryLock,
     errors,
-    ledger,
     signals: runSignals,
     turnStream,
     runActivity,

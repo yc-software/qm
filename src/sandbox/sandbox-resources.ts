@@ -159,7 +159,6 @@ export function createSandboxResources(opts: {
     }
   };
   const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
-    await get(id);
     const lock = exclusive || !opts.lock.withSharedLock ? opts.lock.withLock : opts.lock.withSharedLock;
     return lock(`sandbox-resource:${id}`, async () => {
       const current = await get(id);

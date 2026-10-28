@@ -2021,8 +2021,8 @@ test("pg run store: the turn boundary is recorded once and survives a re-claim",
   }
 });
 
-test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger, reaper", { skip }, async () => {
-  const { runs, ledger, close } = createPostgresRunStore(URL!);
+test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, reaper", { skip }, async () => {
+  const { runs, close } = createPostgresRunStore(URL!);
   try {
     const r1 = (await runs.enqueue({ sessionId: "sA", request: turn("1") })).run;
     await runs.enqueue({ sessionId: "sA", request: turn("2") });
@@ -2055,11 +2055,6 @@ test("pg run store: enqueue dedup, atomic one-per-session claim, fencing, ledger
     assert.equal(racedIds.size, 1, "all concurrent same-key enqueues return the same run");
     assert.equal(raced.filter((r) => r.deduped === false).length, 1, "exactly one inserter");
     assert.equal(raced.filter((r) => r.deduped === true).length, N - 1, "the rest are dedup hits");
-
-    assert.equal((await ledger.begin("run1", 1, 0)).cached, false);
-    await ledger.record("run1", 1, 0, JSON.stringify({ ok: true }));
-    assert.deepEqual(JSON.parse((await ledger.begin("run1", 1, 0)).output ?? "null"), { ok: true });
-    assert.equal((await ledger.begin("run1", 2, 0)).cached, false, "attempt 2 call 0 is a fresh slot");
 
     const r = (await runs.enqueue({ sessionId: "sR", request: turn("x"), maxAttempts: 3 })).run;
     await runs.claim("dead", 1);
@@ -2414,58 +2409,6 @@ test("pg run store: withdraw and claim cannot both win the same queued run", { s
     assert.notEqual(withdrawn, Boolean(claimed), "the run is either withdrawn or running, never both");
   } finally {
     await close();
-  }
-});
-
-test("pg run store startup does not lock an already-migrated tool ledger", { skip }, async () => {
-  const baseline = createPostgresRunStore(URL!);
-  await baseline.runs.activeSessionIds();
-  const pg = (await import("pg")).default;
-  const reader = new pg.Client({ connectionString: URL });
-  await reader.connect();
-  const reboot = createPostgresRunStore(URL!);
-  let initialization: Promise<unknown> | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await reader.query("BEGIN");
-    await reader.query("SELECT output FROM tool_calls LIMIT 1");
-    const runId = `boot-ledger-${randomUUID()}`;
-    initialization = (async () => {
-      await reboot.runs.activeSessionIds();
-      await reboot.ledger.record(runId, 1, 0, "kept");
-      assert.deepEqual(await baseline.ledger.begin(runId, 1, 0), { cached: true, output: "kept" });
-    })();
-    await Promise.race([
-      initialization,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("run-store startup blocked on a ledger reader")), 5_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-    await reader.query("ROLLBACK");
-    await initialization?.catch(() => {});
-    await Promise.all([reader.end(), baseline.close(), reboot.close()]);
-  }
-});
-
-test("pg run store still repairs a legacy tool ledger without an attempt column", { skip }, async () => {
-  const baseline = createPostgresRunStore(URL!);
-  await baseline.runs.activeSessionIds();
-  await baseline.close();
-  const pg = (await import("pg")).default;
-  const raw = new pg.Client({ connectionString: URL });
-  await raw.connect();
-  const reboot = createPostgresRunStore(URL!);
-  try {
-    await raw.query("ALTER TABLE tool_calls DROP COLUMN attempt CASCADE");
-    const runId = `legacy-ledger-${randomUUID()}`;
-    await reboot.ledger.record(runId, 1, 0, "first");
-    await reboot.ledger.record(runId, 2, 0, "second");
-    assert.deepEqual(await reboot.ledger.begin(runId, 1, 0), { cached: true, output: "first" });
-    assert.deepEqual(await reboot.ledger.begin(runId, 2, 0), { cached: true, output: "second" });
-  } finally {
-    await Promise.all([raw.end(), reboot.close()]);
   }
 });
 

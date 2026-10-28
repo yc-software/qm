@@ -630,6 +630,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (result === undefined) throw new ProjectRosterChanged();
         return result;
       };
+      let mirrored = Promise.resolve();
       const mirrorRunActivity = async (appended: SessionEntry): Promise<void> => {
         if (
           input.runId &&
@@ -2745,10 +2746,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           })(),
           ...(deps.execTimeoutMs !== undefined ? { execTimeoutMs: deps.execTimeoutMs } : {}),
           ...(deps.execTimeoutCeilingMs !== undefined ? { execTimeoutCeilingMs: deps.execTimeoutCeilingMs } : {}),
-          ...(deps.ledger ? { ledger: deps.ledger } : {}),
           ...(deps.signals ? { signals: deps.signals } : {}),
           ...(input.runId ? { runId: input.runId } : {}),
-          attempt: input.attempt ?? 1,
           ...(backgroundBroker ? { backgroundBroker } : {}),
           ...(monitorBroker ? { monitorBroker } : {}),
         });
@@ -3283,7 +3282,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }
               }
             }
-            await mirrorRunActivity(appended);
+            mirrored = mirrored.then(() => mirrorRunActivity(appended));
             return appended;
           };
           const initialDocuments = [...documentInputs.documents];
@@ -3737,6 +3736,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
+        await mirrored;
         if (
           input.addressed &&
           !strictReadOnly &&
