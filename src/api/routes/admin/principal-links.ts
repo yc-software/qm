@@ -39,7 +39,6 @@ export async function createPrincipalLink(ctx: ApiCtx): Promise<RouteResult> {
     const link = await deps.principalLinks.link({
       principalId: b.principalId,
       canonicalId: b.canonicalId,
-      evidence: b.evidence,
       linkedBy: authz.actor.id,
     });
     await deps.identity?.refresh(true);

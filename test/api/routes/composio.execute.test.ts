@@ -289,7 +289,7 @@ test("linked aliases can execute their existing accounts until the identity link
   const aliasUserId = composioUserId(tenant().orgId, aliasId);
   const account = { ...aliceAccount, user_id: aliasUserId };
   try {
-    await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
+    await links.link({ principalId: aliasId, canonicalId: "alice", linkedBy: "admin" });
     for (const actorId of ["alice", aliasId]) {
       f.replies.push(account, gmailTool, { successful: true, data: { emails: [] } });
       const cap = { ...privateCap, actorId, scopeId: scopeId("personal", actorId) };
@@ -337,7 +337,7 @@ test("linked account discovery and Slack status preserve historical aliases with
     workspace: "Example",
   });
   try {
-    await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
+    await links.link({ principalId: aliasId, canonicalId: "alice", linkedBy: "admin" });
     f.replies.push({
       items: [
         account,
@@ -379,7 +379,7 @@ test("unlinking an account owner during tool lookup prevents provider execution"
   installPrincipalLinks(links);
   const aliasId = "oidc:alice";
   try {
-    await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
+    await links.link({ principalId: aliasId, canonicalId: "alice", linkedBy: "admin" });
     const original = f.deps.composioFetch!;
     f.deps.composioFetch = async (...args) => {
       const response = await original(...args);
@@ -408,7 +408,7 @@ test("consent and browser verification use the canonical identity when signed in
   const userId = composioUserId(tenant().orgId, "alice");
   const callbackUrl = "https://qm.example/s/chat?composioReturn=linked";
   try {
-    await links.link({ principalId: aliasId, canonicalId: "alice", evidence: "test", linkedBy: "admin" });
+    await links.link({ principalId: aliasId, canonicalId: "alice", linkedBy: "admin" });
     f.replies.push(
       { session_id: "trs_linked" },
       { redirect_url: "https://connect.composio.dev/link/lk_linked", connected_account_id: "ca_linked" },
@@ -451,7 +451,7 @@ test("linked identities retain provider accounts and Slack status until unlinked
     await f.deps.principalLinks.link({
       principalId: "oidc:alice",
       canonicalId: "alice",
-      evidence: "test",
+
       linkedBy: "admin",
     });
     const identity = { userId: canonical, userIds: [canonical, alias] };

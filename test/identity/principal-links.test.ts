@@ -37,12 +37,11 @@ import { createPostgresReplayDedupe } from "../../src/auth/replay-dedupe.ts";
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
 const OIDC = "oidc:1111111111111111111111111111111111111111111111111111111111111111:am9yZGFu";
-const EVIDENCE = "SSO email jordan@acme.test matched the Slack-verified directory email";
 
 describe("principal link service: one person, several sign-ins", () => {
   it("links a sign-in to a canonical principal and resolves both directions", async () => {
     const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
-    const row = await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
+    const row = await links.link({ principalId: OIDC, canonicalId: EMAIL, linkedBy: "admin" });
     assert.equal(row.canonicalId, EMAIL);
     assert.equal(links.canonical(OIDC), EMAIL);
     assert.deepEqual(links.aliases(EMAIL), [OIDC]);
@@ -57,14 +56,13 @@ describe("principal link service: one person, several sign-ins", () => {
   it("links an OIDC principal whose encoded subject runs past 255 characters", async () => {
     const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     const longSubject = `oidc:${"2".repeat(64)}:${"c".repeat(340)}`;
-    const evidence = `${EVIDENCE}; ${"verified against the HR roster export ".repeat(20)}`;
-    const row = await links.link({ principalId: longSubject, canonicalId: EMAIL, evidence, linkedBy: "admin" });
+    const row = await links.link({ principalId: longSubject, canonicalId: EMAIL, linkedBy: "admin" });
     assert.equal(row.principalId, longSubject);
     assert.equal(links.canonical(longSubject), EMAIL);
     await links.unlink(longSubject);
   });
 
-  it("refuses self-links, chains, reversed links, missing evidence, and conflicting re-links", async () => {
+  it("refuses self-links, chains, reversed links, and conflicting re-links", async () => {
     const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     const reject = async (input: Parameters<typeof links.link>[0], status: number, re: RegExp) => {
       await assert.rejects(links.link(input), (e: unknown) => {
@@ -74,36 +72,19 @@ describe("principal link service: one person, several sign-ins", () => {
         return true;
       });
     };
-    await reject(
-      { principalId: EMAIL, canonicalId: "Jordan@Acme.Test", evidence: EVIDENCE, linkedBy: "a" },
-      400,
-      /itself/,
-    );
-    await reject({ principalId: OIDC, canonicalId: EMAIL, evidence: "", linkedBy: "a" }, 400, /evidence/);
-    await reject({ principalId: "", canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" }, 400, /non-empty/);
-    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "a" });
+    await reject({ principalId: EMAIL, canonicalId: "Jordan@Acme.Test", linkedBy: "a" }, 400, /itself/);
+    await reject({ principalId: "", canonicalId: EMAIL, linkedBy: "a" }, 400, /non-empty/);
+    await links.link({ principalId: OIDC, canonicalId: EMAIL, linkedBy: "a" });
     const again = await links.link({
       principalId: OIDC,
       canonicalId: EMAIL.toUpperCase(),
-      evidence: "x",
+
       linkedBy: "b",
     });
     assert.equal(again.linkedBy, "a", "re-linking to the same canonical is idempotent and keeps the first record");
-    await reject(
-      { principalId: OIDC, canonicalId: "casey@acme.test", evidence: EVIDENCE, linkedBy: "a" },
-      409,
-      /already/,
-    );
-    await reject(
-      { principalId: "U0OTHER", canonicalId: OIDC, evidence: EVIDENCE, linkedBy: "a" },
-      400,
-      /itself linked/,
-    );
-    await reject(
-      { principalId: EMAIL, canonicalId: "casey@acme.test", evidence: EVIDENCE, linkedBy: "a" },
-      400,
-      /canonical/,
-    );
+    await reject({ principalId: OIDC, canonicalId: "casey@acme.test", linkedBy: "a" }, 409, /already/);
+    await reject({ principalId: "U0OTHER", canonicalId: OIDC, linkedBy: "a" }, 400, /itself linked/);
+    await reject({ principalId: EMAIL, canonicalId: "casey@acme.test", linkedBy: "a" }, 400, /canonical/);
   });
 
   it("reads links written by another process on refresh", async () => {
@@ -112,9 +93,9 @@ describe("principal link service: one person, several sign-ins", () => {
     await links.refresh();
     assert.equal(links.canonical(OIDC), undefined);
     await createPgPool(databaseUrl).q(
-      `INSERT INTO principal_links (id, principal_id, canonical_id, evidence, linked_by, created_at)
-       VALUES ($1, $1, $2, $3, 'ops', 1)`,
-      [OIDC, EMAIL, EVIDENCE],
+      `INSERT INTO principal_links (id, principal_id, canonical_id, linked_by, created_at)
+       VALUES ($1, $1, $2, 'ops', 1)`,
+      [OIDC, EMAIL],
     );
     await links.refresh();
     assert.equal(links.canonical(OIDC), EMAIL);
@@ -126,7 +107,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
 
   async function installed(databaseUrl = testDatabaseUrl()) {
     const links = createPrincipalLinkService(databaseUrl, testAdvisoryLock());
-    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
+    await links.link({ principalId: OIDC, canonicalId: EMAIL, linkedBy: "admin" });
     installPrincipalLinks(links);
     return links;
   }
@@ -173,11 +154,11 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
       createdAt: 1,
       updatedAt: 1,
     });
-    await links.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "admin" });
+    await links.link({ principalId: OIDC, canonicalId: EMAIL, linkedBy: "admin" });
     await links.link({
       principalId: "guest@partner.test",
       canonicalId: "U0GUEST",
-      evidence: EVIDENCE,
+
       linkedBy: "admin",
     });
     installPrincipalLinks(links);
@@ -285,7 +266,7 @@ describe("linked sign-ins across the HTTP surface", () => {
   });
 
   it("only an org admin manages links, the agent never does, and a directory member stays canonical", async () => {
-    const body = JSON.stringify({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE });
+    const body = JSON.stringify({ principalId: OIDC, canonicalId: EMAIL });
     assert.equal(
       (await signed("POST", "/v1/admin/principal-links", body, { "x-admin-actor": "U0STRANGER@default-org" })).status,
       403,
@@ -300,7 +281,7 @@ describe("linked sign-ins across the HTTP surface", () => {
       const reversed = await signed(
         "POST",
         "/v1/admin/principal-links",
-        JSON.stringify({ principalId: memberSide, canonicalId: OIDC, evidence: EVIDENCE }),
+        JSON.stringify({ principalId: memberSide, canonicalId: OIDC }),
         admin,
       );
       assert.equal(reversed.status, 400, `${memberSide} is a directory member and stays canonical`);
@@ -309,7 +290,7 @@ describe("linked sign-ins across the HTTP surface", () => {
     const escalation = await signed(
       "POST",
       "/v1/admin/principal-links",
-      JSON.stringify({ principalId: "admin-alice", canonicalId: "casey@acme.test", evidence: EVIDENCE }),
+      JSON.stringify({ principalId: "admin-alice", canonicalId: "casey@acme.test" }),
       admin,
     );
     assert.equal(escalation.status, 400, "an admin sign-in cannot make a non-admin canonical principal an admin");
@@ -391,7 +372,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
 
   before(async () => {
     built = buildApp(testConfig());
-    await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
+    await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, linkedBy: "test" });
     await built.identity.refresh(true);
     server = createInsecureTestServer(built.app, {
       portalIdentitySecret: PID,
@@ -425,8 +406,8 @@ describe("link mutation serialization", () => {
   it("rejects concurrent chains", async () => {
     const links = createPrincipalLinkService(testDatabaseUrl(), testAdvisoryLock());
     const results = await Promise.allSettled([
-      links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" }),
-      links.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" }),
+      links.link({ principalId: "A", canonicalId: "B", linkedBy: "qa" }),
+      links.link({ principalId: "B", canonicalId: "C", linkedBy: "qa" }),
     ]);
     assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
     assert.equal((await links.list()).length, 1);
@@ -453,8 +434,8 @@ describe("link mutation serialization", () => {
     }) as typeof pool.query;
     const pending = a.refresh();
     await started.promise;
-    await b.link({ principalId: "B", canonicalId: "C", evidence: "qa", linkedBy: "qa" });
-    const result = a.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
+    await b.link({ principalId: "B", canonicalId: "C", linkedBy: "qa" });
+    const result = a.link({ principalId: "A", canonicalId: "B", linkedBy: "qa" });
     delayed.resolve();
     await pending;
     await assert.rejects(result, /itself linked/);
@@ -463,7 +444,7 @@ describe("link mutation serialization", () => {
     for (const reverse of [false, true]) {
       const databaseUrl = testDatabaseUrl();
       const links = createPrincipalLinkService(databaseUrl, testAdvisoryLock());
-      await links.link({ principalId: "A", canonicalId: "B", evidence: "qa", linkedBy: "qa" });
+      await links.link({ principalId: "A", canonicalId: "B", linkedBy: "qa" });
       installPrincipalLinks(links);
       try {
         const rows = [
@@ -494,7 +475,7 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
   it("accepts a linked sign-in and rejects its stale canonical claim after unlink", async () => {
     const secret = "authenticated-as-test-secret-0123456789";
     const app = buildApp(testConfig());
-    await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
+    await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, linkedBy: "qa" });
     await app.identity.refresh(true);
     const server = createInsecureTestServer(app.app, {
       portalIdentitySecret: secret,

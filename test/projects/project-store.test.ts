@@ -283,7 +283,7 @@ test("capability scope checks honor a linked identity's room membership", async 
   await built.principalLinks.link({
     principalId: "slack-person@example.com",
     canonicalId: "web-person",
-    evidence: "test: verified Slack account",
+
     linkedBy: "web-person",
   });
   assert.equal(await check("web-person", "channel:C-private"), true);

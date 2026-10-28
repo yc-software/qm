@@ -71,6 +71,10 @@ export const HELD_BACK_CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
       "ALTER TABLE session_llm_requests DROP COLUMN IF EXISTS prompt_hash, DROP COLUMN IF EXISTS truncated",
     ],
   },
+  {
+    id: "contract/0026-drop-principal-link-evidence",
+    statements: ["SET LOCAL lock_timeout = '3s'", "ALTER TABLE principal_links DROP COLUMN IF EXISTS evidence"],
+  },
 ];
 
 export const pgMigrationsFrom = (definition: PgMigrationDefinition): PgMigration[] =>

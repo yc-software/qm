@@ -58,14 +58,18 @@ export function buildStores(deps: StoresInputs) {
   const pgPool = createPgPool(databaseUrl, []);
   registerAbsurdSchema(databaseUrl);
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgPool);
-  const principalLinks = createPrincipalLinkService(databaseUrl, advisoryLock);
+  const configStore = createConfigStore({ databaseUrl, connectorSecretKey });
+  const principalLinks = createPrincipalLinkService(databaseUrl, advisoryLock, {
+    refreshScopes: async (ids) => {
+      await Promise.all(ids.map((id) => configStore.refreshScope(id)));
+    },
+  });
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(databaseUrl, {
     directorySyncProtected: () => tenantConfig(config).emailAuthPrincipals,
     principalLinks,
   });
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgPool);
-  const configStore = createConfigStore({ databaseUrl, connectorSecretKey });
   const skills: SkillStore = createSkillStore({
     databaseUrl,
     advisoryLock,

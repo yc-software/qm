@@ -633,7 +633,7 @@ test(
       await built.principalLinks.link({
         principalId: email,
         canonicalId: canonical,
-        evidence: "test: verified sign-in",
+
         linkedBy: canonical,
       });
       assert.equal(await built.directory.get(canonical), null, "the directory row stays keyed by the linked email");

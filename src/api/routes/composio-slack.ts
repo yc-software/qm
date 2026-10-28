@@ -203,7 +203,6 @@ export async function completeSlack(ctx: ApiCtx): Promise<RouteResult> {
       await deps.principalLinks.link({
         principalId: member.principalId,
         canonicalId: access.principal,
-        evidence: `Slack OAuth user ${slack.user_id} in workspace ${slack.team_id}, connection ${proof.accountId}`,
         linkedBy: access.principal,
       });
       await deps.identity?.refresh(true);

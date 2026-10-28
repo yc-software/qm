@@ -26,11 +26,18 @@ before proxying, and the keychain stores credentials under the canonical owner.
   can only be linked to a canonical principal that is already an admin.
 - **Links are flat.** A canonical principal is never itself linked onward, and
   a linked sign-in cannot become canonical for others.
-- **Evidence is required.** Every link records how the two identities were
-  verified as one person and which admin created it.
-- **Links are reversible.** Deleting a link restores two separate principals.
-  Records written while the link existed stay under the canonical id, so a
-  wrong link is an incident to reconcile, not just a row to delete.
+- **Linking merges the sign-in's data.** In the same transaction that records
+  the link, sessions, memory, crons, files and other records owned by the
+  linked sign-in move to the canonical principal: its principal id and its
+  personal scope are rewritten. When both principals already hold a row under
+  the same key, the canonical principal's row is kept and the linked sign-in's
+  duplicate is dropped. Thread refs and history (transcript items, runs, audit
+  and usage logs) keep their original ids. Credentials, keychain grants, admin
+  grants, team and project membership already resolve through the link and are
+  not rewritten. The canonical email is stored lowercased.
+- **Unlinking does not un-merge.** Deleting a link restores two separate
+  principals, but merged records stay with the canonical principal, so a wrong
+  link is an incident to reconcile, not just a row to delete.
 - **Deactivation follows the person.** Deactivating either id deactivates both.
 
 ## Admin API
@@ -39,7 +46,7 @@ Org admins manage links through the admin surface; the agent cannot.
 
 ```
 GET    /v1/admin/principal-links
-POST   /v1/admin/principal-links      { principalId, canonicalId, evidence }
+POST   /v1/admin/principal-links      { principalId, canonicalId }
 DELETE /v1/admin/principal-links/:principalId
 ```
 
@@ -53,7 +60,7 @@ The portal caches the answer for one minute and refuses to proxy (503) when
 core cannot answer, rather than acting as the unresolved subject. A deleted
 link therefore stays effective for at most a minute of cached sessions.
 
-Links live in the `principal_links` durable map of the company database.
+Links live in the `principal_links` table of the company database.
 
 ## Self-service Slack linking
 
