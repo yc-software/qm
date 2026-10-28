@@ -751,6 +751,7 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
   }
   const results = await searchAcrossScopes(memory, scopes, b.query, typeof b.limit === "number" ? b.limit : 20, {
     actorId: capability.actorId,
+    ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
   });
   audit(deps, {
     principalId: capability.actorId,

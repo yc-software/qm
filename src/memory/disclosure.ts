@@ -148,6 +148,7 @@ export function disclosedMemory(memory: MemoryService, access: MemoryDisclosure)
       const shown = new Set((await visible(scope)).map((fact) => fact.id));
       return (await memory.recall(scope, context)).filter((row) => row.id !== undefined && shown.has(row.id));
     },
-    query: async (scope, query, limit = 20) => queryFacts(await visible(scope), query, limit),
+    query: async (scope, query, limit = 20, context) =>
+      queryFacts(await visible(scope), query, limit, context?.sessionId),
   };
 }

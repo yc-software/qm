@@ -93,15 +93,21 @@ export async function resolveTurnContext(input: ContextInput) {
         complete: notebooks.every(({ facts }) => !!facts),
       };
     },
-    recallMemory: (query: string, disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>) =>
+    recallMemory: (query: string, disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>, sessionId?: string) =>
       recallAcrossScopes(
         memory,
         read,
-        { query, actorId: input.actor.id, maxChars: RECALL_MAX_CHARS, ...(disclosedFacts ? { disclosedFacts } : {}) },
+        {
+          query,
+          actorId: input.actor.id,
+          maxChars: RECALL_MAX_CHARS,
+          ...(disclosedFacts ? { disclosedFacts } : {}),
+          ...(sessionId ? { sessionId } : {}),
+        },
         memoryLabels,
       ),
-    searchMemory: async (query: string, limit = 20, scope?: ScopeId): Promise<string[] | null> => {
-      const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id);
+    searchMemory: async (query: string, limit = 20, scope?: ScopeId, sessionId?: string): Promise<string[] | null> => {
+      const hits = await searchNotebooks(memory, read, query, limit, scope, input.actor.id, sessionId);
       if (hits) for (const source of scope === undefined ? read : [scope]) recordRead(source, "memory");
       return hits;
     },

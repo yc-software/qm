@@ -14,6 +14,7 @@ export interface MemoryFact extends MemoryProvenance {
   id: string;
   text: string;
   author?: string;
+  sessionId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -81,6 +82,7 @@ export interface MemoryCandidate {
   text: string;
   score: number;
   at?: number;
+  sessionId?: string;
 }
 
 export function recentCandidates(facts: readonly MemoryFact[]): MemoryCandidate[] {
@@ -88,7 +90,13 @@ export function recentCandidates(facts: readonly MemoryFact[]): MemoryCandidate[
 }
 
 export function factCandidate(fact: MemoryFact, score: number): MemoryCandidate {
-  return { id: fact.id, text: renderFacts([fact]), score, at: fact.createdAt };
+  return {
+    id: fact.id,
+    text: renderFacts([fact]),
+    score,
+    at: fact.createdAt,
+    ...(fact.sessionId ? { sessionId: fact.sessionId } : {}),
+  };
 }
 
 export function factLine(fact: Shown & Pick<MemoryFact, "id">): string {

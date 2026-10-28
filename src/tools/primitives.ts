@@ -1177,10 +1177,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null> {
-      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit, scope));
+      if (deps.context) return timed("recall", () => deps.context!.searchMemory(q, limit, scope, deps.sessionId));
       if (!memory) return null;
       return timed("recall", () =>
-        searchNotebooks(memory!, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy),
+        searchNotebooks(memory!, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy, deps.sessionId),
       );
     },
 

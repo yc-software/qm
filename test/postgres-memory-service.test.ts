@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { scopeId } from "../src/types.ts";
+import { recallAcrossScopes, searchAcrossScopes } from "../src/memory/cross-scope.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres memory tests";
@@ -110,4 +111,20 @@ test("pg memory: add, edit and delete by id; a bad id rolls back the whole call"
   assert.equal(await second.read(sid), "- (2026-05-31) Prefers short replies");
   const [row] = await sql("SELECT deleted_at FROM memory_facts WHERE id = $1", [billing!.id]);
   assert.ok(row?.deleted_at, "delete keeps the row, marked deleted");
+});
+
+test("pg memory: the capturing session is stored and that session never gets the fact back", { skip }, async () => {
+  const memory = createPostgresMemoryService(URL!);
+  const sid = scopeId("personal", "U1");
+  await memory.capture(sid, ["Owns billing"], at, "U1", { mode: "automatic", sessionId: "S" });
+  await memory.capture(sid, ["Prefers terse replies"], at, "U1");
+  const [billing, terse] = await memory.facts!(sid);
+  assert.equal(billing!.sessionId, "S");
+  assert.equal(terse!.sessionId, undefined);
+  const recalled = async (sessionId: string) =>
+    (await recallAcrossScopes(memory, [sid], { sessionId })).map((fact) => fact.text);
+  assert.deepEqual(await recalled("S"), ["- (2026-05-31) Prefers terse replies"]);
+  assert.deepEqual(await recalled("T"), ["- (2026-05-31) Prefers terse replies", "- (2026-05-31) Owns billing"]);
+  assert.deepEqual(await searchAcrossScopes(memory, [sid], "billing", 20, { sessionId: "S" }), []);
+  assert.equal((await searchAcrossScopes(memory, [sid], "billing", 20, { sessionId: "T" })).length, 1);
 });

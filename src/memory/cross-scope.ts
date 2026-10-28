@@ -1,5 +1,5 @@
 import type { ScopeId } from "../types.ts";
-import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
+import { fromOtherSession, type MemoryService, type MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
 import { factLine } from "./facts.ts";
 
@@ -23,7 +23,10 @@ export async function recallAcrossScopes(
   const batches = await Promise.all(
     unique.map(async (scope) => (await memory.recall(scope, context)).map((row) => ({ ...row, scope }))),
   );
-  const ranked = batches.flat().sort((a, b) => b.score - a.score || (b.at ?? 0) - (a.at ?? 0));
+  const ranked = batches
+    .flat()
+    .filter((row) => fromOtherSession(row, context.sessionId))
+    .sort((a, b) => b.score - a.score || (b.at ?? 0) - (a.at ?? 0));
   const picked: RecalledFact[] = [];
   const headed = new Set<ScopeId>();
   const seen = new Set<string>();
@@ -75,9 +78,13 @@ export async function searchNotebooks(
   limit: number | undefined,
   scope: ScopeId | undefined,
   actorId: string | undefined,
+  sessionId?: string,
 ): Promise<string[] | null> {
   if (!readable.length || (scope !== undefined && !readable.includes(scope))) return null;
-  const hits = await searchAcrossScopes(memory, scope === undefined ? readable : [scope], query, limit, { actorId });
+  const hits = await searchAcrossScopes(memory, scope === undefined ? readable : [scope], query, limit, {
+    actorId,
+    ...(sessionId ? { sessionId } : {}),
+  });
   return hits.map((hit) => (readable.length > 1 || scope !== undefined ? `[${hit.scopeId}] ${hit.fact}` : hit.fact));
 }
 

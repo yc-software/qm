@@ -211,3 +211,22 @@ test("an external block that fills its maxChars is trimmed to the remaining budg
   assert.match(out, /zzzz/);
   assert.ok(out.length <= 6000);
 });
+
+test("facts captured in a session are not recalled or searched back into that session", async (t) => {
+  const { base, memory } = await fixture(t);
+  await base.capture("personal:a", ["0.9 said in session S"], AT, undefined, { mode: "automatic", sessionId: "S" });
+  await base.capture("personal:a", ["0.8 said elsewhere"], AT);
+  const recalled = async (sessionId?: string) =>
+    (await recallAcrossScopes(memory, ["personal:a"], { query: "verify", ...(sessionId ? { sessionId } : {}) })).map(
+      (fact) => fact.text,
+    );
+  assert.deepEqual(await recalled("S"), ["- (2026-10-01) 0.8 said elsewhere"]);
+  assert.deepEqual(await recalled("T"), ["- (2026-10-01) 0.9 said in session S", "- (2026-10-01) 0.8 said elsewhere"]);
+  assert.deepEqual(await recalled(), await recalled("T"));
+  const searched = async (sessionId?: string) =>
+    (await searchAcrossScopes(memory, ["personal:a"], "said", 20, sessionId ? { sessionId } : undefined)).map((hit) =>
+      hit.fact.replace(/^#\d+ /, ""),
+    );
+  assert.deepEqual(await searched("S"), ["(2026-10-01) 0.8 said elsewhere"]);
+  assert.deepEqual(await searched("T"), ["(2026-10-01) 0.9 said in session S", "(2026-10-01) 0.8 said elsewhere"]);
+});

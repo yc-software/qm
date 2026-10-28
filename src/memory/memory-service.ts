@@ -60,10 +60,14 @@ export interface MemoryService {
   metadata?(): Promise<Map<ScopeId, { bytes: number; updatedAt?: number }>>;
 }
 
-export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number): string[] {
+export const fromOtherSession = (fact: { sessionId?: string }, sessionId: string | undefined): boolean =>
+  !sessionId || fact.sessionId !== sessionId;
+
+export function queryFacts(facts: readonly MemoryFact[], q: string, limit: number, sessionId?: string): string[] {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   return facts
+    .filter((fact) => fromOtherSession(fact, sessionId))
     .filter((fact) => terms.every((term) => fact.text.toLowerCase().includes(term)))
     .slice(0, limit)
     .map(factLine);
@@ -145,7 +149,14 @@ export function createNotebookMemory(store: FactStore): MemoryService {
             }
             continue;
           }
-          const fact = { text, ...provenance, ...(author ? { author } : {}), createdAt: at, updatedAt: at };
+          const fact = {
+            text,
+            ...provenance,
+            ...(author ? { author } : {}),
+            ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
+            createdAt: at,
+            updatedAt: at,
+          };
           await tx.insert(fact);
           existing.set(key, { ...fact, id: "" });
           added++;
@@ -154,8 +165,8 @@ export function createNotebookMemory(store: FactStore): MemoryService {
       });
     },
 
-    async query(scopeId, q, limit = 20) {
-      return queryFacts(await store.list(scopeId), q, limit);
+    async query(scopeId, q, limit = 20, context) {
+      return queryFacts(await store.list(scopeId), q, limit, context?.sessionId);
     },
 
     async read(scopeId) {

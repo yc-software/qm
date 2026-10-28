@@ -2713,7 +2713,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external ? { humanTurn: true } : {}),
-          ...(deps.toolOutput ? { toolOutput: deps.toolOutput, sessionId: session.id } : {}),
+          sessionId: session.id,
+          ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
           ...(sessionSyscalls
             ? {
@@ -2834,7 +2835,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await historyWindow()).entries;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recalled = await context.recallMemory(memoryRecallQuery(input.text, visibleHistory), memoryView.loaded);
+        const recalled = await context.recallMemory(
+          memoryRecallQuery(input.text, visibleHistory),
+          memoryView.loaded,
+          session.id,
+        );
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         let resumePlan = partial ? resumeStrategy(visibleHistory, partial) : null;
         if (partial && resumePlan?.kind === "settle") {
