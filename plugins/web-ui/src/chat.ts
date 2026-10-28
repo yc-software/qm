@@ -3063,7 +3063,11 @@ export function createChatSurface(
     return workedLabel(work.status === "working" ? "Working" : "Worked", secs);
   }
 
-  /** The one-line work summary: step icon + label (crossfading from the previous step), timer, chevron. */
+  /**
+   * The one-line work summary: step icon + label (crossfading from the previous step), timer, chevron.
+   * With a step, the icon, the changing label and the timer already show that work is moving, so the
+   * label skips the thinking shimmer; the fallback labels (stale, approvals) keep it.
+   */
   function stepLine(
     step: { icon: IconNode; label: string } | null,
     label: string,
@@ -3080,7 +3084,10 @@ export function createChatSurface(
         }${keyed(
           label,
           html`<span class="work-step" ${ref(easeStepWidth)}
-            >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(label, animating)}</span
+            >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(
+              label,
+              animating && !step,
+            )}</span
           >`,
         )}</span
       >${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span class="activity-chevron"
