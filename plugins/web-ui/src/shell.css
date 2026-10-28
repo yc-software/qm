@@ -11912,6 +11912,7 @@ body.app-edit-embed .custom-chat-shell.app-edit-chat > .chat-bottom-dock {
   gap: 4px;
 }
 .split-canvas:not(.single-pane) .composer-wrap .composer-toolbar .menu-button.loadout-button {
+  font-size: var(--composer-font-size);
   max-width: 180px;
 }
 .split-canvas:not(.single-pane) .composer-wrap .composer-toolbar :is(.icon-btn, .menu-button, .send-btn, .stop-btn) {
