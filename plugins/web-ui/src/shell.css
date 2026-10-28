@@ -8029,6 +8029,10 @@ h3.ambient-field-label {
   display: none;
 }
 
+.split-canvas:not(.single-pane) .custom-chat-shell > .chat-bottom-dock {
+  margin-top: 0;
+}
+
 .split-canvas:not(.single-pane) .split-pane-chat .custom-chat-shell .composer-wrap {
   --composer-control-size: 28px;
   --composer-font-size: 12px;
