@@ -64,7 +64,7 @@ window.addEventListener("DOMContentLoaded", () => {
       html[data-qm-desktop="darwin"] .brand button { -webkit-app-region: no-drag; }
       html[data-qm-desktop="darwin"] .dv-tabs-and-actions-container,
       html[data-qm-desktop="darwin"] .chat-topbar { -webkit-app-region: drag; }
-      html[data-qm-desktop="darwin"] .dv-tabs-and-actions-container :is(button, a, input, [role="tab"], .dv-tab),
+      html[data-qm-desktop="darwin"] .dv-tabs-and-actions-container :is(button, a, input, [role="tab"], .dv-tab, .dv-right-actions-container),
       html[data-qm-desktop="darwin"] .chat-topbar :is(button, a, input, [role="tab"]) {
         -webkit-app-region: no-drag;
       }
