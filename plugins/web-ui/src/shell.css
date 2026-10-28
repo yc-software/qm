@@ -8055,7 +8055,7 @@ h3.ambient-field-label {
 }
 
 .split-canvas:not(.single-pane) .chat-scroll.user-scrolling {
-  scrollbar-color: var(--muted-foreground) transparent;
+  scrollbar-color: var(--color-border) transparent;
 }
 
 .split-canvas:not(.single-pane) .custom-chat-shell > .chat-bottom-dock {
