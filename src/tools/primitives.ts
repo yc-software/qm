@@ -82,7 +82,6 @@ import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-
 import type { Cron, Webhook } from "../types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
-import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";
 
 export interface PublishInput {
   dir?: string;
@@ -239,7 +238,6 @@ export interface ToolContext extends SurfaceToolDeps {
   write(path: string, data: string, sandboxId?: string): Promise<void>;
   publish(input: PublishInput): Promise<PublishResult>;
   setDeploymentPublic(id: string, isPublic: boolean): Promise<{ id: string; name?: string; public: boolean }>;
-  createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact>;
   memorySearch(q: string, limit?: number, scope?: ScopeId): Promise<string[] | null>;
   memoryRead(scope?: ScopeId): Promise<string | null>;
   memoryAdd(facts: string[]): Promise<number | null>;
@@ -1028,17 +1026,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         }
         return { content: null, sourceScopeId: null };
       });
-    },
-
-    async createPlayground(input: { title: string; html: string }): Promise<PlaygroundArtifact> {
-      if (!deps.files || !writableScopeId) throw new Error("playgrounds require a writable artifact store");
-      return once(() =>
-        createPlaygroundArtifact(deps.files!, {
-          ...input,
-          ownerScopeId: writableScopeId,
-          createdBy: deps.createdBy,
-        }),
-      );
     },
 
     async listSkills(query = "", offset = 0, limit = 50, source?: string) {

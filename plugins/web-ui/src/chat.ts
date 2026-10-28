@@ -20,7 +20,6 @@ import {
   sessionPresentation,
 } from "./activity-presentation";
 import { dismissGeneratedActivity, loadGeneratedActivities } from "./generated-activities";
-import { playgroundPath, playgroundsIn, type PlaygroundArtifact } from "./playground";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Attachment } from "@earendil-works/pi-web-ui";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -45,7 +44,6 @@ import {
   Clock3,
   Copy,
   FileImage,
-  FileText,
   Files,
   GitFork,
   Link2,
@@ -2252,27 +2250,6 @@ export function createChatSurface(
     return connectorCard(link, connectedConnectors.has(link.provider), withReturnTo);
   }
 
-  function playgroundCard(playground: PlaygroundArtifact): TemplateResult {
-    const src = withBase(playgroundPath(playground.artifactId));
-    const source = withBase(playgroundPath(playground.artifactId, true));
-    return html`<section class="playground-card">
-      <header class="playground-header">
-        <span class="playground-title">${icon(Rocket, 16)}<strong>${playground.title}</strong></span>
-        <nav class="playground-actions" aria-label="Playground actions">
-          <a href=${source} target="_blank" rel="noreferrer">${icon(FileText, 14)} Source</a>
-          <a href=${src} target="_blank" rel="noreferrer">${icon(Maximize2, 14)} Open</a>
-        </nav>
-      </header>
-      <iframe
-        class="playground-frame"
-        src=${src}
-        title=${playground.title}
-        sandbox="allow-scripts allow-forms allow-pointer-lock"
-        referrerpolicy="no-referrer"
-      ></iframe>
-    </section>`;
-  }
-
   function isReadOnlySlackView(): boolean {
     return !chatState.agent && chatState.forkSession !== null && surfaceOf(chatState.forkSession) === "slack";
   }
@@ -2348,9 +2325,6 @@ export function createChatSurface(
           </details>`,
         );
       }
-    }
-    for (const playground of playgroundsIn((message as AssistantWork).work?.activity)) {
-      parts.push(playgroundCard(playground));
     }
     return parts;
   }

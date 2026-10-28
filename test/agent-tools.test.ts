@@ -58,9 +58,6 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
     async setDeploymentPublic(id, isPublic) {
       return { id, name: id, public: isPublic };
     },
-    async createPlayground(input) {
-      return { kind: "playground", artifactId: "playground-1", title: input.title };
-    },
     async memorySearch(q) {
       return q.includes("billing") ? ["(2026-05-31) Owns the billing service"] : [];
     },
@@ -375,15 +372,6 @@ const call = (tool: ReturnType<typeof createAgentTools>[number] | undefined, par
   assert.ok(tool);
   return (tool.execute as unknown as (id: string, p: unknown) => Promise<unknown>)("t", params);
 };
-
-test("miniapp stays unavailable while playground rendering is deferred", () => {
-  for (const surfaceName of [undefined, "web", "slack"]) {
-    assert.equal(
-      createAgentTools({ current: fakeToolContext() }, { surfaceName }).some((tool) => tool.name === "miniapp"),
-      false,
-    );
-  }
-});
 
 test("each agent tool emits a tool_call then a tool_result", async () => {
   const emitted: Emitted[] = [];
