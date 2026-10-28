@@ -175,10 +175,19 @@ export function syncUrlFromState(sessionOverride?: string | null, historyMode: "
   else history.replaceState(null, "", next);
 }
 
+function openViewAt(view: View, item: string | null, historyMode: "push" | "replace"): void {
+  if (view === "deploys" && item) openDeployById(item);
+  if (view === "crons" && item) openCronById(item);
+  if (view === "webhooks" && item) openWebhookById(item);
+  if (view === "skills" && item) openSkillById(item);
+  switchView(view, historyMode);
+  if (view === "inbox") routeInboxHistory(item);
+}
+
 async function restoreChatsEntry(sessionId: string | null): Promise<void> {
   if (!sessionId) {
     if (appState.currentView !== "chats") switchView("chats", "replace");
-    else if (splitState.active ? singlePaneSessionId() : mainConversation().state.sessionId) openNewChat(null, null);
+    if (splitState.active ? singlePaneSessionId() : mainConversation().state.sessionId) openNewChat(null, null);
     return;
   }
   const conversation = focusedPaneConversation() ?? mainConversation();
@@ -1019,7 +1028,7 @@ window.addEventListener("popstate", () => {
     else routeInboxHistory(item);
     return;
   }
-  if (view !== "chats") switchView(view, "replace");
+  if (view !== "chats") openViewAt(view, item, "replace");
   else void restoreChatsEntry(session);
 });
 
@@ -1226,12 +1235,7 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
-    if (wanted === "deploys" && wantedItem) openDeployById(wantedItem);
-    if (wanted === "crons" && wantedItem) openCronById(wantedItem);
-    if (wanted === "webhooks" && wantedItem) openWebhookById(wantedItem);
-    if (wanted === "skills" && wantedItem) openSkillById(wantedItem);
-    switchView(wanted as View);
-    if (wanted === "inbox") routeInboxHistory(wantedItem);
+    openViewAt(wanted as View, wantedItem, "push");
     return;
   }
 

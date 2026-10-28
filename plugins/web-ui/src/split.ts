@@ -400,7 +400,7 @@ onPhoneChange((phone) => {
     syncDocumentTitle();
     renderSidebarTop();
     if (appState.currentView !== "chats") return;
-    if (focused) void openSession(focused);
+    if (focused) void openSession(focused, undefined, undefined, "replace");
     else mainConversation().newChat();
     return;
   }
