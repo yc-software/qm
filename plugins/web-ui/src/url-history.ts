@@ -1,19 +1,21 @@
-let pending: { destination: string | null } | null = null;
+let pending: object | null = null;
 
-export function navigateNext(destination: string | null = null): void {
-  pending = { destination };
+export function beginNavigation(): object {
+  const token = {};
+  pending = token;
+  return token;
 }
 
-export function historyWrite(current: string, next: string): "push" | "replace" | "skip" | "none" {
-  if (pending?.destination && next !== pending.destination) return "skip";
-  const push = pending !== null;
-  pending = null;
-  if (current === next) return "none";
-  return push ? "push" : "replace";
-}
-
-export function abandonNavigation(destination: string | null): boolean {
-  if (pending?.destination !== destination) return false;
+export function endNavigation(token: object): boolean {
+  if (pending !== token) return false;
   pending = null;
   return true;
+}
+
+export function cancelNavigation(): void {
+  pending = null;
+}
+
+export function navigationInFlight(): boolean {
+  return pending !== null;
 }

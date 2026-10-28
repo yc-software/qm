@@ -100,7 +100,7 @@ import {
 import { groupDmLabel, groupDmText } from "./group-dm-label";
 import { transcriptModel } from "./model-options";
 import { appState, closeSidebarOnNarrowView, renderSidebarTop, syncDocumentTitle, syncUrlFromState } from "./shell";
-import { abandonNavigation, navigateNext } from "./url-history";
+import { beginNavigation, endNavigation } from "./url-history";
 import { allConversations, isLiveConversation, mainConversation } from "./conversations";
 import type { Conversation } from "./conv-types";
 import {
@@ -533,13 +533,11 @@ export function startNewChat(
   threadRef?: string,
 ): Conversation | null {
   closeSidebarOnNarrowView();
-  const shown = (focusedPaneConversation() ?? mainConversation()).state.sessionId;
-  const destination = deepLinkPath(UI_BASE, "chats", null);
-  if (appState.currentView !== "chats" || shown) navigateNext(destination);
+  const navigation = beginNavigation();
   try {
     return openNewChat(scopeId, name, threadRef);
   } finally {
-    if (abandonNavigation(destination)) syncUrlFromState();
+    if (endNavigation(navigation)) syncUrlFromState(undefined, "push");
   }
 }
 
@@ -1905,13 +1903,11 @@ export async function openSession(
 ): Promise<void> {
   if (pendingForkThreads.has(s.threadRef)) return;
   if (keptUnreadId !== s.id) keptUnreadId = null;
-  const shown = (focusedPaneConversation() ?? mainConversation()).state.sessionId;
-  const destination = deepLinkPath(UI_BASE, "chats", s.id || null);
-  if (historyMode === "push" && (appState.currentView !== "chats" || shown !== s.id)) navigateNext(destination);
+  const navigation = historyMode === "push" ? beginNavigation() : null;
   try {
     await showSession(s, entriesPrefetch, approvalsPrefetch);
   } finally {
-    if (abandonNavigation(destination)) syncUrlFromState();
+    if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
   }
 }
 

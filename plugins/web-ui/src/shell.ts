@@ -50,7 +50,7 @@ import { seedRuntimeConfig } from "./runtime-config-store";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
 import { brandMark, brandName } from "./ui";
 import { desktopHistoryNav } from "./desktop-history";
-import { historyWrite, navigateNext } from "./url-history";
+import { beginNavigation, cancelNavigation, endNavigation, navigationInFlight } from "./url-history";
 import { icon } from "./icons";
 import { PHONE_MAX_WIDTH, trackVisualViewport } from "./viewport";
 import { markConnectorConnected } from "./chat";
@@ -160,7 +160,8 @@ export const ADMIN_BASE = (() => {
 })();
 export const ADMIN_HOME_URL = `${ADMIN_BASE}/`;
 
-export function syncUrlFromState(sessionOverride?: string | null): void {
+export function syncUrlFromState(sessionOverride?: string | null, historyMode: "push" | "replace" = "replace"): void {
+  if (navigationInFlight()) return;
   const chatState = mainConversation().state;
   const fromState =
     sessionOverride !== undefined ? sessionOverride : (chatState.sessionId ?? chatState.rememberedSessionId);
@@ -169,9 +170,9 @@ export function syncUrlFromState(sessionOverride?: string | null): void {
   const linked = parseDeepLink(UI_BASE, location.pathname, location.search);
   const seq = messageLinkSeq(location.search);
   if (appState.currentView === "chats" && linked.session === sessionId && seq !== null) next += `?seq=${seq}`;
-  const write = historyWrite(`${location.pathname}${location.search}`, next);
-  if (write === "push") history.pushState(null, "", next);
-  else if (write === "replace") history.replaceState(null, "", next);
+  if (`${location.pathname}${location.search}` === next) return;
+  if (historyMode === "push") history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
 }
 
 async function restoreChatsEntry(sessionId: string | null): Promise<void> {
@@ -711,13 +712,21 @@ function onNavClick(e: Event): void {
 }
 
 export function switchView(v: View, historyMode: "push" | "replace" = "push"): void {
+  const navigation = historyMode === "push" ? beginNavigation() : null;
+  try {
+    showView(v);
+  } finally {
+    if (navigation && endNavigation(navigation)) syncUrlFromState(undefined, "push");
+  }
+}
+
+function showView(v: View): void {
   if (!canView(v)) v = "chats";
   closeSidebarOnNarrowView();
   if (appState.currentView === v) {
     refreshActiveView(v);
     return;
   }
-  if (historyMode === "push") navigateNext();
   appState.currentView = v;
   capturePageview(v);
   appState.viewRenderSeq++;
@@ -999,6 +1008,7 @@ export function replacePanePreservingFocus(host: HTMLElement): void {
 
 window.addEventListener("popstate", () => {
   if (!appState.me) return;
+  cancelNavigation();
   const routed = ["crons", "webhooks", "inbox", "skills"];
   const { view: linkedView, session, item } = parseDeepLink(UI_BASE, location.pathname, location.search);
   const view = isView(linkedView) ? linkedView : "chats";
