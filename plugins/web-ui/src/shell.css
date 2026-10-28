@@ -2872,12 +2872,12 @@ qm-markdown .tok-in {
 }
 .work-thinking > .work-head .work-step-label > .sheen-label,
 .work-working > .work-head .work-step-label > .sheen-label,
-.work-thinking > .work-head .work-step-enter-fade .tool-icon:not(.work-step-out),
-.work-working > .work-head .work-step-enter-fade .tool-icon:not(.work-step-out) {
+.work-thinking > .work-head .work-step-enter-fade .tool-icon,
+.work-working > .work-head .work-step-enter-fade .tool-icon {
   animation: work-step-in 420ms ease-out both;
 }
-.work-thinking > .work-head .work-step-enter-roll .tool-icon:not(.work-step-out),
-.work-working > .work-head .work-step-enter-roll .tool-icon:not(.work-step-out) {
+.work-thinking > .work-head .work-step-enter-roll .tool-icon,
+.work-working > .work-head .work-step-enter-roll .tool-icon {
   animation: work-icon-in 328ms cubic-bezier(0.2, 0.7, 0.2, 1) 92ms both;
 }
 .work-head .work-step-label .work-step-out {
