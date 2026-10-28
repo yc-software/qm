@@ -2131,12 +2131,20 @@ export function createChatSurface(
           (msg as AssistantWork).streamingBaseline ?? "",
         );
       }
+      const preStep =
+        isStreaming &&
+        !showWork &&
+        runSlot.stopGeneration !== runSlot.generation &&
+        (chatState.liveWork ?? work) === work &&
+        preStepWork(work, text);
+      if (preStep) workView = preStepHead(work);
       if (msg.stopReason === "aborted") {
         workView = work ? workBlock(work, false, "", "", true) : html`<div class="stopped-head">You stopped</div>`;
       }
       const deliveredFiles = (msg as AssistantWork).deliveredFiles;
       const hasVisibleContent =
         showWork ||
+        preStep ||
         steeringOnly.length > 0 ||
         hasText ||
         Boolean(deliveredFiles?.length) ||
@@ -2957,6 +2965,9 @@ export function createChatSurface(
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
+    const streaming = agent.state.streamingMessage as AssistantWork | undefined;
+    if (streaming && streaming.work === work && preStepWork(work, messageText(streaming as AssistantMessage)))
+      return nothing;
     const summary = liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
@@ -3052,6 +3063,55 @@ export function createChatSurface(
     return workedLabel(work.status === "working" ? "Working" : "Worked", secs);
   }
 
+  /** The one-line work summary: step icon + label (crossfading from the previous step), timer, chevron. */
+  function stepLine(
+    step: { icon: IconNode; label: string } | null,
+    label: string,
+    animating: boolean,
+    elapsed: string,
+  ): TemplateResult {
+    return html`<span class="work-step-slot"
+        >${
+          step && fadingStep
+            ? html`<span class="work-step work-step-out" aria-hidden="true"
+                ><span class="tool-icon">${icon(fadingStep.icon, 15)}</span>${fadingStep.label}</span
+              >`
+            : nothing
+        }${keyed(
+          label,
+          html`<span class="work-step" ${ref(easeStepWidth)}
+            >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(label, animating)}</span
+          >`,
+        )}</span
+      >${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span class="activity-chevron"
+        >${icon(ChevronRight, 14)}</span
+      >`;
+  }
+
+  /** True while a live turn has produced no step yet: the "Thinking" line stands in for the work block. */
+  function preStepWork(work: WorkBlock | null | undefined, text: string): work is WorkBlock {
+    return Boolean(
+      work &&
+      (work.status === "thinking" || work.status === "working") &&
+      !work.stale &&
+      !work.pendingApprovals?.length &&
+      !text.trim() &&
+      currentTextPhase(work)?.phase !== "final_answer" &&
+      messageWorkTimeline(work, "").length === 0,
+    );
+  }
+
+  function preStepHead(work: WorkBlock): TemplateResult {
+    const step = { icon: Brain, label: "Thinking" };
+    trackLiveStep(step);
+    const secs = workSeconds(work);
+    return html`<details class="work work-fold work-${work.status} work-prestep">
+      <summary class="work-head">
+        ${stepLine(step, step.label, true, secs > 0 ? goalElapsedLabel(0, secs * 1000) : "")}
+      </summary>
+    </details>`;
+  }
+
   function currentStep(timeline: TimelineItem[], work: WorkBlock): { icon: IconNode; label: string } | null {
     // The newest item names the step; a finished tool keeps its name until the next one starts,
     // so the line changes only when something new begins.
@@ -3122,6 +3182,7 @@ export function createChatSurface(
       if (
         timeline.length === 1 &&
         !tail.trim() &&
+        !oneStep &&
         !(last && (stopped || stopping || work.stale || work.pendingApprovals?.length))
       )
         return html`${renderTimelineItem(timeline[0]!, work)}${replies.map((reply) => html`<div class="streaming-text" dir="auto">${markdown(reply)}</div>`)}`;
@@ -3135,22 +3196,7 @@ export function createChatSurface(
               }}
             >
               <summary class=${stopped && last ? "stopped-head" : "work-head"}>
-                <span class="work-step-slot"
-                  >${
-                    step && fadingStep && last
-                      ? html`<span class="work-step work-step-out" aria-hidden="true"
-                          ><span class="tool-icon">${icon(fadingStep.icon, 15)}</span>${fadingStep.label}</span
-                        >`
-                      : nothing
-                  }${keyed(
-                    label,
-                    html`<span class="work-step" ${ref(easeStepWidth)}
-                      >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(label, animating)}</span
-                    >`,
-                  )}</span
-                >${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span class="activity-chevron"
-                  >${icon(ChevronRight, 14)}</span
-                >
+                ${stepLine(step && last ? step : null, label, animating, elapsed)}
               </summary>
               ${stopped && last ? nothing : html`<div class="work-divider"></div>`}
               <div class="work-rows">

@@ -2714,6 +2714,15 @@ qm-markdown .tok-in {
   color: color-mix(in srgb, var(--muted-foreground) 70%, transparent);
   font-variant-numeric: tabular-nums;
 }
+.work-prestep > .work-head {
+  cursor: default;
+}
+.work-prestep > .work-head .activity-chevron {
+  visibility: hidden;
+}
+.work-working:not(.work-prestep) > .work-head .activity-chevron {
+  animation: work-step-in 420ms ease-out both;
+}
 .work-head .work-step-slot {
   position: relative;
   display: inline-flex;
