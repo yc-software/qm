@@ -29,7 +29,7 @@ test(
     await base.capture(scope, ["original browser preference"], Date.now());
     const facts = await base.facts!(scope);
     await write(index, scope, facts);
-    const search = () => index.search({ scope, model: "test-v1", vector: [1, 0], ids: ids(facts) });
+    const search = () => index.search({ scope, model: "test-v1", vector: [1, 0], ids: ids(facts), limit: 10 });
     assert.equal((await search())[0]!.factId, facts[0]!.id);
     const secondIndex = createPostgresVectorStore(url!);
     t.after(() => secondIndex.close());
@@ -62,6 +62,7 @@ test(
       model: "test-v1",
       vector: [1, 0],
       ids: ids(revised),
+      limit: 10,
       minSimilarity: 0.9,
     });
     assert.deepEqual(
@@ -70,10 +71,13 @@ test(
     );
     assert.ok(Math.abs(unindexed[0]!.score - 0.2) < 1e-9);
     await write(index, scope, revised);
-    assert.equal((await index.search({ scope, model: "test-v1", vector: [1, 0], ids: ids(revised) }))[0]!.score, 1);
+    assert.equal(
+      (await index.search({ scope, model: "test-v1", vector: [1, 0], ids: ids(revised), limit: 10 }))[0]!.score,
+      1,
+    );
     await base.delete!(scope, [facts[0]!.id]);
     assert.deepEqual(await search(), []);
-    assert.deepEqual(await index.search({ scope, model: "test-v1", vector: [1, 0], ids: ids(revised) }), []);
+    assert.deepEqual(await index.search({ scope, model: "test-v1", vector: [1, 0], ids: ids(revised), limit: 10 }), []);
     assert.deepEqual(await memory.recall(scope, { query: "verify" }), []);
     assert.ok(!(await index.missing("test-v1", 256)).some((row) => row.factId === facts[0]!.id));
   },
@@ -89,10 +93,10 @@ test("native cosine returns one stable ranking and excludes other scopes/models"
   await write(index, scope, facts, "rank-model", () => [3, 4]);
   await write(index, scope, facts, "other-model", () => [1, 0]);
   await write(index, "personal:other", facts, "rank-model", () => [1, 0]);
-  const ranked = await index.search({ scope, model: "rank-model", vector: [2, 0], ids: ids(facts) });
+  const ranked = await index.search({ scope, model: "rank-model", vector: [2, 0], ids: ids(facts), limit: 10 });
   assert.ok(ranked.every((row) => Math.abs(row.score - 0.6) < 1e-6));
   assert.deepEqual(
-    await index.search({ scope, model: "rank-model", vector: [2, 0], ids: ids(facts), minSimilarity: 0.9 }),
+    await index.search({ scope, model: "rank-model", vector: [2, 0], ids: ids(facts), limit: 10, minSimilarity: 0.9 }),
     [],
   );
   assert.deepEqual(
@@ -111,7 +115,7 @@ test("model and dimension drift fall back until reindexed", { skip: !url }, asyn
   const wide = [1, 0, 0];
   await write(index, scope, facts, "wide-model", () => wide);
   const unindexedScore = async (model: string, vector: number[]) => {
-    const rows = await index.search({ scope, model, vector, ids: ids(facts) });
+    const rows = await index.search({ scope, model, vector, ids: ids(facts), limit: 10 });
     return rows.length === 1 && Math.abs(rows[0]!.score - 0.2) < 1e-9;
   };
   assert.ok(await unindexedScore("wide-model", [1, 0]));
@@ -125,7 +129,10 @@ test("model and dimension drift fall back until reindexed", { skip: !url }, asyn
     !(await index.missing("wide-model", 256, 2, undefined, facts[0]!.id)).some((row) => row.factId === facts[0]!.id),
   );
   await write(index, scope, facts, "wide-model", () => [1, 0]);
-  assert.equal((await index.search({ scope, model: "wide-model", vector: [1, 0], ids: ids(facts) }))[0]!.score, 1);
+  assert.equal(
+    (await index.search({ scope, model: "wide-model", vector: [1, 0], ids: ids(facts), limit: 10 }))[0]!.score,
+    1,
+  );
   await assert.rejects(
     index.put([{ scope, model: "wide-model", factId: facts[0]!.id, hash: factHash(facts[0]!.text), vector: [0, 0] }]),
     /Invalid memory embedding/,
@@ -248,7 +255,7 @@ test(
     );
     await write(index, scope, edited, "hash-model", (fact) => (fact.text.startsWith("third") ? [1, 0] : [1, 1]));
     const search = (wanted: readonly MemoryFact[]) =>
-      index.search({ scope, model: "hash-model", vector: [1, 0], ids: ids(wanted) });
+      index.search({ scope, model: "hash-model", vector: [1, 0], ids: ids(wanted), limit: 10 });
     const ranked = await search(edited);
     assert.equal(ranked[0]!.factId, edited[2]!.id);
     assert.equal(ranked[0]!.updatedAt, edited[2]!.updatedAt);
@@ -262,3 +269,78 @@ test(
     );
   },
 );
+
+test("search returns the nearest facts within the limit and follows re-embedded vectors", { skip: !url }, async (t) => {
+  const scope = `personal:sketch-${randomUUID()}`;
+  const base = createPostgresMemoryService(url!);
+  const index = createPostgresVectorStore(url!);
+  t.after(() => index.close());
+  await base.capture(
+    scope,
+    Array.from({ length: 12 }, (_, i) => `sketch fact ${i}`),
+    1000,
+  );
+  const facts = await base.facts!(scope);
+  const target = facts.at(-1)!;
+  await write(index, scope, facts, "sketch-model", () => [0.5, 1, 1]);
+  const search = () => index.search({ scope, model: "sketch-model", vector: [1, 0, 0], ids: ids(facts), limit: 2 });
+  const before = await search();
+  assert.equal(before.length, 2);
+  assert.ok(before.every((row) => Math.abs(row.score - 1 / 3) < 1e-6));
+  await write(index, scope, [target], "sketch-model", () => [1, -0.1, -0.1]);
+  const after = await search();
+  assert.equal(after.length, 2);
+  assert.equal(after[0]!.factId, target.id);
+  assert.ok(after[0]!.score > 0.98);
+  assert.ok(Math.abs(after[1]!.score - 1 / 3) < 1e-6);
+});
+
+test("vectors stored before the sketch column are backfilled and ranked", { skip: !url }, async (t) => {
+  const admin = new pg.Client({ connectionString: url! });
+  await admin.connect();
+  const name = `memory_sketch_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE DATABASE ${name}`);
+  const fresh = new URL(url!);
+  fresh.pathname = `/${name}`;
+  const client = new pg.Client({ connectionString: fresh.toString() });
+  const index = createPostgresVectorStore(fresh.toString());
+  t.after(async () => {
+    await index.close();
+    await client.end();
+    await admin.query(`DROP DATABASE ${name} WITH (FORCE)`);
+    await admin.end();
+  });
+  const scope = "personal:legacy-vectors";
+  const base = createPostgresMemoryService(fresh.toString());
+  await base.capture(
+    scope,
+    Array.from({ length: 12 }, (_, i) => `legacy fact ${i}`),
+    1000,
+  );
+  const facts = await base.facts!(scope);
+  const target = facts.at(-1)!;
+  await client.connect();
+  await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+  await client.query(`CREATE TABLE memory_fact_vectors (
+    scope_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    fact_id BIGINT NOT NULL,
+    fact_hash TEXT NOT NULL,
+    dimensions INTEGER NOT NULL CHECK (dimensions BETWEEN 1 AND 16000),
+    embedding vector NOT NULL,
+    PRIMARY KEY (scope_id, model, fact_id),
+    CHECK (vector_dims(embedding) = dimensions)
+  )`);
+  await client.query(
+    `INSERT INTO memory_fact_vectors(scope_id, model, fact_id, fact_hash, dimensions, embedding)
+     SELECT scope_id, 'legacy-model', id, text_hash, 3,
+       CASE WHEN id = $2 THEN '[1,-0.1,-0.1]' ELSE '[0.5,1,1]' END::vector
+     FROM memory_facts WHERE scope_id = $1`,
+    [scope, target.id],
+  );
+  const rows = await index.search({ scope, model: "legacy-model", vector: [1, 0, 0], ids: ids(facts), limit: 1 });
+  assert.deepEqual(
+    rows.map((row) => row.factId),
+    [target.id],
+  );
+});

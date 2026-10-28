@@ -5,6 +5,8 @@ import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 import { disclosedMemory } from "./disclosure.ts";
 
+const RECALL_LIMIT = 100;
+
 export function memoryRecallQuery(message: string, visibleItems: readonly Item[]): string {
   const recent = visibleItems
     .filter((item) => isUserItem(item) || isAgentReply(item))
@@ -55,6 +57,7 @@ export function createSemanticMemoryService(
               scope,
               ...query,
               ids: facts.map((fact) => fact.id),
+              limit: RECALL_LIMIT,
               minSimilarity: opts.minSimilarity,
             });
             return matches.flatMap((match) => {

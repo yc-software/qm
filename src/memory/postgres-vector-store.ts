@@ -21,6 +21,7 @@ interface MemoryVectorSearch {
   model: string;
   vector: number[];
   ids: readonly string[];
+  limit: number;
   minSimilarity?: number;
 }
 
@@ -65,6 +66,28 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
     ...MEMORY_FACTS_MIGRATIONS,
     { id: "memory/vectors/0001-extension", statements: ["CREATE EXTENSION IF NOT EXISTS vector"] },
     { id: "memory/vectors/0002", statements: SCHEMA },
+    {
+      id: "memory/vectors/0003-sketch",
+      statements: [
+        "SET LOCAL lock_timeout = '3s'",
+        "ALTER TABLE memory_fact_vectors ADD COLUMN IF NOT EXISTS embedding_bits BIT VARYING",
+        `CREATE OR REPLACE FUNCTION memory_fact_vectors_bits() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          NEW.embedding_bits := binary_quantize(NEW.embedding);
+          RETURN NEW;
+        END $$`,
+        "DROP TRIGGER IF EXISTS memory_fact_vectors_bits ON memory_fact_vectors",
+        `CREATE TRIGGER memory_fact_vectors_bits BEFORE INSERT OR UPDATE OF embedding ON memory_fact_vectors
+          FOR EACH ROW EXECUTE FUNCTION memory_fact_vectors_bits()`,
+      ],
+    },
+    {
+      id: "memory/vectors/0004-sketch-backfill",
+      statements: [
+        "UPDATE memory_fact_vectors SET embedding_bits = binary_quantize(embedding) WHERE embedding_bits IS NULL",
+        "ALTER TABLE memory_fact_vectors ALTER COLUMN embedding_bits SET NOT NULL",
+      ],
+    },
   ]);
   return {
     async search(input) {
@@ -72,16 +95,28 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
       const vector = unitVector(input.vector);
       const minSimilarity = input.minSimilarity ?? 0.2;
       const rows = await db.q(
-        `SELECT id, updated_at, distance FROM (
-          SELECT f.id, f.updated_at, f.created_at, v.fact_hash IS DISTINCT FROM f.text_hash AS unindexed,
-            CASE WHEN v.fact_hash = f.text_hash THEN v.embedding <=> $4::vector ELSE $6::double precision END AS distance
+        `WITH sketches AS MATERIALIZED (
+          SELECT fact_id, fact_hash, embedding_bits <~> binary_quantize($4::vector) AS approx
+          FROM memory_fact_vectors
+          WHERE scope_id = $1 AND model = $2 AND dimensions = $3
+        ),
+        candidates AS (
+          SELECT f.id, f.updated_at, f.created_at, s.fact_id IS NULL AS unindexed
           FROM memory_facts f
-          LEFT JOIN memory_fact_vectors v ON v.scope_id = f.scope_id AND v.model = $2 AND v.dimensions = $3
-            AND v.fact_id = f.id
+          LEFT JOIN sketches s ON s.fact_id = f.id AND s.fact_hash = f.text_hash
           WHERE f.scope_id = $1 AND f.deleted_at IS NULL AND f.id = ANY($7::bigint[])
+          ORDER BY s.approx NULLS FIRST, f.id
+          LIMIT $8::integer * 4
+        )
+        SELECT id, updated_at, distance FROM (
+          SELECT c.id, c.updated_at, c.created_at, c.unindexed,
+            CASE WHEN c.unindexed THEN $6::double precision ELSE v.embedding <=> $4::vector END AS distance
+          FROM candidates c
+          LEFT JOIN memory_fact_vectors v ON NOT c.unindexed AND v.scope_id = $1 AND v.model = $2 AND v.fact_id = c.id
         ) ranked
         WHERE unindexed OR distance <= $5
-        ORDER BY distance, created_at DESC, id`,
+        ORDER BY distance, created_at DESC, id
+        LIMIT $8`,
         [
           input.scope,
           input.model,
@@ -90,6 +125,7 @@ export function createPostgresVectorStore(connectionString: string): MemoryVecto
           1 - minSimilarity,
           1 - Math.min(0.2, minSimilarity),
           input.ids,
+          batchSize(input.limit),
         ],
         { timeoutMs: 5000 },
       );
