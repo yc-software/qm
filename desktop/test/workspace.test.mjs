@@ -188,36 +188,18 @@ test("new-session commands reach the page unless a modal dialog is open", async 
   }
 });
 
-function appRegionRules(css) {
-  const rules = [];
-  const walk = (text, wide) => {
-    let i = 0;
-    while (i < text.length) {
-      const open = text.indexOf("{", i);
-      if (open === -1) return;
-      const head = text.slice(i, open).trim();
-      let depth = 1;
-      let j = open + 1;
-      for (; depth > 0; j++) depth += text[j] === "{" ? 1 : text[j] === "}" ? -1 : 0;
-      const body = text.slice(open + 1, j - 1);
-      if (head.startsWith("@media")) walk(body, !head.includes("max-width"));
-      else {
-        const region = /-webkit-app-region:\s*([\w-]+)/.exec(body)?.[1];
-        if (region && wide) rules.push({ selector: head, region });
-      }
-      i = j;
-    }
-  };
-  walk(css, true);
-  return rules;
-}
-
-function appRegion(rules, element) {
-  for (let node = element; node; node = node.parentElement) {
-    const match = rules.findLast((rule) => node.matches(rule.selector));
-    if (match) return match.region;
-  }
-  return "none";
+function useAppRegionAsCustomProperty(document) {
+  const styles = [...document.querySelectorAll("style")];
+  const probe = document.createElement("style");
+  probe.textContent = styles
+    .map((style) => style.textContent.replaceAll("-webkit-app-region", "--app-region"))
+    .join("\n");
+  document.head.append(probe);
+  const flat = [...probe.sheet.cssRules].flatMap((rule) => (rule.media ? [...rule.cssRules] : [rule]));
+  probe.textContent = flat.map((rule) => rule.cssText).join("\n");
+  for (const style of styles) style.remove();
+  return (selector) =>
+    document.defaultView.getComputedStyle(document.querySelector(selector)).getPropertyValue("--app-region").trim();
 }
 
 test("Mac pane strip controls stay outside the window drag region", async () => {
@@ -231,17 +213,15 @@ test("Mac pane strip controls stay outside the window drag region", async () => 
         <div class="dv-void-container"></div>
         <div class="dv-right-actions-container">
           <div class="dv-tabs-overflow-dropdown-root"><div class="dv-tabs-overflow-dropdown-default"><svg></svg><span>2</span></div></div>
-          <span class="split-pane-actions"><button class="split-tools-btn">Tools</button></span>
         </div>
       </div></div></div>`,
     );
-    const rules = appRegionRules([...document.querySelectorAll("style")].map((style) => style.textContent).join("\n"));
-    const region = (selector) => appRegion(rules, document.querySelector(selector));
+    const region = useAppRegionAsCustomProperty(document);
     assert.equal(region(".dv-void-container"), "drag");
     assert.equal(region(".dv-tab"), "no-drag");
     assert.equal(region(".dv-tabs-overflow-dropdown-default span"), "no-drag");
-    assert.equal(region(".dv-right-actions-container"), "no-drag");
-    assert.equal(region(".split-tools-btn"), "no-drag");
+    document.querySelector(".split-canvas").classList.add("single-pane");
+    assert.equal(region(".dv-tab"), "drag");
   } finally {
     app.close();
   }
