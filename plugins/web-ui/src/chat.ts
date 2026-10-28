@@ -445,11 +445,13 @@ export function createChatSurface(
   let fadingStep: { icon: IconNode; label: string } | null = null;
   let fadingTimer: ReturnType<typeof setTimeout> | null = null;
   let liveStepWidth = 0;
+  let liveStepWidthLabel: string | null = null;
   const STEP_FADE_MS = 420;
   function resetLiveStep(): void {
     liveStep = null;
     fadingStep = null;
     liveStepWidth = 0;
+    liveStepWidthLabel = null;
     if (fadingTimer) clearTimeout(fadingTimer);
     fadingTimer = null;
   }
@@ -478,8 +480,14 @@ export function createChatSurface(
     }
     if (!el.parentElement) return;
     const width = el.getBoundingClientRect().width;
+    const label = el.dataset.step ?? "";
     const from = liveStepWidth;
+    const fromLabel = liveStepWidthLabel;
     liveStepWidth = width;
+    liveStepWidthLabel = label;
+    // Ease only when the step itself changed: a re-render or remount of the same step, and the first
+    // step of a turn, must not animate from a stale width.
+    if (fromLabel === null || fromLabel === label) return;
     if (!from || !width || Math.abs(from - width) < 0.5) return;
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     el.parentElement.animate?.([{ width: `${from}px` }, { width: `${width}px` }], {
@@ -2136,7 +2144,8 @@ export function createChatSurface(
         !showWork &&
         runSlot.stopGeneration !== runSlot.generation &&
         (chatState.liveWork ?? work) === work &&
-        preStepWork(work, text);
+        preStepWork(work) &&
+        !text.trim();
       if (preStep) workView = preStepHead(work);
       if (msg.stopReason === "aborted") {
         workView = work ? workBlock(work, false, "", "", true) : html`<div class="stopped-head">You stopped</div>`;
@@ -2966,8 +2975,7 @@ export function createChatSurface(
     if (work.status !== "thinking" && work.status !== "working") return nothing;
     if (currentTextPhase(work)?.phase === "final_answer" || shouldShowWork(work, "")) return nothing;
     const streaming = agent.state.streamingMessage as AssistantWork | undefined;
-    if (streaming && streaming.work === work && preStepWork(work, messageText(streaming as AssistantMessage)))
-      return nothing;
+    if (streaming && streaming.work === work && preStepWork(work)) return nothing;
     const summary = liveWorkSummary(work);
     const expandable = Boolean(summary?.detail);
     const expanded = expandable && liveWorkExpanded;
@@ -3083,7 +3091,7 @@ export function createChatSurface(
             : nothing
         }${keyed(
           label,
-          html`<span class="work-step" ${ref(easeStepWidth)}
+          html`<span class="work-step" data-step=${label} ${ref(step ? easeStepWidth : undefined)}
             >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(
               label,
               animating && !step,
@@ -3095,15 +3103,17 @@ export function createChatSurface(
       >`;
   }
 
-  /** True while a live turn has produced no step yet: the "Thinking" line stands in for the work block. */
-  function preStepWork(work: WorkBlock | null | undefined, text: string): work is WorkBlock {
+  /**
+   * True while a live turn has produced no step yet. Until reply text arrives the "Thinking" line stands
+   * in for the work block; once a step-less reply streams, the text takes its place and no separate
+   * status line is drawn under it.
+   */
+  function preStepWork(work: WorkBlock | null | undefined): work is WorkBlock {
     return Boolean(
       work &&
       (work.status === "thinking" || work.status === "working") &&
       !work.stale &&
       !work.pendingApprovals?.length &&
-      !text.trim() &&
-      currentTextPhase(work)?.phase !== "final_answer" &&
       messageWorkTimeline(work, "").length === 0,
     );
   }

@@ -91,3 +91,75 @@ test("a live turn shows only the current step in a closed fold that remembers be
     await h.close();
   }
 });
+
+test("a step-less live turn draws one Thinking line that redraws of earlier work heads never animate", async () => {
+  const startedAt = Date.now() - 3_000;
+  const run = () => ({ status: "running", alive: true, startedAt, attempt: 1, activity: [], result: null });
+  const h = await harness({
+    path: `/s/${SESSION.id}`,
+    listSessions: [SESSION],
+    entries: [
+      { seq: 1, type: "user", createdAt: startedAt - 60_000, payload: { text: "check the tests" } },
+      {
+        seq: 2,
+        type: "tool_call",
+        createdAt: startedAt - 59_000,
+        payload: { tool: "execute", callId: "p1", command: "npm test", purpose: "Run the test suite" },
+      },
+      {
+        seq: 3,
+        type: "tool_result",
+        createdAt: startedAt - 50_000,
+        payload: { tool: "execute", callId: "p1", code: 0, result: "ok" },
+      },
+      {
+        seq: 31,
+        type: "tool_call",
+        createdAt: startedAt - 50_000,
+        payload: { tool: "files", action: "read", callId: "p2", path: "docs/plan.md" },
+      },
+      {
+        seq: 32,
+        type: "tool_result",
+        createdAt: startedAt - 49_500,
+        payload: { tool: "files", action: "read", callId: "p2", path: "docs/plan.md", bytes: 10 },
+      },
+      {
+        seq: 4,
+        type: "text",
+        createdAt: startedAt - 49_000,
+        payload: { text: "All green.", step: { stopReason: "stop" } },
+      },
+      { seq: 5, type: "user", createdAt: startedAt - 1000, payload: { text: "testing" } },
+    ],
+    api: (path) => {
+      if (path.includes("/api/runs/active")) return Response.json({ runId: "r1", run: run(), queued: [] });
+      if (path.startsWith("/api/runs/r1/events")) throw new TypeError("no sse");
+      if (path === "/api/runs/r1") return Response.json(run());
+      return undefined;
+    },
+  });
+  const animateBefore = Element.prototype.animate;
+  let animations = 0;
+  Element.prototype.animate = function () {
+    animations++;
+    return { cancel() {}, finished: Promise.resolve() } as unknown as Animation;
+  };
+  try {
+    h.releaseSessions();
+    await h.boot();
+    await h.sessionsReady();
+    const prestep = () => document.querySelector<HTMLElement>(".work-prestep .work-step");
+    await until(() => /Thinking/.test(prestep()?.textContent ?? ""));
+    assert.match(document.querySelector("details.work:not(.work-prestep) > summary")?.textContent ?? "", /Worked for/);
+    assert.equal(document.querySelector(".live-work-line"), null, "no second status line below the transcript");
+    for (let i = 0; i < 3; i++) {
+      h.visibleConversation().drawActiveChat();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    assert.equal(animations, 0, "redraws with an earlier finished work head do not animate the live line");
+  } finally {
+    Element.prototype.animate = animateBefore;
+    await h.close();
+  }
+});
