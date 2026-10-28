@@ -620,60 +620,42 @@ test("writes revalidate access even while a target is running", async () => {
   assert.deepEqual(await r.signals.takePending(run!.id), []);
 });
 
-test("completion cannot expand the finished run's audience and retries after its return delay", async (t) => {
-  const r = await rig();
+test("a finished child still reaches a parent whose audience grew while it ran", async () => {
+  let grown = false;
+  const prepareRequest = async (request: OrchestratorInput) =>
+    grown
+      ? {
+          ...request,
+          conversation: { ...request.conversation, audience: [actor, { id: "new-member", type: "internal" as const }] },
+        }
+      : request;
+  const r = await rig({ prepareRequest });
   const opened = await r.syscallsFor(r.room).open({ task: "private research" });
   assert.ok(opened.ok);
   const child = await freshSession(r.sessions, opened.sessionId);
+  const { lease } = await r.sessions.acquireLease(child.id);
+  const entry = await r.sessions.append(lease!, {
+    type: "assistant",
+    payload: { text: "private result" },
+    scopeLabel: scope,
+  });
+  await r.sessions.releaseLease(lease!);
   const [run] = await r.runs.inFlightForThread(child.threadRef);
   const claimed = await r.runs.claimById(run!.id, "worker", 60_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, { status: "ok", reply: "private result" });
-  let expanded = true;
-  let attempts = 0;
-  const recover = async () => {
-    for (const pending of await r.runs.pendingReturns()) {
-      attempts++;
-      try {
-        if (
-          await deliverSubagentMail(
-            {
-              mailbox: r.mailbox,
-              sessions: r.sessions,
-              runs: r.runs,
-              maxAttempts: 3,
-              prepareRequest: async (request) => ({
-                ...request,
-                conversation: {
-                  ...request.conversation,
-                  audience: expanded ? [actor, { id: "new-member", type: "internal" }] : [actor],
-                },
-              }),
-            },
-            pending,
-          )
-        )
-          await r.runs.markReturned(pending.id);
-      } catch (error) {
-        await r.runs.deferReturn(pending.id, 60_000);
-        throw error;
-      }
-    }
-  };
-  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
-  await assert.rejects(recover(), /audience/);
-  assert.deepEqual(await r.runs.inFlightForThread(r.room.threadRef), []);
-  assert.deepEqual(await r.mailbox.pending(r.room.id), []);
-  expanded = false;
-  for (let i = 0; i < 59; i++) {
-    t.mock.timers.tick(1_000);
-    await recover();
-  }
-  assert.equal(attempts, 1);
-  t.mock.timers.tick(1_000);
-  await recover();
-  assert.equal(attempts, 2);
-  assert.equal((await r.mailbox.pending(r.room.id)).length, 1);
+  await r.runs.complete(run!.id, claimed!.leaseToken!, {
+    status: "ok",
+    reply: "private result",
+    sourceAssistantEntrySeq: entry.seq,
+  });
+  grown = true;
+  await deliverSubagentMail(
+    { mailbox: r.mailbox, sessions: r.sessions, runs: r.runs, maxAttempts: 3, prepareRequest },
+    (await r.runs.get(run!.id))!,
+  );
   assert.ok(await r.runs.getByDedupKey(`subagent-return:${run!.id}`));
+  const received = await r.syscallsFor(r.room).receive!();
+  assert.equal(received.length, 1);
+  assert.match(received[0]!.text, /private result/);
 });
 
 test("private session replies stay read-only, queue behind running work, and do not return to a parent", async () => {
@@ -846,7 +828,6 @@ test("mailbox survives recreation and rejects acknowledgements for another recip
     senderId: "sender",
     recipientId: "recipient",
     actor,
-    audience: [actor],
     text: "data",
     createdAt: 1,
   };
@@ -875,48 +856,6 @@ test("wait is cancelled and disabled actors cannot open or send", async () => {
   enabled = false;
   assert.equal((await api.open({ task: "forbidden" })).ok, false);
   assert.equal((await api.write({ target: "any", text: "forbidden" })).ok, false);
-});
-
-test("queued results recheck source-entry visibility after participant tenure changes", async () => {
-  const r = await rig();
-  const other: Principal = { id: "U2", type: "internal" };
-  const sharedScope = scopeId("group", "G1");
-  const shared = await r.sessions.getOrCreateByThread("group:G1:mail-tenure", "group", sharedScope);
-  for (const id of [actor.id, other.id]) await r.sessions.addParticipant(shared.id, id);
-  const sharedConversation: Conversation = { kind: "group", threadRef: shared.threadRef, audience: [actor, other] };
-  const factory = createSessionSyscalls({ ...r, maxAttempts: 3 });
-  const api = factory.forTurn({
-    session: shared,
-    scopeId: sharedScope,
-    request: { actor, conversation: sharedConversation },
-  });
-  const opened = await api.open({ task: "shared result" });
-  assert.ok(opened.ok);
-  const child = await freshSession(r.sessions, opened.sessionId);
-  const { lease } = await r.sessions.acquireLease(child.id);
-  const entry = await r.sessions.append(lease!, {
-    type: "assistant",
-    payload: { text: "OLD_PRIVATE_RESULT" },
-    scopeLabel: sharedScope,
-  });
-  await r.sessions.releaseLease(lease!);
-  const [run] = await r.runs.inFlightForThread(child.threadRef);
-  const claimed = await r.runs.claimById(run!.id, "child-worker", 30_000);
-  await r.runs.complete(run!.id, claimed!.leaseToken!, {
-    status: "ok",
-    reply: "OLD_PRIVATE_RESULT",
-    sourceAssistantEntrySeq: entry.seq,
-  });
-  await deliverSubagentMail(
-    { sessions: r.sessions, runs: r.runs, mailbox: r.mailbox, maxAttempts: 3 },
-    (await r.runs.get(run!.id))!,
-  );
-  assert.equal((await api.receive!()).length, 1);
-  await r.sessions.removeParticipant(child.id, other.id);
-  await r.sessions.addParticipant(child.id, other.id);
-  assert.equal((await r.sessions.visibleEntries(child.id, other.id)).length, 0);
-  assert.deepEqual(await api.receive!(), []);
-  assert.equal((await r.mailbox.pending(shared.id)).length, 1);
 });
 
 test("enabled coordinators and their children can delegate", async () => {

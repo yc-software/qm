@@ -241,7 +241,6 @@ export interface SessionSyscallDeps {
     | "addParticipant"
     | "updateTitle"
     | "getEntries"
-    | "latestEntrySeq"
     | "visibleEntries"
     | "getForParticipant"
   >;
@@ -373,15 +372,6 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.fastMode !== undefined ? { fastMode: meta.fastMode } : {}),
     ...(meta.timezone ? { timezone: meta.timezone } : {}),
   };
-}
-
-function assertAudienceCompatible(
-  source: Pick<OrchestratorInput, "actor" | "conversation">,
-  target: Pick<OrchestratorInput, "actor" | "conversation">,
-): void {
-  const allowed = new Set([source.actor.id, ...source.conversation.audience.map((person) => person.id)]);
-  if ([target.actor.id, ...target.conversation.audience.map((person) => person.id)].some((id) => !allowed.has(id)))
-    throw new Error("the target audience includes people outside the sender's authorized audience");
 }
 
 async function sessionAncestors(sessions: Pick<SessionStore, "get">, session: Session): Promise<Session[]> {
@@ -597,30 +587,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               const sender = await deps.sessions.getForParticipant(message.senderId, caller.actor.id);
               if (!sender || sender.scopeId !== binding.scopeId) continue;
               if (deps.authorize && !(await deps.authorize(sender, caller.actor.id))) continue;
-              try {
-                assertAudienceCompatible(
-                  { actor: message.actor, conversation: { ...caller.conversation, audience: message.audience } },
-                  caller,
-                );
-                if (message.sourceEntrySeq !== undefined) {
-                  const viewers = new Set([
-                    caller.actor.id,
-                    ...caller.conversation.audience.map((person) => person.id),
-                  ]);
-                  const readable = await Promise.all(
-                    [...viewers].map(async (id) =>
-                      (await deps.sessions.visibleEntries(sender.id, id)).some(
-                        (entry) => entry.seq === message.sourceEntrySeq && entry.scopeLabel === binding.scopeId,
-                      ),
-                    ),
-                  );
-                  if (!readable.every(Boolean)) continue;
-                }
-                visible.push(message);
-                if (visible.length >= 4) break;
-              } catch {
-                continue;
-              }
+              visible.push(message);
+              if (visible.length >= 4) break;
             }
             if (visible.length || Date.now() >= deadline) return visible;
             await sleep(Math.min(250, deadline - Date.now()));
@@ -636,7 +604,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
                 throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
-              assertAudienceCompatible(binding.request, caller);
               if (binding.request.privateSessionMessage)
                 throw new Error("private session messages cannot delegate new work");
               const task = input.task?.trim();
@@ -737,7 +704,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (binding.request.swarm || binding.session.threadRef.startsWith("swarm:"))
                 throw new Error("swarm workers coordinate through the swarm API");
               const caller = await currentCaller();
-              assertAudienceCompatible(binding.request, caller);
               const target = await resolveTarget(input.target);
               if (!target)
                 return {
@@ -789,7 +755,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 "",
               );
               const request = deps.prepareRequest ? await deps.prepareRequest(prepared) : prepared;
-              assertAudienceCompatible(caller, request);
               const title = visibleTitle(target);
               if (input.interrupt) {
                 if (privateMessage)
@@ -812,7 +777,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               if (!input.followup) {
-                const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
                 await deps.mailbox.send({
                   id: input.requestId
                     ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
@@ -821,8 +785,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   senderId: binding.session.id,
                   actor: caller.actor,
                   text: stamped,
-                  ...(sourceEntrySeq >= 0 ? { sourceEntrySeq } : {}),
-                  audience: caller.conversation.audience,
                   createdAt: Date.now(),
                 });
                 return { ok: true, sessionId: target.id, title, delivered: "queued_message" };
@@ -1032,7 +994,7 @@ export interface SubagentMailDeps {
   deliveries?: Pick<DeliveryStore, "enqueue">;
   delegationEnabled?: (actorId: string) => Promise<boolean>;
   mailbox: SessionMailbox;
-  sessions: Pick<SessionStore, "get" | "getByThread" | "getEntries" | "latestEntrySeq" | "visibleEntries">;
+  sessions: Pick<SessionStore, "get" | "getByThread">;
   runs: Pick<RunStore, "enqueue" | "inFlightForThread" | "getByDedupKey" | "withdraw"> &
     Partial<Pick<RunStore, "latestForThread" | "get">>;
   maxAttempts: number;
@@ -1147,15 +1109,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     delete request[key];
   if (!originalParent) request.addressed = false;
   const prepared = deps.prepareRequest ? await deps.prepareRequest(request) : request;
-  assertAudienceCompatible(run.request, prepared);
-  const outputSeq = run.result?.sourceAssistantEntrySeq ?? run.turnUserSeq ?? run.result?.sourceUserSeq;
-  if (outputSeq !== undefined && outputSeq !== null) {
-    for (const id of new Set([prepared.actor.id, ...prepared.conversation.audience.map((person) => person.id)])) {
-      const visible = await deps.sessions.visibleEntries(child.id, id);
-      if (!visible.some((entry) => entry.seq === outputSeq))
-        throw new Error("the current parent audience cannot read this child result");
-    }
-  }
   if (result?.attachments?.length && deps.deliveries) {
     const delivery = deliveryCandidatesFor(meta.surface, meta.deliveryTarget, meta.deliveryCandidates, parent.scopeId);
     const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
@@ -1184,8 +1137,6 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     senderId: child.id,
     actor: prepared.actor,
     text,
-    ...(outputSeq !== undefined && outputSeq !== null ? { sourceEntrySeq: outputSeq } : {}),
-    audience: prepared.conversation.audience,
     createdAt: Date.now(),
   });
   if (!isSubagentThreadRef(parent.threadRef)) {
