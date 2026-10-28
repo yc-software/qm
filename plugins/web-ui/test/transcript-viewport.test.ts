@@ -4,6 +4,51 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { createTranscriptViewport, preserveTranscriptScroll } from "../src/transcript-viewport.ts";
 
+test("the scrollbar follows scrolling without requiring wheel input or pane focus", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  try {
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    assert.notEqual(f.s.ownerDocument.activeElement, f.s);
+    f.scroll(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    t.mock.timers.tick(500);
+    f.scroll(400);
+    t.mock.timers.tick(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    f.viewport.follow(true);
+    f.flush();
+    f.scroll(800);
+    t.mock.timers.tick(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.scroll(300);
+    f.viewport.dispose();
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.scroll(200);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("the End key reveals the scrollbar for the user-requested jump", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  try {
+    f.scroll(300);
+    t.mock.timers.tick(1000);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.KeyboardEvent("keydown", { key: "End" }));
+    f.flush();
+    assert.equal(f.s.scrollTop, 800);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    t.mock.timers.tick(1000);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
 test("layout mutations preserve bottom following and an earlier reading anchor independently", () => {
   const dom = new JSDOM(
     '<main><section class="chat-scroll"><div class="message-stack"><p>Reading here</p></div></section><section class="chat-scroll"></section></main>',
@@ -1004,51 +1049,6 @@ test("an inline steer does not take the sticky prompt marker from the original r
     f.viewport.sync(f.s);
     assert.equal(f.prompt.classList.contains("latest-prompt"), true);
     assert.equal(work.querySelector(".steered-row")!.classList.contains("latest-prompt"), false);
-  } finally {
-    f.close();
-  }
-});
-
-test("the scrollbar follows scrolling without requiring wheel input or pane focus", (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const f = fixture();
-  try {
-    assert.equal(f.s.classList.contains("user-scrolling"), false);
-    assert.notEqual(f.s.ownerDocument.activeElement, f.s);
-    f.scroll(500);
-    assert.equal(f.s.classList.contains("user-scrolling"), true);
-    t.mock.timers.tick(500);
-    f.scroll(400);
-    t.mock.timers.tick(500);
-    assert.equal(f.s.classList.contains("user-scrolling"), true);
-    f.viewport.follow(true);
-    f.flush();
-    f.scroll(800);
-    t.mock.timers.tick(500);
-    assert.equal(f.s.classList.contains("user-scrolling"), false);
-    f.scroll(300);
-    f.viewport.dispose();
-    assert.equal(f.s.classList.contains("user-scrolling"), false);
-    f.scroll(200);
-    assert.equal(f.s.classList.contains("user-scrolling"), false);
-  } finally {
-    f.close();
-  }
-});
-
-test("the End key reveals the scrollbar for the user-requested jump", (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  const f = fixture();
-  try {
-    f.scroll(300);
-    t.mock.timers.tick(1000);
-    assert.equal(f.s.classList.contains("user-scrolling"), false);
-    f.s.dispatchEvent(new f.s.ownerDocument.defaultView!.KeyboardEvent("keydown", { key: "End" }));
-    f.flush();
-    assert.equal(f.s.scrollTop, 800);
-    assert.equal(f.s.classList.contains("user-scrolling"), true);
-    t.mock.timers.tick(1000);
-    assert.equal(f.s.classList.contains("user-scrolling"), false);
   } finally {
     f.close();
   }

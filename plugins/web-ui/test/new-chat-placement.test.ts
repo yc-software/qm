@@ -141,11 +141,13 @@ async function withCanvas(
           .dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true }));
       },
       splitTile: (index) => {
-        document
-          .querySelectorAll(".dv-groupview")
-          .item(index)!
-          .querySelector<HTMLButtonElement>('[aria-label="Split this pane with a new session"]')!
-          .click();
+        const group = document.querySelectorAll(".dv-groupview").item(index)!;
+        group.querySelector<HTMLButtonElement>('[aria-label="Pane layout and tools"]')!.click();
+        const action = Array.from(group.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
+          (button) => button.textContent?.trim() === "New pane to the right",
+        );
+        assert.ok(action, "the pane layout menu offers an explicit split");
+        action.click();
       },
       tiles: () => document.querySelectorAll(".dv-groupview").length,
       newChat: () => sessions.startNewChat() !== null,

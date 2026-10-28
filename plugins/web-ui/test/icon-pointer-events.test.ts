@@ -37,6 +37,8 @@ for (const [label, glyph] of [
       >`;
     render(view(), host);
     const button = host.querySelector("button")!;
+    button.focus();
+    assert.equal(document.activeElement, button);
     const before = button.querySelector("svg")!;
     assert.equal(dom.window.getComputedStyle(before).pointerEvents, "none");
     render(view(), host);
