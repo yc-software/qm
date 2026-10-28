@@ -151,53 +151,6 @@
   grid-column: 2;
   justify-content: flex-end;
 }
-#app-view .screening-test-options {
-  border-top: 1px solid var(--border);
-}
-#app-view .screening-test-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 0 12px;
-}
-#app-view #view-governance .screening-compare {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin: 0;
-}
-#app-view #view-governance .screening-compare input {
-  flex: 0 0 18px;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  accent-color: var(--cta);
-  cursor: pointer;
-}
-#app-view #view-governance #auto-flagger-window {
-  width: 76px;
-  min-width: 76px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  appearance: textfield;
-  -moz-appearance: textfield;
-}
-#app-view #auto-flagger-window::-webkit-inner-spin-button,
-#app-view #auto-flagger-window::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-#app-view #auto-flagger-window-range {
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-#app-view #auto-flagger-test {
-  grid-column: 1 / -1;
-  justify-self: end;
-}
 #app-view #view-governance .card > .foot [data-save],
 #app-view #view-governance .card > .foot #governance-org-ambient-save,
 #app-view #view-governance .card > .foot #sc-save {
@@ -230,23 +183,9 @@
     grid-column: 1;
   }
 }
-#app-view .screening-count {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-#app-view #view-governance .governance-prompt,
-#app-view #view-governance .screening-test-options {
+#app-view #view-governance .governance-prompt {
   padding-top: 12px;
   margin-top: 12px;
-}
-#app-view #view-governance .screening-test-options h3 {
-  margin: 0 0 4px;
-  font-size: 13px;
-  font-weight: 500;
-}
-#app-view #view-governance .screening-test-help {
-  margin: 0 0 12px;
 }
 #app-view #view-governance #card-external-slack .choice-stack,
 #app-view #view-governance #card-org-ambient .choice-stack {

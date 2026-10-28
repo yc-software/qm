@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { type TurnRequest } from "../../../../src/types.ts";
 import { eventually } from "../../../support/settle.ts";
 import { start, get, getJson } from "../../../support/admin-observability.ts";
+import { mockPrompts } from "../../../support/mock-harness/turn.ts";
 
 test("an org admin sees conversations, transcripts, files, and runs top-down", async () => {
   const s = start();
@@ -137,7 +138,7 @@ test("an org admin sees conversations, transcripts, files, and runs top-down", a
   }
 });
 
-test("an org admin sees EXACTLY what we sent the model per turn (captured request sidecar)", async () => {
+test("an org admin sees per-call model metadata for each turn", async () => {
   const s = start();
   try {
     const dm: TurnRequest = {
@@ -158,43 +159,23 @@ test("an org admin sees EXACTLY what we sent the model per turn (captured reques
         turnSeq: number | null;
         step: number;
         model: string;
-        truncated: boolean;
-        promptEnvelope?: unknown;
       }[];
     };
     assert.ok(d.requests.length >= 1, "at least one captured request");
     const meta = d.requests[0]!;
     assert.equal(meta.step, 0, "first agent step of the turn");
     assert.equal(typeof meta.turnSeq, "number", "correlated to the turn's user entry");
-    assert.equal(meta.truncated, false);
-    assert.equal(
-      meta.promptEnvelope,
-      undefined,
-      "the bare list omits the prompt body — bodies load per turn on demand",
-    );
     const tr = await get(
       s.base,
       `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?turnSeq=${meta.turnSeq}&scope=org:default-org`,
     );
     assert.equal(tr.status, 200);
-    const td = (await tr.json()) as {
-      requests: {
-        turnSeq: number | null;
-        promptEnvelope: { system?: string; messages?: { role: string; content: string }[] };
-      }[];
-    };
+    const td = (await tr.json()) as { requests: { turnSeq: number | null }[] };
     assert.ok(td.requests.length >= 1, "the turn's requests");
-    const req = td.requests[0]!;
-    assert.equal(req.turnSeq, meta.turnSeq, "scoped to the requested turn");
     assert.ok(
-      req.promptEnvelope.messages?.some((m) => m.content.includes("what's the weather")),
-      "the snapshot carries exactly what we sent — the user message",
+      td.requests.every((req) => req.turnSeq === meta.turnSeq),
+      "scoped to the requested turn",
     );
-    assert.ok(
-      !req.promptEnvelope.messages?.some((m) => m.role === "soul"),
-      "SOUL is carried in the system prompt, not as a provider message",
-    );
-    assert.ok(typeof req.promptEnvelope.system === "string", "and the system prompt we sent");
     assert.equal(
       (await get(s.base, `/v1/admin/sessions/${encodeURIComponent(conv.id)}/llm?turnSeq=nope&scope=org:default-org`))
         .status,
@@ -293,9 +274,7 @@ test("a Slack DM post joins the recipient's DM conversation and shows up in thei
       text: "what was that deploy note?",
     };
     assert.equal((await s.built.app.turn(turn)).status, "ok");
-    const reqs = await s.built.sessions.listLlmRequests(session!.id);
-    const latest = reqs[reqs.length - 1] as any;
-    const userMessage = latest.promptEnvelope.messages.at(-1).content;
+    const userMessage = mockPrompts(session!.id).at(-1)!.messages.at(-1)!.content;
     assert.match(userMessage, /Delivered here since the user's last message/);
     assert.match(userMessage, /\[cron\] from U-carol: the deploy is done/);
   } finally {

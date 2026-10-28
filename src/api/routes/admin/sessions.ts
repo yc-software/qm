@@ -128,15 +128,13 @@ export async function getAdminSessionLlm(ctx: ApiCtx): Promise<RouteResult> {
   const { record: session } = scoped;
   scoped.audit("session.llm.read", id, session.scopeId);
   const turnParam = url.searchParams.get("turnSeq");
-  if (turnParam != null && turnParam !== "") {
-    let opts: { orphans: true } | { turnSeqs: number[] } | null = null;
-    if (turnParam === "orphan") opts = { orphans: true };
-    else if (Number.isInteger(Number(turnParam))) opts = { turnSeqs: [Number(turnParam)] };
-    if (!opts) throw badRequest('turnSeq must be an integer or "orphan"');
-    const requests = (await deps.sessions?.listLlmRequests(id, opts)) ?? [];
-    return ok({ session, requests });
+  let opts: { orphans: true } | { turnSeqs: number[] } | undefined;
+  if (turnParam === "orphan") opts = { orphans: true };
+  else if (turnParam != null && turnParam !== "") {
+    if (!Number.isInteger(Number(turnParam))) throw badRequest('turnSeq must be an integer or "orphan"');
+    opts = { turnSeqs: [Number(turnParam)] };
   }
-  const requests = (await deps.sessions?.listLlmRequests(id, { omitRequest: true })) ?? [];
+  const requests = (await deps.sessions?.listLlmRequests(id, opts)) ?? [];
   return ok({ session, requests });
 }
 

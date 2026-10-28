@@ -1,4 +1,5 @@
 import type { HarnessTurnInput, HarnessTurnResult } from "../../../src/harness/harness.ts";
+import type { DocumentInput } from "../../../src/core/document-inputs.ts";
 import { estimateHistoryTokens } from "../../../src/harness/context-compaction.ts";
 import { countTokens } from "../../../src/util/tokens.ts";
 import { dispatchScenario } from "./scenarios.ts";
@@ -42,26 +43,35 @@ function mockCallUsage(turn: HarnessTurnInput, command0: string, modelPrompt: st
   });
 }
 
+export interface MockPrompt {
+  model: string;
+  system: string;
+  messages: Array<{ role: string; content: string }>;
+  images?: Array<{ mimeType: string; dataBase64: string }>;
+  documents?: Array<Pick<DocumentInput, "name" | "mimeType" | "artifactId">>;
+}
+
+const promptsSent = new Map<string, MockPrompt[]>();
+
+export const mockPrompts = (sessionId: string): MockPrompt[] => promptsSent.get(sessionId) ?? [];
+
 async function recordMockRequest({ t, turnSeq, usage }: OpenTurn, step: number): Promise<void> {
   const { turn, modelPrompt } = t;
-  await turn.recordLlmRequest?.({
-    turnSeq,
-    step,
+  const prompt: MockPrompt = {
     model: "mock",
-    promptEnvelope: {
-      model: "mock",
-      system: turn.systemPrompt,
-      messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
-      ...(turn.images?.length
-        ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
-        : {}),
-      ...(turn.documents?.length
-        ? { documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })) }
-        : {}),
-    },
-    truncated: false,
-    usage: usage(step),
-  });
+    system: turn.systemPrompt,
+    messages: [...mockProviderMessages(turn.history), { role: "user", content: modelPrompt }],
+    ...(turn.images?.length
+      ? { images: turn.images.map((image) => ({ mimeType: image.mimeType, dataBase64: image.dataBase64 })) }
+      : {}),
+    ...(turn.documents?.length
+      ? { documents: turn.documents.map(({ name, mimeType, artifactId }) => ({ name, mimeType, artifactId })) }
+      : {}),
+  };
+  const sent = promptsSent.get(turn.session.id);
+  if (sent) sent.push(prompt);
+  else promptsSent.set(turn.session.id, [prompt]);
+  await turn.recordLlmRequest?.({ turnSeq, step, model: "mock", usage: usage(step) });
 }
 
 async function openTurn(input: HarnessTurnInput, state: MockHarnessState): Promise<OpenTurn> {

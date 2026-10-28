@@ -529,7 +529,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/admin/sessions?scope=",
         summary:
-          "conversation metadata; /v1/admin/sessions/:id for a transcript and /:id/llm for captured prompts (DM or a turn a person started)",
+          "conversation metadata; /v1/admin/sessions/:id for a transcript and /:id/llm for per-call model metadata (DM or a turn a person started)",
       },
       {
         method: "GET",

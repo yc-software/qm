@@ -36,14 +36,11 @@ import { adminSessionUrl } from "../util/admin-links.ts";
 import { wireRunResultPosts } from "../runs/run-results.ts";
 import { createGitFetcher, resolvePackAuth } from "../skills/pack-fetcher.ts";
 import { nonDeploymentCredential } from "../credentials/deployment-credentials.ts";
-import { swallowAs } from "../util/errors.ts";
 import {
   type AmbientJudgmentStore,
   createPostgresAmbientJudgmentStore,
 } from "../surface-cache/ambient-judgment-store.ts";
 import { type AckEmojiPickStore, createPostgresAckEmojiPickStore } from "../surface-cache/ack-emoji-pick-store.ts";
-import type { SecurityScreenProbe } from "../security/security-screener.ts";
-import { estimateCostUsd } from "../ratelimit/budget.ts";
 
 type OrchestratorInputs = Pick<Head, "late" | "config" | "overrides"> & {
   stores: StoresModule;
@@ -125,7 +122,7 @@ export function buildOrchestrator(deps: OrchestratorInputs) {
     },
   };
   const orchestrator = createOrchestrator(orchestratorDeps);
-  const { skillFetcher, screenSecurity, ambientJudgments, ackEmojiPicks, providerKeys } = buildAppServices(deps);
+  const { skillFetcher, ambientJudgments, ackEmojiPicks, providerKeys } = buildAppServices(deps);
   return {
     orchestrator,
     surfaceCache,
@@ -135,7 +132,6 @@ export function buildOrchestrator(deps: OrchestratorInputs) {
     sessionMailbox,
     prepareSessionRequest,
     skillFetcher,
-    screenSecurity,
     ambientJudgments,
     ackEmojiPicks,
     providerKeys,
@@ -384,9 +380,8 @@ function buildAppServices(deps: OrchestratorInputs) {
   const { runs } = deps.runs;
   const { outbound, chatSurfaces } = deps.outbound;
   const { sessions, databaseUrl, every } = deps.stores;
-  const { serviceCreds, keychain, modelGateway } = deps.credentials;
-  const { directProviderAvailability, harness } = deps.harness;
-  const { budget } = deps.files;
+  const { serviceCreds, keychain } = deps.credentials;
+  const { directProviderAvailability } = deps.harness;
 
   const uuidId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const runResultRecovery = wireRunResultPosts(runs, outbound, {
@@ -417,25 +412,9 @@ function buildAppServices(deps: OrchestratorInputs) {
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
-  const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
-    ? ({ payload, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
-        harness.models.screenSecurity!({
-          payload,
-          modelId,
-          systemPrompt,
-          signal,
-          recordModelCall: (rec) => {
-            modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
-            void budget
-              ?.record(actorId, estimateCostUsd(rec.inputTokens))
-              .catch(swallowAs("budget: record screen spend", undefined));
-          },
-        })
-    : undefined;
   every("run-result-sweep", 60_000, () => runResultRecovery.sweep());
   return {
     skillFetcher,
-    screenSecurity,
     ambientJudgments,
     ackEmojiPicks,
     providerKeys,

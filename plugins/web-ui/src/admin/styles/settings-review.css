@@ -570,11 +570,7 @@
     margin-left: 0;
     justify-content: flex-start;
   }
-  #app-view .context-segment {
-    padding: 0 6px;
-  }
-  #app-view .header-check-prefix,
-  #app-view .context-segment small {
+  #app-view .header-check-prefix {
     display: none;
   }
 }

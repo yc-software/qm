@@ -16,6 +16,7 @@ import { computeBundleHash, type SkillBundle } from "../../src/skills/skill-bund
 import { buildApp } from "../support/build-app.ts";
 import { type TurnRequest, scopeId } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
+import { mockPrompts } from "../support/mock-harness/turn.ts";
 
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
 const root = ".agent-turn/t1/skills";
@@ -415,8 +416,7 @@ test("skills index order uses visible history, resets with compaction, and leave
   await built.sessions.releaseLease(reset.lease);
   const third = await built.app.turn(request);
   assert.ok(!promoted(third.reply ?? ""));
-  const recorded = (await built.sessions.listLlmRequests(sessionId)).filter((r) => r.model === "mock");
-  const systems = recorded.map((r) => (r.promptEnvelope as { system: string }).system);
+  const systems = mockPrompts(sessionId).map((prompt) => prompt.system);
   assert.equal(systems.length, 4);
   assert.equal(systems[0], systems[1]);
   assert.equal(systems[1], systems[2]);

@@ -35,7 +35,6 @@ import type { KeychainApprovals } from "../credentials/keychain-approval.ts";
 import type { AdminService } from "../admin/admin-service.ts";
 import type { Mailer } from "../../plugins/chassis/src/resend.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import type { SecurityScreenProbe } from "../security/security-screener.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { RunStore } from "../runs/run-store.ts";
@@ -142,7 +141,6 @@ export interface ServerDeps {
   rateLimiter?: RateLimiter;
   budget?: BudgetTracker;
   sessions?: SessionStore;
-  screenSecurity?: SecurityScreenProbe;
   auditLog?: AuditLog;
   errors?: ErrorLog;
   crons?: CronStore;

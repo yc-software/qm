@@ -6,7 +6,6 @@ import {
   guardOutputBudget,
   OUTPUT_BUDGET_FLOOR_TOKENS,
   OUTPUT_GUARD_SAFETY_TOKENS,
-  sanitizeLlmPayload,
   trimPayloadToByteBudget,
   transportFromModel,
 } from "../../src/harness/pi-payload.ts";
@@ -201,23 +200,6 @@ for (const capKey of ["max_tokens", "max_output_tokens", "max_completion_tokens"
   });
 }
 
-test("sanitizeLlmPayload captures the prompt envelope and drops the message array", () => {
-  const payload = {
-    model: "claude-opus-4-8",
-    system: [{ type: "text", text: "be helpful" }],
-    tools: [{ name: "execute" }],
-    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
-  };
-
-  const { envelope, truncated } = sanitizeLlmPayload(payload);
-  assert.equal(truncated, false);
-  assert.deepEqual(envelope, {
-    model: "claude-opus-4-8",
-    system: [{ type: "text", text: "be helpful" }],
-    tools: [{ name: "execute" }],
-  });
-});
-
 const imageBlock = (data: string) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
 
 test("trimPayloadToByteBudget returns the payload untouched when it fits", () => {
@@ -313,24 +295,4 @@ test("transportFromModel keeps the model id + string headers (the anthropic-beta
   );
   assert.equal(transportFromModel({}), undefined, "no id and no headers → no transport");
   assert.equal(transportFromModel(null), undefined, "no model → no transport");
-});
-
-test("sanitizeLlmPayload attaches transport from the model arg alongside the redacted body", () => {
-  const model = { id: "claude-opus-4-8", headers: { "anthropic-beta": "fast-mode" } };
-  const out = sanitizeLlmPayload({ messages: [{ role: "user", content: "hi" }] }, model);
-  assert.deepEqual(out.transport, { modelId: "claude-opus-4-8", headers: { "anthropic-beta": "fast-mode" } });
-  assert.equal(out.truncated, false);
-  assert.equal(sanitizeLlmPayload({ messages: [] }).transport, undefined);
-});
-
-test("sanitizeLlmPayload redacts image bytes that appear outside the message array", () => {
-  const big = "AAAA".repeat(2000);
-  const payload = {
-    system: [{ type: "image", source: { type: "base64", media_type: "image/png", data: big } }],
-    messages: [],
-  };
-
-  const { envelope } = sanitizeLlmPayload(payload);
-  const block = (envelope as any).system[0];
-  assert.match(block.source.data, /<base64 image\/png omitted: \d+ chars>/, "image bytes never persist");
 });

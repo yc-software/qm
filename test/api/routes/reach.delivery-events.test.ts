@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "../../support/build-app.ts";
 import { scopeId } from "../../../src/types.ts";
 import { testConfig } from "../../support/test-config.ts";
+import { mockPrompts } from "../../support/mock-harness/turn.ts";
 
 describe("agent → teammate DM: delivery events in the recipient's session (anti-amnesia, §10)", () => {
   const slackDm = () => {
@@ -63,8 +64,7 @@ describe("agent → teammate DM: delivery events in the recipient's session (ant
       conversation: { kind: "dm", threadRef: "dm:D-alice" },
       text: "what was that?",
     });
-    const latest = (await built.sessions.listLlmRequests(session!.id)).at(-1) as any;
-    const footer = latest.promptEnvelope.messages.at(-1).content;
+    const footer = mockPrompts(session!.id).at(-1)!.messages.at(-1)!.content;
     assert.match(footer, /Delivered here since the user's last message/);
     assert.match(footer, /\[cron\] from U-carol: the deploy is done/);
   });

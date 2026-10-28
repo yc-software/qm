@@ -32,7 +32,7 @@ import { SCOPE_SETTINGS, type ScopeSettingName, type ScopeSettingValue } from ".
 import { auditAs, modelKeys, orgOnly } from "./admin/common.ts";
 import { applyServiceCredentials } from "./admin-service-credentials.ts";
 
-export interface AutoFlaggerDraft {
+interface AutoFlaggerDraft {
   modelId: string;
   rubric: string;
 }
@@ -43,7 +43,7 @@ export function defaultAutoFlaggerConfig(deps: Pick<ConfiguredDeps, "baseModelDe
   return { modelId: defaultModel(deps.baseModelDefault), rubric: DEFAULT_SECURITY_SCREEN_RUBRIC };
 }
 
-export async function parseAutoFlaggerDraft(
+async function parseAutoFlaggerDraft(
   deps: Pick<ConfiguredDeps, "providerKeys" | "modelCredentials">,
   body: { modelId?: unknown; rubric?: unknown },
 ): Promise<{ value: AutoFlaggerDraft } | { error: string }> {

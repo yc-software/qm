@@ -8,8 +8,6 @@ interface ModelDispatch {
 }
 
 interface CapturedRequest {
-  envelope: unknown;
-  truncated: boolean;
   transport?: { modelId?: string; headers?: Record<string, string> };
 }
 

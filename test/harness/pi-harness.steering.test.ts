@@ -3,7 +3,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../../src/harness/harness.ts";
-import { promptEnvelopeBody } from "../../src/sessions/session-store.ts";
 import { storedItem, type Item, type NewItem } from "../../src/sessions/items.ts";
 import { createMemoryRunSignalStore } from "../../src/runs/run-signal-store.ts";
 import type { ScopeId } from "../../src/types.ts";
@@ -368,12 +367,8 @@ test("Pi Responses captures exclude history and document text without changing r
     assert.match(JSON.stringify(requests.at(-1)), /do the thing/);
     assert.match(JSON.stringify(requests.at(-1)), /The turn ended with an empty message/);
     assert.match(JSON.stringify(sink.entries), /do the thing/);
-    const firstEnvelope = promptEnvelopeBody(captures[0]!.promptEnvelope)!;
-    assert.match(firstEnvelope.body, /BASE/);
-    for (const capture of captures) {
-      assert.equal(promptEnvelopeBody(capture.promptEnvelope)!.hash, firstEnvelope.hash);
-      assert.doesNotMatch(JSON.stringify(capture.promptEnvelope), /do the thing|The turn ended with an empty message/);
-    }
+    assert.equal(captures.length, requests.length);
+    assert.doesNotMatch(JSON.stringify(captures), /BASE|do the thing|The turn ended with an empty message/);
     assert.ok(JSON.stringify(requests).includes("RTF-QUARTZ-731"));
     assert.ok(captures.length > 0);
     assert.ok(!JSON.stringify(captures).includes("RTF-QUARTZ-731"));

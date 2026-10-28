@@ -9,7 +9,6 @@ import {
   retention,
   whoami,
 } from "./admin/scope-config.ts";
-import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
@@ -117,7 +116,6 @@ const routes: Route<ApiCtx>[] = [
     route("GET", "/custom-providers", getCustomProviders),
     route("PUT", "/custom-providers/:provider", putCustomProvider),
     route("DELETE", "/custom-providers/:provider", deleteCustomProvider),
-    route("POST", "/scopes/:scope/auto-flagger/test", testAutoFlagger),
     route("PUT", "/scopes/:scope/:resource", putScopeConfig),
     route("GET", "/whoami", whoami, { agent: "anyone" }),
     route("GET", "/scopes", listAdminScopes, unattended("admin.sessions.read", "list the scope directory")),

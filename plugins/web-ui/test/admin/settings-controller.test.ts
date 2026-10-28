@@ -280,64 +280,6 @@ test("governance shows its policy cards with working navigation actions", async 
   admin.close();
 });
 
-test("testing the auto flagger replays the unsaved draft without saving it", async () => {
-  const tests: any[] = [];
-  const admin = await governancePage({
-    "POST /scopes/org:acme/auto-flagger/test": ({ body }: any) => {
-      tests.push(body);
-      return { sampled: 2, scored: 2, flagged: 1, flagRate: 0.5, durationMs: 100 };
-    },
-  });
-  type(admin, "auto-flagger-rubric", "Unsaved draft — café");
-  type(admin, "auto-flagger-window", "25");
-  const compare = admin.document.getElementById("auto-flagger-compare") as HTMLInputElement;
-  if (!compare.checked) compare.click();
-  const button = admin.document.getElementById("auto-flagger-test") as HTMLButtonElement;
-  button.click();
-  await admin.settle();
-  assert.deepEqual(tests, [{ window: 25, compare: true, modelId: "model-a", rubric: "Unsaved draft — café" }]);
-  assert.match(text(admin, "st-auto-flagger-test"), /Flagged 1 of 2 scored \(50.0%\)/);
-  assert.equal(button.disabled, false);
-  assert.equal(admin.requests.filter((r) => r.method === "PUT").length, 0);
-  type(admin, "auto-flagger-window", "0");
-  button.click();
-  await admin.settle();
-  assert.equal(tests.length, 1);
-  assert.equal(admin.document.getElementById("auto-flagger-test-result")!.hidden, false);
-  assert.match(text(admin, "st-auto-flagger-test"), /between 1 and 500/);
-  admin.close();
-});
-
-test("auto flagger replay summaries describe empty, partial, errored and comparison runs", async () => {
-  const replies = [
-    { sampled: 0 },
-    {
-      sampled: 4,
-      scored: 2,
-      flagged: 1,
-      flagRate: 0.5,
-      errors: 1,
-      unscreened: 1,
-      partial: true,
-      durationMs: 100,
-      baseline: { flagRate: 0, changed: 1 },
-    },
-  ];
-  const admin = await governancePage({ "POST /scopes/org:acme/auto-flagger/test": () => replies.shift() });
-  const button = admin.document.getElementById("auto-flagger-test") as HTMLButtonElement;
-  button.click();
-  await admin.settle();
-  assert.match(text(admin, "st-auto-flagger-test"), /No past screenings/);
-  button.click();
-  await admin.settle();
-  const summary = text(admin, "st-auto-flagger-test");
-  assert.match(summary, /current rubric flags 0.0%.*1 verdict changed/);
-  assert.match(summary, /1 sample came back unscreened/);
-  assert.match(summary, /1 sample errored/);
-  assert.match(summary, /partial result/);
-  admin.close();
-});
-
 test("resetting the auto flagger restores the default and ignores a reply for a scope left behind", async () => {
   const resets: any[] = [];
   let release!: () => void;

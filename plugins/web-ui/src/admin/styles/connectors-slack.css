@@ -173,7 +173,7 @@
 #app-view #view-data .users-layout .card > .head p,
 :where(#app-view[data-admin-kit="true"])
   :is(.admin-main, dialog)
-  label:not(:where(.posture-choice, .setting-toggle, .screening-compare, .switch)) {
+  label:not(:where(.posture-choice, .setting-toggle, .switch)) {
   line-height: 1.4;
 }
 #app-view #view-data .users-layout .card > .body {

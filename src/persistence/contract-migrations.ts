@@ -60,6 +60,15 @@ export const HELD_BACK_CONTRACT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     id: "contract/0011-drop-tenant-env-bags",
     statements: ["ALTER TABLE IF EXISTS tenants DROP COLUMN IF EXISTS env, DROP COLUMN IF EXISTS secret_env"],
   },
+  {
+    id: "contract/0025-drop-llm-prompt-envelopes",
+    statements: [
+      "SET LOCAL lock_timeout = '3s'",
+      "DROP TABLE IF EXISTS llm_prompt_envelopes",
+      "DROP INDEX IF EXISTS session_llm_requests_screens",
+      "ALTER TABLE session_llm_requests DROP COLUMN IF EXISTS prompt_hash, DROP COLUMN IF EXISTS truncated",
+    ],
+  },
 ];
 
 export const pgMigrationsFrom = (definition: PgMigrationDefinition): PgMigration[] =>

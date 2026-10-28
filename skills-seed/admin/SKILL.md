@@ -1,13 +1,13 @@
 ---
 name: admin
-description: Act for an org admin — the admin API (scope directory, per-scope config & instructions, any scope's memory, transcripts & captured prompts, files, user roster & external users, audit/errors/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
+description: Act for an org admin — the admin API (scope directory, per-scope config & instructions, any scope's memory, transcripts & per-call model metadata, files, user roster & external users, audit/errors/egress) accepts your token when the user you're talking to is an org admin and started this turn themselves. Use when an admin asks you to inspect or change anything org-wide or in another scope, or anyone asks whether they're an admin.
 ---
 
 # admin — act for an org admin, from chat
 
 Use the native `admin` tool for the operations below. Its fixed actions call the same
 `/v1/admin/*` handlers and accept the same values; configuration and provider value
-objects are validated by those existing handlers. Binary and full captured-prompt downloads, raw-secret setters, connector configuration,
+objects are validated by those existing handlers. Binary downloads, raw-secret setters, connector configuration,
 and service-credential configuration still use the self-API, never native tool arguments. You are acting **as them**: authorization is re-checked against the live grant
 store on every call; existing admin audit events remain attributed to them. Two standing rules:
 **confirm before any mutation** (state exactly what you'll change and where), and report
@@ -194,7 +194,7 @@ PUT /v1/admin/memory?scope=<scopeId>          {"content":"…full replacement…
 ```bash
 GET /v1/admin/sessions?scope=&limit=&cursor=  → conversation listing (turns, last activity); pass nextCursor for older rows
 GET /v1/admin/sessions/<id>?scope=            → a transcript
-GET /v1/admin/sessions/<id>/llm?scope=        → captured provider requests — what the model actually saw (debugging "why did it do X")
+GET /v1/admin/sessions/<id>/llm?scope=        → per-call model metadata: model, tokens, cost, latency (prompt bodies are not stored)
 GET /v1/admin/runs?scope=                     → queued/in-flight/recent runs
 GET /v1/admin/files?scope=                    → document store; read?id= / download?id= for content
 GET /v1/admin/volumes?scope=                  → a scope's computer/backup contents (sizes only)

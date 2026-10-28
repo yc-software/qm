@@ -120,7 +120,6 @@
   margin-bottom: 12px;
 }
 #app-view .tool-line-entry > .tool-entry > .who,
-#app-view .context-turn.collapsed .context-overview,
 #app-view .context-turn.collapsed .context-details {
   display: none;
 }
@@ -140,73 +139,6 @@
   gap: 14px;
   margin-left: auto;
   flex-wrap: wrap;
-}
-#app-view .context-overview {
-  border: 0;
-  background: transparent;
-  padding: 0;
-}
-#app-view .context-stack {
-  display: flex;
-  height: 30px;
-  width: 100%;
-  overflow: hidden;
-  background: var(--subtle);
-  border: 1px solid var(--border);
-}
-#app-view .context-segment {
-  appearance: none;
-  border: 0;
-  border-right: 1px solid var(--border);
-  color: var(--muted);
-  background: var(--surface);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 28px;
-  padding: 0 8px;
-  font: inherit;
-  font-size: 11px;
-  line-height: 1;
-  overflow: hidden;
-  text-align: left;
-}
-#app-view .context-segment:last-child {
-  border-right: 0;
-}
-#app-view .context-segment:hover {
-  background: var(--subtle);
-  color: var(--text);
-}
-#app-view .context-segment:focus-visible {
-  outline: 2px solid #111827;
-  outline-offset: 2px;
-  position: relative;
-  z-index: 1;
-}
-#app-view .context-segment.active {
-  background: var(--surface);
-  color: var(--text);
-  outline: 2px solid #111827;
-  outline-offset: -2px;
-}
-#app-view .context-segment span,
-#app-view .context-segment small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-#app-view .context-segment small {
-  flex: 0 0 auto;
-  opacity: 0.78;
-  font-variant-numeric: tabular-nums;
-}
-#app-view .context-segment[data-tiny="true"] span,
-#app-view .context-segment[data-tiny="true"] small {
-  display: none;
 }
 #app-view .context-details {
   margin-top: 10px;
@@ -252,38 +184,8 @@
   color: var(--text);
   background: none;
 }
-#app-view .context-selection {
-  margin-top: 10px;
-}
-#app-view .context-selection:empty {
-  display: none;
-}
-#app-view .context-section-view {
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
-}
-#app-view .context-section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
-  margin: 0 0 8px;
-}
-#app-view .context-section-head strong {
-  font-size: 12px;
-  font-weight: 600;
-}
-#app-view .context-section-head span {
-  color: var(--muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-#app-view .context-section-view pre {
-  max-height: 360px;
-  overflow: auto;
-}
 #app-view .context-note {
-  color: var(--danger);
+  color: var(--muted);
   font-size: 12px;
   margin: 6px 0 0;
 }
@@ -372,9 +274,6 @@
   border-color: var(--muted);
   background: var(--subtle);
 }
-#app-view .context-page .context-stack {
-  height: 36px;
-}
 #app-view .context-page.context-turn {
   margin: 0;
 }
@@ -382,15 +281,7 @@
   border-left: 0;
   padding-left: 0;
 }
-#app-view .context-page .context-overview {
-  padding: 10px 0;
-  margin: 0;
-}
-#app-view .context-page .context-section-view {
-  border-top: 0;
-  padding-top: 0;
-}
-#app-view .context-page .context-section-view pre {
+#app-view .context-page .context-request pre {
   max-height: none;
   overflow: visible;
   white-space: pre-wrap;
@@ -400,15 +291,6 @@
   background: var(--subtle);
   border: 1px solid var(--border);
   border-radius: 6px;
-}
-#app-view .context-page .context-selection:empty::after {
-  content: "Pick a section above to read it verbatim.";
-  color: var(--muted);
-  font-size: 12px;
-}
-#app-view .context-page .context-selection:empty {
-  display: block;
-  padding-top: 8px;
 }
 #app-view .context-empty {
   color: var(--muted);

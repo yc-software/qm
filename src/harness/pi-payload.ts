@@ -1,9 +1,6 @@
 import type { LlmTransportMeta } from "../sessions/session-store.ts";
 import { MAX_LLM_REQUEST_BYTES } from "../core/document-kinds.ts";
-import { promptEnvelopeWithoutHistory } from "./harness.ts";
 import { ELIDED_IMAGE_TEXT } from "./replay-images.ts";
-
-const MAX_CAPTURED_PAYLOAD_CHARS = 2_000_000;
 
 const LLM_REQUEST_TRIM_SLACK_BYTES = 3_000_000;
 export const GATEWAY_REQUEST_MAX_BYTES = 9_000_000;
@@ -85,40 +82,6 @@ export function trimPayloadToByteBudget(payload: unknown, maxBytes: number = MAX
   return { ...p, [listKey]: items };
 }
 
-function redactImageBytes(v: unknown): unknown {
-  if (Array.isArray(v)) return v.map(redactImageBytes);
-  if (v && typeof v === "object") {
-    const o = v as Record<string, unknown>;
-    if ((o.type === "image" || o.type === "document") && o.source && typeof o.source === "object") {
-      const src = o.source as Record<string, unknown>;
-      if (typeof src.data === "string") {
-        return {
-          ...o,
-          source: { ...src, data: `<base64 ${String(src.media_type ?? "image")} omitted: ${src.data.length} chars>` },
-        };
-      }
-    }
-    if (o.type === "thinking" && typeof o.signature === "string") {
-      return { ...o, signature: `<signature ${o.signature.length} chars omitted>` };
-    }
-    if (o.type === "redacted_thinking" && typeof o.data === "string") {
-      return { ...o, data: `<redacted_thinking ${o.data.length} chars omitted>` };
-    }
-    const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(o)) {
-      out[k] =
-        typeof val === "string" &&
-        (k === "file_data" ||
-          (k === "image_url" && val.startsWith("data:")) ||
-          (k === "data" && typeof o.mimeType === "string"))
-          ? `<file bytes omitted: ${val.length} chars>`
-          : redactImageBytes(val);
-    }
-    return out;
-  }
-  return v;
-}
-
 export function transportFromModel(model: unknown): LlmTransportMeta | undefined {
   if (!model || typeof model !== "object") return undefined;
   const m = model as { id?: unknown; headers?: unknown };
@@ -132,33 +95,6 @@ export function transportFromModel(model: unknown): LlmTransportMeta | undefined
     if (Object.keys(headers).length) out.headers = headers;
   }
   return out.modelId || out.headers ? out : undefined;
-}
-
-export function sanitizeLlmPayload(
-  payload: unknown,
-  model?: unknown,
-): { envelope: unknown; truncated: boolean; transport?: LlmTransportMeta } {
-  const transport = transportFromModel(model);
-  const withTransport = (r: { envelope: unknown; truncated: boolean }) => (transport ? { ...r, transport } : r);
-  let redacted: unknown;
-  try {
-    redacted = redactImageBytes(promptEnvelopeWithoutHistory(payload));
-  } catch {
-    return withTransport({ envelope: { note: "payload not capturable" }, truncated: true });
-  }
-  let json: string;
-  try {
-    json = JSON.stringify(redacted);
-  } catch {
-    return withTransport({ envelope: { note: "payload not serializable" }, truncated: true });
-  }
-  if (json.length > MAX_CAPTURED_PAYLOAD_CHARS) {
-    return withTransport({
-      envelope: { truncated: true, bytes: json.length, preview: json.slice(0, MAX_CAPTURED_PAYLOAD_CHARS) },
-      truncated: true,
-    });
-  }
-  return withTransport({ envelope: redacted, truncated: false });
 }
 
 export function textFromContent(content: unknown): string {

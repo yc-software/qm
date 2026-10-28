@@ -40,43 +40,11 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
               @input=${(event: Event) => changeField(s, "auto-flagger-rubric", event)}
             ></textarea>
           </div>
-          <div class="screening-test-options">
-            <h3>Test Auto flagger</h3>
-            <p class="screening-test-help">
-              Try the model and prompt above on recent screenings without applying changes.
-            </p>
-            <div class="screening-test-fields">
-              <label for="auto-flagger-window">Recent screenings to test</label>
-              <div class="screening-count">
-                <input
-                  id="auto-flagger-window"
-                  type="number"
-                  inputmode="numeric"
-                  min="1"
-                  max="500"
-                  step="1"
-                  value="100"
-                  aria-describedby="auto-flagger-window-range"
-                />
-                <span id="auto-flagger-window-range">1–500</span>
-              </div>
-              <label
-                class="screening-compare"
-                title="Also replay the configuration in effect today, so the flag rates are comparable"
-              >
-                <input type="checkbox" id="auto-flagger-compare" />Compare with the currently applied configuration
-              </label>
-              <button id="auto-flagger-test" type="button">Run test</button>
-            </div>
-          </div>
         </div>
       </div>
       <div class="foot">
         <button id="auto-flagger-reset" type="button">Restore default</button>
         ${saveButton(s, "Apply", s.disabled)} ${settingStatus(s)}
-      </div>
-      <div class="foot" id="auto-flagger-test-result" hidden>
-        <span class="status" id="st-auto-flagger-test"></span>
       </div>
     </section>`,
   "card-command-policy": (s) =>

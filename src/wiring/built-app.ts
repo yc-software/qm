@@ -47,7 +47,7 @@ export function assembleBuiltApp(deps: BuiltAppInputs): BuiltApp {
 function builtAppHead(deps: BuiltAppInputs) {
   const { app, sweepAsks, inbox } = deps.apiApp;
   const { pgPool, sessions, configStore, slackInstallation, skills, skillBundles, jobs } = deps.stores;
-  const { screenSecurity, surfaceCache, skillFetcher } = deps.orchestrator;
+  const { surfaceCache, skillFetcher } = deps.orchestrator;
   const { deploymentLayer, deploymentLayerStore, brokeredTools, auditLog } = deps.deploymentLayer;
   const {
     startOnce,
@@ -79,7 +79,6 @@ function builtAppHead(deps: BuiltAppInputs) {
     checkReadiness: async (signal) => {
       await pgPool.q("SELECT 1", [], { signal });
     },
-    ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,

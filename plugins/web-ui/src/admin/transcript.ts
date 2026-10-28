@@ -3,7 +3,7 @@ import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { badge, copyButton, errorStripBox, metaChip, node, renderer, scroller } from "./shared.ts";
 import { isUserMessage, itemFields, type Item } from "../items.ts";
-import { firstLine, fmtBytes, fmtTime, fmtTokens, plural, relTime, wakeOriginLabel } from "./format.ts";
+import { firstLine, fmtBytes, fmtTime, plural, relTime, wakeOriginLabel } from "./format.ts";
 import { isXmlishText } from "./rich-text.ts";
 import { markdown } from "../message-markdown.ts";
 import {
@@ -16,14 +16,12 @@ import {
   toolStatusMeta,
 } from "./tool-entry.ts";
 import {
-  type ContextSection,
   cacheMetaItems,
-  contextSections,
   fmtContextSize,
   isStablePrefixMiss,
   rawJsonLink,
-  requestBody,
   sumCacheUsage,
+  transportText,
 } from "./llm-context.ts";
 type Row = Record<string, any>;
 let generation = 0;
@@ -132,11 +130,10 @@ export function prepare(data: Row, requests: Row[]) {
     originPromptSeq: data.origin && !data.hasMore ? items.find(isOriginPrompt)?.seq : null,
   };
 }
-function contextStats(requests: Row[], s: Row, sections?: ContextSection[]) {
-  const latest = requests.at(-1) || { request: {} };
-  sections ??= contextSections(requestBody(latest), latest.transport);
+function contextStats(requests: Row[]) {
+  const latest = requests.at(-1) || {};
   return html`<div class="context-stats">
-    ${metaChip((latest.model || "?") + " · " + fmtContextSize(latest, sections))}${cacheMetaItems(sumCacheUsage(requests))}${rawJsonLink(requests)}
+    ${metaChip((latest.model || "?") + " · " + fmtContextSize(latest))}${cacheMetaItems(sumCacheUsage(requests))}${rawJsonLink(requests)}
   </div>`;
 }
 function begin(s: Row, shell: Row) {
@@ -152,71 +149,24 @@ const fetchSession = (s: Row, id: string, path: string, query = "") =>
   s.api("GET", "/api/sessions/" + encodeURIComponent(id) + path + "scope=" + encodeURIComponent(s.scope) + query);
 const failed = (result: Row, what: string) =>
   html`<div class="detail">${result.data?.message || `Failed to load ${what} (${result.status}).`}</div>`;
-export function requestsPanel(requests: Row[], s: Row, opts: Row = {}) {
-  const host = document.createDocumentFragment(),
-    draw = renderer(host as unknown as HTMLElement),
-    sections: ContextSection[][] = requests.map((q) => contextSections(requestBody(q), q.transport)),
-    selected = sections.map((list) =>
-      opts.selectLargest && list.length ? list.reduce((a, b) => (b.tokens > a.tokens ? b : a)).key : null,
-    ),
-    cache = sumCacheUsage(requests);
-  function paint() {
-    draw(
-      html`<div
-        class=${classMap({ llm: true, "context-turn": true, "context-page": !!opts.page, "cache-miss": !!cache && isStablePrefixMiss(cache) })}
-      >
-        ${opts.page ? nothing : html`<div class="who">${contextStats(requests, s, sections.at(-1) || [])}</div>`}
-        <div class="context-details">
-          ${requests.map((q, index) => {
-            const list: ContextSection[] = sections[index],
-              total = list.reduce((n, section) => n + section.tokens, 0),
-              chosen = list.find((section) => section.key === selected[index]);
-            return html`<div class="context-request">
-              ${requests.length > 1 ? html`<div class="context-request-head"><strong>${"Request " + (index + 1)}</strong><span>${(q.model || "?") + " · " + fmtContextSize(q, list)}</span></div>` : nothing}${q.truncated ? html`<p class="context-note">Stored payload was truncated.</p>` : nothing}
-              <div class="context-overview">
-                <div class="context-stack" role="group" aria-label="request context">
-                  ${list.map((section) => {
-                    const title =
-                      section.label + " · " + fmtTokens(section.tokens) + (section.note ? " · " + section.note : "");
-                    return html`<button
-                      type="button"
-                      class=${"context-segment ctx-" + section.key + (chosen === section ? " active" : "")}
-                      style=${"flex-grow:" + Math.max(section.tokens, 1) + ";flex-basis:" + (total ? Math.max(2, Math.round((section.tokens / total) * 100)) + "%" : "1%")}
-                      data-tiny=${total && section.tokens / total < 0.12 ? "true" : "false"}
-                      title=${title}
-                      aria-label=${title}
-                      aria-pressed=${String(chosen === section)}
-                      @click=${() => {
-                        selected[index] = section.key;
-                        paint();
-                      }}
-                    >
-                      <span>${section.label}</span><small>${"~" + fmtTokens(section.tokens)}</small>
-                    </button>`;
-                  })}
-                </div>
-              </div>
-              <div class="context-selection">
-                ${
-                  chosen
-                    ? html`<div class="context-section-view">
-                        <div class="context-section-head">
-                          <strong>${chosen.label}</strong
-                          ><span>${fmtTokens(chosen.tokens) + (chosen.note ? " · " + chosen.note : "")}</span>
-                        </div>
-                        <pre>${chosen.text || "(empty)"}</pre>
-                      </div>`
-                    : nothing
-                }
-              </div>
-            </div>`;
-          })}
-        </div>
-      </div>`,
-    );
-  }
-  paint();
-  return host.firstElementChild as HTMLElement;
+function requestsPanel(requests: Row[]) {
+  const cache = sumCacheUsage(requests);
+  return html`<div
+    class=${classMap({ llm: true, "context-turn": true, "context-page": true, "cache-miss": !!cache && isStablePrefixMiss(cache) })}
+  >
+    <div class="context-details">
+      <p class="context-note">Prompt and response bodies are not stored here.</p>
+      ${requests.map((q, index) => {
+        const transport = transportText(q.transport);
+        return html`<div class="context-request">
+          <div class="context-request-head">
+            <strong>${"Request " + (index + 1)}</strong><span>${(q.model || "?") + " · " + fmtContextSize(q)}</span>
+          </div>
+          ${transport ? html`<pre>${transport}</pre>` : nothing}
+        </div>`;
+      })}
+    </div>
+  </div>`;
 }
 export async function contextPage(sessionId: string, turnSeq: string, s: Row) {
   const { request, draw } = begin(s, {
@@ -232,9 +182,9 @@ export async function contextPage(sessionId: string, turnSeq: string, s: Row) {
     html`<div class="detail">
       <div class="context-page-head">
         <h2>${"Sent to model · " + label + (requests.length > 1 ? " · " + requests.length + " steps" : "")}</h2>
-        ${requests.length ? contextStats(requests, s) : nothing}
+        ${requests.length ? contextStats(requests) : nothing}
       </div>
-      ${requests.length ? requestsPanel(requests, s, { page: true, selectLargest: true }) : html`<p class="context-empty">No context was captured for this turn.</p>`}
+      ${requests.length ? requestsPanel(requests) : html`<p class="context-empty">No model calls were recorded for this turn.</p>`}
     </div>`,
   );
 }

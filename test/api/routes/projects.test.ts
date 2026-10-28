@@ -19,6 +19,7 @@ import { testDeployBackings, testDatabaseUrl } from "../../support/test-database
 import { createPostgresGrantStore } from "../../../src/acl/postgres-grant-store.ts";
 import { listen } from "../../support/project-routes.ts";
 import { settledRun } from "../../support/turns.ts";
+import { mockPrompts } from "../../support/mock-harness/turn.ts";
 
 type Built = ReturnType<typeof buildApp>;
 type ProjectSession = Awaited<ReturnType<Built["sessions"]["listByScope"]>>[number];
@@ -194,9 +195,9 @@ async function sharedDeploymentReachesMembers({ built, scope, turn, first }: Pro
   assert.equal((await deploy.reachDeployment(deployment.id, "member")).status, "ok");
   assert.equal((await turn("owner", "web:owner:first", "Simulate four-way title outage after joining")).status, "ok");
   assert.ok((await built.app.listSessions("member")).some((session) => session.id === first.id));
-  const latestRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
-  assert.match(JSON.stringify(latestRequest.promptEnvelope), /secret-before-join/);
-  assert.match(JSON.stringify(latestRequest.promptEnvelope), /after joining/);
+  const latestRequest = mockPrompts(first.id).at(-1)!;
+  assert.match(JSON.stringify(latestRequest), /secret-before-join/);
+  assert.match(JSON.stringify(latestRequest), /after joining/);
   return { deploy, deployment };
 }
 
@@ -295,8 +296,7 @@ async function forkRacesRosterChange({ built, project, turn, first }: ProjectSce
   );
   assert.equal((await built.app.removeProjectMember(project.id, "owner", "outsider")).status, "ok");
   assert.equal((await turn("owner", racingFork.session.threadRef, "continue the fork")).status, "ok");
-  const continuedForkRequest = (await built.sessions.listLlmRequests(racingFork.session.id)).at(-1)!;
-  assert.match(JSON.stringify(continuedForkRequest.promptEnvelope), /after joining/);
+  assert.match(JSON.stringify(mockPrompts(racingFork.session.id).at(-1)), /after joining/);
 }
 
 async function leaseOrderingAndDeactivation({ built, project, scope, groupRef, turn, first }: ProjectScenario) {
@@ -357,9 +357,9 @@ async function leaseOrderingAndDeactivation({ built, project, scope, groupRef, t
   assert.equal((await turn("owner", "web:owner:first", "inactive-gap-secret")).status, "ok");
   await built.identity.reactivate("member");
   assert.equal((await turn("owner", "web:owner:first", "after-reactivation")).status, "ok");
-  const reactivatedRequest = (await built.sessions.listLlmRequests(first.id)).at(-1)!;
-  assert.doesNotMatch(JSON.stringify(reactivatedRequest.promptEnvelope), /inactive-gap-secret/);
-  assert.match(JSON.stringify(reactivatedRequest.promptEnvelope), /after-reactivation/);
+  const reactivatedRequest = mockPrompts(first.id).at(-1)!;
+  assert.doesNotMatch(JSON.stringify(reactivatedRequest), /inactive-gap-secret/);
+  assert.match(JSON.stringify(reactivatedRequest), /after-reactivation/);
   await built.identity.deactivate("owner");
   assert.deepEqual(await built.app.listProjects("member"), []);
   assert.equal((await turn("member", "web:owner:first")).status, "refused");
@@ -571,8 +571,11 @@ test("a member added to a Project inherits the chats that predate them", async (
     ).status,
     "ok",
   );
-  const request = (await built.sessions.listLlmRequests(session.id)).at(-1)!.promptEnvelope as { messages?: unknown[] };
-  assert.match(JSON.stringify(request.messages), /BEFORE_JOIN_TOPIC/, "the agent keeps the project's full history");
+  assert.match(
+    JSON.stringify(mockPrompts(session.id).at(-1)!.messages),
+    /BEFORE_JOIN_TOPIC/,
+    "the agent keeps the project's full history",
+  );
 });
 
 test("leaving a Project still cuts off everything after the member left", async () => {

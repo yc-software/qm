@@ -19,15 +19,6 @@ export const SECURITY_SCREEN_SYSTEM_PROMPT = securityScreenSystemPrompt();
 
 export const SECURITY_SCREEN_STEP = -1;
 
-export function screenPayloadFromEnvelope(envelope: unknown): string | null {
-  const messages = (envelope as { messages?: unknown } | null)?.messages;
-  if (!Array.isArray(messages) || messages.length !== 1) return null;
-  const only = messages[0] as { role?: unknown; content?: unknown } | undefined;
-  if (!only || only.role !== "user" || typeof only.content !== "string") return null;
-  const payload = only.content.trim();
-  return payload.length ? payload : null;
-}
-
 export interface SecurityScreenVerdict {
   decision: "auto" | "strict";
   reason?: string;

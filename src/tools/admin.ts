@@ -82,7 +82,7 @@ export const adminOperations = {
   }),
   session: operation("Read a conversation transcript.", "GET", "/sessions/:id", { ...scopedId, limit }),
   session_llm: operation(
-    "Read captured model-call metadata (full request content stays on the self-API).",
+    "Read per-call model metadata: model, tokens, cost and latency (prompt bodies are not stored).",
     "GET",
     "/sessions/:id/llm",
     scopedId,
@@ -192,12 +192,6 @@ export const adminOperations = {
   }),
 
   mcp_delete: operation("Remove an MCP server.", "DELETE", "/mcp-servers/:id", { id: string }),
-  auto_flagger_test: operation(
-    "Test a candidate security screener on recent samples (billable).",
-    "POST",
-    "/scopes/:scope/auto-flagger/test",
-    { ...scope, value: object },
-  ),
   ambient_judgments: operation("Read ambient message judgments.", "GET", "/ambient-judgments", {
     ...scope,
     container: optionalString,

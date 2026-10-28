@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../support/build-app.ts";
 import { testConfig } from "../support/test-config.ts";
+import { mockPrompts } from "../support/mock-harness/turn.ts";
 
 function freshApp(maxContextTokens?: number) {
   return buildApp(testConfig({ maxContextTokens }));
@@ -29,18 +30,16 @@ test("document uploads survive follow-up turns and stay isolated to their conver
     text: "what was the verification code?",
   });
   assert.equal(followup.status, "ok");
-  const requests = (await built.sessions.listLlmRequests(followup.sessionId!)).filter((r) => r.model === "mock");
+  const requests = mockPrompts(followup.sessionId!);
   assert.equal(requests.length, 2);
-  for (const recorded of requests)
-    assert.match(JSON.stringify(recorded.promptEnvelope), /"documents":\[\{"name":"notes.txt"/);
+  for (const recorded of requests) assert.match(JSON.stringify(recorded), /"documents":\[\{"name":"notes.txt"/);
   const other = await built.app.turn({
     origin: { kind: "direct" },
     ...request,
     conversation: { kind: "dm", threadRef: "dm:U1:other" },
     text: "hello",
   });
-  const otherRequests = await built.sessions.listLlmRequests(other.sessionId!);
-  assert.doesNotMatch(JSON.stringify(otherRequests), /notes.txt/);
+  assert.doesNotMatch(JSON.stringify(mockPrompts(other.sessionId!)), /notes.txt/);
 });
 
 test("compaction stops automatic document replay while preserving the original file", async () => {
@@ -75,8 +74,7 @@ test("compaction stops automatic document replay while preserving the original f
     text: "what was in the document?",
   });
   assert.equal(result.status, "ok");
-  const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
-  assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
+  assert.doesNotMatch(JSON.stringify(mockPrompts(result.sessionId!).at(-1)), /"documents":/);
   const artifact = await built.files.get(attachment.artifactId);
   assert.equal(artifact?.enabled, true);
   const opened = await built.files.open(attachment.artifactId);
@@ -123,8 +121,7 @@ test("compaction during a turn stops document replay immediately", async () => {
   assert.equal(result.status, "ok");
   const compacted = await built.sessions.getItems(first.sessionId!);
   assert.ok(compacted.some((item) => item.kind === "ContextCompaction"));
-  const calls = (await built.sessions.listLlmRequests(result.sessionId!)).filter((record) => record.model === "mock");
-  assert.doesNotMatch(JSON.stringify(calls.at(-1)?.promptEnvelope), /"documents":/);
+  assert.doesNotMatch(JSON.stringify(mockPrompts(result.sessionId!).at(-1)), /"documents":/);
   const artifact = await built.files.get(attachment.artifactId);
   assert.equal(artifact?.enabled, true);
   const opened = await built.files.open(attachment.artifactId);
@@ -162,10 +159,7 @@ test("large documents never push a follow-up turn past the context budget", asyn
     text: "compare the three files",
   });
   assert.equal(followup.status, "ok");
-  const calls = (await built.sessions.listLlmRequests(followup.sessionId!)).filter((r) => r.model === "mock");
-  const replayed = (
-    (calls.at(-1)?.promptEnvelope as { documents?: Array<{ name: string }> } | undefined)?.documents ?? []
-  ).map((document) => document.name);
+  const replayed = (mockPrompts(followup.sessionId!).at(-1)?.documents ?? []).map((document) => document.name);
   const replayedTokens = replayed.reduce((sum, name) => sum + Math.ceil(sizes.get(name)! / 4), 0);
   assert.ok(replayedTokens <= budget / 2, `replayed ${replayed.join(", ")} (~${replayedTokens} tokens)`);
 });

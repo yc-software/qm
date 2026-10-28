@@ -326,8 +326,6 @@ export function createCallTelemetry(
           turnSeq,
           step,
           model: captured[step]!.transport?.modelId ?? effectiveModel,
-          promptEnvelope: captured[step]!.envelope,
-          truncated: captured[step]!.truncated,
           transport: d?.gateway
             ? { ...captured[step]!.transport, gateway: d.gateway }
             : (captured[step]!.transport ?? null),

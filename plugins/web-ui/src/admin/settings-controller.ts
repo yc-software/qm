@@ -4,7 +4,7 @@ import * as governanceUI from "./admin.ts";
 import * as settings from "./settings.ts";
 import { initCustomDropdowns } from "./dropdown.ts";
 import { el } from "./dom.ts";
-import { pick, plural } from "./format.ts";
+import { pick } from "./format.ts";
 
 export interface SettingsContext {
   api: Api;
@@ -116,7 +116,6 @@ export function startSettings(context: SettingsContext) {
       simulatePolicy();
     }
   });
-  $("auto-flagger-test").onclick = runAutoFlaggerTest;
   $("auto-flagger-reset").onclick = resetAutoFlagger;
   document.querySelectorAll<HTMLButtonElement>("[data-save]").forEach((btn) => {
     btn.onclick = () => saveSetting(btn.dataset.save!, btn);
@@ -309,7 +308,6 @@ async function loadScope() {
     renderEnvironmentNotice(r.data);
     loadedCommandPolicyPresent = r.data.commandPolicy != null;
     governanceUI.load(r.data, scope());
-    if (scopeChanged) $("auto-flagger-test-result").hidden = true;
   }
   if (requestedView === "customize") {
     savedBranding = r.data.branding || {};
@@ -569,25 +567,6 @@ async function simulatePolicy() {
   show(pick({ allow: "ok", deny: "danger" }, decision, "warn"), rule + outcome);
 }
 const sectionSnapshots = new Map();
-function autoFlaggerTestSummary(data: any) {
-  if (!data.sampled) return data.message || "No past screenings to replay yet.";
-  const pct = (value: any) => (value == null ? "n/a" : (value * 100).toFixed(1) + "%");
-  const parts = ["Flagged " + data.flagged + " of " + data.scored + " scored (" + pct(data.flagRate) + ")"];
-  if (data.baseline) {
-    parts.push(
-      "current rubric flags " +
-        pct(data.baseline.flagRate) +
-        " · " +
-        plural(data.baseline.changed, "verdict") +
-        " changed",
-    );
-  }
-  if (data.unscreened) parts.push(plural(data.unscreened, "sample") + " came back unscreened");
-  if (data.errors) parts.push(plural(data.errors, "sample") + " errored");
-  if (data.partial) parts.push("stopped at the time limit — partial result");
-  parts.push("sampled " + data.sampled + " · " + Math.round(data.durationMs / 100) / 10 + "s");
-  return parts.join(" · ");
-}
 function captureGovernanceSnapshots() {
   governanceUI.states.forEach((state, key) => {
     sectionSnapshots.set(key, JSON.stringify(state.collect(false)));
@@ -640,29 +619,6 @@ async function refreshPolicySetting(
   } else governanceUI.status(key, message, "ok");
 }
 let governanceSaveSeq = 0;
-async function runAutoFlaggerTest() {
-  const requestedScope = scope();
-  const button = $("auto-flagger-test");
-  $("auto-flagger-test-result").hidden = false;
-  const requested = Number($("auto-flagger-window").value);
-  if (!Number.isInteger(requested) || requested < 1 || requested > 500)
-    return setStatus("st-auto-flagger-test", "Window must be a whole number between 1 and 500.", "err", true);
-  setStatus("st-auto-flagger-test", "Replaying the last " + requested + " screenings through this rubric…", "", true);
-  button.disabled = true;
-  try {
-    const r = await api("POST", scopeUrl(requestedScope, "/auto-flagger/test"), {
-      window: requested,
-      compare: $("auto-flagger-compare").checked,
-      modelId: $("auto-flagger-model").value,
-      rubric: $("auto-flagger-rubric").value,
-    });
-    if (requestedScope !== scope()) return;
-    if (!r.ok) return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
-    setStatus("st-auto-flagger-test", autoFlaggerTestSummary(r.data), r.data.errors ? "warn" : "ok", true);
-  } finally {
-    button.disabled = false;
-  }
-}
 async function resetAutoFlagger() {
   const requestedScope = scope();
   const requestedGeneration = governanceReq;

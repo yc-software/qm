@@ -38,15 +38,12 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     step: 0,
     model: "claude-x",
     scopeLabel: scope,
-    promptEnvelope: { system: "sys" },
   });
   await s.recordLlmRequest(a.id, {
     turnSeq: 0,
     step: 1,
     model: "claude-x",
     scopeLabel: scope,
-    promptEnvelope: { system: "sys" },
-    truncated: true,
     ttftMs: 1200,
     durationMs: 8400,
     usage: { input: 30, output: 120, cacheRead: 5000, cacheWrite: 0, totalTokens: 5150, costUsd: 0.0123 },
@@ -62,19 +59,11 @@ test("pg session store: one-per-thread, TTL/fenced lease, monotonic log, visibil
     "usage round-trips",
   );
 
-  const metaOnly = await s.listLlmRequests(a.id, { omitRequest: true });
-  assert.equal(metaOnly.length, 2, "every row still listed");
-  assert.ok(
-    metaOnly.every((r) => r.promptEnvelope === undefined),
-    "bodies omitted from the projection",
-  );
-  assert.equal(metaOnly[1]!.ttftMs, 1200, "metadata (timing) still selected");
   await s.recordLlmRequest(a.id, {
     turnSeq: null,
     step: 0,
     model: "claude-x",
     scopeLabel: scope,
-    promptEnvelope: { system: "sys" },
   });
   assert.deepEqual(
     (await s.listLlmRequests(a.id, { orphans: true })).map((r) => r.turnSeq),
@@ -186,7 +175,6 @@ test("pg deleteSession: hard-removes the session and its rows, leaves others", a
     step: 0,
     model: "claude-x",
     scopeLabel: scope,
-    promptEnvelope: { system: "sys" },
   });
 
   await s.deleteSession(a.id);

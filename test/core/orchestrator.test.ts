@@ -9,6 +9,7 @@ import type { ProvisionOptions } from "../../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken } from "../../src/auth/capability-token.ts";
 import { isReply, isUserMessage } from "../../src/sessions/items.ts";
 import { buildTestApp, channel, dm, failedTurn, freshApp, internalActor } from "../support/orchestrator-app.ts";
+import { mockPrompts } from "../support/mock-harness/turn.ts";
 
 test("internal DM turn runs end-to-end and records the session", async () => {
   const { app } = freshApp();
@@ -85,11 +86,8 @@ test("inbound file problems reach the model in the environment footer, not a log
     /<environment>[\s\S]*did not reach \.\/inbox\/[\s\S]*screenshot\.png[\s\S]*<\/environment>/,
   );
 
-  const reqs = (await sessions.listLlmRequests(res.sessionId!)) as Array<{ model: string; promptEnvelope: unknown }>;
   assert.ok(
-    reqs
-      .filter((request) => request.model !== "mock-security")
-      .some((r) => /screenshot\.png/.test(JSON.stringify(r.promptEnvelope))),
+    mockPrompts(res.sessionId!).some((prompt) => /screenshot\.png/.test(JSON.stringify(prompt))),
     "the model sees the dropped file",
   );
 
@@ -144,19 +142,17 @@ test("a triggered turn records its synthetic wake prompt hidden so the chat neve
 });
 
 test("a 1:1 names the authenticated human in the prompt so the agent never asks who they are", async () => {
-  const { app, sessions } = freshApp();
+  const { app } = freshApp();
   const res = await app.turn(dm("hi", { actor: { externalId: "ada@acme.com", displayName: "Ada Lovelace" } }));
   assert.equal(res.status, "ok", res.reason);
-  const sys = (await sessions.listLlmRequests(res.sessionId!)).at(-1)! as any;
-  assert.match(sys.promptEnvelope.system, /live private 1:1 with Ada Lovelace \(ada@acme\.com\)/);
+  assert.match(mockPrompts(res.sessionId!).at(-1)!.system, /live private 1:1 with Ada Lovelace \(ada@acme\.com\)/);
 });
 
 test("a channel turn gets no 1:1 identity block", async () => {
-  const { app, sessions } = freshApp();
+  const { app } = freshApp();
   const res = await app.turn(channel("hi", { actor: { externalId: "U1", displayName: "Ada" } }));
   assert.equal(res.status, "ok", res.reason);
-  const sys = (await sessions.listLlmRequests(res.sessionId!)).at(-1)! as any;
-  assert.doesNotMatch(sys.promptEnvelope.system, /## Who you're talking to/);
+  assert.doesNotMatch(mockPrompts(res.sessionId!).at(-1)!.system, /## Who you're talking to/);
 });
 
 test("a silent cron source run stays out of normal human chat history", async () => {
@@ -246,9 +242,7 @@ test("a cron-delivered digest is noted in the recipient's next DM turn, not writ
     conversation: { kind: "dm", threadRef: "dm:D-alice" },
     text: "what was that digest?",
   });
-  const reqs = await built.sessions.listLlmRequests(recipient!.id);
-  const latest = reqs.at(-1) as any;
-  const footer = latest.promptEnvelope.messages.at(-1).content;
+  const footer = mockPrompts(recipient!.id).at(-1)!.messages.at(-1)!.content;
   assert.match(footer, /Delivered here since the user's last message/);
   assert.match(footer, /\[cron\] from U-carol:/);
   assert.ok(footer.includes(pending[0]!.text.trim().split("\n")[0]!), "the delivered text is quoted in full");

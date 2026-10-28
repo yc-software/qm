@@ -79,7 +79,6 @@ export async function adminRoute(c: WebCtx): Promise<unknown> {
   }
   if (first === "scopes" && rest.length > "scopes/".length) {
     if (method === "GET") return relayAdmin("GET");
-    if (method === "POST" && rest.endsWith("/auto-flagger/test")) return relayAdmin("POST");
     if (method === "PUT" && rest.lastIndexOf("/") > "scopes/".length) {
       if (!rest.endsWith("/branding")) return relayAdmin("PUT");
       const saved = await coreFetch("PUT", corePath, await readBody(req), undefined, headers);

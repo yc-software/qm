@@ -296,10 +296,8 @@ for (const [name, make] of backends) {
       step: 0,
       model: "claude-x",
       scopeLabel: s.scopeId,
-      promptEnvelope: { system: "you are helpful", tools: [{ name: "execute" }] },
     });
     assert.ok(rec.id, "stamps an id");
-    assert.equal(rec.truncated, false, "defaults truncated to false");
     assert.equal(rec.ttftMs, null, "per-call timing defaults to null when not captured");
     assert.equal(rec.usage, null, "usage defaults to null when the provider reported none");
     assert.equal(rec.transport, null, "transport defaults to null when not captured");
@@ -308,7 +306,6 @@ for (const [name, make] of backends) {
       step: 1,
       model: "claude-x",
       scopeLabel: s.scopeId,
-      truncated: true,
       ttftMs: 1200,
       durationMs: 8400,
       usage: { input: 30, output: 120, cacheRead: 5000, cacheWrite: 0, totalTokens: 5150, costUsd: 0.0123 },
@@ -323,28 +320,6 @@ for (const [name, make] of backends) {
       "ordered by step within the turn",
     );
     assert.equal(list[0]!.turnSeq, 0, "correlated to the turn's user entry seq");
-    assert.equal(list[1]!.truncated, true, "truncated flag round-trips");
-    assert.deepEqual(
-      list[0]!.promptEnvelope,
-      { system: "you are helpful", tools: [{ name: "execute" }] },
-      "prompt envelope round-trips via its hash",
-    );
-    assert.ok(list[0]!.promptHash, "envelope rows carry the dedup hash");
-    assert.equal(list[1]!.promptHash, null, "rows recorded without an envelope stay bare");
-    const repeat = await store.recordLlmRequest(s.id, {
-      turnSeq: 1,
-      step: 0,
-      model: "claude-x",
-      scopeLabel: s.scopeId,
-      promptEnvelope: { system: "you are helpful", tools: [{ name: "execute" }] },
-    });
-    assert.equal(repeat.promptHash, list[0]!.promptHash, "identical envelopes dedupe to one stored body");
-    const rehydrated = await store.listLlmRequests(s.id, { turnSeqs: [1] });
-    assert.deepEqual(
-      rehydrated[0]!.promptEnvelope,
-      { system: "you are helpful", tools: [{ name: "execute" }] },
-      "the deduped row still hydrates its envelope",
-    );
     assert.equal(list[1]!.ttftMs, 1200, "per-call TTFT round-trips");
     assert.equal(list[1]!.durationMs, 8400, "per-call duration round-trips");
     assert.deepEqual(
@@ -365,7 +340,7 @@ for (const [name, make] of backends) {
   test(`${name}: listLlmRequests filters by turnSeq in the store (no load-all-then-filter)`, async () => {
     const store = make();
     const s = await store.getOrCreateByThread("t1", "dm", scopeId("personal", "U1"));
-    const base = { model: "claude-x", scopeLabel: s.scopeId, promptEnvelope: { system: "sys" } };
+    const base = { model: "claude-x", scopeLabel: s.scopeId };
     await store.recordLlmRequest(s.id, { ...base, turnSeq: 0, step: 0 });
     await store.recordLlmRequest(s.id, { ...base, turnSeq: 5, step: 0 });
     await store.recordLlmRequest(s.id, { ...base, turnSeq: 5, step: 1 });
@@ -394,17 +369,6 @@ for (const [name, make] of backends) {
     const union = await store.listLlmRequests(s.id, { turnSeqs: [5], orphans: true });
     assert.equal(union.filter((r) => r.turnSeq === 5).length, 2, "turnSeqs + orphans keeps the turn rows");
     assert.equal(union.filter((r) => r.turnSeq === null).length, 1, "…and unions in the orphan");
-
-    const meta = await store.listLlmRequests(s.id, { omitRequest: true });
-    assert.equal(meta.length, 4, "every row still listed");
-    assert.ok(
-      meta.every((r) => r.promptEnvelope === undefined),
-      "bodies omitted",
-    );
-    assert.ok(
-      meta.every((r) => r.model === "claude-x"),
-      "metadata retained",
-    );
   });
 
   test(`${name}: attributedTurns credits only user entries inside a participant's window, per session/day`, async () => {

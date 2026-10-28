@@ -110,18 +110,16 @@ test("header controls appear while transcript requests are pending and stale rep
     dom.window.close();
   }
 });
-test("model context selection and disclosure render from state and escape captured content", () => {
+test("model context shows per-call metadata and escapes transport text", async () => {
   const dom = setup();
   try {
-    dom.window.eval(
-      `document.getElementById('view-data').append(ui.requestsPanel([{promptEnvelope:{system:'<script>bad</script>',messages:[{role:'user',content:'hello'}]}}],services,{embedded:true,page:true,selectLargest:true}))`,
+    await dom.window.eval(
+      `services.api=async()=>({ok:true,data:{requests:[{model:'m',transport:{modelId:'<script>bad</script>'}}]}});ui.contextPage('s','1',services)`,
     );
     const doc = dom.window.document;
-    assert.equal(doc.querySelector("pre")!.textContent, "<script>bad</script>");
+    assert.match(doc.querySelector("pre")!.textContent!, /^model: <script>bad<\/script>/);
     assert.equal(doc.querySelectorAll("script").length, 0);
-    doc.querySelector<HTMLButtonElement>(".ctx-messages")!.click();
-    assert.equal(doc.querySelector("pre")!.textContent, "[user]\nhello");
-    assert.equal(doc.querySelector(".ctx-messages")!.getAttribute("aria-pressed"), "true");
+    assert.match(doc.querySelector(".context-note")!.textContent!, /not stored here/);
   } finally {
     dom.window.close();
   }

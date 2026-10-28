@@ -28,7 +28,7 @@ import { countTokens } from "../util/tokens.ts";
 import {
   GATEWAY_REQUEST_MAX_BYTES,
   trimPayloadToByteBudget,
-  sanitizeLlmPayload,
+  transportFromModel,
   guardOutputBudget,
 } from "./pi-payload.ts";
 import { type ProviderKeys, buildModelRuntime, applyFastSpeed, applyReasoningMode } from "./pi-model-runtime.ts";
@@ -276,7 +276,6 @@ export async function createTurnSession({
       applyFastSpeed(payload, request.fast(), (model as { api?: string } | undefined)?.api);
       applyReasoningMode(payload, model as Model<Api>, request.effortLevel());
       const result = prior ? await prior(payload, model) : payload;
-      const capturedPayload = captureRequests ? sanitizeLlmPayload(result ?? payload, model) : undefined;
       let finalPayload = await withDocumentInputs(
         result ?? payload,
         model as DocumentModel,
@@ -296,7 +295,7 @@ export async function createTurnSession({
       } catch (e) {
         swallow("pi: request byte budget", e);
       }
-      if (captureRequests) calls.capture(capturedPayload!);
+      if (captureRequests) calls.capture({ transport: transportFromModel(model) });
       return finalPayload;
     };
     const priorResponse = agent.onResponse;

@@ -13,7 +13,7 @@ import {
   loadDocumentInputs,
   type DocumentInput,
 } from "../../src/core/document-inputs.ts";
-import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../../src/harness/pi-payload.ts";
+import { guardOutputBudget, trimPayloadToByteBudget } from "../../src/harness/pi-payload.ts";
 import { mimeFromName } from "../../src/core/attachments.ts";
 import type { AttachmentMeta } from "../../src/types.ts";
 import { storedItem, type NewItem } from "../../src/sessions/items.ts";
@@ -68,7 +68,6 @@ for (const ext of [
     assert.equal(block.type, "input_file");
     assert.equal(block.filename, document.name);
     assert.equal(String(block.file_data).split(",")[1], document.dataBase64);
-    assert.ok(!JSON.stringify(sanitizeLlmPayload(payload).envelope).includes(document.dataBase64));
   });
 }
 

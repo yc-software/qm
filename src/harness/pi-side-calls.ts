@@ -158,8 +158,6 @@ export async function piScreenSecurity(
       turnSeq: null,
       step: SECURITY_SCREEN_STEP,
       model: modelId,
-      promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
-      truncated: false,
     });
     return parseSecurityScreenVerdict(
       await complete(model, providerKeys, systemPrompt, payload, {

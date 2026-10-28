@@ -81,8 +81,6 @@ export function createMockModels(flakyScreens: Set<string>): HarnessModelUtiliti
         turnSeq: null,
         step: SECURITY_SCREEN_STEP,
         model,
-        promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
-        truncated: false,
       });
       if (/!security-screen-hang/i.test(payload)) {
         return new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true }));
