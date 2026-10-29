@@ -19,8 +19,8 @@ for (const key of [
 await import("../src/slack-setup.ts");
 const links = {
   tokenUrl: "https://api.slack.com/apps",
-  submitUrl: "https://agent.example.com/admin?slack=setup",
-  installUrl: "https://agent.example.com/admin?slack=install",
+  submitUrl: "https://agent.example.com/settings/slack-settings?slack=setup",
+  installUrl: "https://agent.example.com/settings/slack-settings?slack=install",
 };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 25));
 
@@ -28,7 +28,7 @@ test("one checklist updates from token to consent to connected and clears stale 
   let response = { configured: false, setup: { ...links, appReady: false, connected: false } };
   let fail = false;
   const fetch = t.mock.method(globalThis, "fetch", async (url: unknown) => {
-    assert.equal(url, "/admin/api/slack-installation");
+    assert.equal(url, "/api/admin/slack-installation");
     return fail ? new Response("", { status: 503 }) : Response.json(response);
   });
   const card = document.createElement("qm-slack-setup");

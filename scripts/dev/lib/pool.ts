@@ -68,7 +68,7 @@ export function slotValid(slot: string, store = poolStore()): boolean {
 }
 
 const LEGACY_PORT_SLOTS = 16;
-const PORTS_PER_SLOT = 7;
+const PORTS_PER_SLOT = 6;
 
 export function portSlotCount(basePort = Number(process.env.DEV_INSTANCE_BASE_PORT || 8080)): number {
   if (!Number.isInteger(basePort) || basePort < 0 || basePort > 65535) {
@@ -91,11 +91,10 @@ export function slotPorts(slot: string, basePort = Number(process.env.DEV_INSTAN
   return {
     core: first,
     web: first + stride,
-    admin: first + 2 * stride,
-    portal: first + 3 * stride,
-    prodProxy: first + 4 * stride,
-    slackHealth: first + 5 * stride,
-    supervisor: first + 6 * stride,
+    portal: first + 2 * stride,
+    prodProxy: first + 3 * stride,
+    slackHealth: first + 4 * stride,
+    supervisor: first + 5 * stride,
   };
 }
 

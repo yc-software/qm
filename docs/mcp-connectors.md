@@ -1,7 +1,7 @@
 # MCP connector credentials
 
 Administrators register HTTP MCP servers through `PUT /v1/admin/mcp-servers/:id`
-from an admin session (`/admin/api/mcp-servers/:id` behind the portal); agent tokens
+from an administrator session (`/api/admin/mcp-servers/:id` in the web UI behind the portal); agent tokens
 are refused, so an agent cannot change which tools it may call or which calls need
 approval. Registration controls the outbound destination and the tools available to agents.
 

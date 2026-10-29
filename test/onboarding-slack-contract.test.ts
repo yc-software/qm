@@ -39,7 +39,7 @@ test("admins set up a connector source before voice or work questions", () => {
   assert.match(onboarding, /unknown, not absent/);
   assert.doesNotMatch(onboarding, /connector-sources/);
   assert.match(admin, /view=credentials[\s\S]*COMPOSIO_API_KEY/);
-  assert.match(admin, /Admin → Credentials, Admin → Connectors/);
+  assert.match(admin, /Settings → Credentials, Settings → Connectors/);
   assert.match(admin, /<web origin>\/v1\/connectors\/oauth\/<provider>\/callback/);
   assert.match(admin, /Never\s+ask\s+regular\s+users\s+to\s+configure\s+a\s+source/);
 });

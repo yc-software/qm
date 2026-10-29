@@ -174,7 +174,6 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
   const portal = renderServiceEnv(config, "portal", values, connections);
   assert.equal(portal.OIDC_ISSUER, `${config.publicUrl}/idp`);
   assert.equal(portal.AUTH_REDIRECT_URI, `${config.publicUrl}/auth/callback`);
-  assert.equal(portal.ADMIN_UPSTREAM, "http://web-ui:8080/admin");
   assert.equal(renderServiceEnv(config, "slack", values, connections).PUBLIC_API_URL, config.apiUrl);
 });
 
@@ -201,9 +200,9 @@ test("Render rejects prebuilt plugin images", (t) => {
   assert.ok(renderConfigErrors(config, plugins).some((error) => /Git source Dockerfiles/.test(error.message)));
 });
 
-test("removing hosted auth, admin, and Slack resets their managed settings", (t) => {
+test("removing hosted auth and Slack resets their managed settings", (t) => {
   const { config } = deployment(t);
-  config.services = config.services.filter((service) => !["auth", "admin", "slack"].includes(service));
+  config.services = config.services.filter((service) => !["auth", "slack"].includes(service));
   config.env.portal = { OIDC_ISSUER: "https://idp.example.test" };
   const core = renderServiceEnv(config, "core", new Map(), connections);
   for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET", "AUTH_ALLOWED_EMAIL_DOMAIN"])
@@ -211,7 +210,6 @@ test("removing hosted auth, admin, and Slack resets their managed settings", (t)
   const portal = renderServiceEnv(config, "portal", new Map(), connections);
   assert.equal(portal.AUTH_EMBEDDED, "0");
   assert.equal(portal.AUTH_BROKER_UPSTREAM, "");
-  assert.equal(portal.ADMIN_UPSTREAM, "");
   assert.equal(portal.OIDC_ISSUER, "https://idp.example.test");
   assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, "");
 });

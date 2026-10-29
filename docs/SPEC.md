@@ -117,7 +117,7 @@ Every sandbox provider should give the agent the same machine. When one provider
 - **Adding a provider that subtly deviates from the general sandbox contract (this has been done several times).** For example, ordinary teardown parks E2B, AWS, and local Docker computers, while Modal needs different handling. [qm#1748](https://github.com/yc-software/qm/pull/1748) removes a `backend !== "modal"` locking exception and introduces a `parksOnTeardown` profile property; the distinct lifecycle behaviors remain part of the matrix.
 - **AWS CLI v1 on E2B and Modal** (2026-10-09): The E2B and Modal sandbox images came with no AWS CLI at all. When the agent needed `aws`, it ran `pip install awscli`, and pip only has version 1. Version 1 can't do device-code sign-in. The Fly, Porter and Superserve images already included version 2, so only these two were missing it.
 
-### God files (4 examples)
+### God files (5 examples)
 
 Letting one file or module absorb unrelated responsibilities until changes require understanding the whole system. Keep responsibilities with clear owners and boundaries; splitting a file by line count alone does not untangle those responsibilities.
 
@@ -125,6 +125,7 @@ Letting one file or module absorb unrelated responsibilities until changes requi
 - **[qm#1636](https://github.com/yc-software/qm/pull/1636): Core orchestrator.** `src/core/orchestrator.ts` absorbed memory-audience changes, transcript cutoffs, provenance dependency capture, harness resets, and approval invalidation inside the same turn-execution closure. The diff shows memory-disclosure policy reaching into retry replay and pending approvals; those responsibilities remain embedded in the orchestrator despite separate memory helpers.
 - **[qm#175](https://github.com/yc-software/qm/pull/175): Chat surface.** `plugins/web-ui/src/chat.ts` combines transcript rendering and pagination, pane lifecycle and URL state, command-approval submission, active-run recovery, session forking, and connector-auth widgets inside `createChatSurface`. The multiview change rewrites that shared closure, so changing how a pane mounts also means navigating approval and execution-recovery state. _Status:_ these responsibilities still share `chat.ts`.
 - **[qm#488](https://github.com/yc-software/qm/pull/488): Web server entrypoint.** `plugins/web-ui/server/index.ts` combines session cookies and sign-in, OAuth callback forwarding, core API transport, request-body handling, and route handlers for sessions, files, projects, and crons. The PR extracts a shared router and relay helpers, but keeps the product domains and authentication flows in the same server module. _Status:_ partial cleanup; the shared entrypoint still owns those domains.
+- **Admin controller** (2026-10-25): `plugins/web-ui/src/admin/controller.js` is the former admin page's inline script moved into a module. One `startAdmin` closure owns routing, API calls, the scope directory, governance save review and rendering glue for every admin view. _Status:_ still one closure; the follow-up splits it by view into the existing Lit modules.
 
 ### Mismatched UI (4 examples)
 

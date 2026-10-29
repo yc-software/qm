@@ -65,11 +65,10 @@ test("slotPorts derive the full port block from the slot number", () => {
   assert.deepEqual(ports, {
     core: 8083,
     web: 8099,
-    admin: 8115,
-    portal: 8131,
-    prodProxy: 8147,
-    slackHealth: 8163,
-    supervisor: 8179,
+    portal: 8115,
+    prodProxy: 8131,
+    slackHealth: 8147,
+    supervisor: 8163,
   });
 });
 
@@ -88,8 +87,8 @@ test("port blocks preserve legacy slots and stay disjoint through the port ceili
     }
     assert.throws(() => slotPorts(`pool${count + 1}`, base), /No valid port block/);
   }
-  assert.equal(portSlotCount(8080), 8207);
-  assert.equal(slotPorts("pool17", 8080).core, 8193);
+  assert.equal(portSlotCount(8080), 9575);
+  assert.equal(slotPorts("pool17", 8080).core, 8177);
 });
 
 test("port allocation rejects malformed slots and invalid base ports", () => {
@@ -136,7 +135,7 @@ test("occupied port blocks are skipped without killing listeners or retaining le
   const previousBase = process.env.DEV_INSTANCE_BASE_PORT;
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
-  process.env.DEV_INSTANCE_BASE_PORT = String(port - 97);
+  process.env.DEV_INSTANCE_BASE_PORT = String(port - 81);
   try {
     assert.equal(await claimSlotPorts("pool1", store), false);
     assert.equal(existsSync(lockDir("pool1", store)), false);

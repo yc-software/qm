@@ -7,6 +7,7 @@ import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
+import { adminRoutes } from "./admin-routes.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
@@ -1783,6 +1784,19 @@ const apiRoutes: readonly WebRoute[] = [
       return relayCore(res, "PUT", "/v1/ui-state", JSON.stringify({ ...body, principalId: user }));
     },
   },
+  ...adminRoutes({
+    origin: CORE,
+    secret: CORE_SIGNING_SECRET,
+    org: ORG,
+    portalHeaders: (): Record<string, string> => {
+      const token = portalTokenStore.getStore();
+      return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
+    },
+    readBody,
+    stageUpload: stageUploadStream,
+    refreshBranding: () => brandingCache.refreshNow(),
+    json,
+  }),
   ...uiCanvasRoutes({
     impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
     coreFetch,
@@ -3381,6 +3395,11 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     );
   }
   if (method === "GET" && path === "/manifest.webmanifest") return serveWebManifest(res);
+  if (method === "GET" && (path === "/admin" || path.startsWith("/admin/")) && !path.startsWith("/admin/api/")) {
+    const rest = path.slice("/admin".length).replace(/^\/+/, "");
+    res.writeHead(302, { location: `/settings/${rest || "history"}${url.search}`, "cache-control": "no-store" });
+    return res.end();
+  }
 
   if (method === "POST" && path === "/signin") {
     if (!COOKIE_AUTH) return json(res, 404, { error: "not_found" });
@@ -3542,23 +3561,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
   json(res, 404, { error: "not found" });
 };
 
-let adminModule: Promise<typeof import("../../admin/src/index.ts")> | undefined;
-
 export const handler = async (req: IncomingMessage, res: ServerResponse) => {
-  const originalUrl = req.url ?? "/";
-  const path = originalUrl.split("?")[0]!;
-  if (process.env.ADMIN_ENABLED !== "0" && (path === "/admin" || path.startsWith("/admin/"))) {
-    req.url = originalUrl.slice("/admin".length) || "/";
-    if (req.url.startsWith("?")) req.url = `/${req.url}`;
-    try {
-      process.env.ADMIN_BASE_PATH ??= "/admin";
-      adminModule ??= import("../../admin/src/index.ts");
-      await (await adminModule).handler(req, res);
-    } finally {
-      req.url = originalUrl;
-    }
-    return;
-  }
   res.setHeader("strict-transport-security", "max-age=63072000; includeSubDomains");
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader("x-content-type-options", "nosniff");

@@ -229,7 +229,9 @@ export async function startSlackPlugin(
     : createMirror({ core, ids, directory, externalParticipantsEnabled });
   const historyRateLimitOptions = {
     managed: Boolean(cfg.installationId && cfg.sharedServiceUrl?.trim()),
-    ...(cfg.webUiPublicUrl ? { setupUrl: `${cfg.webUiPublicUrl.replace(/\/$/, "")}/admin/?setup=slack` } : {}),
+    ...(cfg.webUiPublicUrl
+      ? { setupUrl: `${cfg.webUiPublicUrl.replace(/\/$/, "")}/settings/slack-settings?setup=slack` }
+      : {}),
   };
   const rateLimitNotice = createSlackRateLimitNotice({
     ...historyRateLimitOptions,

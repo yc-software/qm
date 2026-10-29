@@ -65,7 +65,7 @@ export function connectorLinksIn(text: string, trustedOrigin?: string): Connecto
     if (
       trustedOrigin &&
       parsed.origin === trustedOrigin &&
-      parsed.pathname === "/admin" &&
+      parsed.pathname === "/settings/slack-settings" &&
       parsed.search === "?slack=setup"
     ) {
       if (!out.some((l) => l.provider === "slack-bot")) out.push({ provider: "slack-bot", url });

@@ -44,6 +44,10 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
+    files: ["plugins/web-ui/src/admin/controller.js"],
+    languageOptions: { globals: globals.browser },
+  },
+  {
     rules: {
       "no-empty": ["error", { allowEmptyCatch: false }],
 

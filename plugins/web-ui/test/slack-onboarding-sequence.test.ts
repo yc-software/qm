@@ -9,7 +9,7 @@ test("personal Slack linking appears beneath the confirmed company installation"
   globalThis.fetch = async (input, init) => {
     if (String(input) === "/me")
       return Response.json({ user: "tester", org: "test", welcomeCohort: "F26", permissions: ["admin"] });
-    if (String(input) === "/admin/api/slack-installation")
+    if (String(input) === "/api/admin/slack-installation")
       return Response.json({ configured: installed, installAvailable: true, setup: { connected: installed } });
     return previousFetch(input, init);
   };

@@ -540,7 +540,7 @@ const config: QmConfig = {
   orgId: "acme",
   publicUrl: "https://agent.acme.example",
   target: "aws",
-  services: ["core", "slack", "web-ui", "admin", "portal"],
+  services: ["core", "slack", "web-ui", "portal"],
   plugins: [],
   skills: [],
   imageOverrides: {},
@@ -551,7 +551,6 @@ const config: QmConfig = {
   },
   env: {
     core: { HARNESS: "pi", AWS_DEPLOY_IMAGE: "acme-qm-sandbox", AWS_DEPLOY_IMAGE_VERSION: "1" },
-    admin: { ADMIN_BASE_PATH: "/admin" },
     portal: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: "T1" },
   },
   aws: {
@@ -563,7 +562,7 @@ const config: QmConfig = {
     secretsPrefix: "acme/qm/",
     networking: { cloudMapNamespace: "acme.internal" },
     services: Object.fromEntries(
-      ["core", "web-ui", "admin", "portal"].map((name) => [
+      ["core", "web-ui", "portal"].map((name) => [
         name,
         {
           ecrRepository: `qm-${name}`,
@@ -578,8 +577,6 @@ const config: QmConfig = {
 
 test("AWS environment derives identity, public URLs, private wiring, and MicroVM coordinates", () => {
   assert.deepEqual(serviceEnvironment(config, "web-ui"), {
-    ADMIN_BASE_PATH: "/admin",
-    ADMIN_ENABLED: "1",
     CORE_API_URL: "http://core.acme.internal:8080",
     CORE_ORG_ID: "acme",
     PORT: "8080",
@@ -679,11 +676,10 @@ test("AWS fixes every workload listen port to its ECS port mapping", () => {
       ...config.env,
       core: { ...config.env.core, PORT: "9000" },
       "web-ui": { PORT: "9001" },
-      admin: { ...config.env.admin, PORT: "9002" },
       portal: { ...config.env.portal, PORT: "9003" },
     },
   };
-  for (const service of ["core", "web-ui", "admin", "portal"] as const) {
+  for (const service of ["core", "web-ui", "portal"] as const) {
     const def = configured.aws!.services[service]!;
     const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/${def.ecrRepository}@sha256:${"a".repeat(64)}`;
     const task = renderTaskDefinition(configured, service, image);
@@ -2530,7 +2526,7 @@ if [ "$1 $2" = "dynamodb get-item" ]; then
   exit 0
 fi
 if [ "$1 $2" = "ecs describe-services" ]; then
-  printf '%s\\n' '{"services":[{"serviceName":"acme-core","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]},{"serviceName":"acme-web-ui","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]},{"serviceName":"acme-admin","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]},{"serviceName":"acme-portal","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]}],"failures":[]}'
+  printf '%s\\n' '{"services":[{"serviceName":"acme-core","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]},{"serviceName":"acme-web-ui","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]},{"serviceName":"acme-portal","desiredCount":0,"runningCount":0,"tags":[{"key":"Deployment","value":"acme"},{"key":"ManagedBy","value":"terraform"}]}],"failures":[]}'
   exit 0
 fi
 for arg in "$@"; do
@@ -3124,7 +3120,6 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
       assert.throws(() => process.kill(pid, 0), /ESRCH/);
       assert.equal(existsSync(join(dir, "completed-" + name)), false);
     }
-    assert.equal(existsSync(join(dir, "pid-admin")), false);
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
   } finally {
     parent.kill("SIGKILL");
@@ -5512,36 +5507,28 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
 
 test("AWS secrets push defers activation against pre-consolidation images", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-combined-"));
-  const operator = computedSecrets(config).filter((secret) => secret.managedBy === "operator" && secret.required);
+  const combined: QmConfig = { ...config, services: [...config.services, "auth"] };
+  const operator = computedSecrets(combined).filter((secret) => secret.managedBy === "operator" && secret.required);
   writeFileSync(join(dir, ".env"), operator.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`).join("\n"));
-  const fake = statefulAws(dir, config);
+  const fake = statefulAws(dir, combined);
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
   const tasks = Object.fromEntries(
-    runnableServices(config.services).map((name) => [name, state.services[`acme-${name}`].taskDefinition]),
+    runnableServices(combined.services).map((name) => [name, state.services[`acme-${name}`].taskDefinition]),
   );
-  state.definitions[tasks["web-ui"]] = {
-    containerDefinitions: [{ name: "web-ui", image: "old-web-image", environment: [] }],
+  state.definitions[tasks.portal] = {
+    containerDefinitions: [{ name: "portal", image: "old-portal-image", environment: [] }],
   };
   state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks }], "current");
   writeFileSync(fake.state, JSON.stringify(state));
   try {
-    await awsSecretsPush(config, dir);
+    await awsSecretsPush(combined, dir);
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /secretsmanager put-secret-value/);
     assert.doesNotMatch(calls, /ecs (?:register-task-definition|update-service)/);
-    state.definitions[tasks["web-ui"]].containerDefinitions[0].environment = [{ name: "ADMIN_ENABLED", value: "1" }];
-    state.definitions[tasks.portal] = {
-      containerDefinitions: [
-        {
-          name: "portal",
-          image: "old-portal-image",
-          environment: [{ name: "ADMIN_UPSTREAM", value: "http://admin.acme.internal:8080" }],
-        },
-      ],
-    };
+    state.definitions[tasks.portal].containerDefinitions[0].environment = [{ name: "AUTH_EMBEDDED", value: "0" }];
     writeFileSync(fake.state, JSON.stringify(state));
     writeFileSync(fake.log, "");
-    await awsSecretsPush(config, dir);
+    await awsSecretsPush(combined, dir);
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
   } finally {
     fake.restore();
@@ -6340,10 +6327,10 @@ for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] 
       }
       const portal = baseline.definitions[baseline.services["acme-portal"].taskDefinition].containerDefinitions[0];
       if (mode === "migration")
-        portal.environment.find((entry: { name: string }) => entry.name === "ADMIN_UPSTREAM").value =
-          "http://admin.acme.local:8080";
+        portal.environment.find((entry: { name: string }) => entry.name === "WEB_UI_UPSTREAM").value =
+          "http://web.acme.local:8080";
       if (mode === "missing")
-        portal.environment = portal.environment.filter((entry: { name: string }) => entry.name !== "ADMIN_UPSTREAM");
+        portal.environment = portal.environment.filter((entry: { name: string }) => entry.name !== "WEB_UI_UPSTREAM");
       if (mode === "unstable") baseline.taskInventory["acme-web-ui"][0].desiredStatus = "STOPPED";
       if (mode === "failure") baseline.failNextWebRollout = true;
       writeFileSync(fake.state, JSON.stringify(baseline));

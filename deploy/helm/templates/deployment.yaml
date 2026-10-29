@@ -1,11 +1,12 @@
-{{- range $component, $host := dict "admin" "web-ui" "auth" "portal" }}
-{{- if and (index $.Values.services $component).enabled (not (index $.Values.services $host).enabled) }}
-{{- fail (printf "%s requires services.%s.enabled=true" $component $host) }}
+{{- if hasKey .Values.services "admin" }}
+{{- fail "services.admin no longer exists; admin settings are part of web-ui at /settings. Remove services.admin" }}
 {{- end }}
+{{- if and .Values.services.auth.enabled (not .Values.services.portal.enabled) }}
+{{- fail "auth requires services.portal.enabled=true" }}
 {{- end }}
 {{- $root := . -}}
 {{- range $name, $svc := .Values.services }}
-{{- if and $svc.enabled (ne $name "admin") (ne $name "auth") }}
+{{- if and $svc.enabled (ne $name "auth") }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -77,7 +78,6 @@ spec:
           {{- $issuer := printf "%s/idp" $base }}
           {{- if eq $name "portal" }}
           {{- $_ := set $wired "WEB_UI_UPSTREAM" (printf "http://%s:%v" (printf $svcHost "web-ui") (index $root.Values.services "web-ui").port) }}
-          {{- $_ := set $wired "ADMIN_UPSTREAM" (printf "http://%s:%v/admin" (printf $svcHost "web-ui") (index $root.Values.services "web-ui").port) }}
           {{- if $authEnabled }}
           {{- $_ := set $wired "AUTH_BROKER_UPSTREAM" $authUpstream }}
           {{- $_ := set $wired "AUTH_EMBEDDED" "1" }}
@@ -109,14 +109,9 @@ spec:
           {{- $_ := set $wired "WEB_UI_PUBLIC_URL" $root.Values.publicUrl }}
           {{- end }}
           {{- end }}
-          {{- if eq $name "web-ui" }}
-          {{- $_ := set $wired "ADMIN_BASE_PATH" "/admin" }}
-          {{- $_ := set $wired "ADMIN_ENABLED" (ternary "1" "0" (index $root.Values.services "admin").enabled) }}
-          {{- end }}
           {{- $componentEnv := deepCopy ($svc.env | default dict) }}
           {{- $component := "" }}
           {{- if eq $name "portal" }}{{- $component = "auth" }}{{- end }}
-          {{- if eq $name "web-ui" }}{{- $component = "admin" }}{{- end }}
           {{- if and $component (index $root.Values.services $component).enabled }}
           {{- range $k, $v := (index $root.Values.services $component).env }}
           {{- if ne $k "PORT" }}

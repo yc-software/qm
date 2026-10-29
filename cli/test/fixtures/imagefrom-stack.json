@@ -10,7 +10,7 @@
   "sandbox": {
     "app": "beta-sandboxes"
   },
-  "services": ["core", "slack", "admin", "web-ui", "portal"],
+  "services": ["core", "slack", "web-ui", "portal"],
   "vms": {
     "core": { "size": "shared-cpu-2x", "memory": "4gb" }
   },
@@ -23,7 +23,6 @@
       "S3_BUCKET": "beta-data",
       "S3_REGION": "auto"
     },
-    "admin": { "ADMIN_BASE_PATH": "/admin" },
     "slack": {
       "WEB_UI_PUBLIC_URL": "https://beta-portal.fly.dev"
     },
