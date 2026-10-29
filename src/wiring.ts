@@ -1468,11 +1468,14 @@ export function buildApp(
       );
     return token ? { anthropic: token } : {};
   };
-  const resolvePiProviderKeys = async (): Promise<ProviderKeys> => ({
-    ...(await resolveCompanyClaudeKeys()),
-    ...(await resolveModelProviderKeys()),
-    ...(await resolveCompanySubscriptionKeys()),
-  });
+  const resolvePiProviderKeys = async (): Promise<ProviderKeys> => {
+    const [claude, metered, chatgpt] = await Promise.all([
+      resolveCompanyClaudeKeys(),
+      resolveModelProviderKeys(),
+      resolveCompanySubscriptionKeys(),
+    ]);
+    return { ...claude, ...metered, ...chatgpt };
+  };
   const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
     includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();
   const companyModelId = (id: string): string => {

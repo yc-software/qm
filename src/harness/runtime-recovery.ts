@@ -26,7 +26,11 @@ export function recoveredRuntime(
       (choice.fastMode === undefined || typeof choice.fastMode === "boolean")
     )
       return {
-        choice: choice as unknown as RuntimeChoice,
+        choice: {
+          modelId: choice.modelId,
+          ...(choice.effortLevel === undefined ? {} : { effortLevel: choice.effortLevel }),
+          ...(choice.fastMode === undefined ? {} : { fastMode: choice.fastMode }),
+        },
         lifetime: p.runtimeHandoff.lifetime === "scope" ? "scope" : "task",
       };
   }

@@ -170,3 +170,18 @@ for (const modelId of ["gpt-6-astra", "gpt-6.1-sol"]) {
     assert.deepEqual(current, entry(base.value, "high", false));
   });
 }
+
+test("loadouts saved with a harness prefix keep their models", () => {
+  assert.deepEqual(
+    parseLoadout(
+      JSON.stringify([
+        { value: "pi:claude-opus-5", effort: "high", fast: false },
+        { value: "claude:claude-sonnet-5", effort: "auto", fast: true },
+      ]),
+    ),
+    [
+      { value: "claude-opus-5", effort: "high", fast: false },
+      { value: "claude-sonnet-5", effort: "auto", fast: true },
+    ],
+  );
+});
