@@ -7298,30 +7298,34 @@ h3.ambient-field-label {
   box-sizing: border-box;
 }
 
-.split-canvas:not(.single-pane) :is(.split-dock, .split-drop-preview) {
+.split-canvas:not(.single-pane) .split-dock,
+.split-drop-preview:not(.single-pane) {
   inset: var(--split-gap);
 }
 
-.split-canvas.single-pane .dockview-theme-qm {
+:is(.split-canvas.single-pane > .split-dock, .split-drop-preview.single-pane) .dockview-theme-qm {
   --dv-tabs-and-actions-container-height: 56px;
   --split-tab-h: 34px;
 }
 
-.split-canvas.single-pane .dv-groupview {
+:is(.split-canvas.single-pane > .split-dock, .split-drop-preview.single-pane) .dv-groupview {
   border: 0;
   border-radius: 0;
 }
 
-.split-canvas.single-pane .dockview-theme-qm .dv-groupview .dv-tabs-and-actions-container {
+:is(.split-canvas.single-pane > .split-dock, .split-drop-preview.single-pane)
+  .dockview-theme-qm
+  .dv-groupview
+  .dv-tabs-and-actions-container {
   --split-strip-line: color-mix(in srgb, var(--border) 68%, transparent);
   padding: 0 16px;
 }
 
-.split-canvas.single-pane .dv-render-overlay {
+:is(.split-canvas.single-pane > .split-dock, .split-drop-preview.single-pane) .dv-render-overlay {
   border-radius: 0;
 }
 
-.split-canvas.single-pane .dv-tab .split-pane-title {
+:is(.split-canvas.single-pane > .split-dock, .split-drop-preview.single-pane) .dv-tab .split-pane-title {
   font-size: var(--font-14);
   font-weight: 400;
 }

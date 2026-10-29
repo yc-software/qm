@@ -44,6 +44,9 @@ export class SplitDropPreview {
     const target = `${paneId}:${edge}`;
     if (this.target === target) return;
     this.target = target;
+    const firstSplit = source.panels.length === 1 && edge !== "center";
+    const insetChange = firstSplit ? splitTheme.gap * 2 : 0;
+    this.element.classList.toggle("single-pane", source.panels.length === 1 && !firstSplit);
     this.element.hidden = false;
     this.api.fromJSON(source.toJSON());
     this.api.layout(source.width, source.height, true);
@@ -61,6 +64,7 @@ export class SplitDropPreview {
       },
     });
     if (edge === "center") this.api.removePanel(this.api.getPanel(paneId)!);
+    if (insetChange) this.api.layout(source.width - insetChange, source.height - insetChange, true);
     panel.group.element.classList.add("split-preview-destination");
   }
 

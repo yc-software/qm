@@ -28,8 +28,8 @@ Object.defineProperty(globalThis, "ResizeObserver", {
 const { createDockview } = await import("dockview-core");
 const { SplitDropPreview } = await import("../src/split-drop-preview.ts");
 
-for (const nested of [false, true])
-  test(`drop previews match ${nested ? "nested" : "column"} layouts without changing the live canvas`, () => {
+for (const layout of ["single", "column", "nested"])
+  test(`drop previews match ${layout} layouts without changing the live canvas`, () => {
     const host = document.createElement("div");
     document.body.append(host);
     const source = createDockview(host, {
@@ -38,13 +38,14 @@ for (const nested of [false, true])
     });
     source.layout(1200, 800, true);
     source.addPanel({ id: "a", component: "pane", title: "First" });
-    source.addPanel({
-      id: "b",
-      component: "pane",
-      title: "Second",
-      position: { referencePanel: "a", direction: "right" },
-    });
-    if (nested) {
+    if (layout !== "single")
+      source.addPanel({
+        id: "b",
+        component: "pane",
+        title: "Second",
+        position: { referencePanel: "a", direction: "right" },
+      });
+    if (layout === "nested") {
       source.addPanel({
         id: "c",
         component: "pane",
@@ -76,6 +77,7 @@ for (const nested of [false, true])
         ["tab", "within"],
       ] as const) {
         source.fromJSON(before);
+        source.layout(1200, 800, true);
         const restored = source.toJSON();
         preview.show(source, "a", edge, "Incoming");
         assert.deepEqual(source.toJSON(), restored, "hover leaves the live layout untouched");
@@ -86,6 +88,7 @@ for (const nested of [false, true])
           position: { referencePanel: "a", direction },
         });
         if (edge === "center") source.removePanel(source.getPanel("a")!);
+        if (layout === "single" && edge !== "center") source.layout(1188, 788, true);
         const actual = sizes(source);
         assert.equal(preview.api.panels.length, actual.length);
         for (const [index, panel] of sizes(preview.api).entries()) {
@@ -96,7 +99,7 @@ for (const nested of [false, true])
         assert.equal(preview.api.groups.length, source.groups.length);
         assert.equal(shape(preview.api), shape(source), `${edge} preview matches the pane order and geometry`);
         assert.match(preview.element.textContent!, /Drop to/);
-        if (edge === "right" && !nested) {
+        if (edge === "right" && layout === "column") {
           assert.equal(preview.api.groups.length, 3);
           const third = (source.width - 2 * splitTheme.gap) / 3;
           assert.ok(preview.api.panels.every((p) => Math.abs(p.api.width - third) < 2));
