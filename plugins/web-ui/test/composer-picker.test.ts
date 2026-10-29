@@ -218,6 +218,24 @@ test("the personal-account picker preserves composer choices and saves context d
     await composer!.refreshRuntimeSelection(null, agent, true);
     assert.equal(composer!.state.effortLevel, "high", "identical refresh preserves restored effort");
     assert.equal(composer!.state.fastMode, true, "identical refresh preserves restored Fast");
+    const modelTrigger = button(".loadout-button");
+    const modelLabel = modelTrigger.querySelector<HTMLElement>(".menu-label")!;
+    let visibleLabel = false;
+    modelLabel.getClientRects = () => ({ length: visibleLabel ? 1 : 0 }) as DOMRectList;
+    const hoverModel = () => {
+      modelTrigger.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+      return modelTrigger.hasAttribute("data-qm-tooltip-anchor");
+    };
+    assert.equal(hoverModel(), false, "ordinary composers retain their original empty tooltip");
+    host.className = "split-canvas single-pane";
+    assert.equal(hoverModel(), false, "single-pane canvases retain the ordinary tooltip");
+    host.classList.remove("single-pane");
+    assert.equal(hoverModel(), true, "the compact split picker identifies its hidden model label");
+    visibleLabel = true;
+    assert.equal(hoverModel(), false, "visible split model labels need no tooltip");
+    host.className = "";
+    assert.equal(hoverModel(), false, "leaving split view restores the ordinary tooltip");
+    Reflect.deleteProperty(modelLabel, "getClientRects");
     const readsBeforeWake = runtimeReads;
     failNextGet = true;
     document.dispatchEvent(new dom.window.Event("visibilitychange"));
@@ -736,6 +754,24 @@ test("the personal-account picker preserves composer choices and saves context d
     (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => routed;
     draw();
     assert.equal(host.querySelector(".loadout-button .menu-label")?.textContent?.trim(), "Beta");
+    const routedTrigger = button(".loadout-button");
+    const routedLabel = routedTrigger.querySelector<HTMLElement>(".menu-label")!;
+    routedLabel.getClientRects = () => ({ length: 1 }) as DOMRectList;
+    for (const surface of ["", "split-canvas single-pane"]) {
+      host.className = surface;
+      routedTrigger.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+      assert.equal(
+        document.querySelector(".qm-tooltip")?.textContent,
+        "The hard-task rule ran this turn on Beta. Your setting is Gamma.",
+      );
+      assert.equal(routedTrigger.hasAttribute("data-qm-tooltip-anchor"), true);
+    }
+    host.className = "split-canvas";
+    routedTrigger.dispatchEvent(new dom.window.MouseEvent("mouseenter"));
+    assert.equal(routedTrigger.hasAttribute("data-qm-tooltip-anchor"), false);
+    host.className = "";
+    Reflect.deleteProperty(routedLabel, "getClientRects");
+
     assert.equal(
       button(".loadout-button").getAttribute("aria-label"),
       "Model: Beta, routed by hard-task for this turn; your setting is Gamma",

@@ -138,11 +138,18 @@ test("single and multiview headers render mutually exclusive tools and pane cont
   known = [];
   await canvas(session("first"));
   assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 6);
+  const hoverTitle = () => {
+    const title = document.querySelector<HTMLElement>(".split-pane-title")!;
+    title.dispatchEvent(new MouseEvent("mouseenter"));
+    return title.hasAttribute("data-qm-tooltip-anchor");
+  };
+  assert.equal(hoverTitle(), true, "single-pane titles keep their original tooltip");
   assert.deepEqual(
-    labels().filter((label) => label === "Expand pane" || label === "Close pane"),
+    labels().filter((label) => ["Pane layout and tools", "Expand pane", "Close pane"].includes(label!)),
     [],
   );
   await canvas(session("first"), session("second"));
+  assert.equal(hoverTitle(), false, "split titles suppress their tooltip");
   assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 0);
   for (const label of ["Pane layout and tools", "Expand pane", "Close pane"])
     assert.ok(labels().includes(label), label);
@@ -150,7 +157,8 @@ test("single and multiview headers render mutually exclusive tools and pane cont
   assert.ok(document.querySelector('.split-pane-actions [role="menu"]'));
   await closePane(1);
   assert.equal(document.querySelector('.split-pane-actions [role="menu"]'), null);
-  assert.ok(document.querySelector('.split-tools-btn[aria-label="Pane layout and tools"]'));
+  assert.equal(document.querySelector(".split-tools-btn"), null);
+  assert.equal(hoverTitle(), true, "closing the split restores the original title tooltip");
   assert.equal(document.querySelectorAll(".split-pane-actions .session-tool").length, 6);
   assert.equal(document.querySelectorAll('.split-pane-actions [aria-label="Close pane"]').length, 0);
 });

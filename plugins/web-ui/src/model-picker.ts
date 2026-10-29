@@ -523,7 +523,10 @@ export function createModelPicker<T>(bindings: ModelPickerBindings<T>) {
         data-focus-key=${`${loadoutMenuId}-trigger`}
         type="button"
         aria-label=${triggerLabel}
-        ${tip((target) => (target.querySelector(".menu-label")?.getClientRects().length ? "" : routedTip || triggerLabel))}
+        ${tip((target) => {
+          if (!target.closest(".split-canvas:not(.single-pane)")) return routedTip;
+          return target.querySelector(".menu-label")?.getClientRects().length ? "" : routedTip || triggerLabel;
+        })}
         aria-haspopup="menu"
         aria-expanded=${open ? "true" : "false"}
         aria-controls=${loadoutMenuId}

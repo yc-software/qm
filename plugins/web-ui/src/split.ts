@@ -57,7 +57,7 @@ import {
 import { SplitDropPreview } from "./split-drop-preview";
 import { paneKindByKey, paneKindEntry } from "./pane-kinds";
 import { focusComposerOnPaneClick, focusPaneComposer, preservingFocus } from "./pane-focus";
-import { tip } from "./tooltip";
+import { attachTooltip, tip } from "./tooltip";
 import { workingWave } from "./ui";
 import { icon } from "./icons";
 import { contextsState, scopeTitle } from "./contexts";
@@ -251,6 +251,7 @@ function buildDock(): DockviewApi {
     host.classList.toggle("single-pane", api.panels.length === 1);
     if (wasSingle !== host.classList.contains("single-pane")) {
       for (const actions of groupActions) actions.draw();
+      for (const tab of paneTabs) tab.draw();
     }
     for (const group of api.groups) {
       if (guarded.has(group)) continue;
@@ -993,6 +994,10 @@ class PaneContent implements IContentRenderer {
     this.visible = p.api.isVisible;
     this.params = (p.params ?? {}) as PaneParams;
     this.element.dataset.paneId = this.panelId;
+    attachTooltip(this.element, (target) => {
+      const panel = dockApi?.getPanel(this.panelId);
+      return panel && target.closest(".split-canvas.single-pane") ? paneTitle(panel) : "";
+    });
     focusComposerOnPaneClick(this.element, () => p.api.isActive);
     paneContents.set(this.panelId, this);
     this.resize.observe(this.element);
@@ -1204,6 +1209,7 @@ class PaneTab implements ITabRenderer {
     if (entry) {
       const title = entry.kind.title(entry.id);
       const count = entry.kind.badge(entry.id);
+      this.element.title = dockApi?.panels.length === 1 ? title : "";
       render(
         html`
           <span class="pane-kind-glyph">${icon(entry.kind.glyph, 12)}</span>
@@ -1239,6 +1245,11 @@ class PaneTab implements ITabRenderer {
     const background = paneBackground(panel);
     const sessionId = panelParams(panel).sessionId ?? paneSession(panel)?.id;
     const parent = sessionId ? sessionParent(sessionId) : undefined;
+    attachTooltip(this.element, (target) =>
+      target.closest(".split-canvas.single-pane")
+        ? [crumb, parent ? sessionTitle(parent) : null, title].filter(Boolean).join(" / ")
+        : "",
+    );
     render(
       html`
         ${working ? html`<span class="working-mark" ${ref(syncWorkingPulse)}>${workingWave()}</span>` : nothing}
@@ -1422,6 +1433,7 @@ class GroupActions implements IHeaderActionsRenderer {
     const sessionId =
       panel && !paneKindEntry(panelParams(panel)) ? (panelParams(panel).sessionId ?? paneSession(panel)?.id) : null;
     const maximized = props.api.isMaximized();
+    if (single) this.menuOpen = false;
     const runTool = (tool: SessionTool): void => {
       this.menuOpen = false;
       const p = activePanel();
@@ -1554,43 +1566,42 @@ class GroupActions implements IHeaderActionsRenderer {
         : nothing;
     render(
       html`${
-          single
-            ? html`<span class="split-single-tools">
-                ${PANE_TOOLS.map((t) => {
-                  const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
-                  return html`<button
-                    class="session-tool"
-                    type="button"
-                    aria-label=${t.label}
-                    ${tip(t.label)}
-                    @click=${() => runTool(t.tool)}
-                  >
-                    ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
-                  </button>`;
-                })}
-              </span>`
-            : nothing
-        }
-        <span class="split-tools">
-          <button
-            class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
-            type="button"
-            ${tip("Pane layout and tools")}
-            aria-label="Pane layout and tools"
-            aria-haspopup="menu"
-            aria-expanded=${this.menuOpen ? "true" : "false"}
-            @click=${() => {
-              tabMenu = null;
-              this.menuOpen = !this.menuOpen;
-              this.draw();
-            }}
-          >
-            ${icon(Columns2, 15)}
-          </button>
-          ${menu}
-        </span>
-        ${sessionId ? sessionActions(sessionId, panel!.id, "split-group-session-action") : nothing}
-        ${single ? nothing : buttons.map(headerButton)}${tabMenuTpl}`,
+        single
+          ? html`<span class="split-single-tools">
+              ${PANE_TOOLS.map((t) => {
+                const count = scope ? scopeToolCount(t.tool, scope, () => this.draw()) : null;
+                return html`<button
+                  class="session-tool"
+                  type="button"
+                  aria-label=${t.label}
+                  ${tip(t.label)}
+                  @click=${() => runTool(t.tool)}
+                >
+                  ${icon(t.glyph, 15)}${count ? html`<span class="session-tool-count">${count}</span>` : nothing}
+                </button>`;
+              })}
+            </span>`
+          : html`<span class="split-tools">
+              <button
+                class="icon-btn subtle split-tools-btn ${this.menuOpen ? "active" : ""}"
+                type="button"
+                ${tip("Pane layout and tools")}
+                aria-label="Pane layout and tools"
+                aria-haspopup="menu"
+                aria-expanded=${this.menuOpen ? "true" : "false"}
+                @click=${() => {
+                  tabMenu = null;
+                  this.menuOpen = !this.menuOpen;
+                  this.draw();
+                }}
+              >
+                ${icon(Columns2, 15)}
+              </button>
+              ${menu}
+            </span>`
+      }
+      ${sessionId ? sessionActions(sessionId, panel!.id, "split-group-session-action") : nothing}
+      ${single ? nothing : buttons.map(headerButton)}${tabMenuTpl}`,
       this.element,
     );
   }

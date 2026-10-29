@@ -6,7 +6,6 @@
   --app-serif: ui-serif, Georgia, "Times New Roman", Times, serif;
   --brand-font: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
   --sidebar-w: 280px;
-  --sidebar-bg: color-mix(in srgb, var(--secondary) 42%, var(--background));
   --text-scale: 1;
   --session-title-size: 13.5px;
   --work-fold-space: 18px;
@@ -43,7 +42,11 @@
   --cta: oklch(0.27 0.062 250);
   --cta-hover: oklch(0.33 0.07 250);
   --cta-foreground: oklch(0.99 0 0);
-  --conversation-hover: color-mix(in srgb, var(--foreground) 4%, var(--sidebar-bg));
+  --conversation-hover: color-mix(
+    in srgb,
+    var(--foreground) 4%,
+    color-mix(in srgb, var(--secondary) 42%, var(--background))
+  );
   --inbox-row-hover: color-mix(in srgb, var(--foreground) 4%, var(--background));
   --success: #1a7f37;
   --warning: #a66700;
@@ -148,7 +151,7 @@ body {
   flex-direction: column;
   overflow: hidden;
   padding: 10px 4px 10px 8px;
-  background: var(--sidebar-bg);
+  background: color-mix(in srgb, var(--secondary) 42%, var(--background));
   transition: width 0.18s ease;
 }
 /* Collapsed, the sidebar narrows to a rail that keeps its own toggle in flow — nothing
@@ -7284,10 +7287,15 @@ h3.ambient-field-label {
 }
 
 .split-canvas {
+  --sidebar-bg: color-mix(in srgb, var(--secondary) 42%, var(--background));
   container: pane-canvas / inline-size;
   position: relative;
   flex: 1;
   min-height: 0;
+  background: var(--background);
+}
+
+.split-canvas:not(.single-pane) {
   background: var(--sidebar-bg);
 }
 
@@ -7318,6 +7326,7 @@ h3.ambient-field-label {
   .dv-groupview
   .dv-tabs-and-actions-container {
   --split-strip-line: color-mix(in srgb, var(--border) 68%, transparent);
+  --split-strip-bg: color-mix(in srgb, var(--background) 94%, var(--secondary));
   padding: 0 16px;
 }
 
@@ -7401,7 +7410,8 @@ h3.ambient-field-label {
   display: none;
 }
 
-.dockview-theme-qm .dv-pre-actions-container:has(> .strip-zones) {
+:is(.split-canvas:not(.single-pane) > .split-dock, .split-drop-preview:not(.single-pane))
+  .dv-pre-actions-container:has(> .strip-zones) {
   display: contents;
 }
 
@@ -7544,8 +7554,11 @@ h3.ambient-field-label {
   }
 }
 
-.split-pane-title {
+.split-canvas:not(.single-pane) .dv-single-tab .split-pane-title {
   cursor: default;
+}
+
+.split-pane-title {
   display: flex;
   align-items: center;
   min-width: 0;
@@ -7647,6 +7660,9 @@ h3.ambient-field-label {
 /* In the strip the shared hover wash needs to differ from the strip's own background. */
 .dockview-theme-qm .dv-tabs-and-actions-container .icon-btn:hover {
   background: color-mix(in srgb, var(--foreground) 7%, var(--secondary));
+}
+
+.split-canvas:not(.single-pane) .dv-tabs-and-actions-container .icon-btn:hover {
   color: var(--foreground);
 }
 
@@ -10402,10 +10418,8 @@ h3.ambient-field-label {
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
   .empty-chat .chat-scroll {
-    padding-block: var(--chat-scroll-pad-top);
-    scrollbar-gutter: stable both-edges;
-  }
-  .empty-chat .empty-stack {
+    display: flex;
+    flex-direction: column;
     justify-content: center;
   }
   .empty-chat .chat-cta {

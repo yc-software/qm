@@ -210,7 +210,11 @@ export function createTranscriptViewport(options: { pinPrompt?: () => boolean } 
   }
 
   function showScrollbar(): void {
-    if (!scroller || scroller.scrollHeight <= scroller.clientHeight) return;
+    if (!scroller?.closest(".split-canvas:not(.single-pane)")) {
+      hideScrollbar();
+      return;
+    }
+    if (scroller.scrollHeight <= scroller.clientHeight) return;
     scroller.classList.add("user-scrolling");
     clearTimeout(scrollIdle);
     scrollIdle = setTimeout(hideScrollbar, 700);

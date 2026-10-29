@@ -7,6 +7,7 @@ import { createTranscriptViewport, preserveTranscriptScroll } from "../src/trans
 test("the scrollbar follows scrolling without requiring wheel input or pane focus", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const f = fixture();
+  f.s.parentElement!.classList.add("split-canvas");
   try {
     assert.equal(f.s.classList.contains("user-scrolling"), false);
     assert.notEqual(f.s.ownerDocument.activeElement, f.s);
@@ -34,6 +35,7 @@ test("the scrollbar follows scrolling without requiring wheel input or pane focu
 test("the End key reveals the scrollbar for the user-requested jump", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const f = fixture();
+  f.s.parentElement!.classList.add("split-canvas");
   try {
     f.scroll(300);
     t.mock.timers.tick(1000);
@@ -43,6 +45,27 @@ test("the End key reveals the scrollbar for the user-requested jump", (t) => {
     assert.equal(f.s.scrollTop, 800);
     assert.equal(f.s.classList.contains("user-scrolling"), true);
     t.mock.timers.tick(1000);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("scrollbar presentation follows transitions between single and split views", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture();
+  const canvas = f.s.parentElement!;
+  try {
+    f.scroll(500);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    canvas.className = "split-canvas single-pane";
+    f.scroll(400);
+    assert.equal(f.s.classList.contains("user-scrolling"), false);
+    canvas.classList.remove("single-pane");
+    f.scroll(300);
+    assert.equal(f.s.classList.contains("user-scrolling"), true);
+    canvas.classList.add("single-pane");
+    f.scroll(200);
     assert.equal(f.s.classList.contains("user-scrolling"), false);
   } finally {
     f.close();
