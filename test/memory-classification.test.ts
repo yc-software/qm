@@ -1,17 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { classifiedMemory } from "../src/memory/classification.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 async function fixture() {
-  const memory = createMemoryService(createLocalWorkspaceStore(await mkdtemp(join(tmpdir(), "classification-"))));
+  const memory = createPostgresMemoryService(testDatabaseUrl());
   return { memory, facts: (scope: string) => memory.facts!(scope) };
 }
 

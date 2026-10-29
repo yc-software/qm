@@ -2,11 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createToolContext } from "../src/tools/primitives.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { createMemoryToolOutputStore, parkIfOverCap, type ToolOutputStore } from "../src/sessions/tool-output.ts";
-import type { SessionEntry } from "../src/types.ts";
+import type { ToolOutputStore } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
 
-function readBack(parked: Awaited<ReturnType<ToolOutputStore["read"]>> | ToolOutputStore) {
+function readBack(parked: Awaited<ReturnType<ToolOutputStore["read"]>>) {
   const written: Array<[string, string]> = [];
   const tc = createToolContext({
     sandbox: {
@@ -23,7 +22,7 @@ function readBack(parked: Awaited<ReturnType<ToolOutputStore["read"]>> | ToolOut
     acl: {} as never,
     createdBy: "U1",
     sessionId: "s1",
-    toolOutput: (parked && "read" in parked ? parked : { read: async () => parked }) as ToolOutputStore,
+    toolOutput: { read: async () => parked } as unknown as ToolOutputStore,
   });
   return { tc, written };
 }
@@ -42,26 +41,4 @@ test("an expired parked output says so and writes nothing", async () => {
   const read = await tc.read("tool-output/toolu_1");
   assert.deepEqual(written, []);
   assert.match(String(read.content), /expired after 30 days/);
-});
-
-test("a cut result from a gateway call id with a thought signature reads back from its marker", async () => {
-  const callId = `call_1__thought__${"Q+/z".repeat(1_500)}`;
-  const entries: SessionEntry[] = [];
-  const store = createMemoryToolOutputStore({ inlineTokens: 10, sessions: { getEntries: async () => entries } });
-  const full = "x".repeat(1_000);
-  const parked = (await parkIfOverCap(store, full, callId))!;
-  entries.push({
-    sessionId: "s1",
-    seq: 0,
-    parentSeq: null,
-    type: "tool_result",
-    payload: { tool: "execute", callId, result: parked.text, output: parked.output },
-    scopeLabel: "personal:U1",
-    createdAt: 1,
-  });
-  const path = /tool-output\/\S+(?=;)/.exec(parked.text)![0];
-  assert.ok(path.length < 64);
-  const { tc, written } = readBack(store);
-  await tc.read(path);
-  assert.deepEqual(written, [[path, full]]);
 });

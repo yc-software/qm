@@ -166,7 +166,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   async function snapshotHome(scope: string, session: ModalSession): Promise<void> {
     if (isJobComputerScope(scope)) return;
     await assertHydrated(session);
-    if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
     const requested = await store.update(scope, (current) => {
       if (current.sandboxId !== session.sandboxId) throw new Error("Modal checkpoint source has been replaced");
       return {

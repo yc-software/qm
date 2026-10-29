@@ -7,10 +7,11 @@ import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { decideShip } from "../src/loops/ship-gate.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
 import { scopeId, type Loop, type ShipGrant } from "../src/types.ts";
+import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -31,12 +32,12 @@ function fakeRes() {
 
 function services(): LoopServiceDeps {
   return {
-    store: createLoopStore(),
-    items: createLoopItemLedger(),
-    outputs: createLoopOutputStore(),
-    grants: createShipGrantStore(),
-    crons: createCronStore(),
-    config: createMemoryConfigStore("org"),
+    store: createLoopStore(testMap()),
+    items: createLoopItemLedger(testMap()),
+    outputs: createLoopOutputStore(testMap()),
+    grants: createShipGrantStore(testMap()),
+    crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+    config: testConfigStore("org"),
   };
 }
 

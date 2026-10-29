@@ -70,58 +70,6 @@ function newRecord(rec: NewProcessRecord, now: number): ProcessRecord {
   };
 }
 
-export function createMemoryProcessRegistry(): ProcessRegistry {
-  const rows = new Map<string, ProcessRecord>();
-  const credentialFiles = new Map<string, ProcessCredentialFiles>();
-  const view = (row: ProcessRecord): ProcessRecord => ({
-    ...row,
-    ...(credentialFiles.has(row.processId) ? { credentialsPending: true } : {}),
-  });
-  return {
-    async register(rec) {
-      const row = newRecord(rec, Date.now());
-      rows.set(row.processId, row);
-      if (rec.credentialFiles) credentialFiles.set(row.processId, rec.credentialFiles);
-      return { ...row };
-    },
-    async credentialFiles(processId) {
-      return credentialFiles.get(processId) ?? null;
-    },
-    async setCredentialFiles(processId, files) {
-      if (!files) credentialFiles.delete(processId);
-      else if (rows.has(processId)) credentialFiles.set(processId, files);
-    },
-    async get(processId) {
-      const row = rows.get(processId);
-      return row ? view(row) : null;
-    },
-    async listByScope(scopeId) {
-      return [...rows.values()].filter((r) => r.scopeId === scopeId).map(view);
-    },
-    async liveByScope(scopeId, now = Date.now()) {
-      return [...rows.values()]
-        .filter((r) => r.scopeId === scopeId && r.status === "running" && r.expiresAt > now)
-        .map((r) => ({ ...r }));
-    },
-    async listLive(now = Date.now()) {
-      return [...rows.values()].filter((r) => r.status === "running" && r.expiresAt > now).map((r) => ({ ...r }));
-    },
-    async markStatus(processId, status) {
-      const row = rows.get(processId);
-      if (!row) return false;
-      row.status = status;
-      return true;
-    },
-    async listExpired(now = Date.now()) {
-      return [...rows.values()].filter((r) => r.status === "running" && r.expiresAt <= now).map((r) => ({ ...r }));
-    },
-    async delete(processId) {
-      rows.delete(processId);
-      credentialFiles.delete(processId);
-    },
-  };
-}
-
 function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
   return {
     processId: r.process_id as string,

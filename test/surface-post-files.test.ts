@@ -11,11 +11,12 @@ import {
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
   return {
@@ -108,7 +109,7 @@ test("surface post rejects traversal before provisioning or staging any attachme
 });
 
 test("surface standing orders preserve and reset the stored ambient reply policy", async () => {
-  const channelPolicy = createMemoryChannelPolicyStore();
+  const channelPolicy = createPostgresChannelPolicyStore(testDatabaseUrl());
   const tools = createSurfaceToolDeps({
     deps: { deliveries: {}, channelPolicy, auditLog: { record() {} } },
     input: { surfaceTools: true },
@@ -157,7 +158,7 @@ test("collectNamedOutbound: a missing/empty path is reported (so post can fail t
 
 test("collectNamedOutbound: a doomed call's rollback never deletes an artifact an earlier call created (idempotent ids under a shared seed)", async () => {
   const transfer = createMemoryBlobTransferStore();
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const register: ArtifactRegistration = {
     store,
     ownerScopeId: scopeId("personal", "U1"),
@@ -203,7 +204,7 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
     provision: async () => handle,
     blobTransfer: createMemoryBlobTransferStore(),
     fileRegistration: {
-      store: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+      store: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
       ownerScopeId: scopeId("personal", "U1"),
       createdBy: "U1",
       seed: "run-post",
@@ -227,7 +228,7 @@ test("surface post returns the sent attachments' metadata (so surfaces can rende
 });
 
 test("stored files retain metadata and need no sandbox, including replacement and failed batches", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const transfer = createMemoryBlobTransferStore();
   await store.put({
     id: "saved",
@@ -280,7 +281,7 @@ test("workspace staging selects the requested sandbox and never falls back on re
     },
     blobTransfer: transfer,
     fileRegistration: {
-      store: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+      store: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
       ownerScopeId: "personal:U1",
       createdBy: "U1",
       seed: "selector",
@@ -330,7 +331,7 @@ test("stored file validation rejects malformed inputs, excessive counts and over
 });
 
 test("a stored stream failure rolls back earlier workspace staging", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const transfer = createMemoryBlobTransferStore();
   await assert.rejects(
     collectNamedOutbound(
@@ -359,7 +360,7 @@ test("a stored stream failure rolls back earlier workspace staging", async () =>
 });
 
 test("replacing a path preserves its artifact when staged again by ID", async () => {
-  const store = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const store = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const staging = createAttachStaging({
     sandbox: fakeSandbox({ "report.txt": bytes("report") }),
     provision: async () => handle,

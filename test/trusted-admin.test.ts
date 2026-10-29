@@ -10,9 +10,10 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
@@ -30,7 +31,7 @@ function start(enabled = true) {
     capabilitySecret: "capability-secret".repeat(3),
     portalIdentitySecret: identitySecret,
     requireSignedPortalIdentity: true,
-    replayDedupe: { ...createMemoryReplayDedupe(), durable: true },
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     admin: built.admin,
     identity: built.identity,
     auditLog: built.auditLog,

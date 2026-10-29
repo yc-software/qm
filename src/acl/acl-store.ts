@@ -80,60 +80,7 @@ export interface GrantPersistence {
   ): Promise<boolean>;
 }
 
-function sameGrant(a: Grant, b: Grant): boolean {
-  return (
-    a.ownerScopeId === b.ownerScopeId &&
-    a.ref === b.ref &&
-    a.granteeScopeId === b.granteeScopeId &&
-    a.permission === b.permission
-  );
-}
-
-function sameGrantTuple(a: Grant, b: Grant): boolean {
-  return sameGrant(a, b) && a.grantedBy === b.grantedBy;
-}
-
-function sameGrantSet(a: readonly Grant[], b: readonly Grant[]): boolean {
-  return a.length === b.length && a.every((grant) => b.some((candidate) => sameGrantTuple(grant, candidate)));
-}
-
-function createMemoryGrantPersistence(): GrantPersistence {
-  const grants: Grant[] = [];
-  return {
-    async all() {
-      const key = (g: Grant) => `${g.ownerScopeId}\n${g.ref}\n${g.granteeScopeId}\n${g.permission}`;
-      return grants.slice().sort((a, b) => {
-        if (key(a) < key(b)) return -1;
-        if (key(a) > key(b)) return 1;
-        return 0;
-      });
-    },
-    async put(g) {
-      const existing = grants.findIndex((x) => sameGrant(x, g));
-      if (existing === -1) grants.push(g);
-      else grants[existing] = g;
-    },
-    async remove(g) {
-      for (let i = grants.length - 1; i >= 0; i--) {
-        if (sameGrant(grants[i]!, g)) grants.splice(i, 1);
-      }
-    },
-    async replaceForResourceIfCurrent(ownerScopeId, ref, expected, replacement) {
-      const current = grants.filter((grant) => grant.ownerScopeId === ownerScopeId && grant.ref === ref);
-      if (!sameGrantSet(current, expected)) return false;
-      for (let i = grants.length - 1; i >= 0; i--) {
-        if (grants[i]!.ownerScopeId === ownerScopeId && grants[i]!.ref === ref) grants.splice(i, 1);
-      }
-      grants.push(...replacement);
-      return true;
-    },
-  };
-}
-
-export function createAclStore(
-  persist: GrantPersistence = createMemoryGrantPersistence(),
-  opts: AclStoreOptions = {},
-): AclStore {
+export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions = {}): AclStore {
   async function resolveGrantedFiles(grants: readonly Grant[]): Promise<Map<string, FileArtifact>> {
     const refs = grants.filter(isFileGrant).map((g) => ({ id: g.ref, ownerScopeId: g.ownerScopeId }));
     const files = refs.length ? await opts.resolveFiles?.(refs) : [];

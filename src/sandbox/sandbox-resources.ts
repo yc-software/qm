@@ -189,13 +189,13 @@ export function createSandboxResources(opts: {
     get,
     use,
     async hold(id, runId) {
-      await opts.records.update!(id, (current) =>
+      await opts.records.update(id, (current) =>
         current.holders?.includes(runId) ? current : { ...current, holders: [...(current.holders ?? []), runId] },
       );
     },
     async release(id, runId, isLive) {
       const record = runId
-        ? await opts.records.update!(id, (current) => ({
+        ? await opts.records.update(id, (current) => ({
             ...current,
             holders: (current.holders ?? []).filter((holder) => holder !== runId),
           }))
@@ -204,7 +204,7 @@ export function createSandboxResources(opts: {
       const live = await Promise.all(others.map(isLive));
       const ended = others.filter((_, index) => !live[index]);
       if (ended.length)
-        await opts.records.update!(id, (current) => ({
+        await opts.records.update(id, (current) => ({
           ...current,
           holders: (current.holders ?? []).filter((holder) => !ended.includes(holder)),
         }));

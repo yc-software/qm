@@ -5,6 +5,7 @@ import * as mockAgent from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
+import { settle } from "./support/settle.ts";
 
 let exercise: (turn: AgentTurnInput) => Promise<void>;
 mock.module("./support/mock-agent.ts", {
@@ -114,10 +115,12 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
         async: true,
       });
       await ready;
+      const expected = action === "post" || action === "delegated-read" ? [] : ["Building the website now."];
+      await settle(async () => (await built.deliveries.pending("slack")).length >= expected.length);
       const deliveries = await built.deliveries.pending("slack");
       assert.deepEqual(
         deliveries.map((delivery) => delivery.text),
-        action === "post" || action === "delegated-read" ? [] : ["Building the website now."],
+        expected,
       );
       release();
       await built.runs.waitFor(queued.runId!, 5000);

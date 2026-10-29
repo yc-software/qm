@@ -14,6 +14,8 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
@@ -259,7 +261,10 @@ test("managed deployments accept validated own apps and preserve credentials on 
 test("an agent capability token can read the connector catalog; an unauthenticated request cannot", async () => {
   const secret = "catalog-route-secret".repeat(3);
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "catalog-")), signingSecret: secret }));
-  const server = createServer(built.app, { signingSecret: secret });
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: secret,
+  });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

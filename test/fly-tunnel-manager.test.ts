@@ -1,8 +1,8 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { ECSClient } from "@aws-sdk/client-ecs";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { FlyPeerClaim } from "../src/deploy/fly-peer-claims.ts";
+import { testMap } from "./support/test-database.ts";
 
 let launches = 0;
 let live = false;
@@ -41,7 +41,7 @@ test("concurrent requests share startup and restart a confirmed dead tunnel once
       { id: "a", config: "a" },
       { id: "b", config: "b" },
     ],
-    claims: createMemoryMap<FlyPeerClaim>(),
+    claims: testMap<FlyPeerClaim>(),
     metadataUri: "http://169.254.170.2/v4/test",
     executable: "wireproxy",
     port: 18096,
@@ -73,7 +73,7 @@ test("monitor records stopped predecessors before any app request or tunnel star
   const ecsMock = mock.method(ECSClient.prototype, "send", async () => ({
     tasks: [{ taskArn: "old", lastStatus: "STOPPED" }],
   }));
-  const claims = createMemoryMap<FlyPeerClaim>();
+  const claims = testMap<FlyPeerClaim>();
   await claims.put("a", { taskArn: "old" });
   let recorded!: () => void;
   const ready = new Promise<void>((resolve) => {

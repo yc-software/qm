@@ -8,14 +8,14 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { ensureInboxLoop, INBOX_SYNC_TASK_VERSION, renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import type { Cron, Loop, LoopItem } from "../src/types.ts";
 import type { LedgerItemView } from "../src/loops/ledger-view.ts";
 import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { sleep } from "../src/util/async.ts";
+import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -50,12 +50,12 @@ let cronSeq = 0;
 function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
   const w: World = {
     loops: {
-      store: createLoopStore(),
-      items: createLoopItemLedger(),
-      outputs: createLoopOutputStore(),
-      grants: createShipGrantStore(),
-      crons: createCronStore(),
-      config: createMemoryConfigStore("org"),
+      store: createLoopStore(testMap()),
+      items: createLoopItemLedger(testMap()),
+      outputs: createLoopOutputStore(testMap()),
+      grants: createShipGrantStore(testMap()),
+      crons: createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) }),
+      config: testConfigStore("org"),
     },
     crons: new Map(),
     sent: [],
@@ -761,7 +761,7 @@ test("concurrent source sends share a durable decision claim", async () => {
 
 test("legacy and canonical item URLs serialize a concurrent send", async () => {
   const w = world();
-  w.loops.lock = createMemoryAdvisoryLock();
+  w.loops.lock = testAdvisoryLock();
   const { loop, item } = await seed(w);
   const defaults = await ensureDefaultInboxLoops(w.loops.store, "josh");
   const target = defaults.find((value) => value.sources?.includes("slack"))!;

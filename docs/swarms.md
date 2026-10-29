@@ -8,8 +8,7 @@ with a `Swarm worker` title. Worker transcripts remain read-only for ordinary me
 
 ## Deployment
 
-Use Postgres for production (`DATABASE_URL`, `SESSION_STORE=postgres`, and
-`RUN_STORE=postgres`) (sandbox resources are always on). Configure a sandbox backend with its required
+Sandbox resources are always on. Configure a sandbox backend with its required
 credentials and deployment-specific settings. Workers use the provider of the scope's selected computer, or the deployment default when none is selected. An initial
 `backend` override chooses another configured provider that supports creation and
 retirement. That choice is stored once; later default changes never move workers
@@ -327,12 +326,9 @@ or your version-control workflow first.
 
 ## Verification
 
-Run the focused suites with `node --experimental-test-module-mocks --test test/swarm*.test.ts`.
-Run `npm run test:pg` against a disposable Postgres database. The swarm suite uses
-a separate schema so migration-reset tests cannot invalidate its state.
-Set `SWARM_TEST_DATABASE_URL` when running `test/swarm-orchestrator.test.ts` to
-exercise the HTTP spawn/reply flow across an application restart with real durable
-state. These tests use deterministic model and sandbox doubles; live provider and
+Run the focused suites with `DATABASE_URL=<disposable Postgres> node scripts/run-pg-tests.mjs test/swarm*.test.ts`.
+`test/swarm-orchestrator.test.ts` exercises the HTTP spawn/reply flow across an application
+restart with real durable state. These tests use deterministic model and sandbox doubles; live provider and
 model acceptance remains a separate deployment check. The agent-board UI is
 intentionally deferred.
 

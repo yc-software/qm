@@ -1,7 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
 import { scopeId, type Webhook, type Cron } from "../src/types.ts";
@@ -15,7 +15,8 @@ import {
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -74,7 +75,9 @@ test("pg map: a value persists across map instances (no per-process cache to div
 });
 
 test("pg map: an artifact store rides the map (a cron round-trips through Postgres)", { skip }, async () => {
-  const store = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"));
+  const store = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
+    fires: createPostgresCronFireStore(testDatabaseUrl()),
+  });
   const c = await store.create({
     schedule: { everyMs: 60_000 },
     action: "digest",
@@ -83,7 +86,9 @@ test("pg map: an artifact store rides the map (a cron round-trips through Postgr
     createdBy: "U1",
   });
   await store.markFired(c.id, 123);
-  const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"));
+  const reader = createCronStore(createPostgresMapFactory(URL!).map<Cron>("map_crons"), {
+    fires: createPostgresCronFireStore(testDatabaseUrl()),
+  });
   const got = await reader.get(c.id);
   assert.equal(got?.action, "digest");
   assert.equal(got?.lastFiredAt, 123);
@@ -185,7 +190,7 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
   ];
   const factory = createPostgresMapFactory(URL!);
   let pgMap = factory.map<Owned>("map_widgets");
-  const memMap = createMemoryMap<Owned>();
+  const memMap = testMap<Owned>();
   for (const [id, row] of rows) {
     await pgMap.put(id, row);
     await memMap.put(id, row);
@@ -324,7 +329,7 @@ test("pg map: original folded-index migration upgrades without changing its ledg
 test("pg keychain: listByOwner is a per-owner projected read with no secret material", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
     grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
     asks: factory.map<KeychainAsk>("map_keychain_asks"),
@@ -362,7 +367,7 @@ test("pg map: concurrent keychain instances claim a once grant exactly once", { 
   const key = deriveConnectorKey("postgres-keychain-test-key");
   const build = (factory: ReturnType<typeof createPostgresMapFactory>) =>
     createKeychain({
-      lock: createMemoryAdvisoryLock(),
+      lock: testAdvisoryLock(),
       creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
       grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
       asks: factory.map<KeychainAsk>("map_keychain_asks"),
@@ -444,7 +449,7 @@ for (const postgres of [false, true]) {
     async () => {
       type Row = { owner: string; secret: string; payload?: Record<string, unknown> | null };
       const factory = postgres ? createPostgresMapFactory(URL!) : undefined;
-      const map = factory ? factory.map<Row>("map_widgets") : createMemoryMap<Row>();
+      const map = factory ? factory.map<Row>("map_widgets") : testMap<Row>();
       const payload = { source: "gmail", automated: true, body: "x".repeat(64_000), nil: null };
       const rows: Row[] = [
         { owner: "projection", secret: "hidden", payload },
@@ -541,7 +546,9 @@ test("pg map: an indexed select plans both branches through their indexes", { sk
 
 test("pg map: trigger stores list only the owner's rows", { skip }, async () => {
   const f = createPostgresMapFactory(URL!);
-  const crons = createCronStore(f.map<Cron>("map_owned_crons", ["ownerScopeId"]));
+  const crons = createCronStore(f.map<Cron>("map_owned_crons", ["ownerScopeId"]), {
+    fires: createPostgresCronFireStore(URL!),
+  });
   const upper = scopeId("personal", "OwnerU");
   const lower = scopeId("personal", "owneru");
   for (const owner of [upper, lower, scopeId("personal", "other")])
