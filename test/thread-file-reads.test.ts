@@ -11,12 +11,6 @@ import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
-import { MAX_THREAD_STARTER_IMAGES, threadStarterImages } from "../src/slack/turn-handler.ts";
-import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
-import { createSlackHistoryReader } from "../src/slack/history.ts";
-import { createConversationSerializer } from "../src/slack/conversation-view.ts";
-import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
-import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 import { encodeTs } from "../src/slack/reactions.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -126,10 +120,10 @@ test("read_file opens a file on another message by its ts and returns an image t
     assert.deepEqual(surface.queries[1].file, { ts: "1793211763.548069", name: "image.png" });
 
     await built.app.turn(mention(`!read_file ${png.blobId}`, "C22", "2200.1"));
-    assert.match(await reply(built, "C22:2200.1"), /^file-image:/, "a staged image blob is shown, not just pointed at");
+    assert.match(await reply(built, "C22:2200.1"), /couldn't read file/, "a raw blob id is not a file reference");
 
     await built.app.turn(mention("!read_file image.png", "C23", "2300.1"));
-    assert.match(await reply(built, "C23:2300.1"), /couldn't read file.*`ts` of the message.*\/v1\/surface-file/);
+    assert.match(await reply(built, "C23:2300.1"), /couldn't read file\] pass the `ts`.*\/v1\/surface-file/);
   } finally {
     await surface.stop();
     await built.runtime.stop();
@@ -186,8 +180,8 @@ test("the slack tool returns an image block for an image file and forwards name"
   };
   const ref = { current: tc } as unknown as ToolContextRef;
   const tool: any = createAgentTools(ref, { surfaceTools: true }).find((t) => t.name === "slack");
-  const out = await tool.execute("c1", { action: "read_file", ref: "1793211763.548069", name: "2" });
-  assert.deepEqual(calls, [["1793211763.548069", "2"]]);
+  const out = await tool.execute("c1", { action: "read_file", ref: "1793211763.548069", index: 2 });
+  assert.deepEqual(calls, [["1793211763.548069", { index: 2 }]]);
   assert.deepEqual(out.content[1], { type: "image", data: "AAAA", mimeType: "image/png" });
 });
 
@@ -260,81 +254,53 @@ describe("the Slack surface fetching a file from a message", () => {
   });
 });
 
-describe("thread starter images", () => {
-  const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
-  const directory = {
-    classifyUserCached: async (_c: unknown, user: string) => ({ actor: { displayName: user } }),
-  } as unknown as Directory;
-  const noLiveReads = {
+test("a file on a reply in a neighbouring thread is found through its stored parent", async () => {
+  const fulfilled: Array<{ outcome: any }> = [];
+  const repliesAsked: string[] = [];
+  const core = {
+    fulfillContextRequest: async (_id: string, outcome: unknown) => void fulfilled.push({ outcome }),
+    stageBlob: async () => ({ blobId: "blob-x" }),
+    readSurfaceMessages: async () => [{ ts: "200.000002", sub: "200.000001" }],
+  };
+  const client = {
     conversations: {
-      history: async () => Promise.reject(new Error("unexpected history read")),
-      replies: async () => Promise.reject(new Error("unexpected replies read")),
+      replies: async ({ ts }: { ts: string }) => {
+        repliesAsked.push(ts);
+        return ts === "200.000001"
+          ? {
+              messages: [
+                {
+                  ts: "200.000002",
+                  files: [
+                    { id: "F9", name: "shot.png", mimetype: "image/png", url_private: "https://files.slack.com/n" },
+                  ],
+                },
+              ],
+            }
+          : { messages: [{ ts }] };
+      },
+      history: async () => ({ messages: [] }),
     },
   };
-  const img = (id: string) => ({ fileId: id, name: "image.png", mimetype: "image/png" });
-
-  async function viewFor(events: Parameters<ReturnType<typeof createMemorySurfaceCache>["ingest"]>[0], ts: string) {
-    const cache = createMemorySurfaceCache();
-    await cache.ingest(events);
-    const core = {
-      readSurfaceMessages: cache.readMessages,
-      rememberSurfaceHistory: async (e: never) => void (await cache.ingest(e)),
-    } as unknown as SlackCoreClient;
-    const serializer = createConversationSerializer({
-      ids,
-      directory,
-      externalParticipantsEnabled: async () => false,
-      readHistory: createSlackHistoryReader({ core, ids, managed: true, setupUrl: "https://qm.test" }),
-    });
-    const { view } = await serializer.serializeSlackConversation(
-      noLiveReads,
-      {
-        kind: "channel",
-        channel: "C1",
-        ts,
-        threadTs: "300.000001",
-        rawText: "@qm why did we get this?",
-        userId: "U2",
-        files: [],
-      },
-      { audience: [] },
-    );
-    return view;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(new Uint8Array(4))) as unknown as typeof fetch;
+  try {
+    await createSurfaceContextFulfiller({
+      core: core as never,
+      directory: {} as never,
+      serializer: {} as never,
+      botToken: "xoxb-test",
+      clientOptions: {},
+    }).fulfillSurfaceContext(client, {
+      id: "r",
+      source: "slack",
+      createdAt: Date.now(),
+      status: "pending",
+      query: { count: 1, conversationTarget: "C1:100.000001", file: { ts: "200.000002" } },
+    } as never);
+  } finally {
+    globalThis.fetch = realFetch;
   }
-
-  it("brings the starter's images (capped, attributed) when QM is first pulled into the thread", async () => {
-    const view = await viewFor(
-      [
-        {
-          container: "C1",
-          ts: "300.000001",
-          text: ":thinking:",
-          authorId: "U-eric",
-          files: [
-            img("A"),
-            { fileId: "P", name: "doc.pdf", mimetype: "application/pdf" },
-            ...["B", "C", "D", "E"].map(img),
-          ],
-        },
-      ],
-      "300.000002",
-    );
-    const got = threadStarterImages(view);
-    assert.deepEqual(
-      got.map((f) => f.id),
-      ["A", "B", "C", "D"].slice(0, MAX_THREAD_STARTER_IMAGES),
-    );
-    assert.ok(got.every((f) => f.user === "U-eric"));
-  });
-
-  it("skips threads QM has already spoken in", async () => {
-    const view = await viewFor(
-      [
-        { container: "C1", ts: "300.000001", text: ":thinking:", authorId: "U-eric", files: [img("A")] },
-        { container: "C1", ts: "300.000002", sub: "300.000001", text: "earlier answer", self: true },
-      ],
-      "300.000003",
-    );
-    assert.deepEqual(threadStarterImages(view), []);
-  });
+  assert.deepEqual(repliesAsked, ["100.000001", "200.000001"]);
+  assert.equal(fulfilled[0]!.outcome.result.file.name, "shot.png");
 });

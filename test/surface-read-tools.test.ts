@@ -149,36 +149,56 @@ test("read_members lists the current container's roster (its resolved audience),
   }
 });
 
-test("read_file returns text content for a text blob and a POINTER (never bytes) for a binary blob", async () => {
+test("read_file returns text content for a text file and a POINTER (never bytes) for a binary one", async () => {
   const built = freshApp();
   built.runtime.start();
+  const blobs: Record<string, string> = {};
+  let running = true;
+  const loop = (async () => {
+    while (running) {
+      for (const r of await built.app.pendingContextRequests("slack")) {
+        const blobId = blobs[r.query.file?.ts ?? ""];
+        await built.app.fulfillContextRequest(
+          r.id,
+          blobId
+            ? { result: { messages: [], file: { blobId, name: "f", sizeBytes: 1 } } }
+            : { error: "I couldn't find that message" },
+        );
+      }
+      await sleep(20);
+    }
+  })();
   try {
-    const textBlob = await built.blobTransfer.put(Buffer.from("hello from the shared file"));
-    const binBlob = await built.blobTransfer.put(Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff]));
-    const jpegLike = await built.blobTransfer.put(
-      Buffer.from([
-        0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0xff, 0xdb, 0xc0, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5,
-        0xf6, 0x87,
-      ]),
-    );
+    blobs["1300.000001"] = (await built.blobTransfer.put(Buffer.from("hello from the shared file"))).blobId;
+    blobs["1400.000001"] = (await built.blobTransfer.put(Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff]))).blobId;
+    blobs["1600.000001"] = (
+      await built.blobTransfer.put(
+        Buffer.from([
+          0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0xff, 0xdb, 0xc0, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5,
+          0xf6, 0x87,
+        ]),
+      )
+    ).blobId;
 
-    await built.app.turn(mention(`!read_file ${textBlob.blobId}`, "C13", "1300.1"));
+    await built.app.turn(mention("!read_file 1300.000001", "C13", "1300.1"));
     const txt = await subToolResult(built, "C13:1300.1", "read_file");
     assert.match(txt, /file: hello from the shared file/);
 
-    await built.app.turn(mention(`!read_file ${binBlob.blobId}`, "C14", "1400.1"));
+    await built.app.turn(mention("!read_file 1400.000001", "C14", "1400.1"));
     const bin = await subToolResult(built, "C14:1400.1", "read_file");
     assert.match(bin, /file-pointer:/);
     assert.doesNotMatch(bin, /hello from the shared file/);
 
-    await built.app.turn(mention(`!read_file ${jpegLike.blobId}`, "C16", "1600.1"));
+    await built.app.turn(mention("!read_file 1600.000001", "C16", "1600.1"));
     const jpg = await subToolResult(built, "C16:1600.1", "read_file");
     assert.match(jpg, /file-pointer:/);
 
-    await built.app.turn(mention("!read_file deadbeefdeadbeefdeadbeefdeadbeef", "C15", "1500.1"));
+    await built.app.turn(mention("!read_file 1500.000001", "C15", "1500.1"));
     const gone = await subToolResult(built, "C15:1500.1", "read_file");
     assert.match(gone, /couldn't read file/);
   } finally {
+    running = false;
+    await loop;
     await built.runtime.stop();
   }
 });

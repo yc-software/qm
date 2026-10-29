@@ -3162,13 +3162,20 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       name: Type.Optional(
         Type.String({
           description:
-            'read_file: which file, when the message at `ref` carries more than one: its name (a unique part is enough) or its position ("2" for the second — use this when names repeat).',
+            "read_file: which file, by name (a unique part is enough), when the message at `ref` carries more than one.",
+        }),
+      ),
+      index: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description:
+            "read_file: which file, by 1-based position on the message at `ref`; use this when names repeat.",
         }),
       ),
       ref: Type.Optional(
         Type.String({
           description:
-            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the `ts` of the message carrying the file (every message in read_thread and the conversation context shows its ts), or a file id from an earlier result.",
+            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the `ts` (or `~id`) of the message carrying the file, as shown on each message by read_thread and the conversation context.",
         }),
       ),
       limit: Type.Optional(
@@ -3484,14 +3491,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         case "read_file": {
           if (params.ref === undefined) return missing("ref");
-          const fileName = typeof params.name === "string" && params.name.trim() ? params.name.trim() : undefined;
-          await recordCall(callId, {
-            tool: surfaceName,
-            action: "read_file",
-            ref: params.ref,
-            ...(fileName ? { name: fileName } : {}),
-          });
-          const r = fileName ? await tc.readFile(params.ref, fileName) : await tc.readFile(params.ref);
+          const pick = {
+            ...(typeof params.name === "string" && params.name.trim() ? { name: params.name.trim() } : {}),
+            ...(params.index !== undefined ? { index: params.index } : {}),
+          };
+          const picked = Object.keys(pick).length > 0;
+          await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref, ...pick });
+          const r = picked ? await tc.readFile(params.ref, pick) : await tc.readFile(params.ref);
           if (!r.ok)
             return recordResult(
               callId,
@@ -3527,7 +3533,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             callId,
             { ...summary, binary: true, ...(r.contentType ? { contentType: r.contentType } : {}) },
             text(
-              `[${r.name ?? "file"}${size} — ${kind}; not text. To work with it on your computer, POST $AGENT_API_URL/v1/surface-file with {"ts": "<message ts>", "name": "<file name>"} (Bearer $AGENT_API_TOKEN) and follow the returned download note.]`,
+              `[${r.name ?? "file"}${size} — ${kind}; ${r.message ?? "not text"}. To work with it on your computer, POST $AGENT_API_URL/v1/surface-file with the same ts and name or index, and follow the returned download note.]`,
             ),
           );
         }

@@ -37,6 +37,14 @@ const VISION_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "imag
 
 export const MAX_VISION_IMAGE_BYTES = 5_000_000;
 
+export async function visionImage(
+  bytes: Uint8Array,
+  mimetype: string,
+): Promise<{ data: string; mimeType: string } | undefined> {
+  if (!VISION_MIME_TYPES.has(mimetype) || bytes.length === 0 || bytes.length > MAX_VISION_IMAGE_BYTES) return undefined;
+  return { data: Buffer.from(await downscaleVisionImage(bytes, mimetype)).toString("base64"), mimeType: mimetype };
+}
+
 export const MAX_LLM_REQUEST_BYTES = 18_000_000;
 
 export interface InboundImage {
@@ -341,15 +349,14 @@ export async function materializeInbound(
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
     });
-    if (VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 && bytes.length <= MAX_VISION_IMAGE_BYTES) {
-      const imageBytes = await downscaleVisionImage(bytes, mimetype);
+    const image = await visionImage(bytes, mimetype);
+    if (image)
       images.push({
         name,
-        mimeType: mimetype,
-        dataBase64: Buffer.from(imageBytes).toString("base64"),
+        mimeType: image.mimeType,
+        dataBase64: image.data,
         ...(registered ? { artifactId: registered.id } : {}),
       });
-    }
   }
   return { metas, images, tooMany, unavailable, blocked, unscreened, ...(unstaged.size ? { unstaged } : {}) };
 }

@@ -2,7 +2,6 @@ import { resolveMentions } from "./mrkdwn.ts";
 export { resolveMentions } from "./mrkdwn.ts";
 import { encodeTs, summarizeReactions, type ReactionTally } from "./reactions.ts";
 import { utcMinute } from "../util/time.ts";
-import type { SlackFile } from "./attachments.ts";
 
 export interface ContextWireMessage {
   ts: string;
@@ -117,8 +116,6 @@ export interface ConversationView {
   messages: readonly RecentMessage[];
   here: { kind: "thread"; youOpenedIt: boolean; starterName?: string; openerText?: string } | { kind: "top-level" };
   omittedFiles: ReadonlyArray<{ name: string; reason: "too-big" | string }>;
-  /** Files on the thread's first message, when the current message is a reply under it. */
-  starterFiles?: readonly SlackFile[];
   nameById?: ReadonlyMap<string, string>;
 }
 

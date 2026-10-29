@@ -201,9 +201,9 @@ export function createConversationSerializer(deps: {
       raw.push({ ts: inc.ts, text: inc.rawText, user: inc.userId, thread_ts: inc.threadTs, files: inc.files });
     const messages = recentWindow(await shapeRecentMessages(client, raw, inc.ts, nameById), RECENT_MESSAGE_WINDOW);
 
-    const root = inc.threadTs ? raw.find((m) => m.ts === inc.threadTs) : undefined;
     let here: ConversationView["here"];
     if (inc.threadTs) {
+      const root = raw.find((m: any) => m.ts === inc.threadTs);
       const youOpenedIt = Boolean(
         root && ((root.user && root.user === ids.botUserId) || (ids.ownBotId !== "" && root.bot_id === ids.ownBotId)),
       );
@@ -231,9 +231,6 @@ export function createConversationSerializer(deps: {
       messages,
       here,
       omittedFiles,
-      ...(root?.files?.length && root.ts !== inc.ts
-        ? { starterFiles: root.files.map((f) => (f.user || !root.user ? f : { ...f, user: root.user })) }
-        : {}),
       nameById,
       ...("note" in page && page.note ? { contextNote: page.note } : {}),
     };

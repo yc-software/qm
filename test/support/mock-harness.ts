@@ -863,7 +863,9 @@ export function createMockHarness(): Harness {
             .slice(cmd.indexOf("!read_file ") + "!read_file ".length)
             .trim()
             .split(/\s+/);
-          const r = nameArg ? await turn.tools.readFile(refArg, nameArg) : await turn.tools.readFile(refArg);
+          let pick: { name?: string; index?: number } | undefined;
+          if (nameArg) pick = /^\d+$/.test(nameArg) ? { index: Number(nameArg) } : { name: nameArg };
+          const r = pick ? await turn.tools.readFile(refArg, pick) : await turn.tools.readFile(refArg);
           await turn.emit({
             type: "tool_result",
             payload: { tool: "read_file", ok: r.ok },
