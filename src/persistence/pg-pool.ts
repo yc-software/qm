@@ -52,7 +52,7 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     connectionString,
     kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
-  const pool = guardedPool(new pg.Pool({ ...connection, max, connectionTimeoutMillis: 10_000 }));
+  const pool = guardedPool(new pg.Pool({ ...connection, max, connectionTimeoutMillis: 10_000, allowExitOnIdle: true }));
   sharedPools.set(key, { pool, users: 1 });
   return pool;
 }

@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -31,7 +31,8 @@ for (const backend of ["memory", "postgres"] as const) {
         url.searchParams.set("options", `-c search_path=${schema}`);
         connectionString = url.toString();
       }
-      const runtime = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(connectionString);
+      const runtime =
+        backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
       let { runs } = runtime;
       const sessionId = randomUUID();
       try {
@@ -94,7 +95,8 @@ for (const backend of ["memory", "postgres"] as const) {
         url.searchParams.set("options", `-c search_path=${schema}`);
         connectionString = url.toString();
       }
-      let { runs } = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(connectionString);
+      let { runs } =
+        backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
       try {
         const child = (await runs.enqueue({ sessionId: `agent:main:subagent:${randomUUID()}`, request })).run;
         await runs.deferReturn(child.id, 60_000);
@@ -203,7 +205,7 @@ test(
 );
 
 test("memory: one claim uses one clock snapshot across the retry boundary", async (t) => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const first = (await runs.enqueue({ sessionId: "same", request })).run;
   const claimed = await runs.claim("w1", 60_000);
   const now = Date.now();

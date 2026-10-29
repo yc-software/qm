@@ -11,6 +11,8 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function start() {
   const built = buildApp(
@@ -427,7 +429,10 @@ async function startSecure() {
       signingSecret: SECRET,
     }),
   );
-  const server = createServer(built.app, { signingSecret: SECRET });
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+  });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const cap = (actorId: string, scope: ScopeId = scopeId("personal", actorId), liveActor = true) =>

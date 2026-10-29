@@ -4,7 +4,6 @@ import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
 import { composeSharingPostures, type SharingPosture } from "./sharing-posture.ts";
@@ -238,23 +237,23 @@ export const configStoreMaps = (map: (table: string) => DurableMap<never>): Requ
     Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)]),
   ) as unknown as Required<ConfigStoreMaps>;
 
-export function createMemoryConfigStore(
+export function createConfigStore(
   orgId: string,
-  opts: ConfigStoreMaps & {
+  opts: Required<ConfigStoreMaps> & {
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
     defaultSharingPosture?: SharingPosture;
-  } = {},
+  },
 ): ScopedConfigStore {
   const souls = new Map<ScopeId, { content: string; version: number }>();
   const soulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
   const legacySoulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
   const baseModels = new Map<ScopeId, PersistedBaseModel>();
-  const soulStore = opts.souls ?? createMemoryMap<PersistedSoul>();
-  const soulHistoryStore = opts.soulHistory ?? createMemoryMap<PersistedSoulRevision>();
-  const baseModelStore = opts.baseModels ?? createMemoryMap<PersistedBaseModel>();
-  const slackEmojiCatalogStore = opts.slackEmojiCatalog ?? createMemoryMap<PersistedSlackEmojiCatalog>();
-  const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
+  const soulStore = opts.souls;
+  const soulHistoryStore = opts.soulHistory;
+  const baseModelStore = opts.baseModels;
+  const slackEmojiCatalogStore = opts.slackEmojiCatalog;
+  const deploymentIdentity = opts.deploymentIdentity;
   const writeQueue = createKeyedQueue();
   const save = (key: string, write: () => Promise<unknown>, apply: () => void): Promise<void> =>
     writeQueue(key, async () => {
@@ -269,7 +268,7 @@ export function createMemoryConfigStore(
     toRow: (id: ScopeId, value: T) => Row<M>,
     orgOnly = false,
   ) => {
-    const store = (opts[name] ?? createMemoryMap()) as DurableMap<Row<M>>;
+    const store = opts[name] as DurableMap<Row<M>>;
     const cache = new Map<ScopeId, T>();
     const load = (id: ScopeId, row: Row<M> | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
     const refresh = async (id: ScopeId) => {
@@ -350,7 +349,7 @@ export function createMemoryConfigStore(
       }
     }
   };
-  const connectorClients = opts.connectorClients ?? createMemoryMap<StoredConnectorClient>();
+  const connectorClients = opts.connectorClients;
   const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
 
@@ -372,8 +371,6 @@ export function createMemoryConfigStore(
     id: ScopeId,
     fn: (row: PersistedBaseModel | null) => PersistedBaseModel,
   ): Promise<PersistedBaseModel | null> => {
-    if (!baseModelStore.update || !baseModelStore.insertIfAbsent || !baseModelStore.deleteIf)
-      throw new Error("base model store does not support atomic updates");
     for (;;) {
       let saved = await baseModelStore.update(id, fn);
       if (!saved) {
@@ -507,7 +504,6 @@ export function createMemoryConfigStore(
     getSoul: (id) => souls.get(id)?.content ?? null,
     setSoul(id, content, updatedBy) {
       return writeQueue(`soul:${id}`, async () => {
-        if (!soulStore.update) throw new Error("SOUL store does not support atomic updates");
         const legacy = legacySoulHistory.get(id) ?? [];
         const append = (current: PersistedSoul): PersistedSoul => {
           const revision: PersistedSoulRevision = {
@@ -565,7 +561,6 @@ export function createMemoryConfigStore(
           if (canonical.mutationId !== mutationId) return null;
           saved = canonical;
         } else {
-          if (!soulStore.update) throw new Error("SOUL store does not support atomic updates");
           let accepted = false;
           const updated = await soulStore.update(id, (current) => {
             if (current.version !== expectedVersion) return current;

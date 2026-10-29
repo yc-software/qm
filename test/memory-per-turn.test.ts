@@ -1,13 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const ACTOR = "U1";
 const CHANNEL = scopeId("channel", "C9");
@@ -16,8 +14,7 @@ const DM = scopeId("personal", ACTOR);
 const PERSONAL = scopeId("personal", ACTOR);
 
 function freshMemory() {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mcc-")));
-  return { memory: createMemoryService(workspace) };
+  return { memory: createPostgresMemoryService(testDatabaseUrl()) };
 }
 
 const INPUT = "remember that my task list is ship the launch";
@@ -53,12 +50,14 @@ test("redirected capture writes only to the resolved target, not the speaker's n
 
 test("burst debounce: turns within the quiet window flush as one extraction after it elapses", async () => {
   const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory, captureQuietMs: 30 });
+  const strategy = createPerTurnStrategy({ agent: createMockAgent(), memory, captureQuietMs: 1_000 });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact one is alpha", reply: REPLY, actorId: ACTOR });
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
   assert.equal(await memory.read(DM), "", "nothing captured before the quiet window elapses");
-  await new Promise((r) => setTimeout(r, 120));
+  await settle(async () =>
+    /fact one is alpha[\s\S]*fact two is beta|fact two is beta[\s\S]*fact one is alpha/.test(await memory.read(DM)),
+  );
   const body = await memory.read(DM);
   assert.match(body, /fact one is alpha/);
   assert.match(body, /fact two is beta/);
@@ -95,7 +94,10 @@ test("burst debounce: different speakers in one channel keep separate bursts in 
     reply: REPLY,
     actorId: "U2",
   });
-  await new Promise((r) => setTimeout(r, 120));
+  await settle(async () => {
+    const body = await memory.read(CHANNEL);
+    return /ship the launch/.test(body) && /write the memo/.test(body);
+  });
 
   assert.match(await memory.read(CHANNEL), /ship the launch/);
   assert.match(await memory.read(CHANNEL), /write the memo/);

@@ -23,9 +23,9 @@ import type { AclStore } from "../src/acl/acl-store.ts";
 import type { ScopeId } from "../src/types.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {
@@ -884,7 +884,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     if (opts) captures.push(opts);
     return realProvision(layers, opts);
   };
-  const directory = createDirectoryStore();
+  const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace([
     { principalId: "U1", displayName: "One", type: "internal" },
     { principalId: "U2", displayName: "Two", type: "internal" },
@@ -911,7 +911,7 @@ test("a channel cron receives env credentials only when the directory proves an 
     const out = await runTrigger(
       {
         deliveries,
-        idempotency: createIdempotencyStore(createMemoryMap()),
+        idempotency: createIdempotencyStore(testMap()),
         identity,
         run: (req) => app.turn(req),
         directory,

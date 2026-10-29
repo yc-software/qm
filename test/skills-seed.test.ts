@@ -15,6 +15,7 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 test("seed skill parser reads the repo frontmatter subset", () => {
   const manifest = parseSeedSkill(`---
@@ -36,7 +37,11 @@ Run the thing.
 });
 
 test("installSeedSkills publishes the repository starter catalog into org scope", async () => {
-  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const skills = createSkillStore({
+    advisoryLock: testAdvisoryLock(),
+    backing: testMap(),
+    signingSecret: "seed-test-secret",
+  });
   const result = await installSeedSkills(skills, { dir: "skills-seed", scopeId: scopeId("org", "default-org") });
   assert.deepEqual(result.skipped, []);
   assert.ok(result.installed.includes("cloud-cli"));
@@ -105,7 +110,11 @@ function writeSeedAsset(dir: string, name: string, relPath: string, content: str
 }
 
 test("installSeedSkills re-seeds a changed manifest over its own prior install, never over another author's", async () => {
-  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const skills = createSkillStore({
+    advisoryLock: testAdvisoryLock(),
+    backing: testMap(),
+    signingSecret: "seed-test-secret",
+  });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-update-"));
   writeSeedSkill(dir, "demo", "old description", "# Demo v1");
@@ -148,7 +157,11 @@ test("installSeedSkills re-seeds a changed manifest over its own prior install, 
 });
 
 test("installSeedSkills leaves an admin-archived catalog skill archived when asked to", async () => {
-  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const skills = createSkillStore({
+    advisoryLock: testAdvisoryLock(),
+    backing: testMap(),
+    signingSecret: "seed-test-secret",
+  });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-archived-"));
   writeSeedSkill(dir, "retired", "old catalog skill", "# Retired v1");
@@ -171,7 +184,11 @@ test("installSeedSkills leaves an admin-archived catalog skill archived when ask
 });
 
 test("concurrent upserts of the same scope+name serialize into one record (no duplicate creates)", async () => {
-  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const skills = createSkillStore({
+    advisoryLock: testAdvisoryLock(),
+    backing: testMap(),
+    signingSecret: "seed-test-secret",
+  });
   const org = scopeId("org", "default-org");
   const upsert = (body: string) =>
     upsertSeedSkill(skills, {
@@ -257,7 +274,11 @@ function fakeSandbox() {
 }
 
 test("a bundled skill round-trips seed → store → materialize, assets land beside SKILL.md", async () => {
-  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const skills = createSkillStore({
+    advisoryLock: testAdvisoryLock(),
+    backing: testMap(),
+    signingSecret: "seed-test-secret",
+  });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-tree-"));
   writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled\n\nRun scripts/hello.py.");
@@ -286,7 +307,11 @@ test("a bundled skill round-trips seed → store → materialize, assets land be
 });
 
 test("a tampered bundled asset fails skill verification", async () => {
-  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const skills = createSkillStore({
+    advisoryLock: testAdvisoryLock(),
+    backing: testMap(),
+    signingSecret: "seed-test-secret",
+  });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-tamper-"));
   writeSeedSkill(dir, "tooled", "a skill with helpers", "# Tooled");
@@ -301,7 +326,7 @@ test("a tampered bundled asset fails skill verification", async () => {
 
 test("a text-only skill signs identically to the pre-files scheme (legacy signatures still verify)", async () => {
   const secret = "legacy-compat-secret";
-  const skills = createSkillStore({ signingSecret: secret });
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap(), signingSecret: secret });
   const org = scopeId("org", "default-org");
   const legacySig = createHmac("sha256", secret)
     .update(
@@ -331,7 +356,11 @@ test("safeSkillFilePath rejects traversal / absolute / dot segments", () => {
 });
 
 test("installSeedSkills re-seeds when only a bundled asset changes", async () => {
-  const skills = createSkillStore({ signingSecret: "seed-test-secret" });
+  const skills = createSkillStore({
+    advisoryLock: testAdvisoryLock(),
+    backing: testMap(),
+    signingSecret: "seed-test-secret",
+  });
   const org = scopeId("org", "default-org");
   const dir = mkdtempSync(join(tmpdir(), "seed-asset-change-"));
   writeSeedSkill(dir, "tooled", "helpers", "# Tooled");

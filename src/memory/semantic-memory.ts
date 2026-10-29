@@ -9,20 +9,13 @@ import { createMemoryVectorIndexer } from "./vector-indexer.ts";
 
 export function createSemanticMemory(opts: {
   notebook: MemoryService;
-  databaseUrl: string | undefined;
+  databaseUrl: string;
   embeddingModel: () => Promise<string | null | undefined>;
   resolveEmbedder: (id: string) => Promise<MemoryEmbedder>;
   leaderLease: LeaderLease;
   createSweeper: typeof createSweeper;
 }) {
   const { databaseUrl } = opts;
-  if (!databaseUrl)
-    return {
-      memory: opts.notebook,
-      start() {},
-      async stop() {},
-      async close() {},
-    };
   let store: MemoryVectorStore | undefined;
   const resolve = async () => {
     const id = await opts.embeddingModel();

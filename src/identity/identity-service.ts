@@ -1,5 +1,5 @@
 import type { ActorAssertion, Principal } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
 import { externalMemberActive, type ExternalMember } from "./external-members.ts";
 
@@ -44,15 +44,14 @@ export function actorAssertionActive(
 }
 
 export function createIdentityService(
-  backing?: DurableMap<DeactivationRecord>,
+  store: DurableMap<DeactivationRecord>,
   opts: {
     directorySyncProtected?: readonly string[];
-    externalMembers?: DurableMap<ExternalMember>;
+    externalMembers: DurableMap<ExternalMember>;
     principalLinks?: { refresh(force?: boolean): Promise<void> };
-  } = {},
+  },
 ): IdentityService {
-  const store = backing ?? createMemoryMap<DeactivationRecord>();
-  const externalStore = opts.externalMembers ?? createMemoryMap<ExternalMember>();
+  const externalStore = opts.externalMembers;
   const deactivated = new Map<string, DeactivationRecord>();
   const externals = new Map<string, ExternalMember>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];

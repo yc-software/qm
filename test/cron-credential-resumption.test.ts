@@ -8,6 +8,8 @@ import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keych
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
 import type { Destination, TurnRequest } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const recipient: Destination = {
   type: "principal",
@@ -17,7 +19,7 @@ const recipient: Destination = {
 };
 
 async function fixture() {
-  const crons = createCronStore();
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const cron = await crons.create({
     owner: "U_ALICE",
     createdBy: "U_ALICE",
@@ -30,8 +32,8 @@ async function fixture() {
   const requests: TurnRequest[] = [];
   const deps: AskResolutionDeps = {
     deliveries,
-    idempotency: createIdempotencyStore(),
-    identity: createIdentityService(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     getCron: (id) => crons.get(id),
     run: async (request) => {
       requests.push(request);

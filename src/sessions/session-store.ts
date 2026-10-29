@@ -42,19 +42,9 @@ export function createContextSummaryPayload(throughSeq: number, text: string): C
   return { kind: CONTEXT_SUMMARY_KIND, throughSeq, text };
 }
 
-export interface ContextWindow {
+interface ContextWindow {
   entries: SessionEntry[];
   totalEntries: number;
-}
-
-export function contextWindowFromEntries(entries: SessionEntry[]): ContextWindow {
-  let latest: ContextSummaryPayload | null = null;
-  for (const entry of entries) latest = contextSummaryPayload(entry) ?? latest;
-  const throughSeq = latest?.throughSeq;
-  return {
-    entries: throughSeq === undefined ? [...entries] : entries.filter((entry) => entry.seq > throughSeq),
-    totalEntries: entries.length,
-  };
 }
 
 export interface Lease {
@@ -348,14 +338,6 @@ export interface ParticipantScope {
 
 export interface EntrySearchHit extends Pick<Session, "scopeId" | "title" | "channelName" | "surface" | "archived"> {
   sessionId: string;
-  seq: number;
-  type: EntryType;
-  author?: string;
-  text: string;
-  createdAt: number;
-}
-
-export interface NewSearchEntry {
   seq: number;
   type: EntryType;
   author?: string;

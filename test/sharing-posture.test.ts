@@ -8,12 +8,12 @@ import {
   MAX_OPEN_SHARED_SCOPES,
   sharingSourcesForTurn,
 } from "../src/resolution/sharing-access.ts";
-import { createMemoryConfigStore, type PersistedSharingPosture } from "../src/resolution/config-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { type PersistedSharingPosture } from "../src/resolution/config-store.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 test("sharing posture is isolated by default and isolated wins composition", () => {
   assert.equal(parseSharingPosture("open"), "open");
@@ -32,9 +32,9 @@ test("sharing posture is isolated by default and isolated wins composition", () 
 });
 
 test("durable sharing policy composes organization, personal, and room vetoes and refreshes replicas", async () => {
-  const sharingPostures = createMemoryMap<PersistedSharingPosture>();
-  const writer = createMemoryConfigStore("acme", { sharingPostures });
-  const reader = createMemoryConfigStore("acme", { sharingPostures });
+  const sharingPostures = testMap<PersistedSharingPosture>();
+  const writer = testConfigStore("acme", { sharingPostures });
+  const reader = testConfigStore("acme", { sharingPostures });
   const org = scopeId("org", "acme");
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
@@ -51,16 +51,16 @@ test("durable sharing policy composes organization, personal, and room vetoes an
   await writer.setSharingPosture(org, "isolated");
   assert.equal(await reader.resolveSharingPostureDurable(personal, room), "isolated");
 
-  const restarted = createMemoryConfigStore("acme", { sharingPostures });
+  const restarted = testConfigStore("acme", { sharingPostures });
   await restarted.hydrate?.();
   assert.equal(await restarted.getSharingPostureOwnDurable(personal), "open");
   assert.equal(await restarted.getSharingPostureOwnDurable(room), "open");
 });
 
 test("Open membership re-checks durable organization, person, room, and membership restrictions", async () => {
-  const store = createMemoryMap<PersistedSharingPosture>();
-  const writer = createMemoryConfigStore("acme", { sharingPostures: store });
-  const reader = createMemoryConfigStore("acme", { sharingPostures: store });
+  const store = testMap<PersistedSharingPosture>();
+  const writer = testConfigStore("acme", { sharingPostures: store });
+  const reader = testConfigStore("acme", { sharingPostures: store });
   const org = scopeId("org", "acme");
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
@@ -87,7 +87,7 @@ test("Open membership re-checks durable organization, person, room, and membersh
 });
 
 test("open sources accept live human-authored ambient turns and bind carry to the authenticated actor", async () => {
-  const config = createMemoryConfigStore("acme", { defaultSharingPosture: "open" });
+  const config = testConfigStore("acme", { defaultSharingPosture: "open" });
   const sessions = { listByParticipant: async () => [] };
   const targetScope = scopeId("channel", "C1");
   const actor: Principal = { id: "U2", type: "internal" };
@@ -147,7 +147,7 @@ test("current membership resolves directory identity aliases and fails closed wh
 });
 
 test("DM carry is recent, bounded, non-transitive, source-vetoed, and revoked by current membership", async () => {
-  const config = createMemoryConfigStore("acme", { defaultSharingPosture: "open" });
+  const config = testConfigStore("acme", { defaultSharingPosture: "open" });
   const actor: Principal = { id: "U1", type: "internal" };
   const personal = scopeId("personal", actor.id);
   const sessions: Session[] = Array.from({ length: 30 }, (_, index) => ({
@@ -187,7 +187,7 @@ test("DM carry is recent, bounded, non-transitive, source-vetoed, and revoked by
 });
 
 test("carried file handles expose only selected source scopes read-only without mounting them", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const personal = scopeId("personal", "U1");
   const teammate = scopeId("personal", "U2");
   await files.put({
@@ -244,7 +244,7 @@ test("carried file handles expose only selected source scopes read-only without 
 });
 
 test("Open examines a bounded candidate window even when every membership is revoked", async () => {
-  const config = createMemoryConfigStore("acme", { defaultSharingPosture: "open" });
+  const config = testConfigStore("acme", { defaultSharingPosture: "open" });
   let checks = 0;
   let requestedLimit = 0;
   const candidates = Array.from({ length: 1000 }, (_, i) => ({
@@ -278,7 +278,7 @@ test("Open examines a bounded candidate window even when every membership is rev
 });
 
 test("Open file enumeration is globally capped across selected scopes", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const scopes = [scopeId("personal", "U1"), scopeId("channel", "C1")];
   for (let i = 0; i < 210; i++) {
     await files.put({

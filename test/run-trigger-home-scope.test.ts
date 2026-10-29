@@ -4,9 +4,9 @@ import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createCurrentScopeMembers } from "../src/resolution/scope-membership.ts";
 import { scopeId, type ScopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { testMap } from "./support/test-database.ts";
 
 const OWNER = "pat@example.com";
 const CHAN = "C0PRIVATE";
@@ -33,8 +33,8 @@ function deps(
   };
   return {
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(createMemoryMap()),
-    identity: createIdentityService(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     run,
     directory: dir,
     currentScopeMembers: createCurrentScopeMembers({ directory: dir }),
@@ -161,8 +161,8 @@ describe("runTrigger home-scope gate for group homes", () => {
     };
     const d: TriggerDeps = {
       deliveries: createDeliveryStore(),
-      idempotency: createIdempotencyStore(createMemoryMap()),
-      identity: createIdentityService(),
+      idempotency: createIdempotencyStore(testMap()),
+      identity: createIdentityService(testMap(), { externalMembers: testMap() }),
       run: async () => {
         ranTurn = true;
         return { status: "ok", reply: "posted" };

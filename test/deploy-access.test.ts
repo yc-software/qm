@@ -6,11 +6,8 @@ import { join } from "node:path";
 import { createApp } from "../src/api/app.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
 import {
@@ -22,6 +19,11 @@ import {
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testAdvisoryLock, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -38,11 +40,11 @@ const request = { deploymentId: "00000000-0000-4000-8000-000000000001", requeste
 async function fixture(t: { after(fn: () => void): void }) {
   const dir = mkdtempSync(join(tmpdir(), "deploy-access-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const deliveries = createDeliveryStore();
-  const identity = createIdentityService();
-  const directory = createDirectoryStore();
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
+  const directory = createPostgresDirectoryStore(testDatabaseUrl());
   await directory.replace(
     [owner, requester, "carol@example.com"].map((principalId) => ({
       principalId,
@@ -55,7 +57,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     canManageEmail: async (email) => (await directory.get(email))?.type === "internal",
     deliveries,
     deployAppsDomain: "apps.example.com",
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     acl,
     auditLog,
     deployDir: dir,
@@ -72,7 +74,7 @@ async function fixture(t: { after(fn: () => void): void }) {
     deliveries,
     auditLog,
     directory,
-    sessions: createMemorySessionStore(),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
     deployAppsDomain: "apps.example.com",
   } as unknown as Parameters<typeof createApp>[0]);
   const d = await app.deploy(publishInput());
@@ -210,12 +212,13 @@ test("notify:false grants access on every direct share path without a DM or invi
   const sent: string[] = [];
   const app = createApp({
     deploy: f.deploy,
-    acl: createAclStore(),
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl())),
     identity: f.identity,
     deliveries: f.deliveries,
     auditLog: f.auditLog,
     directory: f.directory,
-    sessions: createMemorySessionStore(),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
+    advisoryLock: testAdvisoryLock(),
     deployAppsDomain: "apps.example.com",
     inviteMailer: { send: async (m: { to: string }) => void sent.push(m.to) },
   } as unknown as Parameters<typeof createApp>[0]);

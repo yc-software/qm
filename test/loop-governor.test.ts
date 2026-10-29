@@ -6,6 +6,7 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { scopeId } from "../src/types.ts";
 import type { Loop, LoopCaps, LoopGovernorConfig } from "../src/loops/types.ts";
+import { testMap } from "./support/test-database.ts";
 
 const base = {
   owner: "U1",
@@ -25,7 +26,7 @@ const quiet: LoopVitals = {
 };
 
 async function loop(overrides: { caps?: LoopCaps; governor?: LoopGovernorConfig } = {}): Promise<Loop> {
-  return createLoopStore()
+  return createLoopStore(testMap())
     .create({ ...base, ...overrides })
     .then(({ loop }) => loop);
 }
@@ -110,8 +111,8 @@ test("a queue outrunning the work stage asks to throttle", async () => {
 
 test("unconfirmed undeclared outputs quarantine the loop", async () => {
   const configured = await loop();
-  const items = createLoopItemLedger();
-  const outputs = createLoopOutputStore();
+  const items = createLoopItemLedger(testMap());
+  const outputs = createLoopOutputStore(testMap());
   const { item } = await items.enqueue({ loopId: configured.id, sourceKey: "pending" });
   const output = await outputs.capture({
     loopId: configured.id,

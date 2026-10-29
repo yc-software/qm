@@ -12,6 +12,8 @@ import { fileArtifactId } from "../src/files/file-artifact-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "agent-files-secret".repeat(3);
 
@@ -56,7 +58,10 @@ describe("agent files self-API", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
-    server = createServer(built.app, { signingSecret: SECRET });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
     mineId = fileArtifactId("mine", "out", 0);

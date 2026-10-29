@@ -5,6 +5,7 @@ import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/m
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
+import { testConfigStore } from "./support/test-database.ts";
 
 const adaptiveId = "claude-sonnet-4-6";
 
@@ -181,10 +182,9 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
 });
 
 test("runtime scope writes and turn dispatch reject unsupported modes without changing legacy selections", async () => {
-  const { createMemoryConfigStore } = await import("../src/resolution/config-store.ts");
   const { resolveRuntimeChoice } = await import("../src/agent/runtime-choice.ts");
   const { createRuntimeService } = await import("../src/agent/runtime-control.ts");
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   const active = { modelId: "claude-sonnet-5", effortLevel: "auto" };
   await config.setRuntimeSelection("personal:test", active);
   const service = createRuntimeService({ config }, { authorizesCapabilityScope: async () => true });

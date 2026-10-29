@@ -10,8 +10,8 @@ import {
   setPublicOAuthClients,
   withPublicOAuthClients,
 } from "../src/connectors/oauth.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { testMap } from "./support/test-database.ts";
 
 const HOST = "mcp.example.com";
 
@@ -86,7 +86,7 @@ test("oauth-user servers register a PKCE public client that exchanges and refres
 });
 
 test("oauth-user tools offer a sign-in link until the caller connects, then use only their token", async (t) => {
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(testMap<McpServer>());
   const tokens = new Map<string, string>();
   const mcp = await startMcpTestServer(t, {
     tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }],
@@ -146,7 +146,7 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
 });
 
 test("stored oauth-user tools survive a restart but stay hidden from callers whose connection needs repair", async (t) => {
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(testMap<McpServer>());
   await store.put(oauthServer({ tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] }));
   const statuses: Record<string, { connected: boolean; needsReconnect?: boolean }> = {
     "internal:alice": { connected: true },

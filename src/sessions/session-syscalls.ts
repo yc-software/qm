@@ -8,7 +8,7 @@ import type { SessionMailbox, SessionMessage } from "./session-mailbox.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
@@ -251,7 +251,7 @@ export interface SessionSyscallDeps {
   signals: Pick<RunSignalStore, "send" | "pending">;
   maxAttempts: number;
   treeRunCap?: number;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   prepareRequest?: (request: OrchestratorInput) => Promise<OrchestratorInput>;
   authorize?: (session: Session, actorId: string) => Promise<boolean>;
   validateRuntime?: (input: SessionOpenInput, scopeId: ScopeId) => Promise<void>;
@@ -508,7 +508,7 @@ export async function sessionTreeRunCount(
 }
 
 export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscallsFactory {
-  const lock = deps.advisoryLock ?? createMemoryAdvisoryLock();
+  const lock = deps.advisoryLock;
   const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {

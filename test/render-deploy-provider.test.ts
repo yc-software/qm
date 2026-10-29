@@ -5,9 +5,9 @@ import {
   type RenderDeployProviderOptions,
   type StoredRenderDeploy,
 } from "../src/deploy/render-deploy-provider.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { fakeDeployment } from "./support/fake-render.ts";
+import { testMap } from "./support/test-database.ts";
 
 const sha = "a".repeat(40);
 const readyProbes = 40;
@@ -19,7 +19,7 @@ const writePaths = {
 };
 
 function fixture(appRegion?: string) {
-  const store = createMemoryMap<StoredRenderDeploy>();
+  const store = testMap<StoredRenderDeploy>();
   const calls: Array<{ method: string; path: string; body: any }> = [];
   let service: any = null;
   let environment: any = null;

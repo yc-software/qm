@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { settle } from "./support/settle.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -117,6 +118,7 @@ test("spine ON: an @mention engages a sub-conversation session that posts (no se
       "no per-container ambient session is created",
     );
 
+    await settle(async () => (await built.sessions.getEntries(sub!.id)).some((e) => e.type === "assistant"));
     const subEntries = await built.sessions.getEntries(sub!.id);
     assert.ok(
       subEntries.some((e) => e.type === "assistant"),

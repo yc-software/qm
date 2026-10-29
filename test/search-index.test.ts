@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { Lease, SessionStore } from "../src/sessions/session-store.ts";
 import type { ScopeId, Session, SessionEntry } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const scope = "personal:viewer@example.com" as ScopeId;
 const VIEWER = "viewer";
@@ -16,7 +17,7 @@ interface Sim {
 }
 
 async function simSession(threadRef = "dm:search-index-test"): Promise<Sim> {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread(threadRef, "dm", scope);
   await store.addParticipant(session.id, VIEWER, undefined, { includeHistory: true });
   const { lease } = await store.acquireLease(session.id);

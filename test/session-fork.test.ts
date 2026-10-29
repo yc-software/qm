@@ -13,6 +13,8 @@ import { buildApp } from "./support/build-app.ts";
 import { SideChatAnchorError } from "../src/api/app-types.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-fork-"));
@@ -194,6 +196,7 @@ test("side-chat reads bind the query principal to the authenticated portal ident
   const sourceSecret = "side-chat-source-secret-for-http-tests";
   const identitySecret = "side-chat-identity-secret-for-http-tests";
   const server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     capabilitySecret: "side-chat-capability-secret-for-http-tests",
     portalIdentitySecret: identitySecret,
