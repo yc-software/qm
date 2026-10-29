@@ -153,12 +153,11 @@ export async function harness(opts: HarnessOptions): Promise<Harness> {
       if (opts.holdRuntimeConfig) await runtimeHeld;
       return Response.json({
         scopeId: new URL(path, "http://localhost").searchParams.get("scopeId") ?? "personal:tester",
-        approvedHarnesses: [],
-        modelsByHarness: {},
+        models: [],
         modelCatalog: {},
-        orgDefault: { harnessId: "pi", modelId: "m", revision: 1 },
+        orgDefault: { modelId: "m", revision: 1 },
         scopeOverride: null,
-        effective: { harnessId: "pi", modelId: "m" },
+        effective: { modelId: "m" },
         upgradeAvailable: false,
       });
     }

@@ -142,43 +142,33 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
   assert.equal(refreshCalls, 1);
 });
 
-test("routing: anthropic api key -> pi harness with a claude model", () => {
+test("routing: anthropic api key -> a claude model", () => {
   const r = resolveIndividualAuthRouting(apikey("anthropic", "sk-ant-x"), null, undefined);
   assert.equal(r?.kind, "apikey");
-  assert.equal(r?.harness, "pi");
   assert.equal(r?.provider, "anthropic");
   assert.equal((r as { apiKey: string }).apiKey, "sk-ant-x");
 });
 
-test("routing: anthropic OAuth login -> claude harness (not pi)", () => {
+test("routing: anthropic OAuth login -> a claude model", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
   assert.equal(r?.kind, "oauth");
-  assert.equal(r?.harness, "claude");
   assert.equal(r?.model, "claude-opus-5");
 });
 
-test("routing: openai OAuth login -> pi harness on the Codex subscription provider", () => {
+test("routing: openai OAuth login -> the Codex subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), undefined);
   assert.equal(r?.kind, "oauth");
-  assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-6.1-sol");
 });
 
 test("routing: requested model provider wins when that provider is connected", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), oauth("openai"), "gpt-5.6-sol");
-  assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-5.6-sol");
 });
 
 test("routing: a requested openai model is namespaced to the subscription provider", () => {
   const r = resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra");
-  assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-5.6-terra");
-});
-
-test("routing: an anthropic OAuth login still uses the claude harness", () => {
-  const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
-  assert.equal(r?.harness, "claude");
 });
 
 test("codex-subscription model ids resolve to pi-ai's openai-codex provider", () => {

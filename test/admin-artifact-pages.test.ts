@@ -408,7 +408,7 @@ test("admin cron runtime edits preserve task authority and reject unavailable or
       unattendedGrants: ["publish"],
       destination: { type: "principal", target: "U1" },
     });
-    const runtime = { harnessId: "pi", modelId: "claude-sonnet-5" };
+    const runtime = { modelId: "claude-sonnet-5" };
     const put = (body: unknown, scope = "personal:U1", actor = ALICE_ADMIN) =>
       fetch(`${s.base}/v1/admin/crons/${cron.id}/runtime?scope=${scope}`, {
         method: "PUT",

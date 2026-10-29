@@ -43,7 +43,7 @@ for (const mode of ["retry", "handoff"] as const) {
         return {
           reply: "",
           runtimeHandoff: {
-            choice: { harnessId: turn.runtime!.harnessId!, modelId: turn.runtime!.modelId! },
+            choice: { modelId: turn.runtime!.modelId! },
             lifetime: "task",
           },
         };

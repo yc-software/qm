@@ -4,7 +4,6 @@ import type { CapabilityClaims } from "../auth/capability-token.ts";
 export interface RuntimeRequest {
   action: "get" | "set" | "inherit";
   model?: string;
-  harness?: string;
   effort?: string;
   fastMode?: boolean;
   lifetime?: "task" | "scope";

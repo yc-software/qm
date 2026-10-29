@@ -70,36 +70,27 @@ async function scenario() {
     signals: createMemoryRunSignalStore(),
     maxAttempts: 3,
   });
-  const harness = defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set(),
+  const harness = defineHarness({
+    async runTurn(turn) {
+      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      const ref = {
+        current: turn.tools,
+        scopeLabel: turn.scopeLabel,
+        emit: turn.emit,
+        screenToolResult: turn.screenToolResult,
+        pendingApprovals: [],
+      };
+      const tool = createAgentTools(ref).find((tool) => tool.name === "subagents")!;
+      const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
+      const result = await execute(`wait-call-${++callSeq}`, { action: "wait", timeoutMs: 0 });
+      const reply = JSON.stringify(result.content);
+      await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+      return { reply, modelCalls: 1 };
     },
-    {
-      async runTurn(turn) {
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        const ref = {
-          current: turn.tools,
-          scopeLabel: turn.scopeLabel,
-          emit: turn.emit,
-          screenToolResult: turn.screenToolResult,
-          pendingApprovals: [],
-        };
-        const tool = createAgentTools(ref).find((tool) => tool.name === "subagents")!;
-        const execute = tool.execute as unknown as (id: string, input: unknown) => Promise<{ content: unknown[] }>;
-        const result = await execute(`wait-call-${++callSeq}`, { action: "wait", timeoutMs: 0 });
-        const reply = JSON.stringify(result.content);
-        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
-        return { reply, modelCalls: 1 };
-      },
-      async screenSecurity() {
-        return { decision: "strict" as const, reason: "test quarantine" };
-      },
+    async screenSecurity() {
+      return { decision: "strict" as const, reason: "test quarantine" };
     },
-  );
+  });
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "session-mail-")));

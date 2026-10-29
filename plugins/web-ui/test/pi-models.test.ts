@@ -12,13 +12,12 @@ test("models require server metadata even when the browser SDK knows their id", 
 
 test("browser model preserves safe server geometry and does not share mutable metadata", () => {
   const spec = metadata("future", "Future", "anthropic");
-  spec.effortLevelsByHarness = { pi: ["auto", "adaptive", "default", "high"] };
+  spec.effortLevels = ["auto", "adaptive", "default", "high"];
   const model = getBaseModel("future", spec);
-  const capabilities = (model as typeof model & { effortLevelsByHarness: Record<string, string[]> })
-    .effortLevelsByHarness;
-  assert.deepEqual(capabilities, spec.effortLevelsByHarness);
-  capabilities.pi!.push("low");
-  assert.equal(spec.effortLevelsByHarness.pi!.includes("low"), false);
+  const capabilities = (model as typeof model & { effortLevels: string[] }).effortLevels;
+  assert.deepEqual(capabilities, spec.effortLevels);
+  capabilities.push("low");
+  assert.equal(spec.effortLevels.includes("low"), false);
   assert.equal(model.api, "anthropic-messages");
   assert.equal(model.contextWindow, spec.contextWindow);
   model.cost.input = 999;

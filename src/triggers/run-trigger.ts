@@ -34,7 +34,7 @@ export interface TriggerDeps {
   resolveRecipient?: (query: string) => Promise<RecipientResolution>;
 }
 
-export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fastMode" | "attachments"> {
+export interface TriggerSpec extends Pick<TurnRequest, "model" | "fastMode" | "attachments"> {
   runtime?: import("../harness/harness.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
@@ -288,7 +288,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
         ...(spec.unattendedGrants && grantsHomedWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
-        ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
+        ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
         ...turnModelOptions({
           triggered: true,
           surface: spec.surface,
@@ -296,7 +296,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
           fastMode: spec.fastMode ?? spec.runtime?.fastMode,
         }),
         ...(spec.model ? { model: spec.model } : {}),
-        ...(spec.harness ? { harness: spec.harness } : {}),
         ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
         ...(spec.readOnly ? { readOnly: true } : {}),
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),

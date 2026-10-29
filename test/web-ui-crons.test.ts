@@ -268,7 +268,6 @@ test("a channel member sees a teammate's cron read-only via the web until the ow
 });
 
 test("cron runtime patches pass through the web API, validate, and clear", async () => {
-  await built.config.setApprovedHarnesses(["pi"]);
   const cron = await built.app.createCron({
     title: "runtime",
     action: "check",
@@ -277,7 +276,7 @@ test("cron runtime patches pass through the web API, validate, and clear", async
     createdBy: "alice",
     ownerScopeId: "personal:alice",
   });
-  const runtime = { harnessId: "pi", modelId: "claude-sonnet-5" };
+  const runtime = { modelId: "claude-sonnet-5" };
   const patch = (value: unknown) =>
     fetch(
       `${webBase}/api/crons/${cron.id}`,

@@ -30,7 +30,7 @@ export function meterGrindCall(meter: GrindMeter, usage: LlmCallUsage | null): v
   meterGrindSpend(meter, usage);
 }
 
-export function meterGrindSpend(meter: GrindMeter, usage: LlmCallUsage | null): void {
+function meterGrindSpend(meter: GrindMeter, usage: LlmCallUsage | null): void {
   if (!usage) return;
   if (usage.costUsd > 0) meter.usd += usage.costUsd;
   else if (usage.input + usage.output > 0) meter.unpricedCalls++;

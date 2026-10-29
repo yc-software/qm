@@ -4,7 +4,7 @@ A delegated task runs in a durable session with its own transcript and a mutable
 
 ## Lifecycle
 
-`subagents.open` accepts a task, title, model, harness, thinking level, and optional `noComputer` flag. `noComputer: true` removes computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Leave it unset for tasks that need a computer to read email, files, or code; express any no-write constraint in the task.
+`subagents.open` accepts a task, title, model, thinking level, and optional `noComputer` flag. `noComputer: true` removes computer access entirely: no shell, filesystem, browser, or computer-backed integrations. Only memory/history, session coordination, runtime inspection, and permitted read-only connectors remain. Leave it unset for tasks that need a computer to read email, files, or code; express any no-write constraint in the task.
 
 Reusing a request key recovers the same child and initial run after a lost receipt; using that key for different work is rejected. Children inherit the caller's scope and audience. The existing internal `readOnly` restriction remains durable: `noComputer: false` cannot lift a caller's restriction or an existing child's restriction. The session tree admits at most ten pending or running qm runs, including direct turns and explicit follow-up tasks.
 
@@ -26,7 +26,7 @@ Terminal receipts live in the run store. A paginated sweep retries pending retur
 
 The session migration adds parent and spawn metadata. The run migration adds terminal-return acknowledgements and an index restricted to unreturned terminal child runs. Signal replay uses the existing signal acknowledgement columns.
 
-The ten-run limit governs qm session runs. Coordinator turns use durable session delegation and disable provider-native subagent tools; other turns retain their existing native-harness behavior.
+The ten-run limit governs qm session runs. Coordinator turns use durable session delegation and disable provider-native subagent tools.
 
 ## Swarms
 

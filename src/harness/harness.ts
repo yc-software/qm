@@ -12,7 +12,6 @@ import type {
   TurnRequest,
   TurnRuntime,
 } from "../types.ts";
-import type { HarnessId } from "../model/pi-models.ts";
 import type { LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
@@ -23,7 +22,6 @@ import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
 
 export interface RuntimeChoice {
-  harnessId: HarnessId;
   modelId: string;
   effortLevel?: string;
   fastMode?: boolean;
@@ -70,7 +68,6 @@ export interface HarnessLlmRequestRecord {
 
 export interface HarnessSecurityScreenInput {
   payload: string;
-  harnessId?: string;
   modelId?: string;
   systemPrompt?: string;
   signal: AbortSignal;
@@ -135,7 +132,6 @@ export interface HarnessTurnInput {
   providerKeys?: ProviderKeys;
   runtimePinned?: boolean;
   onRuntime?(runtime: TurnRuntime): void;
-  claudeOauthToken?: string;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
   recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
   onProgress?(p: { toolCalls: number; tokens?: number }): void;
@@ -210,37 +206,14 @@ export interface HarnessModelUtilities {
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
 }
 
-type HarnessControlTransport = "in-process" | "sdk" | "http" | "json-rpc" | "api";
-type HarnessToolTransport = "in-process" | "plugin" | "dynamic" | "in-process-mcp" | "mcp";
-type HarnessCapability =
-  "abort" | "steer" | "images" | "thinking-level" | "fast-mode" | "provider-sessions" | "goal-enforcement";
-
-export interface HarnessAdapterProfile {
-  id: string;
-  controlTransport: HarnessControlTransport;
-  toolTransport: HarnessToolTransport;
-  transcriptFormat: string;
-  capabilities: ReadonlySet<HarnessCapability>;
-}
-
-export interface HarnessToolPresentation {
-  name(coreName: string): string;
-}
-
 export interface Harness {
-  profile: HarnessAdapterProfile;
   turns: HarnessTurnController;
   models: HarnessModelUtilities;
-  tools: HarnessToolPresentation;
 }
 
 export type HarnessImplementation = HarnessTurnController & HarnessModelUtilities;
 
-export function defineHarness(
-  profile: HarnessAdapterProfile,
-  implementation: HarnessImplementation,
-  tools: HarnessToolPresentation = { name: (coreName) => coreName },
-): Harness {
+export function defineHarness(implementation: HarnessImplementation): Harness {
   const turns: HarnessTurnController = {
     runTurn: implementation.runTurn.bind(implementation),
     ...(implementation.close ? { close: implementation.close.bind(implementation) } : {}),
@@ -261,5 +234,5 @@ export function defineHarness(
       ? { summarizeApproval: implementation.summarizeApproval.bind(implementation) }
       : {}),
   };
-  return { profile, turns, models, tools };
+  return { turns, models };
 }

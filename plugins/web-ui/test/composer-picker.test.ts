@@ -100,7 +100,6 @@ test("the personal-account picker preserves composer choices and saves context d
       }
       if (change.inherit) return Response.json({ ...config, effective: config.orgDefault, scopeOverride: null });
       const effective = {
-        harnessId: change.harnessId,
         modelId: change.modelId,
         effortLevel: change.effortLevel,
         fastMode: change.fastMode,
@@ -125,11 +124,7 @@ test("the personal-account picker preserves composer choices and saves context d
   }
   const config: RuntimeConfig = {
     scopeId: "personal:tester",
-    approvedHarnesses: ["pi", "claude"],
-    modelsByHarness: {
-      pi: ["alpha", "beta", "gamma", "delta", "epsilon"],
-      claude: ["alpha", "delta"],
-    },
+    models: ["alpha", "beta", "gamma", "delta", "epsilon"],
     modelCatalog: {
       alpha: model("alpha", "Alpha"),
       beta: model("beta", "Beta", "openai"),
@@ -137,8 +132,8 @@ test("the personal-account picker preserves composer choices and saves context d
       delta: model("delta", "Delta"),
       epsilon: model("epsilon", "Epsilon"),
     },
-    orgDefault: { harnessId: "claude", modelId: "alpha", revision: 1 },
-    effective: { harnessId: "claude", modelId: "alpha" },
+    orgDefault: { modelId: "alpha", revision: 1 },
+    effective: { modelId: "alpha" },
     scopeOverride: null,
     upgradeAvailable: false,
     fastModeModelIds: ["alpha", "beta"],
@@ -146,10 +141,9 @@ test("the personal-account picker preserves composer choices and saves context d
   localStorage.setItem(
     "web-ui:loadout",
     JSON.stringify([
-      { value: "pi:beta", effort: "xhigh", fast: false },
-      { value: "claude:alpha", effort: "high", fast: true },
-      { value: "pi:alpha", effort: "low", fast: false },
-      { value: "pi:gamma", effort: "medium", fast: false },
+      { value: "beta", effort: "xhigh", fast: false },
+      { value: "alpha", effort: "high", fast: true },
+      { value: "gamma", effort: "medium", fast: false },
     ]),
   );
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
@@ -282,7 +276,7 @@ test("the personal-account picker preserves composer choices and saves context d
     siblingHost.querySelector<HTMLButtonElement>('[aria-label="Make Beta default"]')!.click();
     await tick();
     assert.match(siblingComposer!.state.error, /default save failed/);
-    assert.equal(siblingComposer!.currentModelOption()?.value, "claude:alpha");
+    assert.equal(siblingComposer!.currentModelOption()?.value, "alpha");
     assert.equal(siblingComposer!.state.effortLevel, "high");
     assert.equal(siblingComposer!.state.fastMode, true);
     assert.equal(
@@ -291,15 +285,12 @@ test("the personal-account picker preserves composer choices and saves context d
       ),
       false,
     );
-    assert.equal(host.querySelector('.composer-toolbar [aria-label="Harness"]'), null);
-    assert.equal(host.querySelector(".composer-toolbar .harness-control"), null);
     assert.equal(host.querySelectorAll('.composer-toolbar [aria-haspopup="menu"]').length, 1);
     button(".loadout-button").click();
     await tick();
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
     assert.ok(pick("Beta").querySelector('[aria-label="OpenAI"]'));
     assert.ok(pick("Gamma").querySelector('[aria-label="OpenAI"]'));
-    assert.equal(pick("Alpha").querySelector(".loadout-harness")?.textContent, "Claude Code");
     assert.equal(host.querySelectorAll(".loadout-default").length, 1);
     assert.equal(pick("Alpha").querySelector(".loadout-default")?.textContent, "my default");
     pick("Beta").click();
@@ -307,28 +298,12 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.equal(pick("Beta").querySelector(".loadout-default"), null);
     assert.equal(pick("Alpha").querySelector(".loadout-default")?.textContent, "my default");
     pick("Alpha").click();
-
-    button('[data-loadout-section="harness"]').click();
-    await tick();
-    const choices = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')];
-    assert.deepEqual(
-      choices.map((choice) => choice.textContent?.trim()),
-      ["Pi", "Claude Code"],
-    );
-    assert.equal(choices[1]!.getAttribute("aria-checked"), "true");
-    assert.equal(document.activeElement, choices[1]);
-    choices[0]!.click();
-    await tick();
-    assert.equal(composer!.currentModelOption()?.value, "pi:alpha");
-    assert.equal(pick("Alpha").querySelector(".loadout-default"), null);
+    assert.equal(composer!.currentModelOption()?.value, "alpha");
     assert.equal(agent.state.model.id, "alpha");
-    assert.equal(host.querySelector(".loadout-submenu"), null);
-    assert.equal(document.activeElement, button('[data-loadout-section="harness"]'));
-    assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
     assert.deepEqual(saved(), [
-      { value: "pi:beta", effort: "xhigh", fast: false },
-      { value: "pi:alpha", effort: "high", fast: true },
-      { value: "pi:gamma", effort: "medium", fast: false },
+      { value: "beta", effort: "xhigh", fast: false },
+      { value: "alpha", effort: "high", fast: true },
+      { value: "gamma", effort: "medium", fast: false },
     ]);
 
     button('[data-loadout-section="add"]').click();
@@ -339,80 +314,35 @@ test("the personal-account picker preserves composer choices and saves context d
     button(".loadout-back").click();
 
     pick("Beta").click();
-    assert.equal(composer!.currentModelOption()?.value, "pi:beta");
-    button('[data-loadout-section="harness"]').click();
-    await tick();
-    const betaChoices = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')];
-    assert.deepEqual(
-      betaChoices.map((choice) => choice.getAttribute("aria-disabled")),
-      ["false", "true"],
-    );
-    const claude = betaChoices[1]!;
-    assert.equal(claude.getAttribute("aria-description"), "Claude Code cannot run Beta.");
-    claude.dispatchEvent(new MouseEvent("mouseenter"));
-    assert.equal(document.querySelector(".qm-tooltip.visible")?.textContent, "Claude Code cannot run Beta.");
-    claude.focus();
-    assert.equal(document.querySelector(".qm-tooltip.visible")?.textContent, "Claude Code cannot run Beta.");
-    const beforeDisabledClick = saved();
-    const beforeDisabledUpdates = updates.length;
-    claude.click();
-    assert.equal(composer!.currentModelOption()?.value, "pi:beta");
-    assert.deepEqual(saved(), beforeDisabledClick);
-    assert.equal(updates.length, beforeDisabledUpdates);
-    assert.ok(host.querySelector(".loadout-submenu"));
-    button(".loadout-back").click();
+    assert.equal(composer!.currentModelOption()?.value, "beta");
     pick("Alpha").click();
-    assert.equal(composer!.currentModelOption()?.value, "pi:alpha");
+    assert.equal(composer!.currentModelOption()?.value, "alpha");
     assert.equal(composer!.state.effortLevel, "high");
     assert.equal(composer!.state.fastMode, true);
-    assert.equal(pick("Alpha").querySelector(".loadout-harness")?.textContent, "Pi");
 
     await mount();
-    assert.equal(composer!.currentModelOption()?.value, "pi:alpha");
+    assert.equal(composer!.currentModelOption()?.value, "alpha");
     assert.equal(composer!.state.effortLevel, "high");
     assert.equal(composer!.state.fastMode, true);
     button(".loadout-button").click();
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
-    assert.equal(pick("Alpha").querySelector(".loadout-harness")?.textContent, "Pi");
     await tick();
 
     ctx.chat.state.threadRef = "web:tester:picker-new-thread";
     await mount();
-    assert.equal(composer!.currentModelOption()?.value, "pi:alpha");
+    assert.equal(composer!.currentModelOption()?.value, "alpha");
     assert.equal(agent.state.model.id, "alpha");
     assert.equal(composer!.state.effortLevel, "high");
     assert.equal(composer!.state.fastMode, true);
     button(".loadout-button").click();
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
-    assert.equal(pick("Alpha").querySelector(".loadout-harness")?.textContent, "Pi");
 
-    button('[data-loadout-section="harness"]').click();
-    const claudeCode = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')].find(
-      (choice) => choice.textContent?.trim() === "Claude Code",
-    );
-    assert.ok(claudeCode);
-    claudeCode.click();
-    assert.equal(composer!.currentModelOption()?.value, "claude:alpha");
-    assert.equal(agent.state.model.id, "alpha");
-    assert.equal(composer!.state.effortLevel, "high");
-    assert.equal(composer!.state.fastMode, true);
-    assert.deepEqual(saved()[1], { value: "claude:alpha", effort: "high", fast: true });
-    assert.ok(host.querySelector('[data-loadout-section="effort"]'));
-    const claudeFast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
-    assert.equal(claudeFast.disabled, false);
-    assert.equal(claudeFast.getAttribute("aria-checked"), "true");
-    claudeFast.click();
+    const fast = button('[aria-label="Fast"][role="menuitemcheckbox"]');
+    assert.equal(fast.disabled, false);
+    assert.equal(fast.getAttribute("aria-checked"), "true");
+    fast.click();
     assert.equal(composer!.state.fastMode, false);
-
-    button('[data-loadout-section="harness"]').click();
-    const pi = [...host.querySelectorAll<HTMLButtonElement>('.loadout-submenu [role="menuitemradio"]')].find(
-      (choice) => choice.textContent?.trim() === "Pi",
-    );
-    assert.ok(pi);
-    pi.click();
-    assert.equal(composer!.currentModelOption()?.value, "pi:alpha");
     assert.equal(composer!.state.effortLevel, "high");
-    assert.equal(composer!.state.fastMode, false);
     assert.deepEqual(names(), ["Beta", "Alpha", "Gamma"]);
     assert.equal(button('[aria-label="Fast"][role="menuitemcheckbox"]').disabled, false);
     pick("Gamma").click();
@@ -428,7 +358,7 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.equal(button('[aria-label="Fast"][role="menuitemcheckbox"]').disabled, false);
     await tick();
 
-    button('[data-loadout-section="harness"]').click();
+    button('[data-loadout-section="effort"]').click();
     await tick();
     assert.ok(host.querySelector(".loadout-submenu"));
     assert.equal(composer!.closeMenus(), true);
@@ -454,7 +384,6 @@ test("the personal-account picker preserves composer choices and saves context d
     await tick();
     assert.equal(updates.length, 1);
     assert.deepEqual(updates[0], {
-      harnessId: "pi",
       modelId: "beta",
       effortLevel: "xhigh",
       fastMode: false,
@@ -468,11 +397,7 @@ test("the personal-account picker preserves composer choices and saves context d
       },
       current,
     );
-    assert.equal(
-      siblingComposer!.currentModelOption()?.value,
-      "pi:beta",
-      "failed save did not pin an untouched sibling",
-    );
+    assert.equal(siblingComposer!.currentModelOption()?.value, "beta", "failed save did not pin an untouched sibling");
     assert.equal(siblingComposer!.state.effortLevel, "xhigh", "sibling follows the new default effort");
     assert.equal(siblingComposer!.state.fastMode, false, "sibling follows the new default Fast setting");
     assert.equal(siblingAgent.state.model.id, "beta");
@@ -634,16 +559,6 @@ test("the personal-account picker preserves composer choices and saves context d
     await tick();
     assert.equal(contextHost.querySelector(".loadout-popover"), null);
     assert.equal(context.contextModelState.config.effective.modelId, "delta");
-    contextButton(".loadout-button").click();
-    contextButton('[data-loadout-section="harness"]').click();
-    const harness = [...contextHost.querySelectorAll<HTMLButtonElement>(".loadout-effort")].find(
-      (item) => item.textContent?.trim() === "Claude Code",
-    )!;
-    harness.focus();
-    harness.click();
-    await tick();
-    assert.equal(context.contextModelState.config.effective.harnessId, "claude");
-    assert.equal(document.activeElement, contextButton('[data-loadout-section="harness"]'));
     context.resetContextModel();
     drawContext();
     assert.equal(contextHost.querySelector(".context-model"), null);
@@ -652,8 +567,8 @@ test("the personal-account picker preserves composer choices and saves context d
     seedRuntimeConfig(staleScope, {
       ...config,
       scopeId: staleScope,
-      effective: { harnessId: "removed", modelId: "retired" },
-      orgDefault: { harnessId: "removed", modelId: "retired", revision: 1 },
+      effective: { modelId: "retired" },
+      orgDefault: { modelId: "retired", revision: 1 },
       scopeOverride: null,
     });
     localStorage.removeItem("web-ui:loadout");
@@ -670,17 +585,13 @@ test("the personal-account picker preserves composer choices and saves context d
     await tick();
     assert.deepEqual(updates.at(-1), {
       scopeId: staleScope,
-      harnessId: "pi",
       modelId: "beta",
       effortLevel: "auto",
       fastMode: false,
     });
     assert.equal(context.contextModelState.config.effective.modelId, "beta");
-    config.modelCatalog!.alpha!.effortLevelsByHarness = {
-      pi: ["auto", "adaptive", "default", "low", "high"],
-      claude: ["auto", "low", "high"],
-    };
-    config.effective = { harnessId: "pi", modelId: "alpha", effortLevel: "auto" };
+    config.modelCatalog!.alpha!.effortLevels = ["auto", "adaptive", "default", "low", "high"];
+    config.effective = { modelId: "alpha", effortLevel: "auto" };
     ctx.chat.state.threadRef = "web:tester:native-auto";
     localStorage.removeItem("web-ui:loadout");
     await composer!.refreshRuntimeSelection(null, agent, true);
@@ -695,13 +606,13 @@ test("the personal-account picker preserves composer choices and saves context d
       .find((item) => item.textContent?.trim() === "Auto")!
       .click();
     assert.equal(composer!.state.effortLevel, "adaptive");
-    assert.equal(saved().find(({ value }) => value === "pi:alpha")?.effort, "adaptive");
+    assert.equal(saved().find(({ value }) => value === "alpha")?.effort, "adaptive");
     button('[data-loadout-section="effort"]').click();
     effortChoices()
       .find((item) => item.textContent?.trim() === "Default")!
       .click();
     assert.equal(composer!.state.effortLevel, "auto");
-    assert.equal(saved().find(({ value }) => value === "pi:alpha")?.effort, "auto");
+    assert.equal(saved().find(({ value }) => value === "alpha")?.effort, "auto");
     button('[data-loadout-section="effort"]').click();
     effortChoices()
       .find((item) => item.textContent?.trim() === "Provider default")!
@@ -722,11 +633,11 @@ test("the personal-account picker preserves composer choices and saves context d
       ["gpt-6-astra", "Astra"],
       ["gpt-6.1-sol", "Sol 6.1"],
     ]) {
-      config.modelsByHarness.pi.push(modelId, `${modelId}-ultrafast`);
+      config.models.push(modelId, `${modelId}-ultrafast`);
       config.modelCatalog![modelId] = model(modelId, label, "openai");
       config.modelCatalog![`${modelId}-ultrafast`] = model(`${modelId}-ultrafast`, `${label} Ultrafast`, "openai");
       config.fastModeModelIds!.push(modelId);
-      config.effective = { harnessId: "pi", modelId: modelId, effortLevel: "high", fastMode: true };
+      config.effective = { modelId: modelId, effortLevel: "high", fastMode: true };
       ctx.chat.state.threadRef = `web:tester:${modelId}-ultrafast`;
       localStorage.removeItem("web-ui:loadout");
       await composer!.refreshRuntimeSelection(null, agent, true);
@@ -736,8 +647,8 @@ test("the personal-account picker preserves composer choices and saves context d
       assert.equal(button('button[aria-label="Fast"]').getAttribute("aria-checked"), "false");
       assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "true");
       assert.deepEqual(
-        saved().filter(({ value }) => value.startsWith(`pi:${modelId}`)),
-        [{ value: `pi:${modelId}-ultrafast`, effort: "high", fast: false }],
+        saved().filter(({ value }) => value.startsWith(modelId)),
+        [{ value: `${modelId}-ultrafast`, effort: "high", fast: false }],
       );
       ctx.chat.state.threadRef = `web:tester:${modelId}-ultrafast-new-thread`;
       await mount();
@@ -753,13 +664,13 @@ test("the personal-account picker preserves composer choices and saves context d
       assert.equal(button('[aria-label="Ultrafast"]').getAttribute("aria-checked"), "false");
       assert.equal(composer!.state.effortLevel, "high");
     }
-    config.effective = { harnessId: "pi", modelId: "gamma" };
+    config.effective = { modelId: "gamma" };
     localStorage.removeItem("web-ui:loadout");
     ctx.chat.state.threadRef = "web:tester:server-default";
     await composer!.refreshRuntimeSelection(null, agent, true);
     await mount();
     assert.equal(composer!.followsDefault(), true, "a chat on the default leaves the model to the server");
-    const routed = { harnessId: "pi", modelId: "beta", label: "Beta", change: { rule: "hard-task" } };
+    const routed = { modelId: "beta", label: "Beta", change: { rule: "hard-task" } };
     (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => routed;
     draw();
     assert.equal(host.querySelector(".loadout-button .menu-label")?.textContent?.trim(), "Beta");
@@ -785,7 +696,7 @@ test("the personal-account picker preserves composer choices and saves context d
       button(".loadout-button").getAttribute("aria-label"),
       "Model: Beta, routed by hard-task for this turn; your setting is Gamma",
     );
-    localStorage.setItem("web-ui:model-picks", JSON.stringify([["web:tester:picked", "pi:beta"]]));
+    localStorage.setItem("web-ui:model-picks", JSON.stringify([["web:tester:picked", "beta"]]));
     window.dispatchEvent(new dom.window.StorageEvent("storage", { key: "web-ui:model-picks" }));
     ctx.chat.state.threadRef = "web:tester:picked";
     await mount();
@@ -794,7 +705,6 @@ test("the personal-account picker preserves composer choices and saves context d
     ctx.chat.state.threadRef = "web:tester:server-default";
     await mount();
     (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => ({
-      harnessId: "pi",
       modelId: "beta",
       change: { agent: "task" },
     });
@@ -804,7 +714,6 @@ test("the personal-account picker preserves composer choices and saves context d
       "Model: Beta, switched for this request; your setting is Gamma",
     );
     (ctx.chat as unknown as { turnRuntime: () => unknown }).turnRuntime = () => ({
-      harnessId: "pi",
       modelId: "beta",
       change: { agent: "scope" },
     });

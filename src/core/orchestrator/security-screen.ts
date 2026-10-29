@@ -122,7 +122,6 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
         payload: request ? JSON.stringify({ request, payload }) : payload,
         ...(flagger
           ? {
-              harnessId: flagger.harnessId,
               modelId: flagger.modelId,
               systemPrompt: securityScreenSystemPrompt(flagger.rubric),
             }

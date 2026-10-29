@@ -3,7 +3,7 @@ import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
+import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../types.ts";
@@ -11,14 +11,13 @@ import { parseScopeId, scopeId as makeScopeId } from "../../types.ts";
 import type { Skill, SkillResolution } from "../../skills/skill-store.ts";
 import { ByteSourceTooLargeError } from "../../files/durable-byte-store.ts";
 import {
-  defaultModelForHarness,
-  isHarnessId,
-  modelSupportedByHarness,
+  defaultModel,
+  modelSupported,
   modelOfferedInWebui,
-  thinkingLevelsForHarness,
+  thinkingLevelsFor,
   fastModeModelIds,
 } from "../../model/pi-models.ts";
-import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../model/model-catalog.ts";
+import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
 import { errMessage } from "../../util/errors.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
@@ -1220,20 +1219,16 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
     deps.config.getExternalSlackParticipantsDurable(orgScope(deps)),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
   ]);
-  const harnessId = deps.harnessId ?? "pi";
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : null;
-  const configuredKeys = deps.providerKeys ?? managedKeys;
-  const providerStatus = harnessId === "pi" && managedKeys ? managedKeys : configuredKeys;
+  const providerStatus = managedKeys ?? deps.providerKeys;
   const catalog = managedKeys?.openrouter
     ? await selectableModelCatalog(deps.modelCredentialFetch)
     : builtInModelCatalog();
-  const allowed = selectableCatalogForHarness(catalog, harnessId)
+  const allowed = selectableCatalog(catalog)
     .filter((model) => modelOfferedInWebui(model.id))
     .map((model) => model.id);
-  const configuredPicker = webuiModels?.filter((id) => modelSupportedByHarness(id, harnessId)) ?? [];
-  const resolvedBase = modelSupportedByHarness(baseModel ?? undefined, harnessId)
-    ? baseModel!
-    : defaultModelForHarness(harnessId, deps.baseModelDefault);
+  const configuredPicker = webuiModels?.filter((id) => modelSupported(id)) ?? [];
+  const resolvedBase = modelSupported(baseModel ?? undefined) ? baseModel! : defaultModel(deps.baseModelDefault);
   const resolvedBranding = {
     ...(branding.orgName ? { orgName: branding.orgName } : {}),
     ...(branding.accent ? { accent: branding.accent } : {}),
@@ -1244,14 +1239,13 @@ async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, {
     webuiModels: webuiModels != null ? configuredPicker : allowed,
     baseModel: resolvedBase,
-    harnessId,
     ...(providerStatus && {
       modelProviderConfigured: Boolean(
         providerStatus.anthropic ||
         providerStatus.openai ||
         providerStatus.openrouter ||
         providerStatus.modelIds?.size ||
-        deps.harnessCarriedModelAuth,
+        deps.companySubscriptionAuth,
       ),
     }),
     externalSlackParticipants,
@@ -1307,37 +1301,24 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
     if (runtime) await config.acknowledgeRuntimeSelection(target.scope);
     else {
       const legacyModel = await config.getBaseModelOwnDurable(target.scope);
-      const fallback = runtimeFallback(ctx);
-      const approved = (await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId];
-      if (
-        legacyModel &&
-        approved.includes(fallback.harnessId) &&
-        modelSupportedByHarness(legacyModel, fallback.harnessId) &&
-        (await webuiModelEnabled(ctx, legacyModel))
-      ) {
-        await config.setRuntimeSelection(target.scope, { harnessId: fallback.harnessId, modelId: legacyModel });
+      if (legacyModel && modelSupported(legacyModel) && (await webuiModelEnabled(ctx, legacyModel))) {
+        await config.setRuntimeSelection(target.scope, { modelId: legacyModel });
       }
     }
   } else {
-    const harnessId = ctx.body.harnessId;
     const modelId = ctx.body.modelId;
-    const fallback = runtimeFallback(ctx);
-    const approved = (await config.getApprovedHarnessesDurable()) ?? [fallback.harnessId];
-    if (!isHarnessId(harnessId) || !approved.includes(harnessId))
-      return sendJson(ctx.res, 400, { error: "harness_not_approved" });
-    if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
+    if (typeof modelId !== "string" || !modelSupported(modelId))
       return sendJson(ctx.res, 400, { error: "model_not_supported" });
     if (!(await webuiModelEnabled(ctx, modelId))) return sendJson(ctx.res, 400, { error: "model_not_enabled" });
     const effortLevel = ctx.body.effortLevel ?? "auto";
-    if (typeof effortLevel !== "string" || !thinkingLevelsForHarness(harnessId, modelId).includes(effortLevel))
+    if (typeof effortLevel !== "string" || !thinkingLevelsFor(modelId).includes(effortLevel))
       return sendJson(ctx.res, 400, { error: "effort_not_supported" });
     const fastMode = ctx.body.fastMode ?? false;
     if (typeof fastMode !== "boolean") return sendJson(ctx.res, 400, { error: "fast_mode_invalid" });
-    const choice = { harnessId, modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
+    const choice = { modelId, effortLevel, fastMode: fastMode && fastModeModelIds().includes(modelId) };
     if ((await config.getModelAccountDurable(target.actorId)) !== "company") {
       const available = await userRuntimeConfigBody(ctx, target.scope, target.actorId);
-      if (!available.modelsByHarness[harnessId]?.includes(modelId))
-        return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
+      if (!available.models.includes(modelId)) return sendJson(ctx.res, 400, { error: "account_runtime_unavailable" });
     }
     await config.setRuntimeSelection(target.scope, choice);
   }

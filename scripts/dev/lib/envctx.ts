@@ -12,7 +12,6 @@ export interface AssembledEnv {
   anthropicKeySource: string;
   openaiKeySource: string;
   codexAuthSource: string;
-  harness: "pi" | "claude";
   liveEnvFile: string;
   warnings: string[];
 }
@@ -136,13 +135,7 @@ export async function assembleEnv(opts: {
     codexAuthSource = codexAuthCandidate;
   }
 
-  let harness: "pi" | "claude";
-  if (opts.callerEnv.HARNESS === "claude") {
-    harness = "claude";
-    env.HARNESS = harness;
-  } else if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
-    harness = "pi";
-    env.HARNESS = harness;
+  if (env.ANTHROPIC_API_KEY || env.OPENAI_API_KEY || codexOAuthConfigured) {
     if (!env.ANTHROPIC_API_KEY && env.OPENAI_API_KEY && !env.MODEL_PROVIDER) env.MODEL_PROVIDER = "openai";
     if (!env.PI_CAPTURE_REQUESTS) env.PI_CAPTURE_REQUESTS = "1";
   } else {
@@ -158,7 +151,7 @@ export async function assembleEnv(opts: {
     if (!env[k] && wtEnv[k]) env[k] = wtEnv[k];
   }
 
-  return { env, anthropicKeySource, openaiKeySource, codexAuthSource, harness, liveEnvFile, warnings };
+  return { env, anthropicKeySource, openaiKeySource, codexAuthSource, liveEnvFile, warnings };
 }
 
 export function envFileGet(path: string, key: string): string {

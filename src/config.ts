@@ -72,7 +72,6 @@ export interface Config {
   databasePoolCaCert?: string;
   databasePoolMax?: number;
   databaseDirectPoolMax?: number;
-  harness: "pi" | "claude";
   securityPosture: SecurityPosture;
   sharingPosture: SharingPosture;
   legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
@@ -87,9 +86,6 @@ export interface Config {
   codexAuthCredential?: string;
   /** Keychain credential id holding a Claude Code subscription token (production path). */
   claudeAuthCredential?: string;
-  claudeModel?: string;
-  claudeBinPath?: string;
-  claudeProcessEnv: NodeJS.ProcessEnv;
   detectModelId?: string;
   titleModelId?: string;
   judgeModelId?: string;
@@ -212,14 +208,12 @@ export interface Config {
   flyDeploy: FlyDeployEnv;
 }
 
-export function configuredModelForHarness(config: Config, harness: string): string | undefined {
-  if (harness === "claude") return config.claudeModel;
+export function configuredModel(config: Config): string | undefined {
   if (
-    harness === "pi" &&
     !config.modelId &&
     !config.anthropicApiKey &&
     !config.modelProvider &&
-    harnessCarriedModelAuth(config) === "openai"
+    companySubscriptionAuth(config) === "openai"
   )
     return DEFAULT_CODEX_MODEL_ID;
   return config.modelId;
@@ -227,7 +221,7 @@ export function configuredModelForHarness(config: Config, harness: string): stri
 
 export function providerKeysPresent(config: Config): ModelProviderAvailability {
   return {
-    anthropic: Boolean(config.anthropicApiKey),
+    anthropic: Boolean(config.anthropicApiKey || config.claudeAuthCredential),
     openai: Boolean(config.openaiApiKey),
     openrouter: Boolean(config.openrouterApiKey),
     ...(config.codexAuthCredential || config.codexAuthFile ? { codexOAuth: true } : {}),
@@ -238,13 +232,8 @@ export function baseModelProviders(config: Config): ModelProviderAvailability | 
   return config.modelProvider ? onlyProvider(config.modelProvider) : undefined;
 }
 
-export function harnessCarriedModelAuth(config: Config): ModelProvider | undefined {
-  if (
-    config.harness === "claude" &&
-    (config.claudeAuthCredential ||
-      config.claudeProcessEnv.CLAUDE_CODE_OAUTH_TOKEN ||
-      config.claudeProcessEnv.ANTHROPIC_AUTH_TOKEN)
-  )
+export function companySubscriptionAuth(config: Config): ModelProvider | undefined {
+  if (config.anthropicApiKey ? config.anthropicApiKey.includes("sk-ant-oat") : config.claudeAuthCredential)
     return "anthropic";
   if (config.codexAuthCredential || config.codexAuthFile) return "openai";
   return undefined;
@@ -1076,13 +1065,6 @@ function orgBrandingFromEnv(env: NodeJS.ProcessEnv): Config["brandingDefault"] {
   });
 }
 
-function harnessEnvStrict(value: string | undefined): Config["harness"] {
-  if (value === undefined || value.trim() === "") return "pi";
-  const harness = value.trim();
-  if (harness === "pi" || harness === "claude") return harness;
-  throw new Error(`HARNESS=${JSON.stringify(value)} is not recognized — use pi or claude, or unset it.`);
-}
-
 export function enabledSandboxBackends(config: Config): Array<Config["sandboxBackend"]> {
   const credentialed: Record<Config["sandboxBackend"], boolean> = {
     local: Boolean(config.localSandbox?.image),
@@ -1228,11 +1210,9 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
       `MODEL_PROVIDER=${JSON.stringify(declared)} is not recognized — use ${MODEL_PROVIDERS.join(", ")}.`,
     );
   }
-  const harness = harnessEnvStrict(env.HARNESS);
-  const base = defaultModelForProvider(harness, declared);
-  if (!base) {
+  if (!defaultModelForProvider(declared)) {
     throw new Error(
-      `MODEL_PROVIDER=${declared} cannot serve a base model on HARNESS=${harness} — that harness runs no ${declared} model, so every turn would be refused.`,
+      `MODEL_PROVIDER=${declared} cannot serve a base model — no ${declared} model is available, so every turn would be refused.`,
     );
   }
   return declared;
@@ -1301,9 +1281,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const swarmDefaults = resolveSwarmSettings(
     env.SWARM_DEFAULTS === undefined ? undefined : JSON.parse(env.SWARM_DEFAULTS),
   );
-  const harness = harnessEnvStrict(env.HARNESS);
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
+  const anthropicApiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
   const codexAuthFile = codexAuthCredential ? undefined : codexAuthFileForEnv(env);
   if (env.NODE_ENV === "production" && codexAuthFile) {
     throw new Error(
@@ -1525,25 +1505,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const providerBaseUrls = providerBaseUrlsFromEnv(env);
   const modelGateway = modelGatewayFromEnv(env);
   const brokerCredentials = deploymentBrokerCredentialsFromEnv(env);
-  const claudeProcessEnv = Object.fromEntries(
-    [
-      "PATH",
-      "TMPDIR",
-      "LANG",
-      "LC_ALL",
-      "SSL_CERT_FILE",
-      "SSL_CERT_DIR",
-      "NODE_EXTRA_CA_CERTS",
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "NO_PROXY",
-      "ALL_PROXY",
-      "ANTHROPIC_API_KEY",
-      "ANTHROPIC_AUTH_TOKEN",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    ].flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
-  ) as NodeJS.ProcessEnv;
-  if (providerBaseUrls.anthropic) claudeProcessEnv.ANTHROPIC_BASE_URL = providerBaseUrls.anthropic;
   const turnWallClockMs =
     (numEnvStrict("TURN_WALL_CLOCK_SEC", env.TURN_WALL_CLOCK_SEC) ?? CONFIG_DEFAULTS.turnWallClockSec) * 1000;
   const runMaxAgeMs =
@@ -1587,7 +1548,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     ...(env.DATABASE_CA_CERT ? { databaseCaCert: env.DATABASE_CA_CERT } : {}),
     ...(env.DATABASE_CA_CERT_FILE ? { databaseCaCertFile: env.DATABASE_CA_CERT_FILE } : {}),
-    harness,
     securityPosture: securityPostureEnvStrict(env.HARNESS_SECURITY_POSTURE),
     sharingPosture: sharingPostureEnvStrict(env.HARNESS_SHARING_POSTURE),
     securityScreen,
@@ -1610,13 +1570,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(codexAuthFile ? { codexAuthFile } : {}),
     ...(codexAuthCredential ? { codexAuthCredential } : {}),
     ...(claudeAuthCredential ? { claudeAuthCredential } : {}),
-    ...(env.CLAUDE_MODEL ? { claudeModel: env.CLAUDE_MODEL } : {}),
-    ...(env.CLAUDE_BIN ? { claudeBinPath: env.CLAUDE_BIN } : {}),
-    claudeProcessEnv,
     ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
     ...(env.PI_TITLE_MODEL ? { titleModelId: env.PI_TITLE_MODEL } : {}),
     ...(env.PI_JUDGE_MODEL ? { judgeModelId: env.PI_JUDGE_MODEL } : {}),
-    ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
+    ...(anthropicApiKey ? { anthropicApiKey } : {}),
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
     ...(modelProvider ? { modelProvider } : {}),

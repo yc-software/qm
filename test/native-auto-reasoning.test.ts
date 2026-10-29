@@ -1,25 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyReasoningMode, createPiHarness } from "../src/harness/pi-harness.ts";
-import { getRequiredModel, thinkingLevelsForHarness, safeModelMetadata } from "../src/model/pi-models.ts";
+import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/model/pi-models.ts";
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 
 const adaptiveId = "claude-sonnet-4-6";
 
-test("native Auto is model and harness specific, while legacy auto remains valid", () => {
-  for (const harnessId of ["pi", "claude"] as const) {
-    const modelId = adaptiveId;
-    assert.equal(validateRuntimeChoice({ harnessId, modelId, effortLevel: "auto" }), null);
-    assert.equal(
-      validateRuntimeChoice({ harnessId, modelId, effortLevel: "adaptive" }),
-      harnessId === "pi" ? null : "effort_not_supported",
-    );
-  }
+test("native Auto is model specific, while legacy auto remains valid", () => {
+  assert.equal(validateRuntimeChoice({ modelId: adaptiveId, effortLevel: "auto" }), null);
+  assert.equal(validateRuntimeChoice({ modelId: adaptiveId, effortLevel: "adaptive" }), null);
   for (const modelId of ["gpt-6-astra", "codex/gpt-5.4", "claude-haiku-4-5", "openrouter/auto"])
-    assert.equal(validateRuntimeChoice({ harnessId: "pi", modelId, effortLevel: "adaptive" }), "effort_not_supported");
-  assert.deepEqual(safeModelMetadata(adaptiveId)?.effortLevelsByHarness.pi, thinkingLevelsForHarness("pi", adaptiveId));
+    assert.equal(validateRuntimeChoice({ modelId, effortLevel: "adaptive" }), "effort_not_supported");
+  assert.deepEqual(safeModelMetadata(adaptiveId)?.effortLevels, thinkingLevelsFor(adaptiveId));
 });
 
 test("gateway capability is determined by the real API and metadata, not its model name", (t) => {
@@ -29,8 +23,8 @@ test("gateway capability is determined by the real API and metadata, not its mod
     { ...model, provider: "qm:gateway", id: "gateway/opaque", api: "anthropic-messages" },
     { ...model, provider: "qm:gateway", id: "gateway/claude-sonnet-4-6", api: "openai-completions", compat: {} },
   ]);
-  assert.ok(thinkingLevelsForHarness("pi", "gateway/opaque").includes("adaptive"));
-  assert.ok(!thinkingLevelsForHarness("pi", "gateway/claude-sonnet-4-6").includes("adaptive"));
+  assert.ok(thinkingLevelsFor("gateway/opaque").includes("adaptive"));
+  assert.ok(!thinkingLevelsFor("gateway/claude-sonnet-4-6").includes("adaptive"));
 });
 
 test("mode serialization retains unrelated output configuration and rejects unsupported Auto", () => {
@@ -188,13 +182,12 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
 
 test("runtime scope writes and turn dispatch reject unsupported modes without changing legacy selections", async () => {
   const { createMemoryConfigStore } = await import("../src/resolution/config-store.ts");
-  const { resolveRuntimeChoice } = await import("../src/harness/harness-router.ts");
+  const { resolveRuntimeChoice } = await import("../src/harness/runtime-choice.ts");
   const { createRuntimeService } = await import("../src/harness/runtime-control.ts");
   const config = createMemoryConfigStore("default-org");
-  await config.setApprovedHarnesses(["pi", "claude", "codex", "opencode"]);
-  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "auto" };
+  const active = { modelId: "claude-sonnet-5", effortLevel: "auto" };
   await config.setRuntimeSelection("personal:test", active);
-  const service = createRuntimeService({ config, harnessId: "pi" }, { authorizesCapabilityScope: async () => true });
+  const service = createRuntimeService({ config }, { authorizesCapabilityScope: async () => true });
   const claims = { actorId: "test", scopeId: "personal:test" as const, liveActor: true, exp: Date.now() + 60_000 };
   for (const effort of ["adaptive", "default"]) {
     const result = await service(claims, active, { action: "set", effort, lifetime: "scope" });

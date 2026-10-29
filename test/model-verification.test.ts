@@ -170,7 +170,6 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
   const upstream = await verificationUpstream();
   const config = testConfig({
     openaiApiKey: "verification-test-key",
-    harness: "pi",
     providerBaseUrls: { openai: upstream.url + "/v1", anthropic: upstream.url },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
@@ -238,7 +237,6 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
     assert.equal(upstream.requests.length, beforeEdit + 1);
     await built.config.setRuntimeSelection("personal:admin-alice@default-org", {
-      harnessId: "pi",
       modelId: spec.id,
     });
     await built.modelCredentials.set("openai", "rotated-test-key", "admin-alice");

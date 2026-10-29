@@ -41,8 +41,6 @@ import {
   defaultEffortForModel,
   defaultModelValue,
   getModelOptions,
-  harnessSupportsFastMode,
-  harnessSupportsSteer,
   type EffortLevel,
   type ModelOption,
   type ModelOptionValue,
@@ -64,8 +62,7 @@ import {
   saveLoadout,
   reconcileLoadout,
   upsertLoadout,
-  effortLevelsForHarness,
-  compatibleHarnessOptions,
+  effortLevelsForModel,
   modelLoadoutOptions,
   type LoadoutEntry,
 } from "./composer-loadout";
@@ -185,7 +182,6 @@ export function resyncModelSelection(): void {
 
 export interface ComposerSubmission {
   model: string;
-  harness: string;
   thinkingLevel?: string;
   fastMode?: boolean;
   attachments?: CoreAttachment[];
@@ -259,7 +255,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.effort : undefined) ??
         (getRuntimeConfig(scopeKey())?.effective.effortLevel as EffortLevel | undefined) ??
         defaultEffortForModel(selected?.model);
-      const levels = effortLevelsForHarness(selected?.harnessId ?? "", selected?.model);
+      const levels = effortLevelsForModel(selected?.model);
       return levels.some((level) => level.value === effort) ? effort : levels[0]!.value;
     },
     set effortLevel(value: EffortLevel) {
@@ -272,11 +268,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
         fastModeOverride ??
         (restoredLoadout?.value === selected?.value ? restoredLoadout?.fast : undefined) ??
         getRuntimeConfig(scopeKey())?.effective.fastMode === true;
-      return (
-        fast &&
-        harnessSupportsFastMode(selected?.harnessId ?? "") &&
-        modelSupportsFastMode(scopeKey(), selected?.model.id)
-      );
+      return fast && modelSupportsFastMode(scopeKey(), selected?.model.id);
     },
     set fastMode(value: boolean | undefined) {
       ++fastSelectionRevision;
@@ -391,9 +383,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             if (key !== scopeKey()) return;
             const next = getRuntimeConfig(key)?.effective;
             if (
-              (["harnessId", "modelId", "effortLevel", "fastMode"] as const).some(
-                (field) => defaults?.[field] !== next?.[field],
-              )
+              (["modelId", "effortLevel", "fastMode"] as const).some((field) => defaults?.[field] !== next?.[field])
             ) {
               restoredLoadout = undefined;
               followDefault(defaults);
@@ -413,12 +403,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     syncRuntimeSelection(agent);
   }
 
-  function followDefault(previous: { harnessId: string; modelId: string } | undefined): void {
+  function followDefault(previous: { modelId: string } | undefined): void {
     const threadRef = ctx.chat.state.threadRef;
     const pick = threadRef ? threadModelPicks.get(threadRef) : undefined;
     const picked = pick ? modelOptionFor(pick, scopeKey()) : undefined;
     if (!threadRef || !previous || !picked) return;
-    if (picked.harnessId !== previous.harnessId || picked.model.id !== previous.modelId) return;
+    if (picked.model.id !== previous.modelId) return;
     forgetThreadPick(threadRef);
     effortOverride = undefined;
     fastModeOverride = undefined;
@@ -430,7 +420,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     let selected = currentModelOption();
     const threadRef = ctx.chat.state.threadRef;
     if (selected && threadRef && !threadModelPicks.has(threadRef)) {
-      const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout, selected.harnessId).find(
+      const preferred = modelLoadoutOptions(getModelOptions(scopeKey()), loadout).find(
         (option) => presetModelId(option.value) === presetModelId(selected!.value),
       );
       if (preferred && preferred.value !== selected.value) {
@@ -459,7 +449,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
 
   async function changeScopeRuntime(
     change: {
-      harnessId?: string;
       modelId?: string;
       effortLevel?: string;
       fastMode?: boolean;
@@ -470,7 +459,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     preserveSelection = false,
   ): Promise<void> {
     if (options.prepareSubmit) {
-      if (change.harnessId && change.modelId) selectModel(`${change.harnessId}:${change.modelId}`, agent);
+      if (change.modelId) selectModel(change.modelId, agent);
       return;
     }
     const request = ++runtimeRequest;
@@ -527,16 +516,12 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             ariaLabel: "Replacement model",
             value: "",
             options: html`<option value="" selected>Select a model…</option>
-              ${getModelOptions(scopeKey()).map((option) => html`<option value=${option.value}>${option.harnessLabel} · ${option.label}</option>`)}`,
+              ${getModelOptions(scopeKey()).map((option) => html`<option value=${option.value}>${option.label}</option>`)}`,
             onChange: async (value) => {
               const option = modelOptionFor(value, scopeKey());
               if (!option) return;
-              await changeScopeRuntime({ harnessId: option.harnessId, modelId: option.model.id }, agent);
-              if (
-                getRuntimeConfig(scopeKey())?.effective.harnessId === option.harnessId &&
-                getRuntimeConfig(scopeKey())?.effective.modelId === option.model.id
-              )
-                selectModel(value, agent);
+              await changeScopeRuntime({ modelId: option.model.id }, agent);
+              if (getRuntimeConfig(scopeKey())?.effective.modelId === option.model.id) selectModel(value, agent);
             },
           })}
         </label>
@@ -574,9 +559,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const compact = Boolean(ctx.pane) || isPhone();
     const turnRuntime = ctx.chat.turnRuntime();
     const routed =
-      turnRuntime?.change &&
-      !switchedDefault(turnRuntime) &&
-      (turnRuntime.harnessId !== selectedModel.harnessId || turnRuntime.modelId !== selectedModel.model.id)
+      turnRuntime?.change && !switchedDefault(turnRuntime) && turnRuntime.modelId !== selectedModel.model.id
         ? turnRuntime
         : undefined;
     const runtimeControls = modelPicker.render(agent, selectedModel, inputBlocked, routed);
@@ -592,13 +575,11 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             ? html`<div class="runtime-upgrade">
                 <span
                   >The org now recommends
-                  ${modelOptionFor(`${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`, scopeKey())?.harnessLabel ?? activeRuntimeConfig.orgDefault.harnessId}
-                  ·
-                  ${modelOptionFor(`${activeRuntimeConfig.orgDefault.harnessId}:${activeRuntimeConfig.orgDefault.modelId}`, scopeKey())?.buttonLabel ?? activeRuntimeConfig.orgDefault.modelId}.</span
+                  ${modelOptionFor(activeRuntimeConfig.orgDefault.modelId, scopeKey())?.buttonLabel ?? activeRuntimeConfig.orgDefault.modelId}.</span
                 >
                 <button
                   type="button"
-                  @click=${() => changeScopeRuntime({ harnessId: activeRuntimeConfig!.orgDefault.harnessId, modelId: activeRuntimeConfig!.orgDefault.modelId }, agent)}
+                  @click=${() => changeScopeRuntime({ modelId: activeRuntimeConfig!.orgDefault.modelId }, agent)}
                 >
                   Upgrade
                 </button>
@@ -821,12 +802,7 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
   }
 
   function canSteer(agent: Agent): boolean {
-    return (
-      agent.state.isStreaming &&
-      !ctx.chat.isStopping() &&
-      ctx.chat.hasLiveRun() &&
-      harnessSupportsSteer(currentModelOption()?.harnessId ?? "")
-    );
+    return agent.state.isStreaming && !ctx.chat.isStopping() && ctx.chat.hasLiveRun();
   }
 
   function queuedStrip(agent: Agent): TemplateResult | typeof nothing {
@@ -1021,7 +997,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     activeEntry: activeLoadoutEntry,
     apply: applyLoadout,
     selectEffort,
-    selectHarness,
     toggleFastMode,
     effectiveFastMode,
     changeDefault: changeScopeRuntime,
@@ -1034,22 +1009,18 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     return {
       value: selected.value,
       effort: composerState.effortLevel,
-      fast:
-        harnessSupportsFastMode(selected.harnessId) &&
-        modelSupportsFastMode(scopeKey(), selected.model.id) &&
-        effectiveFastMode(),
+      fast: modelSupportsFastMode(scopeKey(), selected.model.id) && effectiveFastMode(),
     };
   }
 
   function normalizeLoadoutEntry(entry: LoadoutEntry, option: ModelOption): LoadoutEntry {
-    const levels = effortLevelsForHarness(option.harnessId, option.model);
+    const levels = effortLevelsForModel(option.model);
     const defaultEffort = defaultEffortForModel(option.model);
     const fallbackEffort = levels.some((level) => level.value === defaultEffort) ? defaultEffort : levels[0]!.value;
     return {
       value: option.value,
       effort: levels.some((level) => level.value === entry.effort) ? entry.effort : fallbackEffort,
-      fast:
-        entry.fast && harnessSupportsFastMode(option.harnessId) && modelSupportsFastMode(scopeKey(), option.model.id),
+      fast: entry.fast && modelSupportsFastMode(scopeKey(), option.model.id),
     };
   }
 
@@ -1594,11 +1565,8 @@ ${draft}`
       const attachments = [...composerState.attachments];
       const selection: ComposerSubmission = {
         model: selected.model.id,
-        harness: selected.harnessId,
         thinkingLevel: composerState.effortLevel,
-        ...(harnessSupportsFastMode(selected.harnessId)
-          ? { fastMode: modelSupportsFastMode(scopeKey(), selected.model.id) && effectiveFastMode() }
-          : {}),
+        fastMode: modelSupportsFastMode(scopeKey(), selected.model.id) && effectiveFastMode(),
       };
       submitting = true;
       clearActiveDraft();
@@ -1956,24 +1924,9 @@ ${draft}`
     ctx.chat.drawActiveChat(agent);
   }
 
-  function selectHarness(harnessId: string, agent: Agent): void {
-    const selected = currentModelOption();
-    if (!selected || selected.harnessId === harnessId) return;
-    const target = compatibleHarnessOptions(getModelOptions(scopeKey()), selected.model.id).find(
-      (option) => option.harnessId === harnessId,
-    );
-    if (!target) return;
-    const active = activeLoadoutEntry(selected);
-    applyLoadout({ ...active, value: target.value }, agent);
-  }
-
   function selectEffort(level: EffortLevel, agent: Agent): void {
     const selected = currentModelOption();
-    if (
-      !selected ||
-      !effortLevelsForHarness(selected.harnessId, selected.model).some((option) => option.value === level)
-    )
-      return;
+    if (!selected || !effortLevelsForModel(selected.model).some((option) => option.value === level)) return;
     composerState.effortLevel = level;
     rememberActiveTweaks(selected);
     ctx.chat.drawActiveChat(agent);
@@ -1988,12 +1941,7 @@ ${draft}`
       if (target) applyLoadout({ ...activeLoadoutEntry(selected), value: target.value, fast: true }, agent);
       return;
     }
-    if (
-      !selected ||
-      !harnessSupportsFastMode(selected.harnessId) ||
-      !modelSupportsFastMode(scopeKey(), selected.model.id)
-    )
-      return;
+    if (!selected || !modelSupportsFastMode(scopeKey(), selected.model.id)) return;
     composerState.fastMode = !effectiveFastMode();
     rememberActiveTweaks(selected);
     ctx.chat.drawActiveChat(agent);

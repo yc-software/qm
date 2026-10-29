@@ -289,7 +289,7 @@ test("legacy lease (no heartbeat) keeps the not-today age reclaim rule", () => {
   rmSync(store, { recursive: true, force: true });
 });
 
-test("env assembly precedence: caller > login shell > dev.env > worktree .env; harness gates", async () => {
+test("env assembly precedence: caller > login shell > dev.env > worktree .env", async () => {
   const worktree = mkdtempSync(join(tmpdir(), "qm-wt-"));
   mkdirSync(join(worktree, ".git"));
   writeFileSync(
@@ -311,21 +311,9 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   });
   assert.equal(fromCaller.env.ANTHROPIC_API_KEY, "from-caller");
   assert.equal(fromCaller.env.BOTH, "caller");
-  assert.equal(fromCaller.harness, "pi");
-  assert.equal(fromCaller.env.HARNESS, "pi");
   assert.equal(fromCaller.env.PI_CAPTURE_REQUESTS, "1");
   assert.equal(fromCaller.anthropicKeySource, "your shell export");
 
-  for (const legacy of ["opencode", "codex"]) {
-    const legacyHarness = await assembleEnv({
-      worktree,
-      callerEnv: { ANTHROPIC_API_KEY: "from-caller", HARNESS: legacy },
-      log,
-      probeLoginShell: async () => "",
-    });
-    assert.equal(legacyHarness.harness, "pi");
-    assert.equal(legacyHarness.env.HARNESS, "pi");
-  }
   const defaultCodexHome = join(worktree, "default-codex");
   mkdirSync(defaultCodexHome, { recursive: true });
   const oauthAuth = JSON.stringify({
@@ -356,18 +344,8 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
     log,
     probeLoginShell: async () => "",
   });
-  assert.equal(companyChatGPT.harness, "pi");
   assert.equal(companyChatGPT.env.CODEX_AUTH_FILE, oauthAuthFile);
   assert.equal(companyChatGPT.codexAuthSource, oauthAuthFile);
-
-  const claude = await assembleEnv({
-    worktree,
-    callerEnv: { HARNESS: "claude" },
-    log,
-    probeLoginShell: async () => "",
-  });
-  assert.equal(claude.harness, "claude");
-  assert.equal(claude.env.HARNESS, "claude");
 
   const fromLiveEnv = await assembleEnv({
     worktree,
@@ -414,7 +392,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
     log,
     probeLoginShell: async () => "",
   });
-  assert.equal(openaiOnly.harness, "pi");
   assert.equal(openaiOnly.env.MODEL_PROVIDER, "openai");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
   else process.env.QM_DEV_ENV = prevLive;
@@ -434,12 +411,7 @@ test("dev security secrets are stable, complete, and distinct", () => {
   );
 });
 
-test("harness config is strict and a ChatGPT auth file feeds the company subscription", () => {
-  assert.equal(
-    loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8", CLAUDE_BIN: "/bin/claude" }).claudeModel,
-    "claude-opus-4-8",
-  );
-  assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_BIN: "/bin/claude" }).claudeBinPath, "/bin/claude");
+test("a ChatGPT auth file feeds the company subscription", () => {
   const source = mkdtempSync(join(tmpdir(), "qm-codex-config-"));
   const authFile = join(source, "auth.json");
   writeFileSync(
@@ -455,18 +427,12 @@ test("harness config is strict and a ChatGPT auth file feeds the company subscri
     }),
   );
   chmodSync(authFile, 0o600);
-  const oauthConfig = loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: authFile });
+  const oauthConfig = loadConfig({ CODEX_AUTH_FILE: authFile });
   assert.equal(oauthConfig.codexAuthFile, authFile);
   assert.equal(providerKeysPresent(oauthConfig).openai, false);
   assert.equal(providerKeysPresent(oauthConfig).codexOAuth, true);
-  assert.throws(
-    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(source, "missing.json") }),
-    /CODEX_AUTH_FILE is unusable/,
-  );
+  assert.throws(() => loadConfig({ CODEX_AUTH_FILE: join(source, "missing.json") }), /CODEX_AUTH_FILE is unusable/);
   rmSync(source, { recursive: true, force: true });
-  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use pi or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use pi or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "opencode" }), /use pi or claude/);
 });
 
 test("envSha is order-independent and value-sensitive", () => {

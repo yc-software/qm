@@ -360,11 +360,6 @@ export function deliveryNote(manifest: string): string {
   return `${DELIVERY_NOTE_PREFIX}${manifest.replace(/\s+/g, " ").trim()}]`;
 }
 
-export function isDeliveryNote(text: string): boolean {
-  const t = text.trim();
-  return t.startsWith(DELIVERY_NOTE_PREFIX) && t.endsWith("]") && !t.includes("\n");
-}
-
 export type OutboundFile = string | { file_id: string };
 
 export type OpenStoredFile = (id: string) => Promise<{

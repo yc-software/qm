@@ -31,7 +31,6 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
     config: built.config,
     modelCredentials: built.modelCredentials,
     modelCredentialFetch,
-    harnessId: "pi",
     providerKeys: { anthropic: false, openai: false, openrouter: true },
     admin: built.admin,
     auditLog: built.auditLog,
@@ -41,7 +40,7 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
   const runtimeModels = async (): Promise<string[]> => {
     const response = await fetch(`${base}/v1/runtime-config?principalId=alice&scopeId=personal%3Aalice`);
     assert.equal(response.status, 200);
-    return ((await response.json()) as { modelsByHarness: Record<string, string[]> }).modelsByHarness.pi!;
+    return ((await response.json()) as { models: string[] }).models;
   };
   try {
     const unrestricted = await runtimeModels();

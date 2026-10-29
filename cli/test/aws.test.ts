@@ -550,7 +550,7 @@ const config: QmConfig = {
     secretEnv: ["ACME_API_KEY"],
   },
   env: {
-    core: { HARNESS: "pi", AWS_DEPLOY_IMAGE: "acme-qm-sandbox", AWS_DEPLOY_IMAGE_VERSION: "1" },
+    core: { AWS_DEPLOY_IMAGE: "acme-qm-sandbox", AWS_DEPLOY_IMAGE_VERSION: "1" },
     admin: { ADMIN_BASE_PATH: "/admin" },
     portal: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: "T1" },
   },

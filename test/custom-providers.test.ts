@@ -10,7 +10,7 @@ import {
 } from "../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
-import { modelSupportedByHarness, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
+import { modelSupported, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { StoredCustomProvider } from "../src/model/custom-provider-store.ts";
 
@@ -76,8 +76,7 @@ test("custom models resolve in their own namespace, so they never shadow a built
 
 test("custom models are gated to the pi harness", () => {
   setCustomProviders([GATEWAY]);
-  assert.equal(modelSupportedByHarness("custom/acme-gateway/acme-large", "pi"), true);
-  assert.equal(modelSupportedByHarness("custom/acme-gateway/acme-large", "claude"), false);
+  assert.equal(modelSupported("custom/acme-gateway/acme-large"), true);
 });
 
 test("a registered custom model is serviceable regardless of built-in key availability", () => {

@@ -8,7 +8,6 @@ import { testConfig } from "./support/test-config.ts";
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));
-  await built.config.setApprovedHarnesses(["pi"]);
   await built.app.upsertDirectory(
     ["owner", "sender", "new-member"].map((principalId) => ({
       principalId,
@@ -39,7 +38,6 @@ test("human child replay keeps one receipt across acknowledgement failure and a 
   await built.sessions.setSpawnMeta(child.id, { surface: "web", actor, conversation });
   const options = {
     model: "gpt-5.5",
-    harness: "pi",
     thinkingLevel: "high",
     fastMode: true,
     timezone: "Europe/London",

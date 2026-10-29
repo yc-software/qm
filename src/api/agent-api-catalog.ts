@@ -628,7 +628,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "PUT",
         path: "/v1/admin/scopes/:scopeId/:resource",
         summary:
-          "govern a scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime ({ harnessId, modelId }) | approved-harnesses ({ ids })",
+          "govern a scope: soul | security-posture | command-policy | egress | connectors | service-credentials | runtime ({ modelId })",
       },
       {
         method: "GET|POST|PATCH|DELETE",

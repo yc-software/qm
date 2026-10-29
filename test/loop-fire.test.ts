@@ -1051,14 +1051,12 @@ test("inbox followup runtime and attachments affect only that item turn", async 
   const attachments = [{ name: "notes.txt", mimetype: "text/plain", blobId: "staged-file", sizeBytes: 12 }];
   await s.fire.followUp(loop, item!, "Use these notes", "josh", {
     model: "gpt-5.6-terra",
-    harness: "pi",
     thinkingLevel: "high",
     fastMode: true,
     attachments,
   });
   const turn = s.turns[0]!;
   assert.equal(turn.model, "gpt-5.6-terra");
-  assert.equal(turn.harness, "pi");
   assert.equal(turn.thinkingLevel, "high");
   assert.equal(turn.fastMode, true);
   assert.deepEqual(turn.attachments, attachments);
@@ -1068,7 +1066,6 @@ test("inbox followup runtime and attachments affect only that item turn", async 
   await s.fire.fire(loop.id, "scheduled-after-followup");
   for (const scheduled of s.turns.slice(1)) {
     assert.equal(scheduled.model, undefined);
-    assert.equal(scheduled.harness, undefined);
     assert.equal(scheduled.fastMode, undefined);
     assert.equal(scheduled.thinkingLevel, undefined);
     assert.equal(scheduled.attachments, undefined);

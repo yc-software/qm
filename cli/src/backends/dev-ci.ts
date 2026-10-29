@@ -65,7 +65,7 @@ export async function devCiUp(): Promise<void> {
   for (const f of ["core.log", "tunnel.log"]) writeFileSync(join(dir, f), "");
   const port = ciPort();
 
-  const overlay: Record<string, string> = { HARNESS: process.env.HARNESS ?? "pi" };
+  const overlay: Record<string, string> = {};
   if (process.env.SLACK_EVENTS_MODE === "http" && !process.env.SLACK_EVENTS_PORT) {
     overlay.SLACK_EVENTS_PORT = String(port + 1);
   }

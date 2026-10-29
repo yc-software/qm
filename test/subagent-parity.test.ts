@@ -86,66 +86,56 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     },
   });
   const turns = new Map<string, Turn>();
-  const harness = defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set(),
+  const harness = defineHarness({
+    async runTurn(turn) {
+      const results: Turn["results"] = [];
+      const ref = {
+        current: turn.tools,
+        scopeLabel: turn.scopeLabel,
+        emit: async (entry: Parameters<typeof turn.emit>[0]) => {
+          if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
+          return turn.emit(entry);
+        },
+        screenToolResult: turn.screenToolResult,
+        pendingApprovals: [],
+      };
+      const options = harnessToolOptions({}, turn);
+      const tools = createAgentTools(ref, options);
+      const record: Turn = {
+        ref,
+        runtime: turn.runtimeControl,
+        requestedRuntime: turn.runtime,
+        options,
+        tools: tools.map((t) => t.name).sort(),
+        systemPrompt: turn.systemPrompt,
+        results,
+        started: sidebar,
+      };
+      turns.set(turn.session.threadRef, record);
+      for (
+        let call = next(record, !!turn.session.parentSessionId);
+        call;
+        call = next(record, !!turn.session.parentSessionId)
+      ) {
+        const execute = tools.find((t) => t.name === call.tool)!.execute as unknown as (
+          id: string,
+          input: unknown,
+        ) => Promise<unknown>;
+        await execute(`call-${results.length}`, call.args);
+      }
+      return { reply: "done", modelCalls: 1 };
     },
-    {
-      async runTurn(turn) {
-        const results: Turn["results"] = [];
-        const ref = {
-          current: turn.tools,
-          scopeLabel: turn.scopeLabel,
-          emit: async (entry: Parameters<typeof turn.emit>[0]) => {
-            if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
-            return turn.emit(entry);
-          },
-          screenToolResult: turn.screenToolResult,
-          pendingApprovals: [],
-        };
-        const options = harnessToolOptions({}, turn);
-        const tools = createAgentTools(ref, options);
-        const record: Turn = {
-          ref,
-          runtime: turn.runtimeControl,
-          requestedRuntime: turn.runtime,
-          options,
-          tools: tools.map((t) => t.name).sort(),
-          systemPrompt: turn.systemPrompt,
-          results,
-          started: sidebar,
-        };
-        turns.set(turn.session.threadRef, record);
-        for (
-          let call = next(record, !!turn.session.parentSessionId);
-          call;
-          call = next(record, !!turn.session.parentSessionId)
-        ) {
-          const execute = tools.find((t) => t.name === call.tool)!.execute as unknown as (
-            id: string,
-            input: unknown,
-          ) => Promise<unknown>;
-          await execute(`call-${results.length}`, call.args);
-        }
-        return { reply: "done", modelCalls: 1 };
-      },
-    },
-  );
+  });
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
   const config = createMemoryConfigStore("org");
-  await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setInteractiveFastMode(true);
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     config,
     runtime: createRuntimeService(
-      { config, harnessId: "pi", baseModelDefault: "claude-opus-5" },
+      { config, baseModelDefault: "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
     identity: createIdentityService(),
@@ -285,7 +275,7 @@ test("human-descended tasks cannot finish silently without surface tools", async
 test("human-descended tasks can change their runtime but not scope defaults", async () => {
   const w = await world(["persistent_subagents"], script);
   const { parent, child } = await w.parentTurn("web", "web:U1:runtime");
-  const active = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
+  const active = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
   assert.ok(child.runtime);
   assert.equal((await child.runtime(active, { action: "set", model: "Astra", lifetime: "task" })).ok, true);
   assert.deepEqual(await child.runtime(active, { action: "set", model: "Astra", lifetime: "scope" }), {

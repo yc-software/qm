@@ -1,5 +1,5 @@
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { createHarnessRouter, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
+import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "../src/harness/runtime-choice.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -147,7 +147,7 @@ function buildOrchestrator(
     maxContextTokens,
     defaultTurnWallClockMs,
     runtime: createRuntimeService(
-      { config, harnessId: "pi", baseModelDefault: "claude-sonnet-5" },
+      { config, baseModelDefault: "claude-sonnet-5" },
       { authorizesCapabilityScope: async () => true },
     ),
   });
@@ -1046,7 +1046,7 @@ test("runtime handoff continues once with saved results under the original run a
   const base = createMockHarness();
   const seen: import("../src/harness/harness.ts").HarnessTurnInput[] = [];
   let resets = 0;
-  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
+  const choice = { modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
   const harness: Harness = {
     ...base,
     turns: {
@@ -1105,7 +1105,7 @@ test("runtime handoff cannot restart a stopped task", async () => {
         return {
           reply: "",
           stopped: true,
-          runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" },
+          runtimeHandoff: { choice: { modelId: "gpt-6-astra" }, lifetime: "task" },
         };
       },
     },
@@ -1117,7 +1117,7 @@ test("runtime handoff cannot restart a stopped task", async () => {
 
 test("a retry restores a committed runtime decision after reset crashes, without replaying the selection", async () => {
   const base = createMockHarness();
-  const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra" };
+  const choice = { modelId: "gpt-6-astra" };
   let calls = 0;
   const harness: Harness = {
     ...base,
@@ -1157,7 +1157,7 @@ test("a retry restores a committed runtime decision after reset crashes, without
 
 test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {
   const base = createMockHarness();
-  const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
+  const active = { modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
   const outcomes: { surface: string; ok: boolean }[] = [];
   let resumed = 0;
   const harness: Harness = {
@@ -1222,7 +1222,7 @@ test("only a cron automation receives task-runtime authority and each fire start
 
 test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {
   const base = createMockHarness();
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
+  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
   const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
   const seen: import("../src/harness/harness.ts").RuntimeChoice[] = [];
   const adapter: Harness = {
@@ -1239,7 +1239,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
       },
     },
   };
-  const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+  const router = withResolvedRuntime(adapter, (input) =>
     resolveRuntimeChoiceDurable(
       built.config,
       "org:default-org",
@@ -1251,9 +1251,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
     ),
   );
   const built = buildOrchestrator(router);
-  await built.config.setApprovedHarnesses(["pi"]);
   await built.config.setRuntimeSelection(PERSONAL, {
-    harnessId: "pi",
     modelId: "claude-sonnet-5",
     effortLevel: "high",
   });
@@ -1273,7 +1271,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
 
 test("human child continuations respect non-fast category defaults", async () => {
   const base = createMockHarness();
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   const seen: unknown[] = [];
   const adapter: Harness = {
     ...base,
@@ -1285,7 +1283,7 @@ test("human child continuations respect non-fast category defaults", async () =>
       },
     },
   };
-  const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+  const router = withResolvedRuntime(adapter, (input) =>
     resolveRuntimeChoiceDurable(
       built.config,
       "org:default-org",
@@ -1297,7 +1295,6 @@ test("human child continuations respect non-fast category defaults", async () =>
     ),
   );
   const built = buildOrchestrator(router);
-  await built.config.setApprovedHarnesses(["pi"]);
   await built.config.setInteractiveFastMode(true);
   await built.config.setPurposeRuntime("subagent", category);
   const parent = await built.sessions.getOrCreateByThread("parent", "dm", PERSONAL);
@@ -1315,13 +1312,12 @@ test("human child continuations respect non-fast category defaults", async () =>
 });
 
 test("verified swarm workers resolve their own defaults instead of copying the root runtime, keeping handoffs", async () => {
-  const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   const handoff = { ...category, modelId: "gpt-6-sol" };
   for (const configured of [false, true]) {
     const f = await swarmFixture({
       runtime: {
-        harness: inherited.harnessId,
         model: inherited.modelId,
         thinkingLevel: inherited.effortLevel,
         fastMode: inherited.fastMode,
@@ -1346,7 +1342,7 @@ test("verified swarm workers resolve their own defaults instead of copying the r
         },
       },
     };
-    const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+    const router = withResolvedRuntime(adapter, (input) =>
       resolveRuntimeChoiceDurable(
         built.config,
         "org:default-org",
@@ -1358,14 +1354,10 @@ test("verified swarm workers resolve their own defaults instead of copying the r
       ),
     );
     const built = buildOrchestrator(router, undefined, undefined, f);
-    await built.config.setApprovedHarnesses(["pi"]);
     if (configured) await built.config.setPurposeRuntime("subagent", category);
     const result = await built.orch.handleTurn({ ...run.request, runId: run.id });
     assert.equal(result.status, "ok");
-    assert.deepEqual(seen, [
-      configured ? category : { harnessId: inherited.harnessId, modelId: inherited.modelId },
-      handoff,
-    ]);
+    assert.deepEqual(seen, [configured ? category : { modelId: inherited.modelId }, handoff]);
     assert.equal(run.request.model, undefined, "workers do not copy the root runtime");
   }
 });
@@ -1403,12 +1395,11 @@ test("a teamed owner's swarm worker can start its default computer mid-turn", as
 });
 
 test("swarm workers keep the runtime chosen at spawn over the category and scope defaults", async () => {
-  const inherited = { harnessId: "pi" as const, modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
-  const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
+  const inherited = { modelId: "claude-opus-5", effortLevel: "high", fastMode: true };
+  const category = { modelId: "gpt-6-astra", effortLevel: "low", fastMode: false };
   for (const configured of [false, true]) {
     const f = await swarmFixture({
       runtime: {
-        harness: inherited.harnessId,
         model: inherited.modelId,
         thinkingLevel: inherited.effortLevel,
         fastMode: inherited.fastMode,
@@ -1439,7 +1430,7 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
           },
         },
       };
-      const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
+      const router = withResolvedRuntime(adapter, (input) =>
         resolveRuntimeChoiceDurable(
           built.config,
           "org:default-org",
@@ -1451,21 +1442,17 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
         ),
       );
       const built = buildOrchestrator(router, undefined, undefined, f);
-      await built.config.setApprovedHarnesses(["pi"]);
       if (configured) await built.config.setPurposeRuntime("subagent", category);
       assert.equal((await built.orch.handleTurn({ ...run.request, runId: run.id })).status, "ok");
     }
     assert.deepEqual(seen.get(full!.id), {
-      harnessId: "pi",
       modelId: "gpt-6-sol",
       effortLevel: "medium",
       fastMode: false,
     });
     assert.deepEqual(
       seen.get(partial!.id),
-      configured
-        ? { ...category, effortLevel: "medium" }
-        : { harnessId: inherited.harnessId, modelId: inherited.modelId, effortLevel: "medium" },
+      configured ? { ...category, effortLevel: "medium" } : { modelId: inherited.modelId, effortLevel: "medium" },
     );
   }
 });

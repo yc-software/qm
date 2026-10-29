@@ -5,6 +5,6 @@ import { createMockHarness } from "./mock-harness.ts";
 export function buildApp(config: Config, overrides: Parameters<typeof buildProductionApp>[1] = {}): BuiltApp {
   return buildProductionApp(
     { anthropicApiKey: "test-anthropic-key", ...config },
-    { ...overrides, harnesses: { pi: createMockHarness(), ...overrides.harnesses } },
+    { harness: createMockHarness(), ...overrides },
   );
 }

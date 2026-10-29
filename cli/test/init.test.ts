@@ -59,7 +59,6 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     assert.equal(config.orgId, "acme");
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
-    assert.equal(config.env.core?.HARNESS, "pi");
     assert.equal(config.sandbox, undefined);
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
@@ -248,7 +247,6 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     assert.equal(config.target, "aws");
     assert.equal(config.publicUrl, "https://acme.example.com");
     assert.deepEqual(config.services, ["core", "slack", "web-ui", "admin", "portal", "auth"]);
-    assert.equal(config.env.core?.HARNESS, "pi");
     assert.equal(config.env.core?.AWS_DEPLOY_IMAGE, "acme-qm-sandbox");
     assert.equal(config.env.core?.AWS_PUBLIC_ORIGIN_URL, "http://replace-with-alb-hostname");
     assert.equal(config.env.slack?.SLACK_IDENTITY_EMAIL, "1");

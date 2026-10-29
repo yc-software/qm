@@ -29,7 +29,6 @@ import { redactSecrets } from "../../plugins/chassis/src/redact-secrets.ts";
 import { isObj } from "../util/objects.ts";
 import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { WEBHOOK_SCHEMES } from "../webhooks/verifiers.ts";
-import { HARNESS_IDS } from "../model/pi-models.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import {
   applyGovernorVerdict,
@@ -281,7 +280,7 @@ function fmtCronLine(c: CronLike, preview = false): string {
       ? `\n    shift-change note (${utcMinute(c.lastFireNote.at)}${c.lastFireNote.by ? `, by ${c.lastFireNote.by}` : ""}): ${c.lastFireNote.text}`
       : "";
   const runtime = c.runtime
-    ? `\n    runtime: ${c.runtime.harnessId}/${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
+    ? `\n    runtime: ${c.runtime.modelId}${c.runtime.effortLevel ? ` (${c.runtime.effortLevel})` : ""}`
     : "";
   const grants = c.unattendedGrants?.length ? `\n    unattended grants: ${c.unattendedGrants.join(", ")}` : "";
   return `${c.id}${c.title ? ` "${c.title}"` : ""} — ${fmtCronSchedule(c)}${dest}${state}${next}${what ? `\n    ${what}` : ""}${runtime}${grants}${note}`;
@@ -1502,7 +1501,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           description: "open: model override; use one runtime get lists (unconfigured providers are rejected).",
         }),
       ),
-      harness: Type.Optional(Type.String({ description: "open: harness override." })),
       thinkingLevel: Type.Optional(Type.String({ description: "open: effort override." })),
       fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode." })),
       target: Type.Optional(
@@ -1522,7 +1520,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         action: "open" | "read" | "send_message" | "followup_task" | "wait";
         timeoutMs?: number;
         requestId?: string;
-        harness?: string;
         thinkingLevel?: string;
         fastMode?: boolean;
         task?: string;
@@ -1568,7 +1565,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         const result = await syscalls.open({
           requestId: p.requestId ?? callId,
           task: p.task ?? "",
-          ...(p.harness ? { harness: p.harness } : {}),
           ...(p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
           ...(p.fastMode !== undefined ? { fastMode: p.fastMode } : {}),
           ...(p.name ? { name: p.name } : {}),
@@ -2250,7 +2246,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           [
             Type.Null(),
             Type.Object({
-              harnessId: Type.Union(HARNESS_IDS.map((harnessId) => Type.Literal(harnessId))),
               modelId: Type.String(),
               effortLevel: Type.Optional(Type.String()),
               fastMode: Type.Optional(Type.Boolean()),
@@ -2258,7 +2253,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ],
           {
             description:
-              "create/patch: runtime override for an agent task (null clears). Use runtime get for approved models/harnesses; auto effort unsupported. Prefer a cheap model and low effort for simple tasks.",
+              "create/patch: runtime override for an agent task (null clears). Use runtime get for approved models; auto effort unsupported. Prefer a cheap model and low effort for simple tasks.",
           },
         ),
       ),
@@ -4088,15 +4083,14 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     name: "runtime",
     label: "runtime",
     description:
-      "Inspect or change your model, harness, effort and fast mode. get: active runtime and choices. set: change it (omitted settings kept). inherit: back to the scope default (with lifetime scope, clears the scope override). A change stops this runtime and resumes the task on the new one, so call it alone after other tools finish. lifetime task (default) covers this request or cron fire; scope also sets the scope default. Changes need a live user, except task changes in a cron fire, and are refused while a goal is open. Check here before claiming you cannot switch.",
+      "Inspect or change your model, effort and fast mode. get: active runtime and choices. set: change it (omitted settings kept). inherit: back to the scope default (with lifetime scope, clears the scope override). A change stops this runtime and resumes the task on the new one, so call it alone after other tools finish. lifetime task (default) covers this request or cron fire; scope also sets the scope default. Changes need a live user, except task changes in a cron fire, and are refused while a goal is open. Check here before claiming you cannot switch.",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("get"), Type.Literal("set"), Type.Literal("inherit")]),
       model: Type.Optional(Type.String({ description: "Model ID or exact display name from get." })),
-      harness: Type.Optional(Type.String()),
       effort: Type.Optional(
         Type.String({
           description:
-            "A level from get's modelCatalog[model].effortLevelsByHarness[harness]. adaptive = native Auto; default = provider default; auto = legacy harness default.",
+            "A level from get's modelCatalog[model].effortLevels. adaptive = native Auto; default = provider default; auto = legacy default.",
         }),
       ),
       fastMode: Type.Optional(Type.Boolean()),

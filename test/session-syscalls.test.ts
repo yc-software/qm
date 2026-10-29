@@ -109,12 +109,12 @@ test("open creates a child session with parent pointer, spawn meta, and a queued
 for (const explicit of [
   {},
   { fastMode: false },
-  { model: "chosen-model", harness: "pi", thinkingLevel: "high", fastMode: false },
+  { model: "chosen-model", thinkingLevel: "high", fastMode: false },
   { model: "chosen-model", fastMode: true },
 ]) {
   test(`child followups preserve only explicit runtime choices: ${JSON.stringify(explicit)}`, async () => {
-    const runtimeKeys = ["model", "harness", "thinkingLevel", "fastMode"] as const;
-    let defaults = { model: "old-default", harness: "pi", thinkingLevel: "low", fastMode: true };
+    const runtimeKeys = ["model", "thinkingLevel", "fastMode"] as const;
+    let defaults = { model: "old-default", thinkingLevel: "low", fastMode: true };
     const preparedInputs: OrchestratorInput[] = [];
     const r = await rig({
       prepareRequest: async (request) => {
@@ -135,7 +135,7 @@ for (const explicit of [
     const claimed = await r.runs.claimById(first.id, "worker", 60_000);
     assert.ok(claimed);
     await r.runs.complete(first.id, claimed.leaseToken!, { status: "ok", reply: "done" });
-    defaults = { model: "new-default", harness: "claude", thinkingLevel: "medium", fastMode: false };
+    defaults = { model: "new-default", thinkingLevel: "medium", fastMode: false };
     const followup = await syscalls.write({ followup: true, target: child.id, text: "next task" });
     assert.ok(followup.ok);
     assert.equal(followup.delivered, "queued_turn");
@@ -1445,7 +1445,6 @@ for (const addressed of [true, false]) {
       gatewayContext: { location: "original DM", details: { channel: "D1" }, instructions: "Reply in Slack" },
       timezone: "America/Los_Angeles",
       model: "test-model",
-      harness: "pi",
       thinkingLevel: "high",
       fastMode: false,
       skipMemory: true,

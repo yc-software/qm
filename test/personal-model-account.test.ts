@@ -98,12 +98,10 @@ test("personal provider choice is durable and controls the submitted run indepen
     liveActor: true,
     async: true,
     model: "company-only-custom-model",
-    harness: "pi",
   });
   const run = await built.runs.get(submitted.runId!);
   assert.equal(run?.request.modelAccount, "openai");
   assert.equal(run?.request.model, undefined);
-  assert.equal(run?.request.harness, undefined);
   await built.config.setPersonalModelAuth("U1", false);
   assert.equal((await built.runs.get(submitted.runId!))?.request.modelAccount, "openai");
   const steered = await built.app.signalRun(submitted.runId!, { kind: "steer", text: "more work" }, "U1");

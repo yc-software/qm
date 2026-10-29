@@ -224,39 +224,30 @@ function buildScenario() {
     resumeToolCall?: ResumableToolCall;
     historyTypes: string[];
   }> = [];
-  const harness = defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set(),
-    },
-    {
-      async runTurn(turn) {
-        received.push({
-          input: turn.input,
-          ...(turn.continueTurn ? { continueTurn: true } : {}),
-          ...(turn.resumeToolCall ? { resumeToolCall: turn.resumeToolCall } : {}),
-          historyTypes: turn.history.map((e) => e.type),
+  const harness = defineHarness({
+    async runTurn(turn) {
+      received.push({
+        input: turn.input,
+        ...(turn.continueTurn ? { continueTurn: true } : {}),
+        ...(turn.resumeToolCall ? { resumeToolCall: turn.resumeToolCall } : {}),
+        historyTypes: turn.history.map((e) => e.type),
+      });
+      if (turn.resumeToolCall) {
+        await turn.emit({
+          type: "tool_result",
+          payload: { tool: "history", callId: turn.resumeToolCall.callId, isError: false, result: "- found it" },
+          scopeLabel: turn.scopeLabel,
         });
-        if (turn.resumeToolCall) {
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "history", callId: turn.resumeToolCall.callId, isError: false, result: "- found it" },
-            scopeLabel: turn.scopeLabel,
-          });
-        }
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        const reply = "we kept the Q2 budget flat";
-        await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
-        return { reply, modelCalls: 1 };
-      },
-      async screenSecurity() {
-        return { decision: "auto" as const };
-      },
+      }
+      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      const reply = "we kept the Q2 budget flat";
+      await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
+      return { reply, modelCalls: 1 };
     },
-  );
+    async screenSecurity() {
+      return { decision: "auto" as const };
+    },
+  });
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const acl = createAclStore();

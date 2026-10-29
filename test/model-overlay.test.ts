@@ -12,7 +12,7 @@ const MODEL_ID = "overlay-future-model";
 
 test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
   assert.throws(() => getRequiredModel(MODEL_ID), /Unsupported model/);
-  const config = testConfig({ harness: "pi" });
+  const config = testConfig();
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
@@ -28,7 +28,6 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
       body: JSON.stringify({
         principalId: "admin-alice@default-org",
         scopeId: "personal:admin-alice@default-org",
-        harnessId: "pi",
         modelId: MODEL_ID,
       }),
     });
@@ -50,7 +49,7 @@ import {
   resolveModel,
   contextTokenBudgetForModel,
   safeModelMetadata,
-  modelSupportedByHarness,
+  modelSupported,
   modelSupportsFastMode,
   fastModeModelIds,
   defaultWebuiModelIds,
@@ -130,8 +129,7 @@ test("store reload and independent readers observe edits and soft deletion witho
   assert.deepEqual(inFlight.cost, spec.cost);
   assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
   assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
-  assert.equal(modelSupportedByHarness(MODEL_ID, "pi"), true);
-  assert.equal(modelSupportedByHarness(MODEL_ID, "claude"), false);
+  assert.equal(modelSupported(MODEL_ID), true);
   assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);
   await writer.upsert(
     { ...spec, contextWindow: 600_000, cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
@@ -149,7 +147,7 @@ test("store reload and independent readers observe edits and soft deletion witho
   assert.equal(await writer.delete(MODEL_ID, "admin"), true);
   await reader.refresh();
   assert.equal(resolveModel(MODEL_ID), undefined);
-  assert.equal(modelSupportedByHarness(MODEL_ID, "pi"), false);
+  assert.equal(modelSupported(MODEL_ID), false);
   assert.equal(await writer.delete(MODEL_ID, "admin"), false);
   const row = (await reader.statuses())[0]!;
   assert.equal(row.disabled, true);
@@ -192,7 +190,7 @@ test("OpenRouter failure rebuilds local choices", async () => {
 });
 
 test("live admin lifecycle is authorized, audited, immediately selectable and removed on delete", async () => {
-  const config = testConfig({ harness: "pi", openaiApiKey: "local-test-key" });
+  const config = testConfig({ openaiApiKey: "local-test-key" });
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
@@ -216,7 +214,6 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
   const runtime = {
     principalId: "admin-alice@default-org",
     scopeId: "personal:admin-alice@default-org",
-    harnessId: "pi",
     modelId: MODEL_ID,
   };
   try {
@@ -237,11 +234,11 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
       modelCatalog: Record<string, ReturnType<typeof safeModelMetadata>>;
-      modelsByHarness: Record<string, string[]>;
+      models: string[];
     };
     assert.equal(body.modelCatalog[MODEL_ID]?.contextWindow, 400_000);
     assert.deepEqual(body.modelCatalog[MODEL_ID]?.cost, spec.cost);
-    assert.ok(body.modelsByHarness.pi?.includes(MODEL_ID));
+    assert.ok(body.models.includes(MODEL_ID));
     const wire = JSON.stringify(body.modelCatalog);
     assert.doesNotMatch(wire, /baseUrl|headers|apiKey|local-test-key/);
     const turn = await built.app.turn({
@@ -255,7 +252,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.equal(turn.status, "queued");
     assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
-    await built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: MODEL_ID });
+    await built.config.setRuntimeSelection("org:default-org", { modelId: MODEL_ID });
     assert.equal((await api(path, "DELETE")).status, 200);
     const afterDelete = await api(
       "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
@@ -264,12 +261,12 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
       effective: { modelId: string };
       scopeOverride: { modelId: string };
       unavailableReason: string;
-      modelsByHarness: { pi: string[] };
+      models: string[];
     };
     assert.equal(unavailable.effective.modelId, MODEL_ID);
     assert.equal(unavailable.scopeOverride.modelId, MODEL_ID);
     assert.match(unavailable.unavailableReason, /deleted/);
-    assert.ok(unavailable.modelsByHarness.pi.includes("gpt-5.6-sol"));
+    assert.ok(unavailable.models.includes("gpt-5.6-sol"));
     assert.equal((await api("/v1/runtime-config", "PUT", runtime)).status, 400);
     const deletedTurn = await built.app.turn({
       surface: "web",
@@ -362,7 +359,7 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
       input: "Hello",
       systemPrompt: "Be brief",
       history: [],
-      runtime: { harnessId: "pi" as const, modelId: MODEL_ID },
+      runtime: { modelId: MODEL_ID },
       recordModelCall: () => {},
       tools: {} as import("../src/harness/harness.ts").HarnessTurnInput["tools"],
       scopeLabel: "personal:alice" as const,
@@ -431,7 +428,7 @@ test("hydration isolates promoted builtins, incompatible providers, missing temp
 });
 
 test("model refresh is limited to dependent routes and admin repair survives stale persisted definitions", async () => {
-  const config = testConfig({ harness: "pi" });
+  const config = testConfig();
   const built = buildApp(config, {
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
@@ -494,26 +491,20 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 });
 
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
+import { resolveRuntimeChoice } from "../src/harness/runtime-choice.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = createMemoryConfigStore("default-org");
-  await config.setApprovedHarnesses(["pi", "claude"]);
   const org = "org:default-org" as const;
   const scope = "personal:alice" as const;
-  const fallback = { harnessId: "pi" as const, modelId: "gpt-5.6-sol" };
+  const fallback = { modelId: "gpt-5.6-sol" };
   const overlay = validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true });
   setModelOverlays([overlay]);
-  const requested = { harnessId: "pi" as const, modelId: MODEL_ID, effortLevel: "max", fastMode: true };
+  const requested = { modelId: MODEL_ID, effortLevel: "max", fastMode: true };
   assert.deepEqual(resolveRuntimeChoice(config, org, scope, fallback, requested), requested);
   setModelOverlays([{ ...overlay, fastMode: false }]);
   assert.equal(resolveRuntimeChoice(config, org, scope, fallback, requested).fastMode, false);
-  assert.throws(
-    () => resolveRuntimeChoice(config, org, scope, fallback, { ...requested, harnessId: "claude" }),
-    /not approved/,
-  );
   const native = resolveRuntimeChoice(config, org, scope, fallback, {
-    harnessId: "claude",
     modelId: "claude-opus-4-8",
     effortLevel: "max",
     fastMode: true,

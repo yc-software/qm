@@ -943,7 +943,6 @@ test("followup accepts only typed runtime and staged attachment fields", async (
   };
   const options = {
     model: "gpt-5.6-terra",
-    harness: "pi",
     thinkingLevel: "high",
     fastMode: true,
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 20, blobId: "opaque-upload" }],
@@ -955,7 +954,6 @@ test("followup accepts only typed runtime and staged attachment fields", async (
       message: "",
       ...options,
       model: ` ${options.model} `,
-      harness: " pi ",
       thinkingLevel: " high ",
       attachments: [{ ...options.attachments[0], path: "/ignored" }],
       scopeId: "personal:other",
@@ -966,7 +964,6 @@ test("followup accepts only typed runtime and staged attachment fields", async (
   for (const invalid of [
     { model: 5 },
     { model: " " },
-    { harness: " " },
     { thinkingLevel: " " },
     { fastMode: null },
     { attachments: null },
@@ -975,7 +972,6 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     { attachments: [{ ...options.attachments[0], blobId: "" }] },
     { attachments: [{ ...options.attachments[0], sizeBytes: 1.5 }] },
     { attachments: [{ ...options.attachments[0], sizeBytes: 1_000_000_001 }] },
-    { harness: "unknown" },
     { thinkingLevel: "unsupported" },
     { fastMode: "true" },
     { attachments: [{ path: "/etc/passwd" }] },

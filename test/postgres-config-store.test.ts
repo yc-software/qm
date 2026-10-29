@@ -371,8 +371,7 @@ test("pg config store: settings written on one core reach another core through r
   await a.setChannelHeaderPin(ch, true);
   await a.setApprovalGrantModes(ch, { session: false, always: true });
   await a.setOrgAmbient(false);
-  await a.setApprovedHarnesses(["pi"]);
-  await a.setAutoFlaggerConfig({ harnessId: "pi", modelId: "claude-opus-4-8", rubric: "flag it" });
+  await a.setAutoFlaggerConfig({ modelId: "claude-opus-4-8", rubric: "flag it" });
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
@@ -384,14 +383,12 @@ test("pg config store: settings written on one core reach another core through r
   assert.equal(b.getChannelHeaderPin(ch), true);
   assert.deepEqual(b.getApprovalGrantModes(ch), { session: false, always: true });
   assert.equal(b.getOrgAmbient(), false);
-  assert.deepEqual(b.getApprovedHarnesses(), ["pi"]);
   assert.equal(b.getAutoFlaggerConfig()?.rubric, "flag it");
 
   await a.setWebuiModels(ch, null);
   await a.setAckEmoji(ch, null);
   await a.setBrowseMaxSteps(ch, null);
   await a.setBrowseModel(ch, null);
-  await a.setApprovedHarnesses(null);
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
@@ -399,5 +396,4 @@ test("pg config store: settings written on one core reach another core through r
   assert.equal(b.getAckEmoji(ch), null);
   assert.equal(b.getBrowseMaxSteps(ch), null);
   assert.equal(b.getBrowseModel(ch), null);
-  assert.equal(b.getApprovedHarnesses(), null);
 });

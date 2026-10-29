@@ -147,15 +147,6 @@ export function harnessToolOptions(opts: HarnessToolPlumbing, turn?: HarnessTurn
   };
 }
 
-export function nativeChildToolAllowed(name: string, args?: unknown): boolean {
-  if (!["execute", "files", "apps", "memory", "history", "background"].includes(name)) return false;
-  if (args === undefined || (name !== "apps" && name !== "files")) return true;
-  const action = args && typeof args === "object" ? (args as Record<string, unknown>).action : undefined;
-  if (name === "apps") return action === "publish";
-  if (action === "read" || action === "write") return true;
-  return false;
-}
-
 export function bridgedTools(ref: ToolContextRef, options: AgentToolsOptions): BridgedTool[] {
   return createAgentTools(ref, options) as unknown as BridgedTool[];
 }
@@ -170,15 +161,6 @@ export interface ResumedToolResult {
     isError: boolean;
     timestamp: number;
   };
-}
-
-export async function withResumedToolCall(
-  turn: HarnessTurnInput,
-  ref: ToolContextRef,
-  tools: readonly BridgedTool[],
-): Promise<HarnessTurnInput> {
-  const resumed = await resumeInterruptedToolCall(turn, ref, tools);
-  return resumed ? { ...turn, history: resumed.history } : turn;
 }
 
 export async function resumeInterruptedToolCall(
@@ -245,16 +227,6 @@ export async function resumeInterruptedToolCall(
       timestamp: recorded.createdAt,
     },
   };
-}
-
-export function bridgedToolContent(result: Awaited<ReturnType<BridgedTool["execute"]>>) {
-  return (result.content ?? []).flatMap<
-    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-  >((item) => {
-    if (item.type === "image" && item.data && item.mimeType)
-      return [{ type: "image", data: item.data, mimeType: item.mimeType }];
-    return typeof item.text === "string" ? [{ type: "text", text: item.text }] : [];
-  });
 }
 
 export type OneShotRunner = (

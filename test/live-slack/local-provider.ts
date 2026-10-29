@@ -23,7 +23,6 @@ async function main(): Promise<void> {
     dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
     sessionStore: "memory",
     runStore: "memory",
-    harness: "pi",
     sandboxBackend: "local",
 
     backgroundWorkEnabled: false,

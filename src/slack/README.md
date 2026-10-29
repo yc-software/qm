@@ -82,7 +82,7 @@ One process — core boots the Slack surface itself when the tokens are in its e
 ```bash
 cd ~/Programming/qm
 nvm use
-HARNESS=pi ORG_ID=acme ANTHROPIC_API_KEY=… \
+ORG_ID=acme ANTHROPIC_API_KEY=… \
 SLACK_BOT_TOKEN=xoxb-… SLACK_APP_TOKEN=xapp-… \
 npm start
 ```

@@ -47,7 +47,7 @@ test("settings projections preserve values while excluding unrelated payloads", 
     else assert.deepEqual(projected.directoryChannels, [{ channelId: "C-settings", name: "settings-test" }]);
     assert.match(response.headers.get("server-timing") ?? "", /authorize;dur=/);
     if (["customize", "credentials", "connectors"].includes(view))
-      assert.equal("modelsByHarness" in projected, false, view);
+      assert.equal("baseModelOptions" in projected, false, view);
     if (view === "slack-settings") {
       for (const key of ["externalSlackParticipants", "channelHeaderPinDefault", "ackEmoji"])
         assert.equal(key in projected, true);
@@ -149,7 +149,6 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
     openrouter: true,
   }));
   await srv.built.config.setRuntimeSelection("org:default-org", {
-    harnessId: "pi",
     modelId: "settings/previously-saved-model",
   });
   const started = performance.now();
@@ -160,13 +159,12 @@ test("Models settings do not wait for a cold external model catalog", async (t) 
   assert.equal(response.status, 200);
   const body = (await response.json()) as {
     baseModelOptions: { id: string }[];
-    modelsByHarness: Record<string, { id: string }[]>;
     runtime: { modelId: string };
     modelCatalogRefreshing: boolean;
   };
   assert.ok(body.baseModelOptions.length > 0);
   assert.equal(body.runtime.modelId, "settings/previously-saved-model");
-  assert.ok(body.modelsByHarness.pi!.some((model) => model.id === body.runtime.modelId));
+  assert.ok(body.baseModelOptions.some((model) => model.id === body.runtime.modelId));
   assert.equal(body.modelCatalogRefreshing, true);
   assert.ok(performance.now() - started < 500);
 });

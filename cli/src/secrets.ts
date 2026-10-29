@@ -105,7 +105,7 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "PUBLIC_API_URL",
     service: "core",
-    required: { when: { kind: "env-equals", service: "core", name: "HARNESS", value: "pi" } },
+    required: true,
     description: "Public core self-API URL reachable from agent sandboxes.",
     managedBy: { render: "render" },
   },

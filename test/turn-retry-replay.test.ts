@@ -56,51 +56,42 @@ function buildScenario(interruptAfterToolResult = false) {
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
   const sandbox = fakeSandbox();
-  const harness = defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set(),
-    },
-    {
-      async runTurn(turn) {
-        turns.push(turn.input);
-        continued.push(turn.continueTurn);
-        environments.push(turn.environment);
-        if (!turn.continueTurn)
-          await turn.emit({
-            type: "user",
-            payload: { text: turn.input },
-            scopeLabel: turn.scopeLabel,
-          });
-        if (interruptAfterToolResult && turns.length === 1) {
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", callId: "c1", command: "ls" },
-            scopeLabel: turn.scopeLabel,
-          });
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "execute", callId: "c1", result: "a.txt" },
-            scopeLabel: turn.scopeLabel,
-          });
-          throw new Error("interrupted after recording a tool result");
-        }
-        const reply = "it runs on this conversation's computer";
+  const harness = defineHarness({
+    async runTurn(turn) {
+      turns.push(turn.input);
+      continued.push(turn.continueTurn);
+      environments.push(turn.environment);
+      if (!turn.continueTurn)
         await turn.emit({
-          type: "assistant",
-          payload: { text: reply },
+          type: "user",
+          payload: { text: turn.input },
           scopeLabel: turn.scopeLabel,
         });
-        return { reply, modelCalls: 1 };
-      },
-      async screenSecurity() {
-        return { decision: "auto" as const };
-      },
+      if (interruptAfterToolResult && turns.length === 1) {
+        await turn.emit({
+          type: "tool_call",
+          payload: { tool: "execute", callId: "c1", command: "ls" },
+          scopeLabel: turn.scopeLabel,
+        });
+        await turn.emit({
+          type: "tool_result",
+          payload: { tool: "execute", callId: "c1", result: "a.txt" },
+          scopeLabel: turn.scopeLabel,
+        });
+        throw new Error("interrupted after recording a tool result");
+      }
+      const reply = "it runs on this conversation's computer";
+      await turn.emit({
+        type: "assistant",
+        payload: { text: reply },
+        scopeLabel: turn.scopeLabel,
+      });
+      return { reply, modelCalls: 1 };
     },
-  );
+    async screenSecurity() {
+      return { decision: "auto" as const };
+    },
+  });
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const acl = createAclStore();

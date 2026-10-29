@@ -1812,7 +1812,7 @@ test("manual cron preparation and detached fire retain admission across pause", 
 
 test("scheduled and manual fires use the saved runtime; clearing it restores inherited behavior", async () => {
   const { crons, calls, scheduler } = harness();
-  const runtime = { harnessId: "pi" as const, modelId: "gpt-6-luna", effortLevel: "low", fastMode: false };
+  const runtime = { modelId: "gpt-6-luna", effortLevel: "low", fastMode: false };
   const cron = await crons.create({
     schedule: { everyMs: 60_000 },
     action: "check status",
@@ -1826,7 +1826,6 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
   assert.equal(calls.length, 2);
   for (const call of calls) {
     assert.equal(call.model, runtime.modelId);
-    assert.equal(call.harness, runtime.harnessId);
     assert.equal(call.thinkingLevel, "low");
     assert.equal(call.fastMode, false);
   }
@@ -1834,7 +1833,6 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
   await scheduler.tick(cron.nextFireAt! + 60_000);
   assert.equal(calls.length, 3);
   assert.equal(calls[2]?.model, undefined);
-  assert.equal(calls[2]?.harness, undefined);
   assert.equal(calls[2]?.thinkingLevel, undefined);
   assert.equal(calls[2]?.fastMode, undefined);
 });
@@ -1898,7 +1896,7 @@ test("a cron whose model can't run fires on the default model and is told why", 
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
-    runtime: { harnessId: "pi", modelId: "claude-sonnet-5" },
+    runtime: { modelId: "claude-sonnet-5" },
   });
 
   await runNowSettled(scheduler, cron.id);

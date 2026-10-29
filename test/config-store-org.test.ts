@@ -16,8 +16,8 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   const baseModels = createMemoryMap<import("../src/resolution/config-store.ts").PersistedBaseModel>();
   const store = createMemoryConfigStore("default-org", { baseModels });
   const org = "org:default-org";
-  const cron = { harnessId: "pi", modelId: "gpt-5.5", fastMode: false };
-  const subagent = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "low" };
+  const cron = { modelId: "gpt-5.5", fastMode: false };
+  const subagent = { modelId: "claude-opus-5", effortLevel: "low" };
   assert.equal(store.getPurposeRuntime("cron"), undefined);
   await store.setPurposeRuntime("cron", cron);
   await store.setPurposeRuntime("subagent", subagent);
@@ -29,10 +29,10 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
   reader.getPurposeRuntime("cron")!.modelId = "not-persisted";
   assert.deepEqual(reader.getPurposeRuntime("cron"), cron);
-  await store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gpt-5.5" });
+  await store.setRuntimeSelection(org, { modelId: "gpt-5.5" });
   await store.setRuntimeSelection(org, null);
   await store.setRuntimeSelection(org, null);
-  await store.setRuntimeSelection(org, { harnessId: "pi", modelId: "gpt-5.5" });
+  await store.setRuntimeSelection(org, { modelId: "gpt-5.5" });
   assert.equal(store.getRuntimeSelection(org)?.modelId, "gpt-5.5");
   await store.setBaseModel(org, "gpt-5.5");
   await store.setBaseModel(org, null);

@@ -1,6 +1,6 @@
 import { gatewayModelCatalog } from "./gateway-models.ts";
 import {
-  modelSupportedByHarness,
+  modelSupported,
   registerOpenRouterCatalogModel,
   resolveModel,
   selectableBaseModels,
@@ -198,13 +198,8 @@ export async function selectableModelCatalog(fetcher: typeof fetch = fetch): Pro
   return entry.inFlight;
 }
 
-export function selectableCatalogForHarness(
-  catalog: readonly ModelCatalogEntry[],
-  harness: string,
-): ModelCatalogEntry[] {
-  return catalog.filter(
-    (model) => (model.provider !== "openrouter" || harness === "pi") && modelSupportedByHarness(model.id, harness),
-  );
+export function selectableCatalog(catalog: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
+  return catalog.filter((model) => modelSupported(model.id));
 }
 
 export function cachedModelCatalog(fetcher: typeof fetch = fetch): {

@@ -7,24 +7,18 @@ import type { ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
 import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
-  defaultModelForHarness,
+  defaultModel,
   fastModeModelIds,
-  harnessSupportsFastMode,
-  HARNESS_IDS,
-  harnessIdOrPi,
-  isHarnessId,
-  modelSupportedByHarness,
+  modelSupported,
   modelServiceable,
-  modelProviderAvailabilityFor,
   resolveModel,
   resolveEmbeddingModel,
   embeddingModelCatalog,
-  thinkingLevelsForHarness,
+  thinkingLevelsFor,
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
-  type HarnessId,
 } from "../../model/pi-models.ts";
-import { resolveRuntimeChoiceDurable } from "../../harness/harness-router.ts";
+import { resolveRuntimeChoiceDurable } from "../../harness/runtime-choice.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
 import {
   credentialInjectionError,
@@ -56,7 +50,6 @@ import { FEATURE_NAMES, FEATURES, type FeatureName } from "../../feature-flags.t
 import { parseSharingPosture, SHARING_POSTURES, type SharingPosture } from "../../resolution/sharing-posture.ts";
 
 export interface AutoFlaggerDraft {
-  harnessId: HarnessId;
   modelId: string;
   rubric: string;
 }
@@ -64,11 +57,9 @@ export interface AutoFlaggerDraft {
 const AUTO_FLAGGER_MAX_RUBRIC_CHARS = 20_000;
 
 /** The flagger a deployment falls back to when nothing is configured. */
-export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "harnessId" | "baseModelDefault">): AutoFlaggerDraft {
-  const harnessId = harnessIdOrPi(deps.harnessId);
+export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "baseModelDefault">): AutoFlaggerDraft {
   return {
-    harnessId,
-    modelId: defaultModelForHarness(harnessId, deps.baseModelDefault),
+    modelId: defaultModel(deps.baseModelDefault),
     rubric: DEFAULT_SECURITY_SCREEN_RUBRIC,
   };
 }
@@ -79,17 +70,14 @@ export function defaultAutoFlaggerConfig(deps: Pick<ServerDeps, "harnessId" | "b
  */
 export async function parseAutoFlaggerDraft(
   deps: Pick<ServerDeps, "providerKeys" | "modelCredentials">,
-  body: { harnessId?: unknown; modelId?: unknown; rubric?: unknown },
+  body: { modelId?: unknown; rubric?: unknown },
 ): Promise<{ value: AutoFlaggerDraft } | { error: string }> {
-  if (typeof body.harnessId !== "string" || !isHarnessId(body.harnessId)) {
-    return { error: "auto-flagger requires a valid harnessId" };
-  }
   if (typeof body.modelId !== "string" || !body.modelId.trim()) {
     return { error: "auto-flagger requires a modelId" };
   }
   const modelId = body.modelId.trim();
-  if (!modelSupportedByHarness(modelId, body.harnessId)) {
-    return { error: `model ${modelId} is not supported by ${body.harnessId}` };
+  if (!modelSupported(modelId)) {
+    return { error: `model ${modelId} is not supported` };
   }
   if (typeof body.rubric !== "string" || !body.rubric.trim() || body.rubric.length > AUTO_FLAGGER_MAX_RUBRIC_CHARS) {
     return {
@@ -98,10 +86,10 @@ export async function parseAutoFlaggerDraft(
   }
   const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
   const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-  if (!modelServiceable(modelId, modelProviderAvailabilityFor(body.harnessId, configuredKeys, managedKeys))) {
+  if (!modelServiceable(modelId, managedKeys)) {
     return { error: `model ${modelId} isn't serviceable on this deployment` };
   }
-  return { value: { harnessId: body.harnessId, modelId, rubric: body.rubric.trim() } };
+  return { value: { modelId, rubric: body.rubric.trim() } };
 }
 
 type Actor = { id: string };
@@ -537,53 +525,24 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      const unserviceable = (harness: string): { error: string } | null =>
-        modelId && !modelServiceable(modelId, modelProviderAvailabilityFor(harness, configuredKeys, managedKeys))
-          ? {
-              error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harness} harness`,
-            }
-          : null;
       const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
       if (!modelId) await ctx.deps.config!.setRuntimeSelection(scope, null);
-      else if (runtime) {
-        if (!isHarnessId(runtime.harnessId) || !modelSupportedByHarness(modelId, runtime.harnessId))
-          return { error: `model ${modelId} is not supported by ${runtime.harnessId}` };
-        const bad = unserviceable(runtime.harnessId);
-        if (bad) return bad;
+      else {
+        if (!modelSupported(modelId)) return { error: `model ${modelId} is not supported` };
+        if (!modelServiceable(modelId, managedKeys))
+          return {
+            error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured`,
+          };
+        const current =
+          runtime ??
+          (await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
+            modelId: defaultModel(ctx.deps.baseModelDefault),
+          }));
         await ctx.deps.config!.setRuntimeSelection(scope, {
-          harnessId: runtime.harnessId,
           modelId,
-          ...(runtime.effortLevel ? { effortLevel: runtime.effortLevel } : {}),
-          ...(typeof runtime.fastMode === "boolean"
-            ? {
-                fastMode:
-                  runtime.fastMode &&
-                  harnessSupportsFastMode(runtime.harnessId) &&
-                  fastModeModelIds().includes(modelId),
-              }
-            : {}),
-        });
-      } else {
-        const harnessId = harnessIdOrPi(ctx.deps.harnessId);
-        const effective = await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
-          harnessId,
-          modelId: defaultModelForHarness(harnessId, ctx.deps.baseModelDefault),
-        });
-        if (!modelSupportedByHarness(modelId, effective.harnessId))
-          return { error: `model ${modelId} is not supported by ${effective.harnessId}` };
-        const bad = unserviceable(effective.harnessId);
-        if (bad) return bad;
-        await ctx.deps.config!.setRuntimeSelection(scope, {
-          harnessId: effective.harnessId,
-          modelId,
-          ...(effective.effortLevel ? { effortLevel: effective.effortLevel } : {}),
-          ...(typeof effective.fastMode === "boolean"
-            ? {
-                fastMode:
-                  effective.fastMode &&
-                  harnessSupportsFastMode(effective.harnessId) &&
-                  fastModeModelIds().includes(modelId),
-              }
+          ...(current.effortLevel ? { effortLevel: current.effortLevel } : {}),
+          ...(typeof current.fastMode === "boolean"
+            ? { fastMode: current.fastMode && fastModeModelIds().includes(modelId) }
             : {}),
         });
       }
@@ -611,67 +570,34 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         else await ctx.deps.config!.setRuntimeSelection(scope, null);
         return { ok: true };
       }
-      const harnessId = (ctx.body as { harnessId?: unknown }).harnessId;
       const modelId = (ctx.body as { modelId?: unknown }).modelId;
       const effortLevel = (ctx.body as { effortLevel?: unknown }).effortLevel ?? (purpose ? undefined : "auto");
       const fastMode = (ctx.body as { fastMode?: unknown }).fastMode ?? (purpose ? undefined : false);
-      if (!isHarnessId(harnessId)) return { error: `runtime requires harnessId (${HARNESS_IDS.join(" | ")})` };
-      const approved = (await ctx.deps.config!.getApprovedHarnessesDurable()) ?? [ctx.deps.harnessId ?? "pi"];
-      if (!approved.includes(harnessId)) return { error: `harness ${harnessId} is not approved` };
-      if (typeof modelId !== "string" || !modelSupportedByHarness(modelId, harnessId))
-        return { error: `model ${String(modelId)} is not supported by ${harnessId}` };
-      const thinkingLevels = thinkingLevelsForHarness(harnessId, modelId);
+      if (typeof modelId !== "string" || !modelSupported(modelId))
+        return { error: `model ${String(modelId)} is not supported` };
+      const thinkingLevels = thinkingLevelsFor(modelId);
       if (effortLevel !== undefined && (typeof effortLevel !== "string" || !thinkingLevels.includes(effortLevel)))
-        return { error: `runtime requires effortLevel (${thinkingLevels.join(" | ")}) for ${harnessId}` };
+        return { error: `runtime requires effortLevel (${thinkingLevels.join(" | ")}) for ${modelId}` };
       if (fastMode !== undefined && typeof fastMode !== "boolean")
         return { error: "runtime requires fastMode (boolean)" };
-      if (
-        purpose &&
-        fastMode === true &&
-        (!harnessSupportsFastMode(harnessId) || !fastModeModelIds().includes(modelId))
-      )
-        return { error: `fast mode is not supported by ${harnessId} with ${modelId}` };
+      if (purpose && fastMode === true && !fastModeModelIds().includes(modelId))
+        return { error: `fast mode is not supported by ${modelId}` };
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      if (!modelServiceable(modelId, modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys)))
+      if (!modelServiceable(modelId, managedKeys))
         return {
-          error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured for the ${harnessId} harness`,
+          error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured`,
         };
       const choice = {
-        harnessId,
         modelId,
         ...(typeof effortLevel === "string" ? { effortLevel } : {}),
-        ...(typeof fastMode === "boolean"
-          ? { fastMode: fastMode && harnessSupportsFastMode(harnessId) && fastModeModelIds().includes(modelId) }
-          : {}),
+        ...(typeof fastMode === "boolean" ? { fastMode: fastMode && fastModeModelIds().includes(modelId) } : {}),
       };
       if (purpose) await ctx.deps.config!.setPurposeRuntime(purpose, choice);
       else await ctx.deps.config!.setRuntimeSelection(scope, choice);
       return { ok: true };
     },
   })),
-  {
-    id: "approved-harnesses",
-    kind: "string-list",
-    target: "org",
-    clearable: true,
-    readKey: "approvedHarnesses",
-    enumValues: HARNESS_IDS,
-    get: (deps) => deps.config!.getApprovedHarnesses(),
-    apply: generic(
-      (body, { scope }) => {
-        const bad = orgOnly(scope, "approved harnesses are org-wide");
-        if (bad) return bad;
-        const raw = (body as { ids?: unknown }).ids;
-        if (!Array.isArray(raw)) return { error: "approved-harnesses requires { ids: string[] }" };
-        if (raw.some((id) => !isHarnessId(id)))
-          return { error: `unknown harness (expected ${HARNESS_IDS.join(" | ")})` };
-        const ids = [...new Set(raw.filter(isHarnessId))];
-        return { value: ids.length ? ids : null };
-      },
-      (deps, _scope, ids) => deps.config!.setApprovedHarnesses(ids),
-    ),
-  },
   {
     id: "webui-models",
     refreshesModels: true,
@@ -784,8 +710,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
       const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
       const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      const providers = modelProviderAvailabilityFor(ctx.deps.harnessId ?? "pi", configuredKeys, managedKeys);
-      if (modelId && !modelServiceable(modelId, providers)) {
+      if (modelId && !modelServiceable(modelId, managedKeys)) {
         return { error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured` };
       }
       await ctx.deps.config!.setBrowseModel(scope, modelId || null);

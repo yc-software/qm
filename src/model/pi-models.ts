@@ -50,8 +50,6 @@ export const THINKING_LEVELS = [
   "max",
   "ultracode",
 ] as const;
-export const HARNESS_IDS = ["pi", "claude"] as const;
-export type HarnessId = (typeof HARNESS_IDS)[number];
 
 export function modelSupportsAdaptiveThinking(model: Pick<Model<Api>, "api" | "reasoning" | "compat">): boolean {
   return (
@@ -69,35 +67,19 @@ export function modelSupportsProviderDefault(model: Pick<Model<Api>, "api" | "co
   );
 }
 
-export function thinkingLevelsForHarness(harnessId: HarnessId, modelId?: string): readonly string[] {
+export function thinkingLevelsFor(modelId?: string): readonly string[] {
   const model = modelId ? resolveModel(modelId) : undefined;
   return THINKING_LEVELS.filter((level) => {
-    if (level === "adaptive")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsAdaptiveThinking(model)));
-    if (level === "default")
-      return harnessId === "pi" && (!modelId || (!!model && modelSupportsProviderDefault(model)));
-    if (harnessId === "pi") return true;
-    if (harnessId === "claude") return level !== "ultracode";
-    return level === "auto";
+    if (level === "adaptive") return !modelId || (!!model && modelSupportsAdaptiveThinking(model));
+    if (level === "default") return !modelId || (!!model && modelSupportsProviderDefault(model));
+    return true;
   });
-}
-
-export function harnessSupportsFastMode(harnessId: HarnessId): boolean {
-  return harnessId === "pi" || harnessId === "claude";
 }
 export const MODEL_PROVIDERS = ["anthropic", "openai", "openrouter"] as const;
 export type ModelProvider = (typeof MODEL_PROVIDERS)[number];
 
 export function isModelProvider(value: unknown): value is ModelProvider {
   return typeof value === "string" && (MODEL_PROVIDERS as readonly string[]).includes(value);
-}
-
-export function isHarnessId(value: unknown): value is HarnessId {
-  return typeof value === "string" && (HARNESS_IDS as readonly string[]).includes(value);
-}
-
-export function harnessIdOrPi(value: unknown): HarnessId {
-  return isHarnessId(value) ? value : "pi";
 }
 
 type PiModel = Model<Api>;
@@ -711,27 +693,19 @@ export function modelHasPrices(model: Pick<Model<Api>, "cost">): boolean {
   return model.cost.input > 0 || model.cost.output > 0;
 }
 
-export function modelSupportedByHarness(id: string | undefined, harness: string): boolean {
-  if (id && modelRequestOverrides(id)) return harness === "pi";
-  if (id && isGatewayModelId(id)) return harness === "pi" && Boolean(resolveGatewayModel(id));
+export function modelSupported(id: string | undefined): boolean {
+  if (id && modelRequestOverrides(id)) return true;
+  if (id && isGatewayModelId(id)) return Boolean(resolveGatewayModel(id));
   if (!id || unavailableOverlays.has(id)) return false;
-  if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!) && harness === "pi";
-  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return harness === "pi";
-  if (harness === "pi") return Boolean(resolveModel(id));
-  const provider = resolveModel(id)?.provider;
-  if (harness === "claude") return provider === "anthropic" || /^claude-/i.test(id);
-  return false;
+  if (overlays.has(id)) return !isEmbeddingModel(overlays.get(id)!);
+  if (isCustomModelId(id) && !REGISTRY_BY_ID.has(id)) return true;
+  return Boolean(resolveModel(id));
 }
 
-export function defaultModelForHarness(
-  harness: string,
-  configured?: string,
-  providers?: ModelProviderAvailability,
-): string {
-  if (configured && (modelUnavailableReason(configured) || modelSupportedByHarness(configured, harness)))
-    return configured;
+export function defaultModel(configured?: string, providers?: ModelProviderAvailability): string {
+  if (configured && (modelUnavailableReason(configured) || modelSupported(configured))) return configured;
   if (!providers) return DEFAULT_AGENT_MODEL_ID;
-  const billable = (id: string) => modelSupportedByHarness(id, harness) && modelServiceable(id, providers);
+  const billable = (id: string) => modelSupported(id) && modelServiceable(id, providers);
   return (
     PROVIDER_DEFAULT_MODEL_IDS.find(billable) ??
     selectableBaseModels(true)
@@ -778,24 +752,14 @@ export const ALL_PROVIDERS_AVAILABLE: ModelProviderAvailability = {
   codexOAuth: true,
 };
 
-export function modelProviderAvailabilityFor(
-  harness: string,
-  configKeys: ModelProviderAvailability,
-  managedKeys: ModelProviderAvailability = configKeys,
-): ModelProviderAvailability {
-  if (harness === "pi") return managedKeys;
-  return ALL_PROVIDERS_AVAILABLE;
-}
-
 export function onlyProvider(provider: ModelProvider): ModelProviderAvailability {
   return { anthropic: false, openai: false, openrouter: false, [provider]: true };
 }
 
-export function defaultModelForProvider(harness: string, provider: ModelProvider): string | undefined {
+export function defaultModelForProvider(provider: ModelProvider): string | undefined {
   const only = onlyProvider(provider);
-  if (!modelProviderAvailabilityFor(harness, only)[provider]) return undefined;
-  const model = defaultModelForHarness(harness, undefined, only);
-  return modelSupportedByHarness(model, harness) && modelServiceable(model, only) ? model : undefined;
+  const model = defaultModel(undefined, only);
+  return modelSupported(model) && modelServiceable(model, only) ? model : undefined;
 }
 
 export function getRequiredModel(id: string, useOrgEndpoints = true): PiModel {
@@ -844,9 +808,7 @@ export function safeModelMetadata(id: string) {
     maxTokens: model.maxTokens,
     cost: structuredClone(model.cost),
     fastMode: modelSupportsFastMode(id),
-    effortLevelsByHarness: Object.fromEntries(
-      HARNESS_IDS.map((harness) => [harness, thinkingLevelsForHarness(harness, id)]),
-    ),
+    effortLevels: thinkingLevelsFor(id),
   };
 }
 

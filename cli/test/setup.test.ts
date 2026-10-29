@@ -8,11 +8,7 @@ import { adminGrantEmails, pendingSecrets, playbookFor, updateEnvContent, runSet
 import { CliError } from "../src/log.ts";
 import { MINT_JWK, mintLocalSecret } from "../src/secrets.ts";
 
-function configFor(
-  services: string[],
-  extra = "",
-  env = `{ "core": { "HARNESS": "pi" } }`,
-): ReturnType<typeof loadConfigAt>["config"] {
+function configFor(services: string[], extra = "", env = `{}`): ReturnType<typeof loadConfigAt>["config"] {
   const dir = mkdtempSync(join(tmpdir(), "qm-setup-"));
   try {
     writeFileSync(
@@ -142,7 +138,7 @@ test("the broker's operator secrets replace the external-IdP ones", () => {
   const broker = configFor(
     ["core", "web-ui", "admin", "portal", "auth"],
     "",
-    `{ "core": { "HARNESS": "pi" }, "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
+    `{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend" } }`,
   );
   const brokerNames = pendingSecrets(broker, new Map()).todo.map((secret) => secret.name);
   assert.ok(!brokerNames.includes("OIDC_CLIENT_SECRET"), "the broker mints the portal's client secret");

@@ -14,7 +14,7 @@
 
 **Agent turns.** The system revolves around durable execution against a central writeahead log: the session tape. To execute an agent turn, a session offers up a write lease, at which point a worker claims it from the run queue. The _orchestrator_ assembles context and drives a harness, which fulfills tool calls, and the result is committed to the session tape. The system should be robust to interruption at any time, end to end, and scale to swarms that are millions of agents strong.
 
-**Swappable harnesses and models.** Agents have a single tool catalog; their turns can be fulfilled by Pi or Claude Code, which call into the model catalog, the canonical source for model varieties, effort levels, speed multipliers, and their prices. A particular selection of those variables fulfilling a turn is called the _runtime_.
+**Models.** Agents have a single tool catalog; their turns are fulfilled by Pi, which calls into the model catalog, the canonical source for model varieties, effort levels, speed multipliers, and their prices. A particular selection of those variables fulfilling a turn is called the _runtime_.
 
 **Scopes.** The original model was one OpenClaw per-person or per-channel. That means isolated compute, memory, files, crons, and apps. Breaking through that isolation requires an explicit and auditable _grant_.
 

@@ -131,7 +131,6 @@ export function renderServiceEnv(
   }
   if (service === "core")
     Object.assign(out, {
-      HARNESS: config.env.core?.HARNESS ?? "pi",
       ...securityScreenEnv(config),
       ...renderManagedCoreEnv(render),
       ...managedValues,

@@ -140,9 +140,8 @@ supervisor; extra connections on another host must be stopped on that host. `DEV
 
 The dev instance should exercise the real system:
 
-- real LLM: needs a model credential for the harness you run. Core supports
-  `HARNESS=pi|claude`; the launcher runs Pi when it finds an Anthropic key and honours an
-  explicit `HARNESS=claude`. Pi's GPT models can also use a ChatGPT subscription: set `CODEX_AUTH_FILE`
+- real LLM: needs a model credential. An Anthropic key (or a Claude subscription token in
+  `ANTHROPIC_API_KEY`) serves Claude models; GPT models can also use a ChatGPT subscription: set `CODEX_AUTH_FILE`
   to a local Codex CLI `auth.json`. The auth-file path is for local dev instances; deployed
   production processes use an API key or a keychain credential (`CODEX_AUTH_CREDENTIAL` /
   `CLAUDE_AUTH_CREDENTIAL`), whose secret lives encrypted in its owner's keychain.

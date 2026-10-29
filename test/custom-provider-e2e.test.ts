@@ -14,7 +14,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { oneShot } from "../src/harness/pi-harness.ts";
-import { resolveModel, modelSupportedByHarness, modelServiceable } from "../src/model/pi-models.ts";
+import { resolveModel, modelSupported, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
@@ -67,7 +67,6 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
-    harnessId: "pi",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -149,7 +148,7 @@ test("QA: full custom-provider lifecycle against a live fake upstream", async ()
     assert.equal(model!.provider, "qa");
     assert.equal(model!.reasoning, true);
     assert.equal((model as { baseUrl?: string }).baseUrl, upstreamUrl);
-    assert.equal(modelSupportedByHarness("custom/qa/qa-chat", "pi"), true);
+    assert.equal(modelSupported("custom/qa/qa-chat"), true);
     assert.equal(modelServiceable("custom/qa/qa-chat", { anthropic: false, openai: false, openrouter: false }), true);
 
     // 6. REAL model call through QM's pi path → fake upstream answers
@@ -207,7 +206,6 @@ test("QA: openai-responses custom provider serves a real turn through the genera
     refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
-    harnessId: "pi",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -320,7 +318,6 @@ test("QA: anthropic-protocol custom provider serves a real turn (correct wire sh
     refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
-    harnessId: "pi",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -435,7 +432,6 @@ test("QA: a custom model named like a built-in registers and sends its own model
     refreshCustomProviders: built.refreshCustomProviders,
     admin: built.admin,
     auditLog: built.auditLog,
-    harnessId: "pi",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

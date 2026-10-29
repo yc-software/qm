@@ -38,7 +38,7 @@ import {
   type Usage,
 } from "@earendil-works/pi-ai";
 import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-responses";
-import { baseModelProviders, configuredModelForHarness, CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { baseModelProviders, configuredModel, CONFIG_DEFAULTS, type Config } from "../config.ts";
 
 type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 const TURN_EFFORT_LEVELS = new Set<string>([
@@ -65,7 +65,7 @@ import {
   DEFAULT_AGENT_MODEL_ID,
   auxiliaryModelFor,
   auxiliaryModelForProvider,
-  defaultModelForHarness,
+  defaultModel,
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
@@ -175,8 +175,7 @@ export interface PiHarnessOptions {
 
 export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
   const defaultModelId =
-    configuredModelForHarness(config, "pi") ??
-    (config.modelProvider ? defaultModelForHarness("pi", undefined, baseModelProviders(config)) : undefined);
+    configuredModel(config) ?? (config.modelProvider ? defaultModel(undefined, baseModelProviders(config)) : undefined);
   return {
     ...(defaultModelId ? { defaultModelId } : {}),
     ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
@@ -1117,7 +1116,7 @@ export async function buildModelRuntime(
           ? codexProviderModelId(model.id)
           : (modelRequestOverrides(model.id)?.model ?? custom?.upstreamId ?? model.id);
       const unregistered = !custom && hasCustomModelPrefix(model.id);
-      const candidate = withRequestHeaders(model, true, false);
+      const candidate = withSubscriptionBetas(withRequestHeaders(model, true, false), apiKeys[String(model.provider)]);
       const passthrough = {
         ...retained(options),
         onPayload: async (payload: unknown) => {
@@ -1414,6 +1413,15 @@ export function resolveConfiguredModelId(configured: string | undefined, default
   return DEFAULT_AGENT_MODEL_ID;
 }
 
+const CLAUDE_SUBSCRIPTION_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
+
+function withSubscriptionBetas(model: Model<Api>, apiKey: string | undefined): Model<Api> {
+  const prior = model.headers?.["anthropic-beta"];
+  if (!prior || !apiKey?.includes("sk-ant-oat")) return model;
+  const beta = [...new Set([...CLAUDE_SUBSCRIPTION_BETAS, ...prior.split(",").map((value) => value.trim())])].join(",");
+  return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
+}
+
 export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean): Model<Api> {
   const api = String((model as { api?: unknown }).api ?? "").toLowerCase();
   if (api.startsWith("openai") || !direct) return model;
@@ -1640,830 +1648,804 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
     return { entry };
   }
 
-  return defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set([
-        "abort",
-        "steer",
-        "images",
-        "thinking-level",
-        "fast-mode",
-        "provider-sessions",
-        "goal-enforcement",
-      ]),
-    },
-    {
-      async runTurn(dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
-        const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
-        const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
-        const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
-        const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
-        const ref: TurnSession["ref"] = {
-          current: dispatched.tools,
-          documents: dispatched.documents,
-          runtimeHandoff: undefined,
-          runtimeMutationPending: false,
-          runtimeInFlight: new Set(),
-          runtimeRunId: dispatched.runId,
-          runtimeActorId: dispatched.runtimeActorId,
-          pendingApprovals: [],
-          pausedOnApproval: undefined,
-          silentRequested: false,
-          pollFire: !!dispatched.pollFire,
-          screenToolResult: dispatched.screenToolResult,
-          governGoal: dispatched.governGoal,
-          saveGoal: dispatched.saveGoal,
-          emit: dispatched.emit,
-          scopeLabel: dispatched.scopeLabel,
-          orgScopeId: dispatched.orgScopeId,
-          toolApprovalGate: dispatched.toolApprovalGate,
-          shutdown: dispatched.shutdown,
-        };
-        let activeSteps: StepRecorder | undefined;
-        const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
-        const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
-        const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
-        const { entry } = await createTurnSession(
-          withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
-          turn.session.id,
-          turn.systemPrompt,
-          turn.history,
-          turn.priorTurns,
-          turn.providerKeys,
-          ref,
-          tools,
-          turn.loadImage,
-        );
-        try {
-          const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
+  return defineHarness({
+    async runTurn(dispatched: HarnessTurnInput): Promise<HarnessTurnResult> {
+      const desiredModelId = dispatched.runtime?.modelId ?? resolveModelId(dispatched.scopeLabel);
+      const baseModel = requiredModel(desiredModelId, !dispatched.providerKeys);
+      const turnModelGateway = dispatched.providerKeys ? undefined : modelGateway;
+      const wantFast = wantsFastMode(dispatched.runtime?.fastMode, desiredModelId);
+      const ref: TurnSession["ref"] = {
+        current: dispatched.tools,
+        documents: dispatched.documents,
+        runtimeHandoff: undefined,
+        runtimeMutationPending: false,
+        runtimeInFlight: new Set(),
+        runtimeRunId: dispatched.runId,
+        runtimeActorId: dispatched.runtimeActorId,
+        pendingApprovals: [],
+        pausedOnApproval: undefined,
+        silentRequested: false,
+        pollFire: !!dispatched.pollFire,
+        screenToolResult: dispatched.screenToolResult,
+        governGoal: dispatched.governGoal,
+        saveGoal: dispatched.saveGoal,
+        emit: dispatched.emit,
+        scopeLabel: dispatched.scopeLabel,
+        orgScopeId: dispatched.orgScopeId,
+        toolApprovalGate: dispatched.toolApprovalGate,
+        shutdown: dispatched.shutdown,
+      };
+      let activeSteps: StepRecorder | undefined;
+      const tools = recordingTools(createTurnTools(ref, dispatched), () => activeSteps);
+      const resumed = await resumeInterruptedToolCall(dispatched, ref, tools as unknown as BridgedTool[]);
+      const turn = resumed ? { ...dispatched, history: resumed.history } : dispatched;
+      const { entry } = await createTurnSession(
+        withRequestHeaders(baseModel, !turnModelGateway?.models[desiredModelId], wantFast),
+        turn.session.id,
+        turn.systemPrompt,
+        turn.history,
+        turn.priorTurns,
+        turn.providerKeys,
+        ref,
+        tools,
+        turn.loadImage,
+      );
+      try {
+        const turnWallClockMs = turn.turnWallClockMs ?? defaultTurnWallClockMs;
 
-          const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
-          entry.ref.fast = wantFast;
-          entry.ref.modelHasPrices = () => !entry.agentSession.model || modelHasPrices(entry.agentSession.model);
-          const effectiveModel = activeModel?.id ?? desiredModelId;
-          const defaultThinkingLevel = entry.agentSession.model
-            ? defaultInteractiveThinkingLevel(entry.agentSession.model)
-            : "auto";
-          entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultThinkingLevel;
-          applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
+        const activeModel = entry.agentSession.model as { id?: string; headers?: Record<string, string> } | undefined;
+        entry.ref.fast = wantFast;
+        entry.ref.modelHasPrices = () => !entry.agentSession.model || modelHasPrices(entry.agentSession.model);
+        const effectiveModel = activeModel?.id ?? desiredModelId;
+        const defaultThinkingLevel = entry.agentSession.model
+          ? defaultInteractiveThinkingLevel(entry.agentSession.model)
+          : "auto";
+        entry.ref.effortLevel = turn.runtime?.effortLevel ?? defaultThinkingLevel;
+        applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
 
-          const continued = turn.continueTurn ? continuableContext(entry.agentSession.agent.state.messages) : null;
-          if (continued) entry.agentSession.agent.state.messages = continued;
-          else if (turn.continueTurn)
-            console.log(
-              `[pi] resume has no seeded context to continue; prompting the input session=${turn.session.id}`,
-            );
-          const continueTurn = !!continued;
-          const grindMeter = createGrindMeter();
+        const continued = turn.continueTurn ? continuableContext(entry.agentSession.agent.state.messages) : null;
+        if (continued) entry.agentSession.agent.state.messages = continued;
+        else if (turn.continueTurn)
+          console.log(`[pi] resume has no seeded context to continue; prompting the input session=${turn.session.id}`);
+        const continueTurn = !!continued;
+        const grindMeter = createGrindMeter();
 
-          entry.ref.goal = turn.goal ?? null;
-          entry.ref.goalMeter = grindMeter;
-          entry.ref.goalInbox = turn.goalInbox;
-          entry.ref.goalRound = turn.continueTurn ? 1 : 0;
-          const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
-          const pausedGoalAtStart = entry.ref.goal?.status === "paused" ? entry.ref.goal : null;
-          const goalNote = (() => {
-            if (activeGoalAtStart) return goalSteeringNote(activeGoalAtStart);
-            if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
-            return "";
-          })();
-          const userEntry = continueTurn
-            ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
-            : await turn.emit({
-                type: "user",
-                payload: {
-                  text: turn.input,
-                  ...(turn.environment ? { environment: turn.environment } : {}),
-                  ...(goalNote.trim() ? { goalNote } : {}),
-                  ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
-                  ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
-                  ...imageRefs(turn.images),
-                },
-                scopeLabel: turn.scopeLabel,
-                ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
-              });
-          const modelPrompt =
-            (userEntry
-              ? dayMarkerPrefix(
-                  turn.history.findLast((e) => e.type === "user" && e.seq < userEntry.seq),
-                  userEntry,
-                )
-              : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
-          entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
-          entry.ref.modelCalls = 0;
-          entry.ref.onModelRequest = turn.onModelRequest;
-          turn.recordModelCall({
-            model: effectiveModel,
-            inputTokens:
-              entry.composedPromptTokens +
-              estimateHistoryTokens(turn.history) +
-              (continueTurn ? 0 : countTokens(modelPrompt)),
-            entryCount: turn.history.length,
-          });
-
-          const callUsage: Array<LlmCallUsage | null> = [];
-          let thinkTail: Promise<unknown> = Promise.resolve();
-          let triggerSeen = continueTurn;
-          const toolAbort = new AbortController();
-          const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
-          let persistError: Error | undefined;
-          const persist = (write: () => Promise<unknown>): void => {
-            thinkTail = thinkTail.then(async () => {
-              if (persistError) return;
-              try {
-                await write();
-              } catch (err) {
-                persistError = asError(err);
-                toolAbort.abort();
-                void entry.agentSession.abort().catch(swallowAs("pi: persist-failure abort", undefined));
-              }
-            });
-          };
-          const steps = createStepRecorder(turn, persist);
-          activeSteps = steps;
-          entry.ref.emit = steps.emit;
-          const onMessageEnd = async (message: unknown): Promise<void> => {
-            const role = (message as { role?: string }).role;
-            if (role === "assistant") steps.assistant(message as AssistantMessage);
-            else if (role === "toolResult") steps.toolResult(message as ToolResultMessage);
-            else if (role === "user" && !triggerSeen) triggerSeen = true;
-            else if (role === "user") {
-              steps.flush();
-              const text = textFromContent((message as { content?: unknown }).content);
-              const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
-              const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
-              persist(() =>
-                steer
-                  ? recordSteerIntake(turn, steer)
-                  : turn.emit({ type: "system", payload: { kind: WAKE_KIND, text }, scopeLabel: turn.scopeLabel }),
-              );
-            }
-            await thinkTail;
-            if (persistError) throw persistError;
-          };
-          const unsubscribeMessageEnd = (
-            entry.agentSession as unknown as { agent?: PiAgentWithPayloadHook }
-          ).agent?.subscribe?.((event) => {
-            const e = event as { type?: string; message?: unknown };
-            if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
-            if (e.type === "message_end") noteDocumentRejection(e.message);
-            return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
-          });
-          const unsubscribe = entry.agentSession.subscribe((event) => {
-            if (event.type === "message_update" && entry.ref.firstTokenPhase) {
-              entry.ref.firstTokenPhase.end();
-              entry.ref.firstTokenPhase = undefined;
-            }
-            if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
-              steps.startStreaming();
-            } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
-              turn.onTextBlockStart?.();
-            } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
-              const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
-              if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
-            } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-              turn.onDelta?.(event.assistantMessageEvent.delta);
-            } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
-              const { contentIndex, delta, partial } = event.assistantMessageEvent;
-              const block = partial.content[contentIndex];
-              if (block?.type === "thinking" && !block.redacted)
-                turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
-            } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
-              const served = event.message as { usage?: Partial<Usage>; serviceTier?: string };
-              const stepModel = entry.agentSession.model;
-              const usage = piUsageToCallUsage(served.usage, stepModel, entry.ref.fast, served.serviceTier);
-              meterGrindCall(grindMeter, usage);
-              const meteredGoal = entry.ref.goal;
-              if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
-              callUsage.push(usage);
-              entry.ref.firstTokenPhase?.end();
-              entry.ref.firstTokenPhase = undefined;
-              if ((event.message as AssistantMessage).stopReason === "toolUse")
-                entry.ref.stepPhase = startPhase("step.gap");
-            }
-          });
-          const drainCaptured = async (): Promise<void> => {
-            const captured = entry.ref.llmCapture ?? [];
-            entry.ref.llmCapture = undefined;
-            if (!turn.recordLlmRequest) return;
-            const usageAligned = callUsage.length === captured.length;
-            for (let step = 0; step < captured.length; step++) {
-              try {
-                await turn.recordLlmRequest({
-                  turnSeq: userEntry?.seq ?? null,
-                  step,
-                  model: captured[step]!.transport?.modelId ?? effectiveModel,
-                  promptEnvelope: captured[step]!.envelope,
-                  truncated: captured[step]!.truncated,
-                  transport: captured[step]!.transport ?? null,
-                  usage: usageAligned ? (callUsage[step] ?? null) : null,
-                });
-              } catch (e) {
-                swallow("pi: llm request record", e);
-              }
-            }
-          };
-          let wallClock!: TurnWallClockOutcome;
-          const messagesBefore = entry.agentSession.messages.length;
-          entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
-          const freshAssistantStopReason = (): string | undefined => {
-            const fresh = entry.agentSession.messages.slice(messagesBefore);
-            const last = [...fresh].reverse().find((m) => (m as { role?: string }).role === "assistant") as
-              { stopReason?: string } | undefined;
-            return last?.stopReason;
-          };
-          let userAborted = false;
-          let abortReason: string | undefined;
-          let recoveryDead = false;
-          entry.ref.abortSignal = toolAbort.signal;
-          const onCancel = (): void => {
-            toolAbort.abort();
-            entry.agentSession.clearQueue();
-            void entry.agentSession.abort().catch(swallowAs("pi: lease-lost abort", undefined));
-          };
-          if (turn.cancel) {
-            if (turn.cancel.aborted) onCancel();
-            else turn.cancel.addEventListener("abort", onCancel, { once: true });
-          }
-          const steeredSeen = recordedMessageTimestamps(turn.history);
-          const stopSignalPoll =
-            signals && turn.runId
-              ? startSignalPoll(
-                  signals,
-                  turn.runId,
-                  {
-                    onSteer: async (text, ts, request, acknowledge) => {
-                      if (ts && steeredSeen.has(ts)) return;
-                      const prepared = await turn.prepareSteer?.(text, request);
-                      const prompt = prepared?.text ?? text;
-                      if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
-                      const steer = {
-                        text,
-                        prompt,
-                        ts,
-                        attachments: prepared?.attachments,
-                        images: prepared?.images,
-                        author: prepared?.author,
-                        acknowledge,
-                      };
-                      pendingSteers.push(steer);
-                      if (ts) steeredSeen.add(ts);
-                      if (prepared?.documents?.length)
-                        entry.ref.documents = [...(entry.ref.documents ?? []), ...prepared.documents];
-                      entry.ref.silentRequested = false;
-                      try {
-                        await entry.agentSession.steer(
-                          prompt,
-                          prepared?.images?.map((image) => ({
-                            type: "image" as const,
-                            mimeType: image.mimeType,
-                            data: image.dataBase64,
-                          })),
-                        );
-                      } catch (error) {
-                        const at = pendingSteers.indexOf(steer);
-                        if (at >= 0) pendingSteers.splice(at, 1);
-                        if (ts) steeredSeen.delete(ts);
-                        throw error;
-                      }
-                      return false;
-                    },
-                    onAbort: async (reason) => {
-                      userAborted = true;
-                      abortReason ??= reason;
-                      toolAbort.abort();
-                      entry.agentSession.clearQueue();
-                      await entry.agentSession.abort();
-                    },
-                  },
-                  { onError: (e) => swallow("pi: run signal poll", e) },
-                )
-              : null;
-          const promptStart = Date.now();
-          const floorCap = createFloorCapPolicy({
-            goal: () => entry.ref.goal,
-            meter: grindMeter,
-            promptStart,
-            turnWallClockMs,
-          });
-          const rawRemainingCapMs = floorCap.remainingCapMs;
-          const raceCapMs = floorCap.raceCapMs;
-          const extendCapMs = floorCap.extendMs;
-          const refusedModelIds = new Set<string>();
-          const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
-            if (userAborted || turn.cancel?.aborted) return false;
-            const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
-            if (fromId) refusedModelIds.add(fromId);
-            const configured = opts?.resolveFallbackRuntime?.();
-            const servedModelId = (id: string) => (turn.providerKeys ? id : companyServedId(id));
-            const fallbackId = fromId
-              ? refusalFallbackModelId(
-                  fromId,
-                  configured?.modelId,
-                  (id) => !!resolveModel(servedModelId(id), !turn.providerKeys),
-                )
-              : undefined;
-            const fallback = fallbackId ? resolveModel(servedModelId(fallbackId), !turn.providerKeys) : undefined;
-            if (
-              !fallbackId ||
-              !fallback ||
-              refusedModelIds.has(fallbackId) ||
-              refusedModelIds.has(servedModelId(fallbackId))
-            )
-              return false;
-            const capMs = raceCapMs();
-            if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
-            console.error(
-              `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
-            );
-            const custom = configured?.modelId === fallbackId ? configured : undefined;
-            const wantFast = wantsFastMode(custom?.fastMode ?? turn.runtime?.fastMode, fallbackId);
-            await entry.agentSession.setModel(
-              withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
-            );
-            entry.ref.fast = wantFast;
-            entry.ref.effortLevel =
-              custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
-            applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
-            dropFailedAssistant(entry.agentSession, messagesBefore);
-            const outcome = await raceTurnWallClock(
-              entry.agentSession.prompt(
-                refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
-              ),
-              { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() },
-            );
-            if (userAborted) return false;
-            if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
-            return true;
-          };
-          let documentRejection: ProviderTurnError | undefined;
-          let documentRetried = false;
-          const noteDocumentRejection = (message: unknown): void => {
-            if (documentRejection || !entry.ref.documents?.length) return;
-            const failed = message as AssistantMessage | undefined;
-            if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
-            const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
-            if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
-            documentRejection = failure;
-            entry.ref.documentsStubbed = true;
-            console.error(
-              `[pi] request with ${entry.ref.documents.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
-            );
-          };
-          const retryWithoutDocuments = async (): Promise<boolean> => {
-            if (!documentRejection || documentRetried || userAborted || turn.cancel?.aborted) return false;
-            const lastAssistant = entry.agentSession.messages
-              .slice(messagesBefore)
-              .findLast((m) => (m as { role?: string }).role === "assistant") as AssistantMessage | undefined;
-            if (lastAssistant && lastAssistant.stopReason !== "error") return false;
-            const capMs = raceCapMs();
-            if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
-            documentRetried = true;
-            dropFailedAssistant(entry.agentSession, messagesBefore);
-            const outcome = await raceTurnWallClock(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), {
-              capMs,
-              extendMs: extendCapMs,
-              abort: () => entry.agentSession.abort(),
-            });
-            if (userAborted) return false;
-            if (outcome !== "ok")
-              throw new NonRetryableTurnError(
-                `${documentRejection.message} (retry without inline documents was ${outcome})`,
-              );
-            return true;
-          };
-          const recoverFailedRound = async (): Promise<void> => {
-            if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
-            await retryWithoutDocuments();
-            const refusal = providerRefusalError(entry.agentSession, messagesBefore);
-            if (!refusal) return;
-            try {
-              await attemptRefusalFallback(refusal);
-            } catch (e) {
-              swallow("pi: refusal fallback", e);
-              throw new NonRetryableTurnError(refusal);
-            }
-          };
-          try {
-            const images = turn.images?.length
-              ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
-              : undefined;
-            wallClock = await raceTurnWallClock(
-              continueTurn
-                ? continueAssistantTurn(entry.agentSession)
-                : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
-              {
-                capMs: raceCapMs(),
-                extendMs: extendCapMs,
-                abort: () => entry.agentSession.abort(),
+        entry.ref.goal = turn.goal ?? null;
+        entry.ref.goalMeter = grindMeter;
+        entry.ref.goalInbox = turn.goalInbox;
+        entry.ref.goalRound = turn.continueTurn ? 1 : 0;
+        const activeGoalAtStart = entry.ref.goal?.status === "active" ? entry.ref.goal : null;
+        const pausedGoalAtStart = entry.ref.goal?.status === "paused" ? entry.ref.goal : null;
+        const goalNote = (() => {
+          if (activeGoalAtStart) return goalSteeringNote(activeGoalAtStart);
+          if (pausedGoalAtStart) return goalPausedNote(pausedGoalAtStart);
+          return "";
+        })();
+        const userEntry = continueTurn
+          ? turn.history.find((e) => e.seq === turn.resumeUserSeq)
+          : await turn.emit({
+              type: "user",
+              payload: {
+                text: turn.input,
+                ...(turn.environment ? { environment: turn.environment } : {}),
+                ...(goalNote.trim() ? { goalNote } : {}),
+                ...((turn.triggerTs ?? turn.entryTs) ? { ts: turn.triggerTs ?? turn.entryTs } : {}),
+                ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
+                ...imageRefs(turn.images),
               },
-            );
-            if (wallClock === "ok") await recoverFailedRound();
-            const goalAfterPrompt = entry.ref.goal;
-            if (wallClock === "ok" && goalAfterPrompt && !userAborted && !turn.cancel?.aborted) {
-              wallClock = await enforceGoal({
-                goal: goalAfterPrompt,
-                meter: grindMeter,
-                outcome: wallClock,
-                ok: "ok" as const,
-                blocked: () =>
-                  userAborted ||
-                  !!turn.cancel?.aborted ||
-                  !!entry.ref.runtimeHandoff ||
-                  !!entry.ref.pausedOnApproval ||
-                  !!entry.ref.pendingApprovals?.length ||
-                  piRoundFailed(entry.agentSession, messagesBefore),
-                ...(entry.ref.governGoal
-                  ? {
-                      govern: (previous: GovernorVerdict | undefined) =>
-                        entry.ref.governGoal!({
-                          objective: goalAfterPrompt.objective,
-                          trigger: "checkpoint",
-                          recentWork: entry.ref.goalRecentWork?.() ?? "",
-                          ...(previous ? { previous } : {}),
-                        }),
-                    }
-                  : {}),
-                ...(turn.goalInbox ? { inbox: turn.goalInbox } : {}),
-                beforePrompt: async (note) => {
-                  console.error(
-                    `[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`,
-                  );
-                  void note;
-                  entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
-                  entry.ref.silentRequested = false;
-                  await thinkTail;
-                },
-                prompt: async (note) => {
-                  if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
-                  const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
-                    capMs: raceCapMs(),
-                    extendMs: extendCapMs,
-                    abort: () => entry.agentSession.abort(),
-                  });
-                  if (outcome === "ok") await recoverFailedRound();
-                  return outcome;
-                },
-              });
-            }
-            const note = emptyEndingNote({
-              wallClock,
-              userAborted,
-              cancelled: !!turn.cancel?.aborted,
-              surfaceTools: !!turn.surfaceTools,
-              pollFire: !!turn.pollFire,
-              ref: entry.ref,
-              session: entry.agentSession,
-              turnWallClockMs,
-              elapsedMs: turnWallClockMs > 0 ? turnWallClockMs - rawRemainingCapMs() : Date.now() - promptStart,
+              scopeLabel: turn.scopeLabel,
+              ...(turn.runtimeActorId ? { author: turn.runtimeActorId } : {}),
             });
-            if (note) {
-              console.error(
-                `[pi] empty final response after ${entry.ref.modelCalls} model calls — re-prompting once session=${turn.session.id}`,
-              );
-              await thinkTail;
-              const capMs = raceCapMs();
-              if (
-                !userAborted &&
-                !turn.cancel?.aborted &&
-                (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)
-              ) {
-                try {
-                  const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
-                    capMs,
-                    extendMs: extendCapMs,
-                    abort: () => entry.agentSession.abort(),
-                  });
-                  if (outcome !== "ok" && !userAborted) {
-                    recoveryDead = true;
-                  } else if (
-                    outcome === "ok" &&
-                    !userAborted &&
-                    !(entry.agentSession.getLastAssistantText() ?? "").trim()
-                  ) {
-                    console.error(`[pi] turn still ended empty after re-prompt session=${turn.session.id}`);
-                  }
-                } catch (e) {
-                  swallow("pi: empty-ending re-prompt", e);
-                  recoveryDead = true;
-                }
-              }
+        const modelPrompt =
+          (userEntry
+            ? dayMarkerPrefix(
+                turn.history.findLast((e) => e.type === "user" && e.seq < userEntry.seq),
+                userEntry,
+              )
+            : "") + userPromptText({ goalNote, text: turn.input, environment: turn.environment });
+        entry.ref.llmCapture = captureRequests && turn.recordLlmRequest ? [] : undefined;
+        entry.ref.modelCalls = 0;
+        entry.ref.onModelRequest = turn.onModelRequest;
+        turn.recordModelCall({
+          model: effectiveModel,
+          inputTokens:
+            entry.composedPromptTokens +
+            estimateHistoryTokens(turn.history) +
+            (continueTurn ? 0 : countTokens(modelPrompt)),
+          entryCount: turn.history.length,
+        });
+
+        const callUsage: Array<LlmCallUsage | null> = [];
+        let thinkTail: Promise<unknown> = Promise.resolve();
+        let triggerSeen = continueTurn;
+        const toolAbort = new AbortController();
+        const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
+        let persistError: Error | undefined;
+        const persist = (write: () => Promise<unknown>): void => {
+          thinkTail = thinkTail.then(async () => {
+            if (persistError) return;
+            try {
+              await write();
+            } catch (err) {
+              persistError = asError(err);
+              toolAbort.abort();
+              void entry.agentSession.abort().catch(swallowAs("pi: persist-failure abort", undefined));
             }
-          } catch (err) {
-            if (persistError) throw persistError;
-            const cancelAbortRejection =
-              turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
-            if (!userAborted && !cancelAbortRejection) {
-              const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
-              let recovered = false;
-              try {
-                recovered = await retryWithoutDocuments();
-              } catch (e) {
-                swallow("pi: document-free retry", e);
-              }
-              if (!recovered && turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
-                try {
-                  recovered = await attemptRefusalFallback(turnErr.message);
-                } catch (e) {
-                  swallow("pi: refusal fallback", e);
-                }
-              }
-              if (!recovered && !userAborted) throw turnErr;
-            }
-            wallClock = "ok";
-          } finally {
-            turn.cancel?.removeEventListener("abort", onCancel);
-            await stopSignalPoll?.();
-            if (pendingSteers.length) entry.agentSession.clearQueue();
-            unsubscribeMessageEnd?.();
-            unsubscribe?.();
-            entry.ref.stepPhase?.end();
-            entry.ref.stepPhase = undefined;
+          });
+        };
+        const steps = createStepRecorder(turn, persist);
+        activeSteps = steps;
+        entry.ref.emit = steps.emit;
+        const onMessageEnd = async (message: unknown): Promise<void> => {
+          const role = (message as { role?: string }).role;
+          if (role === "assistant") steps.assistant(message as AssistantMessage);
+          else if (role === "toolResult") steps.toolResult(message as ToolResultMessage);
+          else if (role === "user" && !triggerSeen) triggerSeen = true;
+          else if (role === "user") {
+            steps.flush();
+            const text = textFromContent((message as { content?: unknown }).content);
+            const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
+            const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
+            persist(() =>
+              steer
+                ? recordSteerIntake(turn, steer)
+                : turn.emit({ type: "system", payload: { kind: WAKE_KIND, text }, scopeLabel: turn.scopeLabel }),
+            );
+          }
+          await thinkTail;
+          if (persistError) throw persistError;
+        };
+        const unsubscribeMessageEnd = (
+          entry.agentSession as unknown as { agent?: PiAgentWithPayloadHook }
+        ).agent?.subscribe?.((event) => {
+          const e = event as { type?: string; message?: unknown };
+          if (e.type === "agent_start" && toolAbort.signal.aborted) entry.agentSession.agent.abort();
+          if (e.type === "message_end") noteDocumentRejection(e.message);
+          return e.type === "message_end" ? onMessageEnd(e.message) : undefined;
+        });
+        const unsubscribe = entry.agentSession.subscribe((event) => {
+          if (event.type === "message_update" && entry.ref.firstTokenPhase) {
+            entry.ref.firstTokenPhase.end();
+            entry.ref.firstTokenPhase = undefined;
+          }
+          if (event.type === "message_start" && (event.message as { role?: string }).role === "assistant") {
+            steps.startStreaming();
+          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_start") {
+            turn.onTextBlockStart?.();
+          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
+            const block = event.assistantMessageEvent.partial.content[event.assistantMessageEvent.contentIndex];
+            if (block?.type === "toolCall") turn.onToolCallStart?.(block.name);
+          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+            turn.onDelta?.(event.assistantMessageEvent.delta);
+          } else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_delta") {
+            const { contentIndex, delta, partial } = event.assistantMessageEvent;
+            const block = partial.content[contentIndex];
+            if (block?.type === "thinking" && !block.redacted)
+              turn.onReasoningDelta?.(steps.streamingStepId(), contentIndex, delta);
+          } else if (event.type === "message_end" && (event.message as { role?: string }).role === "assistant") {
+            const served = event.message as { usage?: Partial<Usage>; serviceTier?: string };
+            const stepModel = entry.agentSession.model;
+            const usage = piUsageToCallUsage(served.usage, stepModel, entry.ref.fast, served.serviceTier);
+            meterGrindCall(grindMeter, usage);
+            const meteredGoal = entry.ref.goal;
+            if (meteredGoal?.status === "active") meterGoalCall(meteredGoal, usage);
+            callUsage.push(usage);
             entry.ref.firstTokenPhase?.end();
             entry.ref.firstTokenPhase = undefined;
-            steps.settleResults();
-            activeSteps = undefined;
-            entry.ref.emit = turn.emit;
-            await thinkTail;
-            await drainCaptured();
-            entry.ref.onModelRequest = undefined;
-            toolAbort.abort();
-            entry.ref.abortSignal = undefined;
-            entry.ref.screenToolResult = undefined;
+            if ((event.message as AssistantMessage).stopReason === "toolUse")
+              entry.ref.stepPhase = startPhase("step.gap");
           }
-          if (persistError) throw persistError;
-          if (wallClockTurnFailure(wallClock, userAborted, turn.cancel?.aborted === true)) {
-            const capLabel =
-              turnWallClockMs % 60_000 === 0
-                ? `${turnWallClockMs / 60_000}-minute`
-                : `${Math.round(turnWallClockMs / 1000)}-second`;
+        });
+        const drainCaptured = async (): Promise<void> => {
+          const captured = entry.ref.llmCapture ?? [];
+          entry.ref.llmCapture = undefined;
+          if (!turn.recordLlmRequest) return;
+          const usageAligned = callUsage.length === captured.length;
+          for (let step = 0; step < captured.length; step++) {
+            try {
+              await turn.recordLlmRequest({
+                turnSeq: userEntry?.seq ?? null,
+                step,
+                model: captured[step]!.transport?.modelId ?? effectiveModel,
+                promptEnvelope: captured[step]!.envelope,
+                truncated: captured[step]!.truncated,
+                transport: captured[step]!.transport ?? null,
+                usage: usageAligned ? (callUsage[step] ?? null) : null,
+              });
+            } catch (e) {
+              swallow("pi: llm request record", e);
+            }
+          }
+        };
+        let wallClock!: TurnWallClockOutcome;
+        const messagesBefore = entry.agentSession.messages.length;
+        entry.ref.goalRecentWork = () => piGoalWork(entry.agentSession.messages.slice(-80));
+        const freshAssistantStopReason = (): string | undefined => {
+          const fresh = entry.agentSession.messages.slice(messagesBefore);
+          const last = [...fresh].reverse().find((m) => (m as { role?: string }).role === "assistant") as
+            { stopReason?: string } | undefined;
+          return last?.stopReason;
+        };
+        let userAborted = false;
+        let abortReason: string | undefined;
+        let recoveryDead = false;
+        entry.ref.abortSignal = toolAbort.signal;
+        const onCancel = (): void => {
+          toolAbort.abort();
+          entry.agentSession.clearQueue();
+          void entry.agentSession.abort().catch(swallowAs("pi: lease-lost abort", undefined));
+        };
+        if (turn.cancel) {
+          if (turn.cancel.aborted) onCancel();
+          else turn.cancel.addEventListener("abort", onCancel, { once: true });
+        }
+        const steeredSeen = recordedMessageTimestamps(turn.history);
+        const stopSignalPoll =
+          signals && turn.runId
+            ? startSignalPoll(
+                signals,
+                turn.runId,
+                {
+                  onSteer: async (text, ts, request, acknowledge) => {
+                    if (ts && steeredSeen.has(ts)) return;
+                    const prepared = await turn.prepareSteer?.(text, request);
+                    const prompt = prepared?.text ?? text;
+                    if (!entry.agentSession.isStreaming || toolAbort.signal.aborted) return false;
+                    const steer = {
+                      text,
+                      prompt,
+                      ts,
+                      attachments: prepared?.attachments,
+                      images: prepared?.images,
+                      author: prepared?.author,
+                      acknowledge,
+                    };
+                    pendingSteers.push(steer);
+                    if (ts) steeredSeen.add(ts);
+                    if (prepared?.documents?.length)
+                      entry.ref.documents = [...(entry.ref.documents ?? []), ...prepared.documents];
+                    entry.ref.silentRequested = false;
+                    try {
+                      await entry.agentSession.steer(
+                        prompt,
+                        prepared?.images?.map((image) => ({
+                          type: "image" as const,
+                          mimeType: image.mimeType,
+                          data: image.dataBase64,
+                        })),
+                      );
+                    } catch (error) {
+                      const at = pendingSteers.indexOf(steer);
+                      if (at >= 0) pendingSteers.splice(at, 1);
+                      if (ts) steeredSeen.delete(ts);
+                      throw error;
+                    }
+                    return false;
+                  },
+                  onAbort: async (reason) => {
+                    userAborted = true;
+                    abortReason ??= reason;
+                    toolAbort.abort();
+                    entry.agentSession.clearQueue();
+                    await entry.agentSession.abort();
+                  },
+                },
+                { onError: (e) => swallow("pi: run signal poll", e) },
+              )
+            : null;
+        const promptStart = Date.now();
+        const floorCap = createFloorCapPolicy({
+          goal: () => entry.ref.goal,
+          meter: grindMeter,
+          promptStart,
+          turnWallClockMs,
+        });
+        const rawRemainingCapMs = floorCap.remainingCapMs;
+        const raceCapMs = floorCap.raceCapMs;
+        const extendCapMs = floorCap.extendMs;
+        const refusedModelIds = new Set<string>();
+        const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
+          if (userAborted || turn.cancel?.aborted) return false;
+          const fromId = (entry.agentSession.model as { id?: string } | undefined)?.id;
+          if (fromId) refusedModelIds.add(fromId);
+          const configured = opts?.resolveFallbackRuntime?.();
+          const servedModelId = (id: string) => (turn.providerKeys ? id : companyServedId(id));
+          const fallbackId = fromId
+            ? refusalFallbackModelId(
+                fromId,
+                configured?.modelId,
+                (id) => !!resolveModel(servedModelId(id), !turn.providerKeys),
+              )
+            : undefined;
+          const fallback = fallbackId ? resolveModel(servedModelId(fallbackId), !turn.providerKeys) : undefined;
+          if (
+            !fallbackId ||
+            !fallback ||
+            refusedModelIds.has(fallbackId) ||
+            refusedModelIds.has(servedModelId(fallbackId))
+          )
+            return false;
+          const capMs = raceCapMs();
+          if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+          console.error(
+            `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
+          );
+          const custom = configured?.modelId === fallbackId ? configured : undefined;
+          const wantFast = wantsFastMode(custom?.fastMode ?? turn.runtime?.fastMode, fallbackId);
+          await entry.agentSession.setModel(
+            withRequestHeaders(fallback, !turnModelGateway?.models[fallbackId], wantFast),
+          );
+          entry.ref.fast = wantFast;
+          entry.ref.effortLevel =
+            custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
+          applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
+          dropFailedAssistant(entry.agentSession, messagesBefore);
+          const outcome = await raceTurnWallClock(
+            entry.agentSession.prompt(
+              refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
+            ),
+            { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() },
+          );
+          if (userAborted) return false;
+          if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
+          return true;
+        };
+        let documentRejection: ProviderTurnError | undefined;
+        let documentRetried = false;
+        const noteDocumentRejection = (message: unknown): void => {
+          if (documentRejection || !entry.ref.documents?.length) return;
+          const failed = message as AssistantMessage | undefined;
+          if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
+          const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
+          if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
+          documentRejection = failure;
+          entry.ref.documentsStubbed = true;
+          console.error(
+            `[pi] request with ${entry.ref.documents.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
+          );
+        };
+        const retryWithoutDocuments = async (): Promise<boolean> => {
+          if (!documentRejection || documentRetried || userAborted || turn.cancel?.aborted) return false;
+          const lastAssistant = entry.agentSession.messages
+            .slice(messagesBefore)
+            .findLast((m) => (m as { role?: string }).role === "assistant") as AssistantMessage | undefined;
+          if (lastAssistant && lastAssistant.stopReason !== "error") return false;
+          const capMs = raceCapMs();
+          if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+          documentRetried = true;
+          dropFailedAssistant(entry.agentSession, messagesBefore);
+          const outcome = await raceTurnWallClock(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), {
+            capMs,
+            extendMs: extendCapMs,
+            abort: () => entry.agentSession.abort(),
+          });
+          if (userAborted) return false;
+          if (outcome !== "ok")
             throw new NonRetryableTurnError(
-              `the turn hit its ${capLabel} wall-clock limit and was stopped` +
-                (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
+              `${documentRejection.message} (retry without inline documents was ${outcome})`,
             );
+          return true;
+        };
+        const recoverFailedRound = async (): Promise<void> => {
+          if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
+          await retryWithoutDocuments();
+          const refusal = providerRefusalError(entry.agentSession, messagesBefore);
+          if (!refusal) return;
+          try {
+            await attemptRefusalFallback(refusal);
+          } catch (e) {
+            swallow("pi: refusal fallback", e);
+            throw new NonRetryableTurnError(refusal);
           }
-          if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
-            steps.flush();
+        };
+        try {
+          const images = turn.images?.length
+            ? turn.images.map((i) => ({ type: "image" as const, data: i.dataBase64, mimeType: i.mimeType }))
+            : undefined;
+          wallClock = await raceTurnWallClock(
+            continueTurn
+              ? continueAssistantTurn(entry.agentSession)
+              : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
+            {
+              capMs: raceCapMs(),
+              extendMs: extendCapMs,
+              abort: () => entry.agentSession.abort(),
+            },
+          );
+          if (wallClock === "ok") await recoverFailedRound();
+          const goalAfterPrompt = entry.ref.goal;
+          if (wallClock === "ok" && goalAfterPrompt && !userAborted && !turn.cancel?.aborted) {
+            wallClock = await enforceGoal({
+              goal: goalAfterPrompt,
+              meter: grindMeter,
+              outcome: wallClock,
+              ok: "ok" as const,
+              blocked: () =>
+                userAborted ||
+                !!turn.cancel?.aborted ||
+                !!entry.ref.runtimeHandoff ||
+                !!entry.ref.pausedOnApproval ||
+                !!entry.ref.pendingApprovals?.length ||
+                piRoundFailed(entry.agentSession, messagesBefore),
+              ...(entry.ref.governGoal
+                ? {
+                    govern: (previous: GovernorVerdict | undefined) =>
+                      entry.ref.governGoal!({
+                        objective: goalAfterPrompt.objective,
+                        trigger: "checkpoint",
+                        recentWork: entry.ref.goalRecentWork?.() ?? "",
+                        ...(previous ? { previous } : {}),
+                      }),
+                  }
+                : {}),
+              ...(turn.goalInbox ? { inbox: turn.goalInbox } : {}),
+              beforePrompt: async (note) => {
+                console.error(`[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`);
+                void note;
+                entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
+                entry.ref.silentRequested = false;
+                await thinkTail;
+              },
+              prompt: async (note) => {
+                if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
+                const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
+                  capMs: raceCapMs(),
+                  extendMs: extendCapMs,
+                  abort: () => entry.agentSession.abort(),
+                });
+                if (outcome === "ok") await recoverFailedRound();
+                return outcome;
+              },
+            });
+          }
+          const note = emptyEndingNote({
+            wallClock,
+            userAborted,
+            cancelled: !!turn.cancel?.aborted,
+            surfaceTools: !!turn.surfaceTools,
+            pollFire: !!turn.pollFire,
+            ref: entry.ref,
+            session: entry.agentSession,
+            turnWallClockMs,
+            elapsedMs: turnWallClockMs > 0 ? turnWallClockMs - rawRemainingCapMs() : Date.now() - promptStart,
+          });
+          if (note) {
+            console.error(
+              `[pi] empty final response after ${entry.ref.modelCalls} model calls — re-prompting once session=${turn.session.id}`,
+            );
             await thinkTail;
-            if (persistError) throw persistError;
-            if (entry.ref.goal) {
-              bankGoalTurn(entry.ref.goal, grindMeter.startedAt);
-              await turn.saveGoal?.(entry.ref.goal);
-            }
-            return {
-              reply: "",
-              runtimeHandoff: entry.ref.runtimeHandoff,
-              modelCalls: entry.ref.modelCalls ?? 0,
-              cacheUsage: sumCacheUsage(callUsage) ?? undefined,
-            };
-          }
-          const freshStopReason = freshAssistantStopReason();
-          const cancelStoppedCleanly =
-            turn.cancel?.aborted === true && (freshStopReason === "aborted" || freshStopReason === undefined);
-          if (userAborted || cancelStoppedCleanly) {
-            const freshMessages = entry.agentSession.messages.slice(messagesBefore);
-            const lastFreshAssistant = [...freshMessages]
-              .reverse()
-              .find((m) => (m as { role?: string }).role === "assistant");
-            const partial = lastFreshAssistant
-              ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
-              : "";
-            const reply = partial.trim() ? partial : "(stopped)";
-            if (entry.ref.goal) {
-              const g = entry.ref.goal;
-
-              bankGoalTurn(g, grindMeter.startedAt);
-              if (userAborted && g.status === "active") {
-                g.status = "paused";
-                g.updatedAt = Date.now();
+            const capMs = raceCapMs();
+            if (
+              !userAborted &&
+              !turn.cancel?.aborted &&
+              (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)
+            ) {
+              try {
+                const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
+                  capMs,
+                  extendMs: extendCapMs,
+                  abort: () => entry.agentSession.abort(),
+                });
+                if (outcome !== "ok" && !userAborted) {
+                  recoveryDead = true;
+                } else if (
+                  outcome === "ok" &&
+                  !userAborted &&
+                  !(entry.agentSession.getLastAssistantText() ?? "").trim()
+                ) {
+                  console.error(`[pi] turn still ended empty after re-prompt session=${turn.session.id}`);
+                }
+              } catch (e) {
+                swallow("pi: empty-ending re-prompt", e);
+                recoveryDead = true;
               }
-              await turn.saveGoal?.(g);
-              if (g.status === "complete") entry.ref.goal = null;
             }
-            await recordStoppedTurn(
-              turn,
-              partial,
-              userAborted ? abortReason : "because the run was cancelled",
-              steps.closing(reply),
-            );
-            const cacheUsage = sumCacheUsage(callUsage);
-            const base = {
-              reply,
-              stopped: true as const,
-              modelCalls: entry.ref.modelCalls ?? 0,
-            };
-            return cacheUsage ? { ...base, cacheUsage } : base;
           }
-
+        } catch (err) {
+          if (persistError) throw persistError;
+          const cancelAbortRejection =
+            turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
+          if (!userAborted && !cancelAbortRejection) {
+            const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
+            let recovered = false;
+            try {
+              recovered = await retryWithoutDocuments();
+            } catch (e) {
+              swallow("pi: document-free retry", e);
+            }
+            if (!recovered && turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
+              try {
+                recovered = await attemptRefusalFallback(turnErr.message);
+              } catch (e) {
+                swallow("pi: refusal fallback", e);
+              }
+            }
+            if (!recovered && !userAborted) throw turnErr;
+          }
+          wallClock = "ok";
+        } finally {
+          turn.cancel?.removeEventListener("abort", onCancel);
+          await stopSignalPoll?.();
+          if (pendingSteers.length) entry.agentSession.clearQueue();
+          unsubscribeMessageEnd?.();
+          unsubscribe?.();
+          entry.ref.stepPhase?.end();
+          entry.ref.stepPhase = undefined;
+          entry.ref.firstTokenPhase?.end();
+          entry.ref.firstTokenPhase = undefined;
+          steps.settleResults();
+          activeSteps = undefined;
+          entry.ref.emit = turn.emit;
+          await thinkTail;
+          await drainCaptured();
+          entry.ref.onModelRequest = undefined;
+          toolAbort.abort();
+          entry.ref.abortSignal = undefined;
+          entry.ref.screenToolResult = undefined;
+        }
+        if (persistError) throw persistError;
+        if (wallClockTurnFailure(wallClock, userAborted, turn.cancel?.aborted === true)) {
+          const capLabel =
+            turnWallClockMs % 60_000 === 0
+              ? `${turnWallClockMs / 60_000}-minute`
+              : `${Math.round(turnWallClockMs / 1000)}-second`;
+          throw new NonRetryableTurnError(
+            `the turn hit its ${capLabel} wall-clock limit and was stopped` +
+              (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
+          );
+        }
+        if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
+          steps.flush();
+          await thinkTail;
+          if (persistError) throw persistError;
+          if (entry.ref.goal) {
+            bankGoalTurn(entry.ref.goal, grindMeter.startedAt);
+            await turn.saveGoal?.(entry.ref.goal);
+          }
+          return {
+            reply: "",
+            runtimeHandoff: entry.ref.runtimeHandoff,
+            modelCalls: entry.ref.modelCalls ?? 0,
+            cacheUsage: sumCacheUsage(callUsage) ?? undefined,
+          };
+        }
+        const freshStopReason = freshAssistantStopReason();
+        const cancelStoppedCleanly =
+          turn.cancel?.aborted === true && (freshStopReason === "aborted" || freshStopReason === undefined);
+        if (userAborted || cancelStoppedCleanly) {
+          const freshMessages = entry.agentSession.messages.slice(messagesBefore);
+          const lastFreshAssistant = [...freshMessages]
+            .reverse()
+            .find((m) => (m as { role?: string }).role === "assistant");
+          const partial = lastFreshAssistant
+            ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
+            : "";
+          const reply = partial.trim() ? partial : "(stopped)";
           if (entry.ref.goal) {
             const g = entry.ref.goal;
+
             bankGoalTurn(g, grindMeter.startedAt);
+            if (userAborted && g.status === "active") {
+              g.status = "paused";
+              g.updatedAt = Date.now();
+            }
             await turn.saveGoal?.(g);
             if (g.status === "complete") entry.ref.goal = null;
           }
-          const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-          // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
-          const reply = entry.ref.silentRequested ? "" : closingText;
-          await turn.emit({
-            type: "assistant",
-            payload: { text: reply, ...steps.closing(reply) },
-            scopeLabel: turn.scopeLabel,
-          });
-          const pendingApprovals = entry.ref.pendingApprovals ?? [];
-          const modelCalls = entry.ref.modelCalls ?? 0;
+          await recordStoppedTurn(
+            turn,
+            partial,
+            userAborted ? abortReason : "because the run was cancelled",
+            steps.closing(reply),
+          );
           const cacheUsage = sumCacheUsage(callUsage);
-          const silent = entry.ref.silentRequested ? { silent: true as const } : {};
-          const base = pendingApprovals.length
-            ? {
-                reply,
-                pendingApprovals,
-                ...(entry.ref.pausedOnApproval ? { pausedOnApproval: true as const } : {}),
-                modelCalls,
-                ...silent,
-              }
-            : { reply, modelCalls, ...silent };
+          const base = {
+            reply,
+            stopped: true as const,
+            modelCalls: entry.ref.modelCalls ?? 0,
+          };
           return cacheUsage ? { ...base, cacheUsage } : base;
-        } finally {
-          removeIsolatedDirs(entry);
         }
-      },
 
-      async shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {
-        const modelId = detectModelId();
+        if (entry.ref.goal) {
+          const g = entry.ref.goal;
+          bankGoalTurn(g, grindMeter.startedAt);
+          await turn.saveGoal?.(g);
+          if (g.status === "complete") entry.ref.goal = null;
+        }
+        const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
+        // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
+        const reply = entry.ref.silentRequested ? "" : closingText;
+        await turn.emit({
+          type: "assistant",
+          payload: { text: reply, ...steps.closing(reply) },
+          scopeLabel: turn.scopeLabel,
+        });
+        const pendingApprovals = entry.ref.pendingApprovals ?? [];
+        const modelCalls = entry.ref.modelCalls ?? 0;
+        const cacheUsage = sumCacheUsage(callUsage);
+        const silent = entry.ref.silentRequested ? { silent: true as const } : {};
+        const base = pendingApprovals.length
+          ? {
+              reply,
+              pendingApprovals,
+              ...(entry.ref.pausedOnApproval ? { pausedOnApproval: true as const } : {}),
+              modelCalls,
+              ...silent,
+            }
+          : { reply, modelCalls, ...silent };
+        return cacheUsage ? { ...base, cacheUsage } : base;
+      } finally {
+        removeIsolatedDirs(entry);
+      }
+    },
+
+    async shouldRespond(detect: HarnessDetectInput): Promise<HarnessDetectResult> {
+      const modelId = detectModelId();
+      const model = requiredModel(modelId);
+      const providerKeys = await resolveProviderKeys();
+      if (!keyForModel(providerKeys, model)) return { respond: true };
+      const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
+      const prompt = renderDetectPrompt(detect);
+      detect.recordModelCall({
+        model: modelId,
+        inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
+        entryCount: detect.history.length,
+      });
+      const out = (
+        (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, {
+          modelGateway,
+          ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
+        })) ?? ""
+      ).trim();
+      return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
+    },
+
+    async compactHistory(input: HarnessCompactInput): Promise<string> {
+      const primaryId = resolveModelId();
+      const providerKeys = await resolveProviderKeys();
+      const runtime = await buildModelRuntime(providerKeys, modelGateway);
+      const summarize = (compactModelId: string) =>
+        summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
+          input.recordModelCall({
+            model: compactModelId,
+            inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
+            entryCount: input.history.length,
+          });
+          return runtime.streamSimple(summaryModel, context, options);
+        });
+      try {
+        return await summarize(primaryId);
+      } catch (error) {
+        const fallbackId = refusalFallbackModelId(
+          primaryId,
+          opts?.resolveFallbackRuntime?.()?.modelId,
+          (id) => !!resolveModel(companyServedId(id)),
+        );
+        if (
+          !(error instanceof ProviderTurnError) ||
+          error.code !== "refusal" ||
+          !fallbackId ||
+          !resolveModel(companyServedId(fallbackId)) ||
+          companyServedId(fallbackId) === companyServedId(primaryId)
+        )
+          throw error;
+        console.error(
+          `[pi] compaction failed on ${primaryId}; retrying on fallback model ${fallbackId}: ${error.message}`,
+        );
+        return summarize(fallbackId);
+      }
+    },
+
+    contextTokenBudget(scopeLabel?: string, model?: string): number | undefined {
+      const id = model && resolveModel(model) ? model : resolveModelId(scopeLabel as ScopeId | undefined);
+      return contextTokenBudgetForModel(id);
+    },
+
+    async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
+      const model = requiredModel(resolveModelId());
+      const providerKeys = await resolveProviderKeys();
+      if (!keyForModel(providerKeys, model)) return undefined;
+      return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
+    },
+
+    async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
+      const model = requiredModel(judgeModelId());
+      const providerKeys = await resolveProviderKeys();
+      if (!keyForModel(providerKeys, model)) return undefined;
+      return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
+        modelGateway,
+        signal,
+        thinkingLevel: "low",
+      });
+    },
+
+    async screenSecurity({
+      payload,
+      modelId: configuredScreenModel,
+      systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
+      signal,
+      recordModelCall,
+      recordLlmRequest,
+    }) {
+      try {
+        const modelId = configuredScreenModel ?? detectModelId();
         const model = requiredModel(modelId);
         const providerKeys = await resolveProviderKeys();
-        if (!keyForModel(providerKeys, model)) return { respond: true };
-        const detectSystemPrompt = buildDetectionPrompt(detect.reactionGuidance);
-        const prompt = renderDetectPrompt(detect);
-        detect.recordModelCall({
+        if (!keyForModel(providerKeys, model)) return undefined;
+        recordModelCall({
           model: modelId,
-          inputTokens: countTokens(detectSystemPrompt) + countTokens(prompt),
-          entryCount: detect.history.length,
+          inputTokens: countTokens(systemPrompt) + countTokens(payload),
+          entryCount: 1,
         });
-        const out = (
-          (await oneShot("pi-detect", model, providerKeys, detectSystemPrompt, prompt, {
+        await recordLlmRequest?.({
+          turnSeq: null,
+          step: SECURITY_SCREEN_STEP,
+          model: modelId,
+          promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
+          truncated: false,
+        });
+        return parseSecurityScreenVerdict(
+          await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
+            signal,
             modelGateway,
-            ...(detect.recordLlmRequest ? { recordLlmRequest: detect.recordLlmRequest } : {}),
-          })) ?? ""
-        ).trim();
-        return parseDetectVerdict(out, Boolean(detect.reactionGuidance?.trim()));
-      },
-
-      async compactHistory(input: HarnessCompactInput): Promise<string> {
-        const primaryId = resolveModelId();
-        const providerKeys = await resolveProviderKeys();
-        const runtime = await buildModelRuntime(providerKeys, modelGateway);
-        const summarize = (compactModelId: string) =>
-          summarizeHistory(input.history, requiredModel(compactModelId), (summaryModel, context, options) => {
-            input.recordModelCall({
-              model: compactModelId,
-              inputTokens: countTokens(context.systemPrompt ?? "") + countTokens(JSON.stringify(context.messages)),
-              entryCount: input.history.length,
-            });
-            return runtime.streamSimple(summaryModel, context, options);
-          });
-        try {
-          return await summarize(primaryId);
-        } catch (error) {
-          const fallbackId = refusalFallbackModelId(
-            primaryId,
-            opts?.resolveFallbackRuntime?.()?.modelId,
-            (id) => !!resolveModel(companyServedId(id)),
-          );
-          if (
-            !(error instanceof ProviderTurnError) ||
-            error.code !== "refusal" ||
-            !fallbackId ||
-            !resolveModel(companyServedId(fallbackId)) ||
-            companyServedId(fallbackId) === companyServedId(primaryId)
-          )
-            throw error;
-          console.error(
-            `[pi] compaction failed on ${primaryId}; retrying on fallback model ${fallbackId}: ${error.message}`,
-          );
-          return summarize(fallbackId);
-        }
-      },
-
-      contextTokenBudget(scopeLabel?: string, model?: string): number | undefined {
-        const id = model && resolveModel(model) ? model : resolveModelId(scopeLabel as ScopeId | undefined);
-        return contextTokenBudgetForModel(id);
-      },
-
-      async oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
-        const model = requiredModel(resolveModelId());
-        const providerKeys = await resolveProviderKeys();
-        if (!keyForModel(providerKeys, model)) return undefined;
-        return oneShot("pi-oneshot", model, providerKeys, systemPrompt, prompt, { modelGateway });
-      },
-
-      async judge(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined> {
-        const model = requiredModel(judgeModelId());
-        const providerKeys = await resolveProviderKeys();
-        if (!keyForModel(providerKeys, model)) return undefined;
-        return oneShot("pi-judge", model, providerKeys, systemPrompt, prompt, {
-          modelGateway,
-          signal,
-          thinkingLevel: "low",
-        });
-      },
-
-      async screenSecurity({
-        payload,
-        modelId: configuredScreenModel,
-        systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
-        signal,
-        recordModelCall,
-        recordLlmRequest,
-      }) {
-        try {
-          const modelId = configuredScreenModel ?? detectModelId();
-          const model = requiredModel(modelId);
-          const providerKeys = await resolveProviderKeys();
-          if (!keyForModel(providerKeys, model)) return undefined;
-          recordModelCall({
-            model: modelId,
-            inputTokens: countTokens(systemPrompt) + countTokens(payload),
-            entryCount: 1,
-          });
-          await recordLlmRequest?.({
-            turnSeq: null,
-            step: SECURITY_SCREEN_STEP,
-            model: modelId,
-            promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
-            truncated: false,
-          });
-          return parseSecurityScreenVerdict(
-            await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
-              signal,
-              modelGateway,
-            }),
-          );
-        } catch (e) {
-          swallow("pi: security screen", e);
-          return undefined;
-        }
-      },
-
-      async pickAckEmoji(text: string, candidates: readonly string[]): Promise<string | undefined> {
-        if (!text.trim() || candidates.length === 0) return undefined;
-        const ackModelId = auxiliaryModelForProvider("anthropic");
-        if (!ackModelId) return undefined;
-        try {
-          const model = requiredModel(ackModelId);
-          const providerKeys = await resolveProviderKeys();
-          const apiKey = keyForModel(providerKeys, model);
-          if (!apiKey) return undefined;
-          const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-          const raw = await directAnthropicJson(model, apiKey, ACK_EMOJI_PROMPT, prompt, modelGateway);
-          if (!raw) return undefined;
-          const emoji = (JSON.parse(raw.replace(/```json|```/g, "").trim()) as { emoji?: unknown }).emoji;
-          return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;
-        } catch {
-          return undefined;
-        }
-      },
-
-      async generateTitle(transcript: string): Promise<string | undefined> {
-        if (!transcript.trim()) return undefined;
-        const model = requiredModel(titleModelId());
-        const providerKeys = await resolveProviderKeys();
-        if (!keyForModel(providerKeys, model)) return undefined;
-        const out = await oneShot(
-          "pi-title",
-          model,
-          providerKeys,
-          TITLE_GENERATION_PROMPT,
-          titleUserPrompt(transcript),
-          { modelGateway },
+          }),
         );
-        return sanitizeTitle(out);
-      },
-
-      async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {
-        if (!command.trim()) return undefined;
-        const model = requiredModel(titleModelId());
-        const providerKeys = await resolveProviderKeys();
-        if (!keyForModel(providerKeys, model)) return undefined;
-        const prompt = [
-          `Policy flagged this as: ${reason}`,
-          purpose ? `Agent's stated purpose: ${purpose}` : "",
-          "",
-          "Command:",
-          command.slice(0, 4000),
-        ]
-          .filter((l) => l !== undefined)
-          .join("\n");
-        const out = (
-          await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway })
-        )?.trim();
-        if (!out || out === "NONE") return undefined;
-        return out.replace(/^["']|["']$/g, "").slice(0, 300);
-      },
+      } catch (e) {
+        swallow("pi: security screen", e);
+        return undefined;
+      }
     },
-  );
+
+    async pickAckEmoji(text: string, candidates: readonly string[]): Promise<string | undefined> {
+      if (!text.trim() || candidates.length === 0) return undefined;
+      const ackModelId = auxiliaryModelForProvider("anthropic");
+      if (!ackModelId) return undefined;
+      try {
+        const model = requiredModel(ackModelId);
+        const providerKeys = await resolveProviderKeys();
+        const apiKey = keyForModel(providerKeys, model);
+        if (!apiKey) return undefined;
+        const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
+        const raw = await directAnthropicJson(model, apiKey, ACK_EMOJI_PROMPT, prompt, modelGateway);
+        if (!raw) return undefined;
+        const emoji = (JSON.parse(raw.replace(/```json|```/g, "").trim()) as { emoji?: unknown }).emoji;
+        return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+
+    async generateTitle(transcript: string): Promise<string | undefined> {
+      if (!transcript.trim()) return undefined;
+      const model = requiredModel(titleModelId());
+      const providerKeys = await resolveProviderKeys();
+      if (!keyForModel(providerKeys, model)) return undefined;
+      const out = await oneShot("pi-title", model, providerKeys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
+        modelGateway,
+      });
+      return sanitizeTitle(out);
+    },
+
+    async summarizeApproval(command: string, reason: string, purpose?: string): Promise<string | undefined> {
+      if (!command.trim()) return undefined;
+      const model = requiredModel(titleModelId());
+      const providerKeys = await resolveProviderKeys();
+      if (!keyForModel(providerKeys, model)) return undefined;
+      const prompt = [
+        `Policy flagged this as: ${reason}`,
+        purpose ? `Agent's stated purpose: ${purpose}` : "",
+        "",
+        "Command:",
+        command.slice(0, 4000),
+      ]
+        .filter((l) => l !== undefined)
+        .join("\n");
+      const out = (
+        await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway })
+      )?.trim();
+      if (!out || out === "NONE") return undefined;
+      return out.replace(/^["']|["']$/g, "").slice(0, 300);
+    },
+  });
 }

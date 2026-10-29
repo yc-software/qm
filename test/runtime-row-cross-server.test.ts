@@ -47,8 +47,8 @@ const pausedReads = (map: DurableMap<PersistedBaseModel>) => {
 };
 
 const org = scopeId("org", "default-org");
-const cron = { harnessId: "pi" as const, modelId: "cron-model" };
-const pick = { harnessId: "pi" as const, modelId: "org-model" };
+const cron = { modelId: "cron-model" };
+const pick = { modelId: "org-model" };
 
 test("an org runtime change on one server keeps a cron runtime another server saved meanwhile", async () => {
   const shared = await freshMap();
@@ -86,14 +86,14 @@ test("saving a purpose runtime on one server keeps the org runtime another serve
 
 test("concurrent org runtime changes on two servers get distinct revisions", async () => {
   const shared = await freshMap();
-  await shared.put(org, { scopeId: org, harnessId: "pi", modelId: "seed", revision: 1, orgRevision: 1 });
+  await shared.put(org, { scopeId: org, modelId: "seed", revision: 1, orgRevision: 1 });
   const paused = pausedReads(shared);
   const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
   const right = createMemoryConfigStore("default-org", { baseModels: shared });
 
   const leftWrite = left.setRuntimeSelection(org, pick);
   await paused.readStarted;
-  await right.setRuntimeSelection(org, { harnessId: "pi", modelId: "other" });
+  await right.setRuntimeSelection(org, { modelId: "other" });
   paused.release();
   await leftWrite;
 
@@ -103,15 +103,15 @@ test("concurrent org runtime changes on two servers get distinct revisions", asy
 test("acknowledging the org runtime on one server keeps a scope runtime another server just chose", async () => {
   const shared = await freshMap();
   const channel = scopeId("channel", "c1");
-  await shared.put(channel, { scopeId: channel, harnessId: "pi", modelId: "old", orgRevision: 0 });
-  await shared.put(org, { scopeId: org, harnessId: "pi", modelId: "org-model", revision: 4, orgRevision: 4 });
+  await shared.put(channel, { scopeId: channel, modelId: "old", orgRevision: 0 });
+  await shared.put(org, { scopeId: org, modelId: "org-model", revision: 4, orgRevision: 4 });
   const paused = pausedReads(shared);
   const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
   const right = createMemoryConfigStore("default-org", { baseModels: shared });
 
   const ack = left.acknowledgeRuntimeSelection(channel);
   await paused.readStarted;
-  await right.setRuntimeSelection(channel, { harnessId: "pi", modelId: "new" });
+  await right.setRuntimeSelection(channel, { modelId: "new" });
   paused.release();
   await ack;
 

@@ -91,22 +91,22 @@ const ANTHROPIC_MODELS = [
   { id: "claude-opus-5", name: "Claude Opus 5", provider: "anthropic" },
 ];
 
-test("harness-carried auth shows the model step as ready without a stored key", async () => {
+test("subscription auth shows the model step as ready without a stored key", async () => {
   const elements = await runLoadOnboarding({
     providers: UNCONFIGURED_PROVIDERS,
     models: ANTHROPIC_MODELS,
-    harnessAuth: { harnessId: "claude", provider: "anthropic" },
+    subscriptionAuth: { provider: "anthropic" },
   });
   assert.equal(elements["onboarding-model-badge"]!.textContent, "Ready");
   assert.equal(elements["onboarding-model-badge"]!.className, "badge ok");
   assert.equal(elements["onboarding-model-id"]!.value, "claude-opus-5");
   assert.equal(
     elements["onboarding-model-summary"]!.textContent,
-    "claude-opus-5 · authenticated by the claude harness — no API key needed.",
+    "claude-opus-5 · authenticated by subscription — no API key needed.",
   );
 });
 
-test("without harness auth an unconfigured provider still needs a key", async () => {
+test("without subscription auth an unconfigured provider still needs a key", async () => {
   const elements = await runLoadOnboarding({
     providers: UNCONFIGURED_PROVIDERS,
     models: ANTHROPIC_MODELS,
@@ -116,7 +116,7 @@ test("without harness auth an unconfigured provider still needs a key", async ()
   assert.match(elements["onboarding-model-summary"]!.textContent, /cannot run until its Anthropic key is configured/);
 });
 
-test("a stored key keeps its summary even when the harness also carries auth", async () => {
+test("a stored key keeps its summary even when a subscription also carries auth", async () => {
   const elements = await runLoadOnboarding({
     providers: [
       { provider: "anthropic", configured: true, source: "admin" },
@@ -124,7 +124,7 @@ test("a stored key keeps its summary even when the harness also carries auth", a
       { provider: "openrouter", configured: false, source: "absent" },
     ],
     models: ANTHROPIC_MODELS,
-    harnessAuth: { harnessId: "claude", provider: "anthropic" },
+    subscriptionAuth: { provider: "anthropic" },
   });
   assert.equal(elements["onboarding-model-badge"]!.textContent, "Ready");
   assert.equal(elements["onboarding-model-summary"]!.textContent, "claude-opus-5 · admin-managed key");

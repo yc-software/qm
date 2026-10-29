@@ -184,7 +184,6 @@ function dispatchContract(input: OrchestratorInput) {
     unattendedGrants: input.unattendedGrants,
     readOnly: input.readOnly,
     skipMemory: input.skipMemory,
-    harness: input.harness,
     model: input.model,
     thinkingLevel: input.thinkingLevel,
     fastMode: input.fastMode,

@@ -29,7 +29,7 @@ import {
   INBOX_SYNC_DEFAULT_EVERY_MS,
 } from "../../loops/inbox-loop.ts";
 import { migrateInbox } from "../../loops/inbox-migration.ts";
-import { THINKING_LEVELS, isHarnessId } from "../../model/pi-models.ts";
+import { THINKING_LEVELS } from "../../model/pi-models.ts";
 import { principalDestination } from "../../reach/reach.ts";
 
 const MAX_ITEMS_PER_INGEST = 50;
@@ -427,7 +427,6 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
 const followUpOptionsSchema = z.object({
   model: z.string().trim().min(1).optional(),
-  harness: z.string().trim().refine(isHarnessId, "unsupported harness").optional(),
   thinkingLevel: z.string().trim().pipe(z.enum(THINKING_LEVELS)).optional(),
   fastMode: z.boolean().optional(),
   attachments: z

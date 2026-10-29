@@ -16,7 +16,6 @@ const opts = { skip: NO_KEY ? "set ANTHROPIC_API_KEY to run live e2e" : false, t
 function freshApp() {
   const config: Config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "pi-e2e-")),
-    harness: "pi",
     ...(process.env.PI_MODEL ? { modelId: process.env.PI_MODEL } : {}),
     ...(process.env.ANTHROPIC_API_KEY ? { anthropicApiKey: process.env.ANTHROPIC_API_KEY } : {}),
   });

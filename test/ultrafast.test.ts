@@ -4,7 +4,7 @@ import { calculateCost } from "@earendil-works/pi-ai";
 import { zeroUsage } from "../src/harness/replay.ts";
 import { zstdDecompressSync } from "node:zlib";
 import { buildModelRuntime, piUsageToCallUsage, wantsFastMode } from "../src/harness/pi-harness.ts";
-import { getRequiredModel, modelSupportedByHarness, resolveModel } from "../src/model/pi-models.ts";
+import { getRequiredModel, modelSupported, resolveModel } from "../src/model/pi-models.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 
 for (const [baseId, shortCost, longCost] of [
@@ -18,8 +18,7 @@ for (const [baseId, shortCost, longCost] of [
     assert.equal(model.provider, "openai");
     assert.equal(model.api, "openai-responses");
     assert.equal(wantsFastMode(true, id), false);
-    assert.equal(modelSupportedByHarness(id, "pi"), true);
-    assert.equal(modelSupportedByHarness(id, "claude"), false);
+    assert.equal(modelSupported(id), true);
     assert.equal(resolveModel(`codex/${id}`), undefined);
     for (const tokens of [
       { input: 10_000, output: 2_000, cacheRead: 50_000, cacheWrite: 4_000 },

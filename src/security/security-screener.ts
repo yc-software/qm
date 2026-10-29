@@ -21,7 +21,6 @@ export interface SecurityScreenClassification {
  */
 export type SecurityScreenProbe = (input: {
   payload: string;
-  harnessId: string;
   modelId: string;
   systemPrompt: string;
   actorId: string;

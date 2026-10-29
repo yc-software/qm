@@ -5,19 +5,12 @@ import { getBaseModel, type ModelMetadata } from "./pi-models.ts";
 export type ModelOptionValue = string;
 export interface ModelOption {
   value: ModelOptionValue;
-  harnessId: string;
-  harnessLabel: string;
   model: Model<Api>;
   label: string;
   buttonLabel: string;
   groupLabel: string;
   displayProvider?: string;
 }
-
-const HARNESS_LABELS: Record<string, string> = {
-  pi: "Pi",
-  claude: "Claude Code",
-};
 
 const PROVIDER_LABELS: Record<string, string> = {
   "qm:gateway": "Gateway",
@@ -64,12 +57,7 @@ function gatewayPresentation(id: string, provider: string): { label: string; pro
   };
 }
 
-function buildOption(
-  id: string,
-  harnessId = "pi",
-  qualified = false,
-  catalog: Readonly<Record<string, ModelMetadata>> = {},
-): ModelOption | null {
+function buildOption(id: string, catalog: Readonly<Record<string, ModelMetadata>> = {}): ModelOption | null {
   try {
     const dynamic = catalog[id];
     const meta = dynamic ? { label: dynamic.label, buttonLabel: dynamic.buttonLabel } : null;
@@ -77,9 +65,7 @@ function buildOption(
     const model = getBaseModel(id, dynamic);
     const presentation = gatewayPresentation(id, String(model.provider));
     return {
-      value: qualified ? `${harnessId}:${id}` : id,
-      harnessId,
-      harnessLabel: HARNESS_LABELS[harnessId] ?? harnessId,
+      value: id,
       model,
       ...meta,
       ...(presentation
@@ -102,10 +88,8 @@ function buildOption(
   }
 }
 
-function buildOptions(
+export function runtimeModelOptions(
   ids: readonly string[],
-  harnessId = "pi",
-  qualified = false,
   catalog: Readonly<Record<string, ModelMetadata>> = {},
 ): ModelOption[] {
   const seen = new Set<string>();
@@ -113,7 +97,7 @@ function buildOptions(
   for (const id of ids) {
     if (seen.has(id)) continue;
     seen.add(id);
-    const opt = buildOption(id, harnessId, qualified, catalog);
+    const opt = buildOption(id, catalog);
     if (opt) out.push(opt);
   }
   return out;
@@ -133,8 +117,8 @@ function runtimeFor(scopeKey?: string | null): RuntimeOptions {
   let options = derived.get(config);
   if (!options) {
     options = {
-      options: runtimeModelOptions(config.approvedHarnesses, config.modelsByHarness, config.modelCatalog),
-      defaultValue: `${config.effective.harnessId}:${config.effective.modelId}`,
+      options: runtimeModelOptions(config.models, config.modelCatalog),
+      defaultValue: config.effective.modelId,
     };
     derived.set(config, options);
   }
@@ -143,22 +127,6 @@ function runtimeFor(scopeKey?: string | null): RuntimeOptions {
 
 export function getModelOptions(scopeKey?: string | null): ModelOption[] {
   return runtimeFor(scopeKey).options;
-}
-
-export function harnessOptions(options: readonly ModelOption[]): Array<{ value: string; label: string }> {
-  return [...new Map(options.map((option) => [option.harnessId, option.harnessLabel])).entries()].map(
-    ([value, label]) => ({ value, label }),
-  );
-}
-
-export function runtimeModelOptions(
-  approvedHarnesses: readonly string[],
-  modelsByHarness: Readonly<Record<string, readonly string[]>>,
-  catalog: Readonly<Record<string, ModelMetadata>> = {},
-): ModelOption[] {
-  return approvedHarnesses.flatMap((harnessId) =>
-    buildOptions(modelsByHarness[harnessId] ?? [], harnessId, true, catalog),
-  );
 }
 
 export function defaultModelValue(scopeKey?: string | null): ModelOptionValue {
@@ -170,12 +138,4 @@ export function transcriptModel(scopeKey?: string | null): Model<Api> | undefine
   return options.find((o) => o.value === defaultValue)?.model;
 }
 
-export {
-  EFFORT_LEVELS,
-  defaultEffortForModel,
-  effortLabel,
-  harnessSupportsEffort,
-  harnessSupportsFastMode,
-  harnessSupportsSteer,
-  type EffortLevel,
-} from "./runtime-capabilities.ts";
+export { EFFORT_LEVELS, defaultEffortForModel, effortLabel, type EffortLevel } from "./runtime-capabilities.ts";

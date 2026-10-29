@@ -717,7 +717,6 @@ export interface AppDeps {
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
   judgeModelId?: () => string;
-  harnessId?: string;
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   runtimeFallback?: RuntimeChoice;

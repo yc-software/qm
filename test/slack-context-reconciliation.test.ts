@@ -32,7 +32,7 @@ function reply(): Response {
 
 for (const warm of [false, true]) {
   test(`${warm ? "existing" : "fresh"} human thread includes the approval referent in the provider request and deduplicates after harness reset`, async () => {
-    const built = buildApp(testConfig({ harness: "pi", anthropicApiKey: "sk-test", securityScreen: "off" }));
+    const built = buildApp(testConfig({ anthropicApiKey: "sk-test", securityScreen: "off" }));
     const requests: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {

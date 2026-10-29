@@ -223,7 +223,6 @@ test("company ChatGPT subscription auth uses the native subscription transport w
   );
   const built = buildApp(
     testConfig({
-      harness: "pi",
       codexAuthFile: authFile,
       openaiApiKey: "must-not-fallback",
     }),

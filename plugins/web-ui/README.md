@@ -142,7 +142,7 @@ Below 860px the same build behaves like an app rather than a shrunken desktop:
   button's column so nothing renders under it.
 - **Bottom sheets.** Popover menus — composer settings, a session's ⋯, the user menu, the
   per-session tools — render as sheets with a backdrop; tap outside or swipe down to dismiss.
-- **Compact composer.** Attach · input · settings · send on one row; model, harness, effort, and
+- **Compact composer.** Attach · input · settings · send on one row; model, effort, and
   Fast live in the settings sheet. Inputs are 16px so iOS never zooms on focus, and the layout
   tracks the visual viewport so the composer stays above the on-screen keyboard.
 - **Touch targets.** Message actions, file chips, selects, drawer rows, approvals, and back
@@ -159,7 +159,7 @@ the CSS media queries, the composer, and the split canvas.
 
 - **Custom chat UI** — a first-party conversation surface with a left history rail, centered
   transcript, bottom composer, inline **model selector** (the models core reports as
-  serviceable for the approved harnesses),
+  serviceable),
   explicit **effort selector** (`low|medium|high|xhigh|max|ultracode|auto`), **Fast mode**
   toggle, attachments, streaming partials, and a theme picker. Settings → Theme takes
   light, dark, or system, or an imported palette: drop in an iTerm2 `.itermcolors` preset or

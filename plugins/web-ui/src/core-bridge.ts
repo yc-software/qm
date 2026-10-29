@@ -14,7 +14,6 @@ import { errMessage, swallow } from "../../chassis/src/errors.ts";
 import { userFacingFailureText } from "../../chassis/src/failure-copy.ts";
 import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
-import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabilities.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
 import { messageEntrySeqs } from "./message-link.ts";
 import type { GoalStripState } from "./goal-strip.ts";
@@ -507,7 +506,6 @@ interface LiveReasoning {
 }
 
 export interface TurnRuntime {
-  harnessId: string;
   modelId: string;
   label?: string;
   change?: { rule: string } | { agent: "task" | "scope" };
@@ -592,7 +590,6 @@ export interface RunPoll {
 export interface TurnOptions {
   effortLevel?: string;
   fastMode?: boolean;
-  harness?: string;
   scopeId?: string | null;
   channelName?: string | null;
 }
@@ -1269,17 +1266,13 @@ function turnRequestBody(
 ): Record<string, unknown> {
   const { idempotencyKey, attachments = [] } = send;
   const turnOptions = getTurnOptions?.() ?? {};
-  const thinkingLevel =
-    turnOptions.harness && harnessSupportsEffort(turnOptions.harness)
-      ? (turnOptions.effortLevel ?? agent.state.thinkingLevel ?? defaultEffortForModel(model))
-      : undefined;
+  const thinkingLevel = turnOptions.effortLevel;
   const timezone = browserTimezone();
   return {
     desktopClientId: desktopTurnId(),
     text,
     threadRef,
-    ...(turnOptions.harness ? { harness: turnOptions.harness, model: model.id } : {}),
-    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(thinkingLevel ? { model: model.id, thinkingLevel } : {}),
     ...(typeof turnOptions.fastMode === "boolean" ? { fastMode: turnOptions.fastMode } : {}),
     ...(timezone ? { timezone } : {}),
     ...(turnOptions.scopeId ? { scopeId: turnOptions.scopeId } : {}),

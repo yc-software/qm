@@ -247,10 +247,10 @@ test("a tool call whose outcome was lost records the cause as its own result", (
 
 test("the runtime switch note names the new runtime", () => {
   assert.match(
-    runtimeSwitchNote({ harnessId: "pi", modelId: "claude-opus-5-5", fastMode: true, effortLevel: "high" }),
+    runtimeSwitchNote({ modelId: "claude-opus-5-5", fastMode: true, effortLevel: "high" }),
     /^\[system\] Runtime switched to claude-opus-5-5 fast; effort high\./,
   );
-  assert.doesNotMatch(runtimeSwitchNote({ harnessId: "pi", modelId: "claude-opus-5-5" }), /fast|effort/);
+  assert.doesNotMatch(runtimeSwitchNote({ modelId: "claude-opus-5-5" }), /fast|effort/);
   assert.match(runtimeSwitchNote(undefined), /^\[system\] Context was trimmed without a new summary\./);
 });
 

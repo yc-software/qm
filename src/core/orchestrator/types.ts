@@ -119,8 +119,6 @@ export interface OrchestratorDeps {
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
-  /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
-  defaultHarness?: string;
   defaultTurnWallClockMs?: number;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;

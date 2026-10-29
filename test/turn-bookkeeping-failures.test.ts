@@ -55,25 +55,16 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
-  const harness = defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set(),
+  const harness = defineHarness({
+    async runTurn(turn) {
+      await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+      await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
+      return { reply: "done", modelCalls: 1, ...turnResult };
     },
-    {
-      async runTurn(turn) {
-        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-        await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
-        return { reply: "done", modelCalls: 1, ...turnResult };
-      },
-      async screenSecurity() {
-        return { decision: "auto" as const };
-      },
+    async screenSecurity() {
+      return { decision: "auto" as const };
     },
-  );
+  });
   const sessions = createMemorySessionStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();

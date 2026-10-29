@@ -18,7 +18,7 @@ mock.module("./support/mock-harness.ts", {
           handoffTo = undefined;
           return {
             reply: "",
-            runtimeHandoff: { choice: { harnessId: "pi", modelId }, lifetime: "task" as const },
+            runtimeHandoff: { choice: { modelId }, lifetime: "task" as const },
           };
         }
         started();

@@ -7,12 +7,11 @@ import {
   FAST_MODE_MODEL_IDS,
   resolveModel,
   modelSupportsFastMode,
-  modelSupportedByHarness,
-  defaultModelForHarness,
+  modelSupported,
+  defaultModel,
   safeModelMetadata,
   modelServiceable,
   serviceableModelIds,
-  modelProviderAvailabilityFor,
 } from "../src/model/pi-models.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
 
@@ -97,16 +96,14 @@ test("Opus 5.5 inherits adaptive thinking without off, with its own rates and li
   assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.xhigh, "xhigh");
 });
 
-test("Opus 5.5 is selectable with compatible harnesses and credentials, without changing defaults", () => {
+test("Opus 5.5 is selectable with compatible credentials, without changing defaults", () => {
   const id = "claude-opus-5-5";
   assert.ok(SELECTABLE_BASE_MODELS.some((model) => model.id === id));
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
   assert.ok(FAST_MODE_MODEL_IDS.includes(id));
   assert.equal(safeModelMetadata(id)?.label, "Opus 5.5");
-  for (const harness of ["pi", "claude"]) {
-    assert.equal(modelSupportedByHarness(id, harness), true);
-    assert.equal(defaultModelForHarness(harness), "claude-opus-5");
-  }
+  assert.equal(modelSupported(id), true);
+  assert.equal(defaultModel(), "claude-opus-5");
   assert.match(
     validateWebTurnModelOptions({ model: id }, null, { anthropic: false, openai: true, openrouter: false }) ?? "",
     /provider isn't configured/,
@@ -127,10 +124,8 @@ test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, an
   assert.equal(safeModelMetadata(id)?.label, "Sonnet 5.5");
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
-  for (const harness of ["pi", "claude"]) {
-    assert.equal(modelSupportedByHarness(id, harness), true);
-    assert.equal(defaultModelForHarness(harness), "claude-opus-5");
-  }
+  assert.equal(modelSupported(id), true);
+  assert.equal(defaultModel(), "claude-opus-5");
 });
 
 test("Haiku 5.5 offers every effort, keeps thinking off available, rejects temperature and fast mode, and leaves defaults alone", () => {
@@ -143,7 +138,7 @@ test("Haiku 5.5 offers every effort, keeps thinking off available, rejects tempe
   assert.equal((model.compat as { forceAdaptiveThinking?: boolean }).forceAdaptiveThinking, true);
   assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
   assert.equal(safeModelMetadata(id)?.label, "Haiku 5.5");
-  assert.deepEqual(safeModelMetadata(id)?.effortLevelsByHarness.pi, [
+  assert.deepEqual(safeModelMetadata(id)?.effortLevels, [
     "auto",
     "default",
     "adaptive",
@@ -156,10 +151,8 @@ test("Haiku 5.5 offers every effort, keeps thinking off available, rejects tempe
   ]);
   assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
-  for (const harness of ["pi", "claude"]) {
-    assert.equal(modelSupportedByHarness(id, harness), true);
-    assert.equal(defaultModelForHarness(harness), "claude-opus-5");
-  }
+  assert.equal(modelSupported(id), true);
+  assert.equal(defaultModel(), "claude-opus-5");
 });
 
 test("FAST_MODE_MODEL_IDS derives from the registry — the web-ui client reads this, keeps no copy", () => {
@@ -177,22 +170,6 @@ test("exposure is provider-key-aware: a model whose provider is unconfigured is 
   assert.equal(modelServiceable("gpt-5.6-sol", noOpenai), false);
   assert.equal(modelServiceable("claude-opus-4-8", noOpenai), true);
   assert.deepEqual(serviceableModelIds(["claude-opus-4-8", "gpt-5.6-sol"], noOpenai), ["claude-opus-4-8"]);
-});
-
-test("provider-key gating applies only to key-authed harnesses (no over-hiding on CLI-auth harnesses)", () => {
-  const noKeys = { anthropic: false, openai: false, openrouter: false };
-  assert.deepEqual(modelProviderAvailabilityFor("pi", noKeys), noKeys);
-  assert.deepEqual(modelProviderAvailabilityFor("pi", noKeys, { anthropic: false, openai: true, openrouter: true }), {
-    anthropic: false,
-    openai: true,
-    openrouter: true,
-  });
-  const all = { anthropic: true, openai: true, openrouter: true, codexOAuth: true };
-  assert.deepEqual(modelProviderAvailabilityFor("claude", noKeys), all);
-  assert.deepEqual(modelProviderAvailabilityFor("pi", noKeys, { ...noKeys, codexOAuth: true }), {
-    ...noKeys,
-    codexOAuth: true,
-  });
 });
 
 test("a company ChatGPT subscription serves OpenAI models that have a subscription alias", () => {

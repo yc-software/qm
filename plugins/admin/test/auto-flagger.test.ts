@@ -10,7 +10,6 @@ test("org governance exposes the Auto quarantine rubric and replay controls", ()
   assert.ok(html.includes('id="card-auto-flagger"'), "Auto flagger editor must exist");
   assert.match(html, /id="card-auto-flagger"/);
   for (const id of [
-    "auto-flagger-harness",
     "auto-flagger-model",
     "auto-flagger-rubric",
     "auto-flagger-test",
@@ -67,7 +66,7 @@ function fixture(data: Record<string, unknown> = {}, scope = "org:example") {
   const elements: Record<string, Element> = {};
   const context = vm.createContext({
     governanceReq: 1,
-    governanceUI: { collect: () => ({ harnessId: "pi", modelId: "model-a", rubric: "Default rubric" }) },
+    governanceUI: { collect: () => ({ modelId: "model-a", rubric: "Default rubric" }) },
     refreshModelChoices: [],
     scope,
     scopeChanged: true,
@@ -80,34 +79,28 @@ function fixture(data: Record<string, unknown> = {}, scope = "org:example") {
   return { elements, context };
 }
 
-const defaults = { harnessId: "pi", modelId: "model-a", rubric: "Default rubric" };
+const defaults = { modelId: "model-a", rubric: "Default rubric" };
 const loadData = {
   autoFlagger: null,
   autoFlaggerDefault: defaults,
-  harnessOptions: ["pi", "claude"],
-  modelsByHarness: {
-    pi: [
-      { id: "model-a", name: "A" },
-      { id: "model-b", name: "B" },
-    ],
-    claude: [{ id: "model-c", name: "C" }],
-  },
+  baseModelOptions: [
+    { id: "model-a", name: "A" },
+    { id: "model-b", name: "B" },
+  ],
 };
 
 const handlersSource = slice('$("auto-flagger-test").onclick =', 'document.querySelectorAll("[data-save]").forEach');
 const summarySource = slice("function autoFlaggerTestSummary(data)", "function sectionButton(key)");
 
-test("loading defaults replaces a previous model and harness selection", () => {
+test("loading defaults replaces a previous model selection", () => {
   load(loadData, "org:example");
   const state = states.get("auto-flagger")!;
   state.change("auto-flagger-model", "model-b");
   load(loadData, "org:example");
   assert.equal(state.draft.modelId, "model-a");
-  state.change("auto-flagger-harness", "claude");
-  assert.equal(state.draft.modelId, "model-c");
 });
 test("unavailable configured flagger stays selectable", () => {
-  load({ ...loadData, autoFlagger: { harnessId: "codex", modelId: "saved-model", rubric: "Saved" } }, "org:example");
+  load({ ...loadData, autoFlagger: { modelId: "saved-model", rubric: "Saved" } }, "org:example");
   const state = states.get("auto-flagger")!;
   assert.equal(state.draft.modelId, "saved-model");
   assert.ok(state.models.some((model) => model.id === "saved-model"));
@@ -122,8 +115,6 @@ test("flagger is visible only for org payloads that support it", () => {
 test("test sends an unsaved draft and comparison window without saving it", async () => {
   const { elements, context } = fixture(loadData);
   vm.runInContext(`${summarySource}\n${handlersSource}`, context);
-  elements["auto-flagger-harness"] = new Element();
-  elements["auto-flagger-harness"].value = "pi";
   elements["auto-flagger-model"] = new Element();
   elements["auto-flagger-model"].value = "model-a";
   elements["auto-flagger-rubric"] = new Element();
@@ -145,7 +136,6 @@ test("test sends an unsaved draft and comparison window without saving it", asyn
       {
         window: 25,
         compare: true,
-        harnessId: "pi",
         modelId: "model-a",
         rubric: "Unsaved draft — café",
       },

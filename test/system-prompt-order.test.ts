@@ -1122,7 +1122,7 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
       });
       assert.equal(prepared.documents?.length, 1);
       assert.equal(activeDocuments.length, 0);
-      return { reply: "", runtimeHandoff: { choice: { harnessId: "pi", modelId: "gpt-6-astra" }, lifetime: "task" } };
+      return { reply: "", runtimeHandoff: { choice: { modelId: "gpt-6-astra" }, lifetime: "task" } };
     }
     assert.equal(turn.documents?.length, 1);
     assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");

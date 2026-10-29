@@ -19,7 +19,7 @@ async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
     ownerScopeId: "personal:U_ALICE",
     schedule: { everyMs: 60_000 },
     action: "read a private dummy account",
-    runtime: { harnessId: "pi", modelId: "gpt-6-luna", effortLevel: "low" },
+    runtime: { modelId: "gpt-6-luna", effortLevel: "low" },
     destination: {
       type: "principal",
       target: "U_BOB",

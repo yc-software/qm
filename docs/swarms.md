@@ -29,7 +29,7 @@ mixed memory/Postgres stores so execution leases and writes share one authority.
 
 ## Agent API
 
-These routes appear in `/v1/apis` and work from every harness that can use QM's
+These routes appear in `/v1/apis` and work from every agent turn that can use QM's
 self-API. Use the existing `x-agent-capability: $AGENT_API_TOKEN` header. Swarm
 operations require a token bound to the current session and a real durable run.
 An agent using a token minted during a human turn is still an **agent**, not a
