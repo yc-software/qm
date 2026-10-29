@@ -126,7 +126,7 @@ export function createSurfaceContextFulfiller(deps: {
     client: any,
     channel: string,
     conversationThreadTs: string | undefined,
-    ref: { ts: string; threadTs?: string; name?: string },
+    ref: { ts: string; threadTs?: string; name?: string; index?: number },
   ): Promise<Record<string, unknown>> {
     const threadTs = typeof ref.threadTs === "string" && ref.threadTs ? ref.threadTs : conversationThreadTs;
     const msg = await findMessageAt(client, channel, ref.ts, threadTs);
@@ -137,21 +137,25 @@ export function createSurfaceContextFulfiller(deps: {
     }
     const files = (msg.files ?? []).filter((f) => f?.id);
     if (!files.length) return { error: "that message has no files attached" };
+    const listing = files.map((f, i) => `${i + 1}. ${slackFileName(f)}`).join(", ");
     let file: SlackFile | undefined;
-    if (ref.name) {
+    if (ref.index !== undefined) {
+      file = files[ref.index - 1];
+      if (!file) return { error: `that message carries ${files.length} file(s) — pick one by position: ${listing}` };
+    } else if (ref.name) {
       const want = ref.name.toLowerCase();
       file =
         files.find((f) => slackFileName(f).toLowerCase() === want) ??
         files.find((f) => slackFileName(f).toLowerCase().includes(want));
       if (!file)
         return {
-          error: `that message has no file matching "${ref.name}" — it carries: ${files.map(slackFileName).join(", ")}`,
+          error: `that message has no file matching "${ref.name}" — it carries: ${listing} (pass a name or a position)`,
         };
     } else if (files.length === 1) {
       file = files[0]!;
     } else {
       return {
-        error: `that message carries ${files.length} files — pass a name: ${files.map(slackFileName).join(", ")}`,
+        error: `that message carries ${files.length} files — pass a name or a position: ${listing}`,
       };
     }
     if (isOversize(file)) return { error: oversizeMsg(slackFileName(file)) };

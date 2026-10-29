@@ -1,0 +1,340 @@
+import "./support/auto-fake-sprites.ts";
+
+import { describe, it, test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { deflateSync } from "node:zlib";
+import { buildApp } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
+import type { TurnRequest } from "../src/types.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
+import { MAX_THREAD_STARTER_IMAGES, threadStarterImages } from "../src/slack/turn-handler.ts";
+import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { createSlackHistoryReader } from "../src/slack/history.ts";
+import { createConversationSerializer } from "../src/slack/conversation-view.ts";
+import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import { encodeTs } from "../src/slack/reactions.ts";
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+function crc32(buf: Buffer): number {
+  let c = ~0;
+  for (const b of buf) {
+    c ^= b;
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return ~c >>> 0;
+}
+
+function chunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+}
+
+function tinyPng(): Buffer {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(1, 0);
+  ihdr.writeUInt32BE(1, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(Buffer.from([0, 255, 0, 0]))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function freshApp() {
+  return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-threadfiles-")) }));
+}
+
+const actor = { externalId: "U1", displayName: "Ada" };
+
+function mention(text: string, channel: string, root: string): TurnRequest {
+  return {
+    surface: "slack",
+    actor,
+    conversation: { kind: "channel", threadRef: `ch:${channel}:${root}`, channelRef: channel, audience: [actor] },
+    deliveryTarget: `${channel}:${root}`,
+    text,
+    liveActor: true,
+    async: true,
+  };
+}
+
+async function reply(built: any, root: string): Promise<string> {
+  const deadline = Date.now() + 6_000;
+  while (Date.now() < deadline) {
+    const sub = await built.sessions.getByThread(`ch:${root}`);
+    if (sub) {
+      const entries = await built.sessions.getEntries(sub.id);
+      const hit = entries.find((e: any) => e.type === "assistant" && typeof e.payload?.text === "string");
+      if (hit) return hit.payload.text as string;
+    }
+    await sleep(50);
+  }
+  throw new Error("no assistant reply");
+}
+
+function fulfill(app: any, answer: (query: any) => unknown) {
+  const queries: any[] = [];
+  let running = true;
+  const loop = (async () => {
+    while (running) {
+      for (const r of await app.pendingContextRequests("slack")) {
+        queries.push(r.query);
+        await app.fulfillContextRequest(r.id, { result: answer(r.query) });
+      }
+      await sleep(20);
+    }
+  })();
+  return {
+    queries,
+    stop: async () => {
+      running = false;
+      await loop;
+    },
+  };
+}
+
+test("read_file opens a file on another message by its ts and returns an image the model can see", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  const png = await built.blobTransfer.put(tinyPng());
+  const surface = fulfill(built.app, (q) =>
+    q.file
+      ? { messages: [], file: { blobId: png.blobId, name: "image.png", mimetype: "image/png", sizeBytes: 1 } }
+      : { messages: [] },
+  );
+  try {
+    await built.app.turn(mention("!read_file 1793211763.548069 2", "C20", "2000.1"));
+    assert.match(await reply(built, "C20:2000.1"), /^file-image: image\.png image\/png \d+/);
+    assert.deepEqual(surface.queries[0].file, { ts: "1793211763.548069", index: 2 });
+    assert.equal(surface.queries[0].conversationTarget, "C20:2000.1");
+
+    await built.app.turn(mention(`!read_file ${encodeTs("1793211763.548069")} image.png`, "C21", "2100.1"));
+    assert.match(await reply(built, "C21:2100.1"), /^file-image:/);
+    assert.deepEqual(surface.queries[1].file, { ts: "1793211763.548069", name: "image.png" });
+
+    await built.app.turn(mention(`!read_file ${png.blobId}`, "C22", "2200.1"));
+    assert.match(await reply(built, "C22:2200.1"), /^file-image:/, "a staged image blob is shown, not just pointed at");
+
+    await built.app.turn(mention("!read_file image.png", "C23", "2300.1"));
+    assert.match(await reply(built, "C23:2300.1"), /couldn't read file.*`ts` of the message.*\/v1\/surface-file/);
+  } finally {
+    await surface.stop();
+    await built.runtime.stop();
+  }
+});
+
+test("read_file passes a surface error through instead of claiming success", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  let n = 0;
+  const loop = (async () => {
+    while (n < 1) {
+      for (const r of await built.app.pendingContextRequests("slack")) {
+        n++;
+        await built.app.fulfillContextRequest(r.id, {
+          error: "that message carries 2 files — pass a name or a position",
+        });
+      }
+      await sleep(20);
+    }
+  })();
+  try {
+    await built.app.turn(mention("!read_file 1793211763.548069", "C24", "2400.1"));
+    assert.match(await reply(built, "C24:2400.1"), /couldn't read file\] that message carries 2 files/);
+  } finally {
+    n = 1;
+    await loop;
+    await built.runtime.stop();
+  }
+});
+
+test("read_thread tells the model how to open files it sees", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  const surface = fulfill(built.app, () => ({
+    messages: [{ ts: "2500.1", author: "eric", text: ":thinking:", files: ["image.png", "image.png"] }],
+  }));
+  try {
+    await built.app.turn(mention("!read_thread", "C25", "2500.1"));
+    assert.match(await reply(built, "C25:2500.1"), /read 1 message\(s\) — .*read_file: ref = that message's ts/);
+  } finally {
+    await surface.stop();
+    await built.runtime.stop();
+  }
+});
+
+test("the slack tool returns an image block for an image file and forwards name", async () => {
+  const calls: unknown[][] = [];
+  const tc = {
+    readFile: async (...args: unknown[]) => {
+      calls.push(args);
+      return { ok: true, name: "image.png", sizeBytes: 10, image: { data: "AAAA", mimeType: "image/png" } };
+    },
+  };
+  const ref = { current: tc } as unknown as ToolContextRef;
+  const tool: any = createAgentTools(ref, { surfaceTools: true }).find((t) => t.name === "slack");
+  const out = await tool.execute("c1", { action: "read_file", ref: "1793211763.548069", name: "2" });
+  assert.deepEqual(calls, [["1793211763.548069", "2"]]);
+  assert.deepEqual(out.content[1], { type: "image", data: "AAAA", mimeType: "image/png" });
+});
+
+describe("the Slack surface fetching a file from a message", () => {
+  function fulfiller(files: unknown[]) {
+    const fulfilled: Array<{ id: string; outcome: any }> = [];
+    const fetched: string[] = [];
+    const core = {
+      fulfillContextRequest: async (id: string, outcome: unknown) => void fulfilled.push({ id, outcome }),
+      stageBlob: async (bytes: Uint8Array) => ({ blobId: `blob-${bytes.length}` }),
+    };
+    const client = {
+      conversations: {
+        replies: async () => ({ messages: [{ ts: "100.000001", files }] }),
+        history: async () => ({ messages: [] }),
+      },
+    };
+    const f = createSurfaceContextFulfiller({
+      core: core as never,
+      directory: {} as never,
+      serializer: {} as never,
+      botToken: "xoxb-test",
+      clientOptions: {},
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      fetched.push(url);
+      return new Response(new Uint8Array(url.endsWith("/b") ? 7 : 3), { headers: { "content-type": "image/png" } });
+    }) as typeof fetch;
+    const run = (file: Record<string, unknown>) =>
+      f.fulfillSurfaceContext(client, {
+        id: "r",
+        source: "slack",
+        createdAt: Date.now(),
+        status: "pending",
+        query: { count: 1, conversationTarget: "C1:100.000001", file: { ts: "100.000001", ...file } },
+      } as never);
+    return { run, fulfilled, fetched, restore: () => void (globalThis.fetch = realFetch) };
+  }
+  const twins = [
+    { id: "F1", name: "image.png", mimetype: "image/png", url_private: "https://files.slack.com/a" },
+    { id: "F2", name: "image.png", mimetype: "image/png", url_private: "https://files.slack.com/b" },
+  ];
+
+  it("picks a same-named file by position", async () => {
+    const t = fulfiller(twins);
+    try {
+      await t.run({ index: 2 });
+      assert.deepEqual(t.fetched, ["https://files.slack.com/b"]);
+      assert.equal(t.fulfilled[0]!.outcome.result.file.blobId, "blob-7");
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("lists files with positions when it can't tell which one is meant", async () => {
+    const t = fulfiller(twins);
+    try {
+      await t.run({});
+      assert.match(
+        t.fulfilled[0]!.outcome.error,
+        /carries 2 files — pass a name or a position: 1\. image\.png, 2\. image\.png/,
+      );
+      await t.run({ index: 3 });
+      assert.match(t.fulfilled[1]!.outcome.error, /pick one by position/);
+      assert.deepEqual(t.fetched, []);
+    } finally {
+      t.restore();
+    }
+  });
+});
+
+describe("thread starter images", () => {
+  const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
+  const directory = {
+    classifyUserCached: async (_c: unknown, user: string) => ({ actor: { displayName: user } }),
+  } as unknown as Directory;
+  const noLiveReads = {
+    conversations: {
+      history: async () => Promise.reject(new Error("unexpected history read")),
+      replies: async () => Promise.reject(new Error("unexpected replies read")),
+    },
+  };
+  const img = (id: string) => ({ fileId: id, name: "image.png", mimetype: "image/png" });
+
+  async function viewFor(events: Parameters<ReturnType<typeof createMemorySurfaceCache>["ingest"]>[0], ts: string) {
+    const cache = createMemorySurfaceCache();
+    await cache.ingest(events);
+    const core = {
+      readSurfaceMessages: cache.readMessages,
+      rememberSurfaceHistory: async (e: never) => void (await cache.ingest(e)),
+    } as unknown as SlackCoreClient;
+    const serializer = createConversationSerializer({
+      ids,
+      directory,
+      externalParticipantsEnabled: async () => false,
+      readHistory: createSlackHistoryReader({ core, ids, managed: true, setupUrl: "https://qm.test" }),
+    });
+    const { view } = await serializer.serializeSlackConversation(
+      noLiveReads,
+      {
+        kind: "channel",
+        channel: "C1",
+        ts,
+        threadTs: "300.000001",
+        rawText: "@qm why did we get this?",
+        userId: "U2",
+        files: [],
+      },
+      { audience: [] },
+    );
+    return view;
+  }
+
+  it("brings the starter's images (capped, attributed) when QM is first pulled into the thread", async () => {
+    const view = await viewFor(
+      [
+        {
+          container: "C1",
+          ts: "300.000001",
+          text: ":thinking:",
+          authorId: "U-eric",
+          files: [
+            img("A"),
+            { fileId: "P", name: "doc.pdf", mimetype: "application/pdf" },
+            ...["B", "C", "D", "E"].map(img),
+          ],
+        },
+      ],
+      "300.000002",
+    );
+    const got = threadStarterImages(view);
+    assert.deepEqual(
+      got.map((f) => f.id),
+      ["A", "B", "C", "D"].slice(0, MAX_THREAD_STARTER_IMAGES),
+    );
+    assert.ok(got.every((f) => f.user === "U-eric"));
+  });
+
+  it("skips threads QM has already spoken in", async () => {
+    const view = await viewFor(
+      [
+        { container: "C1", ts: "300.000001", text: ":thinking:", authorId: "U-eric", files: [img("A")] },
+        { container: "C1", ts: "300.000002", sub: "300.000001", text: "earlier answer", self: true },
+      ],
+      "300.000003",
+    );
+    assert.deepEqual(threadStarterImages(view), []);
+  });
+});

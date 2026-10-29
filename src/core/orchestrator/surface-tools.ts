@@ -39,6 +39,7 @@ import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surfac
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { adminSessionUrl } from "../../util/admin-links.ts";
+import { downscaleVisionImage, sniffImageDimensions } from "../image-downscale.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
@@ -46,6 +47,36 @@ const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
 const SURFACE_FILE_MAX_CHARS = 100_000;
+const SLACK_TS = /^\d{9,11}\.\d{6}$/;
+const READ_FILE_REF_HELP =
+  "that doesn't look like a file reference — pass the `ts` of the message carrying the file (shown on each message by read_thread and in the conversation context), plus `name` (or position) when it carries several. From your computer, POST $AGENT_API_URL/v1/surface-file fetches the same files.";
+const MAX_INLINE_IMAGE_BYTES = 3_750_000;
+const FILE_HINT =
+  "A message's `files` can be opened with read_file: ref = that message's ts, plus name (or position) when it carries several.";
+
+function fileSelector(wanted: string | undefined): { name?: string; index?: number } {
+  if (!wanted) return {};
+  if (/^#?\d{1,3}$/.test(wanted)) return { index: Number(wanted.replace("#", "")) };
+  return { name: wanted };
+}
+
+// Conversation context tags messages with a compact id (`~` + base-36 of ts in microseconds).
+function messageTsFromRef(ref: string): string {
+  const m = /^~([0-9a-z]+)$/.exec(ref);
+  if (!m) return ref;
+  const packed = parseInt(m[1]!, 36);
+  if (!Number.isSafeInteger(packed) || packed <= 0) return ref;
+  return `${Math.floor(packed / 1_000_000)}.${String(packed % 1_000_000).padStart(6, "0")}`;
+}
+
+async function surfaceFileImage(bytes: Buffer): Promise<{ data: string; mimeType: string } | undefined> {
+  const format = sniffImageDimensions(bytes)?.format;
+  if (!format) return undefined;
+  const mimeType = `image/${format}`;
+  const scaled = Buffer.from(await downscaleVisionImage(bytes, mimeType));
+  if (scaled.length > MAX_INLINE_IMAGE_BYTES) return undefined;
+  return { data: scaled.toString("base64"), mimeType };
+}
 
 export interface SpineState {
   surfaceOutboundCount: number;
@@ -315,7 +346,11 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
       if (result.note && !result.messages?.length) return { ok: false, message: result.note };
-      return { ok: true, messages: result.messages, ...(result.note ? { message: result.note } : {}) };
+      const hasFiles = (result.messages ?? []).some(
+        (m) => Array.isArray((m as { files?: unknown[] })?.files) && (m as { files: unknown[] }).files.length > 0,
+      );
+      const message = [result.note, hasFiles ? FILE_HINT : undefined].filter(Boolean).join(" ");
+      return { ok: true, messages: result.messages, ...(message ? { message } : {}) };
     },
     whatsNew: async (opts?: { since?: string }) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
@@ -461,16 +496,34 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       if (!roster.length) return { ok: true, members: [] };
       return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
     },
-    readFile: async (ref: string) => {
-      const id = ref.trim();
-      if (!/^[0-9a-f]{32}$/.test(id))
-        return {
-          ok: false,
-          message: "that doesn't look like a file I can read — pass the reference shown next to the file in a thread.",
-        };
+    readFile: async (ref: string, name?: string) => {
+      const id = messageTsFromRef(ref.trim());
+      let blobId: string | undefined;
+      let fileName: string | undefined;
+      let mimetype: string | undefined;
+      if (/^[0-9a-f]{32}$/.test(id)) {
+        blobId = id;
+      } else if (SLACK_TS.test(id)) {
+        if (!deps.surfaceContext) return { ok: false, message: "files can't be fetched from this turn" };
+        if (!currentDestination.target)
+          return { ok: false, message: "this conversation has no messages to read files from" };
+        const wanted = name?.trim();
+        const result = await deps.surfaceContext.pull(input.surface ?? "unknown", {
+          conversationTarget: currentDestination.target,
+          viewer: actor.id,
+          ...rateLimitRecipient,
+          count: 1,
+          file: { ts: id, ...fileSelector(wanted) },
+        });
+        if (!result) return { ok: false, message: "the surface didn't answer in time — try again" };
+        if (!result.file) return { ok: false, message: result.note ?? "I couldn't fetch a file from that message." };
+        ({ blobId, name: fileName, mimetype } = result.file);
+      } else {
+        return { ok: false, message: READ_FILE_REF_HELP };
+      }
       let blob;
       try {
-        blob = await blobTransfer.open(id);
+        blob = await blobTransfer.open(blobId);
       } catch (e) {
         return { ok: false, message: errMessage(e) };
       }
@@ -483,12 +536,15 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         };
       }
       const bytes = await collectBlob(blob.stream);
+      const meta = { sizeBytes: blob.sizeBytes, ...(fileName ? { name: fileName } : {}) };
+      const image = await surfaceFileImage(bytes);
+      if (image) return { ok: true, ...meta, contentType: image.mimeType, image };
       if (!headLooksLikeText(bytes.subarray(0, 8000)))
-        return { ok: true, sizeBytes: blob.sizeBytes, contentType: "application/octet-stream" };
+        return { ok: true, ...meta, contentType: mimetype ?? "application/octet-stream" };
       const decoded = bytes.toString("utf8");
       const content =
         decoded.length > SURFACE_FILE_MAX_CHARS ? `${decoded.slice(0, SURFACE_FILE_MAX_CHARS)}…[truncated]` : decoded;
-      return { ok: true, content, sizeBytes: blob.sizeBytes };
+      return { ok: true, content, ...meta };
     },
     getStandingOrder: async () => {
       if (!deps.channelPolicy) return { ok: false, message: "standing orders aren't available on this turn" };

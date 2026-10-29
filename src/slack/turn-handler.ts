@@ -51,6 +51,7 @@ import {
   refusalDelivery,
   refusalNote,
   renderConversationView,
+  type ConversationView,
   resolveMentions,
   resolveReactionTargets,
   shouldSurfaceReaction,
@@ -124,6 +125,20 @@ function channelLocation(
 ): string {
   if (conversationKind === "group") return "a group direct message";
   return channelName ? `#${channelName}` : `channel ${channel}`;
+}
+
+export const MAX_THREAD_STARTER_IMAGES = 4;
+const THREAD_STARTER_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+// When someone addresses QM in a reply under a post that carries screenshots
+// ("why did we all get this email?"), those images are usually what the question
+// is about. Only the triggering message's own files are downloaded otherwise, so
+// bring the starter's images along the first time QM is pulled into the thread.
+export function threadStarterImages(view: Pick<ConversationView, "messages" | "starterFiles">): SlackFile[] {
+  if (!view.starterFiles?.length || view.messages.some((m) => m.isSelf)) return [];
+  return view.starterFiles
+    .filter((f) => f.id && THREAD_STARTER_IMAGE_TYPES.has(String(f.mimetype ?? "")))
+    .slice(0, MAX_THREAD_STARTER_IMAGES);
 }
 
 export function createTurnHandler(deps: {
@@ -448,6 +463,7 @@ export function createTurnHandler(deps: {
     let overheard: OverheardMessage[] | undefined;
     let detectContext: string | undefined;
     let detectOpener: string | undefined;
+    let serializedView: ConversationView | undefined;
     if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
       const serialize = () =>
         serializer.serializeSlackConversation(client, inc, {
@@ -466,6 +482,7 @@ export function createTurnHandler(deps: {
             serialize,
           )
         : await serialize();
+      serializedView = serialized.view;
       const rendered = renderConversationView(serialized.view);
       if (rendered.header) conversationHeader = rendered.header;
       if (rendered.priorTurns.length) priorTurns = rendered.priorTurns;
@@ -476,13 +493,17 @@ export function createTurnHandler(deps: {
     }
 
     const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
-    const inboundFiles = await hydrateSlackFiles(ownFiles, async (id) => {
+    const starterImages =
+      inc.kind === "channel" && !inc.unprompted && !inc.synthetic && !ownFiles.length && serializedView
+        ? threadStarterImages(serializedView)
+        : [];
+    const inboundFiles = await hydrateSlackFiles([...ownFiles, ...starterImages], async (id) => {
       const response = await client.files.info({ file: id });
       return response?.file as SlackFile | undefined;
     });
     const resolveFileAuthor = async (userId: string | undefined): Promise<string | undefined> =>
       userId ? (await classifyUserCached(client, userId)).actor.displayName : undefined;
-    const { attachments, issues } = await processInboundFiles(
+    const { attachments, issues: fileIssues } = await processInboundFiles(
       inboundFiles,
       (f) =>
         downloadSlackFile(f, {
@@ -492,6 +513,8 @@ export function createTurnHandler(deps: {
       (bytes) => core.stageBlob(bytes),
       resolveFileAuthor,
     );
+    // Starter images are a best-effort extra; a failed fetch shouldn't surface as an error about the asker's message.
+    const issues = starterImages.length ? [] : fileIssues;
 
     if (inc.unprompted && !text.trim() && attachments.length === 0) return;
 

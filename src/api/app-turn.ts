@@ -518,7 +518,7 @@ export function createTurnMethods(
           }
           const fileNames = (req.attachments ?? []).map((a) =>
             a.sourceId
-              ? `${a.name} (fetch via surface-file, ts ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs})`
+              ? `${a.name} (open with read_file ref ${origin.kind === "human" ? (origin.messageTs ?? origin.entryTs) : origin.entryTs}, or POST /v1/surface-file to save it on your computer)`
               : a.name,
           );
           const wake: Wake = {

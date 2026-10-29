@@ -538,7 +538,7 @@ export interface SurfaceContextQuery {
   live?: boolean;
   searchAll?: string;
   viewerToken?: string;
-  file?: { ts: string; threadTs?: string; name?: string };
+  file?: { ts: string; threadTs?: string; name?: string; index?: number };
   openGroup?: { participants: string[] };
   syncDirectory?: boolean;
 }
