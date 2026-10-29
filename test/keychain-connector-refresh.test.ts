@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createKeychain, type KeychainCredential, type OAuthRefresh } from "../src/credentials/keychain.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import type { DurableMap } from "../src/persistence/durable-map.ts";
+import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { decryptSecret, deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 
 const KEY = deriveConnectorKey("keychain-refresh-test-key");
@@ -11,8 +12,8 @@ const HOST = "gmail.googleapis.com";
 function keychain(creds: DurableMap<KeychainCredential>, lock: AdvisoryLock, refreshConnector: OAuthRefresh) {
   return createKeychain({
     creds,
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
     lock,
     refreshConnector,
@@ -41,8 +42,8 @@ const storedRefreshToken = async (creds: DurableMap<KeychainCredential>) => {
 };
 
 test("processes sharing a store refresh a rotating token once and keep the live refresh token", async () => {
-  const creds = createMemoryMap<KeychainCredential>();
-  const lock = createMemoryAdvisoryLock();
+  const creds = testMap<KeychainCredential>();
+  const lock = testAdvisoryLock();
   const provider = rotatingProvider();
   const a = keychain(creds, lock, provider.refresh);
   const b = keychain(creds, lock, provider.refresh);
@@ -55,8 +56,8 @@ test("processes sharing a store refresh a rotating token once and keep the live 
 });
 
 test("a reconnect that lands during a refresh is not overwritten by the refreshed token", async () => {
-  const creds = createMemoryMap<KeychainCredential>();
-  const lock = createMemoryAdvisoryLock();
+  const creds = testMap<KeychainCredential>();
+  const lock = testAdvisoryLock();
   const refresh: OAuthRefresh = async () => {
     await k.setConnectorToken(HOST, "U1", { accessToken: "reconnected", refreshToken: "rt-new" });
     return { accessToken: "refreshed", refreshToken: "rt-stale", expiresAt: Date.now() + 3_600_000 };
@@ -68,8 +69,8 @@ test("a reconnect that lands during a refresh is not overwritten by the refreshe
 });
 
 test("recording a refresh failure never overwrites a rotation that landed concurrently", async () => {
-  const inner = createMemoryMap<KeychainCredential>();
-  const lock = createMemoryAdvisoryLock();
+  const inner = testMap<KeychainCredential>();
+  const lock = testAdvisoryLock();
   let rotateBeforeWrite = false;
   const rotate = async () => {
     if (!rotateBeforeWrite) return;
@@ -99,8 +100,8 @@ test("recording a refresh failure never overwrites a rotation that landed concur
 });
 
 test("a failed refresh inside the margin falls back to the still-valid access token", async () => {
-  const creds = createMemoryMap<KeychainCredential>();
-  const k = keychain(creds, createMemoryAdvisoryLock(), async () => {
+  const creds = testMap<KeychainCredential>();
+  const k = keychain(creds, testAdvisoryLock(), async () => {
     throw new Error("provider unavailable");
   });
   await k.setConnectorToken(HOST, "U1", {
@@ -118,12 +119,12 @@ test("a failed refresh inside the margin falls back to the still-valid access to
 
 test("a refresh that cannot take its lock still serves the unexpired token", async () => {
   const lock: AdvisoryLock = {
-    ...createMemoryAdvisoryLock(),
+    ...testAdvisoryLock(),
     withLock: async () => {
       throw new Error("timeout acquiring advisory lock");
     },
   };
-  const k = keychain(createMemoryMap<KeychainCredential>(), lock, async () => ({ accessToken: "unused" }));
+  const k = keychain(testMap<KeychainCredential>(), lock, async () => ({ accessToken: "unused" }));
   await k.setConnectorToken(HOST, "U1", {
     accessToken: "still-valid",
     refreshToken: "rt",

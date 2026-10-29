@@ -4,6 +4,7 @@ import { createLoopStore } from "../src/loops/loop-store.ts";
 import { buildShipGrant, decideShip, graduationAllowed, undeclaredShipActions } from "../src/loops/ship-gate.ts";
 import { scopeId } from "../src/types.ts";
 import type { Loop } from "../src/loops/types.ts";
+import { testMap } from "./support/test-database.ts";
 
 const base = {
   owner: "U1",
@@ -15,7 +16,7 @@ const base = {
 };
 
 async function loopWith(shipActions: Loop["shipActions"]): Promise<Loop> {
-  return createLoopStore()
+  return createLoopStore(testMap())
     .create({ ...base, shipActions })
     .then(({ loop }) => loop);
 }

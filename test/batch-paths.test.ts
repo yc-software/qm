@@ -2,12 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { scopeId } from "../src/types.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 for (const backend of ["memory", "postgres"] as const) {
   const skip = backend === "postgres" && !process.env.DATABASE_URL;
@@ -16,8 +15,7 @@ for (const backend of ["memory", "postgres"] as const) {
     { skip },
     async () => {
       const factory = backend === "postgres" ? createPostgresMapFactory(process.env.DATABASE_URL!) : null;
-      const map =
-        factory?.map<{ n: number }>(`batch_${randomUUID().replaceAll("-", "")}`) ?? createMemoryMap<{ n: number }>();
+      const map = factory?.map<{ n: number }>(`batch_${randomUUID().replaceAll("-", "")}`) ?? testMap<{ n: number }>();
       try {
         const increment = (value: { n: number } | null) => ({ n: (value?.n ?? 0) + 1 });
         assert.deepEqual(
@@ -67,7 +65,9 @@ for (const backend of ["memory", "postgres"] as const) {
 
   test(`batch appends keep order, roll back atomically and check leases: ${backend}`, { skip }, async () => {
     const store =
-      backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
+      backend === "memory"
+        ? createPostgresSessionStore(testDatabaseUrl())
+        : createPostgresSessionStore(process.env.DATABASE_URL!);
     const scope = scopeId("personal", "batch");
     for (let i = 0; i < 2; i++) {
       const session = await store.getOrCreateByThread(`web:batch:${randomUUID()}`, "dm", scope);
@@ -115,7 +115,9 @@ for (const backend of ["memory", "postgres"] as const) {
   });
   test(`session goals live on the session row behind its lease: ${backend}`, { skip }, async () => {
     const store =
-      backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(process.env.DATABASE_URL!);
+      backend === "memory"
+        ? createPostgresSessionStore(testDatabaseUrl())
+        : createPostgresSessionStore(process.env.DATABASE_URL!);
     const scope = scopeId("personal", "batch");
     const goal = (objective: string) => ({
       objective,
@@ -159,7 +161,10 @@ for (const backend of ["memory", "postgres"] as const) {
   });
 
   test(`latest runs batch matches single reads including private messages and ties: ${backend}`, { skip }, async () => {
-    const runtime = backend === "memory" ? createMemoryRunStore() : createPostgresRunStore(process.env.DATABASE_URL!);
+    const runtime =
+      backend === "memory"
+        ? createPostgresRunStore(testDatabaseUrl())
+        : createPostgresRunStore(process.env.DATABASE_URL!);
     const { runs } = runtime;
     const ids = [`batch:${randomUUID()}`, `batch:${randomUUID()}`];
     const actor = { id: "internal:batch", type: "internal" as const };

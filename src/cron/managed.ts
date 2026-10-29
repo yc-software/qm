@@ -21,7 +21,6 @@ export async function claimManagedCron<T extends ManagedCronClaim>(
   input: CreateCronInput,
   fields: (cron: Cron) => Partial<T> = () => ({}),
 ): Promise<T> {
-  if (!deps.store.update) throw new Error("Managed crons require an atomic profile store");
   const existing = await deps.store.get(key);
   if (existing?.cronId) return existing.arming ? arm(deps, key, existing.cronId) : existing;
   const cron = await deps.crons.create({ ...input, enabled: false });
@@ -37,7 +36,7 @@ export async function claimManagedCron<T extends ManagedCronClaim>(
 async function arm<T extends ManagedCronClaim>(deps: ManagedCronDeps<T>, key: string, cronId: string): Promise<T> {
   await deps.crons.setEnabled(cronId, true);
   deps.scheduler.notifyChanged(cronId);
-  const armed = await deps.store.update!(key, ({ arming: _arming, ...value }) => value as T);
+  const armed = await deps.store.update(key, ({ arming: _arming, ...value }) => value as T);
   if (!armed) throw new Error(`managed cron profile ${key} disappeared while arming`);
   return armed;
 }

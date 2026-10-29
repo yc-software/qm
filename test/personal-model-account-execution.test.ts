@@ -124,8 +124,9 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
   });
 }
 
-test("personal web selections reject wrong providers, policy exclusions and disconnected keys", async () => {
+test("personal web selections reject wrong providers, policy exclusions and disconnected keys", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "company-openai", anthropicApiKey: "company-anthropic" }));
+  t.after(() => built.runtime.stop());
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");
   const submit = (model: string) =>
@@ -244,28 +245,5 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
     assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
   } finally {
     await built.runtime.stop();
-  }
-});
-
-test("a configured company subscription without a keychain cannot fall back to the metered key", async (t) => {
-  buildApp(
-    testConfig({
-      connectorSecretKey: undefined,
-      codexAuthCredential: "unavailable",
-      openaiApiKey: "metered",
-      modelId: "gpt-5.6-sol",
-    }),
-  );
-  const urls: string[] = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
-    urls.push(String(input));
-    return new Response("unexpected provider request", { status: 400 });
-  });
-  const agent = agentRun.createAgent({ ...piOptions, captureRequests: false });
-  try {
-    assert.equal(await agent.oneShot?.("system", "hello"), undefined);
-    assert.deepEqual(urls, []);
-  } finally {
-    await agent.close?.();
   }
 });

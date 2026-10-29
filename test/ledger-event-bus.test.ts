@@ -6,44 +6,25 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import {
-  createMemoryLedgerEventBus,
-  createPostgresLedgerEventBus,
-  type OwnedLedgerEvent,
-} from "../src/loops/ledger-events.ts";
+import { createPostgresLedgerEventBus, type OwnedLedgerEvent } from "../src/loops/ledger-events.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-
-const PG = process.env.DATABASE_URL;
-const pgSkip = PG ? false : "set DATABASE_URL to run the Postgres ledger-event bus test";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 function event(over: Partial<OwnedLedgerEvent> = {}): OwnedLedgerEvent {
   return { loopId: "loop-1", itemId: "item-1", op: "ingest", at: 111, owner: "josh", ...over };
 }
 
-test("memory bus: subscribers receive emitted events and unsubscribe cleanly", () => {
-  const bus = createMemoryLedgerEventBus();
-  const got: OwnedLedgerEvent[] = [];
-  const off = bus.subscribe((e) => got.push(e));
-  bus.emit(event());
-  bus.emit(event({ op: "action", at: 222 }));
-  assert.deepEqual(
-    got.map((e) => e.op),
-    ["ingest", "action"],
-  );
-  off();
-  bus.emit(event({ op: "reopen" }));
-  assert.equal(got.length, 2, "an unsubscribed listener hears nothing");
-});
-
-test("[postgres] ledger events cross bus instances (pg_notify)", { skip: pgSkip }, async () => {
-  const a = createPostgresLedgerEventBus(PG!);
-  const b = createPostgresLedgerEventBus(PG!);
+test("ledger events cross bus instances and an unsubscribed listener hears nothing more", async () => {
+  const url = testDatabaseUrl();
+  const a = createPostgresLedgerEventBus(url);
+  const b = createPostgresLedgerEventBus(url);
   try {
     const got: OwnedLedgerEvent[] = [];
+    let off = (): void => {};
     const ready = new Promise<void>((resolve) => {
-      b.subscribe((e) => {
+      off = b.subscribe((e) => {
         if (e.loopId === "loop-xbus") {
           got.push(e);
           resolve();
@@ -64,6 +45,12 @@ test("[postgres] ledger events cross bus instances (pg_notify)", { skip: pgSkip 
     assert.equal(got[0]?.op, "shipped");
     assert.equal(got[0]?.owner, "ada");
     assert.equal(got[0]?.at, 42);
+    off();
+    await new Promise((r) => setTimeout(r, 300));
+    const heard = got.length;
+    a.emit(event({ loopId: "loop-xbus", op: "reopen" }));
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(got.length, heard, "an unsubscribed listener hears nothing");
   } finally {
     await a.close?.();
     await b.close?.();
@@ -101,7 +88,7 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
       if (done) break;
       buf += new TextDecoder().decode(value);
       for (const chunk of buf.split("\n\n")) {
-        if (!chunk.includes("event: loop_item")) continue;
+        if (!chunk.split("\n").includes("event: loop_item")) continue;
         const data = chunk
           .split("\n")
           .find((l) => l.startsWith("data: "))

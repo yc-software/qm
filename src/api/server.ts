@@ -479,12 +479,11 @@ type ServerOptions = Omit<ServerDeps, "control">;
 
 function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
   const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
-  const auth = deps.signingSecret
-    ? createSourceAuth({
-        signingSecret: deps.signingSecret,
-        ...(deps.replayDedupe ? { dedupe: deps.replayDedupe } : {}),
-      })
-    : null;
+  if (deps.signingSecret && !deps.replayDedupe) throw new Error("source auth requires a replay dedupe store");
+  const auth =
+    deps.signingSecret && deps.replayDedupe
+      ? createSourceAuth({ signingSecret: deps.signingSecret, dedupe: deps.replayDedupe })
+      : null;
   const wiring: Wiring = {
     app,
     deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },

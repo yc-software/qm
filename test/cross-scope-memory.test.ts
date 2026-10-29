@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { recallAcrossScopes, renderRecall, searchAcrossScopes } from "../src/memory/cross-scope.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const AT = Date.parse("2026-10-01T12:00:00Z");
 
@@ -16,7 +17,7 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const dir = await mkdtemp(join(tmpdir(), "cross-memory-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const workspace = createLocalWorkspaceStore(dir);
-  const base = createMemoryService(workspace);
+  const base = createPostgresMemoryService(testDatabaseUrl());
   const calls: string[][] = [];
   const memory = createSemanticMemoryService(
     base,
@@ -126,10 +127,10 @@ test("grep interleaves notebooks and scope-targeted queries can reach later resu
   await base.capture("channel:b", ["match remote"], AT);
   assert.deepEqual(await searchAcrossScopes(base, ["personal:a", "channel:b"], "match", 2), [
     { scopeId: "personal:a", fact: "#1 (2026-10-01) match local 0" },
-    { scopeId: "channel:b", fact: "#1 (2026-10-01) match remote" },
+    { scopeId: "channel:b", fact: "#51 (2026-10-01) match remote" },
   ]);
   assert.deepEqual(await searchAcrossScopes(base, ["channel:b"], "match", 2), [
-    { scopeId: "channel:b", fact: "#1 (2026-10-01) match remote" },
+    { scopeId: "channel:b", fact: "#51 (2026-10-01) match remote" },
   ]);
 });
 

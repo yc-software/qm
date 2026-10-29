@@ -23,6 +23,7 @@ export interface SuggestedActivityProfile extends ManagedCronClaim {
   timezone: string;
   lastSeenAt: number;
   lastBootstrapAt?: number;
+  dismissalRefreshAt?: number;
   managedAction?: string;
   seeds?: SuggestedActivity[];
   dismissed?: DismissedActivity[];
@@ -141,8 +142,30 @@ export function createSuggestedActivityService(deps: {
       let pending = runs.some((run) => run.status === "running");
       const dismissedAt = Math.max(0, ...(profile.dismissed ?? []).map((entry) => entry.at));
       if ((refresh || !poll) && !pending && cron.enabled && dismissedAt > (runs.at(-1)?.firedAt ?? 0)) {
-        const result = await deps.scheduler.runNow(cron.id);
-        pending = result.started || result.reason === "already_running";
+        let won = false;
+        await deps.store.update(principalId, (value) => {
+          won = (value.dismissalRefreshAt ?? 0) < dismissedAt;
+          return won ? { ...value, dismissalRefreshAt: dismissedAt } : value;
+        });
+        if (!won) pending = true;
+        else {
+          const release = async () => {
+            await deps.store.update(principalId, (value) =>
+              value.dismissalRefreshAt === dismissedAt ? { ...value, dismissalRefreshAt: 0 } : value,
+            );
+          };
+          const result = await deps.scheduler.runNow(cron.id).catch(async (err: unknown) => {
+            await release().catch((releaseErr: unknown) => {
+              throw new AggregateError(
+                [err, releaseErr],
+                "runNow failed and releasing the dismissal refresh claim failed",
+              );
+            });
+            throw err;
+          });
+          pending = result.started || result.reason === "already_running";
+          if (!pending) await release();
+        }
       } else if (
         !pending &&
         cron.enabled &&
@@ -150,7 +173,7 @@ export function createSuggestedActivityService(deps: {
         (profile.lastBootstrapAt ?? 0) <= now() - REFRESH_AFTER_MS
       ) {
         const timestamp = now();
-        const claimed = await deps.store.update?.(principalId, (value) =>
+        const claimed = await deps.store.update(principalId, (value) =>
           (value.lastBootstrapAt ?? 0) > timestamp - REFRESH_AFTER_MS
             ? value
             : { ...value, lastBootstrapAt: timestamp },
@@ -178,7 +201,7 @@ export function createSuggestedActivityService(deps: {
           { id, title: activity.title, at: now() },
         ].slice(-MAX_DISMISSED),
       });
-      const updated = await deps.store.update?.(principalId, dismiss);
+      const updated = await deps.store.update(principalId, dismiss);
       if (!updated) return false;
       if (owned(cron, principalId)) await syncAction(cron, updated);
       return true;

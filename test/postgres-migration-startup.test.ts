@@ -60,7 +60,6 @@ test("concurrent cold and repeat migration entrypoints exit and reject checksum 
           NODE_ENV: "test",
           DATABASE_URL: url,
           SANDBOX_BACKEND: "local",
-          SESSION_STORE: "postgres",
           ORG_ID: "migration-test",
           CONNECTOR_SECRET_KEY: "test-connector-secret-0123456789abcdef",
         },

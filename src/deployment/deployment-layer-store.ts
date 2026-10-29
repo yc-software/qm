@@ -62,7 +62,6 @@ export interface DeploymentLayerStore {
   hydrate(): Promise<StoredDeploymentLayer | null>;
   get(): Promise<StoredDeploymentLayer | null>;
   put(bundle: DeploymentLayerBundle, updatedBy: string): Promise<StoredDeploymentLayer>;
-  durable: boolean;
   isApplied(contentHash: string): Promise<boolean>;
   live(): {
     source: "durable" | "filesystem" | "none";
@@ -254,7 +253,6 @@ export function createDeploymentLayerStore(opts: {
   skillBundles?: SkillBundleStore;
   scopeId: ScopeId;
   seedFallback?: () => Promise<unknown>;
-  durable?: boolean;
   now?: () => number;
   retryDelaysMs?: readonly number[];
   advisoryLock: AdvisoryLock;
@@ -422,10 +420,8 @@ export function createDeploymentLayerStore(opts: {
     for (const revision of pending) {
       try {
         await retrying(() => opts.auditPersisted!({ ...record, ...revision }));
-        if (!opts.backing.update)
-          throw new Error("deployment layer backing store must support atomic audit reconciliation");
         await retrying(async () => {
-          const updated = await opts.backing.update!(CURRENT, (current) => ({
+          const updated = await opts.backing.update(CURRENT, (current) => ({
             ...current,
             pendingAudits: (current.pendingAudits ?? []).filter((entry) => entry.version !== revision.version),
           }));
@@ -455,7 +451,6 @@ export function createDeploymentLayerStore(opts: {
   };
 
   return {
-    durable: opts.durable ?? false,
     isApplied: async (hash) => {
       if (appliedHash !== hash) return false;
       try {
@@ -576,7 +571,6 @@ export function createDeploymentLayerStore(opts: {
           ];
           let record = await opts.backing.putIfAbsent(CURRENT, candidate);
           if (record.contentHash !== hash) {
-            if (!opts.backing.update) throw new Error("deployment layer backing store must support atomic updates");
             const updated = await opts.backing.update(CURRENT, (current) => {
               if (current.contentHash === hash) return current;
               const version = current.version + 1;

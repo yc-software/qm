@@ -14,15 +14,16 @@ import {
   CommandDenied,
   NeedsApproval,
 } from "../src/tools/primitives.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { resolveReachableChannel } from "../src/resolution/scope-reach.ts";
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 test("resolveReachableChannel: a public channel is reachable by any internal member", async () => {
-  const d = createDirectoryStore();
+  const d = createPostgresDirectoryStore(testDatabaseUrl());
   await d.replaceChannels([{ channelId: "C-eng", name: "eng" }]);
   const r = await resolveReachableChannel("#eng", { directory: d, actorId: "U1" });
   assert.equal(r.kind, "ok");
@@ -34,7 +35,7 @@ test("resolveReachableChannel: a public channel is reachable by any internal mem
 });
 
 test("resolveReachableChannel: a private channel is ok for a member, denied for a non-member", async () => {
-  const d = createDirectoryStore();
+  const d = createPostgresDirectoryStore(testDatabaseUrl());
   await d.replace([
     { principalId: "U1", displayName: "User One", type: "internal" },
     { principalId: "U2", displayName: "User Two", type: "internal" },
@@ -54,7 +55,7 @@ test("resolveReachableChannel: a private channel is ok for a member, denied for 
 });
 
 test("resolveReachableChannel: ambiguity lists candidate names; unknown says not synced / not in it", async () => {
-  const d = createDirectoryStore();
+  const d = createPostgresDirectoryStore(testDatabaseUrl());
   await d.replaceChannels([
     { channelId: "C1", name: "design-frontend" },
     { channelId: "C2", name: "design-backend" },
@@ -71,7 +72,7 @@ test("resolveReachableChannel: ambiguity lists candidate names; unknown says not
 });
 
 test("listChannelsFor: public channels ∪ private channels the principal is a member of", async () => {
-  const d = createDirectoryStore();
+  const d = createPostgresDirectoryStore(testDatabaseUrl());
   await d.replaceChannels(
     [
       { channelId: "C-pub", name: "general" },

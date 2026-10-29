@@ -7,9 +7,11 @@ import { createDirectory, type BotIdentity } from "../src/slack/directory.ts";
 import { createTurnHandler, type TurnHandler } from "../src/slack/turn-handler.ts";
 import { toEvent } from "../src/api/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
-import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createDeduper, createThreadTracker } from "../src/slack/lib.ts";
 import { createDeferredEnvelopeAck } from "../src/slack/deferred-ack.ts";
+import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { settle } from "./support/settle.ts";
 
 const ids: BotIdentity = {
   botUserId: "UBOT",
@@ -457,7 +459,7 @@ test("thread broadcast snapshots retain broadcast membership through metadata up
 });
 
 test("real message handler checks prior stake in the mirror before ingesting the current reply", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   await cache.ingest([
     { container: "C1", ts: "1.000001", text: "root", authorId: "U1" },
     { container: "C1", ts: "2.000001", sub: "1.000001", text: "prior reply", authorId: "UBOT", self: true },
@@ -498,7 +500,7 @@ test("real message handler checks prior stake in the mirror before ingesting the
     thread_ts: "1.000001",
     text: "follow-up",
   });
-  await new Promise((resolve) => setImmediate(resolve));
+  await settle(async () => f.dispatches.length > 0);
   assert.equal(f.dispatches.length, 1);
   assert.equal(currentStoredAtRead[0], false);
   assert.equal(await handler.botHasStakeInThread(client, "C1", "1.000001", "4.000001"), true);
@@ -530,7 +532,7 @@ test("stake fallback bounds Slack replies while omitted cutoff and negative trac
 });
 
 test("reaction turns preserve the reacted message in the mirror", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const f = fixture({
     ingest: async (events) => {
       await cache.ingest(events);
@@ -573,7 +575,7 @@ test("reaction turns preserve the reacted message in the mirror", async () => {
 });
 
 test("synthetic reaction turns preserve the canonical message snapshot", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const directory = {
     getChannelInfo: async () => ({ id: "D1" }),
     allInternalRosters: async () => new Map([["D1", []]]),
@@ -639,7 +641,7 @@ test("synthetic reaction turns preserve the canonical message snapshot", async (
 });
 
 test("broadcast metadata survives reduced remirroring and partial edits across HTTP ingestion", async () => {
-  const cache = createMemorySurfaceCache();
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const f = fixture({
     ingest: async (events) => {
       await cache.ingest(events.map((e) => toEvent(e)!));
@@ -687,7 +689,7 @@ test("dispatch retains known ordinary and file-share subtypes for direct message
 
 test("untyped attachment-only updates and deletions resolve room kind without dispatch", async () => {
   for (const info of [{ is_im: true }, { is_mpim: true }, { is_private: true }, {}]) {
-    const cache = createMemorySurfaceCache();
+    const cache = createPostgresSurfaceCache(testDatabaseUrl());
     const f = fixture({
       directory: {
         getChannelInfo: async () => info,
@@ -724,7 +726,10 @@ test("untyped attachment-only updates and deletions resolve room kind without di
     const rows = await cache.readMessages("C1");
     assert.match(rows[0]!.text, /forwarded body/);
     assert.equal(rows[0]!.editedAt, 1000);
-    assert.deepEqual(rows[0]!.files, [{ fileId: "F1", name: "image.png", mimetype: "image/png" }]);
+    assert.deepEqual(
+      rows[0]!.files?.map(({ fileId, name, mimetype }) => ({ fileId, name, mimetype })),
+      [{ fileId: "F1", name: "image.png", mimetype: "image/png" }],
+    );
     assert.equal(f.dispatches.length, 0);
     await f.fire({
       type: "message",
