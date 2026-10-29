@@ -401,8 +401,6 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             defaults = next;
             syncRuntimeSelection(ctx.chat.state.agent ?? undefined);
           });
-    // Only clear this function's own notice: a refresh fires at the end of every turn, and wiping all
-    // notices here erased "message wasn't sent" warnings the user still needs to see.
     if (composerState.error === RUNTIME_LOAD_ERROR) composerState.error = "";
     syncRuntimeSelection(agent);
     const config = actualScope === null ? null : await loadRuntimeConfig(actualScope, refresh, options.runtimeAccount);

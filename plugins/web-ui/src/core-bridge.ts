@@ -1341,8 +1341,6 @@ async function drive(
           retryable: [] as Attachment[],
         }
       : await latestUserTurn(agent);
-    // A transient upload failure (timeout, 5xx) must not turn into a text-only send: the agent would
-    // answer as if no file was shared. Hold the message so the user can retry with the file attached.
     if (!opener && ((!text.trim() && attachments.length === 0) || retryable.length > 0)) {
       work.status = "failed";
       work.finishedAt = Date.now();
