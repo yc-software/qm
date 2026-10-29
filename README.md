@@ -37,7 +37,7 @@ You can also try out a 3rd-party hosted version of QM [here](https://www.agent37
 
 If you're an infra provider interested in offering a hosted version of QM, feel free to reach out.
 
-If you're at a big company and interested in a hosted version of QM, let us know [here](https://docs.google.com/forms/d/e/1FAIpQLSfEAhWOYgGHSNHHm7Ae5rS0qH72tZgjA32jDvNmhfFMGsTfOg/viewform).
+If you're at a bigger company and are interested in a hosted version of QM, let us know [here](https://docs.google.com/forms/d/e/1FAIpQLSfEAhWOYgGHSNHHm7Ae5rS0qH72tZgjA32jDvNmhfFMGsTfOg/viewform).
 
 ## Features
 
