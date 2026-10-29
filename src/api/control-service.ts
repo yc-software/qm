@@ -796,7 +796,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
       const permission: Permission = req.permission === "write" ? "write" : "read";
-      const notify = req.notify === false ? { notify: false } : undefined;
+      const notify = { notify: req.notify };
       const home = await app.getArtifactHome(req.type, req.id);
       if (!home)
         return {

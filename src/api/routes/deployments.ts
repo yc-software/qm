@@ -1629,7 +1629,7 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
   };
   if (b.notify !== undefined && typeof b.notify !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
-  const notify = b.notify === false ? { notify: false } : undefined;
+  const notify = { notify: b.notify };
   if (b.public !== undefined) {
     if (typeof b.public !== "boolean")
       return sendJson(res, 400, { error: "bad_request", message: "public must be a boolean" });

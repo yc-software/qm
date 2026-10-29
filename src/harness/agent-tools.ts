@@ -2901,7 +2901,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               ),
               notify: Type.Optional(
                 Type.Boolean({
-                  description: "false: grant quietly, without the access DM or invitation email. Default true.",
+                  description: "false: skip the access DM and invite email.",
                 }),
               ),
             }
@@ -2958,7 +2958,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(params.email !== undefined ? { email: params.email } : {}),
           ...(params.permission !== undefined ? { permission: params.permission } : {}),
           ...(move ? { move: true } : {}),
-          ...(params.notify === false ? { notify: false } : {}),
+          ...(params.notify !== undefined ? { notify: params.notify } : {}),
         });
         if (isUnavailable(r)) return unavailable(callId, tool);
         if (!r.ok) {
@@ -2968,7 +2968,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           return recordResult(callId, { tool, action, error: r.code }, text(`[error] ${r.message}${candidates}`), true);
         }
         let invitationNote = "";
-        if (r.invitation) {
+        if (params.notify === false) invitationNote = " No DM or invitation email sent.";
+        else if (r.invitation) {
           if (r.invitation.emailSent) invitationNote = " App invitation email sent.";
           else if (r.invitation.alreadyShared) invitationNote = " Already shared; no duplicate email sent.";
           else

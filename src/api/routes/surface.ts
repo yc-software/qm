@@ -1188,7 +1188,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       ...(typeof b.email === "string" ? { email: b.email } : {}),
       ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
       ...(b.move === true ? { move: true } : {}),
-      ...(b.notify === false ? { notify: false } : {}),
+      ...(typeof b.notify === "boolean" ? { notify: b.notify } : {}),
     },
     capability,
   );
