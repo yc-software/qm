@@ -68,5 +68,6 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
     assert.equal(body.modelCatalog["custom/acme-gateway/acme-large"]?.provider, "acme-gateway");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
   }
 });

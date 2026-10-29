@@ -9,6 +9,8 @@ import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capabili
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 mock.module("./support/mock-harness.ts", {
   namedExports: {
@@ -68,6 +70,7 @@ async function fixture(t: TestContext) {
   const sharedSandbox = await b.sandboxResources.create("alice", "channel:public-room", "sprites", "shared-proof");
   await b.sandboxResources.setDefault("alice", "channel:public-room", sharedSandbox.id);
   const server = createServer(b.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     scheduler: b.scheduler,
     config: b.config,

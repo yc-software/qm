@@ -7,18 +7,39 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { testMap } from "./support/test-database.ts";
 
 const SECRET = "topsecret";
-const flush = () => new Promise((r) => setImmediate(r));
+let inFlight = 0;
+const tick = () => new Promise((r) => setImmediate(r));
+const flush = async () => {
+  do await tick();
+  while (inFlight > 0);
+};
+
+function tracked<T extends object>(target: T): T {
+  for (const [key, value] of Object.entries(target)) {
+    if (typeof value !== "function") continue;
+    Object.assign(target, {
+      [key]: (...args: unknown[]) => {
+        const result = value.apply(target, args);
+        if (!(result instanceof Promise)) return result;
+        inFlight++;
+        return result.finally(() => inFlight--);
+      },
+    });
+  }
+  return target;
+}
 
 type AssertNo413 = DeliverResult["status"] extends 202 | 200 | 401 | 404 ? true : never;
 const _deliverStatusIsNot413: AssertNo413 = true;
 void _deliverStatusIsNot413;
 
 function harness(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }) {
-  const webhooks = createWebhookStore();
-  const deliveries = createDeliveryStore();
-  const identity = createIdentityService();
+  const webhooks = tracked(createWebhookStore(testMap(), testMap()));
+  const deliveries = tracked(createDeliveryStore());
+  const identity = tracked(createIdentityService(testMap(), { externalMembers: testMap() }));
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
@@ -27,7 +48,7 @@ function harness(runResult: TurnResult = { status: "ok", reply: "DID-THE-WORK" }
   const receiver = createWebhookReceiver({
     webhooks,
     deliveries,
-    idempotency: createIdempotencyStore(),
+    idempotency: tracked(createIdempotencyStore(testMap())),
     identity,
     run,
   });

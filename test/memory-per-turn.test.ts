@@ -1,13 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ACTOR = "U1";
 const CHANNEL = scopeId("channel", "C9");
@@ -16,12 +13,20 @@ const DM = scopeId("personal", ACTOR);
 const PERSONAL = scopeId("personal", ACTOR);
 
 function freshMemory() {
-  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mcc-")));
-  return { memory: createMemoryService(workspace) };
+  return { memory: createPostgresMemoryService(testDatabaseUrl()) };
 }
 
 const INPUT = "remember that my task list is ship the launch";
 const REPLY = "Noted.";
+
+async function flushed(read: () => Promise<string>, patterns: RegExp[]): Promise<string> {
+  let body = await read();
+  for (let attempt = 0; attempt < 300 && !patterns.every((p) => p.test(body)); attempt++) {
+    await new Promise((r) => setTimeout(r, 10));
+    body = await read();
+  }
+  return body;
+}
 
 for (const origin of [CHANNEL, GROUP, DM]) {
   test(`automatic capture writes only to ${origin} and leaves existing notebooks untouched`, async () => {
@@ -58,8 +63,7 @@ test("burst debounce: turns within the quiet window flush as one extraction afte
   await strategy.onTurnEnd!({ scopeId: DM, input: "remember that fact two is beta", reply: REPLY, actorId: ACTOR });
 
   assert.equal(await memory.read(DM), "", "nothing captured before the quiet window elapses");
-  await new Promise((r) => setTimeout(r, 120));
-  const body = await memory.read(DM);
+  const body = await flushed(() => memory.read(DM), [/fact one is alpha/, /fact two is beta/]);
   assert.match(body, /fact one is alpha/);
   assert.match(body, /fact two is beta/);
 });
@@ -95,7 +99,7 @@ test("burst debounce: different speakers in one channel keep separate bursts in 
     reply: REPLY,
     actorId: "U2",
   });
-  await new Promise((r) => setTimeout(r, 120));
+  await flushed(() => memory.read(CHANNEL), [/ship the launch/, /write the memo/]);
 
   assert.match(await memory.read(CHANNEL), /ship the launch/);
   assert.match(await memory.read(CHANNEL), /write the memo/);

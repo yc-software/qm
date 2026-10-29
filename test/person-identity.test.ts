@@ -7,10 +7,11 @@ import {
   samePersonInDirectory,
   samePersonMatcher,
 } from "../src/directory/person.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { canAdministerCron, canAdministerWebhook } from "../src/api/control-service.ts";
 import type { Cron, Webhook } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 describe("personKey / samePerson: the canonical same-person primitive", () => {
   it("trims, and lowercases emails only (the exact formula the connector/secret-drop checks used)", () => {
@@ -28,7 +29,7 @@ describe("personKey / samePerson: the canonical same-person primitive", () => {
   });
 
   it("bridges slackId ↔ email principal ONLY via an authoritative roster row", async () => {
-    const dir = createDirectoryStore();
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
     await dir.replace([
       { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
       { principalId: "casey@acme.test", displayName: "Casey", type: "internal", slackId: "U-casey" },
@@ -46,7 +47,7 @@ describe("personKey / samePerson: the canonical same-person primitive", () => {
       "no roster row, no bridge — fail closed",
     );
     assert.equal(
-      await samePersonInDirectory(createDirectoryStore(), "jordan@acme.test", "U-jordan"),
+      await samePersonInDirectory(createPostgresDirectoryStore(testDatabaseUrl()), "jordan@acme.test", "U-jordan"),
       false,
       "empty directory bridges nothing",
     );
@@ -69,7 +70,7 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
       ...over,
     }) as Cron;
 
-  function appOver(dir = createDirectoryStore()) {
+  function appOver(dir = createPostgresDirectoryStore(testDatabaseUrl())) {
     return {
       isCurrentSharedScopeMember: async () => false,
       artifactGrantPermission: async () => null,
@@ -85,7 +86,7 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
   });
 
   it("a Slack-id owner resolves through the directory for an email-identity actor", async () => {
-    const dir = createDirectoryStore();
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
     await dir.replace([
       { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
     ]);
@@ -109,7 +110,7 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
   });
 
   it("the list-path matcher agrees with the per-item check, including the roster bridge", async () => {
-    const dir = createDirectoryStore();
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
     await dir.replace([
       { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
     ]);
@@ -125,7 +126,7 @@ describe("canAdminister: owner checks are same-person, not raw id equality", () 
 
 describe("samePersonMatcher: one roster read answers many owner checks", () => {
   it("matches the actor's own row's ids without further lookups, and never a stranger", async () => {
-    const dir = createDirectoryStore();
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
     await dir.replace([
       { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
       { principalId: "casey@acme.test", displayName: "Casey", type: "internal", slackId: "U-casey" },
@@ -139,14 +140,14 @@ describe("samePersonMatcher: one roster read answers many owner checks", () => {
   });
 
   it("an actor id with NO row of its own still bridges through the owner's row", async () => {
-    const dir = createDirectoryStore();
+    const dir = createPostgresDirectoryStore(testDatabaseUrl());
     await dir.replace([
       { principalId: "jordan@acme.test", displayName: "Jordan", type: "internal", slackId: "U-jordan" },
     ]);
     const isJordan = await samePersonMatcher(dir, "U-jordan");
     assert.equal(await isJordan("jordan@acme.test"), true, "falls back to the per-pair directory bridge");
     assert.equal(await isJordan("casey@acme.test"), false);
-    const noRoster = await samePersonMatcher(createDirectoryStore(), "U-jordan");
+    const noRoster = await samePersonMatcher(createPostgresDirectoryStore(testDatabaseUrl()), "U-jordan");
     assert.equal(await noRoster("jordan@acme.test"), false, "no roster row anywhere — fail closed");
   });
 });

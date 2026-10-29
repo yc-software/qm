@@ -4,9 +4,10 @@ import assert from "node:assert/strict";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 type Sink = {
   entries: Array<{ seq: number; type: string; payload: unknown }>;
@@ -79,7 +80,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
   const withImages = variant !== "text";
   const finishDuringPreparation = variant === "finished during preparation";
   test(`steered input lands in consumption order, including steered ${variant}`, async () => {
-    const signals = createMemoryRunSignalStore();
+    const signals = createPostgresRunSignalStore(testDatabaseUrl());
     const harness = createPiHarness({ apiKey: "sk-test", signals });
     const sink: Sink = { entries: [] };
     const documentBase64 = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString(
@@ -191,7 +192,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
 test("a lease lost mid-turn fails the turn instead of degrading silently", async () => {
   const harness = createPiHarness({ apiKey: "sk-test" });
   const sink: Sink = { entries: [] };
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const session = await store.getOrCreateByThread("dm:lease-lost", "dm", "personal:tester" as ScopeId);
   const attempt = await store.acquireLease(session.id, "turn");
   const lease = attempt.lease!;
@@ -215,7 +216,7 @@ test("a lease lost mid-turn fails the turn instead of degrading silently", async
 
 test("completed Pi attach results retain openable files in viewer history", async () => {
   const { createTranscriptSource } = await import("../src/sessions/transcript-source.ts");
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const scopeLabel = "personal:tester" as ScopeId;
   const session = await store.getOrCreateByThread("web:tester:attach-history", "dm", scopeLabel);
   await store.addParticipant(session.id, "tester", undefined, { includeHistory: true });
@@ -415,9 +416,9 @@ test("Pi Responses captures exclude history and document text without changing r
 
 for (const stopBeforeIntake of [false, true]) {
   test(`steering during a tool ${stopBeforeIntake ? "survives Stop without fabricated intake" : "lands after its result in live and stored order"}`, async () => {
-    const signals = createMemoryRunSignalStore();
+    const signals = createPostgresRunSignalStore(testDatabaseUrl());
     const harness = createPiHarness({ apiKey: "sk-test", signals });
-    const store = createMemorySessionStore();
+    const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread("web:steer-tool", "dm", "personal:tester" as ScopeId);
     const lease = (await store.acquireLease(session.id, "turn")).lease!;
     const realFetch = globalThis.fetch;
@@ -496,7 +497,7 @@ for (const stopBeforeIntake of [false, true]) {
 }
 
 test("a consumed steer is recorded when its acknowledgement fails", async () => {
-  const signals = createMemoryRunSignalStore();
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   signals.acknowledge = async () => {
     throw new Error("signal store unavailable");
   };
@@ -552,7 +553,7 @@ test("a consumed steer is recorded when its acknowledgement fails", async () => 
 for (const abort of ["shutdown", "stop"] as const) {
   test(`a Pi tool result recorded after ${abort === "shutdown" ? "shutdown is marked interrupted and leaves its call open" : "a user Stop stays a real answer"}`, async () => {
     const harness = createPiHarness({ apiKey: "sk-test" });
-    const store = createMemorySessionStore();
+    const store = createPostgresSessionStore(testDatabaseUrl());
     const session = await store.getOrCreateByThread(`web:${abort}-tool`, "dm", "personal:tester" as ScopeId);
     const lease = (await store.acquireLease(session.id, "turn")).lease!;
     const realFetch = globalThis.fetch;

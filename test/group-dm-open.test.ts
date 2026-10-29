@@ -2,10 +2,11 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import { openGroupViaSurface, resolveReachTarget, type ReachDirectory } from "../src/reach/reach.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../src/types.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const MEMBERS = [
   { principalId: "alice@acme.dev", displayName: "alice", type: "internal" as const },
@@ -526,7 +527,7 @@ describe("the directory crawl when another instance holds the sync lease", () =>
 
 describe("directory resolution by Slack id", () => {
   it("resolves a teammate the agent named by their Slack member id", async () => {
-    const store = createDirectoryStore();
+    const store = createPostgresDirectoryStore(testDatabaseUrl());
     await store.replace([
       { principalId: "kai@acme.dev", displayName: "kai", type: "internal", slackId: "U09LKC3KATS" },
       { principalId: "alice@acme.dev", displayName: "alice", type: "internal", slackId: "U07QR5C33S7" },
@@ -547,7 +548,7 @@ describe("directory resolution by Slack id", () => {
 
 describe("directory group upsert", () => {
   it("makes a just-opened group resolvable and its members visible at once", async () => {
-    const store = createDirectoryStore();
+    const store = createPostgresDirectoryStore(testDatabaseUrl());
     await store.replaceGroups([]);
     assert.equal((await store.resolveGroupByParticipants(["a", "b"])).kind, "none");
 

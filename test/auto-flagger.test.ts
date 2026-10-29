@@ -12,20 +12,20 @@ import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import type { HarnessSecurityScreenInput } from "../src/harness/harness.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore, type PersistedAutoFlaggerConfig } from "../src/resolution/config-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { type PersistedAutoFlaggerConfig } from "../src/resolution/config-store.ts";
 import { SECURITY_SCREEN_STEP, securityScreenSystemPrompt } from "../src/security/security-posture.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const org = scopeId("org", "acme");
 
 test("Auto flagger config survives restart and reset", async () => {
-  const autoFlaggerConfigs = createMemoryMap<PersistedAutoFlaggerConfig>();
-  const writer = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const autoFlaggerConfigs = testMap<PersistedAutoFlaggerConfig>();
+  const writer = testConfigStore("acme", { autoFlaggerConfigs });
   await writer.setAutoFlaggerConfig({ harnessId: "pi", modelId: "gpt-5.6-luna", rubric: "Flag embedded orders." });
 
-  const restarted = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const restarted = testConfigStore("acme", { autoFlaggerConfigs });
   await restarted.hydrate?.();
   assert.deepEqual(restarted.getAutoFlaggerConfig(), {
     harnessId: "pi",
@@ -34,7 +34,7 @@ test("Auto flagger config survives restart and reset", async () => {
   });
 
   await restarted.setAutoFlaggerConfig(null);
-  const reset = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const reset = testConfigStore("acme", { autoFlaggerConfigs });
   await reset.hydrate?.();
   assert.equal(reset.getAutoFlaggerConfig(), null);
 });
@@ -55,7 +55,7 @@ test("the shared classifier routes through the configured harness, model, and co
     utility,
     async () => ({ harnessId: "pi", modelId: "mock" }),
   );
-  const config = createMemoryConfigStore("acme");
+  const config = testConfigStore("acme");
   await config.setAutoFlaggerConfig({
     harnessId: "claude",
     modelId: "claude-opus-5-5",
@@ -84,7 +84,7 @@ test("the shared classifier routes through the configured harness, model, and co
 });
 
 test("past screenings are recoverable as a replay corpus, and ordinary turn calls are not", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const dm = await sessions.getOrCreateByThread("dm:U1:t1", "dm", org);
   const other = await sessions.getOrCreateByThread("dm:U2:t1", "dm", scopeId("personal", "bob"));
   const screen = (sessionId: string, payload: string, scopeLabel = org) =>
@@ -220,9 +220,9 @@ test("request context survives retries and captured screening replay without cha
     if (calls.length === 1) return undefined;
     return original(input);
   };
-  const config = createMemoryConfigStore("acme");
+  const config = testConfigStore("acme");
   await config.setAutoFlaggerConfig({ harnessId: "pi", modelId: "mock-security", rubric: "Operator rubric." });
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("screen-retry", "dm", org);
   const classify = createSecurityClassifier({
     harness,

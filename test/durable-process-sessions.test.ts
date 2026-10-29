@@ -5,19 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
-import { createMemoryProcessRegistry, type ProcessRegistry } from "../src/processes/process-registry.ts";
+import { type ProcessRegistry, createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -26,6 +20,13 @@ import type { Sandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sand
 import type { Conversation, Principal } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -112,13 +113,13 @@ function fakeProcessSandbox() {
 }
 
 function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
-  const config = createMemoryConfigStore(ORG);
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
+  const config = testConfigStore(ORG);
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "dps-")));
   const deploy = createDeployService({
     ...singleProcessDeps(),
-    deployStore: createDeployStore(),
+    deployStore: createDeployStore(testDeployBackings()),
     provider: createDockerDeployProvider(),
     deployDir: join(tmpdir(), "dps-deploy"),
     auditLog,
@@ -126,17 +127,17 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
   });
   return createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService(ORG, config, acl),
-    sessions: createMemorySessionStore(),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     harness: createMockHarness(),
-    memory: createMemoryService(workspace),
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy,
     acl,
     processes,
@@ -144,7 +145,11 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
 }
 
 async function memoryScope(): Promise<string> {
-  const resolution = createResolutionService(ORG, createMemoryConfigStore(ORG), createAclStore());
+  const resolution = createResolutionService(
+    ORG,
+    testConfigStore(ORG),
+    createAclStore(createPostgresGrantStore(testDatabaseUrl())),
+  );
   return writableMemoryScope((await resolution.resolve(conv, actor)).layers, resolution.scopeFor(conv, actor));
 }
 
@@ -157,7 +162,7 @@ const turn = (text: string): OrchestratorInput => ({
 });
 
 test("a live durable process keeps the computer warm; none lets it suspend", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   const fake = fakeProcessSandbox();
   const orch = buildOrchestrator(reg, fake.sandbox);
 
@@ -181,7 +186,7 @@ test("a live durable process keeps the computer warm; none lets it suspend", asy
 });
 
 test("reattach reconciles a session whose process died while core was down", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   const fake = fakeProcessSandbox();
   await reg.register({
     processId: "00000000-0000-0000-0000-0000000000ff",
@@ -201,7 +206,7 @@ test("reattach reconciles a session whose process died while core was down", asy
 });
 
 test("with no live session the per-scope box suspends as before (gate is off by default)", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   const fake = fakeProcessSandbox();
   const orch = buildOrchestrator(reg, fake.sandbox);
   await orch.handleTurn(turn("!run echo hello"));

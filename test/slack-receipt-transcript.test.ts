@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createTranscriptSource } from "../src/sessions/transcript-source.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
@@ -11,6 +10,7 @@ import { forModelContext, forSearchView } from "../src/harness/context-compactio
 import { scopeId } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const scope = scopeId("personal", "alice");
 const databaseUrl = process.env.DATABASE_URL;
@@ -23,7 +23,7 @@ for (const backend of ["memory", "postgres"] as const) {
     },
     async () => {
       const sessions: SessionStore =
-        backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(databaseUrl!);
+        backend === "memory" ? createPostgresSessionStore(testDatabaseUrl()) : createPostgresSessionStore(databaseUrl!);
       const session = await sessions.getOrCreateByThread(`dm:${randomUUID()}`, "dm", scope, undefined, "slack");
       await sessions.addParticipant(session.id, "alice");
       const { lease } = await sessions.acquireLease(session.id, "turn");
@@ -93,7 +93,7 @@ for (const backend of ["memory", "postgres"] as const) {
     },
     async () => {
       const sessions: SessionStore =
-        backend === "memory" ? createMemorySessionStore() : createPostgresSessionStore(databaseUrl!);
+        backend === "memory" ? createPostgresSessionStore(testDatabaseUrl()) : createPostgresSessionStore(databaseUrl!);
       const inner =
         backend === "memory"
           ? createDeliveryStore({ maxAgeMs: 1 })

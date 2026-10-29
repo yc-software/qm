@@ -1,7 +1,6 @@
 import { nativeDocumentFormat } from "../src/harness/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
@@ -19,6 +18,7 @@ import {
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { setCustomProviders, validateCustomProviderSpec } from "../src/model/custom-providers.ts";
 import { loadConfig } from "../src/config.ts";
+import { testConfigStore } from "./support/test-database.ts";
 
 const config = {
   url: "https://gateway.example/prefix/v1",
@@ -238,7 +238,7 @@ test("custom provider models live in their own namespace, never the gateway one"
 });
 
 test("removed gateway selections never fall back to a different org or direct model", async () => {
-  const store = createMemoryConfigStore("default-org");
+  const store = testConfigStore("default-org");
   const org = "org:default-org" as const;
   const personal = "personal:alice" as const;
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-5" };

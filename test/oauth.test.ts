@@ -17,7 +17,7 @@ import {
 } from "../src/connectors/oauth.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testMap } from "./support/test-database.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
@@ -550,7 +550,7 @@ test("token failures keep the provider's error detail", async () => {
 });
 
 test("oauth flow store — a short opaque state resolves once, then expires", async () => {
-  const store = createOAuthFlowStore(createMemoryMap<OAuthState>(), { now: () => 1_000 });
+  const store = createOAuthFlowStore(testMap<OAuthState>(), { now: () => 1_000 });
   const flowId = await store.start({
     provider: "x",
     principalId: "person@example.com",
@@ -564,7 +564,7 @@ test("oauth flow store — a short opaque state resolves once, then expires", as
   assert.equal(opened?.nonce, flowId);
   assert.equal(await store.finish(flowId), null, "single use");
 
-  const stale = createOAuthFlowStore(createMemoryMap<OAuthState>(), { now: () => 1_000, ttlMs: 10 });
+  const stale = createOAuthFlowStore(testMap<OAuthState>(), { now: () => 1_000, ttlMs: 10 });
   const staleId = await stale.start({ provider: "x", principalId: "U1", redirectUri: "https://example.test/cb" }, 0);
   assert.equal(await stale.finish(staleId), null, "expired");
 });

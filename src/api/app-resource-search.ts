@@ -5,7 +5,6 @@ import type { AppHelpers } from "./app-helpers.ts";
 import { cronVisibility } from "./app-messaging.ts";
 import { canAdministerWebhook } from "./control-service.ts";
 import {
-  createMemoryResourceSearch,
   resourceHit,
   type ResourceCandidate,
   type ResourceKind,
@@ -19,41 +18,7 @@ export function createResourceSearchMethods(
   app: App,
   helpers: AppHelpers,
 ): Pick<App, "searchResources"> {
-  const store =
-    deps.resourceSearch ??
-    createMemoryResourceSearch(async (kind) => {
-      const defaults = { scopeId: scopeId("org", ""), ownerScopeId: scopeId("org", ""), createdBy: "", owner: "" };
-      switch (kind) {
-        case "skills":
-          return (await deps.skills.list()).map((s) => ({
-            ...defaults,
-            ...s,
-            title: s.manifest.name,
-            description: s.manifest.description,
-          }));
-        case "crons":
-          return (await deps.crons.list()).map((c) => ({
-            ...defaults,
-            ...c,
-            title: c.title ?? "",
-            description: `${c.action ?? ""} ${c.message ?? ""}`,
-          }));
-        case "deploys":
-          return (await deps.deploy.listDeployments()).map((d) => ({
-            ...defaults,
-            ...d,
-            title: d.displayName ?? d.name ?? "",
-            description: d.name ?? "",
-          }));
-        case "webhooks":
-          return (await deps.webhooks.list()).map((w) => ({
-            ...defaults,
-            ...w,
-            title: w.action,
-            description: w.verification.scheme,
-          }));
-      }
-    });
+  const store = deps.resourceSearch;
   return {
     async searchResources(principalId, query) {
       query = query.slice(0, 500);

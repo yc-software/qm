@@ -1629,7 +1629,7 @@ test("the Auto flagger test run replays real screenings and reports a flag rate,
 test("admin errors paginate all retained records with scoped totals and bounded page sizes", async () => {
   const s = start();
   try {
-    for (let i = 0; i < 260; i++)
+    for (let i = 0; i < 260; i++) {
       s.built.errors.record({
         category: "turn",
         code: String(i),
@@ -1637,6 +1637,8 @@ test("admin errors paginate all retained records with scoped totals and bounded 
         scopeLabel: "personal:U1",
         sessionId: "test-session",
       });
+      await s.built.errors.flush();
+    }
     s.built.errors.record({ category: "turn", code: "other", message: "failure", scopeLabel: "personal:U2" });
     const path = "/v1/admin/errors?scope=personal:U1&sessionId=test-session";
     const page = await getJson(s.base, path + "&limit=50&offset=200");

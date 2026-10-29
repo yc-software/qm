@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { createMonitorBroker, readBackgroundOutputTail } from "../src/monitors/monitor-broker.ts";
 import type { BackgroundWatchArmedResult, BackgroundWatchResult } from "../src/monitors/monitor-broker.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { scopeId } from "../src/types.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const SCOPE = "personal:U1";
 type ReadOutputTail = Parameters<typeof createMonitorBroker>[0]["readOutputTail"];
@@ -15,8 +16,8 @@ function armed(r: BackgroundWatchResult): BackgroundWatchArmedResult {
 }
 
 async function harness(readOutputTail: ReadOutputTail = async () => ({ outputTail: "" })) {
-  const store = createMonitorStore();
-  const registry = createMemoryProcessRegistry();
+  const store = createMonitorStore(testMap());
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const rec = await registry.register({
     processId: "p-1",
     scopeId: SCOPE,

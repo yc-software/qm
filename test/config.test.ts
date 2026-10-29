@@ -24,7 +24,6 @@ const productionEnv = {
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
   SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
-  SESSION_STORE: "postgres",
 } as const;
 
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
@@ -66,25 +65,6 @@ test("AUTH_ALLOWED_EMAILS becomes a normalized email-auth principal set", () => 
   assert.deepEqual(
     loadConfig({ AUTH_ALLOWED_EMAILS: " New@Example.com,other@example.com,new@example.com " }).emailAuthPrincipals,
     ["new@example.com", "other@example.com"],
-  );
-});
-
-test("store kinds default to memory and accept postgres", () => {
-  const def = loadConfig({});
-  assert.equal(def.sessionStore, "memory");
-  assert.equal(def.runStore, "memory");
-
-  const pg = loadConfig({ SESSION_STORE: "postgres", DATABASE_URL: "postgres://test" });
-  assert.equal(pg.sessionStore, "postgres");
-  assert.equal(pg.runStore, "postgres", "runStore mirrors sessionStore when unset");
-
-  assert.equal(
-    loadConfig({ SESSION_STORE: "postgres", RUN_STORE: "memory", DATABASE_URL: "postgres://test" }).runStore,
-    "memory",
-  );
-  assert.throws(
-    () => loadConfig({ SESSION_STORE: "postgres" }),
-    /missing or insecure required core secrets: DATABASE_URL/,
   );
 });
 
@@ -199,12 +179,6 @@ test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
   assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
 });
 
-test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
-  assert.throws(() => loadConfig({ SESSION_STORE: "sqlite" }), /SESSION_STORE=sqlite is no longer supported/);
-  assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
-  assert.throws(() => loadConfig({ ARTIFACT_STORE: "sqlite" }), /ARTIFACT_STORE=sqlite is no longer supported/);
-});
-
 test("a harmless ARTIFACT_STORE=memory (now a dead knob) is ignored, not fatal", () => {
   assert.doesNotThrow(() => loadConfig({ ARTIFACT_STORE: "memory" }));
 });
@@ -303,19 +277,13 @@ test("Render guards do not limit an unconfigured sandbox backend", () => {
   assert.equal(loadConfig({ ...productionEnv, SANDBOX_TIMEOUT_SEC: "86400" }).sandboxBackend, "local");
 });
 
-test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
+test("production refuses to boot without Postgres", () => {
   const { DATABASE_URL: _databaseUrl, ...noDatabase } = productionEnv;
   assert.throws(
     () => loadConfig(noDatabase),
     /missing or insecure required core secrets: DATABASE_URL \(.*resident disk\)/,
   );
-  const { SESSION_STORE: _sessionStore, ...memorySessions } = productionEnv;
-  assert.throws(() => loadConfig(memorySessions), /production requires SESSION_STORE=postgres/);
-  assert.throws(
-    () => loadConfig({ ...productionEnv, RUN_STORE: "memory" }),
-    /production requires SESSION_STORE=postgres/,
-  );
-  assert.doesNotThrow(() => loadConfig({ ...productionEnv, RUN_STORE: "postgres" }));
+  assert.doesNotThrow(() => loadConfig(productionEnv));
   assert.doesNotThrow(
     () => loadConfig({ SANDBOX_BACKEND: "local" }),
     "a single-process dev instance needs no durable store",

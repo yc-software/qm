@@ -11,12 +11,13 @@ import { buildApp } from "../src/wiring.ts";
 import { baseModelProviders, configuredModelForHarness, providerKeysPresent } from "../src/config.ts";
 import { defaultModelForHarness, modelProviderAvailabilityFor } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), harness: "pi", ...overrides });
-  const built = buildApp(config);
+  const built = stopAtEnd(buildApp(config));
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,

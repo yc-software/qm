@@ -8,18 +8,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { defineHarness } from "../src/harness/harness.ts";
 import { harnessToolOptions } from "../src/harness/harness-shared.ts";
 import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
@@ -27,16 +20,29 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureName } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
-import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import type { McpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import {
+  testConfigStore,
+  testDatabaseUrl,
+  testMap,
+  testDeployBackings,
+  testAdvisoryLock,
+} from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {
@@ -59,16 +65,17 @@ const SUBAGENT_EXCEPTIONS = {
 const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)[];
 
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
-  const sessions = createMemorySessionStore();
-  const { runs } = createMemoryRunStore();
-  const featureFlags = createFeatureFlagStore(createMemoryMap());
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const featureFlags = createFeatureFlagStore(testMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];
   const sessionSyscalls = createSessionSyscalls({
+    advisoryLock: testAdvisoryLock(),
     sessions,
     runs,
-    mailbox: createSessionMailbox(createMemoryMap<SessionMessage>()),
-    signals: createMemoryRunSignalStore(),
+    mailbox: createSessionMailbox(testMap<SessionMessage>()),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
     maxAttempts: 1,
     conversations: {
       list: async () => sidebar,
@@ -135,10 +142,10 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       },
     },
   );
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
-  const config = createMemoryConfigStore("org");
+  const config = testConfigStore("org");
   await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setInteractiveFastMode(true);
   const orchestrator = createOrchestrator({
@@ -148,21 +155,21 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { config, harnessId: "pi", baseModelDefault: "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
-    identity: createIdentityService(),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
     resolution: createResolutionService("org", config, acl),
     sessions,
     runs,
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: { profile: { backend: "fake", writablePersistence: "snapshot_to_workspace" } } as Sandbox,
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     harness,
-    memory: createMemoryService(workspace),
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
       ...singleProcessDeps(),
-      deployStore: createDeployStore(),
+      deployStore: createDeployStore(testDeployBackings()),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "subagent-parity-deploy"),
       auditLog,

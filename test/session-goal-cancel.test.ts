@@ -102,6 +102,8 @@ for (const status of ["active", "paused"] as const) {
 
     const cancelling = built.app.cancelSessionGoal(session.id, "U1");
     await new Promise((r) => setTimeout(r, 200));
+    for (let i = 0; i < 250 && status === "active" && (await built.signals.pending(run!.id)).length === 0; i++)
+      await new Promise((r) => setTimeout(r, 20));
     assert.deepEqual(
       (await built.signals.pending(run!.id)).map((p) => p.signal.kind),
       status === "active" ? ["abort"] : [],

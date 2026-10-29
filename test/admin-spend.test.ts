@@ -7,13 +7,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { cacheHitRatio } from "../src/api/routes/admin/spend.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const DAY = 86_400_000;
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };
@@ -55,7 +56,7 @@ const conserved = (report: any, column: string): number =>
   [...report.people, ...report.scopes].reduce((sum: number, e: any) => sum + e[column], 0);
 
 test("spend: uses the saved report and exposes its freshness", async () => {
-  const store = createMemorySessionStore();
+  const store = createPostgresSessionStore(testDatabaseUrl());
   const asOf = Date.UTC(2026, 0, 1);
   let reads = 0;
   store.spendReport = async (range) => {
@@ -170,7 +171,7 @@ test("spend: a window in the past excludes today's rows entirely", async () => {
 
 test("spend: from/to and bucket=week reshape the series over backdated rows", async () => {
   const clock = { at: Date.UTC(2026, 0, 5, 12) };
-  const store = createMemorySessionStore({ now: () => clock.at });
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock.at });
   const s = start(store);
   try {
     await bill(store, "dm:alice:d1", "dm", scopeId("personal", "alice"), { costUsd: 2 });
@@ -215,7 +216,7 @@ test("spend: from/to and bucket=week reshape the series over backdated rows", as
 
 test("spend: ?format=csv exports the same numbers for the same window", async () => {
   const clock = { at: Date.UTC(2026, 0, 5, 12) };
-  const store = createMemorySessionStore({ now: () => clock.at });
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock.at });
   const s = start(store);
   try {
     await seedPricedFixture(store);
@@ -318,7 +319,7 @@ test("spend: an empty deployment answers 200 with zeroed totals", async () => {
 
 test("spend: cron JSON and CSV name each billed cron, giving admins the task an untitled cron is known by", async () => {
   const clock = { at: Date.UTC(2026, 0, 5, 12) };
-  const store = createMemorySessionStore({ now: () => clock.at });
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock.at });
   const s = start(store);
   try {
     const cron = await s.built.app.createCron({
@@ -369,7 +370,7 @@ test("spend: cron JSON and CSV name each billed cron, giving admins the task an 
 
 test("spend: model CSV selects the model breakdown with its own filename", async () => {
   const clock = { at: Date.UTC(2026, 0, 5, 12) };
-  const store = createMemorySessionStore({ now: () => clock.at });
+  const store = createPostgresSessionStore(testDatabaseUrl(), { now: () => clock.at });
   const s = start(store);
   try {
     await seedPricedFixture(store);

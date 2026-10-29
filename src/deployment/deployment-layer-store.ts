@@ -62,7 +62,6 @@ export interface DeploymentLayerStore {
   hydrate(): Promise<StoredDeploymentLayer | null>;
   get(): Promise<StoredDeploymentLayer | null>;
   put(bundle: DeploymentLayerBundle, updatedBy: string): Promise<StoredDeploymentLayer>;
-  durable: boolean;
   isApplied(contentHash: string): Promise<boolean>;
   live(): {
     source: "durable" | "filesystem" | "none";
@@ -268,7 +267,6 @@ export function createDeploymentLayerStore(opts: {
   skillBundles?: SkillBundleStore;
   scopeId: ScopeId;
   seedFallback?: () => Promise<unknown>;
-  durable?: boolean;
   now?: () => number;
   retryDelaysMs?: readonly number[];
   advisoryLock: AdvisoryLock;
@@ -469,7 +467,6 @@ export function createDeploymentLayerStore(opts: {
   };
 
   return {
-    durable: opts.durable ?? false,
     isApplied: async (hash) => {
       if (appliedHash !== hash) return false;
       try {

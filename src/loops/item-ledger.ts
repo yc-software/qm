@@ -10,7 +10,7 @@ import type {
   LoopThreadMessage,
 } from "../types.ts";
 import { isResolved } from "./ledger-view.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -210,7 +210,7 @@ function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): Loop
 }
 
 export function createLoopItemLedger(
-  backing: DurableMap<LoopItem> = createMemoryMap<LoopItem>(),
+  backing: DurableMap<LoopItem>,
   onEvent?: (event: LedgerEvent) => void,
   coordination?: {
     lock: import("../persistence/advisory-lock.ts").AdvisoryLock;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Monitor } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -44,7 +44,7 @@ function defunctBefore(cutoff: number): (m: Monitor) => boolean {
   return (m) => !m.enabled && lastActivityAt(m) <= cutoff;
 }
 
-export function createMonitorStore(backing: DurableMap<Monitor> = createMemoryMap<Monitor>()): MonitorStore {
+export function createMonitorStore(backing: DurableMap<Monitor>): MonitorStore {
   return {
     async create(input) {
       assertNoEscalation(input);

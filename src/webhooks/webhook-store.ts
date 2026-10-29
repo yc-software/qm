@@ -1,5 +1,5 @@
 import type { Webhook } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -40,10 +40,7 @@ export interface WebhookStore {
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
-export function createWebhookStore(
-  backing: DurableMap<Webhook> = createMemoryMap<Webhook>(),
-  history: DurableMap<WebhookHistory> = createMemoryMap<WebhookHistory>(),
-): WebhookStore {
+export function createWebhookStore(backing: DurableMap<Webhook>, history: DurableMap<WebhookHistory>): WebhookStore {
   if (!history.update) throw new Error("webhook history requires atomic updates");
   const updateHistory = history.update.bind(history);
   return {

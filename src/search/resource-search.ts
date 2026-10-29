@@ -1,6 +1,6 @@
 import type { SkillSummary } from "../skills/skill-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { matchesSearchTerms, searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
+import { searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
 import type { Cron, ScopeId } from "../types.ts";
 
 export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
@@ -114,34 +114,6 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
         [terms, limit],
       );
       return rows as unknown as ResourceCandidate[];
-    },
-  };
-}
-
-export function createMemoryResourceSearch(
-  list: (kind: ResourceKind) => Promise<ResourceCandidate[]>,
-): ResourceSearchStore {
-  return {
-    async skillMetadata(names) {
-      const rows = await list("skills");
-      return {
-        homes: rows.map((r) => r.scopeId),
-        skills: rows
-          .filter((r) => names.includes(r.title))
-          .map((r) => ({
-            id: r.id,
-            scopeId: r.scopeId,
-            status: r.status as SkillSummary["status"],
-            manifest: { name: r.title },
-          })),
-      };
-    },
-    async search(kind, query, limit) {
-      const terms = searchTerms(query);
-      return (await list(kind))
-        .filter((row) => matchesSearchTerms(`${row.title} ${row.description}`, terms))
-        .sort((a, b) => a.id.localeCompare(b.id))
-        .slice(0, limit);
     },
   };
 }

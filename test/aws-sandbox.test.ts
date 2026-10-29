@@ -11,12 +11,12 @@ import { scopeId } from "../src/types.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testMap } from "./support/test-database.ts";
 
 function makeSandbox(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aws-ws-"));
   return createAwsSandbox(createLocalWorkspaceStore(dir), {
-    store: createMemoryMap(),
+    store: testMap(),
     ...singleProcessDeps(),
     region: "us-west-2",
     imageIdentifier: "img",
@@ -209,8 +209,7 @@ test("a hydrate failure terminates the fresh body instead of cold-starting over 
 
 test("scope retirement terminates its body and removes only its snapshot, including after restart", async () => {
   const fake = installFakeMicrovm();
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-  const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+  const store = testMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
   const sb = makeSandbox(fake, { store, snapshotIntervalMs: 0 });
   const first = await sb.provision(rw("personal:retire-one"));
   const other = await sb.provision(rw("personal:retire-other"));
@@ -230,8 +229,7 @@ test("scope retirement terminates its body and removes only its snapshot, includ
 for (const stage of ["terminate", "snapshot"] as const) {
   test(`scope retirement retains durable recovery metadata when ${stage} deletion fails`, async () => {
     const fake = installFakeMicrovm();
-    const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-    const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+    const store = testMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
     const sb = makeSandbox(fake, { store });
     const handle = await sb.provision(rw("personal:retire-failure"));
     await sb.teardown(handle);
@@ -256,8 +254,7 @@ for (const stage of ["terminate", "snapshot"] as const) {
 
 test("failed AWS readiness remains discoverable for retirement when immediate termination fails", async () => {
   const fake = installFakeMicrovm();
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-  const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+  const store = testMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
   const sb = makeSandbox(fake, { store });
   const wait = fake.api.waitForState;
   const terminate = fake.api.terminate;
@@ -296,8 +293,7 @@ test("destructive teardown of a stale AWS handle preserves a replacement scope",
 for (const writer of ["teardown", "reaper"] as const) {
   test(`retirement waits for an in-flight ${writer} snapshot and prevents restoration`, async () => {
     const fake = installFakeMicrovm();
-    const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
-    const store = createMemoryMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
+    const store = testMap<import("../src/sandbox/aws-sandbox.ts").StoredMicrovm>();
     const sb = makeSandbox(fake, { store, snapshotIntervalMs: 0 });
     const scope = `personal:retire-race-${writer}`;
     const handle = await sb.provision(rw(scope));

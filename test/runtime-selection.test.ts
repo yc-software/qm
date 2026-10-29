@@ -1,20 +1,16 @@
 import { availableRuntimeError } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  createMemoryConfigStore,
-  type PersistedApprovedHarnesses,
-  type PersistedBaseModel,
-} from "../src/resolution/config-store.ts";
+import { type PersistedApprovedHarnesses, type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const ORG = "org:default-org" as const;
 const PERSONAL = "personal:alice" as const;
 
 test("runtime selection is sparse, revisioned, and acknowledges a changed org default", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-opus-4-8" });
   await config.setRuntimeSelection(PERSONAL, { harnessId: "claude", modelId: "claude-sonnet-5" });
@@ -34,7 +30,7 @@ test("runtime selection is sparse, revisioned, and acknowledges a changed org de
 });
 
 test("runtime resolution uses explicit choice, then scope, then org and rejects unapproved requests", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setRuntimeSelection(ORG, { harnessId: "claude", modelId: "claude-opus-4-8" });
   await config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-5.5" });
@@ -53,7 +49,7 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
 });
 
 test("runtime resolution carries reasoning and fast-mode defaults into turns", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setRuntimeSelection(ORG, {
     harnessId: "pi",
@@ -101,7 +97,7 @@ test("runtime resolution carries reasoning and fast-mode defaults into turns", a
 });
 
 test("runtime resolution falls back to the first approved harness when deployment defaults are not approved", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["claude"]);
   assert.deepEqual(resolveRuntimeChoice(config, ORG, PERSONAL, { harnessId: "pi", modelId: "gpt-5.6-sol" }), {
     harnessId: "claude",
@@ -110,10 +106,10 @@ test("runtime resolution falls back to the first approved harness when deploymen
 });
 
 test("runtime resolution reads approvals and selections from shared durable state on every turn", async () => {
-  const baseModels = createMemoryMap<PersistedBaseModel>();
-  const approvedHarnesses = createMemoryMap<PersistedApprovedHarnesses>();
-  const writer = createMemoryConfigStore("default-org", { baseModels, approvedHarnesses });
-  const reader = createMemoryConfigStore("default-org", { baseModels, approvedHarnesses });
+  const baseModels = testMap<PersistedBaseModel>();
+  const approvedHarnesses = testMap<PersistedApprovedHarnesses>();
+  const writer = testConfigStore("default-org", { baseModels, approvedHarnesses });
+  const reader = testConfigStore("default-org", { baseModels, approvedHarnesses });
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
 
   await writer.setApprovedHarnesses(["pi"]);
@@ -133,7 +129,7 @@ test("runtime resolution reads approvals and selections from shared durable stat
 });
 
 test("every write that changes a scope's served model notifies listeners", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   const seen: string[] = [];
   config.onRuntimeSelectionChanged((id) => seen.push(id));
   await config.setApprovedHarnesses(["pi"]);
@@ -147,7 +143,7 @@ test("every write that changes a scope's served model notifies listeners", async
 });
 
 test("a listener that throws cannot break the write that notified it", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   config.onRuntimeSelectionChanged(() => {
     throw new Error("surface unreachable");
   });
@@ -157,7 +153,7 @@ test("a listener that throws cannot break the write that notified it", async () 
 });
 
 test("durable runtime resolution hydrates the model catalog before rejecting an unknown dynamic model", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["pi"]);
   await config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "testvendor/cold-router-model" });
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
@@ -201,7 +197,7 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
 });
 
 test("explicit runtime validation rejects a revoked scoped model and unsupported fast mode", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["pi"]);
   await config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-sonnet-5" });
   await config.setRuntimeSelection(PERSONAL, { harnessId: "pi", modelId: "gpt-6-astra" });
@@ -218,7 +214,7 @@ test("explicit runtime validation rejects a revoked scoped model and unsupported
 });
 
 test("runtime availability preserves the existing harness normalization of inherited scheduled effort", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["claude"]);
   await config.setWebuiModels(ORG, ["claude-sonnet-5"]);
   const choice = {

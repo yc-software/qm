@@ -5,18 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { defineHarness } from "../src/harness/harness.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -26,12 +19,25 @@ import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 
 import { createAgentTools } from "../src/harness/agent-tools.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
-import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import {
+  testAdvisoryLock,
+  testConfigStore,
+  testDatabaseUrl,
+  testMap,
+  testDeployBackings,
+} from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 function fakeSandbox(): Sandbox {
   const unreached = () => {
@@ -58,17 +64,18 @@ const conversation: Conversation = { kind: "dm", threadRef: "web:U1:mail", audie
 let callSeq = 0;
 
 async function scenario() {
-  const sessions = createMemorySessionStore();
-  const { runs } = createMemoryRunStore();
-  const mailbox = createSessionMailbox(createMemoryMap<SessionMessage>());
-  const featureFlags = createFeatureFlagStore(createMemoryMap());
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const mailbox = createSessionMailbox(testMap<SessionMessage>());
+  const featureFlags = createFeatureFlagStore(testMap());
   await featureFlags.setEnabled("persistent_subagents", "personal:U1", true, "test");
   const sessionSyscalls = createSessionSyscalls({
     sessions,
     runs,
     mailbox,
-    signals: createMemoryRunSignalStore(),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
     maxAttempts: 3,
+    advisoryLock: testAdvisoryLock(),
   });
   const harness = defineHarness(
     {
@@ -100,26 +107,26 @@ async function scenario() {
       },
     },
   );
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "session-mail-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
     modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
     harness,
-    memory: createMemoryService(workspace),
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
       ...singleProcessDeps(),
-      deployStore: createDeployStore(),
+      deployStore: createDeployStore(testDeployBackings()),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "session-mail-deploy"),
       auditLog,

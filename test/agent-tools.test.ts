@@ -6,13 +6,18 @@ import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
-import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
+import { waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
-import { createMemoryToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
+import { createPostgresToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
+import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
 import { connectorToolsNote, deferredMcpTools } from "../src/harness/deferred-tools.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -716,21 +721,36 @@ test("a giant tool result is capped for the model, keeping the tail and matching
 
 test("a result over the inline cap keeps its head and tail and parks the full text where its marker points", async () => {
   const emitted: Emitted[] = [];
-  const outputs = createMemoryToolOutputStore({
-    inlineTokens: 100,
-    sessions: { getEntries: async () => emitted as unknown as SessionEntry[] },
-  });
+  const url = testDatabaseUrl();
+  const store = createPostgresSessionStore(url);
+  const pool = createPgPool(url);
+  const session = await store.getOrCreateByThread("web:park", "dm", "personal:U1" as SessionEntry["scopeLabel"]);
+  const { lease } = await store.acquireLease(session.id);
+  assert.ok(lease);
+  await pool.q("INSERT INTO qm_settings(key, value) VALUES ('tool_result_inline_tokens', '100')");
+  const clock = { at: Date.now() };
+  const bytes = createMemoryDurableByteStore();
+  const outputs = createPostgresToolOutputStore({ pool, bytesFor: () => bytes, now: () => clock.at });
+  const appends: Promise<unknown>[] = [];
   const full = Array.from({ length: 2_000 }, (_, i) => `line ${i}`).join("\n");
   const tc = {
     ...fakeToolContext(),
     toolOutput: outputs,
     execute: async () => ({ stdout: full, stderr: "", code: 0, timedOut: false }),
   };
-  const ref: ToolContextRef = { current: tc, emit: (e) => void emitted.push(e as Emitted), scopeLabel: "personal:U1" };
+  const ref: ToolContextRef = {
+    current: tc,
+    emit: (e) => {
+      emitted.push(e as Emitted);
+      appends.push(store.append({ ...lease, turnId: "run-park" }, e as Parameters<typeof store.append>[1]));
+    },
+    scopeLabel: "personal:U1",
+  };
   const [execute] = createAgentTools(ref);
   const ret = (await call(execute, { command: "seq", purpose: "Run test command" })) as {
     content: Array<{ type: string; text: string }>;
   };
+  await Promise.all(appends);
   const seen = ret.content.map((c) => c.text).join("\n");
   const payload = emitted.find((e) => e.type === "tool_result")!.payload as {
     callId: string;
@@ -741,21 +761,22 @@ test("a result over the inline cap keeps its head and tail and parks the full te
   assert.ok(seen.startsWith("line 0\nline 1"), "head survives");
   assert.ok(seen.includes("[exit 0]"), "tail survives");
   const marker = parkedOutputKey(/tool-output\/\S+(?=;)/.exec(seen)![0])!;
-  assert.deepEqual(
-    await outputs.read("s1", marker),
-    { text: outputs.parked.get(payload.output.blob) },
-    "the marker names the parked file",
-  );
+  const parked = await outputs.read(session.id, marker);
+  assert.ok(parked && "text" in parked, "the marker names the parked file");
   assert.ok(payload.output.shownChars <= 400 && seen.length < 1_000, `cut to the 100-token budget (${seen.length})`);
-  assert.equal(outputs.parked.get(payload.output.blob)!.length, payload.output.chars);
-  assert.ok(outputs.parked.get(payload.output.blob)!.includes("line 1999"));
+  assert.equal(parked.text.length, payload.output.chars);
+  assert.ok(parked.text.includes("line 1999"));
 
-  outputs.setInlineTokens(0);
+  await pool.q("UPDATE qm_settings SET value = '0' WHERE key = 'tool_result_inline_tokens'");
+  clock.at += 60_000;
   emitted.length = 0;
+  ref.emit = (e) => void emitted.push(e as Emitted);
   await call(execute, { command: "seq", purpose: "Run test command" });
   const uncapped = emitted.find((e) => e.type === "tool_result")!.payload as { result: string; output?: unknown };
   assert.equal(uncapped.output, undefined, "0 turns the cap off");
   assert.ok(uncapped.result.includes("line 1000"));
+  await store.releaseLease(lease);
+  await pool.close();
 });
 
 test("execute stores its output once and replays exactly what the model saw", async () => {
@@ -3728,7 +3749,7 @@ test("declared client tools follow qm's own tools, in name order whatever the de
   assert.deepEqual(reversed, forward, "the tools array is stable from one turn to the next");
 });
 
-function clientToolRef(store = createMemoryRunSignalStore()) {
+function clientToolRef(store = createPostgresRunSignalStore(testDatabaseUrl())) {
   const emitted: Emitted[] = [];
   const cancel = new AbortController();
   const ref: ToolContextRef = {

@@ -167,7 +167,7 @@ export interface OrchestratorDeps {
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
   skillsReady?: Promise<void>;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;

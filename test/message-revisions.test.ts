@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import {
   messageRevision,
   reconcileMessageRevisions,
@@ -12,11 +11,13 @@ import {
 } from "../src/core/message-revisions.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "../src/slack/message-gating.ts";
 import { sleep } from "../src/util/async.ts";
-import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SCOPE = "personal:alex@example.com" as ScopeId;
 const DM = "D123";
@@ -52,7 +53,7 @@ function revisions(entries: readonly SessionEntry[]): MessageRevisionPayload[] {
 }
 
 test("an edit of a recorded DM message appends one marker entry the model sees", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { text: "original text", ts: "100.1", name: "Alex Morgan" },
   ]);
@@ -74,7 +75,7 @@ test("an edit of a recorded DM message appends one marker entry the model sees",
 });
 
 test("edits and deletions of messages never recorded in the session append nothing", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { text: "original text", ts: "100.1", name: "Alex Morgan" },
   ]);
@@ -86,7 +87,7 @@ test("edits and deletions of messages never recorded in the session append nothi
 });
 
 test("repeated edit events with the same text dedupe to one marker; a real re-edit appends another", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { text: "original text", ts: "100.1", name: "Alex Morgan" },
   ]);
@@ -102,7 +103,7 @@ test("repeated edit events with the same text dedupe to one marker; a real re-ed
 });
 
 test("an unfurl-style edit event carrying the unchanged original text is a no-op", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { text: "original text", ts: "100.1", name: "Alex Morgan" },
   ]);
@@ -112,7 +113,7 @@ test("an unfurl-style edit event carrying the unchanged original text is a no-op
 });
 
 test("an edit back to the original text after a real edit is recorded", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { text: "original text", ts: "100.1", name: "Alex Morgan" },
   ]);
@@ -125,7 +126,7 @@ test("an edit back to the original text after a real edit is recorded", async ()
 });
 
 test("a deletion after an edit appends a second marker; repeated deletions dedupe", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { text: "original text", ts: "100.1", name: "Alex Morgan" },
   ]);
@@ -141,7 +142,7 @@ test("a deletion after an edit appends a second marker; repeated deletions dedup
 });
 
 test("self events and hidden originals are left alone", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { text: "original text", ts: "100.1", name: "Alex Morgan" },
     { text: "hidden", ts: "100.2", hidden: true },
@@ -152,7 +153,7 @@ test("self events and hidden originals are left alone", async () => {
 });
 
 test("a channel thread reply's edit reaches the thread session via the sub root", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `ch:${CH}:50.0`, "channel", [
     { text: "reply text", ts: "51.0", name: "Josh" },
   ]);
@@ -223,8 +224,8 @@ test("renderMessageRevision escapes attribute and body text", () => {
 const NO_WAIT = { attempts: 1, retryMs: 0 };
 
 test("while a turn holds the lease the ingest-time marker is skipped, and the turn-end catch-up records it", async () => {
-  const sessions = createMemorySessionStore();
-  const cache = createMemorySurfaceCache();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const session = await seedSession(sessions, `ch:${CH}:50.0`, "channel", [
     { text: "original text", ts: "50.0", name: "Alex Morgan" },
     { text: "second", ts: "51.0", name: "Ada" },
@@ -277,8 +278,8 @@ test("while a turn holds the lease the ingest-time marker is skipped, and the tu
 });
 
 test("the catch-up ignores the bot's own edits and non-Slack sessions", async () => {
-  const sessions = createMemorySessionStore();
-  const cache = createMemorySurfaceCache();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [{ text: "original text", ts: "100.1" }]);
   await cache.ingest([{ container: DM, ts: "100.1", text: "self edit", editedAt: Date.now(), self: true }]);
   const { lease } = await sessions.acquireLease(session.id, "turn");
@@ -309,7 +310,7 @@ test("the catch-up ignores the bot's own edits and non-Slack sessions", async ()
 });
 
 test("an edit whose marker is already recorded never takes the backfill lease", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [{ text: "original text", ts: "100.1" }]);
   await recordMessageRevisions(sessions, [edit()], NO_WAIT);
   const acquires: string[] = [];
@@ -326,7 +327,7 @@ test("an edit whose marker is already recorded never takes the backfill lease", 
 });
 
 test("the anchor is the last conversation entry, skipping system entries such as a fresh marker", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [{ text: "original text", ts: "100.1" }]);
   const conversationAt = (await sessions.getEntries(session.id)).at(-1)!.createdAt;
   await sleep(5);
@@ -339,12 +340,12 @@ test("the anchor is the last conversation entry, skipping system entries such as
   });
   await sessions.releaseLease(lease!);
   assert.equal(await revisionAnchorAt(sessions, session.id), conversationAt);
-  assert.equal(await revisionAnchorAt(createMemorySessionStore(), "nope"), undefined);
+  assert.equal(await revisionAnchorAt(createPostgresSessionStore(testDatabaseUrl()), "nope"), undefined);
 });
 
 test("an edit made before the message's own turn is still caught through the trigger timestamp", async () => {
-  const sessions = createMemorySessionStore();
-  const cache = createMemorySurfaceCache();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const cache = createPostgresSurfaceCache(testDatabaseUrl());
   const session = await seedSession(sessions, `ch:${CH}:50.0`, "channel", [{ text: "first", ts: "50.0" }]);
   const editedAt = Date.now() - 60_000;
   await cache.ingest([{ container: CH, ts: "51.0", sub: "50.0", text: "secnd", createdAt: editedAt - 1 }]);
@@ -384,7 +385,7 @@ test("an edit made before the message's own turn is still caught through the tri
 });
 
 test("imported agent posts receive attributed edits and deletions without creating assistant actions", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await seedSession(sessions, `dm:${DM}`, "dm", [
     { overheard: true, sourceRole: "agent", text: "Shall I restart it?", ts: "100.1" },
   ]);

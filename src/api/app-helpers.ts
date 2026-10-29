@@ -674,71 +674,74 @@ export function createAppHelpers(deps: AppDeps, app: App) {
     const drained: Array<{ signal: RunSignal; replayRunId?: string }> = [];
     const completed = await deps.runs.get(runId);
     if (completed && isSubagentThreadRef(completed.sessionId)) {
-      for (const { id, signal } of await deps.signals.pending(runId)) {
-        if (signal.kind === "abort" || signal.kind === "client_result" || !signal.text?.trim()) {
-          await deps.signals.acknowledge(runId, id);
-          continue;
+      const signals = deps.signals;
+      return deps.advisoryLock.withLock(`run-signal-replay:${runId}`, async () => {
+        for (const { id, signal } of await signals.pending(runId)) {
+          if (signal.kind === "abort" || signal.kind === "client_result" || !signal.text?.trim()) {
+            await signals.acknowledge(runId, id);
+            continue;
+          }
+          let replayRunId: string | undefined;
+          const dedupKey = `session-signal:${runId}:${id}`;
+          if (signal.sessionRequest) {
+            const {
+              clientTools: _clientTools,
+              desktopClientId: _desktopClientId,
+              ...sessionRequest
+            } = signal.sessionRequest;
+            const { run } = await deps.runs.enqueue({
+              sessionId: completed.sessionId,
+              request: sessionRequest,
+              dedupKey,
+              maxAttempts: deps.maxAttempts,
+            });
+            replayRunId = run.id;
+          } else if (signal.request) {
+            const {
+              approval: _ap,
+              redeliveryKey: _redeliveryKey,
+              clientTools: _clientTools,
+              desktopClientId: _desktopClientId,
+              ...base
+            } = signal.request;
+            const prior = completed.request;
+            const inheritedOptions = {
+              ...(base.model === undefined && prior.model !== undefined ? { model: prior.model } : {}),
+              ...(base.harness === undefined && prior.harness !== undefined ? { harness: prior.harness } : {}),
+              ...(base.thinkingLevel === undefined && prior.thinkingLevel !== undefined
+                ? { thinkingLevel: prior.thinkingLevel }
+                : {}),
+              ...(base.fastMode === undefined && prior.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
+              ...(base.timezone === undefined && prior.timezone !== undefined ? { timezone: prior.timezone } : {}),
+            };
+            const replayed = await app.turn(
+              { ...base, ...inheritedOptions, async: true, idempotencyKey: dedupKey },
+              { signalDedupKey: dedupKey },
+            );
+            replayRunId = replayed.runId;
+            if (!replayRunId && replayed.status !== "refused") continue;
+          } else {
+            const {
+              approval: _approval,
+              attachments: _attachments,
+              displayText: _display,
+              clientTools: _clientTools,
+              desktopClientId: _desktopClientId,
+              ...request
+            } = completed.request;
+            const { run } = await deps.runs.enqueue({
+              sessionId: completed.sessionId,
+              request: { ...request, text: signal.text, origin: { kind: "automation", screenData: signal.text } },
+              dedupKey,
+              maxAttempts: deps.maxAttempts,
+            });
+            replayRunId = run.id;
+          }
+          await signals.acknowledge(runId, id);
+          drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
         }
-        let replayRunId: string | undefined;
-        const dedupKey = `session-signal:${runId}:${id}`;
-        if (signal.sessionRequest) {
-          const {
-            clientTools: _clientTools,
-            desktopClientId: _desktopClientId,
-            ...sessionRequest
-          } = signal.sessionRequest;
-          const { run } = await deps.runs.enqueue({
-            sessionId: completed.sessionId,
-            request: sessionRequest,
-            dedupKey,
-            maxAttempts: deps.maxAttempts,
-          });
-          replayRunId = run.id;
-        } else if (signal.request) {
-          const {
-            approval: _ap,
-            redeliveryKey: _redeliveryKey,
-            clientTools: _clientTools,
-            desktopClientId: _desktopClientId,
-            ...base
-          } = signal.request;
-          const prior = completed.request;
-          const inheritedOptions = {
-            ...(base.model === undefined && prior.model !== undefined ? { model: prior.model } : {}),
-            ...(base.harness === undefined && prior.harness !== undefined ? { harness: prior.harness } : {}),
-            ...(base.thinkingLevel === undefined && prior.thinkingLevel !== undefined
-              ? { thinkingLevel: prior.thinkingLevel }
-              : {}),
-            ...(base.fastMode === undefined && prior.fastMode !== undefined ? { fastMode: prior.fastMode } : {}),
-            ...(base.timezone === undefined && prior.timezone !== undefined ? { timezone: prior.timezone } : {}),
-          };
-          const replayed = await app.turn(
-            { ...base, ...inheritedOptions, async: true, idempotencyKey: dedupKey },
-            { signalDedupKey: dedupKey },
-          );
-          replayRunId = replayed.runId;
-          if (!replayRunId && replayed.status !== "refused") continue;
-        } else {
-          const {
-            approval: _approval,
-            attachments: _attachments,
-            displayText: _display,
-            clientTools: _clientTools,
-            desktopClientId: _desktopClientId,
-            ...request
-          } = completed.request;
-          const { run } = await deps.runs.enqueue({
-            sessionId: completed.sessionId,
-            request: { ...request, text: signal.text, origin: { kind: "automation", screenData: signal.text } },
-            dedupKey,
-            maxAttempts: deps.maxAttempts,
-          });
-          replayRunId = run.id;
-        }
-        await deps.signals.acknowledge(runId, id);
-        drained.push({ signal, ...(replayRunId ? { replayRunId } : {}) });
-      }
-      return drained;
+        return drained;
+      });
     }
     for (const signal of await deps.signals.takePending(runId)) {
       if (signal.kind === "abort" || signal.kind === "client_result") continue;

@@ -8,7 +8,9 @@ import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tool
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
-import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
+import { startSignalPoll } from "../src/runs/run-signal-store.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
@@ -202,7 +204,7 @@ for (const harnessId of ["claude"] as const) {
 
 for (const harnessId of ["claude"] as const) {
   test(`${harnessId} persists user Stop when shutdown races with the real run signal`, async () => {
-    const signals = createMemoryRunSignalStore();
+    const signals = createPostgresRunSignalStore(testDatabaseUrl());
     const cancel = new AbortController();
     const emitted: SessionEntry[] = [];
     const { harness, calls } = fakeAdapter(async (turn) => {

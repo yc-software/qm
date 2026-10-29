@@ -1,11 +1,9 @@
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createPiHarness, piHarnessConfigOptions } from "../src/harness/pi-harness.ts";
 import { loadConfig } from "../src/config.ts";
-import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy, DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "../src/memory/strategy.ts";
 import {
   DEFAULT_STRATEGY_FLOORS,
@@ -44,6 +42,9 @@ const conversations = readdirSync(fixtureDir)
   .sort()
   .map((f) => parseBenchConversation(JSON.parse(readFileSync(join(fixtureDir, f), "utf8")), f));
 
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error("DATABASE_URL is required");
+
 const harness = createPiHarness({ ...piHarnessConfigOptions(loadConfig()), tempDirPrefix: "membench" });
 if (!harness.models.oneShot) {
   console.error("harness has no oneShot — cannot judge");
@@ -54,10 +55,9 @@ const oneShot = harness.models.oneShot.bind(harness.models);
 const results: BenchResult[] = [];
 for (const kind of kinds) {
   for (const conversation of conversations) {
-    const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), `membench-${kind}-`)));
-    const memory = createMemoryService(workspace);
+    const memory = createPostgresMemoryService(databaseUrl);
     const { strategy } = createMemoryStrategy(kind, { harness: harness.models, memory });
-    const scopeId = "user:bench";
+    const scopeId = `user:bench-${kind}-${conversation.id}-${Date.now()}`;
     if (!strategy.onTurnEnd) {
       console.log(`[${kind}] ${conversation.id}: no automatic capture — judging empty notebook`);
     }

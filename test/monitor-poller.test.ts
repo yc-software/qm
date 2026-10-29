@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMonitorPoller } from "../src/monitors/monitor-poller.ts";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -11,6 +10,8 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
@@ -103,8 +104,8 @@ async function harness(opts?: {
   onRun?: () => Promise<void>;
 }) {
   const fake = fakeSandbox();
-  const monitors = createMonitorStore();
-  const processes = createMemoryProcessRegistry();
+  const monitors = createMonitorStore(testMap());
+  const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
   const run = async (req: TurnRequest): Promise<TurnResult> => {
@@ -112,14 +113,14 @@ async function harness(opts?: {
     await opts?.onRun?.();
     return opts?.result ?? { status: "ok", reply: opts?.reply ?? "MONITOR-REPLY" };
   };
-  const identity = createIdentityService();
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const poller = createMonitorPoller({
     ...singleProcessDeps(),
     monitors,
     processes,
     sandbox: fake.sandbox,
     deliveries,
-    idempotency: createIdempotencyStore(),
+    idempotency: createIdempotencyStore(testMap()),
     identity,
     run,
     ...(opts?.leaderLease ? { leaderLease: opts.leaderLease } : {}),

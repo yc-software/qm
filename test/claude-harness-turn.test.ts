@@ -2,12 +2,13 @@ import { readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 import { createGoalRecord } from "../src/harness/goal.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 type FakeSdkMessage = Record<string, unknown>;
 type Script = (prompts: AsyncIterable<{ message: { content: unknown } }>) => AsyncGenerator<FakeSdkMessage>;
@@ -149,7 +150,7 @@ test("Claude notices use each turn's timezone without leaking it into later turn
 });
 
 test("a steered turn persists every reply, not only the last result's", async () => {
-  const signals = createMemoryRunSignalStore();
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const runId = "run-steer";
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
@@ -190,7 +191,7 @@ test("a steered turn persists every reply, not only the last result's", async ()
 for (const shutdown of [false, true]) {
   test(`a user stop stays explicit when shutdown=${shutdown}`, async () => {
     const cancel = new AbortController();
-    const signals = createMemoryRunSignalStore();
+    const signals = createPostgresRunSignalStore(testDatabaseUrl());
     const runId = "run-stop-error";
     currentScript = async function* (prompts) {
       await prompts[Symbol.asyncIterator]().next();
@@ -407,7 +408,7 @@ test("recorded LLM requests carry real usage instead of a hardcoded truncation f
 });
 
 test("each steered prompt gets its own LLM request record", async () => {
-  const signals = createMemoryRunSignalStore();
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const runId = "run-steps";
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
@@ -556,7 +557,7 @@ for (const terminal of [{ stop_reason: "max_tokens" }, { is_error: true }]) {
 }
 
 test("steering forwards prepared images and file paths while retaining the original caption in history", async () => {
-  const signals = createMemoryRunSignalStore();
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const runId = "run-steer-files";
   const request = {
     surface: "web",
@@ -623,7 +624,7 @@ test("Claude sends documents without persisting their contents in session entrie
 });
 
 test("Claude includes steered native and fallback documents without capturing their echoed contents", async () => {
-  const signals = createMemoryRunSignalStore();
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const pdf = (await readFile(new URL("./fixtures/documents/sample.pdf", import.meta.url))).toString("base64");
   const docx = (await readFile(new URL("./fixtures/documents/sample.docx", import.meta.url))).toString("base64");
   let sent = "";
@@ -747,7 +748,7 @@ test("a Claude worker the swarm holds ends its goal turn quietly instead of as a
 });
 
 test("Claude emits repeated-text steers only at distinct native user echoes", async () => {
-  const signals = createMemoryRunSignalStore();
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const { turn, entries } = harnessTurn({ runId: "echo-intake", input: "same text" });
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();
@@ -786,7 +787,7 @@ test("Claude emits repeated-text steers only at distinct native user echoes", as
 });
 
 test("Claude retains a queued message which the SDK never consumes", async () => {
-  const signals = createMemoryRunSignalStore();
+  const signals = createPostgresRunSignalStore(testDatabaseUrl());
   const { turn, entries } = harnessTurn({ runId: "no-echo" });
   currentScript = async function* (prompts) {
     const iterator = prompts[Symbol.asyncIterator]();

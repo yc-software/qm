@@ -68,5 +68,6 @@ test("the org allowed-models list restricts the runtime-config picker and cleari
     assert.ok(restored.includes("deepseek/deepseek-chat-v3.1"));
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
   }
 });

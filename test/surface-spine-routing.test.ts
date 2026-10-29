@@ -117,7 +117,11 @@ test("spine ON: an @mention engages a sub-conversation session that posts (no se
       "no per-container ambient session is created",
     );
 
-    const subEntries = await built.sessions.getEntries(sub!.id);
+    let subEntries = await built.sessions.getEntries(sub!.id);
+    for (let attempt = 0; attempt < 250 && !subEntries.some((e) => e.type === "assistant"); attempt++) {
+      await new Promise((r) => setTimeout(r, 20));
+      subEntries = await built.sessions.getEntries(sub!.id);
+    }
     assert.ok(
       subEntries.some((e) => e.type === "assistant"),
       "the sub-conversation session did the work + reply",

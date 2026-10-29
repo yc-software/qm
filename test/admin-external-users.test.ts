@@ -67,7 +67,10 @@ function start(
     ...(opts.emailAuthPrincipals ? { emailAuthPrincipals: opts.emailAuthPrincipals } : {}),
   };
   const server = opts.signed
-    ? createServer(built.app, { ...deps, signingSecret: SECRET })
+    ? createServer(built.app, {
+        ...deps,
+        signingSecret: SECRET,
+      })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

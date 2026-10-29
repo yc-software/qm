@@ -5,6 +5,7 @@ import { getRequiredModel, thinkingLevelsForHarness, safeModelMetadata } from ".
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
+import { testConfigStore } from "./support/test-database.ts";
 
 const adaptiveId = "claude-sonnet-4-6";
 
@@ -187,10 +188,9 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
 });
 
 test("runtime scope writes and turn dispatch reject unsupported modes without changing legacy selections", async () => {
-  const { createMemoryConfigStore } = await import("../src/resolution/config-store.ts");
   const { resolveRuntimeChoice } = await import("../src/harness/harness-router.ts");
   const { createRuntimeService } = await import("../src/harness/runtime-control.ts");
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["pi", "claude", "codex", "opencode"]);
   const active = { harnessId: "pi" as const, modelId: "claude-sonnet-5", effortLevel: "auto" };
   await config.setRuntimeSelection("personal:test", active);

@@ -5,6 +5,7 @@ import * as modalClient from "../src/sandbox/modal-client.ts";
 import * as mockHarness from "./support/mock-harness.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { createServer } from "../src/api/server.ts";
@@ -190,264 +191,231 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
   }
 });
 
-for (const storage of ["memory", "postgres"] as const) {
-  test(
-    `${storage}: HTTP root spawns three peers and receives their replies using real orchestrator-issued credentials`,
-    { skip: storage === "postgres" && !process.env.SWARM_TEST_DATABASE_URL },
-    async () => {
-      let databaseUrl: string | undefined;
-      let cleanupDatabase = async () => {};
-      let recordedErrors: (() => Promise<number>) | undefined;
-      let errorsAfterStop: number | undefined;
-      if (storage === "postgres") {
-        const { default: pg } = await import("pg");
-        const url = new URL(process.env.SWARM_TEST_DATABASE_URL!);
-        const schema = `swarm_http_${process.pid}`;
-        const pool = new pg.Pool({ connectionString: url.toString() });
-        await pool.query(`CREATE SCHEMA ${schema}`);
-        url.searchParams.set("options", `-c search_path=${schema}`);
-        databaseUrl = url.toString();
-        recordedErrors = async () =>
-          Number((await pool.query(`SELECT COUNT(*) AS n FROM ${schema}.error_events`)).rows[0].n);
-        cleanupDatabase = async () => {
-          try {
-            await pool.query(`DROP SCHEMA ${schema} CASCADE`);
-          } finally {
-            await pool.end();
-          }
-        };
-      }
-      const config = testConfig({
-        databaseUrl,
-        sessionStore: storage,
-        runStore: storage,
-
-        modalSandbox: { tokenId: "test", tokenSecret: "test" },
-        signingSecret: "swarm-http-source-signing-key-distinct",
-        portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
-        apiBaseUrl: "http://core.test",
-      });
-      if (storage === "postgres") {
-        for (const overrides of [{ runStore: "memory" as const }, { sessionStore: "memory" as const }]) {
-          const mixed = buildApp({ ...config, ...overrides });
-          assert.equal(mixed.app.swarms, undefined);
-          await mixed.runtime.stop();
-        }
-      }
-      let built = buildApp(config);
-      const tokenCommand = "printf '%s' \"$AGENT_API_TOKEN\"";
-      const issuedTokens = new Map<string, string>();
-      const captureIssuedTokens = () => {
-        const run = built.sandbox.run.bind(built.sandbox);
-        built.sandbox.run = async (handle, command, opts) => {
-          if (command === tokenCommand) {
-            const token = handle.env?.AGENT_API_TOKEN;
-            assert.ok(token, "the orchestrator supplies a capability to the sandbox");
-            const claims = await verifyCapabilityToken(token, config.capabilitySecret!);
-            assert.ok(claims?.sessionId);
-            assert.ok(claims?.runId);
-            issuedTokens.set(`${claims.sessionId}:${claims.runId}`, token);
-          }
-          return run(handle, command, opts);
-        };
-      };
-      captureIssuedTokens();
-      const { serverDeps } = await import("../src/wiring.ts");
-      let server = createServer(built.app, serverDeps(config, built));
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-      let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-      let rootId = "";
-      const childIds = new Set<string>();
-      const issued: Array<{ sessionId: string; attempt: number }> = [];
-      exerciseTurn = async (turn) => {
-        if (turn.input !== "http-swarm-root" && !turn.input.includes("http-swarm-worker")) return;
-        const result = await turn.tools.execute(tokenCommand);
-        assert.equal(result.code, 0, result.stderr);
-        assert.equal(result.stdout, "<redacted:credential>");
-        const token = issuedTokens.get(`${turn.session.id}:${turn.runId}`);
-        assert.ok(token, "the HTTP fixture uses the actual issued capability, outside tool output");
+test("HTTP root spawns three peers and receives their replies using real orchestrator-issued credentials", async () => {
+  const databaseUrl = testDatabaseUrl();
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({ connectionString: databaseUrl });
+  const config = testConfig({
+    databaseUrl,
+    modalSandbox: { tokenId: "test", tokenSecret: "test" },
+    signingSecret: "swarm-http-source-signing-key-distinct",
+    portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
+    apiBaseUrl: "http://core.test",
+  });
+  let errorsAfterStop: number;
+  let built = buildApp(config);
+  const tokenCommand = "printf '%s' \"$AGENT_API_TOKEN\"";
+  const issuedTokens = new Map<string, string>();
+  const captureIssuedTokens = () => {
+    const run = built.sandbox.run.bind(built.sandbox);
+    built.sandbox.run = async (handle, command, opts) => {
+      if (command === tokenCommand) {
+        const token = handle.env?.AGENT_API_TOKEN;
+        assert.ok(token, "the orchestrator supplies a capability to the sandbox");
         const claims = await verifyCapabilityToken(token, config.capabilitySecret!);
-        assert.equal(claims?.sessionId, turn.session.id);
-        assert.equal(claims?.runId, turn.runId);
-        assert.ok(claims?.runAttempt);
-        assert.ok(claims?.runLeaseToken);
-        issued.push({ sessionId: claims.sessionId!, attempt: claims.runAttempt });
-        const root = turn.input === "http-swarm-root";
-        if (root) rootId = turn.session.id;
-        else childIds.add(turn.session.id);
-        const body = root
-          ? {
-              action: "spawn",
-              requestId: "pool",
-              count: 3,
-              backend: "sprites",
-              settings: { agents: 8, turnMs: 900_000 },
-              text: "http-swarm-worker",
-            }
-          : {
-              action: "send",
-              requestId: "reply",
-              audience: [rootId],
-              notify: true,
-              text: "http-worker-result",
-            };
-        const response = await fetch(`${base}/v1/swarm`, {
-          method: "POST",
-          headers: { "x-agent-capability": token, "content-type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        assert.equal(response.status, 202, await response.text());
-        if (!root) {
-          const headers = { "x-agent-capability": token, "content-type": "application/json" };
-          const inspected = await fetch(`${base}/v1/swarm`, { headers });
-          const view = (await inspected.json()) as {
-            self: { id: string };
-            peers: unknown[];
-            settings: { agents: number; turnMs: number };
-            backend: string;
-          };
-          assert.equal(view.peers.length, 4);
-          assert.equal(view.settings.turnMs, 900_000);
-          assert.equal(view.settings.agents, 8);
-          assert.equal(view.backend, "sprites");
-          for (const message of [
-            { action: "send", requestId: "self", audience: [view.self.id], text: "http-self-note" },
-            { action: "send", requestId: "all", audience: "all", notify: false, text: "http-shared-note" },
-          ]) {
-            const sent = await fetch(`${base}/v1/swarm`, { method: "POST", headers, body: JSON.stringify(message) });
-            assert.equal(sent.status, 202, await sent.text());
-          }
-          for (const invalid of [
-            { action: "send", requestId: "forged", audience: [view.self.id, "forged-peer"], text: "must reject" },
-            { action: "spawn", requestId: "reconfigure", settings: { turnMs: 10 }, text: "must reject" },
-          ]) {
-            const rejected = await fetch(`${base}/v1/swarm`, {
-              method: "POST",
-              headers,
-              body: JSON.stringify(invalid),
-            });
-            assert.equal(rejected.status, 400);
-          }
-          const history = await fetch(`${base}/v1/swarm?read=1`, { headers });
-          assert.match(await history.text(), /http-shared-note/);
-        }
-      };
-      try {
-        const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "HTTP test root");
-        await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
-        const body = JSON.stringify({
-          surface: "web",
-          actor: { externalId: "U1" },
-          conversation: { kind: "dm", threadRef: "http-swarm-root" },
-          text: "http-swarm-root",
-        });
-        const rootResponse = await fetch(`${base}/v1/turns`, {
-          method: "POST",
-          headers: signedRequestHeaders(config.signingSecret!, "POST", "/v1/turns", body, {
-            "content-type": "application/json",
-          }),
-          body,
-        });
-        assert.equal(rootResponse.status, 200);
-        const root = (await rootResponse.json()) as { status: string };
-        assert.equal(root.status, "ok", JSON.stringify(root));
-        if (storage === "postgres") {
-          await new Promise<void>((resolve) => server.close(() => resolve()));
-          await built.runtime.stop();
-          built = buildApp(config);
-          captureIssuedTokens();
-          server = createServer(built.app, serverDeps(config, built));
-          await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-          base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-        }
-        await built.app.swarms!.sweep();
-        const workers = (await built.runs.list()).filter((run) => run.request.swarm);
-        assert.equal(workers.length, 3);
-        const worker = workers[0]!;
-        built.runtime.start();
-        const completed = await Promise.all(workers.map((run) => built.runs.waitFor(run.id, 15_000)));
-        for (const run of completed) {
-          assert.equal(run.result?.status, "ok", JSON.stringify(run.result));
-          assert.equal(runResultDelivery(run), null);
-        }
-        await built.app.swarms!.sweep();
-        const replies = (await built.runs.list()).filter(
-          (run) => run.request.swarm && run.request.conversation.threadRef === "http-swarm-root",
-        );
-        assert.equal(replies.length, 3);
-        for (const reply of replies) assert.equal((await built.runs.waitFor(reply.id, 15_000)).result?.status, "ok");
-        assert.equal(issued.length, 4);
-        assert.equal(childIds.size, 3);
-        for (const childId of childIds) {
-          assert.notEqual(childId, rootId);
-          assert.ok(await built.app.getSessionForViewer(childId, "U1"));
-          assert.equal(await built.app.getSessionForViewer(childId, "U2"), null);
-        }
-        const view = await built.app.getSessionForViewer(rootId, "U1");
-        assert.ok(JSON.stringify(view?.entries).includes("http-worker-result"));
-        built.app.swarms!.stop();
-        const human = { kind: "human" as const, actorId: "U1", sessionId: rootId };
-        const entered = Promise.withResolvers<string>();
-        exerciseTurn = async (turn) => {
-          if (!turn.input.includes("http-cancel-worker")) return;
-          const aborted = Promise.withResolvers<void>();
-          const stopPoll = startSignalPoll(built.signals, turn.runId!, {
-            onSteer: async () => {},
-            onAbort: async () => aborted.resolve(),
-          });
-          entered.resolve(turn.runId!);
-          try {
-            await withTimeout(() => aborted.promise, 15_000, "abort signal");
-            return { stopped: true };
-          } finally {
-            await stopPoll();
-          }
-        };
-        await built.app.swarms!.spawn(human, { requestId: "cancel", text: "http-cancel-worker" });
-        await built.app.swarms!.sweep();
-        const cancelRunId = await withTimeout(() => entered.promise, 15_000, "worker start");
-        const stopPath = `/v1/runs/${cancelRunId}/signal`;
-        const stopBody = JSON.stringify({ kind: "abort" });
-        const portal = await mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, config.portalIdentitySecret!);
-        const stopped = await fetch(`${base}${stopPath}`, {
-          method: "POST",
-          headers: signedRequestHeaders(config.signingSecret!, "POST", stopPath, stopBody, {
-            "content-type": "application/json",
-            "x-portal-identity": portal,
-          }),
-          body: stopBody,
-        });
-        assert.equal(stopped.status, 200, await stopped.text());
-        const cancelled = await built.runs.waitFor(cancelRunId, 15_000);
-        assert.equal(cancelled.result?.stopped, true, JSON.stringify(cancelled.result));
-        let revokedExecuted = false;
-        exerciseTurn = async (turn) => {
-          if (turn.input.includes("http-revoked-work")) revokedExecuted = true;
-        };
-        const revoked = await built.app.swarms!.send(human, {
-          requestId: "revoke",
-          audience: [worker.request.swarm!.recipientId],
-          text: "http-revoked-work",
-        });
-        await built.sessions.addParticipant(rootId, "U2");
-        await built.app.swarms!.sweep();
-        const blocked = (await built.runs.list()).find((run) => run.request.swarm?.messageId === revoked.id)!;
-        assert.ok(blocked);
-        const rejected = await built.runs.waitFor(blocked.id, 15_000);
-        assert.equal(rejected.status, "failed");
-        assert.equal(rejected.errorAttempts, 1);
-        assert.equal(revokedExecuted, false);
-      } finally {
-        exerciseTurn = undefined;
-        await new Promise<void>((resolve) => server.close(() => resolve()));
-        await built.runtime.stop();
-        errorsAfterStop = await recordedErrors?.();
-        await cleanupDatabase();
+        assert.ok(claims?.sessionId);
+        assert.ok(claims?.runId);
+        issuedTokens.set(`${claims.sessionId}:${claims.runId}`, token);
       }
-      if (storage === "postgres") assert.ok(errorsAfterStop! > 0);
-    },
-  );
-}
+      return run(handle, command, opts);
+    };
+  };
+  captureIssuedTokens();
+  const { serverDeps } = await import("../src/wiring.ts");
+  let server = createServer(built.app, serverDeps(config, built));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  let rootId = "";
+  const childIds = new Set<string>();
+  const issued: Array<{ sessionId: string; attempt: number }> = [];
+  exerciseTurn = async (turn) => {
+    if (turn.input !== "http-swarm-root" && !turn.input.includes("http-swarm-worker")) return;
+    const result = await turn.tools.execute(tokenCommand);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "<redacted:credential>");
+    const token = issuedTokens.get(`${turn.session.id}:${turn.runId}`);
+    assert.ok(token, "the HTTP fixture uses the actual issued capability, outside tool output");
+    const claims = await verifyCapabilityToken(token, config.capabilitySecret!);
+    assert.equal(claims?.sessionId, turn.session.id);
+    assert.equal(claims?.runId, turn.runId);
+    assert.ok(claims?.runAttempt);
+    assert.ok(claims?.runLeaseToken);
+    issued.push({ sessionId: claims.sessionId!, attempt: claims.runAttempt });
+    const root = turn.input === "http-swarm-root";
+    if (root) rootId = turn.session.id;
+    else childIds.add(turn.session.id);
+    const body = root
+      ? {
+          action: "spawn",
+          requestId: "pool",
+          count: 3,
+          backend: "sprites",
+          settings: { agents: 8, turnMs: 900_000 },
+          text: "http-swarm-worker",
+        }
+      : {
+          action: "send",
+          requestId: "reply",
+          audience: [rootId],
+          notify: true,
+          text: "http-worker-result",
+        };
+    const response = await fetch(`${base}/v1/swarm`, {
+      method: "POST",
+      headers: { "x-agent-capability": token, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 202, await response.text());
+    if (!root) {
+      const headers = { "x-agent-capability": token, "content-type": "application/json" };
+      const inspected = await fetch(`${base}/v1/swarm`, { headers });
+      const view = (await inspected.json()) as {
+        self: { id: string };
+        peers: unknown[];
+        settings: { agents: number; turnMs: number };
+        backend: string;
+      };
+      assert.equal(view.peers.length, 4);
+      assert.equal(view.settings.turnMs, 900_000);
+      assert.equal(view.settings.agents, 8);
+      assert.equal(view.backend, "sprites");
+      for (const message of [
+        { action: "send", requestId: "self", audience: [view.self.id], text: "http-self-note" },
+        { action: "send", requestId: "all", audience: "all", notify: false, text: "http-shared-note" },
+      ]) {
+        const sent = await fetch(`${base}/v1/swarm`, { method: "POST", headers, body: JSON.stringify(message) });
+        assert.equal(sent.status, 202, await sent.text());
+      }
+      for (const invalid of [
+        { action: "send", requestId: "forged", audience: [view.self.id, "forged-peer"], text: "must reject" },
+        { action: "spawn", requestId: "reconfigure", settings: { turnMs: 10 }, text: "must reject" },
+      ]) {
+        const rejected = await fetch(`${base}/v1/swarm`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(invalid),
+        });
+        assert.equal(rejected.status, 400);
+      }
+      const history = await fetch(`${base}/v1/swarm?read=1`, { headers });
+      assert.match(await history.text(), /http-shared-note/);
+    }
+  };
+  try {
+    const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "HTTP test root");
+    await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
+    const body = JSON.stringify({
+      surface: "web",
+      actor: { externalId: "U1" },
+      conversation: { kind: "dm", threadRef: "http-swarm-root" },
+      text: "http-swarm-root",
+    });
+    const rootResponse = await fetch(`${base}/v1/turns`, {
+      method: "POST",
+      headers: signedRequestHeaders(config.signingSecret!, "POST", "/v1/turns", body, {
+        "content-type": "application/json",
+      }),
+      body,
+    });
+    assert.equal(rootResponse.status, 200);
+    const root = (await rootResponse.json()) as { status: string };
+    assert.equal(root.status, "ok", JSON.stringify(root));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
+    built = buildApp(config);
+    captureIssuedTokens();
+    server = createServer(built.app, serverDeps(config, built));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await built.app.swarms!.sweep();
+    const workers = (await built.runs.list()).filter((run) => run.request.swarm);
+    assert.equal(workers.length, 3);
+    const worker = workers[0]!;
+    built.runtime.start();
+    const completed = await Promise.all(workers.map((run) => built.runs.waitFor(run.id, 15_000)));
+    for (const run of completed) {
+      assert.equal(run.result?.status, "ok", JSON.stringify(run.result));
+      assert.equal(runResultDelivery(run), null);
+    }
+    await built.app.swarms!.sweep();
+    const replies = (await built.runs.list()).filter(
+      (run) => run.request.swarm && run.request.conversation.threadRef === "http-swarm-root",
+    );
+    assert.equal(replies.length, 3);
+    for (const reply of replies) assert.equal((await built.runs.waitFor(reply.id, 15_000)).result?.status, "ok");
+    assert.equal(issued.length, 4);
+    assert.equal(childIds.size, 3);
+    for (const childId of childIds) {
+      assert.notEqual(childId, rootId);
+      assert.ok(await built.app.getSessionForViewer(childId, "U1"));
+      assert.equal(await built.app.getSessionForViewer(childId, "U2"), null);
+    }
+    const view = await built.app.getSessionForViewer(rootId, "U1");
+    assert.ok(JSON.stringify(view?.entries).includes("http-worker-result"));
+    built.app.swarms!.stop();
+    const human = { kind: "human" as const, actorId: "U1", sessionId: rootId };
+    const entered = Promise.withResolvers<string>();
+    exerciseTurn = async (turn) => {
+      if (!turn.input.includes("http-cancel-worker")) return;
+      const aborted = Promise.withResolvers<void>();
+      const stopPoll = startSignalPoll(built.signals, turn.runId!, {
+        onSteer: async () => {},
+        onAbort: async () => aborted.resolve(),
+      });
+      entered.resolve(turn.runId!);
+      try {
+        await withTimeout(() => aborted.promise, 15_000, "abort signal");
+        return { stopped: true };
+      } finally {
+        await stopPoll();
+      }
+    };
+    await built.app.swarms!.spawn(human, { requestId: "cancel", text: "http-cancel-worker" });
+    await built.app.swarms!.sweep();
+    const cancelRunId = await withTimeout(() => entered.promise, 15_000, "worker start");
+    const stopPath = `/v1/runs/${cancelRunId}/signal`;
+    const stopBody = JSON.stringify({ kind: "abort" });
+    const portal = await mintPortalIdentity({ p: "U1", exp: Date.now() + 60_000 }, config.portalIdentitySecret!);
+    const stopped = await fetch(`${base}${stopPath}`, {
+      method: "POST",
+      headers: signedRequestHeaders(config.signingSecret!, "POST", stopPath, stopBody, {
+        "content-type": "application/json",
+        "x-portal-identity": portal,
+      }),
+      body: stopBody,
+    });
+    assert.equal(stopped.status, 200, await stopped.text());
+    const cancelled = await built.runs.waitFor(cancelRunId, 15_000);
+    assert.equal(cancelled.result?.stopped, true, JSON.stringify(cancelled.result));
+    let revokedExecuted = false;
+    exerciseTurn = async (turn) => {
+      if (turn.input.includes("http-revoked-work")) revokedExecuted = true;
+    };
+    const revoked = await built.app.swarms!.send(human, {
+      requestId: "revoke",
+      audience: [worker.request.swarm!.recipientId],
+      text: "http-revoked-work",
+    });
+    await built.sessions.addParticipant(rootId, "U2");
+    await built.app.swarms!.sweep();
+    const blocked = (await built.runs.list()).find((run) => run.request.swarm?.messageId === revoked.id)!;
+    assert.ok(blocked);
+    const rejected = await built.runs.waitFor(blocked.id, 15_000);
+    assert.equal(rejected.status, "failed");
+    assert.equal(rejected.errorAttempts, 1);
+    assert.equal(revokedExecuted, false);
+  } finally {
+    exerciseTurn = undefined;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
+    try {
+      errorsAfterStop = Number((await pool.query("SELECT COUNT(*) AS n FROM error_events")).rows[0].n);
+    } finally {
+      await pool.end();
+    }
+  }
+  assert.ok(errorsAfterStop > 0);
+});
 
 test("unbound request fields cannot claim verified swarm provenance", async () => {
   const built = buildApp(testConfig());

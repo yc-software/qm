@@ -22,6 +22,7 @@ export interface SuggestedActivityProfile extends ManagedCronClaim {
   timezone: string;
   lastSeenAt: number;
   lastBootstrapAt?: number;
+  dismissalRefreshAt?: number;
   managedAction?: string;
   seeds?: SuggestedActivity[];
   dismissed?: DismissedActivity[];
@@ -140,8 +141,25 @@ export function createSuggestedActivityService(deps: {
       let pending = runs.some((run) => run.status === "running");
       const dismissedAt = Math.max(0, ...(profile.dismissed ?? []).map((entry) => entry.at));
       if ((refresh || !poll) && !pending && cron.enabled && dismissedAt > (runs.at(-1)?.firedAt ?? 0)) {
-        const result = await deps.scheduler.runNow(cron.id);
-        pending = result.started || result.reason === "already_running";
+        let won = !deps.store.update;
+        await deps.store.update?.(principalId, (value) => {
+          won = (value.dismissalRefreshAt ?? 0) < dismissedAt;
+          return won ? { ...value, dismissalRefreshAt: dismissedAt } : value;
+        });
+        if (!won) pending = true;
+        else {
+          const release = async () => {
+            await deps.store.update?.(principalId, (value) =>
+              value.dismissalRefreshAt === dismissedAt ? { ...value, dismissalRefreshAt: 0 } : value,
+            );
+          };
+          const result = await deps.scheduler.runNow(cron.id).catch(async (err: unknown) => {
+            await release();
+            throw err;
+          });
+          pending = result.started || result.reason === "already_running";
+          if (!pending) await release();
+        }
       } else if (
         !pending &&
         cron.enabled &&

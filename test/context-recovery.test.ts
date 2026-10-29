@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createCompaction } from "../src/core/orchestrator/compaction.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { estimateHistoryTokens, forModelContext } from "../src/harness/context-compaction.ts";
 
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 async function fixture() {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("recovery", "dm", "personal:test");
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);

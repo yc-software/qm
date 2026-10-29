@@ -12,8 +12,7 @@ import { createMemoryEmbedder } from "../src/model/embeddings.ts";
 import { createModelVerifier } from "../src/model/model-verification.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
+import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import {
   setModelOverlays,
   resolveModel,
@@ -24,6 +23,7 @@ import {
   modelSupportedByHarness,
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const definition = {
   kind: "embedding",
@@ -38,7 +38,7 @@ afterEach(() => {
 
 test("verified embedding definitions survive registry reload but never become chat models", async () => {
   const credentials = createModelCredentialStore({
-    backing: createMemoryMap(),
+    backing: testMap(),
     keyMaterial: "test-key",
     fallback: { openai: "test-key" },
   });
@@ -51,7 +51,7 @@ test("verified embedding definitions survive registry reload but never become ch
       return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
     },
   });
-  const backing = createMemoryMap<import("../src/model/model-overlay-store.ts").StoredModelOverlay>();
+  const backing = testMap<import("../src/model/model-overlay-store.ts").StoredModelOverlay>();
   const writer = createModelOverlayStore(backing, undefined, verifier);
   await writer.upsert(definition, "admin");
   await assert.rejects(
@@ -129,12 +129,12 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
 });
 
 test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
-  const baseModels = createMemoryMap<PersistedBaseModel>();
-  const first = createMemoryConfigStore("test", { baseModels });
+  const baseModels = testMap<PersistedBaseModel>();
+  const first = testConfigStore("test", { baseModels });
   await first.setEmbeddingModel("gateway/embed");
   await first.setRuntimeSelection("org:test", { harnessId: "pi", modelId: "gpt-5.5" });
   await first.setRuntimeSelection("org:test", null);
-  const restarted = createMemoryConfigStore("test", { baseModels });
+  const restarted = testConfigStore("test", { baseModels });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);
   assert.equal(await first.getEmbeddingModelDurable(), null);

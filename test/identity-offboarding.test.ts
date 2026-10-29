@@ -12,6 +12,8 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "offboarding-secret".repeat(3);
 
@@ -43,7 +45,12 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       }),
     );
     await built.identity.hydrate();
-    server = createServer(built.app, { signingSecret: SECRET, identity: built.identity, auditLog: built.auditLog });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+      identity: built.identity,
+      auditLog: built.auditLog,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

@@ -2,19 +2,19 @@ import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { SocketModeClient } from "@slack/socket-mode";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createEnvelopeStaging, type StagedEnvelope } from "../src/slack/envelope-staging.ts";
 import { createDeferredAckReceiver, type AckGate } from "../src/slack/deferred-ack.ts";
 import { createHttpEventsReceiver } from "../src/slack/http-events.ts";
 import { createDeduper, dedupedRun } from "../src/slack/message-gating.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 
 function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite?: boolean } = {}) {
-  const store = createDirectoryStore();
+  const store = createPostgresDirectoryStore(testDatabaseUrl());
   const state = { memberIds: ["U_ONE"], failMembers: false, failUser: false, writes: 0 };
   const client = {
     async *paginate(method: string) {
@@ -141,7 +141,7 @@ for (const mode of ["socket", "http"] as const)
       const options = { failWrite: true };
       const { observe } = fixture(options);
       const deduper = createDeduper();
-      const map = createMemoryMap<StagedEnvelope>();
+      const map = testMap<StagedEnvelope>();
       const staging = createEnvelopeStaging(map, { account: "test", staleAfterMs: 0 });
       let release!: () => void;
       const blocked = new Promise<void>((resolve) => {
@@ -258,8 +258,10 @@ for (const mode of ["socket", "http"] as const)
         if (mode === "http") assert.equal(retryStatus, 200);
         assert.equal(retries.at(-1), 1);
       }
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let i = 0; i < 200 && admitted === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
       assert.equal(admitted, 1);
       assert.equal(attempts, 2);
+      for (let i = 0; i < 200 && (await map.entries()).length > 0; i++)
+        await new Promise((resolve) => setTimeout(resolve, 10));
       assert.equal((await map.entries()).length, 0);
     });

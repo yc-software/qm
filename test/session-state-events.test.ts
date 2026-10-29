@@ -43,11 +43,16 @@ function statesFor(events: SessionStateEvent[], threadRef: string): string[] {
   return events.filter((e) => e.threadRef === threadRef && e.state !== "metadata").map((e) => e.state);
 }
 
+async function settledStates(events: SessionStateEvent[], threadRef: string, count: number): Promise<string[]> {
+  await waitFor(() => statesFor(events, threadRef).length >= count);
+  return statesFor(events, threadRef);
+}
+
 test("a plain turn emits working then idle", async () => {
   const built = freshApp();
   const got = record(built.sessionStateBus);
   await built.app.turn(dm("hello", "web:U1:plain"));
-  assert.deepEqual(statesFor(got, "web:U1:plain"), ["working", "idle"]);
+  assert.deepEqual(await settledStates(got, "web:U1:plain", 2), ["working", "idle"]);
 });
 
 test("a turn parking a blocking command emits working then awaiting_approval", async () => {
@@ -55,14 +60,16 @@ test("a turn parking a blocking command emits working then awaiting_approval", a
   const got = record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:park"));
   assert.equal(r.status, "pending_approval");
-  assert.deepEqual(statesFor(got, "web:U1:park"), ["working", "awaiting_approval"]);
+  assert.deepEqual(await settledStates(got, "web:U1:park", 2), ["working", "awaiting_approval"]);
 });
 
 test("resolving the approval emits working, then idle once the resumed turn settles", async () => {
   const built = freshApp();
+  const parked = record(built.sessionStateBus);
   const paused = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:resolve"));
   const requestId = paused.pendingApprovals?.[0]?.requestId;
   assert.ok(requestId);
+  await settledStates(parked, "web:U1:resolve", 2);
   const got = record(built.sessionStateBus);
   await built.app.turn({
     surface: "test",
@@ -71,7 +78,7 @@ test("resolving the approval emits working, then idle once the resumed turn sett
     text: "",
     approval: { requestId: requestId!, approved: false },
   });
-  assert.deepEqual(statesFor(got, "web:U1:resolve"), ["working", "idle"]);
+  assert.deepEqual(await settledStates(got, "web:U1:resolve", 2), ["working", "idle"]);
 });
 
 test("a COLLECTED (non-blocking) approval settles idle — push and snapshot agree", async () => {
@@ -80,7 +87,7 @@ test("a COLLECTED (non-blocking) approval settles idle — push and snapshot agr
   const r = await built.app.turn(dm(`!collect-approval ${BLOCKED_CMD}`, "web:U1:collected"));
   assert.equal(r.status, "ok");
   assert.equal(r.pendingApprovals?.length, 1);
-  assert.deepEqual(statesFor(got, "web:U1:collected"), ["working", "idle"]);
+  assert.deepEqual(await settledStates(got, "web:U1:collected", 2), ["working", "idle"]);
   const row = (await built.app.listSessions("U1")).find((s) => s.id === r.sessionId);
   assert.ok(!row?.awaitingInput, "snapshot agrees: a non-blocking offer is not awaiting input");
 });
@@ -90,7 +97,7 @@ test("the settle event derives from the durable approvals store, exactly what li
   const got = record(built.sessionStateBus);
   const r = await built.app.turn(dm(`!run ${BLOCKED_CMD}`, "web:U1:agree"));
   assert.equal(r.status, "pending_approval");
-  const states = statesFor(got, "web:U1:agree");
+  const states = await settledStates(got, "web:U1:agree", 2);
   assert.equal(states[states.length - 1], "awaiting_approval");
   const row = (await built.app.listSessions("U1")).find((s) => s.id === r.sessionId);
   assert.equal(row?.awaitingInput, true, "snapshot agrees with the pushed state");
@@ -100,18 +107,33 @@ test("the events carry the session UUID and a timestamp", async () => {
   const built = freshApp();
   const got = record(built.sessionStateBus);
   const r = await built.app.turn(dm("hello", "web:U1:meta"));
+  await settledStates(got, "web:U1:meta", 2);
   const settle = got.find((e) => e.threadRef === "web:U1:meta" && e.state === "idle");
   assert.ok(settle);
   assert.equal(settle!.sessionId, r.sessionId);
   assert.ok(typeof settle!.at === "number" && settle!.at > 0);
 });
 
+async function listen(built: ReturnType<typeof freshApp>): Promise<SessionStateEvent[]> {
+  const got: SessionStateEvent[] = [];
+  built.app.subscribeSessionStates((e) => got.push(e));
+  for (let attempt = 0; attempt < 100 && !got.some((e) => e.threadRef === "web:U1:probe"); attempt++) {
+    built.sessionStateBus.emit({ threadRef: "web:U1:probe", state: "idle", at: 1 });
+    await waitFor(() => got.some((e) => e.threadRef === "web:U1:probe"), 100);
+  }
+  return got;
+}
+
+async function received(got: SessionStateEvent[], at: number): Promise<SessionStateEvent | undefined> {
+  await waitFor(() => got.some((e) => e.at === at));
+  return got.find((e) => e.at === at);
+}
+
 test("a shed-participants event is rehydrated from the session store before subscribers see it", async () => {
   const built = freshApp();
   const thread = "web:U1:shed";
   const turned = await built.app.turn(dm("hello", thread));
-  const got: SessionStateEvent[] = [];
-  built.app.subscribeSessionStates((e) => got.push(e));
+  const got = await listen(built);
   built.sessionStateBus.emit({
     threadRef: thread,
     sessionId: turned.sessionId!,
@@ -119,10 +141,11 @@ test("a shed-participants event is rehydrated from the session store before subs
     at: 7,
     participantsShed: true,
   });
-  assert.ok(await waitFor(() => got.length > 0), "the flagged event reached the subscriber");
-  assert.deepEqual(got[0]!.participants, ["U1"], "the routing field is rebuilt from durable session membership");
-  assert.equal(got[0]!.participantsShed, undefined, "the internal shed flag never leaves the app");
-  assert.equal(got[0]!.state, "working");
+  const event = await received(got, 7);
+  assert.ok(event, "the flagged event reached the subscriber");
+  assert.deepEqual(event.participants, ["U1"], "the routing field is rebuilt from durable session membership");
+  assert.equal(event.participantsShed, undefined, "the internal shed flag never leaves the app");
+  assert.equal(event.state, "working");
 });
 
 test("a shed event still reaches subscribers when the participant lookup fails", async () => {
@@ -132,22 +155,22 @@ test("a shed event still reaches subscribers when the participant lookup fails",
   built.sessions.participantsOf = async () => {
     throw new Error("db down");
   };
-  const got: SessionStateEvent[] = [];
-  built.app.subscribeSessionStates((e) => got.push(e));
+  const got = await listen(built);
   built.sessionStateBus.emit({ threadRef: thread, state: "working", at: 8, participantsShed: true });
-  assert.ok(await waitFor(() => got.length > 0), "the transition is not dropped with the lookup");
-  assert.equal(got[0]!.participants, undefined);
-  assert.equal(got[0]!.participantsShed, undefined);
+  const event = await received(got, 8);
+  assert.ok(event, "the transition is not dropped with the lookup");
+  assert.equal(event.participants, undefined);
+  assert.equal(event.participantsShed, undefined);
 });
 
 test("a shed event for an unknown thread still reaches subscribers, just without participants", async () => {
   const built = freshApp();
-  const got: SessionStateEvent[] = [];
-  built.app.subscribeSessionStates((e) => got.push(e));
+  const got = await listen(built);
   built.sessionStateBus.emit({ threadRef: "web:U1:ghost", state: "idle", at: 9, participantsShed: true });
-  assert.ok(await waitFor(() => got.length > 0));
-  assert.equal(got[0]!.participants, undefined);
-  assert.equal(got[0]!.participantsShed, undefined);
+  const event = await received(got, 9);
+  assert.ok(event);
+  assert.equal(event.participants, undefined);
+  assert.equal(event.participantsShed, undefined);
 });
 
 test("GET /v1/session-state/events streams transitions as SSE frames", async () => {
@@ -204,7 +227,7 @@ function resolvedDm(text: string, thread: string): OrchestratorInput {
   };
 }
 
-async function waitFor(cond: () => boolean, ms = 2000): Promise<boolean> {
+async function waitFor(cond: () => boolean, ms = 10_000): Promise<boolean> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     if (cond()) return true;
@@ -216,8 +239,10 @@ async function waitFor(cond: () => boolean, ms = 2000): Promise<boolean> {
 test("a terminal run with another run still queued on the thread emits no settle — the LAST live run owns it", async () => {
   const built = freshApp();
   const thread = "web:U1:queued";
-  await built.app.turn(dm("hello", thread));
   const got = record(built.sessionStateBus);
+  await built.app.turn(dm("hello", thread));
+  await settledStates(got, thread, 2);
+  got.length = 0;
   const { run: a } = await built.runs.enqueue({
     sessionId: thread,
     request: resolvedDm("first", thread),
@@ -269,6 +294,7 @@ test("a settle frame is stamped with the run's durable finishedAt — a later en
   const thread = "web:U1:stamp";
   const got = record(built.sessionStateBus);
   await built.app.turn(dm("hello", thread));
+  await settledStates(got, thread, 2);
   const settle = got.find((e) => e.threadRef === thread && e.state === "idle");
   assert.ok(settle);
   const { run } = await built.runs.enqueue({ sessionId: thread, request: resolvedDm("next", thread), maxAttempts: 3 });

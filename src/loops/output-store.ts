@@ -1,5 +1,5 @@
 import type { LoopOutput, LoopOutputState, LoopShipResult } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -87,7 +87,7 @@ export function unresolvedOutput(output: LoopOutput): boolean {
 }
 
 export function createLoopOutputStore(
-  backing: DurableMap<LoopOutput> = createMemoryMap<LoopOutput>(),
+  backing: DurableMap<LoopOutput>,
   onEvent?: (output: LoopOutput) => void,
 ): LoopOutputStore {
   const forLoop = async (loopId: string): Promise<LoopOutput[]> =>

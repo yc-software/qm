@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { recorded } from "./support/recorded.ts";
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-egress-")) }));
@@ -47,6 +48,7 @@ test("egress: brokered calls surface as scope-labelled audit records, org-wide",
       principalId: "U2",
     });
 
+    await recorded(() => s.built.credentialUsage.list(), 2);
     const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
     assert.equal(d.scopeId, "org:default-org");
     assert.equal(d.total, 2, "both brokered calls counted");
@@ -98,6 +100,8 @@ test("egress: broker and firewall sources are unioned into one feed", async () =
       scopeLabel: "personal:U1",
     });
 
+    await recorded(() => s.built.credentialUsage.list(), 1);
+    await recorded(() => s.built.egressAudit.list(), 1);
     const d = await getJson(s.base, "/v1/admin/egress?scope=org:default-org");
     assert.equal(d.total, 2, "both sources counted in one feed");
     assert.deepEqual(d.bySource, { broker: 1, firewall: 1 });
@@ -148,6 +152,8 @@ test("egress: a scoped read returns only that scope's records, across both sourc
       scopeLabel: "personal:U2",
     });
 
+    await recorded(() => s.built.credentialUsage.list(), 2);
+    await recorded(() => s.built.egressAudit.list(), 2);
     const d = await getJson(s.base, "/v1/admin/egress?scope=personal:U1");
     assert.equal(d.total, 2, "the broker + firewall rows for this scope, and nothing else");
     assert.deepEqual(d.bySource, { broker: 1, firewall: 1 });

@@ -2,6 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildApp, serverDeps } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
@@ -9,7 +10,7 @@ import type { AddressInfo } from "node:net";
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
   const config = testConfig({ anthropicApiKey: "test-only" });
-  const built = buildApp(config);
+  const built = stopAtEnd(buildApp(config));
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   try {
@@ -29,7 +30,6 @@ test("admin lookup recognizes an existing model without asking for a clone templ
 
 import { lookupModel } from "../src/model/model-lookup.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { setModelOverlays } from "../src/model/pi-models.ts";
@@ -41,7 +41,7 @@ afterEach(() => {
 });
 const credentials = () =>
   createModelCredentialStore({
-    backing: createMemoryMap(),
+    backing: testMap(),
     keyMaterial: "test-key",
     fallback: { openai: "test-openai-key", anthropic: "test-anthropic-key" },
   });
@@ -135,11 +135,13 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
     anthropicApiKey: "lookup-key",
     providerBaseUrls: { anthropic: upstream.url },
   });
-  const built = buildApp(config, {
-    modelCredentialFetch: async () => {
-      throw Error("lookup must not fetch for builtin");
-    },
-  });
+  const built = stopAtEnd(
+    buildApp(config, {
+      modelCredentialFetch: async () => {
+        throw Error("lookup must not fetch for builtin");
+      },
+    }),
+  );
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -183,7 +185,7 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
 test("enable rechecks serving credentials and harness policy before mutating the picker", async () => {
   let onProbe: () => Promise<void> = async () => {};
   const config = testConfig({ harness: "pi", anthropicApiKey: "test-key" });
-  const built = buildApp(config, { modelVerificationProbe: async () => onProbe() });
+  const built = stopAtEnd(buildApp(config, { modelVerificationProbe: async () => onProbe() }));
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/claude-opus-4-6/enable`;
@@ -223,6 +225,7 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 });
 
 import { createServer } from "node:http";
+import { testMap } from "./support/test-database.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

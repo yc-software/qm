@@ -5,6 +5,7 @@ import * as mockHarness from "./support/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import { recorded } from "./support/recorded.ts";
 
 let exercise: (turn: HarnessTurnInput) => Promise<void>;
 mock.module("./support/mock-harness.ts", {
@@ -114,10 +115,12 @@ for (const action of ["read", "react", "post", "delegated-read"] as const) {
         async: true,
       });
       await ready;
+      const expected = action === "post" || action === "delegated-read" ? [] : ["Building the website now."];
+      await recorded(() => built.deliveries.pending("slack"), expected.length);
       const deliveries = await built.deliveries.pending("slack");
       assert.deepEqual(
         deliveries.map((delivery) => delivery.text),
-        action === "post" || action === "delegated-read" ? [] : ["Building the website now."],
+        expected,
       );
       release();
       await built.runs.waitFor(queued.runId!, 5000);

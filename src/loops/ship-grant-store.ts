@@ -1,5 +1,5 @@
 import type { ShipGrant } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 
 export interface ShipGrantStore {
   put(grant: ShipGrant): Promise<ShipGrant>;
@@ -10,7 +10,7 @@ export interface ShipGrantStore {
   deleteByLoop(loopId: string): Promise<void>;
 }
 
-export function createShipGrantStore(backing: DurableMap<ShipGrant> = createMemoryMap<ShipGrant>()): ShipGrantStore {
+export function createShipGrantStore(backing: DurableMap<ShipGrant>): ShipGrantStore {
   if (!backing.update) throw new Error("ship grants need atomic durable updates");
   return {
     async put(grant) {

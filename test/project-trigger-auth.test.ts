@@ -15,6 +15,8 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "project-trigger-secret".repeat(3);
 
@@ -106,7 +108,11 @@ test("Project trigger access follows current membership while Slack-group owner 
   assert.ok((await control.listCrons(claims("owner"))).visible.some((cron) => cron.id === projectCron.id));
   assert.ok((await control.listWebhooks(claims("owner"))).some((webhook) => webhook.id === projectWebhook.id));
 
-  const server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
+  const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret: SECRET,
+    scheduler: built.scheduler,
+  });
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const currentVersion = await built.projects.version(project.scopeId.slice("group:".length));

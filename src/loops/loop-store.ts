@@ -8,7 +8,7 @@ import type {
   Destination,
   ShipActionPolicy,
 } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
@@ -138,7 +138,7 @@ function mergeTriage(current: LoopTriageConfig | undefined, patch: LoopTriageCon
   return next;
 }
 
-export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop>()): LoopStore {
+export function createLoopStore(backing: DurableMap<Loop>): LoopStore {
   if (!backing.update) throw new Error("loops need atomic durable updates");
   const atomicUpdate = backing.update.bind(backing);
   const merge = (id: string, fields: Partial<Loop>) => atomicUpdate(id, (loop) => ({ ...loop, ...fields }));

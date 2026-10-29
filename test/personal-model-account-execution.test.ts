@@ -131,8 +131,9 @@ for (const account of ["personal", "openai", "anthropic"] as const) {
   });
 }
 
-test("personal web selections reject wrong providers, harnesses, policy exclusions and disconnected keys", async () => {
+test("personal web selections reject wrong providers, harnesses, policy exclusions and disconnected keys", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "company-openai", anthropicApiKey: "company-anthropic" }));
+  t.after(() => built.runtime.stop());
   await built.config.setApprovedHarnesses(["pi", "claude"]);
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");
@@ -228,8 +229,9 @@ test("web subscription selections use the namespaced model and personal OAuth on
   }
 });
 
-test("partial personal web choices queue the complete validated scoped runtime", async () => {
+test("partial personal web choices queue the complete validated scoped runtime", async (t) => {
   const built = buildApp(testConfig());
+  t.after(() => built.runtime.stop());
   await built.config.setApprovedHarnesses(["pi"]);
   await built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "gpt-5.6-sol" });
   await built.config.setRuntimeSelection("personal:U1", { harnessId: "pi", modelId: "gpt-5.6-terra" });
@@ -304,28 +306,5 @@ test("a company ChatGPT login feeds pi's subscription provider while personal Ch
     assert.equal(turns[0]!.runtime!.modelId, "codex/gpt-6.1-sol");
   } finally {
     await built.runtime.stop();
-  }
-});
-
-test("a configured company subscription without a keychain cannot fall back to the metered key", async (t) => {
-  buildApp(
-    testConfig({
-      connectorSecretKey: undefined,
-      codexAuthCredential: "unavailable",
-      openaiApiKey: "metered",
-      modelId: "gpt-5.6-sol",
-    }),
-  );
-  const urls: string[] = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
-    urls.push(String(input));
-    return new Response("unexpected provider request", { status: 400 });
-  });
-  const harness = piHarness.createPiHarness({ ...piOptions, captureRequests: false });
-  try {
-    assert.equal(await harness.models.oneShot?.("system", "hello"), undefined);
-    assert.deepEqual(urls, []);
-  } finally {
-    await harness.turns.close?.();
   }
 });

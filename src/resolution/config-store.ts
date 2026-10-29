@@ -4,7 +4,6 @@ import { defaultOrgPolicy } from "../policy/command-policy.ts";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { isHarnessId, modelSupportedByHarness } from "../model/pi-models.ts";
 import { composeSecurityPosture, type SecurityPosture } from "../security/security-posture.ts";
@@ -266,23 +265,23 @@ export const configStoreMaps = (map: (table: string) => DurableMap<never>): Requ
     Object.entries(CONFIG_STORE_TABLES).map(([key, table]) => [key, map(table)]),
   ) as unknown as Required<ConfigStoreMaps>;
 
-export function createMemoryConfigStore(
+export function createConfigStore(
   orgId: string,
-  opts: ConfigStoreMaps & {
+  opts: Required<ConfigStoreMaps> & {
     connectorSecretKey?: Buffer | string;
     defaultSecurityPosture?: SecurityPosture;
     defaultSharingPosture?: SharingPosture;
-  } = {},
+  },
 ): ScopedConfigStore {
   const souls = new Map<ScopeId, { content: string; version: number }>();
   const soulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
   const legacySoulHistory = new Map<ScopeId, PersistedSoulRevision[]>();
   const baseModels = new Map<ScopeId, PersistedBaseModel>();
-  const soulStore = opts.souls ?? createMemoryMap<PersistedSoul>();
-  const soulHistoryStore = opts.soulHistory ?? createMemoryMap<PersistedSoulRevision>();
-  const baseModelStore = opts.baseModels ?? createMemoryMap<PersistedBaseModel>();
-  const slackEmojiCatalogStore = opts.slackEmojiCatalog ?? createMemoryMap<PersistedSlackEmojiCatalog>();
-  const deploymentIdentity = opts.deploymentIdentity ?? createMemoryMap<PersistedDeploymentIdentity>();
+  const soulStore = opts.souls;
+  const soulHistoryStore = opts.soulHistory;
+  const baseModelStore = opts.baseModels;
+  const slackEmojiCatalogStore = opts.slackEmojiCatalog;
+  const deploymentIdentity = opts.deploymentIdentity;
   const writeQueue = createKeyedQueue();
   const save = (key: string, write: () => Promise<unknown>, apply: () => void): Promise<void> =>
     writeQueue(key, async () => {
@@ -297,7 +296,7 @@ export function createMemoryConfigStore(
     toRow: (id: ScopeId, value: T) => Row<M>,
     orgOnly = false,
   ) => {
-    const store = (opts[name] ?? createMemoryMap()) as DurableMap<Row<M>>;
+    const store = opts[name] as DurableMap<Row<M>>;
     const cache = new Map<ScopeId, T>();
     const load = (id: ScopeId, row: Row<M> | null) => (row ? cache.set(id, read(row)) : cache.delete(id));
     const refresh = async (id: ScopeId) => {
@@ -379,7 +378,7 @@ export function createMemoryConfigStore(
       }
     }
   };
-  const connectorClients = opts.connectorClients ?? createMemoryMap<StoredConnectorClient>();
+  const connectorClients = opts.connectorClients;
   const connectorKey = deriveConnectorKey(opts.connectorSecretKey ?? randomBytes(32), "connector-clients");
   const connectorMapKey = (id: ScopeId, provider: string) => `${id}|${provider}`;
 

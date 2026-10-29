@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
 import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../src/core/turn-options.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { testConfigStore, testMap } from "./support/test-database.ts";
 
 const ORG = "org:default-org";
 const SCOPE = "personal:alice";
@@ -15,7 +15,7 @@ const fallback: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5" };
 const category: RuntimeChoice = { harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
 
 async function setup() {
-  const config = createMemoryConfigStore("default-org");
+  const config = testConfigStore("default-org");
   await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setRuntimeSelection(ORG, { ...fallback, effortLevel: "high", fastMode: true });
   await config.setRuntimeSelection(SCOPE, { ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" });
@@ -72,9 +72,9 @@ test("each purpose ignores conversation overrides and explicit fields including 
 });
 
 test("durable purpose defaults refresh between child followups", async () => {
-  const baseModels = createMemoryMap<PersistedBaseModel>();
-  const writer = createMemoryConfigStore("default-org", { baseModels });
-  const reader = createMemoryConfigStore("default-org", { baseModels });
+  const baseModels = testMap<PersistedBaseModel>();
+  const writer = testConfigStore("default-org", { baseModels });
+  const reader = testConfigStore("default-org", { baseModels });
   await writer.setPurposeRuntime("subagent", category);
   assert.deepEqual(
     await resolveRuntimeChoiceDurable(reader, ORG, SCOPE, fallback, undefined, undefined, "subagent"),

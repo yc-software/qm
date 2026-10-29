@@ -1,5 +1,4 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
@@ -13,16 +12,16 @@ import {
   type LegacyRoute,
   type SandboxResourceUpgradeMarker,
 } from "../src/sandbox/sandbox-resource-upgrade.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
-  const records = createMemoryMap<SandboxResource>();
-  const defaults = createMemoryMap<SandboxDefault>();
-  const routes = createMemoryMap<LegacyRoute>();
-  const marker = createMemoryMap<SandboxResourceUpgradeMarker>();
+  const records = testMap<SandboxResource>();
+  const defaults = testMap<SandboxDefault>();
+  const routes = testMap<LegacyRoute>();
+  const marker = testMap<SandboxResourceUpgradeMarker>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
   const backend: Sandbox = {
@@ -62,7 +61,7 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     },
   };
   configure?.(backend);
-  const lock = createMemoryAdvisoryLock();
+  const lock = testAdvisoryLock();
   const upgrade =
     (overrides: Partial<Parameters<typeof upgradeLegacySandboxes>[0]> = {}) =>
     () =>
@@ -576,7 +575,7 @@ test("retirement waits for background startup to commit its live registry row", 
     sandbox.signalProcess = async () => {};
     sandbox.listProcesses = async () => [];
   });
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
@@ -622,7 +621,7 @@ test("failed background registration kills its process and releases the resource
   assert.ok(supportsProcessSessions(router));
   const record = await resources.create("alice", "personal:alice", "local");
   const handle = await router.provision(layers, { sandboxId: record.id });
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   registry.register = async () => {
     throw new Error("registry unavailable");
   };
@@ -882,7 +881,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   parking.teardown = async (_handle, opts) => {
     teardowns.push(opts ?? {});
   };
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const start = async (sessionId: string) => {
     await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
     return (await runs.claim("worker", 60_000))!;

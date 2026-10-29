@@ -4,13 +4,14 @@ import { createCompaction } from "../src/core/orchestrator/compaction.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import { forModelContext } from "../src/harness/context-compaction.ts";
 import { createGoalRecord } from "../src/harness/goal.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { ScopeId } from "../src/types.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const scope = "personal:goal@example.com" as ScopeId;
 
 test("compaction leaves the session goal on its row and writes no goal entries", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("goal", "dm", scope);
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);
@@ -52,7 +53,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
 });
 
 test("background compaction cannot revive an older goal over one closed while it summarized", async () => {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("goal-race", "dm", scope);
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);

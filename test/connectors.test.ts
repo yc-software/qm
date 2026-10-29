@@ -9,14 +9,9 @@ import {
   type OAuthToken,
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import {
-  createMemoryMap,
-  selectEntries,
-  type DurableMap,
-  type DurableMapSelect,
-} from "../src/persistence/durable-map.ts";
+import { selectEntries, type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -29,10 +24,10 @@ function makeKeychain(
   } = {},
 ) {
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: opts.creds ?? createMemoryMap<KeychainCredential>(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    lock: testAdvisoryLock(),
+    creds: opts.creds ?? testMap<KeychainCredential>(),
+    grants: testMap(),
+    asks: testMap(),
     key: KEY,
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.skewMs !== undefined ? { oauthSkewMs: opts.skewMs } : {}),
@@ -208,7 +203,7 @@ test("connector token refresh failures are logged and never poison the stored to
     errors.push(args.map(String).join(" "));
   });
 
-  const creds = createMemoryMap<KeychainCredential>();
+  const creds = testMap<KeychainCredential>();
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0, refresh: async () => ({ accessToken: "" }) });
   await keychain.setConnectorToken("api.github.com", "U1", {
     accessToken: "stale",
@@ -401,7 +396,7 @@ test("disconnect revokes connector grants so reconnect cannot restore old access
 });
 
 test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
-  const creds = createMemoryMap<KeychainCredential>();
+  const creds = testMap<KeychainCredential>();
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0 });
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" });
   await keychain.save({ ownerId: "U1", service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });

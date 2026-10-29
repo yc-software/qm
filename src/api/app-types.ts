@@ -653,7 +653,7 @@ export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;
-  resourceSearch?: ResourceSearchStore;
+  resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
@@ -685,7 +685,7 @@ export interface AppDeps {
   skillPacks?: SkillPackStore;
   skillFetcher?: SkillPackFetcher;
   skillBundles?: SkillBundleStore;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   config: ScopedConfigStore;
   crons: CronStore;
@@ -703,7 +703,7 @@ export interface AppDeps {
   approvals?: DurableMap<PendingApprovalRecord>;
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
-  contextRequests?: DurableMap<SurfaceContextRequest>;
+  contextRequests: DurableMap<SurfaceContextRequest>;
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;

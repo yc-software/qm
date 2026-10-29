@@ -250,19 +250,23 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
   });
   try {
     await srv.built.mcpToolService.refresh();
-    setPublicOAuthClients([
-      {
-        name: "orders",
-        host: "api.orders.example",
-        authUrl: "https://id.orders.example/authorize",
-        tokenUrl: "https://id.orders.example/token",
-        scopes: ["orders:write"],
-        clientId: "public-client",
-        label: "Orders",
-      },
-    ]);
+    // The MCP service's own background refresh republishes the registry's (empty) client list,
+    // so set the test client again before every read.
+    const setOrdersClient = () =>
+      setPublicOAuthClients([
+        {
+          name: "orders",
+          host: "api.orders.example",
+          authUrl: "https://id.orders.example/authorize",
+          tokenUrl: "https://id.orders.example/token",
+          scopes: ["orders:write"],
+          clientId: "public-client",
+          label: "Orders",
+        },
+      ]);
     const statusPath = "/v1/connectors/oauth/status?principalId=U1";
     const read = async () => {
+      setOrdersClient();
       const res = await fetch(`${srv.base}${statusPath}`, { headers: sign("GET", statusPath) });
       assert.equal(res.status, 200);
       return (await res.json()) as {
@@ -275,7 +279,11 @@ test("OAuth status lists a linked per-user MCP sign-in under its display name", 
       accessToken: "orders-token",
       expiresAt: Date.now() + 3_600_000,
     });
-    const linked = (await read()).providers.orders;
+    let linked = (await read()).providers.orders;
+    for (let attempt = 0; attempt < 100 && !linked?.connected; attempt++) {
+      await new Promise((r) => setTimeout(r, 20));
+      linked = (await read()).providers.orders;
+    }
     assert.equal(linked?.connected, true);
     assert.equal(linked?.mcpLabel, "Orders");
     assert.equal(linked?.available, true);

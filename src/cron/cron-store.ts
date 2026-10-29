@@ -1,11 +1,6 @@
 import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
-import {
-  createMemoryCronFireStore,
-  type BeginFireResult,
-  type CronFireRecord,
-  type CronFireStore,
-} from "./fire-store.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
+import { type BeginFireResult, type CronFireRecord, type CronFireStore } from "./fire-store.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -98,11 +93,11 @@ function normalizeTitle(title: string | undefined): string | undefined {
 }
 
 export function createCronStore(
-  backing: DurableMap<Cron> = createMemoryMap<Cron>(),
-  opts?: { staleRunningMs?: number; fires?: CronFireStore },
+  backing: DurableMap<Cron>,
+  opts: { staleRunningMs?: number; fires: CronFireStore },
 ): CronStore {
-  const staleRunningMs = opts?.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
-  const fires = opts?.fires ?? createMemoryCronFireStore();
+  const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
+  const fires = opts.fires;
   return {
     async create(input) {
       assertNoEscalation(input);
