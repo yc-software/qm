@@ -507,7 +507,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
   server.maxConnections = 1024;
 
   async function front(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    armBodyDeadline(req, 30_000);
+    armBodyDeadline(req, deps.requestBodyDeadlineMs ?? 30_000);
     const base = baseCtx(req, res, wiring);
     if (await proxyDeploymentSubdomain(base)) {
       nameRequest(base.method, "/deployment-proxy/*");

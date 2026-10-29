@@ -367,6 +367,8 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     );
   }
 
+  const RUNTIME_LOAD_ERROR = "Could not load runtime settings.";
+
   async function refreshRuntimeSelection(scopeId: string | null, agent?: Agent, refresh = false): Promise<void> {
     const request = ++runtimeRequest;
     const actualScope = runtimeScopeKey(scopeId);
@@ -399,11 +401,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
             defaults = next;
             syncRuntimeSelection(ctx.chat.state.agent ?? undefined);
           });
-    composerState.error = "";
+    // Only clear this function's own notice: a refresh fires at the end of every turn, and wiping all
+    // notices here erased "message wasn't sent" warnings the user still needs to see.
+    if (composerState.error === RUNTIME_LOAD_ERROR) composerState.error = "";
     syncRuntimeSelection(agent);
     const config = actualScope === null ? null : await loadRuntimeConfig(actualScope, refresh, options.runtimeAccount);
     if (request !== runtimeRequest) return;
-    if (!config) composerState.error = "Could not load runtime settings.";
+    if (!config) composerState.error = RUNTIME_LOAD_ERROR;
     if (config && !loadoutRestored) {
       restoreLoadoutSelection();
       loadoutRestored = true;
@@ -1374,18 +1378,13 @@ export function createComposerSurface(ctx: ConvCtx, options: ComposerOptions = {
     const droppedIds = new Set(skipped.filter((s) => s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
     const transientIds = new Set(skipped.filter((s) => !s.permanent).flatMap((s) => (s.id ? [s.id] : [])));
     const sendable = staged.filter((a) => !droppedIds.has(a.id));
-    if (!text && !uploaded.length) {
+    if ((!text && !uploaded.length) || transientIds.size) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error || "Could not queue the files.");
       return ctx.chat.drawActiveChat(agent);
     }
     const steer = alwaysSteer() && canSteer(agent);
     if (!(await enqueueTurn(agent, threadRef, text, uploaded, queuedFilesKey(sendable), steer))) {
       if (stillHere()) restoreStagedOnFailure(text, sendable, composerState.error);
-    } else if (transientIds.size && stillHere()) {
-      restageAttachments(
-        staged.filter((a) => transientIds.has(a.id)),
-        composerState.error,
-      );
     }
     ctx.chat.drawActiveChat(agent);
   }

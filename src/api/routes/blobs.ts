@@ -72,7 +72,9 @@ async function putBlob(ctx: BaseCtx): Promise<void> {
   }
   const authz = await authorizeBlob(ctx, "write", null);
   if (!authz) return;
-  if (authz.via === "capability") extendBodyDeadline(req, STAGE_UPLOAD_DEADLINE_MS);
+  // Authenticated uploads (sandbox capability or a signed surface such as the web UI's attachment
+  // proxy) can legitimately take minutes on a slow uplink; the 30s default would cut them off.
+  extendBodyDeadline(req, STAGE_UPLOAD_DEADLINE_MS);
   try {
     const info = await deps.blobTransfer.put(req, {
       maxBytes: authz.via === "capability" ? MAX_STAGE_BLOB_BYTES : MAX_BLOB_BYTES,

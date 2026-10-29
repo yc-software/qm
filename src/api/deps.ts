@@ -85,6 +85,8 @@ import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
 
 export interface ServerDeps {
+  /** Default time a request has to deliver its whole body (ms); routes may extend it. Tests shorten it. */
+  requestBodyDeadlineMs?: number;
   externalSlackPolicies?: ExternalSlackPolicies;
   checkReadiness?: (signal: AbortSignal) => Promise<void>;
   modelGatewayTransport?: ModelGatewayTransportConfig;

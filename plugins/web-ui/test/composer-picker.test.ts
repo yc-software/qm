@@ -213,6 +213,15 @@ test("the personal-account picker preserves composer choices and saves context d
     await mount();
     assert.match(composer!.state.error, /Could not load runtime settings/);
     await composer!.refreshRuntimeSelection(null, agent);
+    assert.equal(composer!.state.error, "", "a successful retry clears the runtime-load notice");
+    composer!.state.error = "Couldn't attach the files, so the message wasn't sent. Try again.";
+    await composer!.refreshRuntimeSelection(null, agent, true);
+    assert.match(
+      composer!.state.error,
+      /wasn't sent/,
+      "the end-of-turn runtime refresh leaves unrelated notices (a held send) on screen",
+    );
+    composer!.state.error = "";
     assert.equal(composer!.state.effortLevel, "high", "retry restores saved preset effort");
     assert.equal(composer!.state.fastMode, true, "retry restores saved preset Fast");
     await composer!.refreshRuntimeSelection(null, agent, true);
