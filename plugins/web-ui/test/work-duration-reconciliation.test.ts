@@ -84,7 +84,7 @@ test("work duration survives a transcript refresh — persisted turn timing wins
     activity: [],
   };
   const liveLabel = workedLabel("Worked", workSeconds(liveWork));
-  assert.equal(liveLabel, "Worked for 13.00s");
+  assert.equal(liveLabel, "Worked for 13s");
 
   const msgs = entriesToMessages(entries, MODEL);
   const rebuilt = (msgs[1] as AssistantWork).work;
@@ -108,7 +108,7 @@ test("fold expansion does not change the duration — the label derives only fro
 
   const before = workedLabel("Worked", workSeconds(work));
   const after = workedLabel("Worked", workSeconds(work));
-  assert.equal(before, "Worked for 13.00s");
+  assert.equal(before, "Worked for 13s");
   assert.equal(after, before, "re-rendering (fold toggle) yields the identical label");
 
   const realNow = Date.now;
@@ -132,16 +132,16 @@ test("historical transcripts without persisted timing keep the activity-inferenc
   assert.equal(work?.finishedAt, 130);
 });
 
-test("live and completed work include centiseconds with minute rollover", () => {
+test("live and completed work use whole seconds with minute rollover", () => {
   for (const prefix of ["Working", "Worked"]) {
     for (const [seconds, duration] of [
-      [0.12, "0.12s"],
-      [7, "7.00s"],
-      [57.239, "57.23s"],
-      [59.999, "59.99s"],
-      [60, "1m 00.00s"],
-      [65.129, "1m 05.12s"],
-      [365, "6m 05.00s"],
+      [0.12, "0s"],
+      [7, "7s"],
+      [57.239, "57s"],
+      [59.999, "59s"],
+      [60, "1m 00s"],
+      [65.129, "1m 05s"],
+      [365, "6m 05s"],
     ] as const)
       assert.equal(workedLabel(prefix, seconds), `${prefix} for ${duration}`);
   }
@@ -150,7 +150,7 @@ test("live and completed work include centiseconds with minute rollover", () => 
 test("work timing keeps fractions through live updates, completion and transcript refresh", (t) => {
   t.mock.method(Date, "now", () => 157_239);
   const work: WorkBlock = { status: "working", startedAt: 100_000, activity: [] };
-  assert.equal(workedLabel("Working", workSeconds(work)), "Working for 57.23s");
+  assert.equal(workedLabel("Working", workSeconds(work)), "Working for 57s");
   work.status = "complete";
   work.finishedAt = 157_239;
   const entries: SessionEntry[] = [
@@ -164,7 +164,7 @@ test("work timing keeps fractions through live updates, completion and transcrip
     },
   ];
   const rebuilt = (entriesToMessages(entries, MODEL)[1] as AssistantWork).work!;
-  assert.equal(workedLabel("Worked", workSeconds(rebuilt)), "Worked for 57.23s");
+  assert.equal(workedLabel("Worked", workSeconds(rebuilt)), "Worked for 57s");
   assert.equal(workSeconds(rebuilt), workSeconds(work));
 });
 

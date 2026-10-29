@@ -19,10 +19,10 @@ export function workSeconds(work: WorkBlock): number {
 }
 
 export function workDuration(secs: number): string {
-  const centiseconds = Math.floor(Math.round(secs * 1000) / 10);
-  const minutes = Math.floor(centiseconds / 6000);
-  const seconds = ((centiseconds % 6000) / 100).toFixed(2);
-  return `${minutes ? `${minutes}m ${seconds.padStart(5, "0")}` : seconds}s`;
+  const whole = Math.floor(secs);
+  const minutes = Math.floor(whole / 60);
+  const seconds = String(whole % 60);
+  return `${minutes ? `${minutes}m ${seconds.padStart(2, "0")}` : seconds}s`;
 }
 
 export function workedLabel(prefix: string, secs: number): string {

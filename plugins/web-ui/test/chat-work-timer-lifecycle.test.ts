@@ -56,7 +56,7 @@ test("replacing and disposing a chat disconnects its live work timer", async (t)
       Object.assign(agent.state, { messages: [], streamingMessage: message, isStreaming: true });
       chat.drawActiveChat();
       const oldHost = chat.state.host!;
-      assert.match(oldHost.textContent ?? "", /1\.\d{2}s/);
+      assert.match(oldHost.textContent ?? "", /1s/);
       assert.equal(ticking.size, 1);
       release();
       assert.equal(oldHost.textContent, "");
