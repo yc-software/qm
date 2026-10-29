@@ -2899,6 +2899,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                   description: "true: anyone with the link; false: restricted.",
                 }),
               ),
+              notify: Type.Optional(
+                Type.Boolean({
+                  description: "false: grant quietly, without the access DM or invitation email. Default true.",
+                }),
+              ),
             }
           : {}),
         ...(!move
@@ -2918,6 +2923,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           email?: string;
           public?: boolean;
           permission?: "read" | "write";
+          notify?: boolean;
         };
         const tc = ref.current;
         if (!tc) return text("[error] no active tool context");
@@ -2952,6 +2958,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ...(params.email !== undefined ? { email: params.email } : {}),
           ...(params.permission !== undefined ? { permission: params.permission } : {}),
           ...(move ? { move: true } : {}),
+          ...(params.notify === false ? { notify: false } : {}),
         });
         if (isUnavailable(r)) return unavailable(callId, tool);
         if (!r.ok) {

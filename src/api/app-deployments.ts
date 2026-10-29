@@ -63,10 +63,10 @@ export function createDeploymentMethods(
     getDeployment(idOrName) {
       return deps.deploy.getDeployment(idOrName);
     },
-    shareDeployment(idOrName, grantee, permission, actor) {
-      return deps.deploy.shareDeployment(idOrName, grantee, permission, actor);
+    shareDeployment(idOrName, grantee, permission, actor, opts) {
+      return deps.deploy.shareDeployment(idOrName, grantee, permission, actor, opts);
     },
-    async inviteToDeployment(idOrName, rawEmail, actorId) {
+    async inviteToDeployment(idOrName, rawEmail, actorId, opts) {
       const email = rawEmail.trim().toLowerCase();
       if (!validEmail(email)) throw new Error("a valid email address is required");
       const grantee = await deploymentShareScope(`personal:${email}`, "read");
@@ -82,7 +82,7 @@ export function createDeploymentMethods(
         const alreadyShared = previous.some((g) => g.scope === grantee);
         const grantees = previous.some((g) => g.scope === grantee && g.permission === "read")
           ? previous
-          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId });
+          : await deps.deploy.shareDeployment(deployment.id, grantee, "read", { createdBy: actorId }, opts);
         const appUrl = deps.deployAppsDomain
           ? `https://${deployment.name ?? deployment.id}.${deps.deployAppsDomain}/`
           : undefined;
@@ -90,7 +90,8 @@ export function createDeploymentMethods(
           return { grantees, invitation: { emailSent: false, alreadyShared: true, ...(appUrl ? { appUrl } : {}) } };
         let emailSent = false;
         let emailProblem: string | undefined;
-        if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
+        if (opts?.notify === false) emailProblem = "notify was false";
+        else if (!deps.inviteMailer) emailProblem = INVITE_EMAIL_NOT_CONFIGURED;
         else if (!appUrl)
           emailProblem = "app URLs are not configured (set DEPLOY_APPS_DOMAIN); share the app link manually";
         else {

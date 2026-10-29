@@ -1154,6 +1154,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
     email?: unknown;
     permission?: unknown;
     move?: unknown;
+    notify?: unknown;
   };
   if (typeof b.type !== "string" || !isArtifactType(b.type)) {
     return sendJson(res, 400, { error: "bad_request", message: `type must be one of: ${ARTIFACT_TYPES.join(", ")}` });
@@ -1177,6 +1178,8 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
   if (b.permission !== undefined && b.permission !== "read" && b.permission !== "write") {
     return sendJson(res, 400, { error: "bad_request", message: 'permission must be "read" or "write"' });
   }
+  if (b.notify !== undefined && typeof b.notify !== "boolean")
+    return sendJson(res, 400, { error: "bad_request", message: "notify must be a boolean" });
   const result = await deps.control.shareArtifact(
     {
       type: b.type,
@@ -1185,6 +1188,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       ...(typeof b.email === "string" ? { email: b.email } : {}),
       ...(b.permission === "read" || b.permission === "write" ? { permission: b.permission } : {}),
       ...(b.move === true ? { move: true } : {}),
+      ...(b.notify === false ? { notify: false } : {}),
     },
     capability,
   );

@@ -796,6 +796,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
     async shareArtifact(req, capability): Promise<ShareArtifactResult> {
       const permission: Permission = req.permission === "write" ? "write" : "read";
+      const notify = req.notify === false ? { notify: false } : undefined;
       const home = await app.getArtifactHome(req.type, req.id);
       if (!home)
         return {
@@ -898,16 +899,19 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
 
         const invite =
           req.type === "deploy" && req.email !== undefined && permission === "read"
-            ? await app.inviteToDeployment(home.id, req.email, capability.actorId)
+            ? await app.inviteToDeployment(home.id, req.email, capability.actorId, notify)
             : undefined;
         if (!invite)
-          await app.grant({
-            ownerScopeId: home.ownerScopeId,
-            ref: home.grantRef,
-            granteeScopeId: toScope,
-            permission,
-            grantedBy: capability.actorId,
-          });
+          await app.grant(
+            {
+              ownerScopeId: home.ownerScopeId,
+              ref: home.grantRef,
+              granteeScopeId: toScope,
+              permission,
+              grantedBy: capability.actorId,
+            },
+            notify,
+          );
         return {
           ok: true,
           verb: "share",

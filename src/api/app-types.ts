@@ -438,7 +438,7 @@ export interface App {
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
   openFileForViewer(id: string, principalId: string): Promise<OpenedFile | null>;
-  grant(g: Grant): Promise<void>;
+  grant(g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string): Promise<void>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
@@ -613,11 +613,13 @@ export interface App {
     grantee: ScopeId,
     permission: Permission | null,
     actor: { createdBy: string },
+    opts?: { notify?: boolean },
   ): Promise<DeploymentGrantee[]>;
   inviteToDeployment(
     idOrName: string,
     email: string,
     actorId: string,
+    opts?: { notify?: boolean },
   ): Promise<{
     grantees: DeploymentGrantee[];
     invitation: DeploymentInvitation;

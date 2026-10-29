@@ -1188,7 +1188,7 @@ export function createSessionMethods(
       return true;
     },
 
-    async grant(g) {
+    async grant(g, opts) {
       if (parseRef(g.ref).kind === "deploy") {
         g = {
           ...g,
@@ -1211,7 +1211,7 @@ export function createSessionMethods(
         scopeLabel: g.granteeScopeId,
       });
       const ref = parseRef(g.ref);
-      if (ref.kind === "deploy")
+      if (ref.kind === "deploy" && opts?.notify !== false)
         await notifyDeploymentShared(
           deps,
           deps.deploy.getDeployment(ref.id),

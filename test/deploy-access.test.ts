@@ -205,6 +205,48 @@ test("direct share paths notify only after successful grants; org, self and revo
   assert.equal((await f.share("write")).find((g) => g.scope === person(requester))?.permission, "write");
 });
 
+test("notify:false grants access on every direct share path without a DM or invitation email", async (t) => {
+  const f = await fixture(t);
+  const sent: string[] = [];
+  const app = createApp({
+    deploy: f.deploy,
+    acl: createAclStore(),
+    identity: f.identity,
+    deliveries: f.deliveries,
+    auditLog: f.auditLog,
+    directory: f.directory,
+    sessions: createMemorySessionStore(),
+    deployAppsDomain: "apps.example.com",
+    inviteMailer: { send: async (m: { to: string }) => void sent.push(m.to) },
+  } as unknown as Parameters<typeof createApp>[0]);
+  const control = createControlService(app);
+  const cap = { actorId: owner, scopeId: person(owner), liveActor: true } as CapabilityClaims;
+  const quiet = { notify: false };
+  assert.equal(
+    (await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester), ...quiet }, cap)).ok,
+    true,
+  );
+  await app.shareDeployment(f.d.id, person(requester), "write", { createdBy: owner }, quiet);
+  const invited = await control.shareArtifact(
+    { type: "deploy", id: f.d.id, email: "carol@example.com", ...quiet },
+    cap,
+  );
+  assert.ok(invited.ok);
+  assert.deepEqual(invited.invitation, {
+    emailSent: false,
+    emailProblem: "notify was false",
+    appUrl: "https://mysite.apps.example.com/",
+  });
+  assert.deepEqual(await f.deploy.deploymentGrantees(f.d.id), [
+    { scope: person(requester), permission: "write" },
+    { scope: person("carol@example.com"), permission: "read" },
+  ]);
+  assert.deepEqual(await f.notices(), []);
+  assert.deepEqual(sent, []);
+  await control.shareArtifact({ type: "deploy", id: f.d.id, scope: person(requester) }, cap);
+  assert.equal((await f.notices()).length, 1);
+});
+
 test("button dispatch classifies the clicker, settles the card, and keeps failed cards actionable", async (t) => {
   const f = await fixture(t);
   let handler!: (a: any) => Promise<void>;
