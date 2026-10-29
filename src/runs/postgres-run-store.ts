@@ -161,6 +161,10 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       id: "runs/store/0010-drop-turn-metrics",
       statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS turn_metrics`],
     },
+    {
+      id: "runs/store/0011-drop-tool-calls",
+      statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS tool_calls`],
+    },
   ]);
 
   const availabilityListeners = new Map<() => void, number>();
