@@ -485,16 +485,17 @@ export const scenarios: Scenario[] = [
         initialComment: ":thinking:",
       });
       const ask = await ch.mention("what's the word in the screenshot above? Reply with just the word.", root);
-      const answer = await ch.waitForBotReply(root, { afterTs: ask, match: new RegExp(first) });
-      assert.match(answer.text ?? "", new RegExp(first), `the agent didn't read the starter's screenshot`);
+      const answer = await ch.waitForBotReply(root, { afterTs: ask, match: new RegExp(first, "i") });
+      assert.match(answer.text ?? "", new RegExp(first, "i"), `the agent didn't read the starter's screenshot`);
 
-      const second = randomCodeword();
+      let second = randomCodeword();
+      while (second === first) second = randomCodeword();
       await ctx.env.qa.uploadFile(ch.id, { filename: "image.png", bytes: textPng(second), threadTs: root });
       const again = await ch.mention("and the word in the newest screenshot in this thread? Just the word.", root);
-      const later = await ch.waitForBotReply(root, { afterTs: again, match: new RegExp(second) });
+      const later = await ch.waitForBotReply(root, { afterTs: again, match: new RegExp(second, "i") });
       assert.match(
         later.text ?? "",
-        new RegExp(second),
+        new RegExp(second, "i"),
         `the agent didn't read a screenshot posted later in the thread`,
       );
     },

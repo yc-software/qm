@@ -1,4 +1,4 @@
-import { deflateSync } from "node:zlib";
+import { crc32, deflateSync } from "node:zlib";
 
 const GLYPHS: Record<string, string[]> = {
   A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
@@ -25,30 +25,39 @@ const GLYPHS: Record<string, string[]> = {
   Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
   Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
 };
-const LETTERS = Object.keys(GLYPHS).join("");
+const WORDS = [
+  "CACTUS",
+  "WALRUS",
+  "LANTERN",
+  "HAMMER",
+  "VELVET",
+  "MAGNET",
+  "PEPPER",
+  "TUNDRA",
+  "ZEPHYR",
+  "JACKAL",
+  "KETTLE",
+  "BREEZE",
+  "SPHINX",
+  "WAFFLE",
+  "CANDLE",
+  "PRETZEL",
+];
 
-export function randomCodeword(length = 6): string {
-  return Array.from({ length }, () => LETTERS[Math.floor(Math.random() * LETTERS.length)]).join("");
+export function randomCodeword(): string {
+  return WORDS[Math.floor(Math.random() * WORDS.length)]!;
 }
-
-const CRC = Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
 
 function chunk(type: string, data: Buffer): Buffer {
   const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
-  let c = ~0;
-  for (const b of body) c = CRC[(c ^ b) & 0xff]! ^ (c >>> 8);
   const out = Buffer.alloc(12 + data.length);
   out.writeUInt32BE(data.length, 0);
   body.copy(out, 4);
-  out.writeUInt32BE(~c >>> 0, 8 + data.length);
+  out.writeUInt32BE(crc32(body), 8 + data.length);
   return out;
 }
 
-export function textPng(text: string, scale = 8): Buffer {
+export function textPng(text: string, scale = 12): Buffer {
   const chars = [...text.toUpperCase()];
   const pad = 2;
   const w = (chars.length * 6 - 1 + pad * 2) * scale;

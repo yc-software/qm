@@ -63,18 +63,24 @@ export class SlackClient {
     channel: string,
     file: { filename: string; bytes: Uint8Array; title?: string; initialComment?: string; threadTs?: string },
   ): Promise<string> {
-    const base = {
-      channel_id: channel,
+    const target = (await this.web.files.getUploadURLExternal({
       filename: file.filename,
-      file: Buffer.from(file.bytes),
-      ...(file.title ? { title: file.title } : {}),
+      length: file.bytes.length,
+    })) as { upload_url?: string; file_id?: string };
+    if (!target.upload_url || !target.file_id) throw new Error("getUploadURLExternal returned no upload url");
+    const sent = await fetch(target.upload_url, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: Buffer.from(file.bytes),
+    });
+    if (!sent.ok) throw new Error(`file upload failed: HTTP ${sent.status}`);
+    await this.web.files.completeUploadExternal({
+      files: [{ id: target.file_id, title: file.title ?? file.filename }],
+      channel_id: channel,
       ...(file.initialComment ? { initial_comment: file.initialComment } : {}),
-    };
-    const uploaded = (await this.web.filesUploadV2(file.threadTs ? { ...base, thread_ts: file.threadTs } : base)) as {
-      files?: Array<{ files?: Array<{ id?: string }> }>;
-    };
-    const fileId = uploaded.files?.[0]?.files?.[0]?.id;
-    if (!fileId) throw new Error("filesUploadV2 returned no uploaded file id");
+      ...(file.threadTs ? { thread_ts: file.threadTs } : {}),
+    });
+    const fileId = target.file_id;
     for (let i = 0; i < 10; i++) {
       const msgs = file.threadTs ? await this.replies(channel, file.threadTs) : await this.history(channel);
       const shared = msgs.find((m) => (m.files ?? []).some((f) => f.id === fileId));

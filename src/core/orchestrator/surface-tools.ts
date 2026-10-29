@@ -504,14 +504,13 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const bytes = await collectBlob(blob.stream);
       const meta = { sizeBytes: blob.sizeBytes, name: result.file.name };
       const format = sniffImageDimensions(bytes)?.format;
-      const mimetype = format ? `image/${format}` : result.file.mimetype;
-      const image = mimetype ? await visionImage(bytes, mimetype) : undefined;
+      const image = format ? await visionImage(bytes, `image/${format}`) : undefined;
       if (image) return { ok: true, ...meta, contentType: image.mimeType, image };
       if (!headLooksLikeText(bytes.subarray(0, 8000)))
         return {
           ok: true,
           ...meta,
-          contentType: mimetype ?? "application/octet-stream",
+          contentType: result.file.mimetype ?? "application/octet-stream",
           ...(format && bytes.length > MAX_VISION_IMAGE_BYTES
             ? { message: `image too large to show inline (limit ${MAX_VISION_IMAGE_BYTES} bytes)` }
             : {}),

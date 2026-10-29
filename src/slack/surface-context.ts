@@ -120,11 +120,7 @@ export function createSurfaceContextFulfiller(deps: {
     const hit = threadTs ? await inThread(threadTs) : undefined;
     if (hit) return hit;
     const res = await client.conversations.history({ channel, latest: ts, inclusive: true, limit: 1 });
-    const topLevel = parseMessageList(res).messages.find((m) => m?.ts === ts);
-    if (topLevel) return topLevel;
-    const stored = await core.readSurfaceMessages?.(channel, { timestamps: [ts], limit: 1 });
-    const parent = stored?.[0]?.sub;
-    return parent && parent !== threadTs ? inThread(parent) : undefined;
+    return parseMessageList(res).messages.find((m) => m?.ts === ts) ?? (ts !== threadTs ? inThread(ts) : undefined);
   }
 
   async function fetchSurfaceFile(

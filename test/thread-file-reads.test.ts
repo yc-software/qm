@@ -5,47 +5,15 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deflateSync } from "node:zlib";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import { encodeTs } from "../src/slack/reactions.ts";
+import { textPng } from "./live-slack/text-png.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-function crc32(buf: Buffer): number {
-  let c = ~0;
-  for (const b of buf) {
-    c ^= b;
-    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
-  }
-  return ~c >>> 0;
-}
-
-function chunk(type: string, data: Buffer): Buffer {
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length);
-  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(body));
-  return Buffer.concat([len, body, crc]);
-}
-
-function tinyPng(): Buffer {
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(1, 0);
-  ihdr.writeUInt32BE(1, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 2;
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk("IHDR", ihdr),
-    chunk("IDAT", deflateSync(Buffer.from([0, 255, 0, 0]))),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
 
 function freshApp() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-threadfiles-")) }));
@@ -103,21 +71,29 @@ function fulfill(app: any, answer: (query: any) => unknown) {
 test("read_file opens a file on another message by its ts and returns an image the model can see", async () => {
   const built = freshApp();
   built.runtime.start();
-  const png = await built.blobTransfer.put(tinyPng());
-  const surface = fulfill(built.app, (q) =>
-    q.file
-      ? { messages: [], file: { blobId: png.blobId, name: "image.png", mimetype: "image/png", sizeBytes: 1 } }
-      : { messages: [] },
-  );
+  const png = await built.blobTransfer.put(textPng("AB"));
+  const fake = await built.blobTransfer.put(Buffer.from([0x89, 0x50, 0x00, 0x01, 0x02, 0x03, 0xff, 0x00]));
+  const surface = fulfill(built.app, (q) => {
+    if (!q.file) return { messages: [] };
+    const blobId = q.file.ts === "1700000000.000099" ? fake.blobId : png.blobId;
+    return { messages: [], file: { blobId, name: "image.png", mimetype: "image/png", sizeBytes: 1 } };
+  });
   try {
-    await built.app.turn(mention("!read_file 1793211763.548069 2", "C20", "2000.1"));
+    await built.app.turn(mention("!read_file 1700000000.000042 2", "C20", "2000.1"));
     assert.match(await reply(built, "C20:2000.1"), /^file-image: image\.png image\/png \d+/);
-    assert.deepEqual(surface.queries[0].file, { ts: "1793211763.548069", index: 2 });
+    assert.deepEqual(surface.queries[0].file, { ts: "1700000000.000042", index: 2 });
     assert.equal(surface.queries[0].conversationTarget, "C20:2000.1");
 
-    await built.app.turn(mention(`!read_file ${encodeTs("1793211763.548069")} image.png`, "C21", "2100.1"));
+    await built.app.turn(mention(`!read_file ${encodeTs("1700000000.000042")} image.png`, "C21", "2100.1"));
     assert.match(await reply(built, "C21:2100.1"), /^file-image:/);
-    assert.deepEqual(surface.queries[1].file, { ts: "1793211763.548069", name: "image.png" });
+    assert.deepEqual(surface.queries[1].file, { ts: "1700000000.000042", name: "image.png" });
+
+    await built.app.turn(mention("!read_file 1700000000.000099", "C26", "2600.1"));
+    assert.match(
+      await reply(built, "C26:2600.1"),
+      /^file-pointer:.*image\/png/,
+      "bytes labelled image/png that aren't an image never go to the model as one",
+    );
 
     await built.app.turn(mention(`!read_file ${png.blobId}`, "C22", "2200.1"));
     assert.match(await reply(built, "C22:2200.1"), /couldn't read file/, "a raw blob id is not a file reference");
@@ -146,7 +122,7 @@ test("read_file passes a surface error through instead of claiming success", asy
     }
   })();
   try {
-    await built.app.turn(mention("!read_file 1793211763.548069", "C24", "2400.1"));
+    await built.app.turn(mention("!read_file 1700000000.000042", "C24", "2400.1"));
     assert.match(await reply(built, "C24:2400.1"), /couldn't read file\] that message carries 2 files/);
   } finally {
     n = 1;
@@ -159,7 +135,7 @@ test("read_thread tells the model how to open files it sees", async () => {
   const built = freshApp();
   built.runtime.start();
   const surface = fulfill(built.app, () => ({
-    messages: [{ ts: "2500.1", author: "eric", text: ":thinking:", files: ["image.png", "image.png"] }],
+    messages: [{ ts: "2500.1", author: "Ada", text: ":thinking:", files: ["image.png", "image.png"] }],
   }));
   try {
     await built.app.turn(mention("!read_thread", "C25", "2500.1"));
@@ -180,8 +156,8 @@ test("the slack tool returns an image block for an image file and forwards name"
   };
   const ref = { current: tc } as unknown as ToolContextRef;
   const tool: any = createAgentTools(ref, { surfaceTools: true }).find((t) => t.name === "slack");
-  const out = await tool.execute("c1", { action: "read_file", ref: "1793211763.548069", index: 2 });
-  assert.deepEqual(calls, [["1793211763.548069", { index: 2 }]]);
+  const out = await tool.execute("c1", { action: "read_file", ref: "1700000000.000042", index: 2 });
+  assert.deepEqual(calls, [["1700000000.000042", { index: 2 }]]);
   assert.deepEqual(out.content[1], { type: "image", data: "AAAA", mimeType: "image/png" });
 });
 
@@ -254,21 +230,21 @@ describe("the Slack surface fetching a file from a message", () => {
   });
 });
 
-test("a file on a reply in a neighbouring thread is found through its stored parent", async () => {
+test("a file on a reply in a neighbouring thread is found by asking Slack for the thread around it", async () => {
   const fulfilled: Array<{ outcome: any }> = [];
   const repliesAsked: string[] = [];
   const core = {
     fulfillContextRequest: async (_id: string, outcome: unknown) => void fulfilled.push({ outcome }),
     stageBlob: async () => ({ blobId: "blob-x" }),
-    readSurfaceMessages: async () => [{ ts: "200.000002", sub: "200.000001" }],
   };
   const client = {
     conversations: {
       replies: async ({ ts }: { ts: string }) => {
         repliesAsked.push(ts);
-        return ts === "200.000001"
+        return ts === "200.000002"
           ? {
               messages: [
+                { ts: "200.000001" },
                 {
                   ts: "200.000002",
                   files: [
@@ -301,6 +277,6 @@ test("a file on a reply in a neighbouring thread is found through its stored par
   } finally {
     globalThis.fetch = realFetch;
   }
-  assert.deepEqual(repliesAsked, ["100.000001", "200.000001"]);
+  assert.deepEqual(repliesAsked, ["100.000001", "200.000002"]);
   assert.equal(fulfilled[0]!.outcome.result.file.name, "shot.png");
 });
