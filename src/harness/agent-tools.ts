@@ -2969,13 +2969,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         let invitationNote = "";
         if (params.notify === false) invitationNote = " No DM or invitation email sent.";
-        else if (r.invitation) {
-          if (r.invitation.emailSent) invitationNote = " App invitation email sent.";
-          else if (r.invitation.alreadyShared) invitationNote = " Already shared; no duplicate email sent.";
-          else
-            invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
-          if (r.invitation.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
-        }
+        else if (r.invitation?.emailSent) invitationNote = " App invitation email sent.";
+        else if (r.invitation?.alreadyShared) invitationNote = " Already shared; no duplicate email sent.";
+        else if (r.invitation)
+          invitationNote = ` Access granted, but invitation email was not sent: ${r.invitation.emailProblem ?? "delivery unavailable"}`;
+        if (r.invitation?.appUrl) invitationNote += ` App link: ${r.invitation.appUrl}`;
         return recordResult(
           callId,
           { tool, action, verb: r.verb, type: r.type, id: r.id, target: r.target.scope },
