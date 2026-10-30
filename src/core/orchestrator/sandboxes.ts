@@ -346,7 +346,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const cached = pool.get(key);
     if (cached?.pending) {
       await cached.opening;
-      return provisionResource(access, authorize);
+      return provisionResource(resource.id, authorize);
     }
     authorize?.(access);
     const policy = JSON.stringify({ egress, credentialScopeId });

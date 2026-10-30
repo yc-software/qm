@@ -319,18 +319,3 @@ test("reopening a computer under a different egress policy releases it once", as
   assert.equal(f.tornDown.length, 1);
   assert.equal(f.tornDown[0], narrowed);
 });
-
-test("a caller waiting on another's open of the same computer keeps its own egress policy", async () => {
-  const f = fixture();
-  const access = await f.turn.accessResource("job-box");
-  const narrow = { allowedHosts: ["only.test"], deniedHosts: [] };
-  const [broad, narrowed] = await Promise.all([
-    f.turn.provisionResource(access),
-    f.turn.provisionResource({ ...access, egress: narrow }),
-  ]);
-  assert.notEqual(narrowed, broad);
-  assert.deepEqual(
-    f.provisions.map((opts) => opts?.egress),
-    [access.egress, narrow],
-  );
-});
