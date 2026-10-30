@@ -7,7 +7,7 @@ import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
 
-type Kind = "sign_in" | "cron" | "webhook" | "keychain_grant" | "app" | "skill" | "computer";
+type Kind = "principal" | "cron" | "loop" | "webhook" | "keychain" | "deployment" | "skill" | "sandbox";
 
 interface Change {
   kind: Kind;
@@ -28,6 +28,8 @@ interface Kept {
 }
 
 type Step = Change & { run: () => Promise<unknown> };
+
+const firstLine = (text: string | undefined): string => text?.trim().split("\n", 1)[0] ?? "";
 
 const SHARED_HOME = "lives in a shared scope where others may rely on it; archive it there if nobody needs it";
 
@@ -55,7 +57,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
     await deps.identity.refresh(true);
     if (deps.identity.deactivationSource(principalId) !== "manual")
       steps.push({
-        kind: "sign_in",
+        kind: "principal",
         id: principalId,
         label: "sign-in and app access",
         scopeId: org,
@@ -64,14 +66,26 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
       });
   }
   for (const cron of await app.listCrons()) {
-    if ((cron.archived && !cron.enabled) || !(await owns(cron.owner, cron.ownerScopeId))) continue;
+    if (cron.loopId || (cron.archived && !cron.enabled) || !(await owns(cron.owner, cron.ownerScopeId))) continue;
     steps.push({
       kind: "cron",
       id: cron.id,
-      label: cron.title || cron.action || cron.message || cron.id,
+      label: cron.title || firstLine(cron.action ?? cron.message) || cron.id,
       scopeId: cron.ownerScopeId,
       action: "disable_and_archive",
       run: () => app.updateCron(cron.id, { enabled: false, archived: true }),
+    });
+  }
+  const loops = deps.loops?.store;
+  for (const loop of (await loops?.list()) ?? []) {
+    if (loop.state !== "enabled" || !(await owns(loop.owner, loop.ownerScopeId))) continue;
+    steps.push({
+      kind: "loop",
+      id: loop.id,
+      label: loop.name,
+      scopeId: loop.ownerScopeId,
+      action: "pause",
+      run: () => loops!.setState(loop.id, "paused"),
     });
   }
   for (const webhook of await app.listWebhooks()) {
@@ -79,7 +93,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
     steps.push({
       kind: "webhook",
       id: webhook.id,
-      label: webhook.action,
+      label: firstLine(webhook.action) || webhook.id,
       scopeId: webhook.ownerScopeId,
       action: "disable",
       run: () => app.setWebhookEnabled(webhook.id, false),
@@ -95,7 +109,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
     for (const grant of grants) {
       if (grant.status !== "active" || (grant.expiresAt !== undefined && grant.expiresAt <= Date.now())) continue;
       steps.push({
-        kind: "keychain_grant",
+        kind: "keychain",
         id: grant.id,
         label: `${service.get(grant.credentialId) ?? grant.credentialId}: ${grant.purpose}`,
         scopeId: grant.audienceScopeId,
@@ -110,7 +124,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
         label: credential.service,
         scopeId: makeScopeId("personal", principalId),
         reason:
-          "stays encrypted in their keychain; nothing can use it once their grants are revoked and sign-in is off",
+          "stays encrypted in their keychain; their grants are revoked and their crons, loops and webhooks stopped",
       });
   }
   for (const deployment of await app.listDeployments()) {
@@ -118,7 +132,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
     const label = deployment.displayName || deployment.name || deployment.id;
     if (await ownScope(deployment.ownerScopeId))
       steps.push({
-        kind: "app",
+        kind: "deployment",
         id: deployment.id,
         label,
         scopeId: deployment.ownerScopeId,
@@ -126,7 +140,13 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
         run: () => app.archiveDeployment(deployment.id),
       });
     else if (await isThem(deployment.createdBy))
-      kept.push({ kind: "app", id: deployment.id, label, scopeId: deployment.ownerScopeId, reason: SHARED_HOME });
+      kept.push({
+        kind: "deployment",
+        id: deployment.id,
+        label,
+        scopeId: deployment.ownerScopeId,
+        reason: SHARED_HOME,
+      });
   }
   for (const skill of await app.listSkills()) {
     if (skill.status === "archived") continue;
@@ -152,12 +172,22 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
   if (resources) {
     const listing = await resources.list(actorId, makeScopeId("personal", principalId));
     for (const computer of listing.sandboxes) {
-      if (!(await ownScope(computer.ownerScopeId))) continue;
+      if (!(await ownScope(computer.ownerScopeId))) {
+        if (computer.state !== "retired" && (await isThem(computer.createdBy)))
+          kept.push({
+            kind: "sandbox",
+            id: computer.id,
+            label: computer.name,
+            scopeId: computer.ownerScopeId,
+            reason: SHARED_HOME,
+          });
+        continue;
+      }
       const retirable = computer.availableActions?.includes("retire") ?? false;
       if (computer.state === "retired" && !retirable) continue;
       if (!retirable) {
         kept.push({
-          kind: "computer",
+          kind: "sandbox",
           id: computer.id,
           label: computer.name,
           scopeId: computer.ownerScopeId,
@@ -166,7 +196,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
         continue;
       }
       steps.push({
-        kind: "computer",
+        kind: "sandbox",
         id: computer.id,
         label: `${computer.name} (${computer.backend})`,
         scopeId: computer.ownerScopeId,
@@ -201,10 +231,14 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     !["boolean", "undefined"].includes(typeof input.apply)
   )
     return sendJson(res, 400, { error: "bad_request", message: "body is { apply?: boolean }; omit apply to preview" });
-  const { principalId } = await resolveAdminUser(deps, params.principalId!);
+  const { member, principalId } = await resolveAdminUser(deps, params.principalId!);
+  if (!principalId) return sendJson(res, 404, { error: "not_found", message: "no such person" });
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
   const { steps, kept } = await planOffboarding(ctx, actor.id, principalId);
+  const known =
+    member || deps.identity?.externalMember(principalId) || kept.length || steps.some((s) => s.kind !== "principal");
+  if (!known) return sendJson(res, 404, { error: "not_found", message: `nothing is known about ${principalId}` });
   const org = orgScope(deps);
   const view = ({ run: _run, ...change }: Step): Change => change;
   if (input.apply !== true) {
@@ -213,18 +247,22 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   }
   const changes: Change[] = [];
   for (const step of steps) {
+    const change = view(step);
     try {
       await step.run();
-      audit(deps, {
-        principalId: actor.id,
-        action: `offboard.${step.kind}.${step.action}`,
-        resource: step.id,
-        scopeLabel: step.scopeId,
-      });
-      changes.push({ ...view(step), result: "done" });
+      changes.push({ ...change, result: "done" });
     } catch (error) {
-      changes.push({ ...view(step), result: "failed", error: errMessage(error) });
+      changes.push({ ...change, result: "failed", error: errMessage(error) });
     }
+    const outcome = changes.at(-1)!;
+    audit(deps, {
+      principalId: actor.id,
+      action: `${step.kind}.${step.action}`,
+      resource: step.id,
+      scopeLabel: step.scopeId,
+      status: outcome.result === "done" ? "ok" : "error",
+      ...(outcome.error ? { detail: outcome.error } : {}),
+    });
   }
   const failed = changes.filter((c) => c.result === "failed").length;
   audit(deps, {
