@@ -42,8 +42,7 @@ test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image,
     "secretEnv value/name must not be written to the toml",
   );
 
-  const admin = derivedTomlFor(cfg, "admin", repoRoot);
-  assert.doesNotMatch(admin, /FLY_RESIDENT_ENV_TZ/);
+  assert.doesNotMatch(derivedTomlFor(cfg, "egress-proxy", repoRoot), /FLY_RESIDENT_ENV_TZ/);
 });
 
 test("the fly target routes security screen proxy configuration only to core", () => {
@@ -70,7 +69,7 @@ test("the fly target routes security screen proxy configuration only to core", (
     },
   );
   assert.deepEqual(
-    Object.keys(generatedEnv(derivedTomlFor(screened, "admin", repoRoot))).filter((name) =>
+    Object.keys(generatedEnv(derivedTomlFor(screened, "egress-proxy", repoRoot))).filter((name) =>
       name.startsWith("SECURITY_SCREEN_"),
     ),
     [],
@@ -560,16 +559,11 @@ test("fly live check requires deployed machines and a healthy public endpoint", 
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
-  const liveEnvs = Object.fromEntries(
-    ["core", "web-ui", "portal"].map((service) => [
-      service,
-      generatedEnv(derivedTomlFor(config, service as "core" | "web-ui" | "portal", repoRoot)),
-    ]),
-  );
+  const liveEnvs = { core: generatedEnv(derivedTomlFor(config, "core", repoRoot)) };
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify(["core", "web-ui", "portal"].map((service) => ({ Name: "acme-" + service }))));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
 else if (a.startsWith("status")) {
   const app = process.argv[process.argv.indexOf("-a") + 1];
   const service = app.slice("acme-".length);
@@ -591,9 +585,8 @@ else console.log("ok");`,
     });
     assert.deepEqual(lines, [], "JSON callers can suppress all human-readable live-check output");
     const calls = readFileSync(fake.log, "utf8");
-    for (const app of ["acme-core", "acme-web-ui", "acme-portal"]) {
-      assert.ok(calls.includes(`status -a ${app} --json`));
-    }
+    assert.ok(calls.includes("status -a acme-core --json"));
+    assert.doesNotMatch(calls, /acme-(web-ui|portal)/);
     assert.match(
       calls,
       /machine exec -a acme-core machine-core .* --timeout 120/,
@@ -1153,14 +1146,14 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     await flySecretsPush(config, dir);
     const calls = readFileSync(fake.log, "utf8");
     assert.ok(
-      calls.includes("secrets set --stage -a acme-portal PORTAL_SESSION_SECRET=-"),
-      "the portal keeps its plain delivery",
+      calls.includes("secrets set --stage -a acme-core PORTAL_SESSION_SECRET=-"),
+      "the core-hosted portal keeps its plain delivery",
     );
     assert.ok(
       calls.includes("secrets set --stage -a acme-core DEPLOY_APPS_SESSION_SECRET=-"),
       "the alias delivers the stored value under its declared env name on core",
     );
-    assert.ok(!calls.includes("-a acme-core PORTAL_SESSION_SECRET"), "the alias adds no plain-name delivery on core");
+    assert.ok(!calls.includes("-a acme-portal"), "nothing is staged on a separate portal app");
     assert.ok(
       calls.includes("secrets set --stage -a acme-core EXTRA_API_KEY=-"),
       "config secretEnv extras stage on their service",

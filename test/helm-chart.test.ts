@@ -96,7 +96,7 @@ test("Helm requires an explicit compatible image and supports full digest refere
   const ref = `registry.example.com/qm/core@sha256:${"a".repeat(64)}`;
   const resources = render({ services: { core: { imageRef: ref }, portal: { tag: "portal-fixture" } } });
   assert.equal(container(resources).image, ref);
-  assert.equal(container(resources, "portal").image, "ghcr.io/yc-software/qm/portal:portal-fixture");
+  assert.equal(container(resources, "portal").image, "ghcr.io/yc-software/qm/core:portal-fixture");
   assert.equal(resources.filter((r) => r.kind === "Deployment").length, 4);
   const byReference = render(
     {

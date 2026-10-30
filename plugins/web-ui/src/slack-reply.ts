@@ -3,7 +3,7 @@ import { ArrowUp } from "lucide";
 import { icon } from "./icons";
 import { tip } from "./tooltip";
 import { LitElement, html, nothing } from "lit";
-import { withBase } from "./core-bridge";
+import { webFetch, withBase } from "./core-bridge";
 import "./slack-account";
 import "./slack-reply.css";
 
@@ -87,7 +87,7 @@ export class SlackReply extends LitElement {
     }
   };
   private request(action: string, message?: { text: string; clientMessageId: string }): Promise<Response> {
-    return fetch(withBase(`/api/composio/slack/${action}`), {
+    return webFetch(withBase(`/api/composio/slack/${action}`), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId: this.sessionId, ...message }),

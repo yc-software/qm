@@ -292,8 +292,8 @@ npm run typecheck
 npm test
 ```
 
-See **`deploy/README.md` → Portal** for the public bring-up (IPs + cert, DNS, the Slack OIDC
-app, and secrets) and `cli/templates/fly/portal.toml`.
+Deployments run the portal inside core on its public port; see `docs/combined-services.md`
+and `cli/templates/fly/core.toml`.
 
 With embedded auth, trusted OIDC, and `PORTAL_TRUSTED_OIDC_LABEL` explicitly set,
 all email sign-in pages offer a link

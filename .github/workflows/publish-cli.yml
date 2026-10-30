@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           out=$(jq -n '{sandboxBase: "", services: {}}')
-          for service in core web-ui admin portal auth egress-proxy sandbox-base; do
+          for service in core admin egress-proxy sandbox-base; do
             repo="yc-software/qm/$service"
             token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull&service=ghcr.io" | jq -r .token)
             digest=$(curl -fsS -o /dev/null -D - -H "Authorization: Bearer $token" \

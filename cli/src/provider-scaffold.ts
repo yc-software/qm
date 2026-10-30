@@ -73,11 +73,12 @@ function renderConfig(orgId: string, values: ConfigValues): string {
   // "model": "",
 ${values.providerFields}
   // First-party services to run. The full set: "core" (the agent runtime and API,
-  // always required), "slack" (the Slack surface, runs inside the core process),
-  // "web-ui" (a browser chat UI), "admin" (the operator dashboard), "portal"
-  // (the public sign-in front door), "auth" (the built-in sign-in broker that
-  // emails one-time links; drop it to sign in through an external OIDC provider),
-  // and "egress-proxy" (the TLS proxy that enforces sandbox egress policy).
+  // always required), "slack" (the Slack surface), "portal" (the public sign-in
+  // front door), "web-ui" (a browser chat UI), "admin" (the operator dashboard),
+  // "auth" (the built-in sign-in broker that emails one-time links; drop it to
+  // sign in through an external OIDC provider), and "egress-proxy" (the TLS proxy
+  // that enforces sandbox egress policy). Everything but egress-proxy runs inside
+  // the core process; web-ui, admin, and auth require portal.
   "services": [${values.services.map((service) => JSON.stringify(service)).join(", ")}],
 
   // Extra plugins to run alongside the services. A prebuilt image runs with
@@ -163,14 +164,14 @@ cannot deregister or delete task definitions.
 const noFiles = (): ScaffoldFile[] => [];
 
 export const dockerScaffold: ProviderScaffold = {
-  renderConfig: (orgId, modelProvider) =>
+  renderConfig: (orgId, modelProvider, emailTransport) =>
     renderConfig(orgId, {
       target: "docker",
       modelProvider,
-      publicUrl: "http://localhost:8082",
+      publicUrl: "http://localhost:8081",
       providerFields: "",
-      services: ["core", "web-ui"],
-      env: `{ "core": { "HARNESS": "pi" } }`,
+      services: ["core", "web-ui", "portal", "auth"],
+      env: `{ "core": { "HARNESS": "pi" }, "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: "",
       sandbox: "",
     }),
@@ -187,7 +188,7 @@ export const flyScaffold: ProviderScaffold = {
     renderConfig(orgId, {
       target: "fly",
       modelProvider,
-      publicUrl: `https://${orgId}-portal.fly.dev`,
+      publicUrl: `https://${orgId}-core.fly.dev`,
       providerFields: `
   // Globally unique prefix for every Fly app in this deployment.
   "appPrefix": ${JSON.stringify(orgId)},
@@ -216,11 +217,7 @@ export const awsScaffold: ProviderScaffold = {
   renderConfig: (orgId, modelProvider, emailTransport) => {
     const cluster = clusterName(orgId);
     const services = Object.fromEntries(
-      [
-        ["core", 2048, 4096],
-        ["web-ui", 512, 1024],
-        ["portal", 512, 1024],
-      ].map(([name, cpu, memory]) => [
+      [["core", 2048, 4096]].map(([name, cpu, memory]) => [
         name,
         {
           ecrRepository: `${orgId}-qm-${name}`,

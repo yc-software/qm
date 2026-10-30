@@ -93,26 +93,15 @@ services:
 
   auth:
     enabled: true
-    image: auth
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "src/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
     env: {}
 
   web-ui:
     enabled: true
-    image: web-ui
+    image: core
     type: web
     port: 8080
     replicas: 1
-    command: ["node", "server/index.ts"]
+    command: ["node", "plugins/web-ui/server/index.ts"]
     resources:
       requests:
         cpu: 100m
@@ -139,11 +128,11 @@ services:
 
   portal:
     enabled: true
-    image: portal
+    image: core
     type: web
     port: 8080
     replicas: 1
-    command: ["node", "src/index.ts"]
+    command: ["node", "plugins/portal/src/index.ts"]
     resources:
       requests:
         cpu: 100m

@@ -105,7 +105,7 @@ test("split security keys are required and routed only to their trust boundary",
   }
   const identity = secretByName(config, "PORTAL_IDENTITY_SECRET");
   assert.equal(identity.required, true);
-  assert.deepEqual([...secretDestinations(identity).keys()].sort(), ["core", "portal"]);
+  assert.deepEqual([...secretDestinations(identity).keys()].sort(), ["core"]);
   const example = renderEnvExample(config);
   for (const name of ["CORE_SIGNING_SECRET", "CAPABILITY_SECRET", "PORTAL_IDENTITY_SECRET", "CONNECTOR_SECRET_KEY"]) {
     assert.match(example, new RegExp(`^${name}=$`, "m"));
@@ -306,15 +306,15 @@ test("config secretEnv extras enter the computed set as required operator secret
   assert.match(renderEnvExample(config), /^OPENAI_API_KEY=$/m);
 });
 
-test("a secretEnv alias delivers the stored secret under its declared env name only", () => {
+test("a secretEnv alias delivers the stored secret under its declared env name alongside the hosted surface's name", () => {
   const config = makeConfig({
     services: ["core", "web-ui", "portal"],
     secretEnv: { core: { DEPLOY_APPS_SESSION_SECRET: "PORTAL_SESSION_SECRET" } },
   });
   const secret = secretByName(config, "PORTAL_SESSION_SECRET");
   assert.deepEqual(secret.services, ["portal"], "the alias adds no plain-name claim");
-  assert.deepEqual(runtimeSecretNames("core", secret), ["DEPLOY_APPS_SESSION_SECRET"]);
-  assert.deepEqual(runtimeSecretNames("portal", secret), ["PORTAL_SESSION_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("core", secret), ["PORTAL_SESSION_SECRET", "DEPLOY_APPS_SESSION_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("portal", secret), runtimeSecretNames("core", secret));
   assert.ok(secretsForService(config, "core").some((s) => s.name === "PORTAL_SESSION_SECRET"));
   assert.ok(
     !computedSecrets(config).some((s) => s.name === "DEPLOY_APPS_SESSION_SECRET"),
@@ -337,14 +337,11 @@ test("secretEnv for a service the config does not enable is ignored", () => {
   assert.ok(!computedSecrets(config).some((s) => s.name === "EXTRA_TOKEN"));
 });
 
-test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a portal identity", () => {
+test("PORTAL_IDENTITY_SECRET reaches core, which both signs and verifies portal identities", () => {
   const config = makeConfig({ services: ["core", "web-ui", "admin", "portal"] });
   const secret = secretByName(config, "PORTAL_IDENTITY_SECRET");
-  assert.deepEqual(
-    [...secretDestinations(secret).keys()].sort(),
-    ["core", "portal", "web-ui"],
-    "core verifies with PORTAL_IDENTITY_SECRET, so a surface left without it signs with a different key and every request it makes is rejected",
-  );
+  assert.deepEqual([...secretDestinations(secret).keys()], ["core"]);
+  assert.deepEqual(secret.services, ["admin", "core", "portal", "web-ui"]);
 });
 
 test("INBOX_USERS is one optional secret shared by web-ui and admin", () => {
@@ -352,7 +349,7 @@ test("INBOX_USERS is one optional secret shared by web-ui and admin", () => {
   const allowlist = secretByName(config, "INBOX_USERS");
   assert.equal(allowlist.required, false);
   assert.deepEqual(allowlist.services, ["admin", "web-ui"]);
-  assert.deepEqual([...secretDestinations(allowlist).keys()], ["web-ui"]);
+  assert.deepEqual([...secretDestinations(allowlist).keys()], ["core"]);
   assert.deepEqual(runtimeSecretNames("web-ui", allowlist), ["INBOX_USERS"]);
   assert.deepEqual(runtimeSecretNames("admin", allowlist), ["INBOX_USERS"]);
   assert.match(renderEnvExample(config), /Inbox, Calendar, and Design System\. \(admin, web-ui\)/);
@@ -373,7 +370,7 @@ test("the invitation-email pair reaches core as optional secrets on every topolo
     });
     const shared = secretByName(broker, name);
     assert.equal(shared.required, false);
-    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["core", "portal"]);
+    assert.deepEqual([...secretDestinations(shared).keys()], ["core"]);
   }
 });
 

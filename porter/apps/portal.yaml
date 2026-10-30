@@ -3,11 +3,11 @@ name: qm-portal
 build:
   method: docker
   context: .
-  dockerfile: ./deploy/portal/Dockerfile
+  dockerfile: ./deploy/core/Dockerfile
 services:
   - name: portal
     type: web
-    run: node src/index.ts
+    run: node plugins/portal/src/index.ts
     instances: 1
     cpuCores: 0.25
     ramMegabytes: 512

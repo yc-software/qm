@@ -1,7 +1,6 @@
 # Deployment templates
 
-The files under `deploy/` are service-image and Fly configuration templates used
-by the `qm` CLI. They are not a production deployment and contain no cloud
+The files under `deploy/` are service-image templates used by the `qm` CLI. They are not a production deployment and contain no cloud
 account, workspace, or organization credentials.
 
 The one exception is [`layers/`](./layers/), which is empty in qm itself. A private
@@ -26,36 +25,30 @@ Do not deploy the example names in these templates directly.
 
 ## Topology
 
-The public portal is the only Internet-facing service. It authenticates users
-over OIDC and proxies the private Web UI and admin surfaces. Core, Postgres, and
-agent computers stay private. The optional Slack surface runs inside core over
-outbound Socket Mode.
+Core is the only Internet-facing service. With `portal` in `services`, the core
+process also runs the public front door on its public port (8000): the portal
+authenticates users over OIDC and serves the Web UI and admin surfaces from the
+same process. Core's API port (8080), Postgres, and agent computers stay
+private. The optional Slack surface runs inside core over outbound Socket Mode.
 
-By default the OIDC provider is the `auth` service qm deploys for itself: a
-sign-in broker that emails a one-time link. It is private like every other
-non-portal service — the portal republishes only its two browser-facing routes
-under `/idp/`, so the issuer and the sign-in pages live on the portal's own
-origin while the token, userinfo, and JWKS calls stay on the private network.
-The self-hoster supplies an admin address, a verified sender, and a Resend key
-or SMTP credentials; the CLI generates the broker's signing key and the portal's
-client credentials and wires both sides. Core receives the same `RESEND_API_KEY`
-and `AUTH_EMAIL_FROM`, which let admins email invitations to external users from
-the admin Users tab or by chatting with QM; both are optional on core, and
-without them the invitation is still created and the sign-in link is shared by
-hand. Dropping `"auth"` from `services` hands
-sign-in back to an external identity provider, which then has to register the
-exact `<publicUrl>/auth/callback` redirect.
+By default the OIDC provider is the `auth` sign-in broker, which emails a
+one-time link. It runs inside core on loopback; the portal republishes only its
+two browser-facing routes under `/idp/`, so the issuer and the sign-in pages live
+on the public origin while the token, userinfo, and JWKS calls never leave the
+process. The self-hoster supplies an admin address, a verified sender, and a
+Resend key or SMTP credentials; the CLI generates the broker's signing key and
+the portal's client credentials and wires both sides. Core uses the same
+`RESEND_API_KEY` and `AUTH_EMAIL_FROM` to let admins email invitations to
+external users from the admin Users tab or by chatting with QM; both are
+optional, and without them the invitation is still created and the sign-in link
+is shared by hand. Dropping `"auth"` from `services` hands sign-in back to an
+external identity provider, which then has to register the exact
+`<publicUrl>/auth/callback` redirect.
 
 Connector OAuth clients and the optional Slack bot token pair are entered at
 the authenticated admin connector URL returned by `qm outputs`. Secrets are
 encrypted in durable storage and are never committed to a deployment directory.
 The agent advertises only connectors whose admin configuration is enabled.
-
-`cli/templates/fly/auth.toml` declares an `[http_service]` like every other surface, but the
-CLI always deploys it `--flycast --no-public-ips`; on AWS the ALB assertions refuse to
-attach it to a load balancer. Never `fly launch` that file by hand — a broker with a
-public IP exposes its token endpoint and lets a caller forge the rate-limit client
-address.
 
 ## Fixtures
 

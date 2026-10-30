@@ -12,6 +12,7 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { startWebEdge } from "./web-edge.ts";
 
 const config = loadConfig();
 
@@ -48,12 +49,14 @@ await built.deploymentLayerReady;
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
-server.listen(config.port, () => {
-  console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
-      `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
-  );
-});
+await new Promise<void>((resolve) => server.listen(config.port, resolve));
+console.log(
+  `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
+    `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
+);
+const edgeServers = config.publicPort
+  ? await startWebEdge({ publicPort: config.publicPort, corePort: config.port, orgId: config.orgId }, process.env)
+  : [];
 
 if (config.deployAppsDomain) {
   const domain = config.deployAppsDomain;
@@ -185,6 +188,10 @@ function shutdown(signal: string): void {
     void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
   void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
   built.deploymentLayerRefresh.stop();
+  for (const edge of edgeServers) {
+    edge.close();
+    edge.closeIdleConnections();
+  }
   server.close();
   server.closeIdleConnections();
   stopWithBackstop(

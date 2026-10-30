@@ -3,12 +3,12 @@ name: qm-web-ui
 build:
   method: docker
   context: .
-  dockerfile: ./deploy/web-ui/Dockerfile
+  dockerfile: ./deploy/core/Dockerfile
 services:
   - name: web-ui
     type: web
     private: true
-    run: node server/index.ts
+    run: node plugins/web-ui/server/index.ts
     instances: 1
     cpuCores: 0.25
     ramMegabytes: 512

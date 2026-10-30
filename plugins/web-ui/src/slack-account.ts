@@ -4,7 +4,7 @@ import { ArrowUpRight, Check, Link2, UserRound } from "lucide";
 import { slackMark } from "./slack-mark";
 import { icon } from "./icons";
 import "./slack-account.css";
-import { withBase } from "./core-bridge";
+import { webFetch, withBase } from "./core-bridge";
 
 interface SlackAttempt {
   user: string;
@@ -93,7 +93,7 @@ export class SlackAccount extends LitElement {
 
   private async status(): Promise<void> {
     try {
-      const response = await fetch(withBase("/api/composio/slack"), {
+      const response = await webFetch(withBase("/api/composio/slack"), {
         cache: "no-store",
         signal: AbortSignal.timeout(10_000),
       });
@@ -115,7 +115,7 @@ export class SlackAccount extends LitElement {
       if (await openDesktopBrowser(withBase("/settings"))) return;
       await this.status();
       if (this.nativeOAuth) {
-        const response = await fetch(withBase("/api/connectors/slack/start"), {
+        const response = await webFetch(withBase("/api/connectors/slack/start"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ returnTo: `${location.pathname}${location.search}` }),
@@ -135,7 +135,7 @@ export class SlackAccount extends LitElement {
         return;
       }
       const state = crypto.randomUUID();
-      const response = await fetch(withBase("/api/composio/slack/authorize"), {
+      const response = await webFetch(withBase("/api/composio/slack/authorize"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ state, returnTo: `${location.pathname}${location.search}` }),
@@ -167,7 +167,7 @@ export class SlackAccount extends LitElement {
     this.busy = true;
     this.error = "";
     try {
-      const response = await fetch(withBase("/api/composio/slack/complete"), {
+      const response = await webFetch(withBase("/api/composio/slack/complete"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ticket: this.attempt.ticket }),

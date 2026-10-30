@@ -143,15 +143,13 @@ test("a missing secretEnv value is warned, not invented", async () => {
   }
 });
 
-test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async () => {
+test("model → PI_MODEL and host ports follow the offset map (core API +0, core public front door +1)", async () => {
   const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
   try {
     const out = await plan(dir);
     assert.match(out, /PI_MODEL/);
-    assert.match(out, /host :8080/);
-    assert.match(out, /host :8081/);
-    assert.match(out, /host :8082/);
-    assert.doesNotMatch(out, /host :8083/);
+    assert.match(out, /core: .*\(host :8080, :8081\)/);
+    assert.doesNotMatch(out, /:8082/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

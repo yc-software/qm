@@ -4,10 +4,12 @@ locals {
   azs                     = length(data.aws_availability_zones.available.names) >= 2 ? slice(data.aws_availability_zones.available.names, 0, 2) : []
   subnet_ids              = values(aws_subnet.public)[*].id
   vpc_id                  = aws_vpc.this.id
-  has_portal              = contains(keys(var.services), "portal")
+  has_portal              = var.public_port > 0
   public_path_services    = { for name, service in var.services : name => service.public_paths if length(service.public_paths) > 0 }
   public_service_names    = concat(local.has_portal ? concat(["portal"], length(var.core_public_hosts) > 0 ? ["core"] : []) : ["core"], keys(local.public_path_services))
-  ingress_services        = { for name, service in var.services : name => service if contains(local.public_service_names, name) }
+  ingress_owners          = { for name in local.public_service_names : name => name == "portal" ? "core" : name }
+  ingress_services        = { for name, owner in local.ingress_owners : name => merge(var.services[owner], { internal_port = name == "portal" ? var.public_port : var.services[owner].internal_port }) }
+  owned_ingress           = { for name in keys(var.services) : name => [for route, owner in local.ingress_owners : route if owner == name] }
   egress_proxy            = { for name, service in var.services : name => service if name == "egress-proxy" }
   direct_path_services    = merge(local.has_portal ? {} : { core = ["/v1/*"] }, local.public_path_services)
   alb_name                = "${substr(var.cluster_name, 0, 23)}-${substr(sha1(var.cluster_name), 0, 8)}"
@@ -936,7 +938,7 @@ resource "aws_cloudfront_distribution" "portal" {
 resource "aws_lb_listener_rule" "production" {
   for_each     = local.ingress_services
   listener_arn = aws_lb_listener.public.arn
-  priority     = contains(keys(local.public_path_services), each.key) ? 1 + index(sort(keys(local.public_path_services)), each.key) : (length(local.public_path_services) > 0 ? 1000 : 10) + index(sort(keys(var.services)), each.key)
+  priority     = contains(keys(local.public_path_services), each.key) ? 1 + index(sort(keys(local.public_path_services)), each.key) : (length(local.public_path_services) > 0 ? 1000 : 10) + index(sort(keys(local.ingress_services)), each.key)
   lifecycle {
     ignore_changes = [action]
   }
@@ -1027,7 +1029,7 @@ resource "aws_ecs_task_definition" "bootstrap" {
     operating_system_family = "LINUX"
     cpu_architecture        = each.value.architecture == "amd64" ? "X86_64" : "ARM64"
   }
-  container_definitions = jsonencode([{ name = each.key, image = "public.ecr.aws/docker/library/alpine:3.20", essential = true, command = ["sh", "-c", "while true; do nc -l -p ${each.value.internal_port} -e echo ok; done"], portMappings = [merge({ name = each.key, containerPort = each.value.internal_port }, contains(keys(local.egress_proxy), each.key) ? {} : { appProtocol = "http" })], logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.service[each.key].name, awslogs-region = var.region, awslogs-stream-prefix = each.key } } }])
+  container_definitions = jsonencode([{ name = each.key, image = "public.ecr.aws/docker/library/alpine:3.20", essential = true, command = ["sh", "-c", "while true; do nc -l -p ${each.value.internal_port} -e echo ok; done"], portMappings = concat([merge({ name = each.key, containerPort = each.value.internal_port }, contains(keys(local.egress_proxy), each.key) ? {} : { appProtocol = "http" })], contains(local.owned_ingress[each.key], "portal") ? [{ name = "public", containerPort = var.public_port, appProtocol = "http" }] : []), logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.service[each.key].name, awslogs-region = var.region, awslogs-stream-prefix = each.key } } }])
   tags                  = local.tags
 }
 
@@ -1073,23 +1075,25 @@ resource "aws_ecs_service" "service" {
     bake_time_in_minutes = contains(keys(local.egress_proxy), each.key) ? null : var.ecs_blue_green_bake_minutes
   }
   dynamic "alarms" {
-    for_each = contains(keys(local.ingress_services), each.key) ? [each.key] : []
+    for_each = length(local.owned_ingress[each.key]) > 0 ? [each.key] : []
     content {
-      alarm_names = [
-        aws_cloudwatch_metric_alarm.primary_target_5xx[alarms.value].alarm_name,
-        aws_cloudwatch_metric_alarm.alternate_target_5xx[alarms.value].alarm_name,
-      ]
+      alarm_names = flatten([
+        for route in local.owned_ingress[each.key] : [
+          aws_cloudwatch_metric_alarm.primary_target_5xx[route].alarm_name,
+          aws_cloudwatch_metric_alarm.alternate_target_5xx[route].alarm_name,
+        ]
+      ])
       enable   = true
       rollback = true
     }
   }
   sigint_rollback = true
   dynamic "load_balancer" {
-    for_each = contains(keys(local.ingress_services), each.key) ? [each.key] : []
+    for_each = local.owned_ingress[each.key]
     content {
       target_group_arn = aws_lb_target_group.service[load_balancer.value].arn
       container_name   = each.key
-      container_port   = each.value.internal_port
+      container_port   = local.ingress_services[load_balancer.value].internal_port
       advanced_configuration {
         alternate_target_group_arn = aws_lb_target_group.alternate[load_balancer.value].arn
         production_listener_rule   = aws_lb_listener_rule.production[load_balancer.value].arn

@@ -18,14 +18,10 @@ import {
 import {
   isVirtualService,
   ordered,
-  type BrandEnv,
-  brandEnvOf,
-  orgEnv,
   runnableServices,
   hostedServiceEnv,
   serviceHost,
   serviceDef,
-  virtualServiceEnv,
   type ServiceCtx,
   type LogOpts,
   type ServiceName,
@@ -49,23 +45,11 @@ import {
 import { manifestRef } from "../manifest.ts";
 import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
-const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => {
-  const brand = brandEnvOf(config);
-  return {
-    appPrefix,
-    orgId: config.orgId,
-    deployAppPrefix,
-    publicUrl: config.publicUrl,
-    hasPortal: config.services.includes("portal"),
-    hasAuth: config.services.includes("auth"),
-    ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-      ? { authAllowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-      : {}),
-    ...(brand ? { brand } : {}),
-    coreUrl: `http://${appPrefix}-core.internal:8080`,
-    authUrl: `http://${appPrefix}-auth.flycast`,
-  };
-};
+const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => ({
+  config,
+  deployAppPrefix,
+  coreUrl: `http://${appPrefix}-core.internal:8080`,
+});
 
 const FLY_RESPONSE = "QM_LAYER_RESPONSE=";
 const FLY_REMOTE_ERROR = "QM_LAYER_ERROR=";
@@ -336,7 +320,6 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
   const spec = serviceDef(service).fly!;
   const base = readFileSync(join(flyTemplateRoot(), `${service}.toml`), "utf8");
   const sandboxEnv = service === "core" ? sandboxCoreEnv(ctx.config).env : {};
-  const virtualEnv = service === "core" ? virtualServiceEnv(ctx.config.services, ctx.config.env) : {};
   const modelEnv: Record<string, string> =
     service === "core"
       ? {
@@ -350,7 +333,6 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
   const overrides: Record<string, string> = {
     ...spec.managed(ctx.serviceCtx),
     ...sandboxEnv,
-    ...virtualEnv,
     ...modelEnv,
     ...configuredEnv,
     ...(service === "core" ? securityScreenEnv(ctx.config) : {}),
@@ -413,6 +395,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
     out.push(line);
   }
   if (inEnv) out.push(...pendingExtra());
+  if (overrides.PUBLIC_PORT) out.push(...publicHttpService(Number(overrides.PUBLIC_PORT)));
   return out.join("\n");
 
   function pendingExtra(): string[] {
@@ -421,6 +404,30 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
       .map(([k, v]) => `${envIndent}${k} = ${tomlStr(v)}`);
   }
 }
+
+const publicHttpService = (port: number): string[] => [
+  "[http_service]",
+  `  internal_port = ${port}`,
+  "  force_https = true",
+  "  auto_stop_machines = false",
+  "  auto_start_machines = true",
+  "  min_machines_running = 1",
+  "",
+  "  [[http_service.ports]]",
+  "    port = 80",
+  '    handlers = ["http"]',
+  "    force_https = true",
+  "",
+  "  [[http_service.ports]]",
+  "    port = 443",
+  '    handlers = ["tls", "http"]',
+  "",
+  "  [http_service.concurrency]",
+  '    type = "requests"',
+  "    soft_limit = 200",
+  "    hard_limit = 250",
+  "",
+];
 
 export function derivedTomlFor(config: QmConfig, service: ServiceName, repoRoot: string): string {
   const appPrefix = appPrefixOf(config);
@@ -662,13 +669,6 @@ export function mpgDirectUrl(statusOutput: string, clusterId: string): string {
   return url.toString();
 }
 
-function ensureFlycast(app: string): void {
-  const ips = fly(["ips", "list", "-a", app]);
-  if (/private/i.test(ips)) return;
-  fly(["ips", "allocate-v6", "--private", "-a", app]);
-  note(`flycast: allocated private v6 for ${app}`);
-}
-
 function ensurePublicIngress(app: string): void {
   let ips: Array<{ Type?: string }>;
   try {
@@ -762,24 +762,6 @@ function imageSourceFor(ctx: FlyCtx, opts: FlyUpOpts): ImageSource | undefined {
   return { kind: "manifest" };
 }
 
-const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "admin", "auth"]);
-
-export function flyDeployPhases(services: ServiceName[]): ServiceName[][] {
-  const phases: ServiceName[][] = [];
-  const remaining = [...services];
-  const coreIndex = remaining.indexOf("core");
-  if (coreIndex !== -1) {
-    phases.push(["core"]);
-    remaining.splice(coreIndex, 1);
-  }
-  const parallel = remaining.filter((s) => SAFE_AFTER_CORE.has(s));
-  if (parallel.length) phases.push(parallel);
-  for (const s of remaining) {
-    if (!SAFE_AFTER_CORE.has(s)) phases.push([s]);
-  }
-  return phases;
-}
-
 function resolveServices(config: QmConfig, only?: ServiceName[]): ServiceName[] {
   const runnable = runnableServices(config.services);
   for (const s of runnable) {
@@ -865,8 +847,8 @@ async function deployService(
   const spec = serviceDef(service).fly!;
   note(`\n=== deploying ${app} ===`);
   if (service === "core") timing.time(service, "Postgres ensure", () => ensurePostgres(ctx));
-  if (spec.flycast) timing.time(service, "Flycast ensure", () => ensureFlycast(app));
-  if (spec.publicIngress) timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
+  if (spec.publicIngress?.(ctx.serviceCtx))
+    timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
   const cfgPath = serviceCfgPath(ctx, service);
   const args = ["deploy", "--yes", "-c", cfgPath, ...spec.deployFlags];
   if (imageSource?.kind === "tagged") {
@@ -884,17 +866,6 @@ async function deployService(
   step(`fly ${args.join(" ")}`);
 
   await timing.timeAsync(service, "fly deploy", () => runFlyDeploy(args, ctx.commandCwd));
-}
-
-async function deployPhase(
-  ctx: FlyCtx,
-  phase: ServiceName[],
-  imageSource: ImageSource | undefined,
-  timing: ReturnType<typeof createTimingRecorder>,
-): Promise<void> {
-  if (phase.length > 1)
-    note(`\n=== deploying in parallel: ${phase.map((s) => `${ctx.appPrefix}-${s}`).join(", ")} ===`);
-  await settleAll(phase.map((s) => deployService(ctx, s, imageSource, timing)));
 }
 
 async function buildServiceImage(
@@ -947,15 +918,12 @@ function pluginTomlContent(
   appPrefix: string,
   flyOrg: string,
   orgId: string,
-  publicUrl: string,
-  hasPortal: boolean,
   region: string,
   plugin: ResolvedPlugin,
-  brand?: BrandEnv,
 ): string {
   const env: Record<string, string> = {
     ...(plugin.coreAccess === false ? {} : { CORE_API_URL: `http://${appPrefix}-core.internal:8080` }),
-    ...orgEnv(plugin.name, orgId, publicUrl, hasPortal, brand),
+    CORE_ORG_ID: orgId,
     PORT: "8080",
     ...plugin.env,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, orgId, appPrefix),
@@ -976,34 +944,13 @@ function pluginTomlContent(
 }
 
 export function derivedPluginTomlFor(config: QmConfig, plugin: ResolvedPlugin): string {
-  return pluginTomlContent(
-    appPrefixOf(config),
-    config.flyOrg ?? "",
-    config.orgId,
-    config.publicUrl,
-    config.services.includes("portal"),
-    config.region ?? "",
-    plugin,
-    brandEnvOf(config),
-  );
+  return pluginTomlContent(appPrefixOf(config), config.flyOrg ?? "", config.orgId, config.region ?? "", plugin);
 }
 
 function writePluginDerived(ctx: FlyCtx, plugin: ResolvedPlugin): string {
   mkdirSync(generatedDir(ctx), { recursive: true });
   const path = pluginCfgPath(ctx, plugin.name);
-  writeFileSync(
-    path,
-    pluginTomlContent(
-      ctx.appPrefix,
-      ctx.flyOrg,
-      ctx.orgId,
-      ctx.config.publicUrl,
-      ctx.config.services.includes("portal"),
-      ctx.region,
-      plugin,
-      brandEnvOf(ctx.config),
-    ),
-  );
+  writeFileSync(path, pluginTomlContent(ctx.appPrefix, ctx.flyOrg, ctx.orgId, ctx.region, plugin));
   return path;
 }
 
@@ -1265,7 +1212,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     }
     unsetCorelessPluginCoreSecrets(plugins, ctx.appPrefix);
 
-    for (const phase of flyDeployPhases(services)) await deployPhase(ctx, phase, imageSource, timing);
+    for (const service of services) await deployService(ctx, service, imageSource, timing);
     await deployPlugins(ctx, plugins, imageSource, timing);
     if (ctx.sourceRoot) recordServiceImages(ctx, services, opts.configPath);
 
@@ -1658,16 +1605,7 @@ export async function flyCheckLive(
     const expectedEnv = generatedTomlEnv(
       firstParty.has(workload)
         ? deriveToml(ctx, workload as ServiceName)
-        : pluginTomlContent(
-            ctx.appPrefix,
-            ctx.flyOrg,
-            ctx.orgId,
-            config.publicUrl,
-            config.services.includes("portal"),
-            ctx.region,
-            plugin!,
-            brandEnvOf(config),
-          ),
+        : pluginTomlContent(ctx.appPrefix, ctx.flyOrg, ctx.orgId, ctx.region, plugin!),
     );
     const envDrift = machines.flatMap((machine, index) =>
       Object.entries(expectedEnv).flatMap(([name, value]) =>

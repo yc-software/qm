@@ -270,7 +270,7 @@ function statefulAws(
   restore: () => void;
 } {
   const state = join(dir, "aws-state.json");
-  const frontService = configured.aws!.services.portal ? "portal" : "core";
+  const frontService = configured.services.includes("portal") ? "portal" : "core";
   const coreHosts: string[] = [];
   if (frontService === "portal") {
     const api = configured.apiUrl;
@@ -281,12 +281,8 @@ function statefulAws(
     const apps = configured.env.core?.AWS_DEPLOY_APPS_DOMAIN;
     if (apps) coreHosts.push(`*.${apps.toLowerCase().replace(/\.$/, "")}`);
   }
-  const targetGroups = Object.fromEntries(
-    (["core", "portal"] as const).flatMap((name) => {
-      const pinned = configured.aws!.services[name]?.targetGroup;
-      return pinned ? [[name, pinned]] : [];
-    }),
-  );
+  const pinned = configured.aws!.services.core?.targetGroup;
+  const targetGroups: Partial<Record<"core" | "portal", string>> = pinned ? { [frontService]: pinned } : {};
   const tgName = (name: "core" | "portal"): string =>
     targetGroups[name] ??
     `acme-qm-${name.replaceAll("-", "").slice(0, 4)}-${createHash("sha1").update(`acme-qm:${name}`).digest("hex").slice(0, 6)}`;
@@ -382,14 +378,14 @@ else if (a.includes("ecs describe-services")) {
           { id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: service.desiredCount, failedTasks: 1 },
           { id: "old", status: "ACTIVE", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: 1, failedTasks: 0 },
         ]
-      : (${JSON.stringify(opts.rolloutFailed ?? false)} || s.failedTaskDefinition === service.taskDefinition)
+      : (${JSON.stringify(opts.rolloutFailed ?? false)})
         ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "FAILED", runningCount: 0, failedTasks: 1 }]
       : ${JSON.stringify(opts.primaryFailedTasks ?? false)} || transientlyFailing
         ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "IN_PROGRESS", runningCount: 0, failedTasks: 1 }]
         : blueGreenBakePolls
           ? [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: 0 }]
         : [{ id: service.deploymentId, status: "PRIMARY", taskDefinition: service.taskDefinition, rolloutState: "COMPLETED", runningCount: service.desiredCount, failedTasks: transientFailedTaskPolls && s.updated ? 1 : 0 }];
-    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments: [...deployments, ...(${JSON.stringify(opts.inactiveDeploymentRunning === undefined ? [] : [{ id: "inactive", status: "INACTIVE", rolloutState: "COMPLETED", runningCount: opts.inactiveDeploymentRunning, failedTasks: 0 }])}).map(deployment => ({ taskDefinition: service.taskDefinition, ...deployment }))].map(deployment => ({ pendingCount: 0, ...deployment })), pendingCount: 0, loadBalancers: service.workload === ${JSON.stringify(frontService)} ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }] : (service.workload === "core" && ${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)} }] : []), tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
+    return [{ serviceName: name, status: "ACTIVE", launchType: "FARGATE", platformVersion: "1.4.0", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet-a", "subnet-b"], securityGroups: ["sg-core"], assignPublicIp: "ENABLED" } }, desiredCount: service.desiredCount, runningCount: draining ? service.desiredCount + 1 : service.desiredCount, taskDefinition: service.taskDefinition, deploymentConfiguration: { strategy: blueGreenBakePolls ? "BLUE_GREEN" : "ROLLING" }, deployments: [...deployments, ...(${JSON.stringify(opts.inactiveDeploymentRunning === undefined ? [] : [{ id: "inactive", status: "INACTIVE", rolloutState: "COMPLETED", runningCount: opts.inactiveDeploymentRunning, failedTasks: 0 }])}).map(deployment => ({ taskDefinition: service.taskDefinition, ...deployment }))].map(deployment => ({ pendingCount: 0, ...deployment })), pendingCount: 0, loadBalancers: service.workload === "core" ? [{ targetGroupArn: ${JSON.stringify(frontTargetArn)}, containerPort: ${frontService === "portal" ? 8000 : 8080}, ...(blueGreenBakePolls ? { advancedConfiguration: { alternateTargetGroupArn: ${JSON.stringify(frontAlternateArn)}, productionListenerRule: ${JSON.stringify(productionRuleArn)} } } : {}) }, ...(${JSON.stringify(coreHosts.length > 0)} ? [{ targetGroupArn: ${JSON.stringify(coreTargetArn)}, containerPort: 8080 }] : [])] : [], tags: [{ key: "Deployment", value: ${JSON.stringify(opts.foreignServiceTags ? "other" : configured.orgId)} }, { key: "ManagedBy", value: "terraform" }], ...(s.serviceOverrides?.[name] || {}) }];
   }), failures: names.filter((name) => !s.services[name]).map((name) => ({ arn: name, reason: "MISSING" })) }));
 }
 else if (a.includes("ecs list-service-deployments") && ${JSON.stringify(opts.failNativeStatusOnceAfterUpdate ?? false)} && s.updated && !s.nativeStatusFailedOnce) {
@@ -454,7 +450,6 @@ else if (a.includes("ecs update-service")) {
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)} && args.includes("--desired-count")) service.desiredCount = Number(after("--desired-count"));
   if (!${JSON.stringify(opts.ignoreUpdate ?? false)}) service.deploymentId = "ecs-svc/" + name + "-" + (++s.revision);
   if (s.stoppedInventory) delete s.taskInventory;
-  if (s.failNextWebRollout && service.workload === "web-ui") { s.failedTaskDefinition = service.taskDefinition; s.failNextWebRollout = false; }
   s.updated = true;
   s.drainPolls = ${JSON.stringify(opts.drainPolls ?? 0)};
   s.blueGreenPolls = 0;
@@ -562,31 +557,21 @@ const config: QmConfig = {
     imageLabel: "release",
     secretsPrefix: "acme/qm/",
     networking: { cloudMapNamespace: "acme.internal" },
-    services: Object.fromEntries(
-      ["core", "web-ui", "admin", "portal"].map((name) => [
-        name,
-        {
-          ecrRepository: `qm-${name}`,
-          ecsService: `acme-${name}`,
-          cpu: name === "core" ? 2048 : 512,
-          memory: name === "core" ? 4096 : 1024,
-        },
-      ]),
-    ),
+    services: { core: { ecrRepository: "qm-core", ecsService: "acme-core", cpu: 2048, memory: 4096 } },
   },
 };
 
 test("AWS environment derives identity, public URLs, private wiring, and MicroVM coordinates", () => {
-  assert.deepEqual(serviceEnvironment(config, "web-ui"), {
-    ADMIN_BASE_PATH: "/admin",
-    ADMIN_ENABLED: "1",
-    CORE_API_URL: "http://core.acme.internal:8080",
-    CORE_ORG_ID: "acme",
-    PORT: "8080",
-    REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
-    WEB_UI_PUBLIC_URL: "https://agent.acme.example",
-  });
   const core = serviceEnvironment(config, "core");
+  assert.equal(core.PUBLIC_PORT, "8000");
+  assert.equal(core.PORTAL_PUBLIC_URL, "https://agent.acme.example");
+  assert.equal(core.ADMIN_ENABLED, "1");
+  assert.equal(core.ADMIN_BASE_PATH, "/admin");
+  assert.equal(core.REQUIRE_SIGNED_PORTAL_IDENTITY, "1");
+  assert.equal(core.PORTAL_XFF_TRUSTED_HOPS, "1");
+  assert.equal(core.OIDC_CLIENT_ID, "client");
+  assert.equal(core.CORE_API_URL, undefined);
+  assert.equal(core.WEB_UI_UPSTREAM, undefined);
   assert.equal(core.ORG_ID, "acme");
   assert.equal(core.PUBLIC_WEB_URL, "https://agent.acme.example");
   assert.equal(core.WEB_UI_PUBLIC_URL, "https://agent.acme.example");
@@ -623,7 +608,7 @@ test("AWS hosting preserves an explicit publishing provider independently of san
       assert.equal(core.SANDBOX_BACKEND, sandbox?.backend ?? "aws");
       assert.equal(core.SESSION_STORE, "postgres");
       assert.equal(core.SNAPSHOT_STORE, "s3");
-      assert.equal(serviceEnvironment(selected, "portal").DEPLOY_PROVIDER, undefined);
+      assert.equal(serviceEnvironment(selected, "egress-proxy").DEPLOY_PROVIDER, undefined);
     }
   }
 });
@@ -633,7 +618,7 @@ test("a configured bot identity lands in the AWS core task env and only there", 
   const core = serviceEnvironment(branded, "core");
   assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
   assert.equal(core.ORG_BRAND_ORG_NAME, "Straylight Industries");
-  assert.equal(serviceEnvironment(branded, "web-ui").ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(serviceEnvironment(branded, "egress-proxy").ORG_BRAND_SELF_LABEL, undefined);
   assert.equal(serviceEnvironment(config, "core").ORG_BRAND_SELF_LABEL, undefined);
 });
 
@@ -659,7 +644,7 @@ test("AWS routes security screen proxy configuration and its token only to core"
     },
   );
   assert.deepEqual(
-    Object.keys(serviceEnvironment(screened, "web-ui")).filter((name) => name.startsWith("SECURITY_SCREEN_")),
+    Object.keys(serviceEnvironment(screened, "egress-proxy")).filter((name) => name.startsWith("SECURITY_SCREEN_")),
     [],
   );
   const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
@@ -672,36 +657,27 @@ test("AWS routes security screen proxy configuration and its token only to core"
   );
 });
 
-test("AWS fixes every workload listen port to its ECS port mapping", () => {
-  const configured: QmConfig = {
-    ...config,
-    env: {
-      ...config.env,
-      core: { ...config.env.core, PORT: "9000" },
-      "web-ui": { PORT: "9001" },
-      admin: { ...config.env.admin, PORT: "9002" },
-      portal: { ...config.env.portal, PORT: "9003" },
-    },
-  };
-  for (const service of ["core", "web-ui", "admin", "portal"] as const) {
-    const def = configured.aws!.services[service]!;
-    const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/${def.ecrRepository}@sha256:${"a".repeat(64)}`;
-    const task = renderTaskDefinition(configured, service, image);
-    const container = task.containerDefinitions[0]!;
-    const environment = Object.fromEntries(
-      (container.environment as Array<{ name: string; value: string }>).map(({ name, value }) => [name, value]),
-    );
-    assert.equal(environment.PORT, "8080");
-    assert.deepEqual(container.portMappings, [
-      {
-        name: service,
-        containerPort: 8080,
-        hostPort: 8080,
-        protocol: "tcp",
-        appProtocol: "http",
-      },
-    ]);
-  }
+test("AWS fixes core's listen ports to its ECS port mappings", () => {
+  const configured: QmConfig = { ...config, env: { ...config.env, core: { ...config.env.core, PORT: "9000" } } };
+  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
+  const container = renderTaskDefinition(configured, "core", image).containerDefinitions[0]!;
+  const environment = Object.fromEntries(
+    (container.environment as Array<{ name: string; value: string }>).map(({ name, value }) => [name, value]),
+  );
+  assert.equal(environment.PORT, "8080");
+  assert.equal(environment.PUBLIC_PORT, "8000");
+  assert.deepEqual(container.portMappings, [
+    { name: "core", containerPort: 8080, hostPort: 8080, protocol: "tcp", appProtocol: "http" },
+    { name: "public", containerPort: 8000, hostPort: 8000, protocol: "tcp", appProtocol: "http" },
+  ]);
+  const coreOnly = renderTaskDefinition({ ...configured, services: ["core", "slack"] }, "core", image);
+  assert.deepEqual(
+    (coreOnly.containerDefinitions[0]!.portMappings as Array<{ containerPort: number }>).map(
+      (mapping) => mapping.containerPort,
+    ),
+    [8080],
+    "without a portal core publishes only its API port",
+  );
 });
 
 test("AWS core receives the configured model and virtual-service environment", () => {
@@ -1161,7 +1137,7 @@ test("AWS deploy requires the live core-only ALB to default 404 and expose exact
   }
 });
 
-test("AWS portal ALB adopts pinned target groups and requires exactly the env-derived host rules", async () => {
+test("AWS portal ALB adopts core's pinned front-door target group and requires exactly the env-derived host rules", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-host-split-"));
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
@@ -1179,8 +1155,7 @@ test("AWS portal ALB adopts pinned target groups and requires exactly the env-de
       ...config.aws!,
       services: {
         ...config.aws!.services,
-        core: { ...config.aws!.services.core!, targetGroup: "legacy-core-tg" },
-        portal: { ...config.aws!.services.portal!, targetGroup: "legacy-portal-tg" },
+        core: { ...config.aws!.services.core!, targetGroup: "legacy-portal-tg" },
       },
     },
   });
@@ -1852,7 +1827,7 @@ test("AWS deploy rejects required secret containers without an AWSCURRENT value 
   const fake = fakeAws(
     dir,
     `
-if (a.includes("ecs describe-services")) console.log(JSON.stringify({ services: ${JSON.stringify(Object.entries(config.aws!.services).map(([name, spec]) => ({ serviceName: spec.ecsService, loadBalancers: name === "portal" ? [{ targetGroupArn: targetArn }] : [] })))} }));
+if (a.includes("ecs describe-services")) console.log(JSON.stringify({ services: ${JSON.stringify(Object.entries(config.aws!.services).map(([name, spec]) => ({ serviceName: spec.ecsService, loadBalancers: name === "core" ? [{ targetGroupArn: targetArn, containerPort: 8000 }] : [] })))} }));
 else if (a.includes("secretsmanager get-secret-value")) {
   console.error("ResourceNotFoundException: Secrets Manager can't find the specified secret value");
   process.exit(1);
@@ -2000,7 +1975,9 @@ test("AWS task definitions are digest-pinned and route only computed secrets", (
     "CORE_SIGNING_SECRET",
     "DATABASE_URL",
     "FLY_RESIDENT_ENV_ACME_API_KEY",
+    "OIDC_CLIENT_SECRET",
     "PORTAL_IDENTITY_SECRET",
+    "PORTAL_SESSION_SECRET",
     "PUBLIC_API_URL",
     "SKILL_SIGNING_SECRET",
     "SPRITES_TOKEN",
@@ -2072,7 +2049,7 @@ test("AWS image transfer preserves the source manifest instead of pulling the ho
   ]);
 });
 
-test("AWS source builds honor the configured web-ui base build-arg and record git provenance", async () => {
+test("AWS source builds pass the configured web-ui base build-arg to core and record git provenance", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-web-ui-build-"));
   const sourceDir = join(dir, "source");
   const dockerLog = join(dir, "docker.log");
@@ -2083,7 +2060,7 @@ test("AWS source builds honor the configured web-ui base build-arg and record gi
     `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\n`,
   );
   chmodSync(dockerBin, 0o755);
-  for (const service of ["core", "web-ui", "portal"]) {
+  for (const service of ["core"]) {
     mkdirSync(join(sourceDir, "deploy", service), { recursive: true });
     writeFileSync(join(sourceDir, "deploy", service, "Dockerfile"), `FROM scratch\nLABEL service=${service}\n`);
   }
@@ -2108,11 +2085,7 @@ test("AWS source builds honor the configured web-ui base build-arg and record gi
     services: ["core", "web-ui", "portal"],
     aws: {
       ...config.aws!,
-      services: {
-        core: config.aws!.services.core!,
-        "web-ui": { ...config.aws!.services["web-ui"]!, architecture: "amd64", buildArgs: { WEB_UI_BASE: "/custom/" } },
-        portal: config.aws!.services.portal!,
-      },
+      services: { core: { ...config.aws!.services.core!, buildArgs: { WEB_UI_BASE: "/custom/" } } },
     },
   };
   const fake = statefulAws(dir, webUiConfig);
@@ -2120,14 +2093,15 @@ test("AWS source builds honor the configured web-ui base build-arg and record gi
     await awsUp(webUiConfig, dir, { yes: true, buildFrom: true, buildFromPath: sourceDir });
     const build = readFileSync(dockerLog, "utf8")
       .split("\n")
-      .find((line) => line.includes("buildx build") && line.includes("qm-web-ui"));
+      .find((line) => line.includes("buildx build") && line.includes("qm-core"));
     assert.match(build ?? "", /--platform linux\/amd64/);
     assert.match(build ?? "", /--provenance=false/);
     assert.match(build ?? "", /--build-arg WEB_UI_BASE=\/custom\//);
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
     const manifestId = state.dynamo["deployment/current"].manifestId.S;
     const manifest = JSON.parse(state.dynamo[`deployment/manifest/${manifestId}`].manifest.S);
-    for (const service of ["core", "web-ui", "portal"]) {
+    assert.deepEqual(Object.keys(manifest.imageProvenance), ["core"]);
+    for (const service of ["core"]) {
       assert.deepEqual(manifest.imageProvenance[service], {
         kind: "source-build",
         source: "checkout",
@@ -2170,7 +2144,7 @@ test("AWS source builds honor a per-service dockerfile override and stamp GIT_SH
     `#!/usr/bin/env node\nrequire("node:fs").appendFileSync(${JSON.stringify(dockerLog)}, process.argv.slice(2).join(" ") + "\\n");\n`,
   );
   chmodSync(dockerBin, 0o755);
-  for (const service of ["core", "web-ui", "portal"]) {
+  for (const service of ["core", "egress-proxy"]) {
     mkdirSync(join(sourceDir, "deploy", service), { recursive: true });
     writeFileSync(join(sourceDir, "deploy", service, "Dockerfile"), `FROM scratch\nLABEL service=${service}\n`);
   }
@@ -2191,13 +2165,12 @@ test("AWS source builds honor a per-service dockerfile override and stamp GIT_SH
   const head = git("rev-parse", "HEAD");
   const layeredConfig: QmConfig = {
     ...config,
-    services: ["core", "web-ui", "portal"],
+    services: ["core", "web-ui", "portal", "egress-proxy"],
     aws: {
       ...config.aws!,
       services: {
         core: { ...config.aws!.services.core!, dockerfile: "layered/core.Dockerfile" },
-        "web-ui": config.aws!.services["web-ui"]!,
-        portal: config.aws!.services.portal!,
+        "egress-proxy": { ecrRepository: "qm-egress-proxy", ecsService: "acme-egress-proxy", cpu: 512, memory: 1024 },
       },
     },
   };
@@ -2215,13 +2188,13 @@ test("AWS source builds honor a per-service dockerfile override and stamp GIT_SH
       `core build uses the override: ${coreBuild}`,
     );
     assert.ok(coreBuild?.includes(`--build-arg GIT_SHA=${head}`), `core build stamps GIT_SHA: ${coreBuild}`);
-    const webUiBuild = builds.find((line) => line.includes("qm-web-ui"));
+    const proxyBuild = builds.find((line) => line.includes("qm-egress-proxy"));
     assert.ok(
-      webUiBuild?.includes(`-f ${join(sourceDir, "deploy", "web-ui", "Dockerfile")}`),
-      `web-ui build keeps the default: ${webUiBuild}`,
+      proxyBuild?.includes(`-f ${join(sourceDir, "deploy", "egress-proxy", "Dockerfile")}`),
+      `egress-proxy build keeps the default: ${proxyBuild}`,
     );
     const dirtySource = join(dir, "dirty-source");
-    for (const service of ["core", "web-ui", "portal"]) {
+    for (const service of ["core", "egress-proxy"]) {
       mkdirSync(join(dirtySource, "deploy", service), { recursive: true });
       writeFileSync(join(dirtySource, "deploy", service, "Dockerfile"), `FROM scratch\nLABEL service=${service}\n`);
     }
@@ -2750,7 +2723,7 @@ test("AWS optional-secret activation restores prior tasks when a later service r
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
   const oldTasks = {
     core: state.services["acme-core"].taskDefinition,
-    "web-ui": state.services["acme-web-ui"].taskDefinition,
+    "egress-proxy": state.services["acme-egress-proxy"].taskDefinition,
   };
   const arns = Object.fromEntries(
     [...required.map((secret) => secret.name), "INBOX_USERS"].map((name) => [
@@ -2758,7 +2731,7 @@ test("AWS optional-secret activation restores prior tasks when a later service r
       "arn:aws:secretsmanager:us-west-2:123456789012:secret:test-AbCdEf",
     ]),
   );
-  for (const workload of ["core", "web-ui"] as const) {
+  for (const workload of ["core", "egress-proxy"] as const) {
     const repository = secretsConfig.aws!.services[workload]!.ecrRepository;
     const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/${repository}@sha256:${"a".repeat(64)}`;
     state.definitions[oldTasks[workload]] = renderTaskDefinition(secretsConfig, workload, image, arns);
@@ -2768,7 +2741,7 @@ test("AWS optional-secret activation restores prior tasks when a later service r
   try {
     await assert.rejects(
       () => awsSecretsPush(secretsConfig, dir),
-      /did not identify the replacement deployment for web-ui/,
+      /did not identify the replacement deployment for egress-proxy/,
     );
     const after = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.equal(after.services["acme-core"].taskDefinition, oldTasks.core);
@@ -2779,7 +2752,7 @@ test("AWS optional-secret activation restores prior tasks when a later service r
     assert.ok(updates.some((line) => line.includes("--service acme-core") && !line.includes(oldTasks.core)));
     assert.ok(updates.some((line) => line.includes("--service acme-core") && line.includes(oldTasks.core)));
     assert.ok(
-      updates.some((line) => line.includes("--service acme-web-ui") && line.includes("--force-new-deployment")),
+      updates.some((line) => line.includes("--service acme-egress-proxy") && line.includes("--force-new-deployment")),
     );
   } finally {
     fake.restore();
@@ -2989,7 +2962,7 @@ test("AWS candidate builds honor their concurrency bound and join failures befor
     const candidatePath = join(dir, "candidate.json");
     const events = join(dir, "events");
     writeFileSync(events, "");
-    const fake = statefulAws(dir, config);
+    const fake = statefulAws(dir, twoServiceConfig());
     const docker = join(dir, "docker");
     writeFileSync(
       docker,
@@ -3006,9 +2979,9 @@ const log = (event) => fs.appendFileSync(events, event + ":" + name + "\\n");
 log("start");
 fs.writeFileSync(path.join(dir, "started-" + name), "");
 (async () => {
-  if (mode !== "serial" && ["core", "web-ui"].includes(name)) {
+  if (mode !== "serial" && ["core", "egress-proxy"].includes(name)) {
     const deadline = Date.now() + 10000;
-    while (!["core", "web-ui"].every((peer) => fs.existsSync(path.join(dir, "started-" + peer)))) {
+    while (!["core", "egress-proxy"].every((peer) => fs.existsSync(path.join(dir, "started-" + peer)))) {
       if (Date.now() > deadline) process.exit(9);
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -3025,7 +2998,7 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
     try {
       const provider = hostingProvider("aws");
       const context = {
-        config,
+        config: twoServiceConfig(),
         configDir: dir,
         configPath: join(dir, "qm.config.json"),
         sandboxDir: dir,
@@ -3049,8 +3022,11 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
       } else {
         await result;
         const candidate = JSON.parse(readFileSync(candidatePath, "utf8"));
-        assert.deepEqual(Object.keys(candidate.images).sort(), runnableServices(config.services).sort());
-        assert.deepEqual(Object.keys(candidate.imageProvenance).sort(), runnableServices(config.services).sort());
+        assert.deepEqual(Object.keys(candidate.images).sort(), runnableServices(twoServiceConfig().services).sort());
+        assert.deepEqual(
+          Object.keys(candidate.imageProvenance).sort(),
+          runnableServices(twoServiceConfig().services).sort(),
+        );
         assert.ok(Object.values(candidate.images).every((image) => /@sha256:[a-f0-9]{64}$/.test(String(image))));
       }
       const lines = readFileSync(events, "utf8").trim().split("\n");
@@ -3063,7 +3039,7 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
       assert.equal(active, 0);
       assert.equal(peak, mode === "serial" ? 1 : 2);
       if (mode === "failure") {
-        assert.ok(lines.includes("end:web-ui"));
+        assert.ok(lines.includes("end:egress-proxy"));
         assert.equal(lines.filter((line) => line.startsWith("start:")).length, 2);
       }
       assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
@@ -3078,7 +3054,7 @@ fs.writeFileSync(path.join(dir, "started-" + name), "");
 test("cancelling candidate builds terminates and joins every Docker child without a manifest", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-aws-build-cancel-"));
   const candidatePath = join(dir, "candidate.json");
-  const fake = statefulAws(dir, config);
+  const fake = statefulAws(dir, twoServiceConfig());
   const docker = join(dir, "docker");
   writeFileSync(
     docker,
@@ -3090,8 +3066,8 @@ if (args[0] === "login") process.exit(0);
 const name = args[args.indexOf("-t") + 1].split("/").at(-1).split(":")[0].slice(3);
 const dir = ${JSON.stringify(dir)};
 if (name === "core") process.on("SIGTERM", () => {});
-if (name === "web-ui") {
-  const plugin = 'process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(' + JSON.stringify(path.join(dir, "pid-web-ui-plugin")) + ', String(process.pid)); setTimeout(() => {}, 20000);';
+if (name === "egress-proxy") {
+  const plugin = 'process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(' + JSON.stringify(path.join(dir, "pid-egress-proxy-plugin")) + ', String(process.pid)); setTimeout(() => {}, 20000);';
   require("node:child_process").spawn(process.execPath, ["-e", plugin], { stdio: "inherit" });
 }
 fs.writeFileSync(path.join(dir, "pid-" + name), String(process.pid));
@@ -3100,7 +3076,7 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
   );
   chmodSync(docker, 0o755);
   const moduleUrl = new URL("../src/backends/aws.ts", import.meta.url).href;
-  const code = `const { awsUp } = await import(${JSON.stringify(moduleUrl)}); await awsUp(${JSON.stringify(config)}, ${JSON.stringify(dir)}, ${JSON.stringify({ buildOnly: true, buildFrom: true, buildConcurrency: 2, imageLabel: "cancelled-candidate", candidateOut: candidatePath })});`;
+  const code = `const { awsUp } = await import(${JSON.stringify(moduleUrl)}); await awsUp(${JSON.stringify(twoServiceConfig())}, ${JSON.stringify(dir)}, ${JSON.stringify({ buildOnly: true, buildFrom: true, buildConcurrency: 2, imageLabel: "cancelled-candidate", candidateOut: candidatePath })});`;
   const parent = spawn(process.execPath, ["--input-type=module", "-e", code], {
     env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
     stdio: "ignore",
@@ -3111,7 +3087,7 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
   });
   try {
     const deadline = Date.now() + 10000;
-    while (!["core", "web-ui", "web-ui-plugin"].every((name) => existsSync(join(dir, "pid-" + name)))) {
+    while (!["core", "egress-proxy", "egress-proxy-plugin"].every((name) => existsSync(join(dir, "pid-" + name)))) {
       assert.ok(Date.now() < deadline, "Docker children and nested buildx plugin must start");
       assert.equal(parent.exitCode, null);
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -3119,7 +3095,7 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
     parent.kill("SIGTERM");
     assert.notEqual(await exited, 0);
     assert.equal(existsSync(candidatePath), false);
-    for (const name of ["core", "web-ui", "web-ui-plugin"]) {
+    for (const name of ["core", "egress-proxy", "egress-proxy-plugin"]) {
       const pid = Number(readFileSync(join(dir, "pid-" + name), "utf8"));
       assert.throws(() => process.kill(pid, 0), /ESRCH/);
       assert.equal(existsSync(join(dir, "completed-" + name)), false);
@@ -3128,7 +3104,7 @@ setTimeout(() => fs.writeFileSync(path.join(dir, "completed-" + name), ""), 2000
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /dynamodb|ecs |secretsmanager/);
   } finally {
     parent.kill("SIGKILL");
-    for (const name of ["core", "web-ui", "web-ui-plugin"]) {
+    for (const name of ["core", "egress-proxy", "egress-proxy-plugin"]) {
       const path = join(dir, "pid-" + name);
       if (existsSync(path)) {
         try {
@@ -3148,8 +3124,8 @@ test("AWS rejects invalid or misplaced candidate build concurrency before mutati
     await assert.rejects(awsUp(config, ".", { buildOnly: true, buildConcurrency: value }), /positive integer/);
   }
   await assert.rejects(awsUp(config, ".", { buildConcurrency: 2 }), /requires --build-only/);
-  const shared = structuredClone(config);
-  shared.aws!.services["web-ui"]!.ecrRepository = shared.aws!.services.core!.ecrRepository;
+  const shared = twoServiceConfig();
+  shared.aws!.services["egress-proxy"]!.ecrRepository = shared.aws!.services.core!.ecrRepository;
   await assert.rejects(awsUp(shared, ".", { buildOnly: true, buildConcurrency: 2 }), /distinct ECR repositories/);
 });
 
@@ -3325,8 +3301,14 @@ test("AWS candidate deploy migration failure preserves the runtime and releases 
 
 const twoServiceConfig = (): QmConfig => ({
   ...config,
-  services: ["core", "web-ui"],
-  aws: { ...config.aws!, services: { core: config.aws!.services.core!, "web-ui": config.aws!.services["web-ui"]! } },
+  services: ["core", "egress-proxy"],
+  aws: {
+    ...config.aws!,
+    services: {
+      core: config.aws!.services.core!,
+      "egress-proxy": { ecrRepository: "qm-egress-proxy", ecsService: "acme-egress-proxy", cpu: 512, memory: 1024 },
+    },
+  },
 });
 
 function manifestItems(
@@ -3370,11 +3352,11 @@ test("rollback uses a coherent durable manifest across independent service histo
   const multi = twoServiceConfig();
   const old = {
     core: "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:7",
-    "web-ui": "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-web-ui:4",
+    "egress-proxy": "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-egress-proxy:4",
   };
   const current = {
     core: "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:9",
-    "web-ui": "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-web-ui:8",
+    "egress-proxy": "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-egress-proxy:8",
   };
   const fake = statefulAws(
     dir,
@@ -3391,7 +3373,7 @@ test("rollback uses a coherent durable manifest across independent service histo
     await awsRollback(multi);
     const calls = readFileSync(fake.log, "utf8");
     assert.match(calls, /--task-definition arn:aws:ecs:us-west-2:123456789012:task-definition\/acme-core:7/);
-    assert.match(calls, /--task-definition arn:aws:ecs:us-west-2:123456789012:task-definition\/acme-web-ui:4/);
+    assert.match(calls, /--task-definition arn:aws:ecs:us-west-2:123456789012:task-definition\/acme-egress-proxy:4/);
     const state = JSON.parse(readFileSync(fake.state, "utf8"));
     assert.equal(state.dynamo["deployment/current"].manifestId.S, "old");
   } finally {
@@ -3761,13 +3743,13 @@ test("rollback refuses an incomplete manifest before mutating ECS", async () => 
     manifestItems(
       [
         { id: "old", tasks: { core: "core:1" } },
-        { id: "current", previous: "old", tasks: { core: "core:2", "web-ui": "web:2" } },
+        { id: "current", previous: "old", tasks: { core: "core:2", "egress-proxy": "web:2" } },
       ],
       "current",
     ),
   );
   try {
-    await assert.rejects(() => awsRollback(multi), /missing workloads: web-ui/);
+    await assert.rejects(() => awsRollback(multi), /missing workloads: egress-proxy/);
     assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs update-service/);
   } finally {
     fake.restore();
@@ -3837,7 +3819,7 @@ test("aws logs never reinterprets --tail and interleaves all workloads instead o
     await awsLogs(twoServices, undefined, { follow: false });
     const out = lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
     assert.match(out, /core\s*\| line-from-/);
-    assert.match(out, /web-ui\s*\| line-from-/);
+    assert.match(out, /egress-proxy\s*\| line-from-/);
   } finally {
     console.log = log;
     fake.restore();
@@ -4226,10 +4208,13 @@ test("AWS rejects stale service entries after a workload is removed", async () =
     ...single,
     aws: {
       ...single.aws!,
-      services: { ...single.aws!.services, portal: config.aws!.services.portal! },
+      services: {
+        ...single.aws!.services,
+        linear: { ecrRepository: "qm-linear", ecsService: "acme-linear", cpu: 256, memory: 512 },
+      },
     },
   };
-  const expected = /aws\.services topology mismatch \(disabled workloads: portal\)/;
+  const expected = /aws\.services topology mismatch \(disabled workloads: linear\)/;
   await assert.rejects(() => awsUp(stale, process.cwd(), { dryRun: true }), expected);
   await assert.rejects(() => awsCheckLive(stale, { report: false }), expected);
   assert.throws(() => awsStatus(stale), expected);
@@ -4457,7 +4442,7 @@ test("AWS up requires a complete trusted baseline before a partial deployment", 
 
   const tasks = {
     core: "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-core:1",
-    "web-ui": "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-web-ui:1",
+    "egress-proxy": "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-egress-proxy:1",
   };
   const baseline = statefulAws(
     dir,
@@ -4470,7 +4455,7 @@ test("AWS up requires a complete trusted baseline before a partial deployment", 
           tasks,
           imageProvenance: {
             core: { kind: "source-build" },
-            "web-ui": { kind: "configured", source: "ghcr.io/qm/qm-web-ui:0.1.0" },
+            "egress-proxy": { kind: "configured", source: "ghcr.io/qm/qm-egress-proxy:0.1.0" },
           },
         },
       ],
@@ -4478,11 +4463,11 @@ test("AWS up requires a complete trusted baseline before a partial deployment", 
     ),
   );
   const state = JSON.parse(readFileSync(baseline.state, "utf8"));
-  state.definitions[tasks["web-ui"]] = {
+  state.definitions[tasks["egress-proxy"]] = {
     containerDefinitions: [
       {
-        name: "web-ui",
-        image: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-web-ui@sha256:${"d".repeat(64)}`,
+        name: "egress-proxy",
+        image: `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-egress-proxy@sha256:${"d".repeat(64)}`,
       },
     ],
   };
@@ -4497,10 +4482,10 @@ test("AWS up requires a complete trusted baseline before a partial deployment", 
     const after = JSON.parse(readFileSync(baseline.state, "utf8"));
     const currentId = after.dynamo["deployment/current"].manifestId.S;
     const current = JSON.parse(after.dynamo[`deployment/manifest/${currentId}`].manifest.S);
-    assert.equal(current.tasks["web-ui"], tasks["web-ui"]);
+    assert.equal(current.tasks["egress-proxy"], tasks["egress-proxy"]);
     assert.deepEqual(current.imageProvenance, {
       core: { kind: "configured", source: manifestRef("core") },
-      "web-ui": { kind: "configured", source: "ghcr.io/qm/qm-web-ui:0.1.0" },
+      "egress-proxy": { kind: "configured", source: "ghcr.io/qm/qm-egress-proxy:0.1.0" },
     });
   } finally {
     process.env.PATH = priorPath;
@@ -4539,10 +4524,10 @@ test("AWS up can introduce a selected workload onto a trusted deployment baselin
   };
   writeFileSync(baseline.state, JSON.stringify(state));
   await assert.rejects(
-    () => awsUp(multi, dir, { dryRun: true, only: ["web-ui"] }),
-    /selected workload web-ui .* must be scaled to zero before adoption/,
+    () => awsUp(multi, dir, { dryRun: true, only: ["egress-proxy"] }),
+    /selected workload egress-proxy .* must be scaled to zero before adoption/,
   );
-  state.services["acme-web-ui"].desiredCount = 0;
+  state.services["acme-egress-proxy"].desiredCount = 0;
   writeFileSync(baseline.state, JSON.stringify(state));
   const dockerBin = join(dir, "docker");
   writeFileSync(dockerBin, "#!/bin/sh\nexit 0\n");
@@ -4550,22 +4535,22 @@ test("AWS up can introduce a selected workload onto a trusted deployment baselin
   const priorPath = process.env.PATH;
   process.env.PATH = `${dir}:${priorPath}`;
   try {
-    await awsUp(multi, dir, { yes: true, only: ["web-ui"] });
+    await awsUp(multi, dir, { yes: true, only: ["egress-proxy"] });
     const after = JSON.parse(readFileSync(baseline.state, "utf8"));
     const currentId = after.dynamo["deployment/current"].manifestId.S;
     const current = JSON.parse(after.dynamo[`deployment/manifest/${currentId}`].manifest.S);
     assert.equal(current.tasks.core, coreTask);
-    assert.match(current.tasks["web-ui"], /task-definition\/acme-web-ui:2$/);
+    assert.match(current.tasks["egress-proxy"], /task-definition\/acme-egress-proxy:2$/);
     const previous = JSON.parse(after.dynamo["deployment/manifest/baseline"].manifest.S);
-    assert.match(previous.tasks["web-ui"], /task-definition\/acme-web-ui:1$/);
-    assert.equal(previous.counts["web-ui"], 0);
+    assert.match(previous.tasks["egress-proxy"], /task-definition\/acme-egress-proxy:1$/);
+    assert.equal(previous.counts["egress-proxy"], 0);
     const calls = readFileSync(baseline.log, "utf8");
     assert.doesNotMatch(calls, /ecs update-service .*--service acme-core/);
-    assert.match(calls, /ecs update-service .*--service acme-web-ui/);
+    assert.match(calls, /ecs update-service .*--service acme-egress-proxy/);
     await awsRollback(multi);
     const rolledBack = JSON.parse(readFileSync(baseline.state, "utf8"));
-    assert.match(rolledBack.services["acme-web-ui"].taskDefinition, /task-definition\/acme-web-ui:1$/);
-    assert.equal(rolledBack.services["acme-web-ui"].desiredCount, 0);
+    assert.match(rolledBack.services["acme-egress-proxy"].taskDefinition, /task-definition\/acme-egress-proxy:1$/);
+    assert.equal(rolledBack.services["acme-egress-proxy"].desiredCount, 0);
   } finally {
     process.env.PATH = priorPath;
     baseline.restore();
@@ -4932,13 +4917,11 @@ test("AWS renders config secretEnv extras and aliases as Secrets Manager referen
     "arn:resolved:portal-session",
     "an alias delivers the stored secret under its declared env name",
   );
-  assert.equal(secrets.PORTAL_SESSION_SECRET, undefined, "the alias adds no plain-name delivery on core");
-  const portalImage = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-portal@sha256:${"a".repeat(64)}`;
-  const portalSecrets = (
-    renderTaskDefinition(extras, "portal", portalImage).containerDefinitions[0]!.secrets as Array<{ name: string }>
-  ).map((s) => s.name);
-  assert.ok(portalSecrets.includes("PORTAL_SESSION_SECRET"), "the portal keeps its own plain delivery");
-  assert.ok(!portalSecrets.includes("DEPLOY_APPS_SESSION_SECRET"));
+  assert.equal(
+    secrets.PORTAL_SESSION_SECRET,
+    "arn:resolved:portal-session",
+    "the core-hosted portal keeps its own plain delivery",
+  );
 });
 
 test("env.core.SANDBOX_BACKEND adopts the deployment's substrate; the default is sprites", () => {
@@ -5041,8 +5024,8 @@ test("AWS doctor still fails a pushed secret store holding a placeholder value",
   assert.match(probe.failures[0]!, /CORE_SIGNING_SECRET: missing, placeholder, or insecure value/);
 });
 
-for (const mode of ["draining", "stale", "failed"] as const) {
-  test(`AWS submits independent workloads before the portal dependency gate: ${mode}`, async () => {
+for (const mode of ["stale", "failed"] as const) {
+  test(`AWS restores every submitted workload when one rollout is ${mode}`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "qm-aws-dependency-rollout-"));
     const selected: QmConfig = {
       ...config,
@@ -5063,61 +5046,28 @@ for (const mode of ["draining", "stale", "failed"] as const) {
     };
     writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
     chmodSync(join(dir, "docker"), 0o755);
-    const fake = statefulAws(
-      dir,
-      selected,
-      {},
-      {
-        drainPolls: mode === "draining" ? 4 : 0,
-        ignoreUpdate: mode === "stale",
-        rolloutFailed: mode === "failed",
-      },
-    );
+    const fake = statefulAws(dir, selected, {}, { ignoreUpdate: mode === "stale", rolloutFailed: mode === "failed" });
     const before = JSON.parse(readFileSync(fake.state, "utf8")).services;
     const priorPath = process.env.PATH;
     process.env.PATH = `${dir}:${priorPath}`;
     try {
-      if (mode === "draining") await awsUp(selected, dir, { yes: true });
-      else
-        await assert.rejects(
-          () => awsUp(selected, dir, { yes: true }),
-          mode === "stale" ? /requested task definition/ : /PRIMARY rollout is FAILED/,
-        );
+      await assert.rejects(
+        () => awsUp(selected, dir, { yes: true }),
+        mode === "stale" ? /requested task definition/ : /PRIMARY rollout is FAILED/,
+      );
       const calls = readFileSync(fake.log, "utf8").trim().split("\n");
-      const webUpdate = calls.findIndex(
-        (line) => line.includes("ecs update-service") && line.includes("--service acme-web-ui"),
-      );
-      const webPoll = calls.findIndex((line, i) => i > webUpdate && line.includes("ecs describe-services"));
-      const portalUpdate = calls.findIndex(
-        (line) => line.includes("ecs update-service") && line.includes("--service acme-portal"),
-      );
+      const after = JSON.parse(readFileSync(fake.state, "utf8"));
       for (const workload of ["core", "linear"]) {
-        const update = calls.findIndex(
-          (line) => line.includes("ecs update-service") && line.includes(`--service acme-${workload}`),
+        const name = `acme-${workload}`;
+        assert.equal(after.services[name].taskDefinition, before[name].taskDefinition);
+        assert.equal(after.services[name].desiredCount, before[name].desiredCount);
+        assert.equal(
+          calls.filter((line) => line.includes("ecs update-service") && line.includes(`--service ${name}`)).length,
+          2,
+          `${workload} is compensated`,
         );
-        assert.ok(webUpdate < update && update < webPoll, `${workload} starts before waiting on web`);
       }
-      if (mode === "draining") {
-        assert.ok(webPoll < portalUpdate);
-        assert.ok(
-          calls.slice(webPoll, portalUpdate).filter((line) => line.includes("ecs describe-services")).length >= 5,
-          "portal waits for old web tasks to retire",
-        );
-      } else {
-        assert.equal(portalUpdate, -1, "portal is untouched when its dependency fails");
-        const after = JSON.parse(readFileSync(fake.state, "utf8"));
-        for (const workload of ["web-ui", "core", "linear"]) {
-          const name = `acme-${workload}`;
-          assert.equal(after.services[name].taskDefinition, before[name].taskDefinition);
-          assert.equal(after.services[name].desiredCount, before[name].desiredCount);
-          assert.equal(
-            calls.filter((line) => line.includes("ecs update-service") && line.includes(`--service ${name}`)).length,
-            2,
-            `${workload} is compensated`,
-          );
-        }
-        assert.equal(after.dynamo["deployment/current"], undefined);
-      }
+      assert.equal(after.dynamo["deployment/current"], undefined);
     } finally {
       process.env.PATH = priorPath;
       fake.restore();
@@ -5136,10 +5086,8 @@ test("AWS private canary reaches core without a core ingress target and refuses 
   try {
     await awsUp(config, dir, { yes: true });
     const rolloutCalls = readFileSync(fake.log, "utf8");
-    const webUpdate = rolloutCalls.indexOf("ecs update-service --cluster acme-qm --service acme-web-ui");
-    const portalUpdate = rolloutCalls.indexOf("ecs update-service --cluster acme-qm --service acme-portal");
-    const webPoll = rolloutCalls.indexOf("ecs describe-services", webUpdate);
-    assert.ok(webUpdate >= 0 && webUpdate < webPoll && webPoll < portalUpdate);
+    assert.match(rolloutCalls, /ecs update-service --cluster acme-qm --service acme-core/);
+    assert.doesNotMatch(rolloutCalls, /--service acme-(web-ui|portal)/);
     await awsCheckLive(config, { report: false });
     assert.match(
       readFileSync(fake.log, "utf8"),
@@ -5510,39 +5458,31 @@ test("AWS layer deadline aborts a native response body that never finishes", asy
   }
 });
 
-test("AWS secrets push defers activation against pre-consolidation images", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-combined-"));
+test("AWS secrets push defers activation while the live manifest still runs separate web workloads", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-aws-secrets-edge-"));
   const operator = computedSecrets(config).filter((secret) => secret.managedBy === "operator" && secret.required);
   writeFileSync(join(dir, ".env"), operator.map((secret) => `${secret.name}=${TEST_SECRET_VALUE}`).join("\n"));
   const fake = statefulAws(dir, config);
   const state = JSON.parse(readFileSync(fake.state, "utf8"));
-  const tasks = Object.fromEntries(
-    runnableServices(config.services).map((name) => [name, state.services[`acme-${name}`].taskDefinition]),
-  );
-  state.definitions[tasks["web-ui"]] = {
-    containerDefinitions: [{ name: "web-ui", image: "old-web-image", environment: [] }],
+  const core = state.services["acme-core"].taskDefinition;
+  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
+  state.definitions[core] = renderTaskDefinition(config, "core", image);
+  const legacy = {
+    core,
+    "web-ui": "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-web-ui:1",
+    portal: "arn:aws:ecs:us-west-2:123456789012:task-definition/acme-portal:1",
   };
-  state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks }], "current");
+  state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks: legacy }], "current");
   writeFileSync(fake.state, JSON.stringify(state));
   try {
     await awsSecretsPush(config, dir);
-    const calls = readFileSync(fake.log, "utf8");
-    assert.match(calls, /secretsmanager put-secret-value/);
-    assert.doesNotMatch(calls, /ecs (?:register-task-definition|update-service)/);
-    state.definitions[tasks["web-ui"]].containerDefinitions[0].environment = [{ name: "ADMIN_ENABLED", value: "1" }];
-    state.definitions[tasks.portal] = {
-      containerDefinitions: [
-        {
-          name: "portal",
-          image: "old-portal-image",
-          environment: [{ name: "ADMIN_UPSTREAM", value: "http://admin.acme.internal:8080" }],
-        },
-      ],
-    };
+    assert.match(readFileSync(fake.log, "utf8"), /secretsmanager put-secret-value/);
+    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
+    state.dynamo = manifestItems([{ id: "current", imageLabel: "release", tasks: { core } }], "current");
     writeFileSync(fake.state, JSON.stringify(state));
     writeFileSync(fake.log, "");
     await awsSecretsPush(config, dir);
-    assert.doesNotMatch(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
+    assert.match(readFileSync(fake.log, "utf8"), /ecs (?:register-task-definition|update-service)/);
   } finally {
     fake.restore();
     rmSync(dir, { recursive: true, force: true });
@@ -5604,11 +5544,12 @@ test("shared ALB validates company routes while rejecting sibling overlap", () =
   const alternate = `arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/${alternateName}/2`;
   const services = new Map([
     [
-      "portal",
+      "core",
       {
         loadBalancers: [
           {
             targetGroupArn: primary,
+            containerPort: 8000,
             advancedConfiguration: {
               alternateTargetGroupArn: alternate,
               productionListenerRule:
@@ -5892,7 +5833,7 @@ test("inactive capacity proves the stack is not the owner and its tasks are stab
     assert.equal(proof.manifestId, manifest.id);
     assert.equal(proof.deploymentId, manifest.backgroundDeploymentId);
     assert.equal(proof.ownerDeploymentId, "peer:active");
-    assert.deepEqual(Object.keys(proof.workloads), ["core", "web-ui"]);
+    assert.deepEqual(Object.keys(proof.workloads), ["core", "egress-proxy"]);
     assert.deepEqual(proof.workloads.core!.taskArns, [coreArn]);
     assert.equal((await awsBackgroundWorkStatus(configured, dir)).manifestId, manifest.id);
     assert.equal(readFileSync(fake.state, "utf8"), JSON.stringify(baseline));
@@ -5934,11 +5875,11 @@ test("inactive capacity proves the stack is not the owner and its tasks are stab
 
     reset();
     const retiringCurrent = structuredClone(baseline);
-    retiringCurrent.taskInventory[configured.aws!.services["web-ui"]!.ecsService][0].desiredStatus = "STOPPED";
+    retiringCurrent.taskInventory[configured.aws!.services["egress-proxy"]!.ecsService][0].desiredStatus = "STOPPED";
     writeFileSync(fake.state, JSON.stringify(retiringCurrent));
     await assert.rejects(awsBackgroundWorkCapacity(configured, dir), /retiring task/);
 
-    for (const workload of ["core", "web-ui"]) {
+    for (const workload of ["core", "egress-proxy"]) {
       reset();
       const lingering = structuredClone(baseline);
       const service = configured.aws!.services[workload]!.ecsService;
@@ -5956,7 +5897,7 @@ test("inactive capacity proves the stack is not the owner and its tasks are stab
       fake.state,
       JSON.stringify({
         ...baseline,
-        omitTask: baseline.taskInventory[configured.aws!.services["web-ui"]!.ecsService][0].taskArn,
+        omitTask: baseline.taskInventory[configured.aws!.services["egress-proxy"]!.ecsService][0].taskArn,
       }),
     );
     await assert.rejects(awsBackgroundWorkCapacity(configured, dir), /complete task inventory/);
@@ -5966,7 +5907,9 @@ test("inactive capacity proves the stack is not the owner and its tasks are stab
       JSON.stringify({
         ...baseline,
         serviceOverrides: {
-          [configured.aws!.services["web-ui"]!.ecsService]: { deploymentConfiguration: { strategy: "BLUE_GREEN" } },
+          [configured.aws!.services["egress-proxy"]!.ecsService]: {
+            deploymentConfiguration: { strategy: "BLUE_GREEN" },
+          },
         },
         nativeStatus: "IN_PROGRESS",
       }),
@@ -6309,82 +6252,3 @@ test("a stopped AWS core cohort is replaceable only while the production route r
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-for (const mode of ["unchanged", "migration", "missing", "unstable", "failure"] as const) {
-  test(`AWS web routing transition gate: ${mode}`, async () => {
-    const dir = mkdtempSync(join(tmpdir(), "qm-aws-web-routing-"));
-    writeFileSync(join(dir, "docker"), `#!/usr/bin/env node\nconsole.log("Digest: sha256:${"a".repeat(64)}");\n`);
-    chmodSync(join(dir, "docker"), 0o755);
-    const priorPath = process.env.PATH;
-    process.env.PATH = `${dir}:${priorPath}`;
-    const fake = statefulAws(dir, config, {}, { drainPolls: 4 });
-    try {
-      await awsUp(config, dir, { yes: true });
-      const baseline = JSON.parse(readFileSync(fake.state, "utf8"));
-      baseline.drainPolls = 0;
-      baseline.taskInventory = {};
-      for (const workload of ["web-ui", "portal"]) {
-        const service = baseline.services[`acme-${workload}`];
-        const task = baseline.definitions[service.taskDefinition];
-        task.containerDefinitions[0].image = task.containerDefinitions[0].image.replace(
-          /sha256:[a-f0-9]+/,
-          `sha256:${"b".repeat(64)}`,
-        );
-        baseline.taskInventory[`acme-${workload}`] = Array.from({ length: service.desiredCount }, (_, index) => ({
-          taskArn: `arn:aws:ecs:us-west-2:123456789012:task/${workload}-${index}`,
-          taskDefinitionArn: service.taskDefinition,
-          desiredStatus: "RUNNING",
-          lastStatus: "RUNNING",
-          healthStatus: "HEALTHY",
-        }));
-      }
-      const portal = baseline.definitions[baseline.services["acme-portal"].taskDefinition].containerDefinitions[0];
-      if (mode === "migration")
-        portal.environment.find((entry: { name: string }) => entry.name === "ADMIN_UPSTREAM").value =
-          "http://admin.acme.local:8080";
-      if (mode === "missing")
-        portal.environment = portal.environment.filter((entry: { name: string }) => entry.name !== "ADMIN_UPSTREAM");
-      if (mode === "unstable") baseline.taskInventory["acme-web-ui"][0].desiredStatus = "STOPPED";
-      if (mode === "failure") baseline.failNextWebRollout = true;
-      writeFileSync(fake.state, JSON.stringify(baseline));
-      writeFileSync(fake.log, "");
-      if (mode === "failure")
-        await assert.rejects(() => awsUp(config, dir, { yes: true }), /PRIMARY rollout is FAILED/);
-      else await awsUp(config, dir, { yes: true });
-      const calls = readFileSync(fake.log, "utf8").trim().split("\n");
-      const webUpdate = calls.findIndex(
-        (line) => line.includes("ecs update-service") && line.includes("--service acme-web-ui"),
-      );
-      const portalUpdate = calls.findIndex(
-        (line) => line.includes("ecs update-service") && line.includes("--service acme-portal"),
-      );
-      assert.ok(webUpdate >= 0 && portalUpdate > webUpdate);
-      const between = calls.slice(webUpdate + 1, portalUpdate).filter((line) => line.includes("ecs describe-services"));
-      if (mode === "unchanged" || mode === "failure")
-        assert.equal(between.length, 0, "both workloads submit before rollout polling");
-      else assert.ok(between.length >= 5, "uncertain routing waits for full old web retirement");
-      if (mode === "failure") {
-        const after = JSON.parse(readFileSync(fake.state, "utf8"));
-        for (const workload of ["web-ui", "portal"]) {
-          assert.equal(
-            after.services[`acme-${workload}`].taskDefinition,
-            baseline.services[`acme-${workload}`].taskDefinition,
-          );
-          assert.equal(
-            calls.filter((line) => line.includes("ecs update-service") && line.includes(`--service acme-${workload}`))
-              .length,
-            2,
-          );
-        }
-        assert.equal(
-          after.dynamo["deployment/current"].manifestId.S,
-          baseline.dynamo["deployment/current"].manifestId.S,
-        );
-      }
-    } finally {
-      process.env.PATH = priorPath;
-      fake.restore();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-}

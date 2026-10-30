@@ -23,7 +23,7 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
     writeConfig(dir, {
       orgId: org,
       target: "docker",
-      services: ["core", "web-ui"],
+      services: ["core", "egress-proxy"],
       plugins: [{ name: "ext", image: "ghcr.io/example/ext:1.2" }],
     });
     standInPlugin(dir, "widget");

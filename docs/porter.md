@@ -90,7 +90,8 @@ any other way.
 ## Hosting the qm surfaces
 
 `porter/apps/` declares four services (core, web-ui, portal,
-egress-proxy) as one Porter app per file, built from `deploy/*/Dockerfile` — `porter
+egress-proxy) as one Porter app per file; core, web-ui, and portal build from
+`deploy/core/Dockerfile` with their own entrypoints — `porter
 apply` takes exactly one app per invocation and silently ignores extra YAML documents,
 which is why they are separate files:
 

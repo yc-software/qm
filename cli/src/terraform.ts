@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { awsWorkloadArchitecture, type QmConfig } from "./config.ts";
 import { CliError, ok } from "./log.ts";
 import { computedSecrets } from "./secrets.ts";
-import { isServiceName, serviceDef } from "./services.ts";
+import { hostsWebEdge, isServiceName, PUBLIC_PORT, serviceDef } from "./services.ts";
 import { canonicalJson } from "./canonical-json.ts";
 
 const DERIVED_VARS = new Set([
@@ -15,6 +15,7 @@ const DERIVED_VARS = new Set([
   "cluster_name",
   "public_url",
   "core_public_hosts",
+  "public_port",
   "cloud_map_namespace",
   "secrets_prefix",
   "github_oidc_provider_arn",
@@ -157,10 +158,16 @@ function derivedValues(
       "the vendored AWS scaffold predates aws.deployEnvironment; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
     );
   }
-  const corePublicHosts = config.services.includes("portal") ? awsCoreHostnames(config) : [];
+  const webEdge = hostsWebEdge(config.services);
+  const corePublicHosts = webEdge ? awsCoreHostnames(config) : [];
   if (corePublicHosts.length && !declared.includes("core_public_hosts")) {
     throw new CliError(
       "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
+    );
+  }
+  if (webEdge && !declared.includes("public_port")) {
+    throw new CliError(
+      "the vendored AWS scaffold predates core hosting the public web edge; update infra/variables.tf and infra/main.tf from the current scaffold before deploying web-ui or portal",
     );
   }
   const services = Object.fromEntries(
@@ -209,6 +216,7 @@ function derivedValues(
     },
     json: {
       ...(declared.includes("core_public_hosts") ? { core_public_hosts: [...new Set(corePublicHosts)].sort() } : {}),
+      public_port: webEdge ? PUBLIC_PORT : 0,
       services,
       secret_names: secrets.map((secret) => secret.name),
     },

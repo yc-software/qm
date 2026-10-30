@@ -785,12 +785,12 @@ test("AWS ECS services use native blue-green rollouts with rollback signals and 
   );
   assert.match(
     service,
-    /alarm_names = \[[\s\S]*aws_cloudwatch_metric_alarm\.primary_target_5xx[\s\S]*aws_cloudwatch_metric_alarm\.alternate_target_5xx[\s\S]*enable\s*= true[\s\S]*rollback = true/,
+    /alarm_names = flatten\(\[[\s\S]*aws_cloudwatch_metric_alarm\.primary_target_5xx[\s\S]*aws_cloudwatch_metric_alarm\.alternate_target_5xx[\s\S]*enable\s*= true[\s\S]*rollback = true/,
   );
   assert.match(service, /sigint_rollback = true/);
   assert.match(
     mainTf,
-    /portMappings = \[merge\(\{ name = each\.key, containerPort = each\.value\.internal_port \}, contains\(keys\(local\.egress_proxy\), each\.key\) \? \{\} : \{ appProtocol = "http" \}\)\]/,
+    /portMappings = concat\(\[merge\(\{ name = each\.key, containerPort = each\.value\.internal_port \}, contains\(keys\(local\.egress_proxy\), each\.key\) \? \{\} : \{ appProtocol = "http" \}\)\], contains\(local\.owned_ingress\[each\.key\], "portal"\) \? \[\{ name = "public", containerPort = var\.public_port, appProtocol = "http" \}\] : \[\]\)/,
   );
 });
 

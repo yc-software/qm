@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,9 +39,7 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
         imageLabel: "latest",
         networking: { cloudMapNamespace: "acme.internal" },
         services: {
-          "web-ui": service("web-ui"),
-          core: service("core"),
-          portal: service("portal"),
+          core: { ...service("core"), targetGroup: "portal" },
           hooks: { ...service("hooks"), publicPaths: paths },
         },
       },
@@ -48,7 +47,11 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
   );
   const names = ["core", "portal", "hooks"];
   const groups = names.flatMap((name) => [
-    { TargetGroupArn: name, TargetGroupName: name },
+    {
+      TargetGroupArn: name,
+      TargetGroupName:
+        name === "core" ? `acme-core-${createHash("sha1").update("acme:core").digest("hex").slice(0, 6)}` : name,
+    },
     ...(blueGreen ? [{ TargetGroupArn: `${name}-alternate`, TargetGroupName: `${name}-alternate` }] : []),
   ]);
   const rules = names
@@ -106,26 +109,22 @@ function fixture(paths: unknown = ["/hooks/*"], blueGreen = false, priority = "2
   );
   const prior = process.env.AWS_BIN;
   process.env.AWS_BIN = bin;
-  const services = new Map(
-    names.map((name) => [
-      name,
-      {
-        loadBalancers: [
-          {
-            targetGroupArn: name,
-            ...(blueGreen
-              ? {
-                  advancedConfiguration: {
-                    alternateTargetGroupArn: `${name}-alternate`,
-                    productionListenerRule: `${name}-rule`,
-                  },
-                }
-              : {}),
+  const attachment = (name: string) => ({
+    targetGroupArn: name,
+    containerPort: name === "portal" ? 8000 : 8080,
+    ...(blueGreen
+      ? {
+          advancedConfiguration: {
+            alternateTargetGroupArn: `${name}-alternate`,
+            productionListenerRule: `${name}-rule`,
           },
-        ],
-      },
-    ]),
-  );
+        }
+      : {}),
+  });
+  const services = new Map([
+    ["core", { loadBalancers: [attachment("core"), attachment("portal")] }],
+    ["hooks", { loadBalancers: [attachment("hooks")] }],
+  ]);
   return {
     configPath,
     services,
@@ -143,7 +142,10 @@ for (const blueGreen of [false, true]) {
     try {
       const config = loadConfigAt(f.configPath).config;
       assert.equal(assertAwsPublicRouting(config, f.services).get("hooks"), "hooks");
-      assert.match(terraformVars(config, "", ["core_public_hosts"]), /"public_paths": \[\s*"\/hooks\/\*"/);
+      assert.match(
+        terraformVars(config, "", ["core_public_hosts", "public_port"]),
+        /"public_paths": \[\s*"\/hooks\/\*"/,
+      );
     } finally {
       f.close();
     }
@@ -202,12 +204,36 @@ test("the egress proxy may sit behind its own load balancer while other private 
     const config = {
       ...loaded,
       services: [...loaded.services, "egress-proxy" as const],
-      aws: { ...loaded.aws!, services: { ...loaded.aws!.services, "egress-proxy": proxy } },
+      aws: {
+        ...loaded.aws!,
+        services: {
+          ...loaded.aws!.services,
+          "egress-proxy": proxy,
+          jobs: { ...proxy, ecrRepository: "jobs", ecsService: "jobs" },
+        },
+      },
     };
-    const services = new Map([...f.services, ["egress-proxy", { loadBalancers: [{ targetGroupArn: "nlb-tcp" }] }]]);
+    const services = new Map<string, { loadBalancers: Array<{ targetGroupArn: string }> }>([
+      ...f.services,
+      ["egress-proxy", { loadBalancers: [{ targetGroupArn: "nlb-tcp" }] }],
+    ]);
     assert.equal(assertAwsPublicRouting(config, services).has("egress-proxy"), false);
-    services.set("web-ui", { loadBalancers: [{ targetGroupArn: "nlb-tcp" }] });
-    assert.throws(() => assertAwsPublicRouting(config, services), /private ECS service web-ui is attached/);
+    services.set("jobs", { loadBalancers: [{ targetGroupArn: "nlb-tcp" }] });
+    assert.throws(() => assertAwsPublicRouting(config, services), /private ECS service jobs is attached/);
+  } finally {
+    f.close();
+  }
+});
+
+test("the portal route must reach core's public port, never its API port", () => {
+  const f = fixture();
+  try {
+    const config = loadConfigAt(f.configPath).config;
+    const core = f.services.get("core")!;
+    core.loadBalancers = core.loadBalancers.map((item) =>
+      item.targetGroupArn === "portal" ? { ...item, containerPort: 8080 } : item,
+    );
+    assert.throws(() => assertAwsPublicRouting(config, f.services), /must reach core on its public port 8000/);
   } finally {
     f.close();
   }

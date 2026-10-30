@@ -11,6 +11,7 @@ import {
 import { LitElement, html, nothing } from "lit";
 import { Check, TriangleAlert } from "lucide";
 import { icon } from "./icons";
+import { webFetch } from "./core-bridge";
 import { mountConnectionPicker, type ConnectionService } from "./connection-picker";
 
 interface ConnectedAccount {
@@ -127,7 +128,7 @@ export class OnboardingWelcome extends LitElement {
   private async refreshWorkspace(): Promise<void> {
     if (this.widget === "apps" || (this.widget !== "slack-account" && this.me?.permissions?.includes("admin"))) return;
     try {
-      const response = await fetch(`${this.base}api/composio/slack`, {
+      const response = await webFetch(`${this.base}api/composio/slack`, {
         cache: "no-store",
         signal: AbortSignal.timeout(10000),
       });
@@ -260,7 +261,7 @@ export class OnboardingWelcome extends LitElement {
     this.connectionError = "";
     this.requestUpdate();
     try {
-      const response = await fetch(`${this.base}api/composio/disconnect`, {
+      const response = await webFetch(`${this.base}api/composio/disconnect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ accountId: account.id }),
@@ -296,7 +297,7 @@ export class OnboardingWelcome extends LitElement {
       do {
         if (seen.has(cursor) || seen.size >= 100) throw new Error("Could not finish checking connected apps.");
         seen.add(cursor);
-        const response = await fetch(`${this.base}api/composio/connections?${new URLSearchParams({ cursor })}`, {
+        const response = await webFetch(`${this.base}api/composio/connections?${new URLSearchParams({ cursor })}`, {
           signal: controller.signal,
         });
         const result = await response.json();
@@ -353,7 +354,7 @@ export class OnboardingWelcome extends LitElement {
       do {
         if (cursors.has(cursor)) throw new Error("Could not finish loading apps. Please try again.");
         cursors.add(cursor);
-        const response = await fetch(`${this.base}api/composio/toolkits?${new URLSearchParams({ cursor })}`, {
+        const response = await webFetch(`${this.base}api/composio/toolkits?${new URLSearchParams({ cursor })}`, {
           signal: controller.signal,
         });
         const result = await response.json();
@@ -409,7 +410,7 @@ export class OnboardingWelcome extends LitElement {
         scrollTop: this.closest(".chat-scroll")?.scrollTop ?? 0,
       };
       saveConnectionAttempt(attempt);
-      const response = await fetch(`${this.base}api/composio/authorize`, {
+      const response = await webFetch(`${this.base}api/composio/authorize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ toolkit: service.id, returnTo: location.pathname + location.search, state }),

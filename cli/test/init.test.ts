@@ -58,7 +58,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
     const { config } = loadConfigInDir(dir);
     assert.equal(config.orgId, "acme");
     assert.equal(config.target, "docker");
-    assert.equal(config.publicUrl, "http://localhost:8082");
+    assert.equal(config.publicUrl, "http://localhost:8081");
     assert.equal(config.env.core?.HARNESS, "pi");
     assert.equal(config.sandbox, undefined);
 
@@ -151,7 +151,7 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     const { config } = loadConfigInDir(dir);
     assert.equal(config.target, "fly");
     assert.deepEqual(config.services, ["core", "slack", "web-ui", "admin", "portal", "auth"]);
-    assert.equal(config.publicUrl, "https://acme-portal.fly.dev");
+    assert.equal(config.publicUrl, "https://acme-core.fly.dev");
     assert.equal(config.flyOrg, "personal");
     assert.ok(config.region, "region is scaffolded");
     assert.equal(config.appPrefix, "acme");
@@ -261,7 +261,7 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
       cpu: 2048,
       memory: 4096,
     });
-    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core", "web-ui", "portal"]);
+    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core"]);
     for (const name of ["main.tf", "outputs.tf", "variables.tf", "versions.tf", "terraform.tfvars"]) {
       assert.ok(existsSync(join(dir, "infra", name)), `infra/${name} is scaffolded`);
     }

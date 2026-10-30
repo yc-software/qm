@@ -1,8 +1,9 @@
 # QM Helm chart
 
 This chart runs core, web-ui (including `/admin`), portal (including `/idp` auth),
-and the optional egress proxy. `services.auth` and `services.admin` configure
-embedded modules, not separate Deployments or Services.
+and the optional egress proxy. web-ui and portal run from the core image.
+`services.auth` and `services.admin` configure embedded modules, not separate
+Deployments or Services.
 
 ## Images
 
@@ -17,7 +18,7 @@ For example, from the repository root, with a registry you own and are signed in
 ```bash
 export REGISTRY=registry.example.com/your-project/qm
 export TAG=$(git rev-parse HEAD)
-for service in core web-ui portal egress-proxy; do
+for service in core egress-proxy; do
   docker buildx build --platform linux/amd64 --push \
     --build-arg GIT_SHA="$TAG" \
     -f "deploy/$service/Dockerfile" -t "$REGISTRY/$service:$TAG" .

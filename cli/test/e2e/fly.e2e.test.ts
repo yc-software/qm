@@ -30,7 +30,7 @@ function flyConfig(label: string): string {
     appPrefix: APP_PREFIX,
     flyOrg: "e2e-org",
     region: "sjc",
-    services: ["core", "web-ui"],
+    services: ["core", "egress-proxy"],
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "qm-e2e-data", S3_REGION: "auto" } },
   });
 }
@@ -42,8 +42,8 @@ function fly(
 ): { result: ReturnType<typeof runCli>; logPath: string } {
   const identity = "qm-v2:e2e-org:acme:qm-e2e";
   const defaults = {
-    apps: ["qm-e2e-core", "qm-e2e-web-ui"],
-    appOwners: { "qm-e2e-core": identity, "qm-e2e-web-ui": identity },
+    apps: ["qm-e2e-core", "qm-e2e-egress-proxy"],
+    appOwners: { "qm-e2e-core": identity, "qm-e2e-egress-proxy": identity },
   };
   const { env, logPath } = fakeFlyEnv({
     ...defaults,
@@ -63,7 +63,7 @@ test("plan (fly) reports MISSING secrets when none are staged, and changes nothi
   assert.match(result.out, /Plan only\. Re-run without --dry-run to deploy\./);
   const cmds = fakeFlyCommands(logPath);
   assert.ok(cmds.some((c) => c[0] === "secrets" && c[1] === "list" && c.includes("qm-e2e-core")));
-  assert.ok(cmds.some((c) => c[0] === "secrets" && c[1] === "list" && c.includes("qm-e2e-web-ui")));
+  assert.ok(cmds.some((c) => c[0] === "secrets" && c[1] === "list" && c.includes("qm-e2e-egress-proxy")));
   assert.ok(!cmds.some((c) => c[0] === "deploy"), "plan must not deploy");
 });
 
@@ -145,7 +145,7 @@ test("--only narrows a fly plan to the named component (and rejects unknown name
     cmds.some((c) => c.includes("qm-e2e-core")),
     "gated core",
   );
-  assert.ok(!cmds.some((c) => c.includes("qm-e2e-web-ui")), "did NOT touch web-ui");
+  assert.ok(!cmds.some((c) => c.includes("qm-e2e-egress-proxy")), "did NOT touch egress-proxy");
 
   const bad = fly(["plan", "--only", "nope"], cfg, { secrets: [] });
   assert.equal(bad.result.code, 1);
@@ -163,7 +163,7 @@ test("status (fly) shells flyctl status per app", () => {
   assert.match(result.out, /qm status — qm-e2e \(target: fly\)/);
   const cmds = fakeFlyCommands(logPath);
   assert.ok(cmds.some((c) => c[0] === "status" && c.includes("qm-e2e-core")));
-  assert.ok(cmds.some((c) => c[0] === "status" && c.includes("qm-e2e-web-ui")));
+  assert.ok(cmds.some((c) => c[0] === "status" && c.includes("qm-e2e-egress-proxy")));
 });
 
 test("logs (fly) shells flyctl logs, and notes that --tail is docker-only", () => {
@@ -177,7 +177,7 @@ test("logs (fly) shells flyctl logs, and notes that --tail is docker-only", () =
   assert.equal(all.result.code, 0, all.result.out);
   const cmds = fakeFlyCommands(all.logPath);
   assert.ok(cmds.some((c) => c[0] === "logs" && c.includes("qm-e2e-core")));
-  assert.ok(cmds.some((c) => c[0] === "logs" && c.includes("qm-e2e-web-ui")));
+  assert.ok(cmds.some((c) => c[0] === "logs" && c.includes("qm-e2e-egress-proxy")));
 });
 
 test("logs -f/--follow streams (flyctl's default: no --no-tail)", () => {
@@ -197,7 +197,7 @@ test("down (fly) scales every app to 0", () => {
   assert.equal(result.code, 0, result.out);
   assert.match(result.out, /scaling every app to 0/);
   const cmds = fakeFlyCommands(logPath);
-  for (const app of ["qm-e2e-core", "qm-e2e-web-ui"]) {
+  for (const app of ["qm-e2e-core", "qm-e2e-egress-proxy"]) {
     assert.ok(
       cmds.some((c) => c[0] === "scale" && c[1] === "count" && c[2] === "0" && c.includes(app)),
       `scaled ${app} to 0`,
@@ -210,7 +210,7 @@ test("down (fly) scales a removed-but-running plugin, but never a sibling/deploy
   const { result, logPath } = fly(["down"], cfg, {
     apps: [
       "qm-e2e-core",
-      "qm-e2e-web-ui",
+      "qm-e2e-egress-proxy",
       "qm-e2e-linear",
       "qm-e2e-2-core",
       "qm-e2e-2-slack",
@@ -221,7 +221,7 @@ test("down (fly) scales a removed-but-running plugin, but never a sibling/deploy
     ],
     appOwners: {
       "qm-e2e-core": "qm-v2:e2e-org:acme:qm-e2e",
-      "qm-e2e-web-ui": "qm-v2:e2e-org:acme:qm-e2e",
+      "qm-e2e-egress-proxy": "qm-v2:e2e-org:acme:qm-e2e",
       "qm-e2e-linear": "qm-v2:e2e-org:acme:qm-e2e",
       "qm-e2e-2-core": "qm-v2:e2e-org:acme:qm-e2e-2",
       "qm-e2e-2-slack": "qm-v2:e2e-org:acme:qm-e2e-2",
@@ -232,7 +232,7 @@ test("down (fly) scales a removed-but-running plugin, but never a sibling/deploy
   const scaled = fakeFlyCommands(logPath)
     .filter((c) => c[0] === "scale" && c[1] === "count" && c[2] === "0")
     .map((c) => c[c.indexOf("-a") + 1]);
-  for (const app of ["qm-e2e-core", "qm-e2e-web-ui", "qm-e2e-linear"]) {
+  for (const app of ["qm-e2e-core", "qm-e2e-egress-proxy", "qm-e2e-linear"]) {
     assert.ok(scaled.includes(app), `scaled ${app} to 0 (incl. the removed plugin still on Fly)`);
   }
   for (const app of ["qm-e2e-2-core", "qm-e2e-2-slack", "qm-e2e-2-billing"]) {
@@ -246,10 +246,10 @@ test("down (fly) scales a removed-but-running plugin, but never a sibling/deploy
 test("down (fly) continues known apps but fails honestly when a same-prefix candidate cannot be inspected", () => {
   const cfg = flyConfig("fly-down-unverified");
   const { result, logPath } = fly(["down"], cfg, {
-    apps: ["qm-e2e-core", "qm-e2e-web-ui", "qm-e2e-linear", "qm-e2e-payments"],
+    apps: ["qm-e2e-core", "qm-e2e-egress-proxy", "qm-e2e-linear", "qm-e2e-payments"],
     appOwners: {
       "qm-e2e-core": "qm-v2:e2e-org:acme:qm-e2e",
-      "qm-e2e-web-ui": "qm-v2:e2e-org:acme:qm-e2e",
+      "qm-e2e-egress-proxy": "qm-v2:e2e-org:acme:qm-e2e",
       "qm-e2e-linear": "qm-v2:e2e-org:acme:qm-e2e",
     },
     failStatusApps: ["qm-e2e-payments"],
@@ -263,7 +263,7 @@ test("down (fly) continues known apps but fails honestly when a same-prefix cand
   const scaled = fakeFlyCommands(logPath)
     .filter((command) => command[0] === "scale")
     .map((command) => command[command.indexOf("-a") + 1]);
-  assert.deepEqual(scaled, ["qm-e2e-core", "qm-e2e-web-ui", "qm-e2e-linear"]);
+  assert.deepEqual(scaled, ["qm-e2e-core", "qm-e2e-egress-proxy", "qm-e2e-linear"]);
 });
 
 test("up --build-only and --image-repo-prefix require --image-label", () => {
@@ -282,12 +282,12 @@ test("down (fly) attempts every app, aggregates failures, and exits nonzero", ()
   const { result, logPath } = fly(["down"], cfg, { fail: "scale" });
   assert.equal(result.code, 1, result.out);
   assert.match(result.out, /down incomplete — failed to scale 2 apps to 0/);
-  assert.match(result.out, /qm-e2e-core.*qm-e2e-web-ui/s);
+  assert.match(result.out, /qm-e2e-core.*qm-e2e-egress-proxy/s);
   assert.doesNotMatch(result.out, /down — all apps scaled to 0/);
   const attempted = fakeFlyCommands(logPath)
     .filter((command) => command[0] === "scale")
     .map((command) => command[command.indexOf("-a") + 1]);
-  assert.deepEqual(attempted, ["qm-e2e-core", "qm-e2e-web-ui"]);
+  assert.deepEqual(attempted, ["qm-e2e-core", "qm-e2e-egress-proxy"]);
 });
 
 test("down (fly) exits nonzero when flyctl is missing instead of reporting a no-op as success", () => {

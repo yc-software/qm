@@ -99,7 +99,7 @@ const workloadOptions = (flags: Readonly<Record<string, string | boolean>>, flag
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
-  if (names.length === 0) throw new CliError(`--${flag} was given no components (e.g. --${flag} core,web-ui)`);
+  if (names.length === 0) throw new CliError(`--${flag} was given no components (e.g. --${flag} core,egress-proxy)`);
   const duplicate = names.find((name, index) => names.indexOf(name) !== index);
   if (duplicate) throw new CliError(`--${flag} lists ${duplicate} more than once`);
   return names;

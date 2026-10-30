@@ -268,7 +268,7 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
   withConfig(
     {
       target: "aws",
-      services: ["core", "web-ui"],
+      services: ["core"],
       aws: {
         ...aws,
         services: {
@@ -277,11 +277,11 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
             taskRoleArn: "arn:aws:iam::123456789012:role/acme-task",
             assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
           },
-          "web-ui": { ecrRepository: "web-ui", ecsService: "acme-web-ui", cpu: 512, memory: 1024 },
+          jobs: { ecrRepository: "jobs", ecsService: "acme-jobs", cpu: 512, memory: 1024 },
         },
       },
     },
-    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by web-ui/),
+    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by jobs/),
   );
   withConfig(
     { target: "aws", aws: { ...aws, services: { core: { ...aws.services.core, architecture: "ppc64" } } } },
@@ -383,7 +383,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
     cpu: name === "core" ? 2048 : 512,
     memory: name === "core" ? 4096 : 1024,
   });
-  const aws = (names: string[]) => ({
+  const aws = () => ({
     accountId: "123456789012",
     region: "us-west-2",
     cluster: "acme",
@@ -391,18 +391,39 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
     secretsPrefix: "acme/",
     imageLabel: "release",
     networking: { cloudMapNamespace: "acme.internal" },
-    services: Object.fromEntries(names.map((name) => [name, service(name)])),
+    services: { core: service("core") },
   });
   const cases: Array<{ label: string; config: Record<string, unknown>; error: RegExp }> = [
+    {
+      label: "a leftover portal workload entry",
+      config: {
+        target: "aws",
+        publicUrl: "https://agent.acme.example",
+        services: ["core", "web-ui", "portal"],
+        aws: { ...aws(), services: { core: service("core"), portal: { ...service("portal"), targetGroup: "pinned" } } },
+      },
+      error:
+        /"aws\.services\.portal" is no longer a workload — core runs portal\. Delete the entry and move its targetGroup to aws\.services\.core\.targetGroup; the next terraform apply retires its ECS service and ECR repository/,
+    },
+    {
+      label: "a leftover web-ui workload entry",
+      config: {
+        target: "aws",
+        publicUrl: "https://agent.acme.example",
+        services: ["core", "web-ui", "portal"],
+        aws: { ...aws(), services: { core: service("core"), "web-ui": service("web-ui") } },
+      },
+      error: /"aws\.services\.web-ui" is no longer a workload — core runs web-ui\. Delete the entry; the next/,
+    },
     {
       label: "web-ui without portal",
       config: {
         target: "aws",
         publicUrl: "https://agent.acme.example",
         services: ["core", "web-ui"],
-        aws: aws(["core", "web-ui"]),
+        aws: aws(),
       },
-      error: /web-ui requires the authenticated portal/,
+      error: /"web-ui" requires "portal"/,
     },
     {
       label: "admin without portal",
@@ -410,9 +431,9 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         target: "aws",
         publicUrl: "https://agent.acme.example",
         services: ["core", "admin"],
-        aws: aws(["core", "admin"]),
+        aws: aws(),
       },
-      error: /admin requires the authenticated portal/,
+      error: /"admin" requires "portal"/,
     },
     {
       label: "portal over HTTP",
@@ -421,7 +442,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         publicUrl: "http://agent.acme.example",
         services: ["core", "web-ui", "portal"],
         env: { core: {} },
-        aws: aws(["core", "web-ui", "portal"]),
+        aws: aws(),
       },
       error: /portal requires an HTTPS publicUrl/,
     },
@@ -432,7 +453,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         publicUrl: "https://agent.acme.example",
         services: ["core", "web-ui", "portal"],
         env: { core: {}, portal: { OIDC_CLIENT_ID: "client", PORTAL_EXPECTED_TEAM_ID: " " } },
-        aws: aws(["core", "web-ui", "portal"]),
+        aws: aws(),
       },
       error: /PORTAL_EXPECTED_TEAM_ID/,
     },
@@ -450,7 +471,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
             OIDC_ALLOWED_EMAILS: "admin@example.com",
           },
         },
-        aws: aws(["core", "web-ui", "portal"]),
+        aws: aws(),
       },
       error: /OIDC_JWKS_URI/,
     },
@@ -469,7 +490,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
             OIDC_ALLOWED_EMAILS: "admin@example.com",
           },
         },
-        aws: aws(["core", "web-ui", "portal"]),
+        aws: aws(),
       },
       error: /non-placeholder HTTPS URL/,
     },
@@ -480,7 +501,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         publicUrl: "http://agent.acme.example",
         services: ["core"],
         env: { core: { HARNESS: "pi" } },
-        aws: aws(["core"]),
+        aws: aws(),
       },
       error: /HARNESS=pi requires an HTTPS publicUrl/,
     },
@@ -492,7 +513,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         apiUrl: "http://api.agent.acme.example",
         services: ["core"],
         env: { core: {} },
-        aws: aws(["core"]),
+        aws: aws(),
       },
       error: /apiUrl must use the same protocol as publicUrl/,
     },
@@ -505,7 +526,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         publicUrl: "https://agent.acme.example",
         services: ["core"],
         env: { core: {} },
-        aws: { ...aws(["core"]), deployBranch },
+        aws: { ...aws(), deployBranch },
       },
       error: /"aws\.deployBranch" must be a valid git branch name/,
     });
@@ -516,7 +537,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       publicUrl: "https://agent.acme.example",
       services: ["core"],
       env: { core: {} },
-      aws: { ...aws(["core"]), deployBranch: "release/prod-2", deployEnvironment: "production" },
+      aws: { ...aws(), deployBranch: "release/prod-2", deployEnvironment: "production" },
     },
     ({ path }) => {
       assert.equal(loadConfigAt(path).config.aws?.deployBranch, "release/prod-2");
@@ -530,7 +551,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         publicUrl: "https://agent.acme.example",
         services: ["core"],
         env: { core: {} },
-        aws: { ...aws(["core"]), deployEnvironment },
+        aws: { ...aws(), deployEnvironment },
       },
       ({ path }) =>
         assert.throws(
@@ -549,7 +570,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       publicUrl: "http://agent.acme.example",
       services: ["core"],
       env: { core: {} },
-      aws: aws(["core"]),
+      aws: aws(),
     },
     ({ path }) => {
       assert.throws(() => loadConfigAt(path), /AWS HARNESS=pi requires an HTTPS publicUrl/);
@@ -564,7 +585,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         core: { HARNESS: "pi" },
         portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAIL_DOMAIN: "example.com", PORTAL_EXPECTED_TEAM_ID: "T123" },
       },
-      aws: aws(["core", "web-ui", "portal"]),
+      aws: aws(),
     },
     ({ path }) => {
       assert.equal(loadConfigAt(path).config.services.includes("portal"), true);
@@ -576,7 +597,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       publicUrl: "https://agent.acme.example",
       services: ["core", "web-ui", "portal"],
       env: { core: { HARNESS: "pi" }, portal: { OIDC_CLIENT_ID: "client", OIDC_ALLOWED_EMAILS: "admin@example.com" } },
-      aws: aws(["core", "web-ui", "portal"]),
+      aws: aws(),
     },
     ({ path }) => {
       assert.equal(loadConfigAt(path).config.env.portal?.OIDC_ALLOWED_EMAILS, "admin@example.com");
@@ -588,7 +609,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
       publicUrl: "https://agent.acme.example",
       services: ["core", "web-ui", "portal"],
       env: { core: { HARNESS: "pi" }, portal: { OIDC_PRINCIPAL_CLAIM: "email" } },
-      aws: aws(["core", "web-ui", "portal"]),
+      aws: aws(),
     },
     ({ path }) => {
       assert.equal(loadConfigAt(path).config.env.portal?.OIDC_CLIENT_ID, undefined);
@@ -648,12 +669,12 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
     withConfig(
       {
         target: "aws",
-        services: ["core", "web-ui"],
+        services: ["core"],
         aws: {
           ...aws,
           services: {
             core: service,
-            "web-ui": { ...service, ecrRepository: "web", ecsService: "acme-web", [field]: service[field] },
+            jobs: { ...service, ecrRepository: "web", ecsService: "acme-web", [field]: service[field] },
           },
         },
       },
@@ -742,12 +763,12 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
   withConfig(
     {
       target: "aws",
-      services: ["core", "web-ui"],
+      services: ["core"],
       aws: {
         ...aws,
         services: {
           core: { ...service, targetGroup: "shared-tg" },
-          "web-ui": { ...service, ecrRepository: "web", ecsService: "acme-web", targetGroup: "shared-tg" },
+          jobs: { ...service, ecrRepository: "web", ecsService: "acme-web", targetGroup: "shared-tg" },
         },
       },
     },
@@ -1498,7 +1519,7 @@ test("proxy deployment rendering names the mode and classifier", () => {
 });
 
 test("AWS built-in architecture defaults match published images and retain explicit choices", () => {
-  const workloads = ["core", "web-ui", "admin", "portal", "auth", "linear"];
+  const workloads = ["core", "egress-proxy", "linear"];
   const config = {
     plugins: [{ name: "linear" }],
     imageOverrides: {},
