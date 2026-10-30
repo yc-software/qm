@@ -21,6 +21,7 @@ interface AdminRouteDeps {
   secret: string | undefined;
   org: string;
   portalHeaders: () => Record<string, string>;
+  impersonated: (req: IncomingMessage) => boolean;
   readBody: (req: IncomingMessage) => Promise<string>;
   stageUpload: (req: IncomingMessage, sha256: string) => Promise<Response>;
   refreshBranding: () => Promise<void>;
@@ -128,6 +129,8 @@ export function adminRoutes(d: AdminRouteDeps) {
   };
 
   const handle = async (c: AdminCtx): Promise<unknown> => {
+    if (d.impersonated(c.req))
+      return d.json(c.res, 403, { message: "Admin pages are unavailable while impersonating." });
     const method = c.req.method ?? "GET";
     const rest = c.url.pathname.slice(PREFIX.length);
     const first = rest.split("/")[0] ?? "";

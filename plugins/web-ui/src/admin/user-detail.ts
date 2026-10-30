@@ -1,3 +1,4 @@
+import { withBase } from "../core-bridge.ts";
 import { html, render } from "lit";
 import { formatMessageTime } from "../message-time.ts";
 import type { AdminPage } from "./sections.ts";
@@ -25,7 +26,7 @@ async function openWebUiAs(target: string) {
   } catch (e) {
     return alert("Couldn't start impersonation: " + ((e as Error)?.message || e));
   }
-  window.open("/web-ui/", "_blank", "noopener");
+  window.open(withBase("/"), "_blank", "noopener");
 }
 
 export async function detail(page: AdminPage) {

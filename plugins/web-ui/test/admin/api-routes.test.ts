@@ -134,6 +134,23 @@ test("admin API calls reach core signed, attributed to the actor, and carrying t
   }
 });
 
+test("admin API calls made while impersonating are refused before any core hop", async () => {
+  const before = calls.length;
+  const response = await fetch(`${base}/api/admin/grants`, {
+    method: "POST",
+    headers: {
+      "x-portal-identity": mintPortalIdentity(
+        { p: "target@example.com", imp: "admin@example.com", exp: Date.now() + 60_000 },
+        identitySecret,
+      ),
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ principal: "x@example.com", scope: "org:acme", role: "admin" }),
+  });
+  assert.equal(response.status, 403);
+  assert.equal(calls.slice(before).filter((c) => c.path.startsWith("/v1/admin/")).length, 0);
+});
+
 test("admin API calls without a portal identity are refused before any core hop", async () => {
   const before = calls.filter((c) => c.path.startsWith("/v1/admin/")).length;
   for (const [method, path] of [

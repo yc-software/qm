@@ -1792,6 +1792,7 @@ const apiRoutes: readonly WebRoute[] = [
       const token = portalTokenStore.getStore();
       return token ? { [PORTAL_IDENTITY_HEADER]: token } : {};
     },
+    impersonated: (req) => Boolean(resolveIdentity(req)?.impersonator),
     readBody,
     stageUpload: stageUploadStream,
     refreshBranding: () => brandingCache.refreshNow(),

@@ -59,7 +59,7 @@ export async function mount(page: AdminPage) {
       })),
       { label: "Custom", active: w.preset === null, href: page.href("spend", { from: w.from, to: w.to }) },
     ],
-    actions: html`<a class="button" href=${"../api/admin/spend?format=csv&breakdown=entity&" + query} download
+    actions: html`<a class="button" href=${page.apiBase + "/spend?format=csv&breakdown=entity&" + query} download
       >Export CSV</a
     >`,
   });
