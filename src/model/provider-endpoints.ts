@@ -50,9 +50,7 @@ export function setProviderBaseUrls(tenant: string, urls: ProviderBaseUrls): voi
 export function providerBaseUrl(provider: string): string | undefined {
   const tenant = boundTenant();
   if (!tenant || !(PROVIDER_IDS as readonly string[]).includes(provider)) return undefined;
-  const urls = configured.get(tenant);
-  if (!urls) throw new Error("This tenant's provider endpoints have not been loaded yet");
-  return urls[provider as ProviderId];
+  return configured.get(tenant)?.[provider as ProviderId];
 }
 
 export class ModelUnavailableError extends Error {
