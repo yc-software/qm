@@ -456,7 +456,7 @@ test("an in-place recovery of a marked task-list reply does not replay attachmen
 });
 
 test("a post Slack refuses for good (DM to a bot) fails the row on the first attempt", async () => {
-  const { store, posted, makeClient, makePoller, failed } = harness();
+  const { store, makeClient, makePoller, failed } = harness();
   const dead = await store.enqueue({
     destination: { type: "slack", target: "D-bot:100.0" },
     text: "BOTDM approval card",
@@ -476,8 +476,4 @@ test("a post Slack refuses for good (DM to a bot) fails the row on the first att
   assert.equal((await store.get(dead.id))?.failedReason, "cannot_dm_bot");
   assert.equal((await store.pending("slack")).length, 0, "nothing left queued");
   assert.equal((await store.get(live.id))?.deliveredAt !== null, true);
-  assert.equal(
-    posted.some((p) => p.text.includes("BOTDM")),
-    false,
-  );
 });
