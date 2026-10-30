@@ -10,6 +10,9 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type Cron, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
