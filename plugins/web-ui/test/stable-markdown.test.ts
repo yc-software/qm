@@ -586,3 +586,35 @@ test("fade ranges preserve selected text across many formatted nodes and paragra
   );
   block.remove();
 });
+
+test("embed fences become sandboxed iframes only in finished embed-enabled messages", async () => {
+  const source =
+    "```embed\nhttps://example.com/a?b=1\nheight=300\n```\n\n```embed\nhttp://example.com/\n```\n\n```embed\nhttp://localhost/x\n```\n\n```embed\nhttps://user:pw@example.com/\n```";
+  const plain = await mount(source);
+  assert.equal(plain.querySelector("iframe"), null);
+  assert.equal(plain.querySelectorAll("code-block").length, 4);
+  plain.remove();
+
+  const block = new StableMarkdown();
+  block.embeds = true;
+  block.isStreaming = true;
+  block.content = source;
+  document.body.append(block);
+  await block.updateComplete;
+  assert.equal(block.querySelector("iframe"), null);
+  block.isStreaming = false;
+  await block.updateComplete;
+  const frames = [...block.querySelectorAll("iframe")];
+  assert.deepEqual(
+    frames.map((frame) => frame.getAttribute("src")),
+    ["https://example.com/a?b=1"],
+  );
+  assert.equal(frames[0]!.style.height, "300px");
+  assert.doesNotMatch(frames[0]!.getAttribute("sandbox")!, /top-navigation/);
+  assert.equal(block.querySelector("qm-embed a")?.getAttribute("href"), "https://example.com/a?b=1");
+  assert.equal(block.querySelectorAll("code-block").length, 3);
+  block.content += "\n\nMore text.";
+  await block.updateComplete;
+  assert.equal(block.querySelector("iframe"), frames[0]);
+  block.remove();
+});

@@ -45,7 +45,9 @@ export function assistantMessage(options: {
     ${
       human || options.role === "system"
         ? html`<span class="inbox-chat-text" ?hidden=${human && !options.text?.trim()}>${options.text ?? ""}</span>`
-        : html`<div class="assistant-body">${options.content ?? markdown(options.text ?? "")}</div>`
+        : html`<div class="assistant-body">
+            ${options.content ?? markdown(options.text ?? "", false, "", !options.streaming)}
+          </div>`
     }
     ${options.after ?? nothing} ${options.meta ?? nothing}
   </article>`;
