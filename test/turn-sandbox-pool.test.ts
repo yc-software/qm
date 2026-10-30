@@ -50,6 +50,8 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
     },
   };
   const holdFailures = new Set<string>();
+  const errors: Array<{ code: string; message: string }> = [];
+  let liveLookups = 0;
   const resource = (id: string, ownerScopeId = OWN) => ({ id, ownerScopeId, state: "ready", backend: "fake" });
   const sandboxResources = {
     access: async (_actor: string, id: string) => resource(id),
@@ -70,6 +72,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
       runs: { get: async () => undefined },
       processes: {
         listLive: async () => {
+          liveLookups++;
           if (over.live instanceof Error) throw over.live;
           return (over.live ?? []).map((sandboxId) => ({ sandboxId }));
         },
@@ -81,6 +84,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
         resolveSharingPostureDurable: async () => "open",
       },
       isCurrentSharedScopeMember: async () => true,
+      errors: { record: (event: { code: string; message: string }) => errors.push(event) },
     },
     input: { origin: { kind: "user" }, runId: "run-1" },
     actor: { id: "alice", type: "internal" },
@@ -97,7 +101,18 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
   } as unknown as TurnSandboxContext);
   const released = () => Object.fromEntries(teardowns);
   const clearedTurnFiles = () => removed.filter(([, dir]) => dir === "turn/s/t").map(([id]) => id);
-  return { turn, provisions, teardowns, released, clearedTurnFiles, failNext, gates, holdFailures };
+  return {
+    turn,
+    provisions,
+    teardowns,
+    released,
+    clearedTurnFiles,
+    failNext,
+    gates,
+    holdFailures,
+    errors,
+    liveLookups: () => liveLookups,
+  };
 }
 
 test("each computer a turn touched is released exactly once, the default box with its own options", async () => {
@@ -110,6 +125,7 @@ test("each computer a turn touched is released exactly once, the default box wit
   assert.deepEqual(f.teardowns.map(([id]) => id).sort(), [scoped.id, "channel:C1", "other"].sort());
   assert.ok(f.teardowns.every(([, opts]) => !opts.keepWarm && !opts.homeUnchanged));
   assert.deepEqual(f.clearedTurnFiles().sort(), [scoped.id, "other"].sort());
+  assert.equal(f.liveLookups(), 1);
 });
 
 test("an eagerly warmed default box the turn never used is released as unchanged", async () => {
@@ -224,6 +240,10 @@ test("a failed release does not stop the others, and only scratch failures fail 
   await clean.turn.provision();
   await clean.turn.reclaimBox();
   assert.deepEqual(Object.keys(clean.released()), ["box-1"]);
+  assert.deepEqual(
+    clean.errors.map((e) => [e.code, e.message]),
+    [["teardown_failed", "fake:box-1: teardown failed: box-1"]],
+  );
 });
 
 test("reopening a computer under a different egress policy releases it once", async () => {

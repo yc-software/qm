@@ -480,22 +480,33 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
   const prepareTurnFiles = async (handle: SandboxHandle): Promise<void> => {
     await Promise.all([pruneSkills(handle), clearStaleTurnFiles(handle)]);
   };
-  const hasLiveProcesses = async (handle: SandboxHandle): Promise<boolean> => {
-    if (!deps.processes || !handle.resourceId) return false;
-    return (await deps.processes.listLive()).some((process) => process.sandboxId === handle.resourceId);
-  };
-  const releaseHandle = async (handle: SandboxHandle, scoped: boolean): Promise<void> => {
+  const releaseHandle = async (
+    handle: SandboxHandle,
+    scoped: boolean,
+    hasLiveJob: (handle: SandboxHandle) => Promise<boolean>,
+  ): Promise<void> => {
     if (scoped || handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId)
       await clearTurnFiles(handle);
     const keepWarm =
       (await releaseHold(handle).catch(swallowAs("orchestrator: hold release", true))) ||
-      (await hasLiveProcesses(handle).catch(swallowAs("orchestrator: live process check", true)));
+      (await hasLiveJob(handle).catch(swallowAs("orchestrator: live process check", true)));
     await deps.sandbox
       .teardown(handle, {
         ...(keepWarm ? { keepWarm: true } : {}),
         ...(scoped && !scopedUsed ? { homeUnchanged: true } : {}),
       })
-      .catch(swallowAs("orchestrator: teardown", undefined));
+      .catch((error: unknown) =>
+        deps.errors?.record(
+          {
+            category: "sandbox",
+            code: "teardown_failed",
+            message: `${handle.backend}:${handle.id}: ${errMessage(error)}`,
+            scopeLabel: scopeId,
+            sessionId: session.id,
+          },
+          error,
+        ),
+      );
   };
   const destroyScratch = async (slot: Slot): Promise<void> => {
     const [handle] = slot.handles;
@@ -535,12 +546,20 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         const id = `${handle.backend}:${handle.id}`;
         if (!targets.get(id)?.scoped) targets.set(id, { handle, scoped: key === SCOPED });
       }
+    let live: Promise<Set<string | undefined>> | undefined;
+    const hasLiveJob = async (handle: SandboxHandle): Promise<boolean> => {
+      if (!deps.processes || !handle.resourceId) return false;
+      live ??= deps.processes.listLive().then((processes) => new Set(processes.map((p) => p.sandboxId)));
+      return (await live).has(handle.resourceId);
+    };
     const scratch = slots.find(([key]) => key === SCRATCH)?.[1];
     const [destroyed] = await Promise.allSettled([
       scratch && destroyScratch(scratch),
-      ...[...targets.values()].map(({ handle, scoped }) => releaseHandle(handle, scoped)),
+      ...[...targets.values()].map(({ handle, scoped }) =>
+        releaseHandle(handle, scoped, hasLiveJob).catch(swallowAs("orchestrator: release", undefined)),
+      ),
     ]);
-    if (destroyed.status === "rejected") throw destroyed.reason;
+    if (destroyed?.status === "rejected") throw destroyed.reason;
   };
 
   return {
