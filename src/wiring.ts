@@ -418,11 +418,12 @@ import {
 } from "./deployment/load-layer.ts";
 import {
   createDeploymentLayerStore,
+  createPostgresDeploymentLayerRows,
   LAYER_CREATED_BY,
   LAYER_REVIEWER,
   type DeploymentLayerStore,
-  type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
+import { memoryRows } from "./persistence/typed-table.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
@@ -701,12 +702,12 @@ export function buildApp(
   const orgScope = scopeId("org", config.orgId);
   const auditLog = config.databaseUrl ? createPostgresAuditLog(config.databaseUrl) : createAuditLog();
   const deploymentLayerStore = createDeploymentLayerStore({
-    backing: artifactMap<StoredDeploymentLayer>("deployment_layer"),
+    backing: config.databaseUrl ? createPostgresDeploymentLayerRows(config.databaseUrl) : memoryRows(),
     runtime: deploymentLayer,
     skills,
     skillBundles,
     scopeId: orgScope,
-    durable: pgArtifactMap !== null,
+    durable: config.databaseUrl !== undefined,
     advisoryLock,
     auditPersisted: (record) =>
       auditLog.recordOnce!(`deployment-layer:${orgScope}:${record.version}`, {

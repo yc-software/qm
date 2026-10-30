@@ -2,6 +2,7 @@ import { createPgPool, withPgTransaction, type PgMigrationDefinition, type Rows 
 import { typedTableMigration } from "./typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
+import { tenantMap } from "../tenants/context.ts";
 
 export type ColumnType = "text" | "bigint" | "double precision" | "boolean" | "jsonb" | "text[]";
 
@@ -173,3 +174,48 @@ export function typedTable<T extends object, K extends string = never>(
 }
 
 export type TypedTable<T extends object> = ReturnType<typeof typedTable<T, string>>;
+
+export type KeyedRows<T extends object> = Pick<
+  TypedTable<T>,
+  "get" | "entries" | "put" | "putIfAbsent" | "merge" | "update" | "delete" | "take"
+>;
+
+export function memoryRows<T extends object>(): KeyedRows<T> {
+  const rows = tenantMap<T>();
+  const copy = (value: T | undefined): T | null => (value === undefined ? null : structuredClone(value));
+  return {
+    get: async (id) => copy(rows().get(id)),
+    entries: async () =>
+      [...rows().entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, value]) => [id, structuredClone(value)]),
+    async put(id, record) {
+      rows().set(id, structuredClone(record));
+    },
+    async putIfAbsent(id, record) {
+      if (!rows().has(id)) rows().set(id, structuredClone(record));
+      return copy(rows().get(id))!;
+    },
+    async merge(id, patch) {
+      const current = rows().get(id);
+      if (!current) return null;
+      for (const [field, value] of Object.entries(patch))
+        if (value === undefined) delete (current as Record<string, unknown>)[field];
+        else (current as Record<string, unknown>)[field] = structuredClone(value);
+      return copy(current);
+    },
+    async update(id, fn) {
+      const current = rows().get(id);
+      if (!current) return null;
+      const next = fn(structuredClone(current));
+      rows().set(id, structuredClone(next));
+      return next;
+    },
+    async delete(id) {
+      rows().delete(id);
+    },
+    async take(id) {
+      const current = copy(rows().get(id));
+      rows().delete(id);
+      return current;
+    },
+  };
+}
