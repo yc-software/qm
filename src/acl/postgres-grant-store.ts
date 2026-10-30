@@ -1,3 +1,4 @@
+import { perTenant } from "../tenants/context.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Grant, Permission, ScopeId } from "../types.ts";
 import type { GrantPersistence } from "./acl-store.ts";
@@ -82,18 +83,20 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
     },
   ]);
   const { q } = db;
-  let cache: { v: string; grants: readonly Grant[] } | null = null;
+  const cached = perTenant(() => ({ current: null as { v: string; grants: readonly Grant[] } | null }));
 
   return {
     async all() {
+      const slot = cached();
       const versionRows = await q("SELECT v FROM acl_grants_version");
       const version = versionRows.length ? String(versionRows[0]!.v) : null;
+      const cache = slot.current;
       if (cache && version !== null && cache.v === version) return [...cache.grants];
       const rows = await q(
         "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants ORDER BY owner_scope_id, path, grantee_scope_id, permission",
       );
       const grants = rows.map(rowToGrant);
-      cache = version === null ? null : { v: version, grants };
+      slot.current = version === null ? null : { v: version, grants };
       return [...grants];
     },
     async put(g) {

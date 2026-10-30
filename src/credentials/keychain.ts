@@ -14,6 +14,7 @@ import { shq } from "../util/shell.ts";
 import { homeRelativePath } from "./paths.ts";
 import { envKey } from "./connector-token.ts";
 import { connectorHostLabel } from "../connectors/oauth.ts";
+import { perTenant } from "../tenants/context.ts";
 
 const COMPOSIO_ENV_KEY = "COMPOSIO_API_KEY";
 
@@ -777,10 +778,9 @@ export function createKeychain(deps: {
     };
   }
 
-  const oauthSlot = (accountType?: string) => `oauth:${accountType && accountType !== "default" ? accountType : ""}`;
   const oauthId = (host: string, principalId: string, accountType?: string) =>
-    credId(principalId, host.toLowerCase(), oauthSlot(accountType));
-  const inflightRefreshes = new Map<string, Promise<string | null>>();
+    credId(principalId, host.toLowerCase(), `oauth:${accountType && accountType !== "default" ? accountType : ""}`);
+  const inflightRefreshes = perTenant(() => new Map<string, Promise<string | null>>());
 
   async function putConnectorToken(
     host: string,
@@ -907,11 +907,11 @@ export function createKeychain(deps: {
     const t = now();
     const refreshable = rec.refresh?.refreshTokenEnc && deps.refreshConnector && rec.host ? rec.host : null;
     if (refreshable && rec.expiresAt !== undefined && t >= rec.expiresAt - oauthRefreshMargin) {
-      let pending = inflightRefreshes.get(rec.id);
+      let pending = inflightRefreshes().get(rec.id);
       if (!pending) {
         pending = refreshAndStore(refreshable, rec.ownerId, rec.refresh?.accountType, rec);
-        inflightRefreshes.set(rec.id, pending);
-        void pending.finally(() => inflightRefreshes.delete(rec.id));
+        inflightRefreshes().set(rec.id, pending);
+        void pending.finally(() => inflightRefreshes().delete(rec.id));
       }
       return pending;
     }
