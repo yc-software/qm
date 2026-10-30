@@ -8,14 +8,17 @@ import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../src/core/turn-options.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "org:default-org";
+bindTestTenant();
+
+const ORG = TEST_ROOT_SCOPE;
 const SCOPE = "personal:alice";
 const fallback: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5" };
 const category: RuntimeChoice = { harnessId: "pi", modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
 
 async function setup() {
-  const config = createMemoryConfigStore("default-org");
+  const config = createMemoryConfigStore();
   await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setRuntimeSelection(ORG, { ...fallback, effortLevel: "high", fastMode: true });
   await config.setRuntimeSelection(SCOPE, { ...fallback, modelId: "claude-sonnet-5", effortLevel: "medium" });
@@ -73,8 +76,8 @@ test("each purpose ignores conversation overrides and explicit fields including 
 
 test("durable purpose defaults refresh between child followups", async () => {
   const baseModels = createMemoryMap<PersistedBaseModel>();
-  const writer = createMemoryConfigStore("default-org", { baseModels });
-  const reader = createMemoryConfigStore("default-org", { baseModels });
+  const writer = createMemoryConfigStore({ baseModels });
+  const reader = createMemoryConfigStore({ baseModels });
   await writer.setPurposeRuntime("subagent", category);
   assert.deepEqual(
     await resolveRuntimeChoiceDurable(reader, ORG, SCOPE, fallback, undefined, undefined, "subagent"),

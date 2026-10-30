@@ -138,7 +138,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
-  const config = createMemoryConfigStore("org");
+  const config = createMemoryConfigStore();
   await config.setApprovedHarnesses(["pi", "claude"]);
   await config.setInteractiveFastMode(true);
   const orchestrator = createOrchestrator({
@@ -149,7 +149,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       { authorizesCapabilityScope: async () => true },
     ),
     identity: createIdentityService(),
-    resolution: createResolutionService("org", config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     runs,
     workspace,

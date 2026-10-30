@@ -20,6 +20,9 @@ import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts"
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("resolveReachableChannel: a public channel is reachable by any internal member", async () => {
   const d = createDirectoryStore();
@@ -287,7 +290,7 @@ test("Trap 1: a reach result prefixes provenance and keeps the SESSION scope lab
     current: tc,
     emit: (e) => void emitted.push(e as never),
     scopeLabel: scopeId("personal", "U1"),
-    orgScopeId: scopeId("org", "default-org"),
+    orgScopeId: TEST_ROOT_SCOPE,
   };
   const [execute] = createAgentTools(ref, { reachExec: true });
   const r = await call(execute, { command: "cat x", scope: "#project-alpha", purpose: "Run test command" });

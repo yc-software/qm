@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SOURCE_SECRET = "source-auth-secret-for-slack-proxy-tests-0001";
 const SLACK_SECRET = "slack-signing-secret-for-proxy-tests-0001";

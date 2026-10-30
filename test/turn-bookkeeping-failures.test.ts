@@ -26,7 +26,6 @@ import type { HarnessTurnResult } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = {
   kind: "channel",
@@ -90,7 +89,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+    resolution: createResolutionService(createMemoryConfigStore(), acl),
     sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),

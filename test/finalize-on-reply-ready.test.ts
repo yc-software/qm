@@ -25,8 +25,10 @@ import type { ErrorLog } from "../src/admin/error-log.ts";
 import type { SurfaceCache } from "../src/surface-cache/types.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const actor: Principal = { id: "U1", type: "internal" };
 const dm = (thread: string, text: string): Omit<OrchestratorInput, "background"> => ({
   surface: "test",
@@ -105,7 +107,7 @@ function buildOrchestrator(
   harness = createMockHarness(),
   surfaceCache?: SurfaceCache,
 ) {
-  const config = createMemoryConfigStore(ORG);
+  const config = createMemoryConfigStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "frr-")));
@@ -121,7 +123,7 @@ function buildOrchestrator(
   const orch = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),

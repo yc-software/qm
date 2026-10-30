@@ -4,6 +4,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const channel = scopeId("channel", "C1");
 
@@ -17,8 +20,8 @@ test("a config write resolves only after another instance can read it from the s
     await sleep(20);
     return orgAmbient.put(key, value);
   });
-  const writer = createMemoryConfigStore("default-org", { orgAmbient: slow });
-  const reader = createMemoryConfigStore("default-org", { orgAmbient });
+  const writer = createMemoryConfigStore({ orgAmbient: slow });
+  const reader = createMemoryConfigStore({ orgAmbient });
 
   await writer.setOrgAmbient(false);
 
@@ -30,7 +33,7 @@ test("a failed config write rejects and leaves this instance's cache on the stor
   const failing = withPut(egressPolicies, async () => {
     throw new Error("database unavailable");
   });
-  const config = createMemoryConfigStore("default-org", { egressPolicies: failing });
+  const config = createMemoryConfigStore({ egressPolicies: failing });
 
   await assert.rejects(config.setEgress(channel, { allowedHosts: ["api.example.com"] }), /database unavailable/);
 

@@ -26,7 +26,6 @@ import { scopeId, type Conversation, type Principal, type SessionEntry } from ".
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:retry", audience: [actor] };
 scopeId("personal", "U1");
@@ -109,7 +108,7 @@ function buildScenario(interruptAfterToolResult = false) {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+    resolution: createResolutionService(createMemoryConfigStore(), acl),
     sessions,
     runs,
     workspace,

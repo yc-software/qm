@@ -14,11 +14,14 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const DAY = 86_400_000;
-const ALICE = { "x-admin-actor": "admin-alice@default-org" };
-const RANDO = { "x-admin-actor": "rando@default-org" };
-const ORG = "org:default-org";
+const ALICE = { "x-admin-actor": "admin-alice" };
+const RANDO = { "x-admin-actor": "rando" };
+const ORG = TEST_ROOT_SCOPE;
 
 function start(sessions?: SessionStore) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-spend-")) }));

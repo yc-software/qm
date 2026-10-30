@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, runtimeSwitchNote, turnAtSeq } from "../src/core/turn-resume.ts";
 import { unrecordedToolResult } from "../src/harness/context-compaction.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function ent(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt: seq };
+  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: TEST_ROOT_SCOPE, createdAt: seq };
 }
 
 const user = (text: string, seq: number, runId = "run-1") => ent("user", { text, runId }, seq);

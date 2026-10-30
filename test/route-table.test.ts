@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { compilePath, findRoute, type Route, type BaseCtx } from "../src/api/routes/route.ts";
 import { apiRoutes } from "../src/api/routes/index.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function matched(path: string, pathname: string): Record<string, string> | null {
   const out: Record<string, string> = {};
@@ -22,8 +25,8 @@ test("compilePath: a :param captures exactly one decoded segment", () => {
 });
 
 test("compilePath: params are URL-decoded; %2F does not smuggle a slash past segmenting", () => {
-  assert.deepEqual(matched("/v1/admin/scopes/:scope", "/v1/admin/scopes/org%3Adefault-org"), {
-    scope: "org:default-org",
+  assert.deepEqual(matched("/v1/admin/scopes/:scope", `/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`), {
+    scope: TEST_ROOT_SCOPE,
   });
   assert.deepEqual(matched("/v1/admin/scopes/:scope", "/v1/admin/scopes/a%2Fb"), { scope: "a/b" });
 });

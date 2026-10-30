@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const factory = URL ? createPostgresMapFactory(URL) : null;
@@ -46,15 +49,15 @@ const pausedReads = (map: DurableMap<PersistedBaseModel>) => {
   return { map: wrapped, release, readStarted };
 };
 
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const cron = { harnessId: "pi" as const, modelId: "cron-model" };
 const pick = { harnessId: "pi" as const, modelId: "org-model" };
 
 test("an org runtime change on one server keeps a cron runtime another server saved meanwhile", async () => {
   const shared = await freshMap();
   const paused = pausedReads(shared);
-  const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
-  const right = createMemoryConfigStore("default-org", { baseModels: shared });
+  const left = createMemoryConfigStore({ baseModels: paused.map });
+  const right = createMemoryConfigStore({ baseModels: shared });
 
   const leftWrite = left.setRuntimeSelection(org, pick);
   await paused.readStarted;
@@ -70,8 +73,8 @@ test("an org runtime change on one server keeps a cron runtime another server sa
 test("saving a purpose runtime on one server keeps the org runtime another server saved meanwhile", async () => {
   const shared = await freshMap();
   const paused = pausedReads(shared);
-  const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
-  const right = createMemoryConfigStore("default-org", { baseModels: shared });
+  const left = createMemoryConfigStore({ baseModels: paused.map });
+  const right = createMemoryConfigStore({ baseModels: shared });
 
   const leftWrite = left.setPurposeRuntime("cron", cron);
   await paused.readStarted;
@@ -88,8 +91,8 @@ test("concurrent org runtime changes on two servers get distinct revisions", asy
   const shared = await freshMap();
   await shared.put(org, { scopeId: org, harnessId: "pi", modelId: "seed", revision: 1, orgRevision: 1 });
   const paused = pausedReads(shared);
-  const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
-  const right = createMemoryConfigStore("default-org", { baseModels: shared });
+  const left = createMemoryConfigStore({ baseModels: paused.map });
+  const right = createMemoryConfigStore({ baseModels: shared });
 
   const leftWrite = left.setRuntimeSelection(org, pick);
   await paused.readStarted;
@@ -106,8 +109,8 @@ test("acknowledging the org runtime on one server keeps a scope runtime another 
   await shared.put(channel, { scopeId: channel, harnessId: "pi", modelId: "old", orgRevision: 0 });
   await shared.put(org, { scopeId: org, harnessId: "pi", modelId: "org-model", revision: 4, orgRevision: 4 });
   const paused = pausedReads(shared);
-  const left = createMemoryConfigStore("default-org", { baseModels: paused.map });
-  const right = createMemoryConfigStore("default-org", { baseModels: shared });
+  const left = createMemoryConfigStore({ baseModels: paused.map });
+  const right = createMemoryConfigStore({ baseModels: shared });
 
   const ack = left.acknowledgeRuntimeSelection(channel);
   await paused.readStarted;
@@ -122,7 +125,7 @@ test("acknowledging the org runtime on one server keeps a scope runtime another 
 
 test("clearing the org runtime keeps purpose runtimes and removes an empty row", async () => {
   const shared = await freshMap();
-  const store = createMemoryConfigStore("default-org", { baseModels: shared });
+  const store = createMemoryConfigStore({ baseModels: shared });
   await store.setRuntimeSelection(org, pick);
   await store.setPurposeRuntime("cron", cron);
   await store.setRuntimeSelection(org, null);

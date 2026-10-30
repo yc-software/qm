@@ -43,8 +43,10 @@ import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessi
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);
 const msgTexts = (n: number): string[] => Array.from({ length: n }, (_, i) => `msg ${i}`);
 const KEEP_RECENT_TOKEN_FRACTION = 0.6;
@@ -111,7 +113,7 @@ function buildOrchestrator(
   swarm?: Awaited<ReturnType<typeof swarmFixture>>,
   teams?: TeamStore,
 ) {
-  const config = createMemoryConfigStore(ORG);
+  const config = createMemoryConfigStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const errors = createErrorLog();
@@ -129,7 +131,7 @@ function buildOrchestrator(
     ...singleProcessDeps(),
     config,
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
@@ -1242,7 +1244,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
   const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
     resolveRuntimeChoiceDurable(
       built.config,
-      "org:default-org",
+      TEST_ROOT_SCOPE,
       input.scopeLabel,
       category,
       input.runtime,
@@ -1288,7 +1290,7 @@ test("human child continuations respect non-fast category defaults", async () =>
   const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
     resolveRuntimeChoiceDurable(
       built.config,
-      "org:default-org",
+      TEST_ROOT_SCOPE,
       input.scopeLabel,
       category,
       input.runtime,
@@ -1349,7 +1351,7 @@ test("verified swarm workers resolve their own defaults instead of copying the r
     const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
       resolveRuntimeChoiceDurable(
         built.config,
-        "org:default-org",
+        TEST_ROOT_SCOPE,
         input.scopeLabel,
         inherited,
         input.runtime,
@@ -1442,7 +1444,7 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
       const router = createHarnessRouter(new Map([["pi", adapter]]), base, (input) =>
         resolveRuntimeChoiceDurable(
           built.config,
-          "org:default-org",
+          TEST_ROOT_SCOPE,
           input.scopeLabel,
           inherited,
           input.runtime,

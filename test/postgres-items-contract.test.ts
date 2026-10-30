@@ -16,7 +16,7 @@ import {
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 

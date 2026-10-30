@@ -19,7 +19,7 @@ import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
 async function fixture() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "turn-context-")));
   const memory = createMemoryService(workspace);
-  const config = createMemoryConfigStore("test", { defaultSharingPosture: "open" });
+  const config = createMemoryConfigStore({ defaultSharingPosture: "open" });
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const auditLog = createAuditLog();
   let member = true;

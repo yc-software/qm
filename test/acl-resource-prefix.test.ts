@@ -6,8 +6,11 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { cronRef, deployRef, encodeRef, parseRef, serviceCredRef, skillRef } from "../src/acl/resource-ref.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = scopeId("org", "default-org");
+bindTestTenant();
+
+const ORG = TEST_ROOT_SCOPE;
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });
 
 function aclWith(grantees: string[]) {

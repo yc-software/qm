@@ -20,8 +20,11 @@ import { createCustomProviderStore } from "../src/model/custom-provider-store.ts
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+bindTestTenant();
+
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 test("QA: full custom-provider lifecycle against a live fake upstream", async () => {
   // --- fake OpenAI-compatible upstream ---
@@ -368,7 +371,7 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
       models: [{ id: "survivor-model" }],
     },
     "sk-live-key",
-    "admin-alice@default-org",
+    "admin-alice",
   );
   // "restart": brand-new store instance over the same backing
   const second = createCustomProviderStore({ backing, keyMaterial: secret });
@@ -393,7 +396,7 @@ test("QA: a corrupt stored key degrades that provider only — admin surface sta
       models: [{ id: "corrupted-model" }],
     },
     "sk-will-be-unreadable",
-    "admin-alice@default-org",
+    "admin-alice",
   );
   // reboot with a DIFFERENT secret: the stored key is undecryptable
   const reader = createCustomProviderStore({ backing, keyMaterial: "other-secret-other-secret-other-secret-2" });

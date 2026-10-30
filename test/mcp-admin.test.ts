@@ -14,8 +14,11 @@ import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-stor
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+bindTestTenant();
+
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 test("MCP admin validates and preserves credential scope, without returning secrets", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
@@ -63,7 +66,7 @@ test("MCP admin validates and preserves credential scope, without returning secr
     (
       await put(
         { credentialScope: "per-user", credentialHost: "accounts.example.com" },
-        { ...ADMIN, "x-admin-actor": "nobody@default-org" },
+        { ...ADMIN, "x-admin-actor": "nobody" },
       )
     ).status,
     403,

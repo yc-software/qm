@@ -18,6 +18,9 @@ import {
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",
@@ -347,7 +350,7 @@ test("Linear refreshes via the standard refresh_token grant", async () => {
 });
 
 test("scopesFor: BYO client scopes override the provider default", async () => {
-  const byo: ResolvedClient = { id: "x", secret: "y", clientRef: "org:default-org:google", scopes: ["only.this"] };
+  const byo: ResolvedClient = { id: "x", secret: "y", clientRef: `${TEST_ROOT_SCOPE}:google`, scopes: ["only.this"] };
   assert.deepEqual(scopesFor(PROVIDERS.google!, byo), ["only.this"]);
   assert.deepEqual(scopesFor(PROVIDERS.google!, await googleClient()), PROVIDERS.google!.scopes);
 });

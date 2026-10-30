@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import type { MemoryCaptureContext, MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
 import { recallText } from "./support/recall-text.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function provider(name: string, calls: string[]): MemoryService {
   return {
@@ -33,10 +36,10 @@ test("routes recall and capture independently by scope and policy", async () => 
     ],
   });
   assert.equal(recallText(await memory.recall("personal:u1", { query: "launch" })), "notebook memory");
-  assert.equal(recallText(await memory.recall("org:acme", { query: "launch" })), "knowledge memory");
+  assert.equal(recallText(await memory.recall(TEST_ROOT_SCOPE, { query: "launch" })), "knowledge memory");
   assert.equal(await memory.capture("personal:u1", ["prefers terse replies"], 1, "u1", { mode: "automatic" }), 1);
-  assert.equal(await memory.capture("org:acme", ["runbook"], 1, "u1", { mode: "automatic" }), 0);
-  assert.equal(await memory.capture("org:acme", ["runbook"], 1, "u1", { mode: "explicit" }), 1);
+  assert.equal(await memory.capture(TEST_ROOT_SCOPE, ["runbook"], 1, "u1", { mode: "automatic" }), 0);
+  assert.equal(await memory.capture(TEST_ROOT_SCOPE, ["runbook"], 1, "u1", { mode: "explicit" }), 1);
   assert.deepEqual(calls, [
     "notebook:recall:personal:u1:launch",
     "knowledge:recall:org:acme:launch",
@@ -55,7 +58,7 @@ test("multiple recall providers compose without duplicating query hits", async (
     ],
   });
   assert.equal(
-    recallText(await memory.recall("org:acme")),
+    recallText(await memory.recall(TEST_ROOT_SCOPE)),
     "### Notebook\nnotebook memory\n### Org knowledge\nknowledge memory",
   );
 });
@@ -75,7 +78,7 @@ test("external recall failures degrade to the remaining provider", async () => {
     ],
     onError: (error, providerId, operation) => errors.push(`${providerId}:${operation}:${String(error)}`),
   });
-  assert.equal(recallText(await memory.recall("org:acme", { query: "launch" })), "notebook memory");
+  assert.equal(recallText(await memory.recall(TEST_ROOT_SCOPE, { query: "launch" })), "notebook memory");
   assert.match(errors[0]!, /^broken:recall:Error: offline$/);
 });
 
@@ -98,7 +101,7 @@ test("external capture failures degrade to the remaining provider", async () => 
     ],
     onError: (error, providerId, operation) => errors.push(`${providerId}:${operation}:${String(error)}`),
   });
-  const stored = await memory.capture("org:acme", ["fact"], 1, "U1", { mode: "automatic" });
+  const stored = await memory.capture(TEST_ROOT_SCOPE, ["fact"], 1, "U1", { mode: "automatic" });
   assert.ok(stored >= 0);
   assert.ok(
     calls.some((c) => c.startsWith("notebook:capture")),
@@ -113,7 +116,7 @@ test("external capture failures degrade to the remaining provider", async () => 
       { provider: "strict", scopes: ["org"], capture: "automatic", manage: false, failOpen: false },
     ],
   });
-  await assert.rejects(strictMemory.capture("org:acme", ["fact"], 1, "U1", { mode: "automatic" }), /offline/);
+  await assert.rejects(strictMemory.capture(TEST_ROOT_SCOPE, ["fact"], 1, "U1", { mode: "automatic" }), /offline/);
 });
 
 test("cross-origin capture only reaches providers that preserve structured provenance", async () => {
@@ -158,5 +161,5 @@ test("fact edits route to the managing provider and fail loudly when it can't ed
   });
   await memory.edit!("personal:u1", [{ id: "1", text: "x" }]);
   assert.deepEqual(calls, ["edit:personal:u1:1"]);
-  await assert.rejects(memory.edit!("org:acme", [{ id: "1", text: "x" }]), /not directly editable/);
+  await assert.rejects(memory.edit!(TEST_ROOT_SCOPE, [{ id: "1", text: "x" }]), /not directly editable/);
 });

@@ -1686,9 +1686,8 @@ export async function shareDeployment(ctx: ApiCtx): Promise<void> {
     const grantees =
       invite?.grantees ??
       (await app.shareDeployment(params.id!, target.scope, permission, { createdBy: capability.actorId }));
-    const orgGrant = grantees.find((g) => parseScopeId(g.scope).kind === "org");
     let reach = "owner-only";
-    if (orgGrant) reach = `everyone in ${parseScopeId(orgGrant.scope).ref}`;
+    if (grantees.some((g) => parseScopeId(g.scope).kind === "org")) reach = "everyone in the org";
     else if (grantees.length) reach = `${grantees.length} grantee${grantees.length === 1 ? "" : "s"}`;
     const deployment = await app.getDeployment(params.id!);
     return sendJson(res, 200, {

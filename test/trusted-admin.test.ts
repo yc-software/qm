@@ -13,6 +13,9 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
@@ -21,7 +24,6 @@ function start(enabled = true) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
-      orgId: "default-org",
       ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}),
     }),
   );
@@ -47,7 +49,7 @@ function claims(overrides: Record<string, unknown> = {}) {
     purpose: "trusted-entry-admin",
     issuer,
     subject: "founder-7",
-    org: "org:default-org",
+    org: TEST_ROOT_SCOPE,
     exp: Date.now() + 55_000,
     jti: crypto.randomUUID(),
     ...overrides,

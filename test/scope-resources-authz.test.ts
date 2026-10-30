@@ -9,12 +9,14 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const U1 = "U1";
 const C1 = "C1";
 const channelScope = scopeId("channel", C1);
-const orgScope = scopeId("org", ORG);
+const orgScope = TEST_ROOT_SCOPE;
 
 function makeDeps() {
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());

@@ -9,6 +9,9 @@ import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capabili
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 mock.module("./support/mock-harness.ts", {
   namedExports: {
@@ -64,7 +67,7 @@ async function fixture(t: TestContext) {
       ids.map((principalId) => ({ channelId: "public-room", principalId })),
     );
   await roster(["alice", "bob"]);
-  await b.config.setSharingPosture("org:default-org", "open");
+  await b.config.setSharingPosture(TEST_ROOT_SCOPE, "open");
   const sharedSandbox = await b.sandboxResources.create("alice", "channel:public-room", "sprites", "shared-proof");
   await b.sandboxResources.setDefault("alice", "channel:public-room", sharedSandbox.id);
   const server = createServer(b.app, {
@@ -257,7 +260,7 @@ test("HTTP Open shared cron isolates synthetic owner credential and revokes reso
 });
 
 for (const isPrivate of [false, true]) {
-  for (const veto of ["org:default-org", "personal:alice", "channel:public-room"]) {
+  for (const veto of [TEST_ROOT_SCOPE, "personal:alice", "channel:public-room"]) {
     test(`HTTP Open cron opt-out stops owner credentials before materialization (${isPrivate ? "private" : "public"}, ${veto})`, async (t) => {
       const b = await fixture(t);
       assert.ok(b.keychain);
@@ -308,7 +311,7 @@ test("HTTP private channel cron runs without its owner's keychain once the conve
     [{ channelId: "public-room", name: "private-room", isPrivate: true }],
     ["alice", "bob"].map((principalId) => ({ channelId: "public-room", principalId })),
   );
-  await b.config.setSharingPosture("org:default-org", "isolated");
+  await b.config.setSharingPosture(TEST_ROOT_SCOPE, "isolated");
   const credential = await b.keychain.save({
     ownerId: "alice",
     service: "continuity-isolated",

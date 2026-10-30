@@ -7,6 +7,9 @@ import { requestPort } from "../plugins/portal/src/proxy.ts";
 import { createAdminService, parseAdminGrants } from "../src/admin/admin-service.ts";
 import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("portal signs /d/ ingress with the principal as the canonical tail (core-verifiable)", () => {
   const secret = "portal-source-auth-secret";
@@ -24,34 +27,31 @@ test("portal proxy omits empty URL ports so http.request uses protocol defaults"
 });
 
 test("parseAdminGrants: unset keeps the seeded defaults (returns undefined)", () => {
-  assert.equal(parseAdminGrants(undefined, "default-org"), undefined);
+  assert.equal(parseAdminGrants(undefined, TEST_ROOT_SCOPE), undefined);
 });
 
 test("parseAdminGrants: parses org_admin grants and skips malformed / removed-role entries", () => {
   const grants = parseAdminGrants(
     "U1:org_admin, U2:team_admin:team-eng, bad, U3:notarole, U5:org_admin",
-    "default-org",
+    TEST_ROOT_SCOPE,
   );
   assert.deepEqual(grants, [
-    { principalId: "U1", scopeId: scopeId("org", "default-org"), role: "org_admin" },
-    { principalId: "U5", scopeId: scopeId("org", "default-org"), role: "org_admin" },
+    { principalId: "U1", scopeId: TEST_ROOT_SCOPE, role: "org_admin" },
+    { principalId: "U5", scopeId: TEST_ROOT_SCOPE, role: "org_admin" },
   ]);
-  assert.deepEqual(parseAdminGrants("", "default-org"), []);
+  assert.deepEqual(parseAdminGrants("", TEST_ROOT_SCOPE), []);
 });
 
 test("ADMIN_GRANTS-seeded admins resolve and authorize org-wide; non-admins do not", async () => {
   const store = createAdminGrantStore(createMemoryAdminGrantPersistence(), {
-    seed: parseAdminGrants("U1:org_admin", "default-org"),
+    seed: () => parseAdminGrants("U1:org_admin", TEST_ROOT_SCOPE) ?? [],
   });
   const svc = createAdminService(store);
-  const u1 = svc.resolveActor("U1@default-org");
-  const u2 = svc.resolveActor("U2@default-org");
+  const u1 = svc.resolveActor("U1");
+  const u2 = svc.resolveActor("U2");
   assert.ok(u1 && u2);
-  assert.equal(await svc.canAdminister(u1, scopeId("org", "default-org")), true);
+  assert.equal(await svc.canAdminister(u1, TEST_ROOT_SCOPE), true);
   assert.equal(await svc.canAdminister(u1, scopeId("channel", "eng")), true);
-  assert.equal(await svc.canAdminister(u2, scopeId("org", "default-org")), false);
-  assert.equal(
-    await svc.canAdminister(svc.resolveActor("admin-alice@default-org")!, scopeId("org", "default-org")),
-    false,
-  );
+  assert.equal(await svc.canAdminister(u2, TEST_ROOT_SCOPE), false);
+  assert.equal(await svc.canAdminister(svc.resolveActor("admin-alice")!, TEST_ROOT_SCOPE), false);
 });

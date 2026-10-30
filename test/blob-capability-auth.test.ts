@@ -12,6 +12,9 @@ import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, BLOB_TRANSFER_AUD } from "../src/auth/capability-token.ts";
 import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "blob-auth-secret".repeat(3);
 

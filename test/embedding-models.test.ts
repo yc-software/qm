@@ -24,6 +24,9 @@ import {
   modelSupportedByHarness,
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const definition = {
   kind: "embedding",
@@ -130,11 +133,11 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
 
 test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
   const baseModels = createMemoryMap<PersistedBaseModel>();
-  const first = createMemoryConfigStore("test", { baseModels });
+  const first = createMemoryConfigStore({ baseModels });
   await first.setEmbeddingModel("gateway/embed");
   await first.setRuntimeSelection("org:test", { harnessId: "pi", modelId: "gpt-5.5" });
   await first.setRuntimeSelection("org:test", null);
-  const restarted = createMemoryConfigStore("test", { baseModels });
+  const restarted = createMemoryConfigStore({ baseModels });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);
   assert.equal(await first.getEmbeddingModelDurable(), null);
@@ -150,17 +153,17 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   const server = createInsecureTestServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/org:default-org/memory-embedding-model`;
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/${TEST_ROOT_SCOPE}/memory-embedding-model`;
   const put = (body: object) =>
     fetch(url, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" },
+      headers: { "content-type": "application/json", "x-admin-actor": "admin-alice" },
       body: JSON.stringify(body),
     });
   assert.equal((await put({ modelId: definition.id })).status, 200);
   assert.equal(await built.config.getEmbeddingModelDurable(), definition.id);
   const models = await fetch(url.replace(/\/memory-embedding-model$/, "?view=models"), {
-    headers: { "x-admin-actor": "admin-alice@default-org" },
+    headers: { "x-admin-actor": "admin-alice" },
   });
   const view = (await models.json()) as { memoryEmbeddingModel: string; memoryEmbeddingOptions: { id: string }[] };
   assert.equal(view.memoryEmbeddingModel, definition.id);

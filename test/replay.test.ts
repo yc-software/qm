@@ -12,6 +12,9 @@ import {
   selectOverheardToImport,
 } from "../src/harness/replay.ts";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function entry(type: SessionEntry["type"], text: string): SessionEntry {
   return {
@@ -20,7 +23,7 @@ function entry(type: SessionEntry["type"], text: string): SessionEntry {
     parentSeq: null,
     type,
     payload: { text },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
     createdAt: 0,
   };
 }
@@ -32,13 +35,13 @@ function overheardEntry(ts: string, name: string, text: string, files?: string[]
     parentSeq: null,
     type: "user",
     payload: { overheard: true, ts, name, text, ...(files ? { files } : {}) },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
     createdAt: Number(ts) || 0,
   };
 }
 
 function ent(type: SessionEntry["type"], payload: unknown, seq = 0): SessionEntry {
-  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: "org:default-org", createdAt: seq };
+  return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: TEST_ROOT_SCOPE, createdAt: seq };
 }
 
 function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>): void {
@@ -72,7 +75,7 @@ test("replayPreamble EXCLUDES thinking from cold-start context (signature is sto
     parentSeq: null,
     type: "thinking",
     payload: { thinking: "secret chain of thought", thinkingSignature: "OPAQUE-SIG-BYTES" },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
     createdAt: 0,
   };
   const out = replayPreamble([entry("user", "hi"), thinking, entry("assistant", "hello")]);
@@ -348,7 +351,7 @@ function triggerEntry(ts: string, text: string): SessionEntry {
     parentSeq: null,
     type: "user",
     payload: { text, ts },
-    scopeLabel: "org:default-org",
+    scopeLabel: TEST_ROOT_SCOPE,
     createdAt: Number(ts) || 0,
   };
 }

@@ -47,7 +47,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
       },
     },
   };
-  const config = createMemoryConfigStore("default-org");
+  const config = createMemoryConfigStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const errors = createErrorLog();
@@ -55,7 +55,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
   const orch = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService("default-org", config, acl),
+    resolution: createResolutionService(config, acl),
     sessions: createMemorySessionStore(),
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),

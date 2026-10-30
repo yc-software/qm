@@ -42,7 +42,6 @@ process.env.PORTAL_PUBLIC_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "broker-proxy-test-portal-secret";
 process.env.PORTAL_IDENTITY_SECRET = "broker-proxy-test-identity-secret";
 process.env.CORE_SIGNING_SECRET = "broker-proxy-test-core-secret";
-process.env.CORE_ORG_ID = "acme";
 process.env.WEB_UI_UPSTREAM = surfaceUrl;
 process.env.ADMIN_UPSTREAM = surfaceUrl;
 process.env.CORE_API_URL = surfaceUrl;
@@ -238,7 +237,7 @@ test("logout clears the remembered cookie and everywhere requires an authenticat
   assert.equal(unsigned.status, 401);
   const now = Date.now();
   const cookie = seal(
-    { k: "session", sub: "user@example.com", org: "acme", iat: now, exp: now + 60000 },
+    { k: "session", sub: "user@example.com", iat: now, exp: now + 60000 },
     deriveKey(process.env.PORTAL_SESSION_SECRET!, "portal.session.v1"),
   );
   const signed = await fetch(`${base}/auth/logout?everywhere=1`, {

@@ -10,6 +10,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "memory-http-")) }));
@@ -25,7 +28,7 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE_ADMIN = { "x-admin-actor": "admin-alice@default-org" };
+const ALICE_ADMIN = { "x-admin-actor": "admin-alice" };
 const json = async (r: Response): Promise<any> => r.json();
 
 const send = (base: string, path: string, method: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -75,7 +78,7 @@ test("an admin edits any scope's facts by id; non-admins are refused without a w
     await s.built.memory.capture(scope, ["The standup is at 10am"], Date.parse("2026-05-31"));
     const [fact] = (await json(await fetch(`${s.base}${path}`, { headers: ALICE_ADMIN }))).facts;
 
-    const nobody = { "x-admin-actor": "nobody@default-org" };
+    const nobody = { "x-admin-actor": "nobody" };
     assert.equal((await fetch(`${s.base}${path}`, { headers: nobody })).status, 403);
     assert.equal((await send(s.base, path, "PATCH", { facts: [{ id: fact.id, text: "evil" }] }, nobody)).status, 403);
     assert.equal((await fetch(`${s.base}/v1/admin/memory`, { headers: ALICE_ADMIN })).status, 400);
@@ -114,7 +117,7 @@ test("the admin memory directory lists every known scope, notebooks-first (power
     const d = await json(r);
     const byId = new Map(d.scopes.map((row: any) => [row.scopeId, row]));
 
-    assert.ok(byId.has("org:default-org"), "the org scope is always listed");
+    assert.ok(byId.has(TEST_ROOT_SCOPE), "the org scope is always listed");
     assert.ok(byId.has("channel:C9"), "session scopes are listed");
     assert.ok(byId.has("personal:U1"), "every participant gets a personal-scope row, even with no memory yet");
     assert.ok(byId.has("personal:admin-alice"), "grant holders are listed even if they never spoke");
@@ -128,7 +131,7 @@ test("the admin memory directory lists every known scope, notebooks-first (power
     assert.equal(d.scopes[0].hasMemory, true, "scopes with notebooks sort first");
 
     assert.equal(
-      (await fetch(`${s.base}/v1/admin/memory/scopes`, { headers: { "x-admin-actor": "nobody@default-org" } })).status,
+      (await fetch(`${s.base}/v1/admin/memory/scopes`, { headers: { "x-admin-actor": "nobody" } })).status,
       403,
       "org_admin-only",
     );
@@ -148,7 +151,10 @@ test("memory routes 404 when no MemoryService is wired", async () => {
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     assert.equal((await fetch(`${base}/v1/memory?principalId=U1`)).status, 404);
-    assert.equal((await fetch(`${base}/v1/admin/memory?scope=org:default-org`, { headers: ALICE_ADMIN })).status, 404);
+    assert.equal(
+      (await fetch(`${base}/v1/admin/memory?scope=${TEST_ROOT_SCOPE}`, { headers: ALICE_ADMIN })).status,
+      404,
+    );
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }

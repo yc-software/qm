@@ -11,8 +11,11 @@ import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolu
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const org = scopeId("org", "default-org");
+bindTestTenant();
+
+const org = TEST_ROOT_SCOPE;
 const internalActor = { externalId: "U1" };
 const guest = { externalId: "G9", isExternalGuest: true };
 
@@ -30,7 +33,7 @@ function freshApp() {
 }
 
 test("external-slack-participants: default off; the org flip is what turns it on", async () => {
-  const c = createMemoryConfigStore("default-org");
+  const c = createMemoryConfigStore();
   assert.equal(c.getExternalSlackParticipants(org), false);
   await c.setExternalSlackParticipants(org, true);
   assert.equal(c.getExternalSlackParticipants(org), true);
@@ -40,8 +43,8 @@ test("external-slack-participants: default off; the org flip is what turns it on
 
 test("external-slack-participants: the durable read sees a flip from another instance without a restart", async () => {
   const store = createMemoryMap<PersistedScopedFlag>();
-  const a = createMemoryConfigStore("default-org", { externalSlackParticipants: store });
-  const b = createMemoryConfigStore("default-org", { externalSlackParticipants: store });
+  const a = createMemoryConfigStore({ externalSlackParticipants: store });
+  const b = createMemoryConfigStore({ externalSlackParticipants: store });
 
   await a.setExternalSlackParticipants(org, true);
   await Promise.resolve();
@@ -112,7 +115,7 @@ test("admin resource: org-only PUT, read-back, and the surface-config echo", asy
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+  const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
   try {
     const notOrg = await fetch(`${base}/v1/admin/scopes/personal:u1/external-slack-participants`, {
       method: "PUT",
@@ -121,14 +124,14 @@ test("admin resource: org-only PUT, read-back, and the surface-config echo", asy
     });
     assert.equal(notOrg.status, 400);
 
-    const put = await fetch(`${base}/v1/admin/scopes/org:default-org/external-slack-participants`, {
+    const put = await fetch(`${base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/external-slack-participants`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ on: true }),
     });
     assert.equal(put.status, 200);
 
-    const read = await fetch(`${base}/v1/admin/scopes/org:default-org`, { headers: ADMIN });
+    const read = await fetch(`${base}/v1/admin/scopes/${TEST_ROOT_SCOPE}`, { headers: ADMIN });
     assert.equal(((await read.json()) as { externalSlackParticipants?: boolean }).externalSlackParticipants, true);
 
     const surf = await fetch(`${base}/v1/surface-config`);

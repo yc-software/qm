@@ -27,8 +27,10 @@ import type { Harness } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const actor: Principal = { id: "U1", type: "internal" };
 const dm = (thread: string, text: string): OrchestratorInput => ({
   surface: "test",
@@ -91,7 +93,7 @@ function gatedHarness() {
 }
 
 function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrategy?: MemoryStrategy) {
-  const config = createMemoryConfigStore(ORG);
+  const config = createMemoryConfigStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "mca-")));
@@ -106,7 +108,7 @@ function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrat
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions: createMemorySessionStore(),
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),

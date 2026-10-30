@@ -13,10 +13,13 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type Grant } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const grant = (over: Partial<Grant> = {}): Grant => ({
   ownerScopeId: owner,
   ref: "F1",

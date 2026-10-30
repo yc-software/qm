@@ -4,6 +4,9 @@ import assert from "node:assert/strict";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function fixture(t: TestContext) {
   const built = buildApp(testConfig());
@@ -102,7 +105,7 @@ test("published skill loads reject invalid and control paths without provisionin
 
 test("published source follows scope shadowing and preserves sandbox-authored working copies", async (t) => {
   const b = await fixture(t);
-  await b.publish("org:default-org", "ORG_BODY");
+  await b.publish(TEST_ROOT_SCOPE, "ORG_BODY");
   const personal = await b.publish("personal:U1", "PERSONAL_BODY");
   assert.match(await b.turn("!skill source-helper"), /\nPERSONAL_BODY$/);
   await b.turn("!write skills/source-helper/SKILL.md LOCAL_EDIT");

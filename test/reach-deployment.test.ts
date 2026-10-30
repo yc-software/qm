@@ -16,6 +16,9 @@ import { scopeId } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function appWithFakeRuntime() {
   const deployStore = createDeployStore();
@@ -48,7 +51,7 @@ test("reachDeployment: org → any non-empty principal; personal → owner only;
   const { app } = appWithFakeRuntime();
 
   const org = await app.deploy({
-    ownerScopeId: scopeId("org", "default-org"),
+    ownerScopeId: TEST_ROOT_SCOPE,
     createdBy: "U1",
     entrypoint: "x",
     files: [],
@@ -309,7 +312,7 @@ test("reachDeployment: an org grant on a personal deployment opens it to any ver
   await acl.grant({
     ownerScopeId: scopeId("personal", "U1"),
     ref: `deployment:${personal.id}`,
-    granteeScopeId: scopeId("org", "default-org"),
+    granteeScopeId: TEST_ROOT_SCOPE,
     permission: "read",
     grantedBy: "U1",
   });

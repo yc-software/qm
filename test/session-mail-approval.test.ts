@@ -51,7 +51,6 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:mail", audience: [actor] };
 
@@ -106,7 +105,7 @@ async function scenario() {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+    resolution: createResolutionService(createMemoryConfigStore(), acl),
     sessions,
     runs,
     workspace,

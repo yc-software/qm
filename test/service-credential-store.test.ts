@@ -5,8 +5,11 @@ import { createKeychain, isValidCredentialSlug, type KeychainCredential } from "
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = scopeId("org", "default-org");
+bindTestTenant();
+
+const ORG = TEST_ROOT_SCOPE;
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
 function store(opts: { creds?: DurableMap<KeychainCredential> } = {}) {

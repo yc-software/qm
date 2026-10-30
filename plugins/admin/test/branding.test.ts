@@ -28,7 +28,6 @@ const core = createServer((req: IncomingMessage, res) => {
 await new Promise<void>((r) => core.listen(0, r));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
-process.env.CORE_ORG_ID = "acme";
 process.env.CORE_SIGNING_SECRET = "admin-branding-test-secret";
 process.env.INBOX_USERS = "U-admin";
 

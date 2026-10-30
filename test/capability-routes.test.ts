@@ -11,6 +11,9 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "route-test-secret".repeat(3);
 
@@ -364,15 +367,15 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("updates only the caller's OWN personal SOUL, ignoring body scope/actor", async () => {
-    const orgVerBefore = built.config.soulVersion(scopeId("org", "default-org"));
+    const orgVerBefore = built.config.soulVersion(TEST_ROOT_SCOPE);
     const res = await post(
       "/v1/soul",
-      { content: "Always answer in bullet points.", scopeId: "org:default-org", actorId: "U2" },
+      { content: "Always answer in bullet points.", scopeId: TEST_ROOT_SCOPE, actorId: "U2" },
       { "x-agent-capability": await capFor("U1") },
     );
     assert.equal(res.status, 200);
     assert.ok(built.config.soulVersion(scopeId("personal", "U1")) >= 1, "U1's personal SOUL was updated");
-    assert.equal(built.config.soulVersion(scopeId("org", "default-org")), orgVerBefore, "org SOUL floor untouched");
+    assert.equal(built.config.soulVersion(TEST_ROOT_SCOPE), orgVerBefore, "org SOUL floor untouched");
   });
 
   it("updates the token's shared-scope SOUL without touching the actor's personal SOUL", async () => {
@@ -392,7 +395,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
   });
 
   it("does not let capability self-update org or team SOUL", async () => {
-    const orgScope = scopeId("org", "default-org");
+    const orgScope = TEST_ROOT_SCOPE;
     const teamScope = scopeId("team", "T");
     const orgBefore = built.config.soulVersion(orgScope);
 
@@ -424,14 +427,14 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     assert.equal(got.scopeId, personalScope, "query scope is ignored; the token's signed scope wins");
     assert.equal(got.soul, "Prefer precise, compact answers.");
     assert.ok(got.soulVersion >= 1);
-    assert.equal(got.orgScopeId, scopeId("org", "default-org"));
+    assert.equal(got.orgScopeId, TEST_ROOT_SCOPE);
     assert.equal(typeof got.orgSoul, "string");
     assert.ok(got.effectiveSoul.includes("Prefer precise, compact answers."));
     assert.ok(got.effectiveSoul.includes(got.orgSoul));
   });
 
   it("effective SOUL deduplicates organization text without rewriting stored scope policy", async () => {
-    const orgScope = scopeId("org", "default-org");
+    const orgScope = TEST_ROOT_SCOPE;
     const personalScope = scopeId("personal", "U7");
     const orgSoul = built.config.getSoul(orgScope)!;
     await built.config.setSoul(personalScope, ` ${orgSoul} `);

@@ -9,6 +9,9 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-impersonate-")) }));
@@ -22,8 +25,8 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE = "admin-alice@default-org";
-const NOBODY = "user-uma@default-org";
+const ALICE = "admin-alice";
+const NOBODY = "user-uma";
 
 const startImp = (base: string, actor: string, target: string) =>
   fetch(`${base}/v1/admin/impersonate`, {

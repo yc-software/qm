@@ -51,7 +51,6 @@ Object.assign(process.env, {
   NODE_ENV: "test",
   PORTAL_PUBLIC_URL: origin,
   PORTAL_SESSION_SECRET: secret,
-  CORE_ORG_ID: "acme",
   CORE_SIGNING_SECRET: "app-only-core-secret",
   CORE_API_URL: upstreamUrl,
   WEB_UI_UPSTREAM: upstreamUrl,
@@ -82,7 +81,7 @@ test.after(() => {
 
 function appCookie() {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${seal({ k: "session", sub: email, org: "acme", appOnly: true, iat: now - 7200, exp: now + 3600 }, sessionKey)}`;
+  return `portal_session=${seal({ k: "session", sub: email, appOnly: true, iat: now - 7200, exp: now + 3600 }, sessionKey)}`;
 }
 async function signIn(cookie = "") {
   const login = await fetch(`${base}/auth/login?returnTo=${encodeURIComponent("https://demo.apps.example.test/")}`, {

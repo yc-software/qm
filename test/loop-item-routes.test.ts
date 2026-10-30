@@ -55,7 +55,7 @@ function world(over: { tokens?: boolean; fire?: boolean } = {}): World {
       outputs: createLoopOutputStore(),
       grants: createShipGrantStore(),
       crons: createCronStore(),
-      config: createMemoryConfigStore("org"),
+      config: createMemoryConfigStore(),
     },
     crons: new Map(),
     sent: [],

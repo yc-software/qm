@@ -19,6 +19,9 @@ import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -27,7 +30,7 @@ const guest = "guest@partner.test";
 const key = deriveKey(secret, "portal.session.v1");
 function token(appOnly: unknown = true) {
   const now = Math.floor(Date.now() / 1000);
-  return seal({ k: "session", sub: guest, org: "acme", iat: now, exp: now + 3600, appOnly }, key);
+  return seal({ k: "session", sub: guest, iat: now, exp: now + 3600, appOnly }, key);
 }
 test("gateway parser keeps app-only authority and rejects malformed signed markers", () => {
   assert.deepEqual(portalSession(`portal_session=${token()}`, secret), { sub: guest, appOnly: true });
@@ -75,7 +78,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     name: "shared",
   });
   await app.deploy({
-    ownerScopeId: scopeId("org", "acme"),
+    ownerScopeId: TEST_ROOT_SCOPE,
     createdBy: "owner@example.test",
     entrypoint: "node app.js",
     files: [],
@@ -129,7 +132,7 @@ test("app-only gateway checks exact current personal read grants without inherit
   try {
     assert.equal((await get("shared")).status, 403);
     assert.equal((await get("org-app")).status, 403, "org ownership is not an app-only entitlement");
-    for (const granteeScopeId of [scopeId("org", "acme"), scopeId("channel", "C1")]) {
+    for (const granteeScopeId of [TEST_ROOT_SCOPE, scopeId("channel", "C1")]) {
       await acl.grant({
         ownerScopeId,
         ref: encodeRef(deployRef(shared.id)),

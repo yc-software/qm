@@ -30,8 +30,10 @@ import type { ToolContext } from "../src/tools/primitives.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:resume", audience: [actor] };
 const personal = scopeId("personal", "U1");
@@ -60,7 +62,7 @@ function turnFor(
     history,
     tools,
     scopeLabel: personal,
-    orgScopeId: scopeId("org", ORG),
+    orgScopeId: TEST_ROOT_SCOPE,
     emit: async (entry) => {
       sink.push({ type: entry.type, payload: entry.payload });
       return { ...entry, sessionId: "s1", seq: seq++, parentSeq: null, createdAt: 1000 + seq } as SessionEntry;
@@ -265,7 +267,7 @@ function buildScenario() {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+    resolution: createResolutionService(createMemoryConfigStore(), acl),
     sessions,
     runs,
     workspace,

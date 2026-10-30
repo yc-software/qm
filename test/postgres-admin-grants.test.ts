@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres admin-grant tests";
@@ -16,7 +19,7 @@ beforeEach(async () => {
   await p.end();
 });
 
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const grant = (over: Partial<AdminGrant> = {}): AdminGrant => ({
   principalId: "U1",
   scopeId: org,
@@ -65,7 +68,7 @@ test(
   { skip },
   async () => {
     const seed = [grant({ principalId: "seed-admin" })];
-    const s1 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), { seed });
+    const s1 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), { seed: () => seed });
     assert.equal(
       (await s1.list()).some((g) => g.principalId === "seed-admin"),
       true,
@@ -73,7 +76,7 @@ test(
     );
     await s1.add(grant({ principalId: "promoted-at-runtime" }));
 
-    const s2 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), { seed });
+    const s2 = createAdminGrantStore(createPostgresAdminGrantStore(URL!), { seed: () => seed });
     const ids = (await s2.list()).map((g) => g.principalId).sort();
     assert.deepEqual(ids, ["promoted-at-runtime", "seed-admin"], "redeploy preserves both seed + runtime grants");
   },

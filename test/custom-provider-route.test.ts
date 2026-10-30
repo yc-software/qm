@@ -12,9 +12,12 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
-const USER = { "content-type": "application/json", "x-admin-actor": "bob@default-org" };
+bindTestTenant();
+
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
+const USER = { "content-type": "application/json", "x-admin-actor": "bob" };
 
 afterEach(() => setCustomProviders([]));
 

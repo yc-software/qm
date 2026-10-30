@@ -7,13 +7,16 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 for (const checkResult of ["passed", "failed", "missing"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
     const built = buildApp(testConfig());
     const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
     await built.sandboxResources.setDefault("U1", "personal:U1", computer.id);
-    const org = scopeId("org", "default-org");
+    const org = TEST_ROOT_SCOPE;
     await built.serviceCreds.setServiceCredential(org, {
       slug: "error-source",
       name: "Error source",
@@ -27,7 +30,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
       ref: encodeRef(serviceCredRef("error-source")),
       granteeScopeId: org,
       permission: "read",
-      grantedBy: "admin@default-org",
+      grantedBy: "admin",
     });
     const { store: loops, items, outputs, grants } = built.loops;
     const check = checkResult === "failed" ? "test ! -s loop-proposal.txt" : "test -s loop-proposal.txt";

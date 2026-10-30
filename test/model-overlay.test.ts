@@ -7,7 +7,7 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 const MODEL_ID = "overlay-future-model";
 
 test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
@@ -26,8 +26,8 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({
-        principalId: "admin-alice@default-org",
-        scopeId: "personal:admin-alice@default-org",
+        principalId: "admin-alice",
+        scopeId: "personal:admin-alice",
         harnessId: "pi",
         modelId: MODEL_ID,
       }),
@@ -214,21 +214,19 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     });
   const path = `/v1/admin/model-registry/${MODEL_ID}`;
   const runtime = {
-    principalId: "admin-alice@default-org",
-    scopeId: "personal:admin-alice@default-org",
+    principalId: "admin-alice",
+    scopeId: "personal:admin-alice",
     harnessId: "pi",
     modelId: MODEL_ID,
   };
   try {
     for (const method of ["PUT", "DELETE"])
       assert.equal(
-        (await api(path, method, method === "PUT" ? spec : undefined, { ...ADMIN, "x-admin-actor": "bob@default-org" }))
-          .status,
+        (await api(path, method, method === "PUT" ? spec : undefined, { ...ADMIN, "x-admin-actor": "bob" })).status,
         403,
       );
     assert.equal(
-      (await api("/v1/admin/model-registry", "GET", undefined, { ...ADMIN, "x-admin-actor": "bob@default-org" }))
-        .status,
+      (await api("/v1/admin/model-registry", "GET", undefined, { ...ADMIN, "x-admin-actor": "bob" })).status,
       403,
     );
     assert.equal((await api(path, "PUT", { ...spec, contextWindow: "400000" })).status, 400);
@@ -255,11 +253,9 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     assert.equal(turn.status, "queued");
     assert.equal((await api(path, "PUT", { ...spec, name: "Renamed", maxTokens: 30_000 })).status, 200);
     assert.equal(getRequiredModel(MODEL_ID).name, "Renamed");
-    await built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: MODEL_ID });
+    await built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { harnessId: "pi", modelId: MODEL_ID });
     assert.equal((await api(path, "DELETE")).status, 200);
-    const afterDelete = await api(
-      "/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org",
-    );
+    const afterDelete = await api("/v1/runtime-config?principalId=admin-alice&scopeId=personal:admin-alice");
     const unavailable = (await afterDelete.json()) as {
       effective: { modelId: string };
       scopeOverride: { modelId: string };
@@ -366,7 +362,7 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
       recordModelCall: () => {},
       tools: {} as import("../src/harness/harness.ts").HarnessTurnInput["tools"],
       scopeLabel: "personal:alice" as const,
-      orgScopeId: "org:default-org" as const,
+      orgScopeId: TEST_ROOT_SCOPE,
       emit: async (entry: Parameters<import("../src/harness/harness.ts").HarnessTurnInput["emit"]>[0]) => ({
         ...entry,
         seq: 1,
@@ -460,8 +456,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
     assert.equal((await fetch(base + "/v1/admin/whoami", { headers: ADMIN })).status, 200);
     assert.equal(refreshes, 0);
     assert.equal(
-      (await fetch(base + "/v1/admin/model-registry", { headers: { ...ADMIN, "x-admin-actor": "bob@default-org" } }))
-        .status,
+      (await fetch(base + "/v1/admin/model-registry", { headers: { ...ADMIN, "x-admin-actor": "bob" } })).status,
       403,
     );
     assert.equal(refreshes, 0);
@@ -495,11 +490,14 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
-  const config = createMemoryConfigStore("default-org");
+  const config = createMemoryConfigStore();
   await config.setApprovedHarnesses(["pi", "claude"]);
-  const org = "org:default-org" as const;
+  const org = TEST_ROOT_SCOPE;
   const scope = "personal:alice" as const;
   const fallback = { harnessId: "pi" as const, modelId: "gpt-5.6-sol" };
   const overlay = validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true });

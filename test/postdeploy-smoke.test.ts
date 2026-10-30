@@ -37,10 +37,10 @@ test("deployed API smoke proves the production portal-identity boundary", async 
     "GET",
     "/v1/admin/sessions",
     "",
-    { "x-admin-actor": "josh@example.com@acme" },
+    { "x-admin-actor": "josh@example.com" },
     now,
   );
-  assert.equal(headers["x-admin-actor"], "josh@example.com@acme");
+  assert.equal(headers["x-admin-actor"], "josh@example.com");
   const actor = await verifyPortalIdentity(headers[PORTAL_IDENTITY_HEADER]!, "portal-secret", now);
   assert.equal(actor?.p, "josh@example.com");
 });
@@ -90,7 +90,6 @@ test("live session smoke proves a model turn, persistence, title, error log, and
   const calls: Array<{ method: string; path: string; body: string; portalIdentity: string | null }> = [];
   const config = {
     adminGrants: "josh@example.com:org_admin",
-    orgId: "acme",
     portalIdentitySecret: "portal-secret",
     signingSecret: "source-secret",
   };
@@ -191,7 +190,6 @@ test("live session smoke waits for a background worker title before checking err
   await checkLiveSession(
     {
       adminGrants: "josh@example.com:org_admin",
-      orgId: "acme",
       portalIdentitySecret: "portal-secret",
       signingSecret: "source-secret",
     },
@@ -235,7 +233,6 @@ test("live session smoke aborts a hung first title read and still archives", asy
     checkLiveSession(
       {
         adminGrants: "josh@example.com:org_admin",
-        orgId: "acme",
         portalIdentitySecret: "portal-secret",
         signingSecret: "source-secret",
       },
@@ -281,7 +278,6 @@ test("live session smoke rejects a title returned after the deadline", async () 
     checkLiveSession(
       {
         adminGrants: "josh@example.com:org_admin",
-        orgId: "acme",
         portalIdentitySecret: "portal-secret",
         signingSecret: "source-secret",
       },

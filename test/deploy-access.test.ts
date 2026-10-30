@@ -22,6 +22,9 @@ import {
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
@@ -190,7 +193,7 @@ test("direct share paths notify only after successful grants; org, self and revo
   const f = await fixture(t);
   await f.share(null);
   await f.share("read", person(owner));
-  await f.share("read", scopeId("org", "acme"));
+  await f.share("read", TEST_ROOT_SCOPE);
   const control = createControlService(f.app);
   const cap = (actorId: string) => ({ actorId, scopeId: person(actorId), liveActor: true }) as CapabilityClaims;
   const request = { type: "deploy" as const, id: f.d.id, scope: person(requester) };

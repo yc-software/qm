@@ -4,6 +4,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("sandbox maintenance runs when both idle stopping settings are disabled", async () => {
   const config = testConfig({ deepIdleMachineMs: 0, devIdleMachineMs: 0, sandboxBackend: "aws" });

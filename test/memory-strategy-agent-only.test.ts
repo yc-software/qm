@@ -6,6 +6,9 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor: Principal = { id: "u1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "t1", audience: [actor] };
@@ -32,7 +35,7 @@ test("createMemoryStrategy('agent-only') returns the agent-only strategy", () =>
 });
 
 test("resolution systemPrompt no longer embeds the memory section — it moved to shared-core + the orchestrator strategy block", async () => {
-  const resolution = createResolutionService("default-org", createMemoryConfigStore("default-org"), createAclStore());
+  const resolution = createResolutionService(createMemoryConfigStore(), createAclStore());
   const res = await resolution.resolve(conversation, actor);
   assert.ok(!res.systemPrompt.includes(AGENT_ONLY_PROMPT_LINES[0] as string));
 });

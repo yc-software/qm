@@ -27,9 +27,12 @@ import {
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "agent-admin-test-secret".repeat(3);
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 
 function start(withConfig = true) {
   const built = buildApp(
@@ -204,7 +207,7 @@ test("x-admin-actor cannot escalate a capability token — the header is the por
   const s = start();
   try {
     const cap = await capFor("U1");
-    const spoof = { "x-agent-capability": cap, "x-admin-actor": "admin-alice@default-org" };
+    const spoof = { "x-agent-capability": cap, "x-admin-actor": "admin-alice" };
 
     const whoami = await fetch(`${s.base}/v1/admin/whoami`, { headers: spoof });
     assert.equal(
@@ -829,7 +832,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
       assert.equal(
         (
           await fetch(`${s.base}${path}`, {
-            headers: { "x-agent-capability": nonAdmin, "x-admin-actor": "admin-alice@default-org" },
+            headers: { "x-agent-capability": nonAdmin, "x-admin-actor": "admin-alice" },
           })
         ).status,
         403,

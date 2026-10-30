@@ -16,6 +16,9 @@ import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
@@ -235,7 +238,7 @@ test("read-only layers materialize into the workspace once per content fingerpri
   const fake = installFakeDocker(daemonPort);
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   const workspace = createLocalWorkspaceStore(dir);
-  const shared = scopeId("org", "default-org");
+  const shared = TEST_ROOT_SCOPE;
   await workspace.write(shared, "guide.md", "shared doc");
   const sb = createLocalSandbox(workspace, { dockerExec: fake.dockerExec, homeDir: guestHome, repoRoot: tmp });
   const h = await sb.provision([

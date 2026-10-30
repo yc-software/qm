@@ -19,6 +19,9 @@ import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let externalSharing = true;
 const externalSharingOn = { enabled: async () => externalSharing } as unknown as FeatureFlagStore;
@@ -420,13 +423,13 @@ test("org-wide app access admits only signed-in org members", async () => {
     });
   try {
     assert.equal((await visit("bob@example.com")).status, 403, "restricted: a signed-in member without a grant");
-    await app.shareDeployment(d.id, scopeId("org", "acme"), "read", { createdBy: "alice@example.com" });
+    await app.shareDeployment(d.id, TEST_ROOT_SCOPE, "read", { createdBy: "alice@example.com" });
     assert.equal((await visit()).status, 401, "org access still requires sign-in");
     assert.equal((await visit("bob@example.com")).status, 200, "any signed-in org member can open it");
     assert.equal((await visit("guest@partner.test", true)).status, 403, "an app-only outside session is not the org");
     await identity.deactivate("carol@example.com", "directory-sync");
     assert.equal((await visit("carol@example.com")).status, 403, "someone who left the org is not the org");
-    await app.shareDeployment(d.id, scopeId("org", "acme"), null, { createdBy: "alice@example.com" });
+    await app.shareDeployment(d.id, TEST_ROOT_SCOPE, null, { createdBy: "alice@example.com" });
     assert.equal((await visit("bob@example.com")).status, 403, "back to restricted closes it");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

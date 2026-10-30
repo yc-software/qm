@@ -15,6 +15,9 @@ import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const tool = (advertise: string): DeploymentLayerBundle["tools"][number] => ({
   path: "tools/acme/tool.json",
@@ -53,7 +56,6 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
     backing,
     runtime,
     skills,
-    scopeId: scopeId("org", "default-org"),
     now: () => now++,
   });
 
@@ -63,7 +65,7 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
   assert.deepEqual(runtime.hints, ["Use acme for company data."]);
   assert.deepEqual(runtime.credentialPaths, [{ path: ".config/acme", kind: "directory" }]);
   assert.equal(runtime.commandRules[0]?.decision, "deny");
-  assert.equal((await skills.resolve("acme", [scopeId("org", "default-org")])).skill?.status, "published");
+  assert.equal((await skills.resolve("acme", [TEST_ROOT_SCOPE])).skill?.status, "published");
 
   const unchanged = await store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "other");
   assert.equal(unchanged.version, 1);
@@ -72,7 +74,7 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
   const second = await store.put({ contract: 1, tools: [tool("acme v2")], skills: [] }, "test-2");
   assert.equal(second.version, 2);
   assert.equal(runtime.advertisedTools[0], "acme v2");
-  assert.equal((await skills.resolve("acme", [scopeId("org", "default-org")])).skill, null);
+  assert.equal((await skills.resolve("acme", [TEST_ROOT_SCOPE])).skill, null);
 
   const hydratedRuntime = emptyDeploymentLayer();
   const hydrated = createDeploymentLayerStore({
@@ -80,7 +82,6 @@ test("the durable deployment layer versions by content, hydrates runtime state, 
     backing,
     runtime: hydratedRuntime,
     skills,
-    scopeId: scopeId("org", "default-org"),
   });
   assert.equal(
     (await hydrated.get())?.version,
@@ -98,7 +99,6 @@ test("invalid descriptors never replace the durable current layer", async () => 
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   const first = await store.put({ contract: 1, tools: [tool("acme")], skills: [] }, "test");
   await assert.rejects(
@@ -123,7 +123,7 @@ test("invalid descriptors never replace the durable current layer", async () => 
 
 test("a legacy published skill with an unsafe name is quarantined without blocking layer replacement", async () => {
   const skillBacking = createMemoryMap<Skill>();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await skillBacking.put("legacy", {
     id: "legacy",
     scopeId: org,
@@ -141,7 +141,6 @@ test("a legacy published skill with an unsafe name is quarantined without blocki
     backing: createMemoryMap<StoredDeploymentLayer>(),
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: org,
   });
 
   await store.put({ contract: 1, tools: [], skills: [] }, "test");
@@ -156,13 +155,12 @@ test("a legacy published skill with an unsafe name is quarantined without blocki
 test("a stale baked-in filesystem seed never downgrades or resurrects the durable layer", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const skills = createSkillStore({ signingSecret: "layer-test" });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const writer = createDeploymentLayerStore({
     ...singleProcessDeps(),
     backing,
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: org,
   });
   await writer.put(
     {
@@ -181,7 +179,6 @@ test("a stale baked-in filesystem seed never downgrades or resurrects the durabl
     backing,
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: org,
     seedFallback: async () => {
       seeded++;
       const stale = await skills.create({
@@ -202,14 +199,13 @@ test("a stale baked-in filesystem seed never downgrades or resurrects the durabl
 test("with no durable record the filesystem seed applies once, and a later durable layer overrides it", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const skills = createSkillStore({ signingSecret: "layer-test" });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   let seeded = 0;
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
     backing,
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: org,
     seedFallback: async () => {
       seeded++;
       const fs = await skills.create({
@@ -256,14 +252,12 @@ test("hydrate retries a transient backing read instead of failing boot", async (
     backing,
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: scopeId("org", "default-org"),
   }).put({ contract: 1, tools: [tool("acme CLI")], skills: [] }, "api");
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
     backing: flaky,
     runtime,
     skills,
-    scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [1],
   });
   assert.equal((await store.hydrate())?.version, 1);
@@ -294,7 +288,6 @@ test("a stored record that no longer applies degrades to the seed instead of fai
     backing,
     runtime,
     skills,
-    scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [1],
     seedFallback: async () => {
       seeded++;
@@ -318,7 +311,6 @@ test("a failed seed is retried on the next hydrate (seeded only latches on succe
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
     seedFallback: async () => {
       attempts++;
       if (attempts === 1) throw new Error("skill store hiccup");
@@ -350,7 +342,6 @@ test("a failed fallback seed after an incompatible stored layer fails boot and r
     backing,
     runtime: resolvedDeploymentLayer("/fallback", []),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
     seedFallback: async () => {
       if (++attempts === 1) throw new Error("fallback write failed");
@@ -365,20 +356,18 @@ test("a failed fallback seed after an incompatible stored layer fails boot and r
 test("a PUT landing on another instance mid-seed is applied right after seeding (no 30s stale window)", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const skills = createSkillStore({ signingSecret: "layer-test" });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const writer = createDeploymentLayerStore({
     ...singleProcessDeps(),
     backing,
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: org,
   });
   const booted = createDeploymentLayerStore({
     ...singleProcessDeps(),
     backing,
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: org,
     seedFallback: async () => {
       const stale = await skills.create({
         scopeId: org,
@@ -419,7 +408,6 @@ test("a layer that appears mid-seed but fails to apply leaves the fallback live 
     backing,
     runtime,
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
     seedFallback: async () => {
       await backing.put("current", {
@@ -459,7 +447,6 @@ test("a mid-seed layer that fails during skill mutation keeps the fallback live 
     backing,
     runtime,
     skills,
-    scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
     seedFallback: async () => {
       await backing.put("current", {
@@ -495,7 +482,6 @@ test("misplaced tool files are rejected, not silently ignored", async () => {
     backing: createMemoryMap<StoredDeploymentLayer>(),
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   for (const path of ["tools/a/b/tool.json", "tools/loose.json", "tools/a/extra.txt"]) {
     await assert.rejects(
@@ -513,7 +499,6 @@ test("live() reports the runtime source and durable reflects the backing", async
     backing: createMemoryMap<StoredDeploymentLayer>(),
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: scopeId("org", "default-org"),
   });
   assert.equal(none.durable, false);
   assert.deepEqual(none.live(), { source: "none", contentHash: null, resolved: null });
@@ -524,7 +509,6 @@ test("live() reports the runtime source and durable reflects the backing", async
     backing: createMemoryMap<StoredDeploymentLayer>(),
     runtime: fsRuntime,
     skills,
-    scopeId: scopeId("org", "default-org"),
     durable: true,
   });
   assert.equal(fs.durable, true);
@@ -542,7 +526,6 @@ test("duplicate skill names across layer skill dirs are rejected at validation",
     backing: createMemoryMap<StoredDeploymentLayer>(),
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(
     store.put(
@@ -566,7 +549,6 @@ test("a NUL byte in the bundle is rejected at validation (Postgres JSONB would 5
     backing: createMemoryMap<StoredDeploymentLayer>(),
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(
     store.put(
@@ -587,7 +569,6 @@ test("unpaired Unicode surrogates are rejected before the JSONB write", async ()
     backing: createMemoryMap<StoredDeploymentLayer>(),
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(
     store.put(
@@ -609,7 +590,6 @@ test("PUT validates cross-tool credential paths before persisting", async () => 
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(
     store.put(
@@ -666,7 +646,6 @@ test("hydrate reparses bundle descriptors instead of trusting stored resolved fi
     backing,
     runtime,
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
     retryDelaysMs: [],
   });
   assert.equal((await store.hydrate())?.version, 7);
@@ -683,7 +662,6 @@ test("hydrate derives runtime fields from the stored bundle, not the resolved ca
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   const record = await writer.put(bundle, "writer");
   await backing.put("current", {
@@ -696,7 +674,6 @@ test("hydrate derives runtime fields from the stored bundle, not the resolved ca
     backing,
     runtime,
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   await reader.hydrate();
   assert.deepEqual(runtime.advertisedTools, ["bundle truth"]);
@@ -714,7 +691,6 @@ test("a concurrent delete during put surfaces a conflict error, not a TypeError"
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   await assert.rejects(store.put({ contract: 1, tools: [], skills: [] }, "api"), /concurrent delete/);
 });
@@ -727,7 +703,6 @@ test("concurrent writes serialize into monotonic durable versions", async () => 
     backing,
     runtime,
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   await store.put({ contract: 1, tools: [tool("v1")], skills: [] }, "one");
   const [two, three] = await Promise.all([
@@ -763,11 +738,11 @@ test("two stores serialize the durable head and shared skill projection under on
   };
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const skills = createSkillStore({ signingSecret: "layer-test" });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const firstRuntime = emptyDeploymentLayer();
   const secondRuntime = emptyDeploymentLayer();
-  const first = createDeploymentLayerStore({ backing, runtime: firstRuntime, skills, scopeId: org, advisoryLock });
-  const second = createDeploymentLayerStore({ backing, runtime: secondRuntime, skills, scopeId: org, advisoryLock });
+  const first = createDeploymentLayerStore({ backing, runtime: firstRuntime, skills, advisoryLock });
+  const second = createDeploymentLayerStore({ backing, runtime: secondRuntime, skills, advisoryLock });
   const v1 = first.put(
     {
       contract: 1,
@@ -806,14 +781,13 @@ test("a failed multi-skill apply rolls every deployment-owned skill back before 
       return baseSkills.create(input);
     },
   };
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const runtime = emptyDeploymentLayer();
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
     backing,
     runtime,
     skills,
-    scopeId: org,
     retryDelaysMs: [],
   });
   await store.put(
@@ -858,13 +832,12 @@ test("a failed multi-skill apply rolls every deployment-owned skill back before 
 test("applied status detects and repairs deployment-skill drift", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const skills = createSkillStore({ signingSecret: "layer-test" });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const store = createDeploymentLayerStore({
     ...singleProcessDeps(),
     backing,
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: org,
   });
   const record = await store.put({ contract: 1, tools: [], skills: skill }, "api");
   const deployed = (await skills.resolve("acme", [org])).skill!;
@@ -882,13 +855,12 @@ test("applied status detects and repairs deployment-skill drift", async () => {
 
 test("a later hydrate reconciles a persisted layer audit exactly once", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const record = await createDeploymentLayerStore({
     ...singleProcessDeps(),
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: org,
   }).put({ contract: 1, tools: [tool("persisted before crash")], skills: [] }, "source-cli");
   const audit = createAuditLog();
   const auditPersisted = (stored: StoredDeploymentLayer) =>
@@ -904,7 +876,6 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: org,
     auditPersisted,
   });
   await recovered.hydrate();
@@ -918,7 +889,7 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
 
 test("a failed audit remains recoverable after a later revision replaces the durable head", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const audited: number[] = [];
   let auditAvailable = false;
   const store = createDeploymentLayerStore({
@@ -926,7 +897,6 @@ test("a failed audit remains recoverable after a later revision replaces the dur
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: org,
     retryDelaysMs: [],
     auditPersisted: async (record) => {
       if (!auditAvailable) throw new Error("audit unavailable");
@@ -950,7 +920,7 @@ test("a failed audit remains recoverable after a later revision replaces the dur
 test("a foreign same-name skill rejects the PUT before anything persists", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const skills = createSkillStore({ signingSecret: "layer-test" });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await skills.create({
     scopeId: org,
     manifest: { name: "acme", description: "user authored", requiredCapabilities: [], body: "mine" },
@@ -961,7 +931,6 @@ test("a foreign same-name skill rejects the PUT before anything persists", async
     backing,
     runtime: emptyDeploymentLayer(),
     skills,
-    scopeId: org,
   });
   await assert.rejects(
     store.put({ contract: 1, tools: [], skills: skill }, "test"),
@@ -977,7 +946,6 @@ test("deployment skill names cannot contain path separators", async () => {
     backing,
     runtime: emptyDeploymentLayer(),
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   const markdown = (name: string) => `---\nname: ${name}\ndescription: Test.\n---\n${name}\n`;
 
@@ -999,7 +967,7 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const skills = createSkillStore({ signingSecret: "layer-test" });
   const skillBundles = createSkillBundleStore();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const packed = await skills.create({
     scopeId: org,
     manifest: { name: "packed", description: "Packed skill.", requiredCapabilities: [], body: "packed" },
@@ -1016,7 +984,6 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
     runtime: emptyDeploymentLayer(),
     skills,
     skillBundles,
-    scopeId: org,
   });
 
   await assert.rejects(
@@ -1038,7 +1005,7 @@ test("a deployment skill cannot materialize over an active pack's shared bundle"
 test("a foreign skill racing after validation reports the revision as persisted and degraded", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const baseSkills = createSkillStore({ signingSecret: "layer-test" });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const realList = baseSkills.list.bind(baseSkills);
   let calls = 0;
   const skills = {
@@ -1056,7 +1023,7 @@ test("a foreign skill racing after validation reports the revision as persisted 
     },
   };
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({ ...singleProcessDeps(), backing, runtime, skills, scopeId: org });
+  const store = createDeploymentLayerStore({ ...singleProcessDeps(), backing, runtime, skills });
   await assert.rejects(
     store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "test"),
     (error: unknown) =>
@@ -1071,7 +1038,7 @@ test("a foreign skill racing after validation reports the revision as persisted 
 test("an archived foreign skill does not block the layer; a later live collision leaves the new revision unapplied", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
   const skills = createSkillStore({ signingSecret: "layer-test" });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const archived = await skills.create({
     scopeId: org,
     manifest: { name: "acme", description: "retired", requiredCapabilities: [], body: "old" },
@@ -1082,7 +1049,7 @@ test("an archived foreign skill does not block the layer; a later live collision
   await skills.archive(archived.id);
 
   const runtime = emptyDeploymentLayer();
-  const store = createDeploymentLayerStore({ ...singleProcessDeps(), backing, runtime, skills, scopeId: org });
+  const store = createDeploymentLayerStore({ ...singleProcessDeps(), backing, runtime, skills });
   const record = await store.put({ contract: 1, tools: [tool("acme CLI")], skills: skill }, "test");
   assert.equal(
     (await skills.resolve("acme", [org])).skill?.createdBy,
@@ -1106,7 +1073,6 @@ test("an archived foreign skill does not block the layer; a later live collision
     backing,
     runtime: fresh,
     skills,
-    scopeId: org,
   });
   assert.equal(
     (await rehydrated.hydrate())?.contentHash,
@@ -1129,7 +1095,6 @@ test("a bundle may carry the files a tool declares under install.files, and noth
     backing: createMemoryMap<StoredDeploymentLayer>(),
     runtime,
     skills: createSkillStore({ signingSecret: "layer-test" }),
-    scopeId: scopeId("org", "default-org"),
   });
   const descriptor = {
     path: "tools/acme/tool.json",

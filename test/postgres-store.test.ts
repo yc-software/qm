@@ -18,7 +18,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 

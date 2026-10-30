@@ -27,7 +27,6 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
-const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
 
 function fakeSandbox(): Sandbox {
@@ -57,7 +56,7 @@ function buildOrchestrator(
   sessions: ReturnType<typeof createMemorySessionStore>,
   deliveries: DeliveryStore,
 ) {
-  const config = createMemoryConfigStore(ORG);
+  const config = createMemoryConfigStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "rsp-")));
@@ -72,7 +71,7 @@ function buildOrchestrator(
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),

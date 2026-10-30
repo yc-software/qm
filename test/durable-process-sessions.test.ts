@@ -26,8 +26,10 @@ import type { Sandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sand
 import type { Conversation, Principal } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const actor: Principal = { id: "U1", type: "internal" };
 const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
 
@@ -112,7 +114,7 @@ function fakeProcessSandbox() {
 }
 
 function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
-  const config = createMemoryConfigStore(ORG);
+  const config = createMemoryConfigStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "dps-")));
@@ -127,7 +129,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions: createMemorySessionStore(),
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
@@ -144,7 +146,7 @@ function buildOrchestrator(processes: ProcessRegistry, sandbox: Sandbox) {
 }
 
 async function memoryScope(): Promise<string> {
-  const resolution = createResolutionService(ORG, createMemoryConfigStore(ORG), createAclStore());
+  const resolution = createResolutionService(createMemoryConfigStore(), createAclStore());
   return writableMemoryScope((await resolution.resolve(conv, actor)).layers, resolution.scopeFor(conv, actor));
 }
 

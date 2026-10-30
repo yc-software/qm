@@ -11,9 +11,12 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "discovery-test-secret".repeat(3);
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 
 async function start(swarmsEnabled = true) {
   const built = buildApp(

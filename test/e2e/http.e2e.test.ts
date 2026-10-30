@@ -11,6 +11,9 @@ import { buildApp } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { scopeId } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
+import { bindTestTenant } from "../support/tenant.ts";
+
+bindTestTenant();
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 
@@ -91,7 +94,7 @@ describe("HTTP e2e (live Pi over the API)", { skip: NO_KEY ? "set ANTHROPIC_API_
     const t = await turn(dm("Say hi in one word.", "log"));
     const sid = t.json.sessionId as string;
     const res = await fetch(`${base}/v1/sessions/${encodeURIComponent(sid)}?viewer=U1`, {
-      headers: { "X-Actor": "U1@default-org" },
+      headers: { "X-Actor": "U1" },
     });
     assert.equal(res.status, 200);
     const body = (await res.json()) as { entries: Array<{ type: string }> };
