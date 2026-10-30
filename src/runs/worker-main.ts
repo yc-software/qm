@@ -3,17 +3,11 @@ import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
-import { instanceTenant } from "../tenants/instance.ts";
-import { enterTenant } from "../tenants/context.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
-const tenant = await instanceTenant(config);
-if (tenant) enterTenant(tenant);
-await built.sandboxResources.initialize();
-await built.config.hydrate?.();
-await built.identity.hydrate();
+await built.boot();
 const { runtime } = built;
 runtime.start();
 console.log(`[qm:worker] draining runs (org=${config.orgId}, runStore=${config.runStore}, workers=${config.workers})`);

@@ -1,10 +1,13 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
+import { tenantColumn } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
 
 type FileUploadState = "pending" | "completing" | "complete" | "aborting" | "aborted" | "failed";
 
 export interface FileUpload {
   id: string;
+  tenantId?: string;
   actorId: string;
   scopeId: ScopeId;
   name: string;
@@ -26,6 +29,7 @@ export interface FileUploadStore {
   touch(id: string, at: number): Promise<boolean>;
   active(actorId: string, now: number): Promise<FileUpload[]>;
   expired(now: number): Promise<FileUpload[]>;
+  completingUploadId(id: string): Promise<string | null>;
 }
 
 export class FileUploadError extends Error {
@@ -68,9 +72,11 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
         "CREATE INDEX IF NOT EXISTS file_uploads_retry ON file_uploads(next_attempt_at,expires_at) WHERE state NOT IN ('complete','aborted','failed')",
       ],
     },
+    tenantColumn("file_uploads"),
   ]);
   const decode = (row: Record<string, unknown>): FileUpload => ({
     ...(row.data as FileUpload),
+    ...(row.tenant_id ? { tenantId: row.tenant_id as string } : {}),
     state: row.state as FileUploadState,
   });
   return {
@@ -123,16 +129,23 @@ export function createPostgresFileUploadStore(connectionString: string): FileUpl
     },
     async expired(now) {
       return (
-        await db.q(
+        await claimAcrossTenants(
+          db,
           `WITH due AS (
              SELECT id FROM file_uploads
              WHERE expires_at <= $1 AND next_attempt_at <= $1 AND state NOT IN ('complete','aborted','failed')
              ORDER BY next_attempt_at, expires_at, id FOR UPDATE SKIP LOCKED LIMIT 100
            ) UPDATE file_uploads SET next_attempt_at=$1+60000 FROM due
-             WHERE file_uploads.id=due.id RETURNING file_uploads.data,file_uploads.state`,
+             WHERE file_uploads.id=due.id RETURNING file_uploads.data,file_uploads.state,file_uploads.tenant_id::text`,
           [now],
         )
       ).map(decode);
+    },
+    async completingUploadId(id) {
+      const { rows } = await (
+        await db.ownerPool()
+      ).query("SELECT data->>'uploadId' AS upload_id FROM file_uploads WHERE id=$1 AND state='completing'", [id]);
+      return (rows[0]?.upload_id as string | undefined) ?? null;
     },
   };
 }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { boundTenant } from "../tenants/context.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
 
@@ -63,6 +64,11 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
   const claimedUntil = new Map<string, number>();
   const enqueueListeners = new Set<() => void>();
 
+  const visible = (d: Delivery): boolean => {
+    const tenant = boundTenant();
+    return !tenant || d.tenantId === tenant;
+  };
+
   const expireOveraged = (now: number): void => {
     for (const d of deliveries.values()) {
       if (
@@ -100,8 +106,10 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         }
         return existing;
       }
+      const tenantId = boundTenant();
       const delivery: Delivery = {
         id: randomUUID(),
+        ...(tenantId ? { tenantId } : {}),
         destination: input.destination,
         text: input.text,
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
@@ -118,7 +126,8 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     },
     async pending(type) {
       return [...deliveries.values()].filter(
-        (d) => d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type,
+        (d) =>
+          d.deliveredAt === null && d.expiredAt === undefined && !d.shadow && d.destination.type === type && visible(d),
       );
     },
     async claimPending(type, ttlMs) {
@@ -130,6 +139,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
           d.expiredAt === undefined &&
           !d.shadow &&
           d.destination.type === type &&
+          visible(d) &&
           (claimedUntil.get(d.id) ?? 0) <= now,
       );
       for (const d of rows) claimedUntil.set(d.id, now + ttlMs);

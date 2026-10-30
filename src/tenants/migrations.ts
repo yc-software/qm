@@ -29,3 +29,18 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     ],
   },
 ];
+
+export function tenantColumn(table: string): PgMigrationDefinition {
+  if (!/^[a-z_][a-z0-9_]*$/.test(table)) throw new Error(`invalid table name: ${table}`);
+  return {
+    id: `tenants/columns/${table}`,
+    statements: [
+      `SET LOCAL lock_timeout = '5s'`,
+      `DO $tenant_column$ BEGIN
+         EXECUTE format('ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS tenant_id UUID NOT NULL DEFAULT %L REFERENCES tenants',
+           CASE WHEN EXISTS (SELECT 1 FROM ${table}) THEN (SELECT id FROM tenants) END);
+       END $tenant_column$`,
+      `ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id()`,
+    ],
+  };
+}

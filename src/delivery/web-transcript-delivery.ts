@@ -2,6 +2,7 @@ import type { Delivery, ScopeId, SessionEntry } from "../types.ts";
 import type { DeliveryStore } from "./delivery-store.ts";
 import { type NewEntry, type SessionStore } from "../sessions/session-store.ts";
 import { reportFailure, swallow } from "../util/errors.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 
 const DEDUPE_SCAN_LIMIT = 200;
 const RECORDED_CACHE_CAP = 1000;
@@ -123,16 +124,18 @@ export function withWebTranscriptDeliveries(store: DeliveryStore, sessions: WebT
     return false;
   };
 
+  const deliverable = async (d: Delivery): Promise<boolean> => {
+    const disposition = classify(d);
+    if (disposition !== "settle") return disposition === "deliver" || recordedForDelivery(d);
+    await store.ack(d.id, Date.now());
+    return false;
+  };
+
   const drained = async (rows: Delivery[]): Promise<Delivery[]> => {
     const out: Delivery[] = [];
     for (const d of rows) {
       try {
-        const disposition = classify(d);
-        if (disposition === "settle") {
-          await store.ack(d.id, Date.now());
-          continue;
-        }
-        if (disposition === "deliver" || (await recordedForDelivery(d))) out.push(d);
+        if (await inTenantOf(d.tenantId, () => deliverable(d))) out.push(d);
       } catch (err) {
         if (overdue(d)) {
           reportFailure(

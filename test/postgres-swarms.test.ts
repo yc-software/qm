@@ -8,9 +8,10 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
+before(() => (process.env.DATABASE_URL ? provisionTestTenants(process.env.DATABASE_URL) : undefined));
 
 const baseUrl = process.env.DATABASE_URL;
 const schema = `swarm_test_${process.pid}`;

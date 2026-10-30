@@ -18,7 +18,7 @@ import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { assertParticipantSessionParity } from "./support/participant-session-parity.ts";
 import { assertSpendRollupParity } from "./support/spend-rollup-parity.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -31,9 +31,10 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS session_spend_days, session_spend_dirty, sessions, items, participants, session_leases, session_llm_requests, session_pins, runs, tool_calls CASCADE",
+    "DROP TABLE IF EXISTS session_spend_days, session_spend_dirty, sessions, items, participants, session_leases, session_llm_requests, session_pins, runs, tool_calls, tenants CASCADE",
   );
   await p.end();
+  await provisionTestTenants(URL);
 });
 
 const actor: Principal = { id: "internal:U1", type: "internal" };

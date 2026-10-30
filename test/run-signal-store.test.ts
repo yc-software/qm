@@ -1,9 +1,29 @@
-import { test } from "node:test";
+import { randomUUID } from "node:crypto";
+import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore, startSignalPoll, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
+
+bindTestTenant();
+before(() => (process.env.DATABASE_URL ? provisionTestTenants(process.env.DATABASE_URL) : undefined));
 
 const URL = process.env.DATABASE_URL;
+
+async function liveRunIds(count: number): Promise<string[]> {
+  const { runs, close } = createPostgresRunStore(URL!);
+  try {
+    const actor = { id: "internal:U1", type: "internal" as const };
+    const request = { actor, conversation: { kind: "dm" as const, threadRef: "t", audience: [actor] }, text: "x" };
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++)
+      ids.push((await runs.enqueue({ sessionId: `signals-${randomUUID()}`, request })).run.id);
+    return ids;
+  } finally {
+    await close();
+  }
+}
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -51,7 +71,11 @@ test("memory store: pending retains steers until acknowledged and leaves aborts 
     "the terminal drain is what consumes the abort",
   );
   assert.deepEqual(await store.pending("r1"), []);
-  assert.deepEqual(await store.pendingRunIds(), [], "nothing outlives the terminal drain");
+  assert.deepEqual(
+    (await store.pendingRuns()).map(({ runId }) => runId),
+    [],
+    "nothing outlives the terminal drain",
+  );
 });
 
 test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by the reclaiming poller, and dies with the terminal drain", async () => {
@@ -85,7 +109,11 @@ test("startSignalPoll: a user stop outlives a lease-losing poller, is honored by
     ["abort"],
     "terminal completion consumes the stop",
   );
-  assert.deepEqual(await store.pendingRunIds(), [], "the stop does not outlive the run's terminal completion");
+  assert.deepEqual(
+    (await store.pendingRuns()).map(({ runId }) => runId),
+    [],
+    "the stop does not outlive the run's terminal completion",
+  );
 });
 
 test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the still-pending stop re-delivers on the next drain", async () => {
@@ -123,7 +151,10 @@ test("startSignalPoll: repeated stops in one drain collapse to one onAbort; the 
     await stop();
   }
   await store.takePending("r1");
-  assert.deepEqual(await store.pendingRunIds(), []);
+  assert.deepEqual(
+    (await store.pendingRuns()).map(({ runId }) => runId),
+    [],
+  );
 });
 
 test("startSignalPoll: a stop whose delivery throws is retried on the next drain instead of being lost", async () => {
@@ -319,7 +350,7 @@ test("pg store: NOTIFY doorbell reaches a listener on a different connection", {
 
 test("pg store: pending retains steers until acknowledged and leaves aborts for terminal drain", { skip }, async () => {
   const store = createPostgresRunSignalStore(URL!);
-  const runId = `test-run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const [runId] = await liveRunIds(1);
   try {
     await store.send(runId, { kind: "steer", text: "a" });
     await store.send(runId, { kind: "abort" });
@@ -336,14 +367,17 @@ test("pg store: pending retains steers until acknowledged and leaves aborts for 
       ["abort"],
       "steers are consumed exactly once; the abort is never consumed by a live drain",
     );
-    assert.ok((await store.pendingRunIds()).includes(runId));
+    assert.ok((await store.pendingRuns()).map(({ runId }) => runId).includes(runId));
     assert.deepEqual(
       (await store.takePending(runId)).map((s) => s.kind),
       ["abort"],
       "the terminal drain is what consumes the abort",
     );
     assert.deepEqual(await store.pending(runId), []);
-    assert.ok(!(await store.pendingRunIds()).includes(runId), "nothing outlives the terminal drain");
+    assert.ok(
+      !(await store.pendingRuns()).map(({ runId }) => runId).includes(runId),
+      "nothing outlives the terminal drain",
+    );
   } finally {
     await store.close?.();
   }
@@ -382,29 +416,35 @@ test("pg store: a signal round-trips ts and request intact", { skip }, async () 
   }
 });
 
-test("memory store: pendingRunIds lists runs with unconsumed signals; prune is a no-op", async () => {
+test("memory store: pendingRuns lists runs with unconsumed signals; prune is a no-op", async () => {
   const store = createMemoryRunSignalStore();
   await store.send("r1", { kind: "steer", text: "a" });
   await store.send("r2", { kind: "abort" });
-  assert.deepEqual((await store.pendingRunIds()).sort(), ["r1", "r2"]);
+  assert.deepEqual((await store.pendingRuns()).map(({ runId }) => runId).sort(), ["r1", "r2"]);
   await store.takePending("r1");
-  assert.deepEqual(await store.pendingRunIds(), ["r2"]);
+  assert.deepEqual(
+    (await store.pendingRuns()).map(({ runId }) => runId),
+    ["r2"],
+  );
   await store.prune(0);
-  assert.deepEqual(await store.pendingRunIds(), ["r2"], "prune never touches unconsumed signals");
+  assert.deepEqual(
+    (await store.pendingRuns()).map(({ runId }) => runId),
+    ["r2"],
+    "prune never touches unconsumed signals",
+  );
 });
 
-test("pg store: pendingRunIds lists unconsumed runs; prune deletes only old consumed rows", { skip }, async () => {
+test("pg store: pendingRuns lists unconsumed runs; prune deletes only old consumed rows", { skip }, async () => {
   const store = createPostgresRunSignalStore(URL!);
-  const a = `test-run-${Date.now()}-a-${Math.random().toString(36).slice(2)}`;
-  const b = `test-run-${Date.now()}-b-${Math.random().toString(36).slice(2)}`;
+  const [a, b] = await liveRunIds(2);
   try {
     await store.send(a, { kind: "steer", text: "x" });
     await store.send(b, { kind: "steer", text: "y" });
-    const pending = await store.pendingRunIds();
+    const pending = (await store.pendingRuns()).map(({ runId }) => runId);
     assert.ok(pending.includes(a) && pending.includes(b));
     await store.takePending(a);
     await store.prune(0);
-    const after = await store.pendingRunIds();
+    const after = (await store.pendingRuns()).map(({ runId }) => runId);
     assert.ok(!after.includes(a), "consumed and pruned");
     assert.ok(after.includes(b), "unconsumed survives any prune");
     assert.equal((await store.takePending(b)).length, 1, "the surviving signal is intact");

@@ -3,6 +3,7 @@ import { jsonbStringify } from "../persistence/durable-map.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
+import { claimAcrossTenants } from "../tenants/claim.ts";
 
 const CHANNEL = "run_signals";
 
@@ -130,13 +131,19 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       return toSignals(rows);
     },
 
-    async pendingRunIds() {
-      const { rows } = await q(`SELECT DISTINCT run_id FROM run_signals WHERE consumed_at IS NULL`);
-      return rows.map((r) => r.run_id as string);
+    async pendingRuns() {
+      const rows = await claimAcrossTenants(
+        pg,
+        `SELECT DISTINCT s.run_id, r.tenant_id::text AS tenant_id FROM run_signals s JOIN runs r ON r.id = s.run_id
+          WHERE s.consumed_at IS NULL`,
+      );
+      return rows.map((r) => ({ runId: r.run_id as string, tenantId: r.tenant_id }));
     },
 
     async prune(olderThanMs) {
-      await q(`DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [Date.now() - olderThanMs]);
+      await (
+        await pg.ownerPool()
+      ).query(`DELETE FROM run_signals WHERE consumed_at IS NOT NULL AND consumed_at < $1`, [Date.now() - olderThanMs]);
     },
 
     onSignal(runId, cb) {

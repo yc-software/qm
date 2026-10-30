@@ -8,7 +8,7 @@ function recordingSource(over: Partial<SweepSource> = {}): { source: SweepSource
   const swept: string[] = [];
   const source: SweepSource = {
     async engagedSessions() {
-      return ["A"];
+      return [{ threadRef: "A" }];
     },
     async sweepSession(threadRef) {
       swept.push(threadRef);

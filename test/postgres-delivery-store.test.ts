@@ -6,6 +6,9 @@ import {
   exerciseDeliveryExpiryRevive,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
+import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
@@ -17,6 +20,7 @@ before(async () => {
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS deliveries CASCADE");
   await p.end();
+  await provisionTestTenants(URL);
 });
 
 test("pg delivery store: idempotent enqueue, pending-by-type, ack, get", { skip }, async () => {

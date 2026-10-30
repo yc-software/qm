@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { inTenantOf } from "../tenants/claim.ts";
+import { boundTenant } from "../tenants/context.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunDeliveryState, RunStop, RunStore } from "./run-store.ts";
 import {
   countedClaims,
@@ -50,7 +52,7 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
   function settle(run: Run): void {
     if (!isTerminal(run.status)) return;
     events.emit(run.id, run);
-    for (const listener of terminalListeners) listener(run);
+    for (const listener of terminalListeners) inTenantOf(run.tenantId, () => listener(run));
   }
 
   const store: RunStore = {
@@ -64,8 +66,10 @@ export function createMemoryRunStore(opts?: { maxClaims?: number }): MemoryRunti
           if (existing) return { run: existing, deduped: true };
         }
       }
+      const tenantId = boundTenant();
       const run: Run = {
         id: randomUUID(),
+        ...(tenantId ? { tenantId } : {}),
         sessionId,
         status: "pending",
         request: withTraceCarrier(request),
