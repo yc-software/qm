@@ -2131,23 +2131,29 @@ export function buildApp(
       start: (actorId, input) => startSession(app, sessions, actorId, input),
     },
     async validateRuntime(input, scope) {
-      const choice = await resolveRuntimeChoiceDurable(
+      const requested = {
+        ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
+        ...(input.model ? { modelId: input.model } : {}),
+        ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
+        ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
+      };
+      const resolved = await resolveRuntimeChoiceDurable(
         configStore,
         runtimeOrgScope,
         scope,
         fallback,
-        {
-          ...(input.harness ? { harnessId: input.harness as HarnessId } : {}),
-          ...(input.model ? { modelId: input.model } : {}),
-          ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
-          ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
-        },
+        requested,
         hydrateModelCatalog,
         "subagent",
-      );
-      if (!input.model && !input.harness && !input.thinkingLevel && input.fastMode === undefined) return;
+      ).catch((error: unknown) => ({ error }));
+      if (!input.model && !input.harness && !input.thinkingLevel && input.fastMode === undefined) {
+        if ("error" in resolved) throw resolved.error;
+        return;
+      }
+      const choice = "error" in resolved ? { ...fallback, ...requested } : resolved;
       const error = await subagentRuntimeError({ deps: runtimeDeps }, scope, choice);
       if (error) throw new Error(error);
+      if ("error" in resolved) throw resolved.error;
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");

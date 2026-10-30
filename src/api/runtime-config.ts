@@ -272,7 +272,9 @@ export async function subagentRuntimeError(
   scope: ScopeId,
   choice: RuntimeChoice,
 ): Promise<string | null> {
-  const error = await availableRuntimeError(ctx, scope, choice, "subagent");
+  const error = await availableRuntimeError(ctx, scope, choice, "subagent").catch(
+    (resolveError: unknown) => `${errMessage(resolveError)}; it may be an unknown model ID`,
+  );
   if (!error) return null;
   const head = `${choice.harnessId}/${choice.modelId} can't run subagents here (${error}). Don't guess another model. Omit model and harness to use the default`;
   try {
