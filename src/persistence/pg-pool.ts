@@ -47,7 +47,8 @@ async function retainPool(connectionString: string, kind: PoolKind): Promise<Poo
     existing.users++;
     return existing.pool;
   }
-  const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
+  const pooled = kind === "query" || kind === "owner";
+  const setting = pooled ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
   const max = {
     query: poolingConfig.queryMax ?? 10,
     session: poolingConfig.sessionMax ?? 32,
@@ -58,7 +59,7 @@ async function retainPool(connectionString: string, kind: PoolKind): Promise<Poo
     throw new Error(`${setting} must be an integer between 1 and 100`);
   const connection = pgConnectionOptions(
     connectionString,
-    kind === "query" && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
+    pooled && connectionString === poolingConfig.poolUrl ? poolingConfig.caCert : undefined,
   );
   const options = { ...connection, max, connectionTimeoutMillis: 10_000 };
   const pool = guardedPool(kind === "migration" || kind === "owner" ? new pg.Pool(options) : tenantPgPool(pg, options));
@@ -538,7 +539,7 @@ export function createPgPool(
   async function ownerPool(): Promise<Pool> {
     await ready();
     if (closed) throw new Error("Postgres store is closed");
-    return (ownerPoolP ??= retainPool(connectionString, "owner"));
+    return (ownerPoolP ??= retainPool(queryUrl, "owner"));
   }
   async function query(
     text: string,
@@ -618,7 +619,7 @@ export function createPgPool(
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
-      ownerPoolP?.then((instance) => releasePool(connectionString, instance, "owner")),
+      ownerPoolP?.then((instance) => releasePool(queryUrl, instance, "owner")),
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
