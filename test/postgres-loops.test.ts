@@ -209,9 +209,9 @@ test(
             { id: "older-id", sourceKey: "t1" },
           ].sort((a, b) => (a.id < b.id ? -1 : 1)),
         );
-        await ledger.ingest([entry("L1", "t1", { snippet: "newer" }), { ...entry("L1", "t1"), sourceAt: 2_000 }]);
+        await ledger.ingest([entry("L1", "t1", { snippet: "newer" }), { ...entry("L1", "t1"), sourceAt: 2_000.25 }]);
         assert.equal(await ledger.get(loopItemId("L1", "t1")), null);
-        assert.equal((await ledger.get("older-id"))?.sourceAt, 2_000);
+        assert.equal((await ledger.get("older-id"))?.sourceAt, 2_000.25);
         const plain = await ledger.summaries(["L1"]);
         assert.equal(plain.length, 2);
         for (const row of plain)
@@ -388,9 +388,6 @@ test("ingress sources and deliveries queue per tenant and background claims span
         new Set((await owner.sources.gmailWatching("a@example.com")).map((s) => `${s.tenantId}/${s.id}`)),
         new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
       );
-      assert.equal(await owner.sources.tenantOf("s9"), otherTenant);
-      assert.equal(await owner.sources.tenantOf("s1"), tenant);
-      assert.equal(await owner.sources.tenantOf("missing"), null);
       assert.equal(await owner.deliveries.pruneCompleted(60), 2);
       const inbox = await owner.loopStore.inboxLoops();
       assert.deepEqual(

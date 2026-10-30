@@ -36,7 +36,7 @@ const LOOP_ITEMS_MIGRATION = typedTableMigration({
     "source TEXT",
     "source_payload JSONB",
     "inbox_preview JSONB",
-    "source_at BIGINT",
+    "source_at DOUBLE PRECISION",
     "proposal JSONB",
     "agent_drafts JSONB",
     "agent_mention_keys TEXT[]",
@@ -68,7 +68,7 @@ const LOOP_ITEMS_MIGRATION = typedTableMigration({
     source: "json->>'source'",
     source_payload: kvJsonb("sourcePayload"),
     inbox_preview: kvJsonb("inboxPreview"),
-    source_at: kvBigint("sourceAt"),
+    source_at: "(json->>'sourceAt')::double precision",
     proposal: kvJsonb("proposal"),
     agent_drafts: kvJsonb("agentDrafts"),
     agent_mention_keys: kvTexts("agentMentionKeys"),
@@ -102,7 +102,7 @@ const SUMMARY_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ["source_summary", "text"],
   ["source", "text"],
   ["inbox_preview", "jsonb"],
-  ["source_at", "bigint"],
+  ["source_at", "float8"],
   ["agent_mention_keys", "text[]"],
   ["triage", "jsonb"],
   ["status", "text"],
@@ -343,12 +343,16 @@ export function createMemoryItemRows(): ItemRows {
     insertIfAbsent: async (item) => rows.insertIfAbsent(item),
     update: async (id, apply) => rows.update(id, apply),
     async mutateMany(updates) {
-      return updates.map(({ id, apply }) => {
-        const current = rows.get(id);
-        if (current) return rows.update(id, (item) => apply(item))!;
-        rows.insertIfAbsent({ ...apply(null), id });
-        return rows.get(id)!;
+      const staged = new Map<string, LoopItem>();
+      const results = updates.map(({ id, apply }) => {
+        const next = { ...apply(structuredClone(staged.get(id) ?? rows.get(id) ?? null)), id };
+        staged.set(id, next);
+        return next;
       });
+      for (const [id, item] of staged) {
+        if (!rows.update(id, () => item)) rows.insertIfAbsent(item);
+      }
+      return results;
     },
     async delete(ids) {
       for (const id of ids) rows.delete(id);
