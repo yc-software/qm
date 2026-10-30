@@ -187,7 +187,18 @@ test("sharing posture defaults to isolated and accepts only isolated or open", (
 });
 
 test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unless exempted", () => {
-  const proxied = loadConfig({ EGRESS_PROXY_URL: "https://egress.test" });
+  const byDefault = loadConfig({ EGRESS_PROXY_URL: "https://egress.test" });
+  for (const provider of [
+    byDefault.spritesSandbox,
+    byDefault.e2bSandbox,
+    byDefault.modalSandbox,
+    byDefault.porterSandbox,
+    byDefault.agent37Sandbox,
+  ])
+    assert.equal(provider.egressProxyUrl, "https://egress.test");
+  assert.equal(byDefault.managedAgentsSandbox.egressProxyUrl, undefined);
+  assert.equal(byDefault.smolmachinesSandbox.egressProxyUrl, undefined);
+  const proxied = loadConfig({ EGRESS_PROXY_URL: "https://egress.test", EGRESS_PROXY_EXEMPT_BACKENDS: "" });
   for (const provider of [
     proxied.spritesSandbox,
     proxied.e2bSandbox,
@@ -925,6 +936,7 @@ test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config"
     SMOLMACHINES_TOKEN: "smk_test",
     SMOLMACHINES_AUTOSTOP_SEC: "900",
     EGRESS_PROXY_URL: "https://proxy.example.com",
+    EGRESS_PROXY_EXEMPT_BACKENDS: "",
     SMOLMACHINES_SNAPSHOT_S3_BUCKET: "qm-home-snapshots",
     SMOLMACHINES_SNAPSHOT_INTERVAL_SEC: "300",
   });

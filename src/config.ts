@@ -371,7 +371,8 @@ const csvList = (value: string | undefined): string[] | undefined => {
 };
 
 function egressProxyFor(env: NodeJS.ProcessEnv, backend: string): { egressProxyUrl?: string } {
-  return env.EGRESS_PROXY_URL && !csvList(env.EGRESS_PROXY_EXEMPT_BACKENDS)?.includes(backend)
+  return env.EGRESS_PROXY_URL &&
+    !csvList(env.EGRESS_PROXY_EXEMPT_BACKENDS ?? "do-managed-agents,smolmachines")?.includes(backend)
     ? { egressProxyUrl: env.EGRESS_PROXY_URL }
     : {};
 }
