@@ -21,15 +21,8 @@ import { buffer } from "node:stream/consumers";
 import type { App } from "./app.ts";
 import type { ErrorLog } from "../admin/error-log.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
-import type {
-  Delivery,
-  PendingApproval,
-  ScopeId,
-  SurfaceContextRequest,
-  SurfaceContextResult,
-  TurnRequest,
-  TurnResult,
-} from "../types.ts";
+import type { Delivery, PendingApproval, ScopeId, TurnRequest, TurnResult } from "../types.ts";
+import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { scopeId } from "../types.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import type { CachedMessage, ReadMessagesOpts, SurfaceCache, IngestEvent } from "../surface-cache/surface-cache.ts";

@@ -8,7 +8,8 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { scopeId, type Cron, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
 const URL = process.env.DATABASE_URL;

@@ -1,4 +1,4 @@
-import type { Cron } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import { thinkingLevelsFor } from "../model/pi-models.ts";
 import { isObj } from "../util/objects.ts";

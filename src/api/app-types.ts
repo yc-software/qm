@@ -69,17 +69,9 @@ import type {
   GroupMembership,
   RecipientResolution,
 } from "../directory/directory-store.ts";
-import type {
-  Cron,
-  CronFireLogEntry,
-  CronFireNote,
-  Delivery,
-  Destination,
-  SurfaceContextQuery,
-  SurfaceContextRequest,
-  SurfaceContextResult,
-  Webhook,
-} from "../types.ts";
+import type { Delivery, Destination } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, Webhook } from "../triggers/types.ts";
+import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
   CachedMessage,

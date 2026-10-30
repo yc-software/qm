@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMonitorStore } from "../src/monitors/monitor-store.ts";
-import { scopeId, type Monitor } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Monitor } from "../src/triggers/types.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const GRACE_MS = 7 * 24 * 60 * 60_000;

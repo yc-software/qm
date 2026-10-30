@@ -4,7 +4,8 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
 import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
-import { scopeId, type Cron } from "../types.ts";
+import { scopeId } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 
 const SUGGESTED_ACTIVITIES_TASK = `Generate five suggested activities for the owner of this personal session's new-chat screen.
 First look for urgent work the owner owes another person and has not yet done: an unanswered direct question or request, a promise they made, a review or approval someone is waiting on, a reply in a thread where someone is waiting on them, an assigned ticket someone is blocked on, or an action only they can take that blocks a teammate. Their own project work counts only if a specific person is waiting on it. Check the sources you can already access (messages, email, assigned issues, review requests, recent conversations, memory, and scheduled-task notes), confirm each item is still open, and drop anything already handled or stale. Rank owed items by how blocked the other person is, explicit deadlines, how long they have waited, and how many people are affected. Never invent an obligation.

@@ -5,7 +5,7 @@ import { openGroupViaSurface, resolveReachTarget, type ReachDirectory } from "..
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
-import type { SurfaceContextQuery, SurfaceContextResult } from "../src/types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../src/reach/reach.ts";
 
 const MEMBERS = [
   { principalId: "alice@acme.dev", displayName: "alice", type: "internal" as const },

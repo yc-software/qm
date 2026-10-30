@@ -13,7 +13,8 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { CONFIG_DEFAULTS, type Config } from "../config.ts";
-import type { ClientToolDeclaration, CronFireLogEntry, EntryType, ScopeId } from "../types.ts";
+import type { ClientToolDeclaration, EntryType, ScopeId } from "../types.ts";
+import type { CronFireLogEntry } from "../triggers/types.ts";
 import type { ToolContext, PublishInput, PublishAudienceDescriptor } from "../tools/primitives.ts";
 import { tracePhase, type Phase } from "../../plugins/chassis/src/error-reporting.ts";
 import { NeedsApproval, CommandDenied } from "../tools/primitives.ts";

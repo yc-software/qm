@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { sortLedgerItems } from "../src/loops/ledger-view.ts";
 import { planTriage, removeFromGroup, settleGroup, triageWork, workOrder } from "../src/loops/triage.ts";
-import { scopeId, type Loop, type LoopItem } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Loop, LoopItem } from "../src/loops/types.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { sleep } from "../src/util/async.ts";
 

@@ -80,11 +80,11 @@ import {
   baseModelProviders,
   companySubscriptionAuth,
   configuredModel,
-  enabledSandboxBackends,
   providerKeysPresent,
   type Config,
 } from "./config.ts";
 import type { ServerDeps } from "./api/deps.ts";
+import { enabledSandboxBackends } from "./sandbox/sandbox-settings.ts";
 import {
   actorAssertionActive,
   createIdentityService,
@@ -122,20 +122,15 @@ import {
 } from "./persistence/advisory-lock.ts";
 import type {
   CommandApprovalGrant,
-  Cron,
-  Loop,
-  LoopItem,
-  LoopOutput,
-  Monitor,
-  ShipGrant,
   PendingApprovalRecord,
   ScopeId,
   Session,
-  SurfaceContextRequest,
   TurnRequest,
   TurnResult,
-  Webhook,
 } from "./types.ts";
+import type { Cron, Monitor, Webhook } from "./triggers/types.ts";
+import type { Loop, LoopItem, LoopOutput, ShipGrant } from "./loops/types.ts";
+import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import { createAuditLog, type AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";

@@ -6,7 +6,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import type { SurfaceContextResult, TurnRequest } from "../src/types.ts";
+import type { TurnRequest } from "../src/types.ts";
+import type { SurfaceContextResult } from "../src/reach/reach.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 

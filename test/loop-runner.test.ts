@@ -5,7 +5,8 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { fireNeedsAttention, runLoopFire, type LoopRunnerEffects, type LoopStores } from "../src/loops/runner.ts";
-import { scopeId, type Loop } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Loop } from "../src/loops/types.ts";
 
 const base = {
   owner: "U1",

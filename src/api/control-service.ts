@@ -1,6 +1,7 @@
 import { unattendedGrantRefusal } from "../cron/authority.ts";
 import { isDeepStrictEqual } from "node:util";
-import type { Cron, CronFireLogEntry, CronSchedule, Destination, Webhook } from "../types.ts";
+import type { Destination } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronSchedule, Webhook } from "../triggers/types.ts";
 import type { CreateCronInput, CronPatch } from "../cron/cron-store.ts";
 import type { CreateWebhookInput } from "../webhooks/webhook-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";

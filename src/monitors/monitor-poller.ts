@@ -1,5 +1,6 @@
 import type { AdmittedWork } from "../util/admitted-work.ts";
-import type { Monitor, TurnRequest, TurnResult } from "../types.ts";
+import type { TurnRequest, TurnResult } from "../types.ts";
+import type { Monitor } from "../triggers/types.ts";
 import type { MonitorStore } from "./monitor-store.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";

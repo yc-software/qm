@@ -1,4 +1,5 @@
-import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } from "../types.ts";
+import type { Destination } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule } from "../triggers/types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import {
   createMemoryCronFireStore,

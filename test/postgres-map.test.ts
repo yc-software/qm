@@ -4,7 +4,8 @@ import { randomBytes } from "node:crypto";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
-import { scopeId, type Webhook, type Cron } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Webhook, Cron } from "../src/triggers/types.ts";
 import {
   createKeychain,
   KeychainError,

@@ -4,7 +4,7 @@ import { createMemoryMap, createPostgresMap } from "../src/persistence/durable-m
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
-import type { Cron } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
 import { scopeId } from "../src/types.ts";
 
 test("crons persist to the backing map (a second store instance reads them back)", async () => {

@@ -1,4 +1,4 @@
-import type { CronFireLogEntry } from "../types.ts";
+import type { CronFireLogEntry } from "../triggers/types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { pgTextSafe } from "../util/text.ts";
 

@@ -1,7 +1,8 @@
 import type { SkillSummary } from "../skills/skill-store.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { matchesSearchTerms, searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
-import type { Cron, ScopeId } from "../types.ts";
+import type { ScopeId } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 
 export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
 export interface ResourceCandidate {

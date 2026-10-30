@@ -7,7 +7,8 @@ import { createSlackSessionStatus, type SlackSessionStatusState } from "../src/s
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../src/processes/process-registry.ts";
-import type { Session, Monitor } from "../src/types.ts";
+import type { Session } from "../src/types.ts";
+import type { Monitor } from "../src/triggers/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
 
 function deferred() {

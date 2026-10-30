@@ -10,7 +10,8 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
-import { scopeId, type Loop, type ShipGrant } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Loop, ShipGrant } from "../src/loops/types.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };

@@ -1,4 +1,4 @@
-import type { Cron } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 import type { TriggerSpec } from "../triggers/run-trigger.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { App } from "../api/app.ts";

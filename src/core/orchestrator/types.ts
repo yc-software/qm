@@ -10,11 +10,10 @@ import type {
   Conversation,
   Principal,
   PendingApprovalRecord,
-  SurfaceContextQuery,
-  SurfaceContextResult,
   TurnRequest,
   TurnResult,
 } from "../../types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";

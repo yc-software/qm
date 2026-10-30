@@ -11,7 +11,7 @@ import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { createDirectoryStore, type DirectoryStore } from "../src/directory/directory-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { Cron } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
 import { singleProcessDeps } from "./support/single-process.ts";

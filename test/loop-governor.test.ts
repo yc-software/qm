@@ -4,7 +4,8 @@ import { createLoopStore } from "../src/loops/loop-store.ts";
 import { collectVitals, evaluateGovernor, healthWorsened, type LoopVitals } from "../src/loops/governor.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
-import { scopeId, type Loop, type LoopCaps, type LoopGovernorConfig } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Loop, LoopCaps, LoopGovernorConfig } from "../src/loops/types.ts";
 
 const base = {
   owner: "U1",

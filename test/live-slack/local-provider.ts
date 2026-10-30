@@ -27,7 +27,6 @@ async function main(): Promise<void> {
 
     backgroundWorkEnabled: false,
     turnWallClockMs: 180_000,
-    localSandbox: { ...config.localSandbox, coreContainer: process.env.QM_CORE_CONTAINER },
   });
   const actorId = `provider-qualification-${randomUUID()}`;
   const scopeId = `personal:${actorId}`;

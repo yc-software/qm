@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Monitor } from "../types.ts";
+import type { Monitor } from "../triggers/types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,

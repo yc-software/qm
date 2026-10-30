@@ -9,7 +9,8 @@ import {
 } from "../src/cron/cron-store.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createMemoryCronFireStore } from "../src/cron/fire-store.ts";
-import { scopeId, type Cron } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
 
 const base = { action: "x", owner: "U1", createdBy: "U1", ownerScopeId: scopeId("personal", "U1") };
 const ids = (cs: { id: string }[]) => cs.map((c) => c.id);

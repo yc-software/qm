@@ -9,7 +9,7 @@ import {
 } from "../src/directory/person.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { canAdministerCron, canAdministerWebhook } from "../src/api/control-service.ts";
-import type { Cron, Webhook } from "../src/types.ts";
+import type { Cron, Webhook } from "../src/triggers/types.ts";
 import { scopeId } from "../src/types.ts";
 
 describe("personKey / samePerson: the canonical same-person primitive", () => {

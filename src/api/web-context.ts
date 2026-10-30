@@ -1,4 +1,5 @@
-import type { SessionEntry, SurfaceContextQuery, SurfaceContextResult } from "../types.ts";
+import type { SessionEntry } from "../types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../reach/reach.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 

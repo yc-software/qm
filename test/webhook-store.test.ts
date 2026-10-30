@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { scopeId, type Webhook } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Webhook } from "../src/triggers/types.ts";
 
 const base = {
   ownerScopeId: scopeId("personal", "U1"),

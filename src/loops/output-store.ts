@@ -1,4 +1,4 @@
-import type { LoopOutput, LoopOutputState, LoopShipResult } from "../types.ts";
+import type { LoopOutput, LoopOutputState, LoopShipResult } from "./types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";

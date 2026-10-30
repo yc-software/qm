@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { Loop, LoopItem } from "../types.ts";
+import type { Loop, LoopItem } from "./types.ts";
 import type { LoopStore } from "./loop-store.ts";
 import type { IngestEntryInput, LoopItemLedger } from "./item-ledger.ts";
 import type { LoopOutputStore } from "./output-store.ts";

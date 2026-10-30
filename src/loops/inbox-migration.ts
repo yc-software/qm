@@ -1,6 +1,6 @@
 import { adapterForItem } from "./sources/index.ts";
 import { DECISION_LEASE_MS } from "./item-ledger.ts";
-import type { Loop } from "../types.ts";
+import type { Loop } from "./types.ts";
 import type { LoopServiceDeps } from "../api/routes/loops.ts";
 import type { UiStateStore } from "../surfaces/ui-state.ts";
 import { uiStateId } from "../surfaces/ui-state.ts";

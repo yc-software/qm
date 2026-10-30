@@ -5,7 +5,7 @@ import { createInboxRealtime } from "../src/loops/inbox-realtime.ts";
 import { renderSourceInboxTask } from "../src/loops/inbox-loop.ts";
 import { slackConversationRef } from "../src/loops/sources/slack.ts";
 import type { LedgerEvent } from "../src/loops/ledger-events.ts";
-import type { Loop } from "../src/types.ts";
+import type { Loop } from "../src/loops/types.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 
 const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox" } as unknown as Loop;

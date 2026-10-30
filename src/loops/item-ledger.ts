@@ -8,7 +8,7 @@ import type {
   LoopProposal,
   LoopSourcePayload,
   LoopThreadMessage,
-} from "../types.ts";
+} from "./types.ts";
 import { isResolved } from "./ledger-view.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { contentPart } from "../triggers/trigger-store.ts";

@@ -6,7 +6,8 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import type { KeychainAsk } from "../src/credentials/keychain.ts";
-import type { Cron, Destination, TurnRequest } from "../src/types.ts";
+import type { Destination, TurnRequest } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
 
 const recipient: Destination = {
   type: "principal",

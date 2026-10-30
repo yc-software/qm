@@ -1,14 +1,8 @@
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import {
-  type Cron,
-  type ScopeId,
-  type CronFireLogEntry,
-  type CronFireNote,
-  type TurnRequest,
-  type TurnResult,
-} from "../types.ts";
+import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote } from "../triggers/types.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";

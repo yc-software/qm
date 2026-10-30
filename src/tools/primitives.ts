@@ -77,7 +77,7 @@ import type {
   ControlErr,
 } from "../api/control-service.ts";
 import type { ShareArtifactRequest, ShareArtifactResult } from "../api/artifact-share.ts";
-import type { Cron, Webhook } from "../types.ts";
+import type { Cron, Webhook } from "../triggers/types.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import type { VisibleCron } from "../api/app.ts";
 import { createPlaygroundArtifact, type PlaygroundArtifact } from "../playgrounds/playground.ts";

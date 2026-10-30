@@ -1,5 +1,5 @@
 import { createMemoryMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
-import type { LoopItem } from "../src/types.ts";
+import type { LoopItem } from "../src/loops/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentDraftOf, createLoopItemLedger, loopItemId, type IngestEntryInput } from "../src/loops/item-ledger.ts";

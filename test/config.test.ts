@@ -6,14 +6,13 @@ import { join, resolve } from "node:path";
 import {
   companySubscriptionAuth,
   baseModelProviders,
-  boolEnv,
-  enabledSandboxBackends,
   loadConfig,
   configuredModel,
-  numEnv,
   providerKeysPresent,
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
+import { boolEnv, numEnv } from "../src/util/env.ts";
+import { enabledSandboxBackends } from "../src/sandbox/sandbox-settings.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -163,17 +162,8 @@ test("agent security posture defaults to auto and validates named modes", () => 
   }
 });
 
-test("retired security screen variables fail loudly unless they only said off", () => {
-  assert.equal(loadConfig({ SECURITY_SCREEN_BACKEND: "off" }).securityScreen, "off");
-  for (const env of [
-    { SECURITY_SCREEN_BACKEND: "proxy" },
-    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN: "observe" },
-    { SECURITY_SCREEN_BACKEND: "off", SECURITY_SCREEN_ALL_POSTURES: "false" },
-    { SECURITY_SCREEN_ALL_POSTURES: "true" },
-    { SECURITY_SCREEN_PROXY_ROLLOUT: "shadow" },
-  ]) {
-    assert.throws(() => loadConfig(env), /retired.*SECURITY_SCREEN=off\|observe\|enforce/);
-  }
+test("QM_CORE_CONTAINER reaches the local sandbox settings", () => {
+  assert.equal(loadConfig({ QM_CORE_CONTAINER: "qm-acme-core" }).localSandbox.coreContainer, "qm-acme-core");
 });
 
 test("sharing posture defaults to isolated and accepts only isolated or open", () => {
@@ -525,9 +515,6 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     }).superserveSandbox?.template,
     "qm-agent-1.0.0",
   );
-  const config = loadConfig({ SANDBOX_SECONDARY_BACKEND: "smolmachines" });
-  assert.equal(config.sandboxBackend, "local");
-  assert.ok(!("sandboxSecondaryBackend" in config));
 });
 
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
@@ -829,28 +816,6 @@ test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
   );
   chmodSync(path, 0o644);
   assert.throws(() => loadConfig({ CODEX_AUTH_FILE: path }), /must not be readable by group or others/);
-});
-
-test("retired brain environment does not configure a runtime integration and warns once", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg: unknown) => void warnings.push(String(msg));
-  let config;
-  try {
-    config = loadConfig({
-      BRAIN: "mcp",
-      BRAIN_MCP_URL: "https://unused.invalid",
-      BRAIN_RO_CLIENT_ID: "retired",
-      BRAIN_RO_CLIENT_SECRET: "retired",
-    });
-  } finally {
-    console.warn = original;
-  }
-  assert.deepEqual({ ...config, layerEnv: {} }, loadConfig({}));
-  const retired = warnings.filter((w) => w.includes("retired and ignored"));
-  assert.equal(retired.length, 1);
-  assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
-  assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
 });
 
 test("Modal native retention and interval configuration are parsed into Config", () => {

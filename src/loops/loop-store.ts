@@ -1,3 +1,4 @@
+import type { Destination } from "../types.ts";
 import type {
   Loop,
   LoopCaps,
@@ -5,9 +6,8 @@ import type {
   LoopHealth,
   LoopState,
   LoopTriageConfig,
-  Destination,
   ShipActionPolicy,
-} from "../types.ts";
+} from "./types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {

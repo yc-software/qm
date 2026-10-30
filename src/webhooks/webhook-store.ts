@@ -1,4 +1,4 @@
-import type { Webhook } from "../types.ts";
+import type { Webhook } from "../triggers/types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,

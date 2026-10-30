@@ -1,4 +1,4 @@
-import type { ShipGrant } from "../types.ts";
+import type { ShipGrant } from "./types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 
 export interface ShipGrantStore {

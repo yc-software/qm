@@ -2,7 +2,8 @@ import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
-import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
+import type { Destination } from "../types.ts";
+import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { adminCronHistoryUrl } from "../util/admin-links.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
@@ -22,7 +23,7 @@ import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revis
 import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";
-import type { Cron } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 import { validateUserSchedule } from "../cron/schedule.ts";
 
 import type { App, AppDeps, ReachNowResult } from "./app-types.ts";
@@ -47,7 +48,7 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
   return {
     viewersOwn,
     scopeNames,
-    canSee: (c: Pick<import("../types.ts").Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
+    canSee: (c: Pick<Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
       allowed(c.ownerScopeId) &&
       (viewersOwn(c.owner) ||
         scopeNames.has(c.ownerScopeId) ||
