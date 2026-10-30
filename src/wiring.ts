@@ -1153,17 +1153,21 @@ export function buildApp(
   const sandboxResources = createSandboxResources({
     records: sandboxRecords,
     defaults: sandboxDefaults,
-    upgrade: async () => {
-      const tenant = await tenantRouting.snapshot();
-      return upgradeLegacySandboxes({
-        availableBackends: tenant.usable,
+    upgrade: () =>
+      upgradeLegacySandboxes({
+        backends: async () => {
+          const tenant = await tenantRouting.snapshot();
+          return {
+            available: tenant.usable,
+            legacyBackend: (scope) =>
+              legacySandboxBackendForScope(scope, tenant.fallback, config.legacySandboxScopeDefaults),
+          };
+        },
         records: sandboxRecords,
         defaults: sandboxDefaults,
         marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
         routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
         lock: advisoryLock,
-        legacyBackend: (scope) =>
-          legacySandboxBackendForScope(scope, tenant.fallback, config.legacySandboxScopeDefaults),
         specFor: (backend) => sandboxBackends[backend]?.profile.spec,
         legacyScopes: async () => [
           ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
@@ -1187,8 +1191,7 @@ export function buildApp(
             })),
           ];
         },
-      });
-    },
+      }),
     backends: sandboxBackends,
     defaultBackend: tenantRouting.defaultBackend,
     usableBackends: tenantRouting.usable,

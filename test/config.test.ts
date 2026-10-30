@@ -21,7 +21,6 @@ const productionEnv = {
   CAPABILITY_SECRET: "capabilities",
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
-  SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
   SESSION_STORE: "postgres",
 } as const;

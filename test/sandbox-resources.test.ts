@@ -71,14 +71,13 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     (overrides: Partial<Parameters<typeof upgradeLegacySandboxes>[0]> = {}) =>
     () =>
       upgradeLegacySandboxes({
-        availableBackends: ["local"],
+        backends: async () => ({ available: ["local"], legacyBackend: () => "local" }),
         records,
         defaults,
         marker,
         lock,
         routes: () => routes.entries(),
         legacyScopes: async () => legacyScopes,
-        legacyBackend: () => "local",
         ...overrides,
       });
   const options = {
@@ -411,7 +410,7 @@ test("activation preserves routes, cold identities and explicit nulls without ca
   const resources = createSandboxResources({
     ...options,
     upgrade: upgrade({
-      availableBackends: ["local", "modal"],
+      backends: async () => ({ available: ["local", "modal"], legacyBackend: () => "local" }),
       legacyScopes: async () => ["personal:old-session", "personal:unset"],
       legacySandboxes: async () => [
         { scopeId: "personal:routed", backend: "modal", machineId: "sb-old" },
@@ -652,8 +651,10 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
   const resources = createSandboxResources({
     ...options,
     upgrade: upgrade({
-      availableBackends: ["aws", "modal", "sprites"],
-      legacyBackend: (scope) => legacySandboxBackendForScope(scope, () => "sprites", scopeDefaults),
+      backends: async () => ({
+        available: ["aws", "modal", "sprites"],
+        legacyBackend: (scope) => legacySandboxBackendForScope(scope, () => "sprites", scopeDefaults),
+      }),
     }),
     backends: { modal: backend, sprites: backend, aws: backend },
     defaultBackend: async () => "sprites",
@@ -863,7 +864,10 @@ test("a verified live turn can create only its own new scope computer without di
 
 test("legacy import refuses an unavailable selected provider before writing any adoption state", async () => {
   const { options, upgrade, records, defaults, marker } = fixture();
-  const resources = createSandboxResources({ ...options, upgrade: upgrade({ availableBackends: [] }) });
+  const resources = createSandboxResources({
+    ...options,
+    upgrade: upgrade({ backends: async () => ({ available: [], legacyBackend: () => "local" }) }),
+  });
   await assert.rejects(resources.initialize(), /personal:alice: backend local is not configured/);
   assert.deepEqual(await records.all(), []);
   assert.deepEqual(await defaults.all(), []);
@@ -876,7 +880,10 @@ test("legacy import does not validate obsolete provider choices after explicit s
   const { options, upgrade, defaults, marker } = fixture(undefined, ["personal:cleared", "personal:selected"]);
   await defaults.put("personal:cleared", { sandboxId: null });
   await defaults.put("personal:selected", { sandboxId: "newer-computer" });
-  await createSandboxResources({ ...options, upgrade: upgrade({ availableBackends: [] }) }).initialize();
+  await createSandboxResources({
+    ...options,
+    upgrade: upgrade({ backends: async () => ({ available: [], legacyBackend: () => "local" }) }),
+  }).initialize();
   assert.deepEqual(await defaults.get("personal:cleared"), { sandboxId: null });
   assert.deepEqual(await defaults.get("personal:selected"), { sandboxId: "newer-computer" });
   assert.ok(await marker.get("explicit-defaults"));

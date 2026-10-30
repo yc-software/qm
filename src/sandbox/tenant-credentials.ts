@@ -11,7 +11,7 @@ import { modalSandboxLifetimeMs, type ModalClient } from "./modal-client.ts";
 import type { RenderClient } from "./render-client.ts";
 import type { SuperserveClient } from "./superserve-client.ts";
 
-export const TENANT_SANDBOX_KEYS: Partial<Record<SandboxBackendName, readonly TenantSettingKey[]>> = {
+const TENANT_SANDBOX_KEYS: Partial<Record<SandboxBackendName, readonly TenantSettingKey[]>> = {
   sprites: ["SPRITES_TOKEN"],
   smolmachines: ["SMOLMACHINES_TOKEN"],
   e2b: ["E2B_API_KEY"],
