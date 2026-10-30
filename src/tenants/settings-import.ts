@@ -38,10 +38,37 @@ export function tenantEnvPresent(env: NodeJS.ProcessEnv): string[] {
   return tenantImportKeys().filter((key) => env[key]?.trim());
 }
 
+const RETIRED_ENV = [
+  "BROKER_CREDENTIALS",
+  "CODEX_AUTH_FILE",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_AUTH_TOKEN",
+  "SECRETS_BACKEND",
+  "SECRETS_PREFIX",
+  "EGRESS_SERVICE_HOSTS",
+];
+
+export function retiredEnvPresent(env: NodeJS.ProcessEnv): string[] {
+  return [
+    ...RETIRED_ENV.filter((key) => env[key]?.trim()),
+    ...Object.keys(env).filter((key) => key.startsWith("VAULT_TOKEN_") && env[key]?.trim()),
+  ];
+}
+
 export interface TenantSettingsImportDeps {
   settings: TenantSettingsStore;
-  modelCredentials: Pick<ModelCredentialStore, "set">;
-  config: Pick<ScopedConfigStore, "setSecurityPosture" | "setSharingPosture" | "setBranding" | "setConnectorClient">;
+  modelCredentials: Pick<ModelCredentialStore, "set" | "statuses">;
+  config: Pick<
+    ScopedConfigStore,
+    | "getSecurityPostureOwnDurable"
+    | "setSecurityPosture"
+    | "getSharingPostureOwnDurable"
+    | "setSharingPosture"
+    | "getBrandingDurable"
+    | "setBranding"
+    | "getConnectorClientSecret"
+    | "setConnectorClient"
+  >;
   rootScope: ScopeId;
   actor: string;
 }
@@ -65,6 +92,37 @@ function parsedPostures(values: Readonly<Record<string, string | undefined>>) {
   return { securityPosture, sharingPosture };
 }
 
+async function importModelKeys(
+  values: Readonly<Record<string, string | undefined>>,
+  deps: TenantSettingsImportDeps,
+): Promise<void> {
+  const configured = new Set(
+    (await deps.modelCredentials.statuses()).filter((status) => status.configured).map((status) => status.provider),
+  );
+  for (const provider of MODEL_PROVIDERS) {
+    const key = values[PROVIDER_KEY_ENV[provider]]?.trim();
+    if (key && !configured.has(provider)) await deps.modelCredentials.set(provider, key, deps.actor);
+  }
+}
+
+async function importOAuthClients(
+  values: Readonly<Record<string, string | undefined>>,
+  deps: TenantSettingsImportDeps,
+): Promise<void> {
+  for (const [name, provider] of Object.entries(PROVIDERS)) {
+    const clientId = values[provider.clientIdEnv]?.trim();
+    const clientSecret = values[provider.clientSecretEnv]?.trim();
+    if (!clientId || !clientSecret || (await deps.config.getConnectorClientSecret(deps.rootScope, name))) continue;
+    const hostedDomain = name === "google" ? values.GOOGLE_WORKSPACE_DOMAIN?.trim() : undefined;
+    await deps.config.setConnectorClient(deps.rootScope, name, {
+      clientId,
+      clientSecret,
+      ...(hostedDomain ? { hostedDomain } : {}),
+      updatedBy: deps.actor,
+    });
+  }
+}
+
 export async function importTenantSettings(
   values: Readonly<Record<string, string | undefined>>,
   deps: TenantSettingsImportDeps,
@@ -74,34 +132,25 @@ export async function importTenantSettings(
   const present = Object.keys(values).filter((key) => values[key] !== undefined);
   const { securityPosture, sharingPosture } = parsedPostures(values);
   await deps.settings.update(Object.fromEntries(present.filter(isTenantSettingKey).map((key) => [key, values[key]!])));
-  for (const provider of MODEL_PROVIDERS) {
-    const key = values[PROVIDER_KEY_ENV[provider]]?.trim();
-    if (key) await deps.modelCredentials.set(provider, key, deps.actor);
-  }
-  if (securityPosture) await deps.config.setSecurityPosture(deps.rootScope, securityPosture);
-  if (sharingPosture) await deps.config.setSharingPosture(deps.rootScope, sharingPosture);
-  if (BRANDING_ENV.some((key) => values[key] !== undefined)) {
+  await importModelKeys(values, deps);
+  const { rootScope } = deps;
+  if (securityPosture && !(await deps.config.getSecurityPostureOwnDurable(rootScope)))
+    await deps.config.setSecurityPosture(rootScope, securityPosture);
+  if (sharingPosture && !(await deps.config.getSharingPostureOwnDurable(rootScope)))
+    await deps.config.setSharingPosture(rootScope, sharingPosture);
+  if (BRANDING_ENV.some((key) => values[key]?.trim())) {
+    const stored = await deps.config.getBrandingDurable(rootScope);
     await deps.config.setBranding(
-      deps.rootScope,
+      rootScope,
       sanitizeBranding({
-        accent: values.ORG_BRAND_ACCENT,
-        mark: values.ORG_BRAND_MARK,
-        selfLabel: values.ORG_BRAND_SELF_LABEL,
-        orgName: values.ORG_BRAND_ORG_NAME,
+        ...stored,
+        accent: stored?.accent ?? values.ORG_BRAND_ACCENT,
+        mark: stored?.mark ?? values.ORG_BRAND_MARK,
+        selfLabel: stored?.selfLabel ?? values.ORG_BRAND_SELF_LABEL,
+        orgName: stored?.orgName ?? values.ORG_BRAND_ORG_NAME,
       }) ?? null,
     );
   }
-  for (const [name, provider] of Object.entries(PROVIDERS)) {
-    const clientId = values[provider.clientIdEnv]?.trim();
-    const clientSecret = values[provider.clientSecretEnv]?.trim();
-    if (!clientId || !clientSecret) continue;
-    const hostedDomain = name === "google" ? values.GOOGLE_WORKSPACE_DOMAIN?.trim() : undefined;
-    await deps.config.setConnectorClient(deps.rootScope, name, {
-      clientId,
-      clientSecret,
-      ...(hostedDomain ? { hostedDomain } : {}),
-      updatedBy: deps.actor,
-    });
-  }
+  await importOAuthClients(values, deps);
   return present;
 }

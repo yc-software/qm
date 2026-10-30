@@ -188,6 +188,7 @@ export interface TenantSettingsStore {
   get(): Promise<TenantSettings>;
   peek(): TenantSettings;
   refreshAll(): Promise<void>;
+  onlyTenant(): Promise<string | null>;
   update(changes: TenantSettingChanges): Promise<TenantSettings>;
 }
 
@@ -216,27 +217,35 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
   const loading = new Map<string, { at: number; settings: Promise<TenantSettings> }>();
   const loaded = new Map<string, TenantSettings>();
 
-  function load(tenant: string): Promise<TenantSettings> {
+  function load(tenant: string, fresh = false): Promise<TenantSettings> {
     const hit = loading.get(tenant);
     if (hit && now() - hit.at < cacheMs) return hit.settings;
     const settings = backing.read(tenant).then((values) => parseTenantSettings(values, opts.harness));
     const entry = { at: now(), settings };
     loading.set(tenant, entry);
+    const stale = fresh ? undefined : loaded.get(tenant);
     settings.then(
       (value) => {
         if (loading.get(tenant) !== entry) return;
         loaded.set(tenant, value);
         opts.onLoad?.(tenant, value);
       },
-      () => {
-        if (loading.get(tenant) === entry) loading.delete(tenant);
+      (error: unknown) => {
+        if (loading.get(tenant) !== entry) return;
+        if (!stale) return void loading.delete(tenant);
+        loading.set(tenant, { at: entry.at, settings: Promise.resolve(stale) });
+        reportFailureAs("tenant settings: refresh", undefined)(error);
       },
     );
-    return settings;
+    return stale ? Promise.resolve(stale) : settings;
   }
 
   return {
     get: () => load(currentTenant()),
+    async onlyTenant() {
+      const tenants = await backing.tenants();
+      return tenants.length === 1 ? tenants[0]! : null;
+    },
     async refreshAll() {
       for (const tenant of await backing.tenants()) {
         await withTenant(tenant, () => load(tenant)).catch(reportFailureAs("tenant settings: refresh", undefined));
@@ -263,7 +272,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
       parseTenantSettings(applyChanges(await backing.read(tenant), normalized), opts.harness);
       await backing.write(tenant, normalized);
       loading.delete(tenant);
-      return load(tenant);
+      return load(tenant, true);
     },
   };
 }
