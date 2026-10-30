@@ -14,6 +14,7 @@ import { shq } from "../util/shell.ts";
 import { RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
 
 export const RENDER_SCRIPT_DIR = "/dev/.qm-run";
+const RENDER_SANDBOX_PLAN = "2c-4g";
 const CONTROL_TIMEOUT_MS = 30_000;
 const SUBMIT_TIMEOUT_MS = 60_000;
 const TRANSFER_TIMEOUT_MS = 300_000;
@@ -187,6 +188,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       const created = await retryOperation(
         () =>
           api.create({
+            plan: RENDER_SANDBOX_PLAN,
             timeoutSeconds: RENDER_SANDBOX_TTL_SEC,
             idleTimeoutSeconds: 0,
             ...(snapshotId ? { snapshotId } : {}),

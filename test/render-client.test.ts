@@ -77,7 +77,7 @@ test("Render SDK adapter maps sandbox and snapshot records and forwards the crea
     {
       method: "POST",
       path: "/v1/sandboxes",
-      body: { ownerId: "tea-test", timeoutSeconds: 86400, idleTimeoutSeconds: 0, snapshotId: "snp-base" },
+      body: { ownerId: "tea-test", plan: "2c-4g", timeoutSeconds: 86400, idleTimeoutSeconds: 0, snapshotId: "snp-base" },
     },
     { method: "GET", path: "/v1/sandboxes/sbx-test" },
   ]);
