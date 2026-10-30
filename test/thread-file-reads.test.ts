@@ -13,6 +13,7 @@ import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import { encodeTs } from "../src/slack/reactions.ts";
 import { textPng } from "./live-slack/text-png.ts";
 import { visionImage } from "../src/core/attachments.ts";
+import { messageTag } from "../src/util/message-tag.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -290,4 +291,9 @@ test("only real images in a supported format are shown to the model, and refusal
     ok: false,
     reason: "not an image",
   });
+});
+
+test("a message shown with files says how to open them, and one without files doesn't", () => {
+  assert.match(messageTag({ id: "1700000000.000042" }, "look", ["image.png"]), /open-files-with="read_file"/);
+  assert.doesNotMatch(messageTag({ id: "1700000000.000042" }, "look"), /open-files-with/);
 });
