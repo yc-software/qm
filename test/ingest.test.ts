@@ -54,6 +54,103 @@ test("planIngest classifies eligibility with reasons and excludes by config", ()
   assert.equal(counts.malformed, 1);
 });
 
+test("skillGlobs match the SKILL.md path as well as the skill directory", () => {
+  const nativeNames = new Set<string>();
+
+  const byPath = planIngest(repo(), { config: { skillGlobs: ["skills/*/SKILL.md"] }, nativeNames });
+  assert.equal(byPath.counts.total, 9, "a glob written against the file the pattern names selects every skill");
+  assert.equal(byPath.counts.filtered, 1, "and the one outside skills/ is reported as filtered, not as absent");
+
+  const byDir = planIngest(repo(), { config: { skillGlobs: ["skills/*"] }, nativeNames });
+  assert.equal(byDir.counts.total, 9, "a glob written against the directory keeps working unchanged");
+  assert.equal(byDir.counts.filtered, 1);
+
+  const neither = planIngest(repo(), { config: { skillGlobs: ["packs/*"] }, nativeNames });
+  assert.equal(neither.counts.total, 0);
+  assert.equal(
+    neither.counts.filtered,
+    10,
+    "a filter that matches nothing says so rather than looking like an empty repository",
+  );
+});
+
+test("an empty repository and a filtered-out one are distinguishable", () => {
+  const nativeNames = new Set<string>();
+  const empty = planIngest({ commit: "abc", files: [] }, { nativeNames });
+
+  assert.equal(empty.counts.total, 0);
+  assert.equal(empty.counts.filtered, 0, "nothing was filtered because there was nothing to filter");
+
+  const filtered = planIngest(repo(), { config: { skillGlobs: ["nope/*"] }, nativeNames });
+  assert.equal(filtered.counts.total, 0);
+  assert.notEqual(filtered.counts.filtered, 0);
+});
+
+test("exclude is counted as filtered too", () => {
+  const { counts } = planIngest(repo(), { config: { exclude: ["trusted/*"] }, nativeNames: new Set<string>() });
+  assert.equal(counts.filtered, 1);
+  assert.equal(counts.total, 9);
+});
+
+test("exclude matches a skill by ancestor and by SKILL.md path, as it already did for bundle files", () => {
+  const nativeNames = new Set<string>();
+  const byAncestor = planIngest(repo(), { config: { exclude: ["trusted"] }, nativeNames });
+  assert.equal(
+    byAncestor.candidates.find((c) => c.upstreamName === "stalker-watch"),
+    undefined,
+    "a bare directory name excludes the skill under it, not only its bundle files",
+  );
+  assert.equal(byAncestor.counts.filtered, 1);
+
+  const byManifest = planIngest(repo(), { config: { exclude: ["trusted/*/SKILL.md"] }, nativeNames });
+  assert.equal(
+    byManifest.candidates.find((c) => c.upstreamName === "stalker-watch"),
+    undefined,
+  );
+  assert.equal(byManifest.counts.filtered, 1);
+});
+
+test("a directory-shaped glob is not widened by the SKILL.md leniency", () => {
+  const { counts } = planIngest(repo(), { config: { skillGlobs: ["skills/*/*"] }, nativeNames: new Set<string>() });
+  assert.equal(counts.total, 0, "no skill sits at that depth, and none is admitted by its manifest path");
+  assert.equal(counts.filtered, 10);
+});
+
+test("exclude is normalized like skillGlobs, so a file-shaped glob does not uninstall the pack", () => {
+  const nativeNames = new Set<string>();
+
+  const docs = planIngest(repo(), { config: { exclude: ["**/*.md"] }, nativeNames });
+  assert.equal(docs.counts.total, 10, "stripping .md out of the bundle leaves every skill selected");
+  assert.equal(docs.counts.filtered, 0);
+
+  const deeper = planIngest(repo(), { config: { exclude: ["skills/*/*"] }, nativeNames });
+  assert.equal(deeper.counts.total, 10, "a depth-2 glob does not reach a skill at depth 1 through its manifest");
+  assert.equal(deeper.counts.filtered, 0);
+});
+
+test("a bare SKILL.md glob selects the repository-root skill", () => {
+  const rootRepo = {
+    commit: "abc1234",
+    files: [
+      { path: "SKILL.md", text: md("name: root-skill\ndescription: d\nscope: company"), binary: false },
+      { path: "skills/other/SKILL.md", text: md("name: other\ndescription: d\nscope: company"), binary: false },
+    ],
+  };
+  const { counts, candidates } = planIngest(rootRepo, {
+    config: { skillGlobs: ["SKILL.md"] },
+    nativeNames: new Set<string>(),
+  });
+  assert.equal(counts.total, 1);
+  assert.equal(counts.filtered, 1, "and the one under skills/ is filtered, not silently absent");
+  assert.equal(candidates[0]!.skillPath, "SKILL.md");
+});
+
+test("an empty skillGlobs means unset rather than nothing", () => {
+  const { counts } = planIngest(repo(), { config: { skillGlobs: [] }, nativeNames: new Set<string>() });
+  assert.equal(counts.total, 10, "an empty allowlist does not silently uninstall the pack");
+  assert.equal(counts.filtered, 0);
+});
+
 test("importPack publishes eligible skills with provenance + assets; native publish untouched", async () => {
   const store = createSkillStore();
   const org = scopeId("org", "acme");
