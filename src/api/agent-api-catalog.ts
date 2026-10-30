@@ -76,7 +76,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "GET",
         path: "/v1/swarm",
         summary:
-          "own identity and all peers with editable JSON context, session IDs and sandbox IDs; ?read=1&after=0&waitMs=0&replyTo=... reads scoped messages, not only intended audience",
+          "own identity and all peers with editable JSON context, session IDs and sandbox IDs; ?read=1&after=0&waitMs=0&replyTo=... reads scoped messages, not only intended audience; replies read with replyTo count as handed to you",
       },
       {
         method: "POST",

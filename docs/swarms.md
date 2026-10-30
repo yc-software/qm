@@ -225,7 +225,7 @@ the stored `settings.waitMs` (10,000 by default); a timeout returns an empty
 
 To ask, send a message, keep its `id`, then read with `replyTo=<id>&waitMs=10000`.
 The responding agent sends with `replyTo` set to that ID. Replies can use
-`wake:false` when the requester is already waiting. Messages an agent reads through the swarm API count as handed to it, so its next turn does not see them again. Waiting does not hold a
+`wake:false` when the requester is already waiting. Replies an agent receives through a read with `replyTo` count as handed to it, so its next turn does not see them again; other reads leave its mailbox as it was. Waiting does not hold a
 swarm transaction, provision lock, or other agent's run lease. It does not promise
 an answer: an active recipient may finish its current turn first, and mutually
 waiting agents time out rather than holding each other indefinitely. Prefer

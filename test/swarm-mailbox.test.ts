@@ -34,6 +34,12 @@ test("a message wakes its recipients unless sent with wake:false, which leaves i
     text: "for the record",
   });
   const order = await f.service.send(f.caller, { requestId: "order", audience: [first!.id], text: "next lane" });
+  await f.service.read(worker, {});
+  assert.equal(
+    (await f.store.get(f.root.id))!.messages.find((message) => message.id === quiet.id)!.notifications[first!.id]!
+      .state,
+    "mailbox",
+  );
   await f.service.sweep();
   assert.deepEqual(ack.notifications, { [f.root.id]: { state: "mailbox" } });
   assert.deepEqual(peer.notifications, { [second!.id]: { state: "mailbox" } });

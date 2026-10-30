@@ -815,23 +815,27 @@ export function createSwarmService(deps: {
       )
         throw new Error("invalid read bounds");
       const deadline = Date.now() + waitMs;
-      for (;;) {
-        const messages = swarm.messages
+      const pick = (current: Swarm) =>
+        current.messages
           .filter((message) => message.seq > after && (!options.replyTo || message.replyTo === options.replyTo))
           .slice(0, 32);
+      for (;;) {
+        let messages = pick(swarm);
         const unread = new Set(
-          caller.kind === "agent"
+          caller.kind === "agent" && options.replyTo
             ? messages
                 .filter((message) => message.notifications[auth.memberId]?.state === "mailbox")
                 .map((message) => message.id)
             : [],
         );
         if (unread.size)
-          await update(auth, (current) => {
-            for (const message of current.messages)
-              if (unread.has(message.id) && message.notifications[auth.memberId]?.state === "mailbox")
-                message.notifications[auth.memberId] = { state: "handed" };
-          });
+          messages = pick(
+            await update(auth, (current) => {
+              for (const message of current.messages)
+                if (unread.has(message.id) && message.notifications[auth.memberId]?.state === "mailbox")
+                  message.notifications[auth.memberId] = { state: "handed" };
+            }),
+          );
         if (messages.length || Date.now() >= deadline) return messages;
         await sleep(Math.min(200, deadline - Date.now()));
         ({ auth, swarm } = await load(caller));
