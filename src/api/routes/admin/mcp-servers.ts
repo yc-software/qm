@@ -12,6 +12,7 @@ import {
 } from "../../../mcp/mcp-server-store.ts";
 import { isAccountType, PROVIDERS } from "../../../connectors/oauth.ts";
 import { discoverOAuth, httpsUrl, parseScopes, type DiscoveredOAuth } from "../../../mcp/oauth-discovery.ts";
+import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
@@ -232,7 +233,7 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
     } catch (e) {
       return sendJson(ctx.res, 400, {
         error: "unreachable",
-        message: `tools/list against ${parsed.host} failed: ${e instanceof Error ? e.message : String(e)}`,
+        message: `tools/list against ${parsed.host} failed: ${errMessage(e)}`,
       });
     }
   }

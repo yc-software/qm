@@ -5,6 +5,7 @@ import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
 import { swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
+import { publicFetch } from "../util/network.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -70,7 +71,7 @@ export type FetchLike = (
   json(): Promise<unknown>;
 }>;
 
-const realFetch: FetchLike = (url, init) => fetch(url, init);
+const realFetch: FetchLike = publicFetch;
 
 function parseScopes(raw: unknown): string[] | undefined {
   if (Array.isArray(raw)) return raw.map(String);

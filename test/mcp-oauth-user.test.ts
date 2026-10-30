@@ -11,7 +11,7 @@ import {
   withPublicOAuthClients,
 } from "../src/connectors/oauth.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 
 const HOST = "mcp.example.com";
 
@@ -95,6 +95,7 @@ test("oauth-user tools offer a sign-in link until the caller connects, then use 
   });
   const auth = () => mcp.requests.filter((r) => r.rpc?.startsWith("tools/")).map((r) => r.authorization ?? "");
   const service = createMcpToolService({
+    fetch: loopbackFetch,
     servers: store,
     userTokens: {
       connectorAccessToken: async (_host, principalId) => tokens.get(principalId) ?? null,
@@ -153,6 +154,7 @@ test("stored oauth-user tools survive a restart but stay hidden from callers who
     "internal:carol": { connected: true, needsReconnect: true },
   };
   const service = createMcpToolService({
+    fetch: loopbackFetch,
     servers: store,
     userTokens: {
       connectorAccessToken: async () => null,
