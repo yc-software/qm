@@ -140,18 +140,16 @@ export interface PrincipalRule {
 type PrincipalArgs = { sub: string; claims: Record<string, unknown>; userinfo: Record<string, unknown> };
 
 function envRefusal(rule: PrincipalRule, email: string, args: PrincipalArgs): string | null {
-  if (
-    rule.allowedEmails?.length &&
-    !rule.allowedEmails.map((allowed) => allowed.trim().toLowerCase()).includes(email)
-  ) {
-    return "account is not on the permitted email list";
-  }
+  // Either gate admits (matches core's emailAllowed / orgMember): a listed address OR an address in the domain.
+  if (rule.allowedEmails?.some((allowed) => allowed.trim().toLowerCase() === email)) return null;
   if (rule.allowedEmailDomain) {
     const domain = rule.allowedEmailDomain.toLowerCase();
     if (!email.endsWith(`@${domain}`)) return "account is outside the permitted domain";
     const hd = args.userinfo.hd ?? args.claims.hd;
     if (typeof hd === "string" && hd.toLowerCase() !== domain) return "account is outside the permitted domain";
+    return null;
   }
+  if (rule.allowedEmails?.length) return "account is not on the permitted email list";
   return null;
 }
 
