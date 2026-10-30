@@ -999,10 +999,11 @@ test("steered documents use the inbound security screen before writing their con
   );
 });
 
-test("inbound files are screened in bounded chunks with the request they arrived with, at turn start and on steer", async () => {
+test("inbound files are screened in bounded chunks with the request they arrived with, at turn start and on steer, and oversized files are left unscreened", async () => {
   const blobTransfer = createMemoryBlobTransferStore();
   const large = await blobTransfer.put(Buffer.from('"quoted","cells"\n'.repeat(800)));
   const small = await blobTransfer.put(Buffer.from("plain notes"));
+  const oversized = await blobTransfer.put(Buffer.from("x".repeat(210_000)));
   const sandbox: Sandbox = {
     ...readSandbox(),
     removeDir: async () => {},
@@ -1038,7 +1039,10 @@ test("inbound files are screened in bounded chunks with the request they arrived
   const { orchestrator } = buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
   const result = await orchestrator.handleTurn({
     ...dm("screen-requests", "turn request"),
-    attachments: [{ name: "first.csv", mimetype: "text/csv", ...large }],
+    attachments: [
+      { name: "first.csv", mimetype: "text/csv", ...large },
+      { name: "huge.txt", mimetype: "text/plain", ...oversized },
+    ],
   });
   assert.equal(result.status, "ok", result.reason);
   const turnStart = fileScreens.filter((screen) => screen.request === "turn request");
@@ -1050,6 +1054,7 @@ test("inbound files are screened in bounded chunks with the request they arrived
     ['{"name":"later.txt","m'],
   );
   assert.equal(fileScreens.length, turnStart.length + 1);
+  assert.ok(fileScreens.every((screen) => !screen.head.startsWith('{"name":"huge.txt"')));
 });
 
 for (const budget of ["count", "bytes", "reupload", "retry"] as const) {

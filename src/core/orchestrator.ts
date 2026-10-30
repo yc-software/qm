@@ -22,6 +22,7 @@ import {
   historicalDocumentMetas,
   loadDocumentInputs,
   MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENT_TEXT_CHARS,
   MAX_DOCUMENTS,
   estimateDocumentTokens,
   isDocumentAttachment,
@@ -221,6 +222,7 @@ import {
   createSecurityClassifier,
   screenChunks,
   type SecurityScreenContext,
+  unscreenedVerdict,
 } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import type { EgressPolicy } from "../types.ts";
@@ -2742,16 +2744,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 registration,
                 inboxDir,
                 securityPolicy.screening !== "off"
-                  ? ({ content, name, mimetype }) =>
-                      screenChunks(
-                        securityScreenChunks("tool_result:inbound_file", JSON.stringify({ name, mimetype, content })),
+                  ? async ({ content, name, mimetype }) => {
+                      const payload = JSON.stringify({ name, mimetype, content });
+                      if (payload.length > MAX_DOCUMENT_TEXT_CHARS) return unscreenedVerdict();
+                      return screenChunks(
+                        securityScreenChunks("tool_result:inbound_file", payload),
                         classifyAs({
                           sessionId: session.id,
                           hook: "tool_response",
                           request: requestText,
                           surface: "inbound_file",
                         }),
-                      )
+                        { batch: 4, signal: turnAbort.signal },
+                      );
+                    }
                   : undefined,
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
