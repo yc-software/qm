@@ -108,7 +108,7 @@ export interface CronRunsResult {
 }
 
 export const CRON_PATCH_NOTHING_TO_CHANGE =
-  "nothing to change — pass title, task, schedule, enabled, archived, unfurlLinks, unattendedGrants, or session";
+  "nothing to change — pass title, task, text, schedule, enabled, archived, unfurlLinks, unattendedGrants, or session";
 
 export const CRON_FIRE_NOTE_MAX_CHARS = 400;
 
