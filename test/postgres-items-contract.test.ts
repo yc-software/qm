@@ -16,7 +16,7 @@ import {
   parkedOutputKey,
 } from "../src/sessions/tool-output.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -37,6 +37,7 @@ async function withSchema(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  await seedTenant(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   try {
     await fn({ raw, url: url.toString(), store: createPostgresSessionStore(url.toString()) });

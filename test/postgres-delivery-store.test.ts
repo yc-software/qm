@@ -6,6 +6,9 @@ import {
   exerciseDeliveryExpiryRevive,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";

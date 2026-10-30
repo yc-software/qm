@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { applyPgMigrations, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -18,6 +18,7 @@ test("migrations drop an empty session_tape and the store keeps working without 
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  await seedTenant(url.toString());
   const raw = new pg.Pool({ connectionString: url.toString() });
   const store = createPostgresSessionStore(url.toString());
   try {

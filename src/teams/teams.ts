@@ -122,7 +122,7 @@ export function createPostgresTeamStore(
            array_agg(m.principal_id) AS present
          FROM team_members m JOIN teams t ON t.team_id = m.team_id
          WHERE m.principal_id = ANY($2)
-         GROUP BY t.team_id ORDER BY t.team_id`,
+         GROUP BY t.tenant_id, t.team_id ORDER BY t.team_id`,
         [scope, [...new Set(principalIds.flatMap(keysOf))]],
       );
       return rows.map((r) => ({

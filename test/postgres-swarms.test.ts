@@ -8,7 +8,7 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -26,6 +26,7 @@ before(async () => {
   } finally {
     await pool.end();
   }
+  await seedTenant(databaseUrl!);
 });
 after(async () => {
   if (!baseUrl) return;

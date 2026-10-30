@@ -22,3 +22,10 @@ export function bindTestTenant(): void {
   const url = process.env.DATABASE_URL;
   if (url) before(() => seedTenant(url));
 }
+
+export function boundUrl(url: string, id = TEST_TENANT): string {
+  const bound = new URL(url);
+  const options = bound.searchParams.get("options");
+  bound.searchParams.set("options", `${options ? `${options} ` : ""}-c qm.tenant_id=${id}`);
+  return bound.toString();
+}

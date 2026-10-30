@@ -6,6 +6,9 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
+import { bindTestTenant, boundUrl } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";
@@ -13,7 +16,7 @@ const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres gr
 before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: boundUrl(URL!) });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query("DROP TABLE IF EXISTS acl_grants CASCADE");
   await p.query("DROP TABLE IF EXISTS acl_grants_version CASCADE");
@@ -97,7 +100,7 @@ test("pg grant persistence: a warm cache sees writes that bypass the store entir
   await reader.all();
 
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: boundUrl(URL!) });
   await p.query(
     "INSERT INTO acl_grants (owner_scope_id, path, grantee_scope_id, permission, granted_by) VALUES ($1, $2, $3, $4, $5)",
     [owner, "out-of-band.md", carol, "read", "U1"],
@@ -117,7 +120,7 @@ test("pg grant persistence: the snapshot is served from cache until the version 
   await reader.all();
 
   const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
+  const p = new pg.Pool({ connectionString: boundUrl(URL!) });
   try {
     await p.query("ALTER TABLE acl_grants DISABLE TRIGGER acl_grants_bump");
     await p.query("DELETE FROM acl_grants WHERE path = $1", ["cached.md"]);
