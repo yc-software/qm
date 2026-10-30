@@ -229,7 +229,7 @@ const CORE_STACK_KEYS = [
 const CATALOG: Record<ServiceName, ServiceDef> = {
   edge: {
     name: "edge",
-    readiness: /edge listening on :\d+/,
+    readiness: /listening on :\d+/,
     order: 0,
     command: ["node", "src/edge/main.ts"],
     dev: { cwd: ".", entry: ["--env-file-if-exists=.env", "src/edge/main.ts"] },
@@ -257,7 +257,7 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
   },
   harness: {
     name: "harness",
-    readiness: /harness listening on :\d+/,
+    readiness: /listening on :\d+/,
     order: 10,
     command: ["node", "src/harness/main.ts"],
     dev: { cwd: ".", entry: ["--env-file-if-exists=.env", "src/harness/main.ts"] },
@@ -303,3 +303,4 @@ export function ordered(names: ServiceName[]): ServiceDef[] {
 export function teardownOrdered(names: ServiceName[]): ServiceDef[] {
   return ordered(names).reverse();
 }
+
