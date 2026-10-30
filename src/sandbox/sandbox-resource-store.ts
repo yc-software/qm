@@ -36,7 +36,7 @@ const DEFAULTS: TableSpec<SandboxDefault> = {
 
 const RETIRED_BACKEND_TABLES = ["aws_sandbox_bodies", "superserve_sandbox_bodies", "superserve_config_epochs"];
 
-export const SANDBOX_RESOURCE_MIGRATIONS = [
+const SANDBOX_RESOURCE_MIGRATIONS = [
   tableConversion(RESOURCES),
   tableConversion(DEFAULTS),
   {

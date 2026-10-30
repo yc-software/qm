@@ -6,7 +6,7 @@ import { tenantMap } from "../tenants/context.ts";
 
 export type ColumnType = "text" | "bigint" | "double precision" | "boolean" | "jsonb" | "text[]";
 
-export type Columns<T, K extends string = never> = {
+type Columns<T, K extends string = never> = {
   readonly [F in Exclude<Extract<keyof T, string>, K>]-?: ColumnType;
 };
 
@@ -23,7 +23,7 @@ export interface TableSpec<T = Record<string, unknown>, K extends string = never
 
 const keyOf = (spec: TableSpec<never, string>): string => columnName(spec.fieldKey ?? spec.key ?? "id");
 
-export const columnName = (field: string): string => field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+const columnName = (field: string): string => field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
 function fromJson(field: string, type: ColumnType): string {
   const value = `json->'${field}'`;
@@ -212,7 +212,7 @@ export function typedTable<T extends object, K extends string = never>(
   };
 }
 
-export type TypedTable<T extends object> = ReturnType<typeof typedTable<T, string>>;
+type TypedTable<T extends object> = ReturnType<typeof typedTable<T, string>>;
 
 export type KeyedRows<T extends object> = Pick<
   TypedTable<T>,
