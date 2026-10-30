@@ -21,7 +21,12 @@ import {
   historicalDocumentMetas,
   loadDocumentInputs,
 } from "../core/document-inputs.ts";
-import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment, isTextDocument } from "../core/document-kinds.ts";
+import {
+  MAX_DOCUMENT_BYTES,
+  estimateDocumentTokens,
+  isDocumentAttachment,
+  isTextDocument,
+} from "../core/document-kinds.ts";
 import { recoveredRuntime } from "../agent/runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
@@ -181,23 +186,9 @@ import type { OrchestratorInput } from "../core/turn-input.ts";
 import { codexSubscriptionModelId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../model/pi-runtime.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
-import { createSessionTitles } from "../core/session-title.ts";
-import {
-  MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
-  approvalGrantId,
-  completedSurfaceEnqueues,
-  deliveryCandidatesFor,
-  egressClaimAllowingControlPlane,
-  filterConnectorSkills,
-  isScreenableTextAttachment,
-  loadActiveBundles,
-  recentPrincipalDeliveryNote,
-  renderTitleTranscript,
-  replayableRequest,
-  stripAckPrefix,
-  turnPostKeys,
-  visibleTitleEntryText,
-} from "../core/turn-helpers.ts";
+import { createSessionTitles, createTitleRegenerator } from "../core/session-title.ts";
+import { createSteerScreen } from "../security/steer-screen.ts";
+import { MAX_AUTO_ATTACHMENT_SCREEN_BYTES, approvalGrantId, completedSurfaceEnqueues, deliveryCandidatesFor, egressClaimAllowingControlPlane, filterConnectorSkills, isScreenableTextAttachment, loadActiveBundles, recentPrincipalDeliveryNote, replayableRequest, stripAckPrefix, turnPostKeys } from "../core/turn-helpers.ts";
 import {
   currentTimeBlock,
   deliveryMenu,
@@ -210,7 +201,7 @@ import {
 } from "../core/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
-import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
+import { createSecurityClassifier } from "../security/security-classifier.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -300,7 +291,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     return byId;
   }
 
-  const securitySteersInFlight = new Set<string>();
   const { compactContextIfNeeded, compactRecent, scheduleBackgroundCompaction, documentTokenBudget } =
     createCompaction(deps);
 
@@ -332,6 +322,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const classifySecurityData = createSecurityClassifier(deps);
+  const screenSecuritySteer = createSteerScreen(deps);
 
   const titles = createSessionTitles({
     sessions: deps.sessions,
@@ -339,6 +330,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     ...(deps.sessionStateBus ? { sessionStateBus: deps.sessionStateBus } : {}),
     ...(deps.errors ? { errors: deps.errors } : {}),
   });
+  const regenerateTitle = createTitleRegenerator({ sessions: deps.sessions, titles });
 
   function recordSessionBusy(busy: {
     site: "turn" | "quarantined_input" | "flagged_input";
@@ -422,101 +414,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const orchestrator: Orchestrator = {
-    async screenSecuritySteer({ payload, actor, conversation, sessionId, verifiedSwarm }) {
-      const resolution = await deps.resolution.resolve(conversation, actor);
-      const { screening } = resolution.securityPolicy;
-      if (screening === "off") return "allow";
-      const scopeLabel = deps.resolution.scopeFor(conversation, actor);
-      const bounded = securityScreenPayload({
-        surface: "external",
-        text: "",
-        triggered: true,
-        securityScreenData: payload,
-        ...(verifiedSwarm ? { verifiedSwarm } : {}),
-      });
-      const steerContext = {
-        hook: "user_input",
-        surface: "steer",
-        origin: verifiedSwarm ? "automation" : "ambient",
-        thread: conversation.threadRef,
-        ...(sessionId ? { sessionId } : {}),
-      } as const;
-      if (screening === "observe") {
-        if (bounded && !bounded.truncated)
-          await classifySecurityData(bounded.content, actor.id, scopeLabel, undefined, {
-            ...steerContext,
-            mode: "observe",
-          });
-        return "allow";
-      }
-      const block = (cause: string, reason?: string): "block" => {
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "security_posture.steer_block",
-          resource: conversation.threadRef,
-          scopeLabel,
-          status: "strict",
-          detail: JSON.stringify({ cause, ...(reason ? { reason } : {}) }),
-        });
-        return "block";
-      };
-      if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
-      if (!(await deps.rateLimiter.check(actor.id)).allowed) return block("rate-limited");
-      if (deps.budget && !(await deps.budget.check(actor.id)).allowed) return block("over-budget");
-      if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
-      if (!bounded || bounded.truncated) return block("oversize-input");
-      securitySteersInFlight.add(conversation.threadRef);
-      const verdict = await classifySecurityData(
-        bounded.content,
-        actor.id,
-        scopeLabel,
-        sessionId
-          ? async (rec, signal) => {
-              await deps.sessions.recordLlmRequest(sessionId, { ...rec, scopeLabel }, signal);
-            }
-          : undefined,
-        { ...steerContext, mode: "enforce" },
-      ).finally(() => securitySteersInFlight.delete(conversation.threadRef));
-      if (verdict?.decision === "auto") {
-        if (!verdict.unscreened) return "allow";
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
-          action: "security_posture.steer_failed_open",
-          resource: conversation.threadRef,
-          scopeLabel,
-          status: "allowed",
-          detail: JSON.stringify({ cause: UNSCREENED_REASON }),
-        });
-        return "unscreened";
-      }
-      return block("strict-verdict", verdict?.reason);
-    },
+    screenSecuritySteer,
 
-    async regenerateTitle(sessionId, principalId, participantIds) {
-      const session = await deps.sessions.get(sessionId);
-      if (!session) return null;
-      let entries = (await transcripts.forViewer(sessionId, principalId)).entries;
-      if (participantIds?.length) {
-        const views = await Promise.all(
-          participantIds.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).entries),
-        );
-        const common = commonEntrySeqs(views);
-        entries = entries.filter((entry) => common.has(entry.seq));
-      }
-      if (entries.length === 0) return null;
-      const transcript = renderTitleTranscript(entries);
-      const fallbackEntry = entries.find((entry) => entry.type === "user" && !isOverheardEntry(entry));
-      const title = await titles.generateAndStore(
-        session.id,
-        session.scopeId,
-        transcript,
-        participantIds?.length ? principalId : undefined,
-        fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
-      );
-      return { title: title ?? (participantIds ? null : (session.title ?? null)) };
-    },
+    regenerateTitle,
 
     async handleTurn(input: OrchestratorInput): Promise<TurnResult> {
       if (

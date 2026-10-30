@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSecurityScreenProxy } from "../src/security/security-screener.ts";
-import { createSecurityClassifier } from "../src/harness/orchestrator/security-screen.ts";
+import { createSecurityClassifier } from "../src/security/security-classifier.ts";
 import type { OrchestratorDeps } from "../src/harness/orchestrator/types.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 

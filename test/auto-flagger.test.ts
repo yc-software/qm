@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createSecurityClassifier } from "../src/harness/orchestrator/security-screen.ts";
+import { createSecurityClassifier } from "../src/security/security-classifier.ts";
 import type { OrchestratorDeps } from "../src/harness/orchestrator/types.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { ScreenSecurityInput } from "../src/agent/agent.ts";
