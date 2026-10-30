@@ -21,6 +21,9 @@ import {
 } from "../src/auth/capability-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";

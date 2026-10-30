@@ -113,7 +113,7 @@ import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
-import { ownerRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
+import { memoryRowTenants, ownerRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
 import type { TenantResolver } from "./tenants/resolver.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
@@ -479,7 +479,7 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   tenants?: TenantResolver;
-  rowTenants?: RowTenants;
+  rowTenants: RowTenants;
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -587,7 +587,7 @@ export function buildApp(
     tenants?: TenantResolver;
   } = {},
 ): BuiltApp {
-  const rowTenants = config.databaseUrl ? ownerRowTenants(createPgPool(config.databaseUrl)) : undefined;
+  const rowTenants = config.databaseUrl ? ownerRowTenants(createPgPool(config.databaseUrl)) : memoryRowTenants;
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let backgroundActive = () => false;
   const admittedWork = createAdmittedWork({
@@ -2682,7 +2682,7 @@ export function buildApp(
     ...(config.gmailPubSub && keychain
       ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
       : {}),
-    ...(rowTenants ? { rowTenants } : {}),
+    rowTenants,
   });
   const loops: LoopServiceDeps = {
     lock: advisoryLock,
@@ -3118,7 +3118,7 @@ export function buildApp(
     oauthFlows,
     secretDrops,
     ...(overrides.tenants ? { tenants: overrides.tenants } : {}),
-    ...(rowTenants ? { rowTenants } : {}),
+    rowTenants,
     modelGatewayTransport: gatewayTransport,
     budget,
     resolveBrowserCompanyKeys,
@@ -3227,7 +3227,6 @@ export function serverDeps(
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
     capabilityTokenCompression: config.capabilityTokenCompression,
     ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
-    ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
@@ -3257,7 +3256,7 @@ export function serverDeps(
     oauthFlows: built.oauthFlows,
     secretDrops: built.secretDrops,
     ...(built.tenants ? { tenants: built.tenants } : {}),
-    ...(built.rowTenants ? { rowTenants: built.rowTenants } : {}),
+    rowTenants: built.rowTenants,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),

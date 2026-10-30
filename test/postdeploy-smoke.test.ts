@@ -11,6 +11,9 @@ import {
   stagingApiHeaders,
 } from "../src/deployment/postdeploy-smoke.ts";
 import { PORTAL_IDENTITY_HEADER, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("deployed database smoke rejects the parallel exception-handler failure class", () => {
   assert.match(PARALLEL_EXCEPTION_QUERY, /p\.proparallel = 's'/);

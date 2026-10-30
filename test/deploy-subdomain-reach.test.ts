@@ -20,6 +20,9 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal
 import { viewerIdentityKey } from "../src/deploy/access-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
@@ -199,7 +202,7 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,
@@ -265,7 +268,7 @@ test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing th
     files: [],
     name: "throttled",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
@@ -306,7 +309,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
     files: [],
     name: "ratelimited",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
@@ -335,7 +338,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
 
 test("subdomain ingress: a non-apps Host is not gated (normal routing proceeds)", async () => {
   const app = appServingUpstream(1);
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
   });
@@ -416,7 +419,7 @@ test("subdomain ingress: the SameSite=None twin is honoured only for framed requ
     files: [],
     name: "framed",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,

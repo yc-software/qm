@@ -23,6 +23,9 @@ import type { BrokerFetch } from "../src/api/credential-broker.ts";
 import type { GitHttpFetch } from "../src/api/git-http-broker.ts";
 import { TEST_CAPABILITY_SECRET, testConfig } from "./support/test-config.ts";
 import type { AclStore } from "../src/acl/acl-store.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "svc-cred-route-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -30,7 +33,7 @@ const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alic
 function start(wrapAcl?: (acl: AclStore) => AclStore): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "svc-cred-route-")) }));
   const acl = wrapAcl?.(built.acl) ?? built.acl;
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     serviceCreds: built.serviceCreds,
     acl,

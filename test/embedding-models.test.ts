@@ -24,6 +24,9 @@ import {
   modelSupportedByHarness,
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const definition = {
   kind: "embedding",
@@ -147,7 +150,7 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   });
   await built.modelRegistry.upsert(definition, "admin");
   await built.refreshModels();
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/org:default-org/memory-embedding-model`;

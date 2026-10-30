@@ -11,6 +11,9 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "test-capability-secret";
 
@@ -23,7 +26,7 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
       seedSkills: false,
     }),
   );
-  const server = createInsecureTestServer(built.app, { capabilitySecret: SECRET, config: built.config });
+  const server = createInsecureTestServer(TEST_TENANT, built.app, { capabilitySecret: SECRET, config: built.config });
   server.listen(0);
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,

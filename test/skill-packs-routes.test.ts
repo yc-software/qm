@@ -10,6 +10,9 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ADMIN = { "x-admin-actor": "admin-alice@default-org", "content-type": "application/json" };
 const json = async (r: Response): Promise<any> => r.json();
@@ -101,7 +104,7 @@ function makeRepoWithLayerCollision(): { dir: string; sha: string } {
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "reg-routes-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     sessions: built.sessions,

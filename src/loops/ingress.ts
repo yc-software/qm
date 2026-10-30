@@ -110,7 +110,7 @@ export interface LoopIngressDeps {
   gmailConfig?: GmailPushConfig;
   gmailClient?: ReturnType<typeof createGmailPushClient>;
   verifyGoogle?: typeof verifyGmailPush;
-  rowTenants?: RowTenants;
+  rowTenants: RowTenants;
 }
 
 export const GMAIL_PUSH_ID = "gmail";
@@ -375,7 +375,6 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           for (const source of sources)
             if (await deps.enabledFor(source.owner)) await enqueue(source, historyId, { historyId });
         };
-        if (!deps.rowTenants) return { status: 503, body: "Tenant lookup unavailable" };
         for (const tenant of await deps.rowTenants("loop_ingress", ["gmail_email"], email))
           await withTenant(tenant, accept);
         return { status: 202, body: "Accepted" };

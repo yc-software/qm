@@ -16,6 +16,9 @@ import { scopeId } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function appWithFakeRuntime() {
   const deployStore = createDeployStore();
@@ -233,7 +236,7 @@ test("HTTP: /v1/deployments?principalId= filters through viewer authz", async ()
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
-  const server = createInsecureTestServer(app);
+  const server = createInsecureTestServer(TEST_TENANT, app);
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;

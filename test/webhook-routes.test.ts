@@ -12,6 +12,9 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
@@ -21,7 +24,7 @@ function start(signingSecret?: string, publicUrl?: string): { base: string; clos
   const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
   const server = signingSecret
     ? createServer(built.app, { ...deps, signingSecret })
-    : createInsecureTestServer(built.app, deps);
+    : createInsecureTestServer(TEST_TENANT, built.app, deps);
   server.listen(0);
   return {
     base: `http://localhost:${(server.address() as AddressInfo).port}`,

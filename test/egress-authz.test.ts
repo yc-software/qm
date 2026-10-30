@@ -14,6 +14,9 @@ import { verifySignature } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
 import { scopeId, type EgressPolicy } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const CAPABILITY_SECRET = "test-egress-capability-secret";
 const SOURCE_SECRET = "test-egress-source-secret";

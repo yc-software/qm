@@ -86,7 +86,6 @@ interface Wiring {
   deps: ServerDeps;
   secret: string | undefined;
   auth: SourceAuth | null;
-  requirePortalIdentity: boolean;
   allowUnsignedSourceAuth: boolean;
 }
 
@@ -190,7 +189,7 @@ async function gate(
   params: Record<string, string>,
 ): Promise<GateResult | null> {
   const routeAuth = route?.auth;
-  const { deps, secret, auth, requirePortalIdentity, allowUnsignedSourceAuth } = wiring;
+  const { deps, secret, auth, allowUnsignedSourceAuth } = wiring;
   const isPublicRoute = routeAuth === "public";
   const requiredAuth = typeof routeAuth === "object" ? routeAuth : null;
   const requiredAud = requiredAuth?.aud ?? null;
@@ -269,7 +268,7 @@ async function gate(
     }
     if (actor)
       actor = { ...actor, p: canonicalPerson(actor.p), ...(actor.imp ? { imp: canonicalPerson(actor.imp) } : {}) };
-    if (!isPublicRoute && requirePortalIdentity) {
+    if (!isPublicRoute && !allowUnsignedSourceAuth) {
       const webTurn =
         method === "POST" &&
         pathname === "/v1/turns" &&
@@ -466,8 +465,8 @@ function buildFastify(wiring: Wiring, server: Server): { fastify: FastifyInstanc
 
 type ServerOptions = Omit<ServerDeps, "control">;
 
-function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boolean): Server {
-  const requirePortalIdentity = Boolean(deps.requireSignedPortalIdentity || deps.production);
+function buildServer(app: App, deps: ServerOptions, unsignedTenant: string | null): Server {
+  const allowUnsignedSourceAuth = unsignedTenant !== null;
   const auth = deps.signingSecret
     ? createSourceAuth({
         signingSecret: deps.signingSecret,
@@ -479,7 +478,6 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
     deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
     secret: deps.signingSecret,
     auth,
-    requirePortalIdentity,
     allowUnsignedSourceAuth,
   };
   const tenantDeps = {
@@ -559,7 +557,7 @@ export function createServer(app: App, deps: ServerOptions = {}): Server {
       `CORE_SIGNING_SECRET must be at least ${MIN_SIGNING_SECRET_LENGTH} characters; tests that intentionally need unsigned source auth must use createInsecureTestServer`,
     );
   }
-  if (deps.requireSignedPortalIdentity || deps.production) {
+  if (deps.production) {
     const shared = (name: string, value: string | undefined): string | null => {
       if (!value) return `${name} is not set (it would fall back to CORE_SIGNING_SECRET)`;
       return value === deps.signingSecret ? `${name} must differ from CORE_SIGNING_SECRET` : null;
@@ -577,10 +575,10 @@ export function createServer(app: App, deps: ServerOptions = {}): Server {
   }
   if (deps.production && (!deps.tenants || !deps.rowTenants))
     throw new Error("a production server needs a tenant resolver and an owner row lookup");
-  return buildServer(app, deps, false);
+  return buildServer(app, deps, null);
 }
 
-export function createInsecureTestServer(app: App, deps: ServerOptions = {}): Server {
+export function createInsecureTestServer(tenant: string, app: App, deps: ServerOptions = {}): Server {
   if (deps.signingSecret) throw new Error("createInsecureTestServer must not receive a signing secret");
-  return buildServer(app, deps, true);
+  return buildServer(app, deps, tenant);
 }

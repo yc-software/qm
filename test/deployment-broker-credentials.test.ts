@@ -23,6 +23,9 @@ import {
 import type { ServiceCredentialStore } from "../src/credentials/keychain.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "deployment-broker-secret".repeat(3);
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -205,7 +208,7 @@ function start(fetchImpl: BrokerFetch, admin = false, brokerCredentials = deploy
     brokerFetch: fetchImpl,
   };
   const server = admin
-    ? createInsecureTestServer(built.app, deps)
+    ? createInsecureTestServer(TEST_TENANT, built.app, deps)
     : createServer(built.app, { ...deps, signingSecret: SECRET });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

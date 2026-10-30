@@ -11,6 +11,9 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function start(withAdmin = true, signingSecret?: string) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));
@@ -20,7 +23,7 @@ function start(withAdmin = true, signingSecret?: string) {
   };
   const server = signingSecret
     ? createServer(built.app, { ...deps, signingSecret })
-    : createInsecureTestServer(built.app, deps);
+    : createInsecureTestServer(TEST_TENANT, built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };

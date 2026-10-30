@@ -11,6 +11,9 @@ import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolu
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };
@@ -103,7 +106,7 @@ test("a bot assertion can enter the turn pipeline", async () => {
 
 test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
   const built = freshApp();
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

@@ -14,6 +14,9 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { testConfig } from "./support/test-config.ts";
 import { recallText } from "./support/recall-text.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function freshApp(overrides: Partial<Config> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-mem-"));

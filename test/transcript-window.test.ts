@@ -13,6 +13,9 @@ import { ENTRY_STRING_BUDGET, windowedTranscript } from "../src/sessions/session
 import type { SessionEntry } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function entry(seq: number, type: SessionEntry["type"]): SessionEntry {
   return {
@@ -154,7 +157,7 @@ test("windowedTranscript: conversation text is never truncated — only tool pay
 
 function start(): { base: string; built: BuiltApp; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "transcript-window-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

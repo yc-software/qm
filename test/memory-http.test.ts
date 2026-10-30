@@ -10,10 +10,13 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "memory-http-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
     memory: built.memory,
@@ -143,7 +146,7 @@ test("the admin memory directory lists every known scope, notebooks-first (power
 
 test("memory routes 404 when no MemoryService is wired", async () => {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "memory-http-none-")) }));
-  const server = createInsecureTestServer(built.app, { admin: built.admin, auditLog: built.auditLog });
+  const server = createInsecureTestServer(TEST_TENANT, built.app, { admin: built.admin, auditLog: built.auditLog });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

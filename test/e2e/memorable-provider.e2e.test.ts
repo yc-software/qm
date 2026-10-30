@@ -14,6 +14,9 @@ import { createInsecureTestServer } from "../../src/api/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
+import { TEST_TENANT, bindTestTenant } from "../support/tenant.ts";
+
+bindTestTenant();
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 const DB = process.env.MEMORABLE_E2E_DB_URL;
@@ -73,7 +76,7 @@ describe("memorable provider e2e (live Pi + real memorable CLI + Postgres)", { s
         anthropicApiKey: process.env.ANTHROPIC_API_KEY!,
       }),
     );
-    server = createInsecureTestServer(built.app);
+    server = createInsecureTestServer(TEST_TENANT, built.app);
     await new Promise<void>((r) => server.listen(0, r));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

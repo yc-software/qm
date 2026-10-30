@@ -6,6 +6,9 @@ import { createServer } from "../src/api/server.ts";
 import type { App, RedeployInput } from "../src/api/app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "deploy-redeploy-route-secret".repeat(2);
 

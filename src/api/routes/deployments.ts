@@ -79,7 +79,7 @@ async function proxyDeployment(ctx: BaseCtx): Promise<void> {
     ))
   )
     return;
-  if (deps.requireSignedPortalIdentity || deps.production) {
+  if (!ctx.allowUnsignedSourceAuth) {
     const psecret = deps.portalIdentitySecret ?? secret;
     const rawTok = req.headers[PORTAL_IDENTITY_HEADER];
     const tok = Array.isArray(rawTok) ? rawTok[0] : rawTok;

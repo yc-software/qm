@@ -11,6 +11,9 @@ import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const transactions: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {

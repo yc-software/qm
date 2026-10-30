@@ -14,6 +14,9 @@ import {
 } from "../src/auth/capability-token.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { personalScope } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "deployment-token-gate-secret".repeat(2);
 

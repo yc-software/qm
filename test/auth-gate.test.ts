@@ -11,6 +11,9 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "test-signing-secret".repeat(3);
 
@@ -25,7 +28,9 @@ function start(signingSecret?: string): { base: string; close: () => Promise<voi
       dataDir: mkdtempSync(join(tmpdir(), "auth-")),
     }),
   );
-  const server = signingSecret ? createServer(built.app, { signingSecret }) : createInsecureTestServer(built.app);
+  const server = signingSecret
+    ? createServer(built.app, { signingSecret })
+    : createInsecureTestServer(TEST_TENANT, built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, close: () => new Promise<void>((r) => server.close(() => r())) };

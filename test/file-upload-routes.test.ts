@@ -10,6 +10,9 @@ import type { DirectFileUploads } from "../src/files/direct-file-upload.ts";
 import { FileUploadError, type FileUpload } from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const secret = "file-upload-test-secret".repeat(3);
 const personal = scopeId("personal", "U1");

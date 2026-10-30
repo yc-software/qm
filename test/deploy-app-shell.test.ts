@@ -20,6 +20,9 @@ import { scopeId } from "../src/types.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -92,7 +95,7 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   });
   await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
   const featureFlags = createFeatureFlagStore(createMemoryMap<FeatureFlagRecord>());
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     featureFlags,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: GATE_SECRET,

@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { canonicalPayload, signRequest, signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest as legacySignRequest } from "../src/auth/source-auth.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("canonicalPayload binds method + path + body with newlines", () => {
   assert.equal(canonicalPayload("POST", "/v1/turns?x=1", "{}"), "POST\n/v1/turns?x=1\n{}");

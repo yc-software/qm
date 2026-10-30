@@ -32,6 +32,9 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -393,7 +396,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "principal-links-gate-")) }));
     await built.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "test" });
     await built.identity.refresh(true);
-    server = createInsecureTestServer(built.app, {
+    server = createInsecureTestServer(TEST_TENANT, built.app, {
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
       scheduler: built.scheduler,
@@ -492,7 +495,7 @@ describe("canonical portal claims retain proof of the original sign-in", () => {
     const app = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "slack-link-proof-")) }));
     await app.principalLinks.link({ principalId: OIDC, canonicalId: EMAIL, evidence: EVIDENCE, linkedBy: "qa" });
     await app.identity.refresh(true);
-    const server = createInsecureTestServer(app.app, {
+    const server = createInsecureTestServer(TEST_TENANT, app.app, {
       portalIdentitySecret: secret,
       requireSignedPortalIdentity: true,
       identity: app.identity,

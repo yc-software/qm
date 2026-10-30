@@ -14,6 +14,9 @@ import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -28,7 +31,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "pid-gate-")) }));
-    server = createInsecureTestServer(built.app, {
+    server = createInsecureTestServer(TEST_TENANT, built.app, {
       capabilitySecret: CAP,
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
@@ -111,7 +114,10 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   });
 
   it("production implies signed identity on the raw deployment proxy", async () => {
-    const prodServer = createInsecureTestServer(built.app, { production: true, portalIdentitySecret: PID });
+    const prodServer = createInsecureTestServer(TEST_TENANT, built.app, {
+      production: true,
+      portalIdentitySecret: PID,
+    });
     await new Promise<void>((resolve) => prodServer.listen(0, resolve));
     try {
       const prodBase = `http://localhost:${(prodServer.address() as AddressInfo).port}`;

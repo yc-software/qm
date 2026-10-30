@@ -19,6 +19,9 @@ import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let externalSharing = true;
 const externalSharingOn = { enabled: async () => externalSharing } as unknown as FeatureFlagStore;
@@ -82,7 +85,7 @@ test("forwarded app hosts fail closed before core routes when gateway configurat
     { deployAppsDomain: "apps.example.com" },
     { deployAppsDomain: "apps.example.com", deployGateSecret: "gate" },
   ]) {
-    const server = createInsecureTestServer({} as Parameters<typeof createInsecureTestServer>[0], config);
+    const server = createInsecureTestServer(TEST_TENANT, {} as Parameters<typeof createInsecureTestServer>[1], config);
     server.listen(0);
     try {
       const result = await httpGet((server.address() as AddressInfo).port, "/healthz", {
@@ -114,7 +117,8 @@ function httpGet(
 
 test("app sign-in uses the configured trusted entry and preserves the app return address", async () => {
   const server = createInsecureTestServer(
-    { getDeployment: async () => null } as unknown as Parameters<typeof createInsecureTestServer>[0],
+    TEST_TENANT,
+    { getDeployment: async () => null } as unknown as Parameters<typeof createInsecureTestServer>[1],
     {
       deployAppsDomain: "apps.example.com",
       deployGateSecret: "gate",
@@ -204,7 +208,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
   (app as unknown as Record<string, unknown>).enqueueDelivery = async (input: (typeof deliveries)[number]) => {
     deliveries.push(input);
   };
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
@@ -402,7 +406,7 @@ test("org-wide app access admits only signed-in org members", async () => {
     files: [],
     name: "teamsite",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     featureFlags: { enabled: async () => false } as unknown as FeatureFlagStore,
     identity,
     deployAppsDomain: "apps.example.com",
@@ -463,7 +467,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",

@@ -18,6 +18,9 @@ import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/ext
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ALICE = "admin-alice@default-org";
 const NOBODY = "user-uma@default-org";
@@ -68,7 +71,7 @@ function start(
   };
   const server = opts.signed
     ? createServer(built.app, { ...deps, signingSecret: SECRET })
-    : createInsecureTestServer(built.app, deps);
+    : createInsecureTestServer(TEST_TENANT, built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };

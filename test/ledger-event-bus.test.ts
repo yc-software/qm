@@ -14,6 +14,9 @@ import {
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const PG = process.env.DATABASE_URL;
 const pgSkip = PG ? false : "set DATABASE_URL to run the Postgres ledger-event bus test";
@@ -74,7 +77,7 @@ test("GET /v1/loop-items/events streams ledger writes as SSE frames, stamped wit
   const dataDir = mkdtempSync(join(tmpdir(), "ap-ledger-sse-"));
   const built = buildApp(testConfig({ dataDir, orgId: "acme" }));
   built.runtime.start();
-  const core = createInsecureTestServer(built.app, { webhookReceiver: built.webhookReceiver });
+  const core = createInsecureTestServer(TEST_TENANT, built.app, { webhookReceiver: built.webhookReceiver });
   core.listen(0);
   const base = `http://localhost:${(core.address() as AddressInfo).port}`;
   try {

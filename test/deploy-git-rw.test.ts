@@ -20,6 +20,9 @@ import { mintDeployGitAccess, verifyDeployGitAccess } from "../src/deploy/access
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-rw-secret".repeat(3);

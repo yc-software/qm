@@ -17,6 +17,9 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -143,7 +146,7 @@ test("status/selector parity — a personal-only connection reports connected (m
     { accessToken: "u1-personal", accountType: "personal" },
     "personal",
   );
-  const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
+  const server = createInsecureTestServer(TEST_TENANT, built.app, { connectorTokens: built.connectorTokens });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

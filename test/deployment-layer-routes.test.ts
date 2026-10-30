@@ -13,6 +13,9 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";

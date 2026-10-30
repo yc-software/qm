@@ -102,7 +102,6 @@ export interface ServerDeps {
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
-  requireSignedPortalIdentity?: boolean;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: () => Promise<void>;

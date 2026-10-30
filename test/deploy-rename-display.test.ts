@@ -12,6 +12,9 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function svc() {
   const deployStore = createDeployStore();
@@ -68,7 +71,7 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   const s = svc();
   const app = createApp({ deploy: s.deploy } as unknown as Parameters<typeof createApp>[0]);
   const identitySecret = "deployment-route-identity-secret";
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     portalIdentitySecret: identitySecret,
     requireSignedPortalIdentity: true,
   });
