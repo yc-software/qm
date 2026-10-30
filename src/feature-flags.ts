@@ -65,8 +65,8 @@ const FEATURE_FLAGS_MIGRATION = typedTableMigration({
     updated_at: "(json->>'updatedAt')::bigint",
     updated_by: "json->>'updatedBy'",
   },
-  where: `id = ANY(ARRAY[${FEATURE_NAMES.map((name) => `'${name}'`).join(", ")}])
-    AND jsonb_typeof(json->'enabledScopes') = 'array' AND json->>'updatedAt' IS NOT NULL AND json->>'updatedBy' IS NOT NULL`,
+  where:
+    "jsonb_typeof(json->'enabledScopes') = 'array' AND json->>'updatedAt' IS NOT NULL AND json->>'updatedBy' IS NOT NULL",
 });
 
 function validUpdater(updatedBy: string): void {

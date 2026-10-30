@@ -64,18 +64,32 @@ test("feature flag rows are scoped to their tenant", { skip }, async () => {
   );
 });
 
-test("the conversion keeps current features in the instance tenant and drops retired ones", { skip }, async () => {
+test("the conversion carries flags into the instance tenant and the store hides retired ones", { skip }, async () => {
   await withTypedTableDb(
     (url) => createPostgresFeatureFlagStore(url),
     async ({ store, admin, tenant }) => {
       assert.equal(await withTenant(tenant, () => store.enabled("inbox_loops", "channel:C1")), true);
+      assert.deepEqual(
+        (await withTenant(tenant, () => store.list())).map((row) => row.featureName),
+        ["inbox_loops"],
+      );
+      assert.deepEqual([...(await withTenant(tenant, () => store.enabledFor("channel:C1")))], ["inbox_loops"]);
       const { rows } = await admin.query(
         `SELECT tenant_id::text AS tenant, feature_name, enabled_scopes, updated_at::text AS at, updated_by,
                 to_regclass('feature_flags_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'feature_flags') AS versions
-           FROM feature_flags`,
+           FROM feature_flags ORDER BY feature_name`,
       );
       assert.deepEqual(rows, [
+        {
+          tenant,
+          feature_name: "command_scoped_credentials",
+          enabled_scopes: ["channel:C1"],
+          at: "1",
+          updated_by: "admin",
+          dropped: true,
+          versions: 0,
+        },
         {
           tenant,
           feature_name: "inbox_loops",
