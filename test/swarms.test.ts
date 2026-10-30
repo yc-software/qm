@@ -5,7 +5,7 @@ import { createSwarmService, type SwarmCaller } from "../src/swarms/swarm-servic
 import { SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/harness/orchestrator/sandboxes.ts";
-import { processRun } from "../src/runs/worker.ts";
+import { processRun } from "../src/harness/worker.ts";
 import type { Orchestrator } from "../src/harness/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { testPgPool } from "./support/test-database.ts";

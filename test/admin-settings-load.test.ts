@@ -5,8 +5,8 @@ import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import type { ServerDeps } from "../src/api/deps.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
+import type { ServerDeps } from "../src/edge/http/deps.ts";
 import { testConfig } from "./support/test-config.ts";
 import { cachedModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
 

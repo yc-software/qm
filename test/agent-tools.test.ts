@@ -3,7 +3,7 @@ import { createGoalRecord } from "../src/agent/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { waitForClientResult } from "../src/runs/run-signal-store.ts";
@@ -16,7 +16,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
-import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
+import { connectorToolsNote, deferredMcpTools } from "../src/harness/deferred-tools.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
@@ -2501,7 +2501,7 @@ test("a blocking command approval terminates the agent loop and flags pausedOnAp
 });
 
 test("pauseStampAfterToolCall stamps terminate on sibling results once the turn paused (batch-wide stop)", async () => {
-  const { pauseStampAfterToolCall } = await import("../src/agent/agent-tools.ts");
+  const { pauseStampAfterToolCall } = await import("../src/harness/agent-tools.ts");
   const ref: { pausedOnApproval?: boolean } = {};
   const hook = pauseStampAfterToolCall(ref);
 

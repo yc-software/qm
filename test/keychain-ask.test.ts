@@ -10,8 +10,8 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createServer } from "../src/api/server.ts";
-import { keychainRoutes } from "../src/api/routes/keychain.ts";
+import { createServer } from "../src/edge/http/server.ts";
+import { keychainRoutes } from "../src/edge/http/routes/keychain.ts";
 import {
   createKeychain,
   askResolutionEvents,
@@ -24,7 +24,7 @@ import {
 import { createAskExpirySweep, fireAskResolution } from "../src/triggers/keychain-ask.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/harness/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";

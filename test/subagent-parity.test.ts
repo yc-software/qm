@@ -1,4 +1,4 @@
-import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { RuntimeControl } from "../src/agent/runtime-types.ts";
 import { test } from "node:test";
@@ -15,8 +15,8 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import type { Agent } from "../src/agent/agent.ts";
-import { turnToolOptions } from "../src/agent/turn-support.ts";
-import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
+import { turnToolOptions } from "../src/harness/turn-support.ts";
+import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";

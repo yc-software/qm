@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loopItemRoutes } from "../src/api/routes/loop-items.ts";
-import type { LoopServiceDeps } from "../src/api/routes/loops.ts";
-import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
+import { loopItemRoutes } from "../src/edge/http/routes/loop-items.ts";
+import type { LoopServiceDeps } from "../src/loops/service-deps.ts";
+import { findRoute, run, type ApiCtx } from "../src/edge/http/routes/route.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";

@@ -4,7 +4,7 @@ import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { countTokens } from "../src/util/tokens.ts";
-import { createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/harness/agent-run.ts";
 import { stableCwd } from "../src/model/pi-runtime.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 

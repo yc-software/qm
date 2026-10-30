@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createGrindMeter } from "../src/agent/grind.ts";
-import { turnToolContext } from "../src/agent/turn-support.ts";
-import { emptyEndingNote } from "../src/agent/agent-run.ts";
+import { turnToolContext } from "../src/harness/turn-support.ts";
+import { emptyEndingNote } from "../src/harness/agent-run.ts";
 import {
   GovernorUndecided,
   supersedeGoal,

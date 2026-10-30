@@ -27,11 +27,11 @@ import {
   isDocumentAttachment,
   isTextDocument,
 } from "../core/document-kinds.ts";
-import { recoveredRuntime } from "../agent/runtime-recovery.ts";
+import { recoveredRuntime } from "./runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { assignedGoal, type GoalRecord, openGoal } from "../agent/goal.ts";
-import { connectorToolsNote, deferredMcpTools } from "../agent/deferred-tools.ts";
+import { connectorToolsNote, deferredMcpTools } from "./deferred-tools.ts";
 import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
 import type {
   CommandApprovalGrant,

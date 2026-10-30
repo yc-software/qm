@@ -4,7 +4,7 @@ import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { buildApp as buildProductionApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";

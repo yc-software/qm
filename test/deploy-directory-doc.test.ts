@@ -20,7 +20,7 @@ test("every ENFORCED deployment-contract clause names a verifier and its impleme
     "secrets.computed-set": [["../cli/src/secrets.ts", /function computedSecrets/]],
     "sandbox.descriptors": [
       ["../cli/src/sandbox-layer.ts", /function validateSandboxLayer/],
-      ["../src/api/routes/deployment-layer.ts", /PUT.*\/v1\/deployment-layer/],
+      ["../src/edge/http/routes/deployment-layer.ts", /PUT.*\/v1\/deployment-layer/],
     ],
     "sandbox.approvals-tighten": [
       ["../cli/src/tool-descriptor.ts", /ApprovalDecision\s*=\s*"require_approval"\s*\|\s*"deny"/],

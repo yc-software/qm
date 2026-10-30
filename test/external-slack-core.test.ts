@@ -161,7 +161,7 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
 });
 
 test("external broker requires the current run lease and both external-safe and ordinary grants", async () => {
-  const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
+  const { externalSlackCapabilityAllowed } = await import("../src/edge/http/external-slack-capability.ts");
   const { createAclStore } = await import("../src/acl/acl-store.ts");
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
@@ -270,7 +270,7 @@ test("external account DMs require admission under the current policy", async ()
 });
 
 test("external sandbox API token cannot reach private APIs, while its safe broker token works", async (t) => {
-  const { createServer } = await import("../src/api/server.ts");
+  const { createServer } = await import("../src/edge/http/server.ts");
   const { mintCapabilityToken } = await import("../src/auth/capability-token.ts");
   const { serverDeps } = await import("../src/wiring.ts");
   const config = testConfig({ signingSecret: "synthetic-signing-key-for-http-test", externalSlackPolicies });

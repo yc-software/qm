@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { emptyEndingNote, EMPTY_ENDING_NOTE, EMPTY_ENDING_MIN_BUDGET_MS } from "../src/agent/agent-run.ts";
+import { emptyEndingNote, EMPTY_ENDING_NOTE, EMPTY_ENDING_MIN_BUDGET_MS } from "../src/harness/agent-run.ts";
 
 type Opts = Parameters<typeof emptyEndingNote>[0];
 

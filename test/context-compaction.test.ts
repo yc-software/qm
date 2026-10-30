@@ -13,7 +13,7 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";

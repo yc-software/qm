@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { processRun, LEASE_LOST_CONSECUTIVE } from "../src/runs/worker.ts";
+import { processRun, LEASE_LOST_CONSECUTIVE } from "../src/harness/worker.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { RunStore } from "../src/runs/run-store.ts";
 import type { Orchestrator } from "../src/harness/orchestrator.ts";

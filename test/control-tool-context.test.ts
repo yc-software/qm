@@ -12,7 +12,7 @@ import { scopeId, type WorkspaceLayer } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createAgentTools } from "../src/agent/agent-tools.ts";
+import { createAgentTools } from "../src/harness/agent-tools.ts";
 import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/harness/orchestrator/surface-tools.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";

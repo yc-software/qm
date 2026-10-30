@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loopRoutes, type LoopServiceDeps } from "../src/api/routes/loops.ts";
+import { loopRoutes } from "../src/edge/http/routes/loops.ts";
+import { type LoopServiceDeps } from "../src/loops/service-deps.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createShipGrantStore } from "../src/loops/ship-grant-store.ts";
 import { decideShip } from "../src/loops/ship-gate.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { findRoute } from "../src/api/routes/route.ts";
-import type { ApiCtx, Route } from "../src/api/routes/route.ts";
+import { findRoute } from "../src/edge/http/routes/route.ts";
+import type { ApiCtx, Route } from "../src/edge/http/routes/route.ts";
 import { scopeId, type Loop, type ShipGrant } from "../src/types.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
