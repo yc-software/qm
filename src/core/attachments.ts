@@ -356,6 +356,8 @@ export async function materializeInbound(
       ...(registered ? { artifactId: registered.id } : {}),
     });
     const image = await visionImage(bytes);
+    if (!image.ok && VISION_MIME_TYPES.has(mimetype))
+      console.warn(`attachments: ${name} (${mimetype}) not shown to the model: ${image.reason}`);
     if (image.ok)
       images.push({
         name,
