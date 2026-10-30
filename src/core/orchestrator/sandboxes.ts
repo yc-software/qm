@@ -495,18 +495,14 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
         ...(keepWarm ? { keepWarm: true } : {}),
         ...(scoped && !scopedUsed ? { homeUnchanged: true } : {}),
       })
-      .catch((error: unknown) =>
+      .catch((error: unknown) => {
+        const message = `${handle.backend}:${handle.id}: ${errMessage(error)}`;
+        swallow(`orchestrator: teardown ${message}`, error);
         deps.errors?.record(
-          {
-            category: "sandbox",
-            code: "teardown_failed",
-            message: `${handle.backend}:${handle.id}: ${errMessage(error)}`,
-            scopeLabel: scopeId,
-            sessionId: session.id,
-          },
+          { category: "sandbox", code: "teardown_failed", message, scopeLabel: scopeId, sessionId: session.id },
           error,
-        ),
-      );
+        );
+      });
   };
   const destroyScratch = async (slot: Slot): Promise<void> => {
     const [handle] = slot.handles;

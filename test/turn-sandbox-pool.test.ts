@@ -12,6 +12,7 @@ const layers = [
 function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Error; teardownFails?: string[] } = {}) {
   const provisions: Array<ProvisionOptions | undefined> = [];
   const teardowns: Array<[string, TeardownOptions]> = [];
+  const tornDown: SandboxHandle[] = [];
   const removed: Array<[string, string]> = [];
   const failNext: Array<Error> = [];
   const gates: Array<Promise<void>> = [];
@@ -37,6 +38,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
     },
     async teardown(handle, opts) {
       teardowns.push([handle.id, opts ?? {}]);
+      tornDown.push(handle);
       if (over.teardownFails?.includes(handle.id)) throw new Error(`teardown failed: ${handle.id}`);
     },
     async removeDir(handle, dir) {
@@ -105,6 +107,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
     turn,
     provisions,
     teardowns,
+    tornDown,
     released,
     clearedTurnFiles,
     failNext,
@@ -252,8 +255,13 @@ test("reopening a computer under a different egress policy releases it once", as
   const again = await f.turn.provisionResource("job-box");
   assert.equal(first, again);
   const access = await f.turn.accessResource("job-box");
-  await f.turn.provisionResource({ ...access, egress: { allowedHosts: ["only.test"], deniedHosts: [] } });
+  const narrowed = await f.turn.provisionResource({
+    ...access,
+    egress: { allowedHosts: ["only.test"], deniedHosts: [] },
+  });
+  assert.notEqual(narrowed, first);
   assert.equal(f.provisions.length, 2);
   await f.turn.reclaimBox();
-  assert.equal(f.teardowns.length, 1);
+  assert.equal(f.tornDown.length, 1);
+  assert.equal(f.tornDown[0], narrowed);
 });
