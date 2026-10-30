@@ -3,6 +3,12 @@ import type { ScopeId } from "../types.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import type { PackConfig } from "./normalize.ts";
 
+export class UnknownSkillPackError extends Error {
+  constructor(id: string) {
+    super(`unknown skill pack: ${id}`);
+  }
+}
+
 type PackKind = "git";
 type SyncMode = "pinned" | "tracked";
 type TrustTier = "internal" | "third-party";
@@ -59,7 +65,7 @@ export function createSkillPackStore(
     list: () => packs.all(),
     async update(id, patch) {
       const merged = await packs.merge(id, patch);
-      if (!merged) throw new Error(`unknown skill pack: ${id}`);
+      if (!merged) throw new UnknownSkillPackError(id);
       return merged;
     },
     remove: (id) => packs.delete(id),
