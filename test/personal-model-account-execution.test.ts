@@ -1,8 +1,5 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { mock, test } from "node:test";
 import * as agentRun from "../src/agent/agent-run.ts";
 import * as mockAgent from "./support/mock-agent.ts";

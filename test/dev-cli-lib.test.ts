@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { spawnSync } from "node:child_process";
 import { ensureDeps } from "../scripts/dev/lib/deps.ts";
@@ -37,20 +37,12 @@ import {
 } from "../scripts/dev/lib/lease.ts";
 import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
-import { loadConfig, providerKeysPresent } from "../src/config.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
 
 function tmpStore(): string {
   const store = mkdtempSync(join(tmpdir(), "qm-dev-test-"));
   ensureStore(store);
   return store;
-}
-
-function oauthIdToken(accountId: string): string {
-  const payload = Buffer.from(
-    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
-  ).toString("base64url");
-  return `header.${payload}.signature`;
 }
 
 function addSlot(store: string, n: number, extra = ""): void {

@@ -58,12 +58,10 @@ async function currentSharedScopeMember(
   const member = await deps.directory?.get?.(principalId).catch(swallowAs("scope membership: directory lookup", null));
   const ids = [...new Set([principalId, member?.principalId, member?.slackId].filter((id): id is string => !!id))];
   const managed = kind === "group" && deps.managedGroups?.recognizes(ref);
-  const membership = (id: string) =>
-    managed
-      ? deps.managedGroups!.membership(ref, id)
-      : kind === "channel"
-        ? deps.directory?.channelMember(ref, id)
-        : deps.directory?.groupMember(ref, id);
+  const membership = (id: string) => {
+    if (managed) return deps.managedGroups!.membership(ref, id);
+    return kind === "channel" ? deps.directory?.channelMember(ref, id) : deps.directory?.groupMember(ref, id);
+  };
   for (const id of ids)
     if ((await membership(id)?.catch(swallowAs("scope membership: membership", false))) === true) return true;
   return false;

@@ -1,6 +1,3 @@
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
@@ -207,7 +204,7 @@ test("personal API keys bypass organization provider endpoint overrides", async 
   }
 });
 
-test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async (t) => {
+test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async () => {
   const claims = Buffer.from(
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
   ).toString("base64url");

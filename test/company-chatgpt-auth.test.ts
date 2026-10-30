@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { chatgptAuthFromValue } from "../src/model/chatgpt-auth-file.ts";
 import { keychainCompanyChatGPTAuth } from "../src/model/company-chatgpt-auth.ts";
 import type { CredentialFile, Keychain, KeychainCredentialMeta } from "../src/credentials/keychain.ts";

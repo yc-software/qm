@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ScopeId } from "../types.ts";
