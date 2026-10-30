@@ -138,9 +138,7 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
       for (const key of TENANT_SETTING_KEYS) {
         const raw = row[tenantSettingColumn(key)];
         if (raw === null || raw === undefined) continue;
-        values[key] = TENANT_SECRET_KEYS.has(key)
-          ? openTenantSecret(sealKey, tenant, key, raw as Buffer)
-          : String(raw);
+        values[key] = TENANT_SECRET_KEYS.has(key) ? openTenantSecret(sealKey, tenant, key, raw as Buffer) : String(raw);
       }
       return values;
     },
@@ -163,7 +161,9 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
 }
 
 function memoryBacking(initial: Readonly<Record<string, TenantSettingValues>> = {}): TenantSettingsBacking {
-  const rows = new Map<string, TenantSettingValues>(Object.entries(initial).map(([tenant, values]) => [tenant, { ...values }]));
+  const rows = new Map<string, TenantSettingValues>(
+    Object.entries(initial).map(([tenant, values]) => [tenant, { ...values }]),
+  );
   return {
     tenants: async () => [...rows.keys()],
     read: async (tenant) => ({ ...rows.get(tenant) }),

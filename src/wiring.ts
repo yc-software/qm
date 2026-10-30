@@ -74,11 +74,7 @@ import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { enabledSandboxBackends, type Config } from "./config.ts";
-import {
-  configuredModelFor,
-  createTenantModels,
-  harnessCarriedModelAuthFor,
-} from "./model/tenant-models.ts";
+import { configuredModelFor, createTenantModels, harnessCarriedModelAuthFor } from "./model/tenant-models.ts";
 import { currentTenant } from "./tenants/context.ts";
 import type { ServerDeps } from "./api/deps.ts";
 import {
@@ -619,6 +615,9 @@ export function buildApp(
       harness: config.harness,
       onLoad: (tenant, settings) => setProviderBaseUrls(tenant, settings.providerBaseUrls),
     });
+  const tenantSettingsRefresh = createUntrackedSweeper(() => tenantSettings.refreshAll(), 60_000, {
+    label: "tenant settings refresh",
+  });
   const directModelCredentials = createModelCredentialStore({
     backing: artifactMap("model_credentials"),
     keyMaterial: connectorSecretKey,
@@ -755,15 +754,10 @@ export function buildApp(
     config.databaseUrl && (config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined)
       ? createPostgresBudgetTracker(config.databaseUrl, budgetOpts)
       : createBudgetTracker(budgetOpts);
-  const resolution = createResolutionService(
-    config.orgId,
-    configStore,
-    acl,
-    async () => {
-      const mode = (await tenantSettings.get()).securityScreen;
-      return mode === "off" && overrides.securityScreener ? "enforce" : mode;
-    },
-  );
+  const resolution = createResolutionService(config.orgId, configStore, acl, async () => {
+    const mode = (await tenantSettings.get()).securityScreen;
+    return mode === "off" && overrides.securityScreener ? "enforce" : mode;
+  });
 
   const requireDbUrl = (kind: string): string => {
     if (!config.databaseUrl) throw new Error(`${kind}=postgres requires DATABASE_URL`);
@@ -1504,7 +1498,6 @@ export function buildApp(
     if (routed.routedBy) routedBy(routed.routedBy);
     return routed.choice;
   });
-
 
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
@@ -2957,6 +2950,7 @@ export function buildApp(
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
+      tenantSettingsRefresh.start();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
     },
@@ -2999,6 +2993,7 @@ export function buildApp(
       await harness.turns.close?.();
       await semanticMemory.close();
       await flyTunnel?.stop();
+      await tenantSettingsRefresh.stop();
       await errors.flush();
     },
   };
@@ -3152,8 +3147,7 @@ export function serverDeps(
     refreshCustomProviders: built.refreshCustomProviders,
     mcpServers: built.mcpServers,
     mcpToolService: built.mcpToolService,
-    harnessCarriedModelAuth: async () =>
-      harnessCarriedModelAuthFor(await built.tenantSettings.get(), config.harness),
+    harnessCarriedModelAuth: async () => harnessCarriedModelAuthFor(await built.tenantSettings.get(), config.harness),
     harnessId: config.harness,
     connectorTokens: built.connectorTokens,
     slackInstallation: built.slackInstallation,

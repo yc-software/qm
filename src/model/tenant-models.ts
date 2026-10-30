@@ -34,8 +34,7 @@ export function defaultModelFor(
   gateway?: ModelGatewayTransportConfig,
 ): string {
   const configured = configuredModelFor(settings, harness);
-  if (settings.modelProvider)
-    return defaultModelForHarness(harness, configured, onlyProvider(settings.modelProvider));
+  if (settings.modelProvider) return defaultModelForHarness(harness, configured, onlyProvider(settings.modelProvider));
   const providers: ModelProviderAvailability | undefined =
     harness === "pi" && gateway
       ? {
