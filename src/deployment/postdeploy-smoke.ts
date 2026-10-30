@@ -4,7 +4,8 @@ import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { mintSignedPayload } from "../auth/signed-token.ts";
 import { TENANT_HEADER, signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { currentTenant } from "../tenants/context.ts";
+import { currentTenant, withTenant } from "../tenants/context.ts";
+import { hostTenant } from "../../plugins/chassis/src/core-client.ts";
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
@@ -341,12 +342,21 @@ export async function runSessionSmoke(config: PostdeployConfig, baseUrl: string)
   if (config.databaseUrl) await checkDatabase(config);
 }
 
+export async function withCoreTenant<T>(baseUrl: string, secret: string | undefined, fn: () => Promise<T>): Promise<T> {
+  const tenant = await hostTenant(baseUrl, secret, new URL(baseUrl).hostname);
+  if (!tenant) throw new Error(`No tenant serves ${baseUrl}`);
+  return withTenant(tenant, fn);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const config = loadConfig();
-  if (process.argv[2] === "session") {
-    await runSessionSmoke(config, process.argv[3] ?? `http://127.0.0.1:${config.port}`);
-    console.log("database and live session smoke passed");
-  } else {
-    await runPostdeploySmoke(config);
-  }
+  const baseUrl = process.argv[3] ?? `http://127.0.0.1:${config.port}`;
+  await withCoreTenant(baseUrl, config.signingSecret, async () => {
+    if (process.argv[2] === "session") {
+      await runSessionSmoke(config, baseUrl);
+      console.log("database and live session smoke passed");
+    } else {
+      await runPostdeploySmoke(config);
+    }
+  });
 }
