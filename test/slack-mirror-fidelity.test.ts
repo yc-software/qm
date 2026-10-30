@@ -8,6 +8,7 @@ import { buildContextWindow } from "../src/slack/conversation.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import { amazonQAlarm, amazonQAlarmText } from "./support/slack-amazon-q-alarm.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 const directory = {
@@ -286,3 +287,39 @@ test("HTTP ingestion rejects invalid file sizes", () => {
   }
   assert.equal(toEvent({ container: "C", ts: "1", files: [{ fileId: "F", size: 0 }] })!.files![0]!.size, 0);
 });
+
+for (const postgres of [false, true]) {
+  test(
+    `the whole Slack message is stored beside its flattened text and follows edit precedence (${postgres ? "postgres" : "memory"})`,
+    { skip: postgres && !process.env.DATABASE_URL },
+    async () => {
+      const cache = postgres ? createPostgresSurfaceCache(process.env.DATABASE_URL!) : createMemorySurfaceCache();
+      const container = `raw-${Date.now()}-${postgres}`;
+      const original = { ...amazonQAlarm, channel: container, ts: "1000" };
+      const edited = {
+        ...original,
+        edited: { ts: "1001" },
+        attachments: [{ id: 1, blocks: [{ type: "section", text: { type: "mrkdwn", text: "Alarm is in OK state" } }] }],
+      };
+      const read = async () => (await cache.readMessages(container, { includeDeleted: true }))[0]!;
+      try {
+        await cache.ingest([toEvent(slackMessageToIngestEvent(original, ids))!]);
+        assert.equal((await read()).text, amazonQAlarmText);
+        assert.deepEqual((await read()).raw, original);
+
+        await cache.ingest([toEvent(slackMessageToIngestEvent(edited, ids, { partial: true }))!]);
+        assert.equal((await read()).text, "Alarm is in OK state");
+        assert.deepEqual((await read()).raw, edited);
+
+        await cache.ingest([toEvent(slackMessageToIngestEvent(original, ids, { handled: true }))!]);
+        assert.deepEqual((await read()).raw, edited);
+
+        await cache.ingest([{ container, ts: "1000", deleted: true }]);
+        assert.equal((await read()).deleted, true);
+        assert.deepEqual((await read()).raw, edited);
+      } finally {
+        await cache.close();
+      }
+    },
+  );
+}

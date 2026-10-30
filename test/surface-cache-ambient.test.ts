@@ -7,6 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { amazonQAlarm } from "./support/slack-amazon-q-alarm.ts";
+import { createMirror } from "../src/slack/mirror.ts";
+import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import type { BotIdentity, Directory } from "../src/slack/directory.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -1036,4 +1040,45 @@ test("a second ambient wake while the first worker is LIVE steers into it instea
     1,
     "no sibling worker run was enqueued",
   );
+});
+
+test("a bot post whose content lives only in attachment blocks reaches the ambient judge through the Slack mirror", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    const container = "C-alarms";
+    await built.app.setChannelPolicy(container, "!engage RCA every CloudWatch alarm", "U-admin", {
+      "Amazon Q Developer": { mode: "action" },
+    });
+    const mirror = createMirror({
+      core: {
+        ingestSurfaceEvents: async (events, self) => {
+          await built.app.ingestSurfaceEvents(events, "slack", self);
+        },
+      } as SlackCoreClient,
+      ids: { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm" } as BotIdentity,
+      directory: {} as Directory,
+      externalParticipantsEnabled: async () => true,
+    });
+    await mirror.mirrorMessageEvent({ ...amazonQAlarm, channel: container, channel_type: "channel", files: [] }, {});
+
+    const [stored] = await built.app.readSurfaceMessages(container, { noFallback: true });
+    assert.deepEqual(stored!.raw?.attachments, amazonQAlarm.attachments);
+    const deadline = Date.now() + 5_000;
+    let rows: any[] = [];
+    while (Date.now() < deadline && !rows.length) {
+      rows = await listFull(built.ambientJudgments!, { container });
+      if (!rows.length) await sleep(50);
+    }
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.decision, "act");
+    assert.match(
+      rows[0]!.prompt!,
+      /Amazon Q Developer \(bot\): \*<https:[^>]*CloudWatch Alarm \| qm-fleet-http-error-rate/,
+    );
+    assert.match(rows[0]!.prompt!, /Threshold Crossed: 2 out of the last 3 datapoints/);
+    assert.doesNotMatch(rows[0]!.prompt!, /List dashboards|cloudwatch list-dashboards/);
+  } finally {
+    await built.runtime.stop();
+  }
 });

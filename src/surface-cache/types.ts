@@ -8,6 +8,7 @@ export interface CachedMessage {
   botId?: string;
   authorName?: string;
   text: string;
+  raw?: Record<string, unknown>;
   replyCount?: number;
   files?: Array<{ fileId: string; name?: string; title?: string; size?: number; mimetype?: string }>;
   mentions?: Record<string, string>;
@@ -59,6 +60,7 @@ export interface IngestEvent {
   botId?: string;
   authorName?: string;
   text?: string;
+  raw?: Record<string, unknown>;
   mentions?: Record<string, string>;
   self?: boolean;
   bot?: boolean;

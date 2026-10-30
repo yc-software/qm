@@ -17,7 +17,7 @@ import {
   parseReactionEvent,
 } from "./payloads.ts";
 import type { AckGate } from "./deferred-ack.ts";
-import { messageWithForwardedContent } from "./forwards.ts";
+import { slackMessageContent } from "./message-content.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
 import type { ActorAssertion } from "./identity.ts";
 import type { DenyResponder } from "./allow-from.ts";
@@ -153,7 +153,7 @@ export function registerSlackEvents(
         channel: e.channel,
         ts: e.ts,
       });
-      const content = messageWithForwardedContent(e);
+      const content = slackMessageContent(e);
       await dispatch(
         key,
         {
@@ -169,6 +169,7 @@ export function registerSlackEvents(
           threadTs: e.thread_ts,
           ts: e.ts,
           ...(e.bot_id || e.subtype === "bot_message" ? { botAuthored: true } : {}),
+          message: e,
           ackGate: context.ackGate,
         },
         client,
@@ -285,7 +286,7 @@ export function registerSlackEvents(
           channel: m.channel,
           ts: m.ts,
         });
-        const content = messageWithForwardedContent(m);
+        const content = slackMessageContent(m);
         await dispatch(
           key,
           {
@@ -301,6 +302,7 @@ export function registerSlackEvents(
             threadTs: m.thread_ts,
             ts: m.ts,
             ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            message: m,
             ackGate,
           },
           client,
@@ -332,7 +334,7 @@ export function registerSlackEvents(
           ts: m.ts,
         });
         const identity = await eventIdentity(client, m);
-        const content = messageWithForwardedContent(m);
+        const content = slackMessageContent(m);
         await dispatch(
           key,
           {
@@ -349,6 +351,7 @@ export function registerSlackEvents(
             ts: m.ts,
             unprompted: true,
             ...(m.bot_id || m.subtype === "bot_message" ? { botAuthored: true } : {}),
+            message: m,
             ackGate,
           },
           client,
