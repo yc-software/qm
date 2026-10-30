@@ -177,6 +177,7 @@ async function appendTranscriptEntry(
 }
 
 export async function recordWebhookTranscript(d: Delivery, sessions: WebTranscriptSessions): Promise<boolean> {
+  if (!d.text && !d.attachments?.length) return true;
   if (d.provenance?.sourceThreadRef === d.destination.target && d.provenance.sourceAssistantEntrySeq !== undefined)
     return true;
   const session = await sessions.getByThread(d.destination.target);

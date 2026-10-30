@@ -233,6 +233,7 @@ export type BackgroundWakeTrigger = "cron" | "webhook" | "monitor" | (string & {
 
 export interface DeliveryProvenance {
   sourceRequestId?: string;
+  sourceRunId?: string;
   sourceTitle?: string;
   trigger: BackgroundWakeTrigger;
   surface: string;

@@ -63,8 +63,17 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
       : {}),
   });
-  if (run.request.deliveryWebhook && run.dedupKey && !run.request.approval && origin.kind === "human")
-    provenance.sourceRequestId = run.dedupKey;
+  if (run.request.deliveryWebhook && run.request.idempotencyKey && (origin.kind === "human" || run.request.approval))
+    provenance.sourceRequestId = run.request.idempotencyKey;
+  if (run.request.deliveryWebhook && run.result) {
+    return {
+      destination,
+      text: run.result.reply ?? "",
+      ...(run.result.attachments?.length ? { attachments: run.result.attachments } : {}),
+      provenance: { ...provenance, sourceRunId: run.id },
+      idempotencyKey,
+    };
+  }
   if (
     surface === "slack" &&
     run.result?.status === "refused" &&

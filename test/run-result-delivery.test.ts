@@ -504,10 +504,50 @@ test("webhook run delivery correlates with the original caller request", () => {
     ...turn("hi", "web:alice:conversation"),
     surface: "web",
     origin: { kind: "human" as const },
+    idempotencyKey: "external-request-123",
     deliveryWebhook: { binding: "binding" },
   };
   const delivery = runResultDelivery(run({ request, dedupKey: "external-request-123" }));
   assert.equal(delivery?.destination.type, "webhook");
   assert.deepEqual(delivery?.destination.webhook, { binding: "binding" });
   assert.equal(delivery?.provenance.sourceRequestId, "external-request-123");
+});
+
+test("bound webhook results identify every terminal outcome for native receiver handling", () => {
+  const results: TurnResult[] = [
+    {
+      status: "pending_approval",
+      pendingApprovals: [{ requestId: "approval-1", command: "send email", reason: "permission required" }],
+    },
+    { status: "react", reactions: ["thumbsup"] },
+    { status: "silent" },
+    { status: "refused", reason: "not permitted" },
+    { status: "failed", reason: "connection failed" },
+    { status: "ok", reply: "" },
+  ];
+  for (const result of results) {
+    const request = {
+      ...turn("hi", "web:alice:conversation"),
+      surface: "web",
+      deliveryWebhook: { binding: "binding" },
+    };
+    const delivery = runResultDelivery(run({ request, result }), () => "https://portal.example.com/admin");
+    assert.equal(delivery?.provenance.sourceRunId, "r-1");
+    assert.equal(delivery?.text, "");
+    assert.equal(delivery?.destination.type, "webhook");
+  }
+});
+
+test("a scheduled approval continuation correlates with the receiver's action request", () => {
+  const request = {
+    ...turn("scheduled update", "web:alice:conversation"),
+    surface: "web",
+    origin: { kind: "automation" as const },
+    idempotencyKey: "receiver-approval-1",
+    approval: { requestId: "approval-1", approved: true },
+    deliveryWebhook: { binding: "binding" },
+  };
+  const delivery = runResultDelivery(run({ request, dedupKey: "receiver-approval-1:approval:approval-1:true" }));
+  assert.equal(delivery?.provenance.sourceRequestId, "receiver-approval-1");
+  assert.equal(delivery?.provenance.sourceRunId, "r-1");
 });

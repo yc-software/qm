@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
+import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
@@ -141,4 +142,27 @@ test("turnPostKeys mints deterministic per-destination position keys and seeds p
   const seeded = turnPostKeys("run-1");
   seeded.seed(2);
   assert.equal(seeded.key(dest, seeded.take()), "post:run-1:slack:C1:100.1:2");
+});
+
+test("bound approval callbacks retain the caller key when the run store extends its dedup key", async () => {
+  const built = freshApp();
+  const request: TurnRequest = {
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: "web:U1:bound" },
+    deliveryTarget: "web:U1:bound",
+    deliveryWebhook: { binding: "binding" },
+    text: "continue",
+    idempotencyKey: "caller-action",
+    async: true,
+    approval: { requestId: "approval-1", approved: true },
+  };
+  const queued = await built.app.turn(request);
+  assert.equal(queued.status, "queued");
+  assert.ok(queued.runId);
+  const stored = await built.runs.get(queued.runId);
+  assert.ok(stored);
+  assert.notEqual(stored.dedupKey, request.idempotencyKey);
+  const delivery = runResultDelivery({ ...stored, status: "done", result: { status: "ok", reply: "done" } });
+  assert.equal(delivery?.provenance.sourceRequestId, request.idempotencyKey);
 });
