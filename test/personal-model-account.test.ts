@@ -12,6 +12,9 @@ import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "personal-account-test-signing-secret";
 

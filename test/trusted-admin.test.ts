@@ -13,6 +13,9 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);

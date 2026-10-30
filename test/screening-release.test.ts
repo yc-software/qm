@@ -6,6 +6,9 @@ import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tool
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let executions = 0;
 let observedRelease = "";

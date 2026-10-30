@@ -10,6 +10,9 @@ import { DEFAULT_AGENT_INPUT_USD_PER_MTOK } from "../src/model/pi-models.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("budget tracker accumulates per-principal and trips at the limit", async () => {
   const b = createBudgetTracker({ limitUsd: 1, windowMs: 60_000 });

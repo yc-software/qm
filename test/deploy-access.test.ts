@@ -22,6 +22,9 @@ import {
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { scopeId, type ActorAssertion, type Permission } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const owner = "alice@example.com";
 const requester = "bob@example.com";
