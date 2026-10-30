@@ -8,9 +8,6 @@ import { Child } from "../scripts/dev/supervisor/children.ts";
 import { portAvailable, portHolders, tcpPortOpen } from "../scripts/dev/lib/proc.ts";
 import { sleep } from "../scripts/dev/lib/util.ts";
 import type { ChildSpec } from "../scripts/dev/lib/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const FAKE = join(import.meta.dirname, "../scripts/dev/test-helpers/fake-child.mjs");
 
