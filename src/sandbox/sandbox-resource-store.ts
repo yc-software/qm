@@ -1,4 +1,4 @@
-import { tableConversion, typedTable, type TableSpec } from "../persistence/typed-table.ts";
+import { dropKeyValueTables, tableConversion, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { SandboxDefault, SandboxResource } from "./sandbox-resources.ts";
 import { tenantMap } from "../tenants/context.ts";
 
@@ -39,6 +39,7 @@ const RETIRED_BACKEND_TABLES = ["aws_sandbox_bodies", "superserve_sandbox_bodies
 const SANDBOX_RESOURCE_MIGRATIONS = [
   tableConversion(RESOURCES),
   tableConversion(DEFAULTS),
+  dropKeyValueTables("tenancy/sandbox_routing/0001-drop", ["sandbox_routing", "sandbox_resource_rollout"]),
   {
     id: "tenancy/retired-sandbox-backends/0001",
     statements: [
@@ -73,7 +74,12 @@ export function createSandboxResourceStores(databaseUrl: string): {
   close(): Promise<void>;
 } {
   const records = typedTable(databaseUrl, RESOURCES, SANDBOX_RESOURCE_MIGRATIONS[0]);
-  const defaults = typedTable(databaseUrl, DEFAULTS, SANDBOX_RESOURCE_MIGRATIONS[1], [SANDBOX_RESOURCE_MIGRATIONS[2]]);
+  const defaults = typedTable(
+    databaseUrl,
+    DEFAULTS,
+    SANDBOX_RESOURCE_MIGRATIONS[1],
+    SANDBOX_RESOURCE_MIGRATIONS.slice(2),
+  );
   const visible = "job_only IS NOT TRUE";
   return {
     records: {

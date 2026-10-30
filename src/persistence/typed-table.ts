@@ -99,6 +99,20 @@ export function globalConversion<T, K extends string>(
   };
 }
 
+export function dropKeyValueTables(id: string, tables: readonly string[]): PgMigrationDefinition {
+  return {
+    id,
+    statements: [
+      `DROP TABLE IF EXISTS ${tables.join(", ")}`,
+      `DO $versions$ BEGIN
+         IF to_regclass('durable_map_versions') IS NOT NULL THEN
+           DELETE FROM durable_map_versions WHERE tbl IN (${tables.map((t) => `'${t}'`).join(", ")});
+         END IF;
+       END $versions$`,
+    ],
+  };
+}
+
 function toParam(value: unknown, type: ColumnType): unknown {
   if (value === undefined || value === null) return null;
   if (type === "jsonb") return jsonbSafeStringify(value);
