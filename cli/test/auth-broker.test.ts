@@ -178,7 +178,11 @@ test("the broker's generated secrets reach both sides under the right names", ()
     const shared = secrets.find((secret) => secret.name === name)!;
     assert.equal(shared.required, false, "email delivery can be deferred while admins use the operator CLI");
     assert.deepEqual(runtimeSecretNames("auth", shared), [name]);
-    assert.deepEqual(runtimeSecretNames("harness", shared), [name], `core emails external-user invitations with ${name}`);
+    assert.deepEqual(
+      runtimeSecretNames("harness", shared),
+      [name],
+      `core emails external-user invitations with ${name}`,
+    );
   }
   assert.ok(secretsForService(config, "auth").some((secret) => secret.name === "CORE_SIGNING_SECRET"));
 });

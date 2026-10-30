@@ -4,7 +4,6 @@ import { CliError, die, errMessage, warn } from "./log.ts";
 import {
   AUTH_BROKER_ENV_KEYS,
   DECLARED_SERVICE_NAMES,
-  IMAGE_NAMES,
   isDeclaredService,
   isImageName,
   isCoreWorkload,
@@ -617,9 +616,7 @@ function validate(raw: unknown, path: string): QmConfig {
   const services: DeclaredServiceName[] = [];
   for (const s of servicesRaw) {
     if (typeof s !== "string" || !isDeclaredService(s)) {
-      throw new CliError(
-        `${path}: unknown service ${JSON.stringify(s)} — valid: ${DECLARED_SERVICE_NAMES.join(", ")}`,
-      );
+      throw new CliError(`${path}: unknown service ${JSON.stringify(s)} — valid: ${DECLARED_SERVICE_NAMES.join(", ")}`);
     }
     if (!services.includes(s)) services.push(s);
   }

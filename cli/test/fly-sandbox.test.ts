@@ -321,7 +321,10 @@ test("fly secrets push stages a dual-role secret under BOTH names on the edge an
       "discovered source plugins get the signing secret",
     );
     assert.ok(calls.includes("apps create acme-core --org personal"), "the edge app exists before secret staging");
-    assert.ok(calls.includes("apps create acme-harness --org personal"), "the harness app exists before secret staging");
+    assert.ok(
+      calls.includes("apps create acme-harness --org personal"),
+      "the harness app exists before secret staging",
+    );
     assert.ok(calls.includes("apps create acme-srcplug --org personal"), "source plugin apps are created too");
     assert.ok(calls.includes("apps create acme-signer --org personal"), "coreless plugin apps are created too");
     assert.ok(

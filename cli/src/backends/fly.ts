@@ -331,10 +331,10 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
   const sandboxEnv = core ? sandboxCoreEnv(ctx.config).env : {};
   const modelEnv: Record<string, string> = core
     ? {
-          ...(ctx.config.model ? { PI_MODEL: ctx.config.model } : {}),
-          ...(ctx.config.modelProvider ? { MODEL_PROVIDER: ctx.config.modelProvider } : {}),
-        }
-      : {};
+        ...(ctx.config.model ? { PI_MODEL: ctx.config.model } : {}),
+        ...(ctx.config.modelProvider ? { MODEL_PROVIDER: ctx.config.modelProvider } : {}),
+      }
+    : {};
   const configuredEnv = hostedServiceEnv(ctx.config.services, ctx.config.env, service);
   if (core) delete configuredEnv.FLY_ORG;
   const deploymentEnv: Record<string, string> = core && ctx.flyOrg ? { FLY_ORG: ctx.flyOrg } : {};

@@ -28,7 +28,6 @@ import {
   runnableImages,
   runnableServices,
   hostedServiceEnv,
-  serviceHost,
   serviceDef,
   serviceWorkloads,
   teardownOrdered,
