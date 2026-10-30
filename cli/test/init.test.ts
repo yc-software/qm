@@ -254,13 +254,20 @@ test("init --target aws scaffolds the full hosted topology, Terraform, and the o
     assert.equal(config.sandbox, undefined);
     assert.equal(config.aws?.cluster, "acme-qm");
     assert.equal(config.aws?.imageLabel, "latest");
-    assert.deepEqual(config.aws?.services.core, {
+    assert.deepEqual(config.aws?.services.edge, {
       ecrRepository: "acme-qm-core",
       ecsService: "acme-qm-core",
       cpu: 2048,
       memory: 4096,
     });
-    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["core", "web-ui", "portal"]);
+    assert.deepEqual(config.aws?.services.harness, {
+      ecrRepository: "acme-qm-core",
+      ecsService: "acme-qm-core-harness",
+      cpu: 2048,
+      memory: 4096,
+    });
+    assert.deepEqual(Object.keys(config.aws?.services ?? {}), ["edge", "harness"]);
+    assert.match(readFileSync(join(dir, "qm.config.jsonc"), "utf8"), /"services": \{\s*"core": \{/);
     for (const name of ["main.tf", "outputs.tf", "variables.tf", "versions.tf", "terraform.tfvars"]) {
       assert.ok(existsSync(join(dir, "infra", name)), `infra/${name} is scaffolded`);
     }
@@ -357,7 +364,8 @@ test("init --target aws derives stable valid AWS names for a maximum-length org 
     assert.equal(one.cluster.length, 49);
     assert.match(one.cluster, /^[a-z][a-z0-9-]*[a-z0-9]$/);
     assert.equal(one.deployRoleArn, `arn:aws:iam::000000000000:role/${one.cluster}-github-deploy`);
-    assert.equal(one.services.core?.ecsService, `${one.cluster}-core`);
+    assert.equal(one.services.edge?.ecsService, `${one.cluster}-core`);
+    assert.equal(one.services.harness?.ecsService, `${one.cluster}-core-harness`);
   } finally {
     rmSync(first, { recursive: true, force: true });
     rmSync(second, { recursive: true, force: true });
@@ -519,7 +527,8 @@ test("init --target aws vendors a contract-valid Terraform deployment", () => {
     quiet(() => runInit({ dir, org: "globex", target: "aws" }));
     const { config } = loadConfigInDir(dir);
     assert.equal(config.aws?.cluster, "globex-qm");
-    assert.equal(config.aws?.services.core?.cpu, 2048);
+    assert.equal(config.aws?.services.edge?.cpu, 2048);
+    assert.equal(config.aws?.services.harness?.cpu, 2048);
     for (const path of [
       ["infra", "versions.tf"],
       ["infra", "variables.tf"],

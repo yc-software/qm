@@ -499,10 +499,9 @@ export function renderTaskDefinition(
   const def = isServiceName(service) ? serviceDef(service) : undefined;
   const internalPort = def?.docker.internalPort ?? 8080;
   const executionRoleArn = spec.executionRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task-execution`;
-  const managedTaskRole = isCoreWorkload(service)
-    ? `${aws.cluster}-core-task`
-    : spec.assumeRoleArns?.length
-      ? `${aws.cluster}-${service}-task`
+  const managedTaskRole =
+    isCoreWorkload(service) || spec.assumeRoleArns?.length
+      ? `${aws.cluster}-${configuredServiceKey(service)}-task`
       : `${aws.cluster}-task`;
   const taskRoleArn = spec.taskRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${managedTaskRole}`;
   const secrets = workloadSecrets(config, service, secretArns)
@@ -844,7 +843,9 @@ function releaseCandidate(config: QmConfig, path: string): AwsReleaseCandidate {
   }
   for (const group of sharedImageWorkloads(config, Object.keys(candidate.images)).values()) {
     if (new Set(group.map((workload) => candidate.images![workload])).size !== 1)
-      throw new CliError(`AWS release candidate ${path} gives ${group.join(" and ")} different images of one repository`);
+      throw new CliError(
+        `AWS release candidate ${path} gives ${group.join(" and ")} different images of one repository`,
+      );
   }
   return candidate as AwsReleaseCandidate;
 }
@@ -2804,9 +2805,7 @@ export async function awsRollback(
     const targetCounts = Object.fromEntries(
       services.map((service) => [
         service,
-        predatesHarness && service === "harness"
-          ? 0
-          : (targetManifest.counts?.[service] ?? before!.counts[service]!),
+        predatesHarness && service === "harness" ? 0 : (targetManifest.counts?.[service] ?? before!.counts[service]!),
       ]),
     );
     const changedTargets = Object.fromEntries(
@@ -3005,8 +3004,7 @@ export function awsBackgroundWorkBootState(config: QmConfig): { enabled: boolean
   ]).taskDefinition;
   const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
   const harness = containers?.filter((container) => container.name === ecsContainerName("harness"));
-  if (harness?.length !== 1)
-    throw new CliError("recorded task definition must contain exactly one harness container");
+  if (harness?.length !== 1) throw new CliError("recorded task definition must contain exactly one harness container");
   const secrets = (harness[0]!.secrets ?? []) as Array<{ name: string }>;
   if (secrets.some((secret) => secret.name === "BACKGROUND_WORK_ENABLED" || secret.name === "BACKGROUND_DEPLOYMENT_ID"))
     throw new CliError("recorded background boot settings cannot be supplied as secrets");
@@ -4545,7 +4543,10 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
           "--services",
           ...coreServices.map(([, ecsService]) => ecsService),
         ]).services ?? []
-      ).map((service) => [service.serviceName, service.networkConfiguration?.awsvpcConfiguration?.securityGroups ?? []]),
+      ).map((service) => [
+        service.serviceName,
+        service.networkConfiguration?.awsvpcConfiguration?.securityGroups ?? [],
+      ]),
     );
     const databaseGroups = (database.VpcSecurityGroups ?? []).flatMap((group) =>
       group.VpcSecurityGroupId ? [group.VpcSecurityGroupId] : [],
@@ -4573,8 +4574,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
           (permission.ToPort ?? -Infinity) >= 5432 &&
           (permission.UserIdGroupPairs ?? []).some((pair) => pair.GroupId && groups.includes(pair.GroupId)),
       );
-      if (!reachable)
-        throw new Error(`database security groups do not allow the ${workload} ECS service on port 5432`);
+      if (!reachable) throw new Error(`database security groups do not allow the ${workload} ECS service on port 5432`);
     }
     const databaseUrl = awsText(aws, [
       "secretsmanager",
@@ -4711,7 +4711,10 @@ async function checkLive(
     if (!provenance) continue;
     const plugin = plugins.get(service);
     if (provenance.kind === "source-build") {
-      if (plugin?.kind === "image" || (isServiceName(service) && config.imageOverrides[serviceDef(service).docker.image])) {
+      if (
+        plugin?.kind === "image" ||
+        (isServiceName(service) && config.imageOverrides[serviceDef(service).docker.image])
+      ) {
         failures.push(
           `${service}: image build provenance drift (deployed from source, current workload uses a configured image)`,
         );
@@ -4801,7 +4804,9 @@ async function checkLive(
       const fields = taskDefinitionDiff(
         renderTaskDefinition(config, service, comparisonImage, arns, manifest.backgroundDeploymentId),
         live,
-      ).filter((field) => desiredImage || field !== `taskDefinition.containerDefinitions.${ecsContainerName(service)}.image`);
+      ).filter(
+        (field) => desiredImage || field !== `taskDefinition.containerDefinitions.${ecsContainerName(service)}.image`,
+      );
       if (fields.length) failures.push(`${service}: task-definition drift (${fields.join(", ")})`);
     }
   }
