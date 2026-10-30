@@ -10,7 +10,7 @@ import {
 } from "../src/slack/external-access.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv } from "../src/slack/config.ts";
 import { continueInPrivate, PRIVATE_CONTINUATION_ACK } from "../src/slack/private-continuation.ts";
-import { createDeliveryPoller } from "../src/slack/deliveries.ts";
+import { testDeliveryPoller } from "./support/slack-delivery-poller.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { createDirectory } from "../src/slack/directory.ts";
@@ -316,7 +316,7 @@ test("delivery recovery routes private result only through its originating accou
       acks.push(id);
     },
   };
-  const poller = createDeliveryPoller({
+  const poller = testDeliveryPoller({
     core: core as never,
     flow: { inFlightRuns: new Set() } as never,
     threads: { mark: () => {} } as never,
@@ -376,7 +376,7 @@ test("external account poller neither claims default identity nor releases pre-p
         },
       },
     };
-    const poller = createDeliveryPoller({
+    const poller = testDeliveryPoller({
       core: core as never,
       flow: { inFlightRuns: new Set() } as never,
       threads: {} as never,

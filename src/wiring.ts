@@ -6,7 +6,7 @@ import type { DecisionBackend } from "./decisions/decisions.ts";
 import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
-import type { SlackSessionStatusState } from "./slack/session-status.ts";
+import { createSlackTables, memorySlackRows, type SlackTables } from "./slack/slack-tables.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
@@ -39,7 +39,6 @@ import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
-import type { TaskAckState } from "./slack/task-ack.ts";
 import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
@@ -72,7 +71,6 @@ import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
-import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
@@ -95,7 +93,7 @@ import {
   type PrincipalLink,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
-import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
+import type { SlackAccountRows, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
@@ -495,6 +493,7 @@ export interface BuiltApp {
   runtime: Runtime;
   config: ScopedConfigStore;
   connectorTokens: ConnectorTokenStore;
+  slackTables?: SlackTables;
   slackInstallation: SlackInstallationStore;
   resolveClient: OAuthClientResolver;
   consentLinks: ConsentLinkStore;
@@ -530,7 +529,7 @@ export interface BuiltApp {
   egressAudit: EgressAuditSink;
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
-  slackAccounts: DurableMap<SlackAccountLink>;
+  slackAccounts: SlackAccountRows;
   composioReturns: DurableMap<ComposioReturn>;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
@@ -692,9 +691,9 @@ export function buildApp(
     ? createPostgresTeamStore(config.databaseUrl, featureFlags, scopeId("org", config.orgId))
     : undefined;
   const decisions = config.databaseUrl ? createPostgresDecisionStore(config.databaseUrl) : undefined;
+  const slackTables = config.databaseUrl ? createSlackTables(config.databaseUrl) : undefined;
   const slackInstallation = createSlackInstallationStore(
-    config.orgId,
-    artifactMap("slack_installation"),
+    (slackTables ?? memorySlackRows()).installation,
     config.connectorSecretKey ?? randomBytes(32),
   );
   const deploymentLayer = config.deploymentLayerDir
@@ -2446,14 +2445,14 @@ export function buildApp(
     memory,
     ...(keychainApprovals ? { keychainApprovals } : {}),
     surfaceCache,
-    taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
-    sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
+    ...(slackTables ? { taskAcknowledgements: slackTables.taskAcknowledgements } : {}),
+    ...(slackTables ? { sessionStatus: slackTables.sessionStatus } : {}),
     statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
     featureFlags,
     inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
     app,
     leaderLease,
-    stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
+    ...(slackTables ? { stagedEnvelopes: slackTables.stagedEnvelopes } : {}),
     config: configStore,
     runtimeFallback: fallback,
     blobTransfer,
@@ -3105,6 +3104,7 @@ export function buildApp(
     runtime,
     config: configStore,
     connectorTokens,
+    slackTables,
     slackInstallation,
     resolveClient,
     consentLinks,
@@ -3140,7 +3140,7 @@ export function buildApp(
     egressAudit,
     identity,
     principalLinks,
-    slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
+    slackAccounts: (slackTables ?? memorySlackRows()).accounts,
     composioReturns,
     workspace,
     memory,

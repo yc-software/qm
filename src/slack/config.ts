@@ -1,6 +1,4 @@
 import { parseExternalSlackAccess, type ExternalSlackAccess } from "./external-access.ts";
-import type { Receiver } from "@slack/bolt";
-import type { EnvelopeStaging } from "./envelope-staging.ts";
 import { botIdentityFromEnv } from "./delivery.ts";
 import { normalizeAllowFrom, parseAllowFrom } from "./allow-from.ts";
 
@@ -20,7 +18,6 @@ export interface SlackPluginConfig {
   historyLimit?: number;
   installationId?: string;
   sharedServiceUrl?: string;
-  receiverFactory?: (staging?: EnvelopeStaging) => Receiver;
   botToken: string;
   accountId?: string;
   allowFrom?: string[];
@@ -58,15 +55,47 @@ export function parseAckEmoji(raw: string | undefined): string[] {
   return out;
 }
 
+const INSTALLATION_TUNABLES = [
+  "DEV_INSTANCE_NO_SLACK",
+  "SLACK_HISTORY_LIMIT",
+  "SLACK_API_URL",
+  "SLACK_ACK_CAP_MS",
+  "WEB_UI_PUBLIC_URL",
+  "QM_SLACK_SERVICE_URL",
+  "SLACK_IDENTITY_EMAIL",
+  "SLACK_LOG_LEVEL",
+  "SLACK_USER_SNAPSHOT_TTL_MS",
+  "SLACK_CHANNEL_MEMBERS_TTL_MS",
+  "SLACK_MAX_PRIVATE_CHANNELS",
+  "SLACK_RECENT_MESSAGES",
+  "SLACK_USER_CACHE_TTL_MS",
+  "DEV_INTROSPECTION",
+  "DEV_HEALTH_PORT",
+] as const;
+
+export function slackInstallationConfig(
+  env: Record<string, string | undefined>,
+  installation: { botToken: string; appToken?: string; installId?: string },
+): SlackPluginConfig | null {
+  return slackPluginConfigFromEnv(
+    {
+      ...Object.fromEntries(INSTALLATION_TUNABLES.map((name) => [name, env[name]])),
+      SLACK_BOT_TOKEN: installation.botToken,
+      SLACK_APP_TOKEN: installation.appToken,
+    },
+    installation.installId,
+  );
+}
+
 export function slackPluginConfigFromEnv(
   env: Record<string, string | undefined>,
-  receiverFactory?: SlackPluginConfig["receiverFactory"],
+  installationId?: string,
 ): SlackPluginConfig | null {
   if (env.DEV_INSTANCE_NO_SLACK === "1") return null;
-  const eventsMode = env.SLACK_EVENTS_MODE?.trim() === "http" ? "http" : "socket";
+  const eventsMode = env.SLACK_EVENTS_MODE?.trim() === "http" && !installationId ? "http" : "socket";
   if (!env.SLACK_BOT_TOKEN) return null;
-  if (!receiverFactory && eventsMode === "socket" && !env.SLACK_APP_TOKEN) return null;
-  if (!receiverFactory && eventsMode === "http" && !env.SLACK_SIGNING_SECRET) return null;
+  if (!installationId && eventsMode === "socket" && !env.SLACK_APP_TOKEN) return null;
+  if (eventsMode === "http" && !env.SLACK_SIGNING_SECRET) return null;
   const num = (v: string | undefined): number | undefined => {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : undefined;
@@ -80,7 +109,7 @@ export function slackPluginConfigFromEnv(
     ...(env.SLACK_EXTERNAL_ACCESS
       ? { externalAccess: parseExternalSlackAccess(JSON.parse(env.SLACK_EXTERNAL_ACCESS)) }
       : {}),
-    ...(receiverFactory ? { receiverFactory } : {}),
+    ...(installationId ? { installationId } : {}),
     ...opt("historyLimit", parseSlackHistoryLimit(env.SLACK_HISTORY_LIMIT)),
     ...opt("appToken", env.SLACK_APP_TOKEN),
     ...opt("apiUrl", env.SLACK_API_URL),

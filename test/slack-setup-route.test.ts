@@ -3,9 +3,13 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { getSlackInstallation, startSlackInstallation } from "../src/api/routes/admin/slack-installation.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memorySlackRows } from "../src/slack/slack-tables.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+
+enterTenant(TEST_TENANT);
 
 type SlackSetupStatus = {
   configured: boolean;
@@ -21,18 +25,16 @@ type SlackSetupStatus = {
 };
 
 async function fixture(t: test.TestContext) {
-  const map = createMemoryMap();
-  const store = createSlackInstallationStore(
-    "test",
-    map as Parameters<typeof createSlackInstallationStore>[1],
-    "test-key",
-  );
+  const store = createSlackInstallationStore(memorySlackRows().installation, "test-key");
   const calls: Array<{ path: string; body?: string }> = [];
   let remote = Response.json({ companyOwned: true, appReady: false, connected: false });
   const managedSlack = createManagedSlack({
     serviceUrl: "https://bridge.example",
     token: "SENTINEL-bridge",
+    stateSecret: "state-secret",
     store,
+    resolver: { forHost: async () => TEST_TENANT, forSlackTeam: async () => TEST_TENANT },
+    runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
     fetchImpl: (async (url: URL, init: RequestInit) => {
       calls.push({ path: url.pathname, body: init.body as string | undefined });
       return url.pathname === "/install/start"
@@ -119,6 +121,8 @@ test("explicit browser start selects setup or installation and rejects arbitrary
   assert.equal(f.calls.length, 0);
   for (const step of ["setup", "install"]) {
     assert.equal((await f.request("POST", { step })).status, 200);
-    assert.equal(f.calls.at(-1)?.body, JSON.stringify({ step }));
+    const sent = JSON.parse(f.calls.at(-1)?.body ?? "{}") as { step?: string; state?: unknown };
+    assert.equal(sent.step, step);
+    assert.equal(typeof sent.state, "string");
   }
 });

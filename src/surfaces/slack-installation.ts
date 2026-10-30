@@ -1,34 +1,6 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import { SLACK_AUTH_ERRORS } from "../slack/payloads.ts";
-
-interface ActiveSlackInstallation {
-  serviceBlocked?: boolean;
-  orgId: string;
-  disabled: false;
-  botTokenEnc: string;
-  appTokenEnc?: string;
-  appId?: string;
-  installId?: string;
-  installedAt?: number;
-  teamId?: string;
-  teamName?: string;
-  updatedAt: number;
-  updatedBy: string;
-  version: string;
-}
-
-interface DisabledSlackInstallation {
-  installedAt?: number;
-  serviceBlocked?: boolean;
-  orgId: string;
-  disabled: true;
-  updatedAt: number;
-  updatedBy: string;
-  version: string;
-}
-
-type StoredSlackInstallation = ActiveSlackInstallation | DisabledSlackInstallation;
+import type { SlackInstallationRows, StoredSlackInstallation } from "../slack/slack-tables.ts";
 
 interface SlackInstallation {
   botToken: string;
@@ -80,11 +52,11 @@ export interface SlackInstallationStore {
 }
 
 export function createSlackInstallationStore(
-  orgId: string,
-  map: DurableMap<StoredSlackInstallation>,
+  rows: SlackInstallationRows,
   keyMaterial: Buffer | string,
 ): SlackInstallationStore {
   const key = deriveConnectorKey(keyMaterial, "slack-installation");
+  const version = () => `${Date.now()}:${crypto.randomUUID()}`;
   const publicStatus = (record: StoredSlackInstallation | null): SlackInstallationStatus =>
     record && !record.disabled
       ? {
@@ -99,8 +71,8 @@ export function createSlackInstallationStore(
       : { configured: false, managed: record !== null };
   return {
     async get() {
-      const record = await map.get(orgId);
-      if (!record || record.disabled) return null;
+      const record = await rows.read();
+      if (!record || record.disabled || !record.botTokenEnc) return null;
       return {
         botToken: decryptSecret(record.botTokenEnc, key),
         ...(record.appTokenEnc ? { appToken: decryptSecret(record.appTokenEnc, key) } : {}),
@@ -115,55 +87,39 @@ export function createSlackInstallationStore(
       };
     },
     async status() {
-      return publicStatus(await map.get(orgId));
+      return publicStatus(await rows.read());
     },
     async set(input) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
-      const updatedAt = Date.now();
-      const record: StoredSlackInstallation = {
-        orgId,
+      const stored = await rows.mutate((current) => ({
         disabled: false,
         serviceBlocked: true,
         botTokenEnc: encryptSecret(input.botToken, key),
         ...(input.appToken ? { appTokenEnc: encryptSecret(input.appToken, key) } : {}),
         ...(input.appId ? { appId: input.appId } : {}),
         ...(input.installId ? { installId: input.installId } : {}),
+        ...(current?.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
         ...(input.teamId ? { teamId: input.teamId } : {}),
         ...(input.teamName ? { teamName: input.teamName } : {}),
-        updatedAt,
+        updatedAt: Date.now(),
         updatedBy: input.updatedBy,
-        version: `${updatedAt}:${crypto.randomUUID()}`,
-      };
-      await map.putIfAbsent(orgId, record);
-      const stored = await map.update(orgId, (current) => ({
-        ...record,
-        ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
+        version: version(),
       }));
-      if (!stored) throw new Error("Slack installation disappeared during update");
       return publicStatus(stored);
     },
     async setManaged(input) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
-      await map.putIfAbsent(orgId, {
-        orgId,
-        disabled: true,
-        updatedAt: 0,
-        updatedBy: "slack-service",
-        version: "initial",
-      });
       let accepted = false;
-      await map.update(orgId, (record) => {
-        if (record.serviceBlocked || (!record.disabled && !record.installId)) return record;
+      await rows.mutate((current) => {
+        const record = current ?? { disabled: true, updatedAt: 0, updatedBy: "slack-service", version: "initial" };
+        if (record.serviceBlocked || (!record.disabled && !record.installId)) return current;
         if (!record.disabled && record.installId === input.installId) {
           accepted =
             record.teamId === input.teamId && record.appId === input.appId && record.installedAt === input.installedAt;
-          return record;
+          return current;
         }
         if ((record.installedAt ?? 0) >= input.installedAt || (!record.disabled && record.teamId !== input.teamId))
-          return record;
+          return current;
         accepted = true;
         return {
-          orgId,
           disabled: false,
           botTokenEnc: encryptSecret(input.botToken, key),
           appId: input.appId,
@@ -179,27 +135,25 @@ export function createSlackInstallationStore(
       return accepted;
     },
     async enableManaged() {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       let accepted = true;
-      await map.update(orgId, (record) => {
-        if (!record.disabled && !record.installId) {
+      await rows.mutate((current) => {
+        if (!current) return null;
+        if (!current.disabled && !current.installId) {
           accepted = false;
-          return record;
+          return current;
         }
-        return { ...record, serviceBlocked: false };
+        return current.serviceBlocked ? { ...current, serviceBlocked: false } : current;
       });
       return accepted;
     },
     async disableManaged(installId) {
-      if (!map.update) throw new Error("Atomic installation updates are required");
       let disabled = false;
-      await map.update(orgId, (record) => {
-        if (record.disabled || record.installId !== installId) return record;
+      await rows.mutate((current) => {
+        if (!current || current.disabled || current.installId !== installId) return current;
         disabled = true;
         return {
-          orgId,
           disabled: true,
-          installedAt: record.installedAt,
+          ...(current.installedAt !== undefined ? { installedAt: current.installedAt } : {}),
           updatedAt: Date.now(),
           updatedBy: "slack-service",
           version: crypto.randomUUID(),
@@ -208,26 +162,16 @@ export function createSlackInstallationStore(
       return disabled;
     },
     async delete(updatedBy) {
-      if (map.update) {
-        const record = await map.update(orgId, (current) => ({
-          orgId,
-          disabled: true,
-          serviceBlocked: current.serviceBlocked || (!current.disabled && !current.installId),
-          ...(current.installedAt ? { installedAt: current.installedAt } : {}),
-          updatedAt: Date.now(),
-          updatedBy,
-          version: crypto.randomUUID(),
-        }));
-        if (record) return;
-      }
-      const updatedAt = Date.now();
-      await map.put(orgId, {
-        orgId,
+      await rows.mutate((current) => ({
         disabled: true,
-        updatedAt,
+        ...(current && (current.serviceBlocked || (!current.disabled && !current.installId))
+          ? { serviceBlocked: true }
+          : {}),
+        ...(current?.installedAt ? { installedAt: current.installedAt } : {}),
+        updatedAt: Date.now(),
         updatedBy,
-        version: `${updatedAt}:${crypto.randomUUID()}`,
-      });
+        version: version(),
+      }));
     },
   };
 }

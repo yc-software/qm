@@ -13,6 +13,10 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
+import { enterTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+
+enterTenant(TEST_TENANT);
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -30,7 +34,10 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
             serviceUrl: "https://bridge.example",
             token: "test-token",
             appId: "A123",
+            stateSecret: "byo-route-state-secret",
             store: built.slackInstallation,
+            resolver: { forHost: async () => TEST_TENANT, forSlackTeam: async () => TEST_TENANT },
+            runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
           }),
         }
       : {}),
