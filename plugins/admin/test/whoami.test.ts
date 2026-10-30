@@ -145,6 +145,16 @@ test("a forwarded portal identity is relayed to core (so an enforcing core can v
   });
 });
 
+test("/api/whoami with malformed admin cookie is unauthenticated", async () => {
+  const r = await api("/api/whoami", "admin=%");
+  assert.equal(r.status, 401);
+});
+
+test("/api/whoami uses a valid admin cookie after a malformed duplicate", async () => {
+  const r = await api("/api/whoami", "admin=%; admin=U-admin");
+  assert.equal(r.status, 200);
+});
+
 test("an unsigned or wrongly-signed portal identity is not accepted as an admin principal", async () => {
   const claims = Buffer.from(JSON.stringify({ p: "U-admin", exp: Date.now() + 60_000 })).toString("base64url");
   for (const token of [
