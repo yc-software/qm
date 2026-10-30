@@ -821,19 +821,12 @@ export function createSwarmService(deps: {
           .slice(0, 32);
       for (;;) {
         let messages = pick(swarm);
-        const unread = new Set(
-          caller.kind === "agent" && options.replyTo
-            ? messages
-                .filter((message) => message.notifications[auth.memberId]?.state === "mailbox")
-                .map((message) => message.id)
-            : [],
-        );
-        if (unread.size)
+        const unread = (current: Swarm) =>
+          pick(current).filter((message) => message.notifications[auth.memberId]?.state === "mailbox");
+        if (caller.kind === "agent" && options.replyTo && unread(swarm).length)
           messages = pick(
             await update(auth, (current) => {
-              for (const message of current.messages)
-                if (unread.has(message.id) && message.notifications[auth.memberId]?.state === "mailbox")
-                  message.notifications[auth.memberId] = { state: "handed" };
+              for (const message of unread(current)) message.notifications[auth.memberId] = { state: "handed" };
             }),
           );
         if (messages.length || Date.now() >= deadline) return messages;

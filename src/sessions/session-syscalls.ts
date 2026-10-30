@@ -806,12 +806,13 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
               const busy = (await deps.runs.inFlightForThread(target.threadRef)).length > 0;
+              const mailId = input.requestId
+                ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
+                : randomUUID();
               const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
                 const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
                 await deps.mailbox.send({
-                  id: input.requestId
-                    ? hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)
-                    : randomUUID(),
+                  id: mailId,
                   recipientId: target.id,
                   senderId: binding.session.id,
                   actor: caller.actor,
@@ -855,8 +856,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 }
               }
               if (
+                (input.requestId && (await deps.mailbox.pending(target.id)).some((message) => message.id === mailId)) ||
                 (await sessionTreeRunCount(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))) >=
-                cap
+                  cap
               )
                 return leaveMail(`all ${cap} session run slots are in use`);
               request.origin = sessionTurnOrigin(request.origin, stamped);
