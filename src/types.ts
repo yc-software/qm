@@ -703,7 +703,6 @@ export interface TurnRequest {
   entryTs?: string;
   gatewayContext?: GatewayContext;
   triggered?: boolean;
-  unattended?: boolean;
   unattendedGrants?: string[];
   securityScreenData?: string;
   triggerDestination?: Destination;
@@ -800,7 +799,7 @@ export interface TurnRuntime {
   harnessId: string;
   modelId: string;
   label?: string;
-  change?: { rule: string; reason?: string } | { agent: "task" | "scope" };
+  change?: { rule: string } | { agent: "task" | "scope" };
 }
 
 export interface TurnResult {

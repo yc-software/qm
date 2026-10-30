@@ -250,7 +250,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let errorCode: string | undefined;
   let note: string | undefined;
   let userNote: string | undefined;
-  let routeNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
   let deferred = false;
@@ -288,7 +287,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         text: typeof spec.input === "string" ? spec.input : spec.input(roster),
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
-        unattended: true,
         ...(spec.unattendedGrants && grantsStayWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
         ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
         ...turnModelOptions({
@@ -310,9 +308,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
       status = res.status;
       errorCode = res.errorCode;
-      const change = res.runtime?.change;
-      if (change && "rule" in change)
-        routeNote = `routed by ${change.rule} to ${res.runtime!.harnessId}/${res.runtime!.modelId}${change.reason ? `: ${change.reason}` : ""}`;
       reply = res.reply;
       sessionId = res.sessionId;
       if (res.status === "silent") return;
@@ -358,7 +353,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(deferred ? { deferred } : {}),
     ...(status ? { status } : {}),
     ...(errorCode ? { errorCode } : {}),
-    ...(note || routeNote ? { note: [routeNote, note].filter(Boolean).join("; ") } : {}),
+    ...(note ? { note } : {}),
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(sessionId ? { sessionId } : {}),

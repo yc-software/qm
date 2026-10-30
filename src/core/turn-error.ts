@@ -1,8 +1,8 @@
 import { headSlice } from "../util/text.ts";
 
 export class NonRetryableTurnError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
+  constructor(message: string) {
+    super(message);
     this.name = "NonRetryableTurnError";
   }
 }

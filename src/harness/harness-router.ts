@@ -281,33 +281,10 @@ export async function resolveRuntimeChoiceDurable(
   return resolveRuntimeChoice(view, orgScopeId, scope, fallback, requested, purpose);
 }
 
-export const MODEL_FALLBACK_ROUTE = "model fallback";
-
-export async function fallBackWhenUnavailable<C>(
-  requested: () => Promise<C>,
-  unavailable: (choice: C) => Promise<string | null>,
-  fallback: (reason: string) => Promise<C>,
-): Promise<{ choice: C; fellBackBecause?: string }> {
-  let choice: C | undefined;
-  let reason: string | null;
-  try {
-    choice = await requested();
-    reason = await unavailable(choice);
-  } catch (error) {
-    if (!(error instanceof NonRetryableTurnError)) throw error;
-    reason = error.message;
-  }
-  if (choice !== undefined && !reason) return { choice };
-  return { choice: await fallback(reason!), fellBackBecause: reason! };
-}
-
 export function createHarnessRouter(
   adapters: ReadonlyMap<HarnessId, Harness>,
   utility: Harness,
-  resolve: (
-    input: HarnessTurnInput,
-    routedBy: (ruleId: string, reason?: string) => void,
-  ) => RuntimeChoice | Promise<RuntimeChoice>,
+  resolve: (input: HarnessTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
 ): Harness {
   const lastHarness = new Map<string, HarnessId>();
   return {
@@ -322,16 +299,16 @@ export function createHarnessRouter(
     tools: utility.tools,
     turns: {
       async runTurn(input) {
-        let routedBy: { rule: string; reason?: string } | undefined;
-        const choice = await resolve(input, (rule, reason) => {
-          routedBy = { rule, ...(reason ? { reason } : {}) };
+        let routedBy: string | undefined;
+        const choice = await resolve(input, (ruleId) => {
+          routedBy = ruleId;
         });
         const label = safeModelMetadata(choice.modelId)?.label;
         input.onRuntime?.({
           harnessId: choice.harnessId,
           modelId: choice.modelId,
           ...(label ? { label } : {}),
-          ...(routedBy ? { change: routedBy } : {}),
+          ...(routedBy ? { change: { rule: routedBy } } : {}),
         });
         const adapter = adapters.get(choice.harnessId);
         if (!adapter) throw new Error(`harness ${choice.harnessId} is unavailable`);

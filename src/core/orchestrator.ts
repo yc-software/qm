@@ -3189,7 +3189,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           requestedRuntime = userModelOverride ? { ...choice, modelId: userModelOverride } : choice;
         };
         if (restoredRuntime) await adoptRuntime(restoredRuntime.choice, restoredRuntime.lifetime);
-        if (automatedTurn && !input.unattended && input.model && inputHarness) {
+        if (automatedTurn && input.model && inputHarness) {
           const error = await deps.validateScheduledRuntime?.(
             scopeId,
             {
@@ -3439,7 +3439,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(userHarnessOverride && !purposeDefault && !restoredRuntime && runtimeHandoffs === 0
               ? { runtimePinned: true }
               : {}),
-            ...(input.unattended ? { unattended: true } : {}),
             runtimeActorId: actor.id,
             onRuntime: (reported: TurnRuntime) => {
               const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;

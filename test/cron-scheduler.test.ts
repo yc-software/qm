@@ -29,6 +29,7 @@ function harness(
   directory?: DirectoryStore,
   maxFiresPerTick?: number,
   now?: () => number,
+  extra: Partial<Parameters<typeof createScheduler>[0]> = {},
 ) {
   const crons = createCronStore();
   const deliveries = createDeliveryStore();
@@ -49,6 +50,7 @@ function harness(
     ...(directory ? { directory } : {}),
     ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
     ...(now ? { now } : {}),
+    ...extra,
   });
   return { crons, deliveries, calls, scheduler, identity };
 }
@@ -1881,16 +1883,14 @@ test("a failing cron posts one notice to its destination, then stays quiet until
   );
 });
 
-test("a cron fire that was routed to another model says so in its run log", async () => {
-  const { crons, scheduler } = harness(async () => ({
-    status: "ok",
-    reply: "standup posted",
-    runtime: {
-      harnessId: "pi",
-      modelId: "gpt-6.1-sol",
-      change: { rule: "model fallback", reason: "pi/claude-sonnet-5 can't run here (runtime is no longer available)." },
-    },
-  }));
+test("a cron whose model can't run fires on the default model and is told why", async () => {
+  const unavailable = new Set(["claude-sonnet-5"]);
+  const { crons, calls, scheduler } = harness("standup posted", undefined, undefined, undefined, {
+    runtimeError: async (_scope, runtime) =>
+      unavailable.has(runtime.modelId)
+        ? `pi/${runtime.modelId} can't run here (runtime is no longer available).`
+        : null,
+  });
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
@@ -1898,10 +1898,19 @@ test("a cron fire that was routed to another model says so in its run log", asyn
     createdBy: "U1",
     ownerScopeId: scopeId("channel", "C1"),
     destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+    runtime: { harnessId: "pi", modelId: "claude-sonnet-5" },
   });
+
   await runNowSettled(scheduler, cron.id);
-  assert.equal(
-    (await crons.listFires(cron.id)).runs[0]?.note,
-    "routed by model fallback to pi/gpt-6.1-sol: pi/claude-sonnet-5 can't run here (runtime is no longer available).",
+  assert.equal(calls[0]?.model, undefined, "the unusable model is dropped so the cron default applies");
+  assert.match(
+    calls[0]?.text ?? "",
+    /runs on the default model because the cron's own model can't run: pi\/claude-sonnet-5 can't run here/,
   );
+  assert.equal((await crons.get(cron.id))?.runtime?.modelId, "claude-sonnet-5", "the stored model is kept");
+
+  unavailable.clear();
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls[1]?.model, "claude-sonnet-5", "the stored model is used again once it can run");
+  assert.doesNotMatch(calls[1]?.text ?? "", /default model because/);
 });

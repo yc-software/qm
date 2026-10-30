@@ -134,7 +134,6 @@ export interface HarnessTurnInput {
   orgScopeId: ScopeId;
   providerKeys?: ProviderKeys;
   runtimePinned?: boolean;
-  unattended?: boolean;
   onRuntime?(runtime: TurnRuntime): void;
   claudeOauthToken?: string;
   recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;

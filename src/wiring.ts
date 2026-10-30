@@ -1,4 +1,3 @@
-import { NonRetryableTurnError } from "./core/turn-error.ts";
 import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
@@ -324,12 +323,7 @@ import {
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
-import {
-  createHarnessRouter,
-  fallBackWhenUnavailable,
-  MODEL_FALLBACK_ROUTE,
-  resolveRuntimeChoiceDurable,
-} from "./harness/harness-router.ts";
+import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
@@ -1570,51 +1564,16 @@ export function buildApp(
         ...(input.cancel ? { cancel: input.cancel } : {}),
       }),
     );
-    const route = () =>
-      routeTurnRuntime(decision, resolve, async () => {
-        if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
-          if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
-            throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-          return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
-        }
-        return resolve(input.runtime);
-      });
-    if (!input.unattended || input.providerKeys || input.claudeOauthToken) {
-      const routed = await route();
-      if (routed.routedBy) routedBy(routed.routedBy);
-      return routed.choice;
-    }
-    const { choice, fellBackBecause } = await fallBackWhenUnavailable(
-      route,
-      (routed) => availableRuntimeError({ deps: runtimeDeps }, input.scopeLabel, routed.choice, input.runtimePurpose),
-      async (reason) => {
-        const failed = (detail: string, cause?: unknown) =>
-          new NonRetryableTurnError(
-            `${reason}${reason.endsWith(".") ? "" : "."} The fallback runtime can't run either: ${detail}`,
-            { cause },
-          );
-        let target: Awaited<ReturnType<typeof resolve>>;
-        try {
-          target = await resolveRuntimeChoiceDurable(
-            configStore,
-            runtimeOrgScope,
-            input.scopeLabel,
-            fallback,
-            {},
-            hydrateModelCatalog,
-            "fallback",
-          );
-        } catch (error) {
-          throw failed(errMessage(error), error);
-        }
-        const unusable = await availableRuntimeError({ deps: runtimeDeps }, input.scopeLabel, target, "fallback");
-        if (unusable) throw failed(unusable);
-        return { choice: target };
-      },
-    );
-    if (fellBackBecause) routedBy(MODEL_FALLBACK_ROUTE, fellBackBecause);
-    else if (choice.routedBy) routedBy(choice.routedBy);
-    return choice.choice;
+    const routed = await routeTurnRuntime(decision, resolve, async () => {
+      if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
+        if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
+          throw new Error(`Unsupported model: ${input.runtime.modelId}`);
+        return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
+      }
+      return resolve(input.runtime);
+    });
+    if (routed.routedBy) routedBy(routed.routedBy);
+    return routed.choice;
   });
 
   if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
@@ -2761,6 +2720,7 @@ export function buildApp(
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
+    runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,

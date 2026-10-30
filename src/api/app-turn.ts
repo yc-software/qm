@@ -214,7 +214,7 @@ export function createTurnMethods(
           : "company";
       const individualAuth = modelAccount !== "company";
       const runtimePurpose = turnRuntimePurpose(req, isSubagentThreadRef(req.conversation.threadRef));
-      if (req.triggered && !req.unattended && (req.model || req.harness)) {
+      if (req.triggered && (req.model || req.harness)) {
         if (req.harness && !isHarnessId(req.harness)) return { status: "refused", reason: "harness_not_approved" };
         const error = await requestedRuntimeError(
           { deps },
@@ -405,7 +405,6 @@ export function createTurnMethods(
           : {}),
         ...(req.skipMemory ? { skipMemory: true } : {}),
         ...(req.unattendedGrants?.length ? { unattendedGrants: req.unattendedGrants } : {}),
-        ...(req.unattended ? { unattended: true } : {}),
         ...(req.botActor ? { botActor: true } : {}),
         ...(req.surfaceTools ? { surfaceTools: true } : {}),
         ...(req.clientTools?.length ? { clientTools: req.clientTools } : {}),
