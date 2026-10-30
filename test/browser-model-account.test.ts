@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
@@ -207,26 +208,19 @@ test("personal API keys bypass organization provider endpoint overrides", async 
 });
 
 test("company ChatGPT subscription auth uses the native subscription transport without API-key fallback", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "company-chatgpt-test-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const authFile = join(dir, "auth.json");
   const claims = Buffer.from(
     JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company" } }),
   ).toString("base64url");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
-    }),
-    { mode: 0o600 },
-  );
   const built = buildApp(
     testConfig({
-      codexAuthFile: authFile,
+      codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL,
       openaiApiKey: "must-not-fallback",
     }),
   );
+  await saveCompanyChatGPTLogin(built.keychain, {
+    auth_mode: "chatgpt",
+    tokens: { access_token: "company-access", refresh_token: "company-refresh", id_token: `header.${claims}.sig` },
+  });
   const selection = { account: "company" as const, model: "gpt-5.6-sol", routing: null };
   const keys = await built.resolveBrowserCompanyKeys();
   assert.equal(keys["openai-codex"], "company-access");

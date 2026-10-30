@@ -9,6 +9,7 @@ import * as mockAgent from "./support/mock-agent.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
 
 const turns: AgentTurnInput[] = [];
 let piOptions: Parameters<typeof agentRun.createAgent>[0];
@@ -211,19 +212,15 @@ test("web subscription selections use the namespaced model and personal OAuth on
   }
 });
 
-test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-company-chatgpt-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
+test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", async () => {
   const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
   const companyToken = `e30.${claims.toString("base64url")}.sig`;
-  const authFile = join(dir, "auth.json");
-  writeFileSync(
-    authFile,
-    JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: companyToken, refresh_token: "r" } }),
-  );
-  chmodSync(authFile, 0o600);
   turns.length = 0;
-  const built = buildApp(testConfig({ codexAuthFile: authFile }));
+  const built = buildApp(testConfig({ codexAuthCredential: COMPANY_CHATGPT_CREDENTIAL }));
+  await saveCompanyChatGPTLogin(built.keychain, {
+    auth_mode: "chatgpt",
+    tokens: { access_token: companyToken, refresh_token: "r" },
+  });
   assert.deepEqual(await piOptions?.resolveProviderKeys?.(), { "openai-codex": companyToken });
   assert.equal(piOptions?.companyModelId?.("gpt-5.6-sol"), "codex/gpt-5.6-sol");
   assert.equal(piOptions?.companyModelId?.("gpt-6-astra-ultrafast"), "gpt-6-astra-ultrafast");

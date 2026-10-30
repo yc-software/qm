@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import {
   companySubscriptionAuth,
   baseModelProviders,
@@ -790,32 +788,31 @@ test("a Claude subscription token in ANTHROPIC_API_KEY or a keychain credential 
 test("company ChatGPT auth satisfies model onboarding without an API key", () => {
   const config = loadConfig({});
   assert.equal(companySubscriptionAuth({ ...config, codexAuthCredential: "cred-1" }), "openai");
-  assert.equal(companySubscriptionAuth({ ...config, codexAuthFile: "/local/auth.json" }), "openai");
   assert.equal(companySubscriptionAuth(config), undefined);
   assert.equal(providerKeysPresent({ ...config, codexAuthCredential: "cred-1" }).codexOAuth, true);
   assert.equal(loadConfig({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthCredential, "cred-1");
 });
 
-test("CODEX_AUTH_FILE is a validated local-only company ChatGPT login", (t) => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-config-chatgpt-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const path = join(dir, "auth.json");
-  const claims = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acct" } }));
-  const token = `e30.${claims.toString("base64url")}.sig`;
-  writeFileSync(path, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: token, refresh_token: "r" } }));
-  chmodSync(path, 0o600);
-  assert.equal(loadConfig({ CODEX_AUTH_FILE: path }).codexAuthFile, path);
-  assert.throws(
-    () => loadConfig({ CODEX_AUTH_FILE: join(dir, "missing.json") }),
-    /CODEX_AUTH_FILE is unusable: .*ENOENT/,
-  );
-  assert.equal(loadConfig({ CODEX_AUTH_FILE: path, CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthFile, undefined);
-  assert.throws(
-    () => loadConfig({ ...productionEnv, CODEX_AUTH_FILE: path }),
-    /CODEX_AUTH_FILE is supported for local development only/,
-  );
-  chmodSync(path, 0o644);
-  assert.throws(() => loadConfig({ CODEX_AUTH_FILE: path }), /must not be readable by group or others/);
+test("retired brain environment does not configure a runtime integration and warns once", () => {
+  const warnings: string[] = [];
+  const original = console.warn;
+  console.warn = (msg: unknown) => void warnings.push(String(msg));
+  let config;
+  try {
+    config = loadConfig({
+      BRAIN: "mcp",
+      BRAIN_MCP_URL: "https://unused.invalid",
+      BRAIN_RO_CLIENT_ID: "retired",
+      BRAIN_RO_CLIENT_SECRET: "retired",
+    });
+  } finally {
+    console.warn = original;
+  }
+  assert.deepEqual({ ...config, layerEnv: {} }, loadConfig({}));
+  const retired = warnings.filter((w) => w.includes("retired and ignored"));
+  assert.equal(retired.length, 1);
+  assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
+  assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
 });
 
 test("Modal native retention and interval configuration are parsed into Config", () => {

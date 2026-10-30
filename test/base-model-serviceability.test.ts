@@ -60,7 +60,7 @@ test("base-model set rejects a model whose provider key is absent (would fail pr
 });
 
 test("ChatGPT OAuth stays separate from OpenAI API-key availability", () => {
-  const config = testConfig({ codexAuthFile: "/tmp/chatgpt-auth.json" });
+  const config = testConfig({ codexAuthCredential: "company-chatgpt" });
   const configured = providerKeysPresent(config);
   assert.equal(configured.openai, false);
   assert.equal(configured.codexOAuth, true);

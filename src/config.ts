@@ -1,10 +1,8 @@
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
-import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/chatgpt-auth-file.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   type DeploymentBrokerCredential,
 } from "./credentials/deployment-credentials.ts";
-import { errMessage } from "./util/errors.ts";
 import { boolEnv, boolEnvStrict, numEnvStrict, optNum } from "./util/env.ts";
 import { sandboxSettings, type SandboxSettings } from "./sandbox/sandbox-settings.ts";
 import { deploySettings, type DeploySettings } from "./deploy/deploy-settings.ts";
@@ -75,7 +73,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   egressServiceHosts?: string[];
   brandingDefault?: OrgBranding;
   modelId?: string;
-  codexAuthFile?: string;
   codexAuthCredential?: string;
   claudeAuthCredential?: string;
   detectModelId?: string;
@@ -197,7 +194,7 @@ export function providerKeysPresent(config: Config): ModelProviderAvailability {
     anthropic: Boolean(config.anthropicApiKey || config.claudeAuthCredential),
     openai: Boolean(config.openaiApiKey),
     openrouter: Boolean(config.openrouterApiKey),
-    ...(config.codexAuthCredential || config.codexAuthFile ? { codexOAuth: true } : {}),
+    ...(config.codexAuthCredential ? { codexOAuth: true } : {}),
   };
 }
 
@@ -208,7 +205,7 @@ export function baseModelProviders(config: Config): ModelProviderAvailability | 
 export function companySubscriptionAuth(config: Config): ModelProvider | undefined {
   if (config.anthropicApiKey ? isClaudeSubscriptionToken(config.anthropicApiKey) : config.claudeAuthCredential)
     return "anthropic";
-  if (config.codexAuthCredential || config.codexAuthFile) return "openai";
+  if (config.codexAuthCredential) return "openai";
   return undefined;
 }
 
@@ -432,19 +429,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
-  const codexAuthFile = codexAuthCredential ? undefined : codexAuthFileForEnv(env);
-  if (env.NODE_ENV === "production" && codexAuthFile) {
-    throw new Error(
-      "CODEX_AUTH_FILE is supported for local development only; production must use CODEX_AUTH_CREDENTIAL (keychain custody)",
-    );
-  }
-  if (codexAuthFile) {
-    try {
-      loadCodexAuthFile(codexAuthFile);
-    } catch (error) {
-      throw new Error(`CODEX_AUTH_FILE is unusable: ${errMessage(error)}`, { cause: error });
-    }
-  }
   const publicApiUrl = env.PUBLIC_API_URL ?? env.AGENT_API_URL;
   const publicUrl = env.PUBLIC_WEB_URL || publicApiUrl;
   const deploy = deploySettings(env, publicUrl);
@@ -567,7 +551,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       : {}),
     ...(orgBrandingFromEnv(env) ? { brandingDefault: orgBrandingFromEnv(env) } : {}),
     ...(env.PI_MODEL ? { modelId: env.PI_MODEL } : {}),
-    ...(codexAuthFile ? { codexAuthFile } : {}),
     ...(codexAuthCredential ? { codexAuthCredential } : {}),
     ...(claudeAuthCredential ? { claudeAuthCredential } : {}),
     ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
