@@ -90,7 +90,7 @@ test(
   },
 );
 
-test("a vendored AWS scaffold without the proxy load balancer refuses the egress proxy", () => {
+test("a vendored AWS scaffold older than the current version refuses the egress proxy", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-legacy-egress-"));
   try {
     const infra = join(dir, "infra");
@@ -98,7 +98,7 @@ test("a vendored AWS scaffold without the proxy load balancer refuses the egress
     writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
     writeFileSync(join(infra, "variables.tf"), 'variable "services" { type = map(any) }\n');
     writeFileSync(join(infra, "main.tf"), 'resource "aws_lb" "this" {}\n');
-    assert.throws(() => renderTerraformVars(config, dir), /AWS scaffold predates the egress-proxy service/);
+    assert.throws(() => renderTerraformVars(config, dir), /AWS scaffold predates the edge and harness services/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

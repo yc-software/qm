@@ -130,7 +130,7 @@ export function awsWorkloadArchitecture(config: QmConfig, workload: string): "ar
     (isServiceName(workload) && Boolean(config.imageOverrides[serviceDef(workload).docker.image]));
   if (!service.architecture && externalImage) {
     throw new CliError(
-      `aws.services.${workload}.architecture is required because ${workload} uses an external prebuilt image`,
+      `aws.services.${isCoreWorkload(workload) ? "core" : workload}.architecture is required because ${workload} uses an external prebuilt image`,
     );
   }
   return service.architecture ?? (isServiceName(workload) ? "amd64" : "arm64");
@@ -1479,10 +1479,11 @@ function validateAws(
   for (const [name, service] of Object.entries(services)) {
     if (!service.assumeRoleArns) continue;
     const role = effectiveTaskRoleArn(name, service);
-    const owners = taskRoleOwners.get(role)!.filter((owner) => !(isCoreWorkload(owner) && isCoreWorkload(name)));
-    if (owners.length > 1) {
+    const configKey = (workload: string): string => (isCoreWorkload(workload) ? "core" : workload);
+    const owners = taskRoleOwners.get(role)!.filter((owner) => configKey(owner) !== configKey(name));
+    if (owners.length) {
       throw new CliError(
-        `${path}: "aws.services.${name}.taskRoleArn" must be unique because assumeRoleArns grants workload-scoped permissions; ${role} is also used by ${owners.filter((owner) => owner !== name).join(", ")}`,
+        `${path}: "aws.services.${configKey(name)}.taskRoleArn" must be unique because assumeRoleArns grants workload-scoped permissions; ${role} is also used by ${[...new Set(owners.map(configKey))].join(", ")}`,
       );
     }
   }
