@@ -11,7 +11,11 @@ import { externalMemberActive, validEmail, type ExternalMember } from "../../../
 import { resolveBranding } from "../../../../resolution/branding.ts";
 import { errMessage } from "../../../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../../../../api/expiry.ts";
-import { detectOnboardingStatus, setOnboardingStatus, type OnboardingStatus } from "../../../../onboarding/onboarding.ts";
+import {
+  detectOnboardingStatus,
+  setOnboardingStatus,
+  type OnboardingStatus,
+} from "../../../../onboarding/onboarding.ts";
 import { sendJson } from "../../../../api/http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";

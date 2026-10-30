@@ -1,7 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAgent } from "../src/harness/agent-run.ts";
-import { applyTurnEffort, applyFastSpeed, applyThinkingBinding, piUsageToCallUsage, scaleCost, withRequestHeaders, FAST_COST_MULTIPLIER, modelSupportsFastMode, wantsFastMode } from "../src/model/pi-runtime.ts";
+import {
+  applyTurnEffort,
+  applyFastSpeed,
+  applyThinkingBinding,
+  piUsageToCallUsage,
+  scaleCost,
+  withRequestHeaders,
+  FAST_COST_MULTIPLIER,
+  modelSupportsFastMode,
+  wantsFastMode,
+} from "../src/model/pi-runtime.ts";
 import type { AgentOptions } from "../src/harness/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";

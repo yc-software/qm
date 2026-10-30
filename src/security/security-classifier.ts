@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "./security-screener.ts";
-import {
-  securityScreenSystemPrompt,
-  UNSCREENED_REASON,
-  type SecurityScreenVerdict,
-} from "./security-posture.ts";
+import { securityScreenSystemPrompt, UNSCREENED_REASON, type SecurityScreenVerdict } from "./security-posture.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import type { TurnLlmRequestRecord } from "../agent/agent.ts";
 import { swallowAs } from "../util/errors.ts";
