@@ -42,15 +42,13 @@ mock.module("../src/resolution/config-store.ts", {
 
 const { buildApp } = await import("./support/build-app.ts");
 
-test("eager hydration failures are contained while explicit startup hydration remains fail-closed", async (t) => {
+test("construction touches no storage while boot and explicit hydration remain fail-closed", async (t) => {
   const errors = t.mock.method(console, "error", () => {});
   const built = buildApp(testConfig());
   try {
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate identity")));
-    assert.ok(
-      errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate configuration")),
-    );
+    assert.ok(!errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate")));
+    await assert.rejects(built.boot(), (error: unknown) => error === configFailure);
     for (let attempt = 0; attempt < 2; attempt++) {
       await assert.rejects(built.identity.hydrate(), (error: unknown) => error === identityFailure);
       await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);

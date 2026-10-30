@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before } from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";

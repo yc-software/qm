@@ -22,7 +22,9 @@ function freshApp(overrides: Partial<Config> = {}) {
     pluginSkillDirs: [onboardingSkillDir],
     ...overrides,
   });
-  return buildApp(config);
+  const built = buildApp(config);
+  void built.skillsReady();
+  return built;
 }
 
 async function waitForOnboardingSkill(skills: ReturnType<typeof buildApp>["skills"]): Promise<void> {
