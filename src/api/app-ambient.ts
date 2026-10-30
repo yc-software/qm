@@ -15,7 +15,6 @@ import type { AmbientJudgmentStore } from "../surface-cache/ambient-judgment-sto
 import { reportFailureAs } from "../util/errors.ts";
 import { buildWakeEnvelope } from "../core/wake-envelope.ts";
 import { isTerminal } from "../runs/run-store.ts";
-import { unscreenedNotice } from "../security/security-posture.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
@@ -283,10 +282,6 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
             recentMessages: shown,
             instructions: `You don't need to have been @mentioned. Respond with the \`${batch.surface}\` tool's \`post\` action — set \`ts\` to the triggering message id to reply in its thread, or \`broadcast: true\` to post at the channel top level — or stay silent if nothing is needed. To include an image or file, name its workspace path in \`post\`'s \`files\` (it uploads with your message, in that thread). Use \`reach\` only to send to a DIFFERENT channel or person. Use the \`read_thread\` or \`search\` action if you need more context than shown.`,
           }),
-          securityScreenData: JSON.stringify({
-            messages: shown.map(({ authorId, authorName, ts, text }) => ({ authorId, authorName, ts, text })),
-            judgeReason: decision.reason ?? null,
-          }),
           triggered: true,
           surfaceTools: true,
           async: true,
@@ -307,21 +302,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     if (!liveRef) return false;
     const live = await deps.runs.activeForThread(liveRef);
     if (!live || isTerminal(live.status)) return false;
-    const session = await deps.sessions.getByThread(liveRef).catch(() => null);
-    const decision = await deps.orchestrator
-      .screenSecuritySteer({
-        payload: req.text,
-        actor: { id: `system:ambient:${orgIdOf()}`, type: "internal" },
-        conversation:
-          batch.kind === "group"
-            ? { kind: "group", threadRef: liveRef, channelRef: batch.container, isMpim: true, audience: [] }
-            : { kind: "channel", threadRef: liveRef, channelRef: batch.container, audience: [] },
-        ...(session ? { sessionId: session.id } : {}),
-      })
-      .catch(() => "block" as const);
-    if (decision === "block") return false;
-    const steerText = decision === "unscreened" ? `${unscreenedNotice("mid-turn message")}\n${req.text}` : req.text;
-    await deps.signals.send(live.id, { kind: "steer", text: steerText, ts: latestTs, request: req });
+    await deps.signals.send(live.id, { kind: "steer", text: req.text, ts: latestTs, request: req });
     const after = await deps.runs.get(live.id);
     if (!after || isTerminal(after.status)) await app.replayOrphanedRunSignals(live.id);
     return true;

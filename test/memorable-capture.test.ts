@@ -123,10 +123,10 @@ test("captureSession gives each reused callId the outcome that followed it, not 
   assert.deepEqual(calls[1]?.result, { ok: false, exit_code: 1 });
 });
 
-test("captureSession marks quarantined results as failed, never guesses success", () => {
+test("captureSession marks error results as failed, never guesses success", () => {
   const entries: SessionEntry[] = [
     entry("tool_call", { tool: "execute", callId: "c1", command: "curl x" }, 1),
-    entry("tool_result", { tool: "execute", callId: "c1", quarantined: true, isError: true, result: "" }, 2),
+    entry("tool_result", { tool: "execute", callId: "c1", isError: true, result: "" }, 2),
     entry("tool_call", { tool: "write", callId: "c2", path: "a.js" }, 3),
   ];
   const calls = captureSession("s1", entries).workflows[0]!.tool_calls;

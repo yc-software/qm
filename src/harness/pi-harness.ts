@@ -128,11 +128,6 @@ import { createStepRecorder, recordingTools, type StepRecorder } from "./pi-step
 import { ELIDED_IMAGE_TEXT, restoreReplayImages, type ReplayImageLoader } from "./replay-images.ts";
 import { summarizeHistory } from "./history-summary.ts";
 import { countTokens } from "../util/tokens.ts";
-import {
-  parseSecurityScreenVerdict,
-  SECURITY_SCREEN_STEP,
-  SECURITY_SCREEN_SYSTEM_PROMPT,
-} from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
 import { createGrindMeter, meterGrindCall } from "./grind.ts";
 import {
@@ -1674,7 +1669,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           pausedOnApproval: undefined,
           silentRequested: false,
           pollFire: !!dispatched.pollFire,
-          screenToolResult: dispatched.screenToolResult,
           governGoal: dispatched.governGoal,
           saveGoal: dispatched.saveGoal,
           emit: dispatched.emit,
@@ -2193,7 +2187,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             entry.ref.onModelRequest = undefined;
             toolAbort.abort();
             entry.ref.abortSignal = undefined;
-            entry.ref.screenToolResult = undefined;
           }
           if (persistError) throw persistError;
           if (wallClockTurnFailure(wallClock, userAborted, turn.cancel?.aborted === true)) {
@@ -2370,43 +2363,6 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           signal,
           thinkingLevel: "low",
         });
-      },
-
-      async screenSecurity({
-        payload,
-        modelId: configuredScreenModel,
-        systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT,
-        signal,
-        recordModelCall,
-        recordLlmRequest,
-      }) {
-        try {
-          const modelId = configuredScreenModel ?? detectModelId();
-          const model = requiredModel(modelId);
-          const providerKeys = await resolveProviderKeys();
-          if (!keyForModel(providerKeys, model)) return undefined;
-          recordModelCall({
-            model: modelId,
-            inputTokens: countTokens(systemPrompt) + countTokens(payload),
-            entryCount: 1,
-          });
-          await recordLlmRequest?.({
-            turnSeq: null,
-            step: SECURITY_SCREEN_STEP,
-            model: modelId,
-            promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
-            truncated: false,
-          });
-          return parseSecurityScreenVerdict(
-            await oneShot("pi-security-screen", model, providerKeys, systemPrompt, payload, {
-              signal,
-              modelGateway,
-            }),
-          );
-        } catch (e) {
-          swallow("pi: security screen", e);
-          return undefined;
-        }
       },
 
       async pickAckEmoji(text: string, candidates: readonly string[]): Promise<string | undefined> {

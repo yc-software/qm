@@ -7,20 +7,9 @@ import {
   userFacingFailureClause,
   userFacingFailureText,
 } from "../src/core/failure-copy.ts";
-import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
 import { GENERIC_FAILURE_TEXT } from "../plugins/chassis/src/failure-copy.ts";
 
-test("the shared failure policy renders quarantine canned, refused reasons verbatim, everything else generic", () => {
-  const quarantine = {
-    status: "refused",
-    refusalKind: "security_quarantine",
-    reason: "internal screening details",
-  } as const;
-  assert.equal(userFacingFailureText(quarantine), SECURITY_QUARANTINE_REFUSAL_TEXT);
-  assert.doesNotMatch(userFacingFailureText(quarantine), /internal screening details/);
-  assert.equal(userFacingFailureClause(quarantine), SECURITY_QUARANTINE_REFUSAL_TEXT);
-  assert.equal(standaloneFailureText(quarantine), SECURITY_QUARANTINE_REFUSAL_TEXT);
-
+test("the shared failure policy renders refused reasons verbatim, everything else generic", () => {
   const busy = { status: "refused", refusalKind: "session_busy", reason: SESSION_BUSY_USER_TEXT } as const;
   assert.equal(userFacingFailureText(busy), SESSION_BUSY_USER_TEXT);
   assert.equal(standaloneFailureText(busy), SESSION_BUSY_USER_TEXT);

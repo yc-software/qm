@@ -641,7 +641,6 @@ export type TurnOrigin =
   | { kind: "ambient"; entryTs?: string; live?: boolean }
   | {
       kind: "automation";
-      screenData?: string;
       destination?: Destination;
       useOwnerKeychain?: boolean;
     }
@@ -704,7 +703,6 @@ export interface TurnRequest {
   gatewayContext?: GatewayContext;
   triggered?: boolean;
   unattendedGrants?: string[];
-  securityScreenData?: string;
   triggerDestination?: Destination;
   ownerKeychainUnion?: boolean;
   unprompted?: boolean;
@@ -755,15 +753,13 @@ export interface PendingApproval {
   matched?: string;
   purpose?: string;
   summary?: string;
-  summaryDetail?: string;
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   blocksInput?: boolean;
-  kind?: "approval" | "input";
+  kind?: "approval";
 }
 
 export interface PendingApprovalRecord {
-  screenedOutput?: { tool: string; text: string; sourceScopeId?: ScopeId };
   sessionId: string;
   command: string;
   createdAt?: number;
@@ -771,12 +767,11 @@ export interface PendingApprovalRecord {
   matched?: string;
   purpose?: string;
   summary?: string;
-  summaryDetail?: string;
   approvalKey?: string;
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
   blocksInput?: boolean;
-  kind?: "approval" | "input";
+  kind?: "approval";
 }
 
 type ApprovalScope = "once" | "session" | "always";
@@ -808,7 +803,7 @@ export interface TurnResult {
   reply?: string;
   reactions?: string[];
   reason?: string;
-  refusalKind?: "security_quarantine" | "session_busy" | "model_budget" | "approval_denied" | "internal_only";
+  refusalKind?: "session_busy" | "model_budget" | "approval_denied" | "internal_only";
   errorCode?: string;
   adminUrl?: string;
   runId?: string;

@@ -67,9 +67,6 @@ const mutations: Record<string, (input: OrchestratorInput) => void> = {
   "owner credential union": (i) => {
     i.origin = { ...i.origin, useOwnerKeychain: true } as never;
   },
-  "screening payload": (i) => {
-    i.origin = { kind: "automation", screenData: "forged benign content" };
-  },
   destination: (i) => {
     i.deliveryTarget = "external-target";
   },

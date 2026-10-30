@@ -171,7 +171,6 @@ export function createAppHelpers(deps: AppDeps, app: App) {
       ...(r.matched ? { matched: r.matched } : {}),
       ...(r.purpose ? { purpose: r.purpose } : {}),
       ...(r.summary ? { summary: r.summary } : {}),
-      ...(r.summaryDetail ? { summaryDetail: r.summaryDetail } : {}),
       ...(r.grantModes ? { grantModes: r.grantModes } : {}),
       blocksInput: r.blocksInput !== false,
       ...(r.kind === "approval" ? { kind: r.kind } : {}),
@@ -729,7 +728,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           } = completed.request;
           const { run } = await deps.runs.enqueue({
             sessionId: completed.sessionId,
-            request: { ...request, text: signal.text, origin: { kind: "automation", screenData: signal.text } },
+            request: { ...request, text: signal.text, origin: { kind: "automation" } },
             dedupKey,
             maxAttempts: deps.maxAttempts,
           });

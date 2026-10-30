@@ -22,12 +22,7 @@ import {
 } from "../../../model/model-catalog.ts";
 import { sendJson } from "../../http.ts";
 import { activePrincipal, adminActorFrom, audit, authorizeAdmin, orgScope } from "../shared.ts";
-import {
-  ADMIN_RESOURCES,
-  ADMIN_RESOURCE_BY_ID,
-  adminResourceManifest,
-  defaultAutoFlaggerConfig,
-} from "../admin-resources.ts";
+import { ADMIN_RESOURCES, ADMIN_RESOURCE_BY_ID, adminResourceManifest } from "../admin-resources.ts";
 import { type ApiCtx } from "../route.ts";
 import {
   composePolicy,
@@ -244,7 +239,6 @@ const SETTINGS_RESOURCES = {
     "runtime",
     "securityPosture",
     "sharingPosture",
-    "autoFlagger",
     "approvalGrantModes",
     "commandPolicy",
     "ambientPolicy",
@@ -404,7 +398,6 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
         .map((model) => model.id),
     ),
     fastModeModelIds: FAST_MODE_MODEL_IDS,
-    autoFlaggerDefault: defaultAutoFlaggerConfig(deps),
     memoryEmbeddingOptions: embeddingModelCatalog(),
     browseModelOptions: selectableBaseModels().filter((m) =>
       modelServiceable(m.id, providersFor(deps.harnessId ?? "pi")),

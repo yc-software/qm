@@ -46,7 +46,6 @@ interface SlackApprovalContext {
   reason: string;
   purpose?: string;
   summary?: string;
-  kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
   turn: Omit<CoreTurnBody, "approval">;
   allowedTs?: Set<string>;
@@ -81,29 +80,10 @@ export function createApprovals(deps: {
 }): Approvals {
   const { core, flow, directory, threads } = deps;
 
-  interface TurnOutcome {
-    result: TurnResult;
-    runId?: string;
-  }
-
-  async function runTurn(body: CoreTurnBody, hooks: { onQueued?: (runId: string) => void } = {}): Promise<TurnOutcome> {
+  async function runTurn(body: CoreTurnBody, hooks: { onQueued?: (runId: string) => void } = {}): Promise<TurnResult> {
     if (deps.externalAccess && body.conversation.kind !== "dm")
       throw new Error("Continue this request privately instead of resuming a shared approval.");
-    let runId: string | undefined;
-    const result = await flow.callCore(body, {
-      ...hooks,
-      onQueued: (id) => {
-        runId = id;
-        hooks.onQueued?.(id);
-      },
-    });
-    return { result, ...(runId ? { runId } : {}) };
-  }
-
-  function ackConveyedQuarantine({ result, runId }: TurnOutcome): void {
-    if (runId && result.status === "refused" && result.refusalKind === "security_quarantine") {
-      flow.ackRunDelivery(runId);
-    }
+    return flow.callCore(body, hooks);
   }
 
   const pendingSlackApprovals = createApprovalRegistry<SlackApprovalContext>();
@@ -215,7 +195,6 @@ export function createApprovals(deps: {
         ...ctx,
         requesterId: rebuilt.requesterId,
         turn: rebuilt.turn as SlackApprovalContext["turn"],
-        ...(rebuilt.kind ? { kind: rebuilt.kind } : {}),
         ...(rebuilt.grantModes ? { grantModes: rebuilt.grantModes } : {}),
         recovered: true,
       };
@@ -313,7 +292,6 @@ export function createApprovals(deps: {
             reason: ctx.reason,
             ...(ctx.purpose ? { purpose: ctx.purpose } : {}),
             ...(ctx.summary ? { summary: ctx.summary } : {}),
-            ...(ctx.kind ? { kind: ctx.kind } : {}),
             ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
             ...retained,
           },
@@ -329,16 +307,14 @@ export function createApprovals(deps: {
       };
 
       if (selected === "deny") {
-        const outcome = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
+        const result = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
         settle();
-        if (await sealedOut(outcome.result)) return;
+        if (await sealedOut(result)) return;
         await updateCard(decisionCard());
-        ackConveyedQuarantine(outcome);
         return;
       }
 
-      const outcome = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
-      const result = outcome.result;
+      const result = await runTurn({ ...ctx.turn, actor: approver, approval }, onQueued ? { onQueued } : {});
       settle();
 
       if (await sealedOut(result)) return;
@@ -409,7 +385,6 @@ export function createApprovals(deps: {
       const failLink = result.refusalKind === "internal_only" ? null : (result.adminUrl ?? null);
       const failDetail = failLink ? ` Full error: ${failLink}` : "";
       await updateCard(decisionCard([`I can't continue — ${userFacingFailureClause(result)}.${failDetail}`]));
-      ackConveyedQuarantine(outcome);
     } catch (err) {
       console.error("%s", `[slack] approval ${requestId} action failed:`, errMessage(err));
       const msg = slackFailureText(err);
@@ -427,7 +402,6 @@ export function createApprovals(deps: {
           reason: ctx.reason,
           ...(ctx.purpose ? { purpose: ctx.purpose } : {}),
           ...(ctx.summary ? { summary: ctx.summary } : {}),
-          ...(ctx.kind ? { kind: ctx.kind } : {}),
           ...(ctx.grantModes ? { grantModes: ctx.grantModes } : {}),
         },
       ]);

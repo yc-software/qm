@@ -12,7 +12,6 @@ export interface PendingApproval {
   reason: string;
   purpose?: string;
   summary?: string;
-  kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
   originUrl?: string;
 }
@@ -62,8 +61,8 @@ const ARG_VALUE_MAX = 500;
 const DECISION_SUBJECT_MAX = 150;
 const DECISION_DETAIL_MAX = 1_500;
 
-function toolCallView(p: { command: string; summary?: string; kind?: string }): ToolCallView | null {
-  if (p.kind === "input" || !p.summary || !p.command.startsWith(`${p.summary} {`)) return null;
+function toolCallView(p: { command: string; summary?: string }): ToolCallView | null {
+  if (!p.summary || !p.command.startsWith(`${p.summary} {`)) return null;
   let params: unknown;
   try {
     params = JSON.parse(p.command.slice(p.summary.length + 1));
@@ -105,7 +104,6 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
     ? approvals
     : [{ requestId: "", command: "unknown command", reason: "requires approval" }];
   const describe = (p: (typeof items)[number]): string => {
-    if (p.kind === "input") return "My security screen flagged part of this message. Allow it?";
     if (p.purpose) return `Approval needed: ${clip(p.purpose, 400)}`;
     const view = toolCallView(p);
     if (view) return `Approval needed: ${toolTitle(view)}`;
@@ -116,14 +114,13 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
   for (const p of items) {
     const view = toolCallView(p);
     const viewArgs = view ? argLines(view.args) : [];
-    let heading = view ? `:lock: *Approval needed:* ${toolTitle(view)}` : ":lock: *Approval needed.*";
-    if (p.kind === "input") heading = ":lock: *My security screen flagged part of this message. Allow it?*";
+    const heading = view ? `:lock: *Approval needed:* ${toolTitle(view)}` : ":lock: *Approval needed.*";
     const lines = [heading];
     if (p.summary && !view) lines.push(clip(p.summary, 400));
     if (p.purpose) lines.push(`*Why:* ${clip(p.purpose, 400)}`);
     const shownArgs = view !== null && viewArgs.join("\n").length <= INLINE_COMMAND_MAX;
     const longText = view ? JSON.stringify(view.args, null, 2) : p.command;
-    const longCommand = p.kind !== "input" && !shownArgs && p.command.length > INLINE_COMMAND_MAX;
+    const longCommand = !shownArgs && p.command.length > INLINE_COMMAND_MAX;
     const sections = longCommand ? slackSectionBlocks(longText, { code: true }) : [];
     const shown = sections.length <= COMMAND_SECTIONS_MAX;
     const commandHeading = view ? "*Arguments:*" : "*Command:*";
@@ -134,7 +131,7 @@ export function approvalMessage(approvals: readonly PendingApproval[]): SlackApp
           ? commandHeading
           : `${commandHeading} too long to show in Slack. Open ${p.originUrl && /^https?:\/\//.test(p.originUrl) ? `<${p.originUrl.replaceAll("|", "%7C").replaceAll(">", "%3E")}|this conversation in QM>` : "this conversation in QM"} on the web to review and approve it.`,
       );
-    else if (p.kind !== "input") lines.push(`*Command:* ${inlineCode(p.command)}`);
+    else lines.push(`*Command:* ${inlineCode(p.command)}`);
     lines.push(`*Flagged as:* ${clip(p.reason, 200)}`);
     blocks.push({
       type: "section",
@@ -180,13 +177,9 @@ function slackDate(at: number): string {
   return `<!date^${seconds}^{date_short_pretty} at {time}|${new Date(at).toISOString()}>`;
 }
 
-function approvalDecisionLine(
-  p: { command: string; summary?: string; kind?: string },
-  record: ApprovalDecisionRecord,
-): string {
+function approvalDecisionLine(p: { command: string; summary?: string }, record: ApprovalDecisionRecord): string {
   const view = toolCallView(p);
-  let subject = view ? toolTitle(view) : inlineCode(clip(p.command, DECISION_SUBJECT_MAX));
-  if (p.kind === "input") subject = "flagged message";
+  const subject = view ? toolTitle(view) : inlineCode(clip(p.command, DECISION_SUBJECT_MAX));
   const by = record.by ? ` by <@${record.by}>` : "";
   if (record.state === "pending")
     return record.decision === "deny"
@@ -196,8 +189,7 @@ function approvalDecisionLine(
   return `${icon}${DECISION_LABEL[record.decision]}${by} · ${subject} · ${slackDate(record.at)}`;
 }
 
-function approvalDecisionDetail(p: { command: string; summary?: string; kind?: string }): string | null {
-  if (p.kind === "input") return null;
+function approvalDecisionDetail(p: { command: string; summary?: string }): string | null {
   const view = toolCallView(p);
   if (view) {
     const entries = Object.entries(view.args);
@@ -211,7 +203,7 @@ function approvalDecisionDetail(p: { command: string; summary?: string; kind?: s
 }
 
 export function approvalDecisionMessage(
-  p: { command: string; summary?: string; kind?: string },
+  p: { command: string; summary?: string },
   record: ApprovalDecisionRecord,
   extra: string[] = [],
 ): SlackApprovalMessage {
@@ -232,7 +224,6 @@ export interface StoredApproval {
   reason?: string;
   purpose?: string;
   summary?: string;
-  kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
   request?: Record<string, unknown>;
 }
@@ -247,13 +238,12 @@ export interface RecoveredApprovalContext {
   reason: string;
   purpose?: string;
   summary?: string;
-  kind?: "approval" | "input";
   grantModes?: { session: boolean; always: boolean };
   turn: Record<string, unknown>;
 }
 
 export function recoveredApprovalContext(
-  stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "kind" | "grantModes" | "request">,
+  stored: Pick<StoredApproval, "command" | "reason" | "purpose" | "summary" | "grantModes" | "request">,
   click: { channel: string; threadTs?: string },
 ): RecoveredApprovalContext | null {
   const req = stored.request as
@@ -289,7 +279,6 @@ export function recoveredApprovalContext(
     reason: stored.reason ?? "requires approval",
     ...(stored.purpose ? { purpose: stored.purpose } : {}),
     ...(stored.summary ? { summary: stored.summary } : {}),
-    ...(stored.kind ? { kind: stored.kind } : {}),
     ...(stored.grantModes ? { grantModes: stored.grantModes } : {}),
     turn,
   };

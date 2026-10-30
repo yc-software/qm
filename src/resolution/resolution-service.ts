@@ -5,7 +5,7 @@ import type { ScopedConfigStore } from "./config-store.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { audienceEgressFloor, audienceDeniedFloor } from "./audience-floor.ts";
 import { principalEntitledToScope } from "./context-filter.ts";
-import { resolveSecurityPolicy, type SecurityScreenMode } from "../security/security-posture.ts";
+import { resolveSecurityPolicy } from "../security/security-posture.ts";
 
 export interface ResolutionService {
   scopeFor(conversation: Conversation, actor: Principal): ScopeId;
@@ -33,12 +33,7 @@ export function composeSoul(orgSoul: string | null, scopeSoul: string | null): s
   return parts.join("\n\n");
 }
 
-export function createResolutionService(
-  orgId: string,
-  config: ScopedConfigStore,
-  acl: AclStore,
-  screening: SecurityScreenMode = "enforce",
-): ResolutionService {
+export function createResolutionService(orgId: string, config: ScopedConfigStore, acl: AclStore): ResolutionService {
   const orgScope = scopeId("org", orgId);
 
   function scopeFor(conversation: Conversation, actor: Principal): ScopeId {
@@ -74,7 +69,7 @@ export function createResolutionService(
       const orgPolicy = config.getCommandPolicy(orgScope) ?? defaultOrgPolicy();
       const scopePolicy = config.getCommandPolicy(scope) ?? undefined;
       const commandPolicy = composePolicy(orgPolicy, scopePolicy);
-      const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope), screening);
+      const securityPolicy = resolveSecurityPolicy(await config.getSecurityPostureDurable(scope));
       const sharingPosture = external
         ? "isolated"
         : await config.resolveSharingPostureDurable(scopeId("personal", actor.id), scope);

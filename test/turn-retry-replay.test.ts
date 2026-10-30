@@ -96,9 +96,6 @@ function buildScenario(interruptAfterToolResult = false) {
         });
         return { reply, modelCalls: 1 };
       },
-      async screenSecurity() {
-        return { decision: "auto" as const };
-      },
     },
   );
   const sessions = createMemorySessionStore();

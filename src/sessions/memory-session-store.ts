@@ -46,7 +46,6 @@ import {
   isWebThread,
 } from "./session-store.ts";
 import { entryFromItem, itemFromEntry } from "./items.ts";
-import { SECURITY_SCREEN_STEP, screenPayloadFromEnvelope } from "../security/security-posture.ts";
 
 function toParticipantWindow(
   sessionId: string,
@@ -424,31 +423,6 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
         const body = r.promptHash != null ? promptEnvelopes.get(r.promptHash) : undefined;
         return body !== undefined ? { ...r, promptEnvelope: JSON.parse(body) } : { ...r };
       });
-    },
-
-    async listScreenSamples(limit) {
-      const wanted = Math.max(0, Math.trunc(limit));
-      if (!wanted) return [];
-      const samples = [...llmRequests.values()].flat().flatMap((r) => {
-        if (r.step !== SECURITY_SCREEN_STEP || r.promptHash == null) return [];
-        const body = promptEnvelopes.get(r.promptHash);
-        const payload = body === undefined ? null : screenPayloadFromEnvelope(JSON.parse(body));
-        return payload
-          ? [
-              {
-                id: r.id,
-                sessionId: r.sessionId,
-                scopeLabel: r.scopeLabel,
-                createdAt: r.createdAt,
-                model: r.model,
-                payload,
-              },
-            ]
-          : [];
-      });
-      return samples
-        .sort((a, b) => b.createdAt - a.createdAt || (llmRequestSeq.get(b.id) ?? 0) - (llmRequestSeq.get(a.id) ?? 0))
-        .slice(0, wanted);
     },
 
     async addParticipant(sessionId, principalId, title, opts) {

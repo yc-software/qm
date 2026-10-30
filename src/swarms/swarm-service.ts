@@ -392,7 +392,7 @@ export function createSwarmService(deps: {
       ...(message.goal || turnWallClockMs === undefined ? {} : { turnWallClockMs }),
       ...recipient.runtime,
       conversation: { ...swarm.template.conversation, threadRef: recipient.threadRef },
-      origin: { kind: "automation", screenData: message.text },
+      origin: { kind: "automation" },
       text: swarmMessageText(message),
       swarm: { swarmId: swarm.id, messageId: message.id, recipientId: recipient.id },
       ...(message.goal ? { swarmGoal: { ...message.goal, assignedAt: message.createdAt } } : {}),

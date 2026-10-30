@@ -63,23 +63,7 @@ function fixture(results: { submit: TurnResult; wait: TurnResult | null }) {
   return { flow, updates, events, pinnedDuringWait, clickApprove };
 }
 
-test("an approved resume that comes back security-quarantined acks the delivery after the card conveys it", async () => {
-  const f = fixture({
-    submit: { status: "queued", runId: "R1" },
-    wait: { status: "refused", refusalKind: "security_quarantine", reason: "quarantined" },
-  });
-  await f.clickApprove();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(f.pinnedDuringWait, [true], "the run is pinned while the approval handler waits on it");
-  const cardIndex = f.events.findIndex((e) => /can't continue/.test(e));
-  const ackIndex = f.events.indexOf("ack:R1");
-  assert.notEqual(cardIndex, -1, "the card conveys the refusal");
-  assert.notEqual(ackIndex, -1, "the delivery row is acked so the poller does not re-post the notice");
-  assert.ok(ackIndex > cardIndex, "the ack lands only after the card conveys the refusal (post-then-ack)");
-  assert.equal(f.flow.inFlightRuns.has("R1"), false, "the pin is released, so nothing leaks until restart");
-});
-
-test("an approved resume that succeeds leaves no pin behind either", async () => {
+test("an approved resume that succeeds leaves no pin behind", async () => {
   const f = fixture({
     submit: { status: "queued", runId: "R2" },
     wait: { status: "ok", reply: "done" },

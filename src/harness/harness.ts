@@ -20,7 +20,6 @@ import type { GrindMeter } from "./grind.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ProviderKeys } from "./pi-harness.ts";
 import type { ToolContext } from "../tools/primitives.ts";
-import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
 
 export interface RuntimeChoice {
   harnessId: HarnessId;
@@ -66,16 +65,6 @@ export interface HarnessLlmRequestRecord {
   truncated: boolean;
   transport?: LlmTransportMeta | null;
   usage?: LlmCallUsage | null;
-}
-
-export interface HarnessSecurityScreenInput {
-  payload: string;
-  harnessId?: string;
-  modelId?: string;
-  systemPrompt?: string;
-  signal: AbortSignal;
-  recordModelCall(rec: { model: string; inputTokens: number; entryCount: number }): void;
-  recordLlmRequest?(rec: HarnessLlmRequestRecord, signal?: AbortSignal): void | Promise<void>;
 }
 
 export interface HarnessTurnInput {
@@ -144,7 +133,6 @@ export interface HarnessTurnInput {
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
-  screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
   governGoal?: import("./goal.ts").GoalGovernor;
 }
 
@@ -160,6 +148,7 @@ export interface HarnessTurnResult {
     kind?: "approval";
     matched?: string;
     purpose?: string;
+    summary?: string;
     approvalKey?: string;
     grantModes?: { session: boolean; always: boolean };
   }>;
@@ -204,7 +193,6 @@ export interface HarnessModelUtilities {
   contextTokenBudget?(scopeLabel?: string, model?: string): number | undefined;
   oneShot?(systemPrompt: string, prompt: string): Promise<string | undefined>;
   judge?(systemPrompt: string, prompt: string, signal?: AbortSignal): Promise<string | undefined>;
-  screenSecurity?(input: HarnessSecurityScreenInput): Promise<SecurityScreenVerdict | undefined>;
   pickAckEmoji?(text: string, candidates: readonly string[]): Promise<string | undefined>;
   generateTitle?(transcript: string): Promise<string | undefined>;
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
@@ -254,7 +242,6 @@ export function defineHarness(
       : {}),
     ...(implementation.oneShot ? { oneShot: implementation.oneShot.bind(implementation) } : {}),
     ...(implementation.judge ? { judge: implementation.judge.bind(implementation) } : {}),
-    ...(implementation.screenSecurity ? { screenSecurity: implementation.screenSecurity.bind(implementation) } : {}),
     ...(implementation.pickAckEmoji ? { pickAckEmoji: implementation.pickAckEmoji.bind(implementation) } : {}),
     ...(implementation.generateTitle ? { generateTitle: implementation.generateTitle.bind(implementation) } : {}),
     ...(implementation.summarizeApproval

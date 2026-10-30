@@ -97,18 +97,9 @@ function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   return safe;
 }
 
-function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: string } {
+function publicTurnOrigin(body: TurnRequest): TurnOrigin {
   const typed = publicOrigin(body.origin);
-  if (
-    typed?.kind === "automation" &&
-    body.triggered === true &&
-    typed.screenData !== undefined &&
-    body.securityScreenData !== undefined &&
-    typed.screenData !== body.securityScreenData
-  ) {
-    return { error: "conflicting typed and legacy automation screen data" };
-  }
-  return { origin: resolveTurnOrigin({ ...body, ...(typed ? { origin: typed } : { origin: undefined }) }) };
+  return resolveTurnOrigin({ ...body, ...(typed ? { origin: typed } : { origin: undefined }) });
 }
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
@@ -123,9 +114,7 @@ function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { e
   } = body;
   if (typeof safeBody.idempotencyKey === "string" && safeBody.idempotencyKey.startsWith("slack:"))
     return { error: "idempotencyKey must not use the reserved slack: prefix" };
-  const resolvedOrigin = publicTurnOrigin(safeBody);
-  if (resolvedOrigin.error) return { error: resolvedOrigin.error };
-  const origin = resolvedOrigin.origin;
+  const origin = publicTurnOrigin(safeBody);
   const { clientTools: rawClientTools, surfaceBriefing: rawSurfaceBriefing, ...rest } = safeBody;
   if (rest.desktopClientId !== undefined && !z.uuid().safeParse(rest.desktopClientId).success)
     return { error: "desktopClientId must be a UUID" };

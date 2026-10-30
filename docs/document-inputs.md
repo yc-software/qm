@@ -18,7 +18,7 @@ Text fallback handles UTF-8 text/code, CSV, TSV, PDF, DOCX, XLSX, PPTX, ODT, ODS
 
 At most ten documents and 8 MB of original bytes are included per turn, newest attachments first. Extraction runs in cancellable workers with a ten-second deadline, memory and decompression limits. Each extraction is capped at 200,000 characters and combined fallback input at 100,000 characters. Pi routes further constrain text to the remaining model context. Binary provider inputs remain subject to provider page and token limits.
 
-Authorization and integrity checks run on every turn. Document content is untrusted data; the external-data security policy applies when enabled. Unscreenable visuals remain marked unscreened. Stored conversation tape does not duplicate the injected document bytes or extracted text; authorized documents are rehydrated from their artifact references.
+Authorization and integrity checks run on every turn. Document content is untrusted data. Stored conversation tape does not duplicate the injected document bytes or extracted text; authorized documents are rehydrated from their artifact references.
 
 ## QA
 
@@ -42,4 +42,4 @@ A live Pi gateway session using discovered OpenAI metadata also passed a read-to
 
 Encrypted PDF fallback was verified to report unavailable content without revealing its verification marker. Native OpenAI requests rejected encrypted and malformed PDFs with HTTP 400 `invalid_file`; they require an unlocked, valid replacement. Supported formats now receive bounded local preflight before native submission; unreadable files become individual unavailability notices. Scanned PDFs with no extractable text remain native visual inputs. Legacy formats without a local parser and provider-specific page/token limits still depend on provider acceptance. A live Pi mixed batch read the scanned marker while reporting malformed/encrypted files unavailable, and repeated that result on a follow-up without tools (2.9 and 3.5 seconds). A twelve-page native PDF check recovered independent markers on the first and last pages in 5.5 seconds.
 
-A live Pi gateway task also accepted a scanned PDF uploaded while its read tool was running, recovered the visual marker in 4.6 seconds, and kept document bytes out of its tape. Regression tests cover active-turn uploads across all four harnesses, shared text/count/byte budgets, screening and runtime handoff.
+A live Pi gateway task also accepted a scanned PDF uploaded while its read tool was running, recovered the visual marker in 4.6 seconds, and kept document bytes out of its tape. Regression tests cover active-turn uploads across all four harnesses, shared text/count/byte budgets and runtime handoff.

@@ -90,14 +90,6 @@ export interface OrgBranding {
   selfLabel?: string;
   orgName?: string;
 }
-interface AutoFlaggerConfig {
-  harnessId: string;
-  modelId: string;
-  rubric: string;
-}
-export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
-  scopeId: ScopeId;
-}
 interface ScopeConfigPresence {
   soul: boolean;
   commandPolicy: boolean;
@@ -196,8 +188,6 @@ export interface ScopedConfigStore {
   setBrowseModel(id: ScopeId, modelId: string | null): Promise<void>;
   getEmbeddingModelDurable(): Promise<string | null>;
   setEmbeddingModel(modelId: string | null): Promise<void>;
-  getAutoFlaggerConfig(): AutoFlaggerConfig | null;
-  setAutoFlaggerConfig(config: AutoFlaggerConfig | null): Promise<void>;
   setConnectorClient(id: ScopeId, provider: string, input: ConnectorClientInput): Promise<void>;
   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
@@ -230,7 +220,6 @@ export interface ConfigStoreMaps {
   branding?: DurableMap<ScopedRow<"branding", OrgBranding>>;
   browseMaxSteps?: DurableMap<ScopedRow<"steps", number>>;
   browseModels?: DurableMap<ScopedRow<"modelId", string>>;
-  autoFlaggerConfigs?: DurableMap<PersistedAutoFlaggerConfig>;
   deploymentIdentity?: DurableMap<PersistedDeploymentIdentity>;
 }
 
@@ -257,7 +246,6 @@ const CONFIG_STORE_TABLES: Record<keyof ConfigStoreMaps, string> = {
   branding: "branding_configs",
   browseMaxSteps: "browse_max_steps_configs",
   browseModels: "browse_model_configs",
-  autoFlaggerConfigs: "auto_flagger_configs",
   deploymentIdentity: "deployment_identity",
 };
 
@@ -351,12 +339,6 @@ export function createMemoryConfigStore(
     branding: field("branding", "branding"),
     browseMaxSteps: field("browseMaxSteps", "steps"),
     browseModels: field("browseModels", "modelId"),
-    autoFlaggerConfigs: setting(
-      "autoFlaggerConfigs",
-      ({ harnessId, modelId, rubric }): AutoFlaggerConfig => ({ harnessId, modelId, rubric }),
-      (id, config) => ({ scopeId: id, ...config }),
-      true,
-    ),
   } satisfies Partial<Record<SettingKey, unknown>>;
   const allSettings = Object.values(settings);
   const channelHeaderPinListeners = new Set<(id: ScopeId) => void>();
@@ -832,8 +814,6 @@ export function createMemoryConfigStore(
         cacheBaseModel(org, saved);
       });
     },
-    getAutoFlaggerConfig: () => settings.autoFlaggerConfigs.get(org) ?? null,
-    setAutoFlaggerConfig: (config) => settings.autoFlaggerConfigs.set(org, config),
     async setConnectorClient(id, provider, input) {
       const rec: StoredConnectorClient = {
         scopeId: id,

@@ -153,7 +153,6 @@ export class CommandDenied extends Error {
 interface ReadResult {
   content: string | null;
   sourceScopeId: ScopeId | null;
-  shared?: true;
   outsideWorkspace?: true;
 }
 
@@ -226,7 +225,6 @@ export interface ToolContext extends SurfaceToolDeps {
     limit?: number,
     source?: string,
   ): Promise<{
-    sourceScopeId: ScopeId | null;
     skills: Array<{ name: string; description: string; source?: string }>;
     nextOffset?: number;
   }>;
@@ -946,11 +944,10 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
         const { grant: granted, bytes } = sharedFile;
         if (bytes === null) return { content: null, sourceScopeId: granted.ownerScopeId };
         const asText = tryDecodeUtf8(bytes);
-        if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId, shared: true };
+        if (asText !== null) return { content: asText, sourceScopeId: granted.ownerScopeId };
         return {
           content: `[binary file ${granted.handlePath.split("/").pop()}, Files ID ${granted.fileId}; send it by ID]`,
           sourceScopeId: granted.ownerScopeId,
-          shared: true,
         };
       }
       if (path.startsWith("shared/open-")) return { content: null, sourceScopeId: null };
@@ -999,10 +996,8 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
       const matches = rankedSkills(available, query, Boolean(query));
       const start = Math.max(0, Math.floor(offset));
       const selected = matches.slice(start, start + Math.max(1, Math.min(100, Math.floor(limit))));
-      const sourceScopeId = selected.length && source ? selected[0]!.skill!.scopeId : null;
       const end = start + selected.length;
       return {
-        sourceScopeId,
         skills: selected.map(({ skill }) => ({
           id: skill!.id,
           name: skill!.manifest.name,

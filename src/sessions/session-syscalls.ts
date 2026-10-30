@@ -223,7 +223,6 @@ export interface SessionSyscalls {
 }
 
 export interface SessionSyscallsFactory {
-  rejectMessage?(sessionId: string, messageId: string): Promise<void>;
   forTurn(binding: SessionSyscallBinding): SessionSyscalls;
 }
 
@@ -361,7 +360,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
     actor: meta.actor,
     conversation: { ...meta.conversation, threadRef: child.threadRef },
-    origin: sessionTurnOrigin(meta.origin, text),
+    origin: sessionTurnOrigin(meta.origin),
     ...(meta.unattendedGrants ? { unattendedGrants: [...meta.unattendedGrants] } : {}),
     text,
     displayText,
@@ -511,7 +510,6 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
   const cap = deps.treeRunCap ?? SUBAGENT_TREE_RUN_CAP;
 
   return {
-    rejectMessage: (sessionId, messageId) => deps.mailbox.acknowledge(sessionId, [messageId]),
     forTurn(binding) {
       const callerTitle = binding.session.title?.trim() || "this conversation";
 
@@ -850,7 +848,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: true, sessionId: target.id, title, delivered: "queued_turn" };
                 }
               }
-              request.origin = sessionTurnOrigin(request.origin, stamped);
+              request.origin = sessionTurnOrigin(request.origin);
               request.sessionSenderId = binding.session.id;
               request.delegatingRunId = binding.request.runId;
               if (
@@ -1115,7 +1113,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         : {}),
       threadRef: parent.threadRef,
     },
-    origin: sessionTurnOrigin(meta.origin, text),
+    origin: sessionTurnOrigin(meta.origin),
     text,
     displayText: `[subagent ${title}: ${kind.replace("_", " ")}]`,
     envelopeWrapped: true,
@@ -1211,7 +1209,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
         ...prepared,
         ...(surfaceTools ? { surfaceTools } : {}),
         ...(originalParent && initiatingRun ? { delegatingRunId: initiatingRun.id } : {}),
-        origin: sessionTurnOrigin(prepared.origin, wake),
+        origin: sessionTurnOrigin(prepared.origin),
         text: wake,
         displayText: "Delegated task completed",
       },

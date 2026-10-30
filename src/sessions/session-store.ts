@@ -221,16 +221,6 @@ export interface LlmRequestRecord {
   transport: LlmTransportMeta | null;
 }
 
-/** A past security screening, recovered from its captured request — the replay corpus for flagger tests. */
-export interface ScreenSample {
-  id: string;
-  sessionId: string;
-  scopeLabel: ScopeId;
-  createdAt: number;
-  model: string;
-  payload: string;
-}
-
 export interface NewLlmRequest {
   turnSeq: number | null;
   step: number;
@@ -560,8 +550,6 @@ export interface SessionStore {
 
   recordLlmRequest(sessionId: string, rec: NewLlmRequest, signal?: AbortSignal): Promise<LlmRequestRecord>;
   listLlmRequests(sessionId: string, opts?: ListLlmRequestsOptions): Promise<LlmRequestRecord[]>;
-  /** The most recent security screenings across every scope, newest first. */
-  listScreenSamples(limit: number): Promise<ScreenSample[]>;
   purgeLlmCaptures?(cutoff: number, opts?: { deadline?: number; stop?: () => boolean }): Promise<number>;
 
   addParticipant(sessionId: string, principalId: string, title?: string, opts?: AddParticipantOptions): Promise<void>;

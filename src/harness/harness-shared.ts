@@ -1,10 +1,5 @@
 import { TURN_STOPPED_KIND, type ReplayImageRef } from "./replay.ts";
 import { randomBytes } from "node:crypto";
-import {
-  parseSecurityScreenVerdict,
-  SECURITY_SCREEN_STEP,
-  SECURITY_SCREEN_SYSTEM_PROMPT,
-} from "../security/security-posture.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
 import { goalWorkFromEntries } from "./goal.ts";
@@ -115,7 +110,6 @@ export function harnessToolContext(turn: HarnessTurnInput): ToolContextRef {
     emit: turn.emit,
     scopeLabel: turn.scopeLabel,
     orgScopeId: turn.orgScopeId,
-    screenToolResult: turn.screenToolResult,
     governGoal: turn.governGoal,
     goalRecentWork: () => goalWorkFromEntries(turn.history.slice(-40)),
     toolApprovalGate: turn.toolApprovalGate,
@@ -306,22 +300,10 @@ export function oneShotRunner(runPrompt: (turn: HarnessTurnInput) => Promise<Har
 export function oneShotModelUtilities(
   single: OneShotRunner,
   judgeModelId?: string,
-): Pick<HarnessModelUtilities, "oneShot" | "judge" | "screenSecurity" | "generateTitle" | "summarizeApproval"> {
+): Pick<HarnessModelUtilities, "oneShot" | "judge" | "generateTitle" | "summarizeApproval"> {
   return {
     oneShot: (system, prompt) => single(system, prompt),
     judge: (system, prompt, signal) => single(system, prompt, signal, undefined, judgeModelId),
-    screenSecurity: async ({ payload, signal, recordModelCall, recordLlmRequest }) =>
-      parseSecurityScreenVerdict(
-        await single(SECURITY_SCREEN_SYSTEM_PROMPT, payload, signal, {
-          recordModelCall,
-          ...(recordLlmRequest
-            ? {
-                recordLlmRequest: (rec, requestSignal) =>
-                  recordLlmRequest({ ...rec, step: SECURITY_SCREEN_STEP }, requestSignal),
-              }
-            : {}),
-        }),
-      ),
     generateTitle: async (transcript) =>
       sanitizeTitle(await single(TITLE_GENERATION_PROMPT, titleUserPrompt(transcript))),
     summarizeApproval: (command, reason, purpose) =>

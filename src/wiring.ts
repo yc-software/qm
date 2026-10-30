@@ -141,8 +141,7 @@ import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
 import { createRateLimiter, type RateLimiter } from "./ratelimit/rate-limiter.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
-import { createBudgetTracker, estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
-import type { SecurityScreenProbe } from "./security/security-screener.ts";
+import { createBudgetTracker, type BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
 import { DROP_RECIPIENT_CONSENT_MIGRATION } from "./triggers/trigger-store.ts";
@@ -325,7 +324,6 @@ import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./ha
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
-import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
 import {
@@ -480,7 +478,6 @@ export interface BuiltApp {
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   app: App;
-  screenSecurity?: SecurityScreenProbe;
   deploymentLayer: DeploymentLayerRuntime;
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
@@ -574,7 +571,6 @@ const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 export function buildApp(
   config: Config,
   overrides: {
-    securityScreener?: SecurityScreener;
     decisionBackend?: DecisionBackend;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
@@ -774,12 +770,7 @@ export function buildApp(
     config.databaseUrl && (config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined)
       ? createPostgresBudgetTracker(config.databaseUrl, budgetOpts)
       : createBudgetTracker(budgetOpts);
-  const resolution = createResolutionService(
-    config.orgId,
-    configStore,
-    acl,
-    config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
-  );
+  const resolution = createResolutionService(config.orgId, configStore, acl);
 
   const requireDbUrl = (kind: string): string => {
     if (!config.databaseUrl) throw new Error(`${kind}=postgres requires DATABASE_URL`);
@@ -1574,10 +1565,6 @@ export function buildApp(
     return routed.choice;
   });
 
-  if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
-    delete harness.models.screenSecurity;
-  }
-
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
   const runStore =
@@ -2030,6 +2017,13 @@ export function buildApp(
   });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
   pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/auto_flagger_configs/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS auto_flagger_configs",
+      "DELETE FROM durable_map_versions WHERE tbl = 'auto_flagger_configs'",
+    ],
+  });
+  pgArtifactMap?.pool.registerMigration({
     id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
     statements: [
       "CREATE TABLE IF NOT EXISTS crons (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
@@ -2051,13 +2045,6 @@ export function buildApp(
     ],
   });
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
-  let securityScreener = overrides.securityScreener;
-  if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
-    securityScreener = createSecurityScreenProxy({
-      ...config.securityScreenProxy,
-      timeoutMs: config.securityScreenTimeoutMs,
-    });
-  }
   const layerEnv = config.layerEnv ?? {};
   const layerBrokerCache = new Map<string, AwsRoleBroker>();
   const layerBrokerFor = (tool: BrokeredLayerTool): AwsRoleBroker | undefined => {
@@ -2184,8 +2171,6 @@ export function buildApp(
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
     turnLeaseWaitMs: config.turnLeaseWaitMs,
-    securityScreenTimeoutMs: config.securityScreenTimeoutMs,
-    ...(securityScreener ? { securityScreener } : {}),
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
     sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,
@@ -2329,20 +2314,6 @@ export function buildApp(
     ? createPostgresAckEmojiPickStore(config.databaseUrl)
     : createMemoryAckEmojiPickStore();
   const providerKeys = directProviderAvailability;
-  const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
-    ? ({ payload, harnessId, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
-        harness.models.screenSecurity!({
-          payload,
-          harnessId,
-          modelId,
-          systemPrompt,
-          signal,
-          recordModelCall: (rec) => {
-            modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
-            void budget?.record(actorId, estimateCostUsd(rec.inputTokens));
-          },
-        })
-    : undefined;
   const app = createApp({
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
@@ -2414,7 +2385,6 @@ export function buildApp(
     ...(harness.models.judge
       ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
       : {}),
-    ...(screenSecurity ? { screenSecurity } : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
     ambientJudgments,
     ackEmojiPicks,
@@ -3090,7 +3060,6 @@ export function buildApp(
     checkReadiness: async (signal) => {
       await pgArtifactMap?.pool.q("SELECT 1", [], { signal });
     },
-    ...(screenSecurity ? { screenSecurity } : {}),
     deploymentLayer,
     deploymentLayerStore,
     brokeredTools,
@@ -3223,7 +3192,6 @@ export function serverDeps(
     ...(built.replayDedupe ? { replayDedupe: built.replayDedupe } : {}),
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
-    ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
     ...(configuredModel ? { baseModelDefault: configuredModel } : {}),
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
     providerKeys: providerKeysPresent(config),

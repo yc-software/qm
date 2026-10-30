@@ -75,8 +75,8 @@ security-relevant actions. These controls are designed to reduce cross-scope acc
 and make actions attributable. They are not a formal non-interference proof or a
 guarantee that the model cannot disclose data.
 
-Command approvals, content screening, and egress policy are defense in depth. Their
-effect depends on the selected posture, configured rules, available classifier, and
+Command approvals and egress policy are defense in depth. Their
+effect depends on the selected posture, configured rules, and
 sandbox backend. Audit records support investigation; they do not prevent an action.
 Encryption at rest protects stored secret material from direct storage reads, not
 plaintext credentials while a process is using them. An approval means a human
@@ -103,9 +103,7 @@ The raw keychain-use endpoint remains personal-or-grant-only. Command approvals 
 force; code can still disclose secrets while using them, so this is not an output filter.
 Open does not change transcript audience filtering, writes or memory capture,
 automation or ambient turns, tenant boundaries, another
-person's entitlement, command approvals, content screening, or egress. In Auto, carried
-skills and their bundled files must pass screening before prompt inclusion or materialization;
-flagged, oversized, or unavailable screening leaves the carried skill inaccessible.
+person's entitlement, command approvals, or egress.
 
 ### Deliberately portal-only actions
 
@@ -156,12 +154,9 @@ these, not through them.
   field; core does not determine whether a later command stays within that purpose.
   Once a credential is materialized into a sandbox, the purpose text does not confine
   how a compromised agent process can use it.
-- **Security screening is incomplete and heuristic.** Auto screens supported,
-  provenance-labelled external text and supported tool results. Command and
-  background-process output, opaque or multimodal results, raw webhook payloads, and
-  replay remediation across a shadow-to-enforcement cutover are not all covered.
-  Classifier approval is not authorization and cannot guarantee prompt-injection
-  resistance.
+- **External content is not screened for prompt injection.** Messages, files, web
+  pages, and tool results reach the model unclassified. Prompt-injection resistance
+  rests on the model, command approvals, egress policy, and credential scoping.
 - **Audience-floor filtering has known gaps.** Model-context entries do not yet carry
   complete origin labels for every granted read, so mixed-permission filtering is
   incomplete. The ambient Slack judge path also does not yet repeat the full

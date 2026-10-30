@@ -326,7 +326,6 @@ test("execute schema lists exact command credential handles", async () => {
 test("execute masks credential output before model delivery, screening, and transcript logging", async () => {
   const secret = "execution-secret-123456";
   const emitted: unknown[] = [];
-  const screened: unknown[] = [];
   const { ctx } = routingCtx({
     sandbox: {
       async run() {
@@ -342,10 +341,6 @@ test("execute masks credential output before model delivery, screening, and tran
       emit: async (entry) => {
         emitted.push(entry);
       },
-      screenToolResult: async (input) => {
-        screened.push(input);
-        return { outcome: "allow" };
-      },
     },
     { commandCredentialHandles: ["kc_test123456"] },
   );
@@ -354,12 +349,11 @@ test("execute masks credential output before model delivery, screening, and tran
     credentials: ["kc_test123456"],
     purpose: "Run test command",
   });
-  const all = JSON.stringify({ result, emitted, screened });
+  const all = JSON.stringify({ result, emitted });
   assert.ok(!all.includes(secret));
   assert.ok(all.includes("useful diagnostics"));
   assert.match(textOf(result), /<redacted:credential>/);
   assert.match(textOf(result), /exit 0/);
-  assert.equal(screened.length, 1);
   assert.ok(
     emitted.some((entry) => {
       const e = entry as { type?: string; payload?: { isError?: boolean; code?: number } };

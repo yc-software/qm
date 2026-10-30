@@ -200,15 +200,13 @@ a goal again replaces a paused or finished one and starts a new token budget.
 While a goal turn runs, messages sent to that worker do not wait for the turn to
 end. The turn checks for the worker's queued messages after each tool call (at
 most every few seconds) and each time the worker ends a reply, including the reply
-that would end the turn. It screens them like a mid-turn message and hands them
+that would end the turn. It hands them
 over in order, on the tool result or with the next prompt. When the turn returns
 without being stopped or cancelled, it marks them handed in the swarm and
 withdraws their queued turns, so they never run again; if the turn fails or is
 stopped first they stay queued and run as their own turns. A goal in one of them replaces the running goal at once,
 so any member can redirect a busy worker; its work floor counts from when the
-message was sent. A message the screen blocks stays queued, with every message
-after it, and runs as its own turn later; a blocked mailbox message reaches the
-next turn only as a notice that it was withheld.
+message was sent.
 
 A worker blocked on another agent can call goal action update `"wait"` with a note
 naming what it waits for. The goal's clock stops and the call returns with the
@@ -249,8 +247,8 @@ Agent operations require credentials bound to the exact session, run attempt, an
 unexpired execution lease. Swarm writes recheck that lease inside their database
 transaction; credentials from replaced attempts cannot authorize new work. Completed, failed, queued, and expired runs cannot authorize agent swarm
 operations. Authenticated human initialization may reference a historical run.
-Worker sessions never inherit the root session's command or security-screen
-approval grants; a worker must obtain its own approval. Auto screening receives host-verified swarm delegation provenance, so routine delegated tasks and in-swarm reporting are distinguished from external instructions. Delegation does not authorize credential disclosure, permission changes, or overriding higher-priority instructions; those remain screened. Frozen swarm roster checks
+Worker sessions never inherit the root session's command
+approval grants; a worker must obtain its own approval. Frozen swarm roster checks
 apply to swarm notifications, not ordinary human follow-ups in the root session.
 
 Each outbox sweep selects at most 16 pending swarms and reconciles resources for at

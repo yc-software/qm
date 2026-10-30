@@ -9,7 +9,6 @@ import {
   retention,
   whoami,
 } from "./admin/scope-config.ts";
-import { testAutoFlagger } from "./admin/auto-flagger-test.ts";
 import { egress, listAdminAudit, listAdminErrors, listAdminRuns } from "./admin/observability.ts";
 import { getAdminSession, getAdminSessionLlm, listAdminSessions, listAdminShadowDeliveries } from "./admin/sessions.ts";
 import { downloadAdminFile, listAdminFiles, readAdminFile, uploadAdminFile } from "./admin/files.ts";
@@ -54,7 +53,6 @@ import {
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
-import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
 import { listUnattendedGrants } from "./admin/unattended-grants.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
@@ -112,12 +110,6 @@ const routes: Route<ApiCtx>[] = [
     { method: "GET", path: "/v1/admin/custom-providers", auth: "either", handle: getCustomProviders },
     { method: "PUT", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: putCustomProvider },
     { method: "DELETE", path: "/v1/admin/custom-providers/:provider", auth: "either", handle: deleteCustomProvider },
-    {
-      method: "POST",
-      path: "/v1/admin/scopes/:scope/auto-flagger/test",
-      auth: "either",
-      handle: testAutoFlagger,
-    },
     { method: "PUT", path: "/v1/admin/scopes/:scope/:resource", auth: "either", handle: putScopeConfig },
     { method: "GET", path: "/v1/admin/whoami", auth: "either", admin: { agent: "anyone" }, handle: whoami },
     {
@@ -288,13 +280,6 @@ const routes: Route<ApiCtx>[] = [
         unattended: { grant: "admin.audit.read", summary: "read security audit events" },
       },
       handle: listAdminAudit,
-    },
-    {
-      method: "GET",
-      path: "/v1/admin/security/flags",
-      auth: "either",
-      admin: { privateRead: "always" },
-      handle: listSecurityFlags,
     },
     {
       method: "GET",

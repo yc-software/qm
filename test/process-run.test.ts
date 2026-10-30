@@ -18,9 +18,6 @@ const turn: OrchestratorInput = {
 function fakeOrchestrator(handle: (input: OrchestratorInput) => Promise<TurnResult>): Orchestrator {
   return {
     handleTurn: handle,
-    async screenSecuritySteer() {
-      return "allow";
-    },
     async regenerateTitle() {
       return null;
     },

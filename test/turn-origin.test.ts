@@ -18,13 +18,11 @@ test("legacy turn provenance normalizes to one origin", () => {
   assert.deepEqual(
     normalizeTurnOrigin({
       triggered: true,
-      securityScreenData: "external payload",
       triggerDestination: { type: "channel", target: "C1" },
       ownerKeychainUnion: true,
     }),
     {
       kind: "automation",
-      screenData: "external payload",
       destination: { type: "channel", target: "C1" },
       useOwnerKeychain: true,
     },
@@ -62,7 +60,6 @@ test("canonical origins replay through the legacy surface contract", () => {
     { kind: "ambient", entryTs: "3", live: true },
     {
       kind: "automation",
-      screenData: "payload",
       destination: { type: "channel", target: "C1" },
       useOwnerKeychain: true,
     },
@@ -79,29 +76,8 @@ test("durable requests from before the origin migration normalize lazily", () =>
 });
 
 test("typed and legacy provenance resolve toward the least interactive origin", () => {
-  assert.deepEqual(resolveTurnOrigin({ origin: { kind: "human" }, triggered: true, securityScreenData: "external" }), {
-    kind: "automation",
-    screenData: "external",
-  });
-  assert.deepEqual(resolveTurnOrigin({ origin: { kind: "automation", screenData: "external" }, liveActor: true }), {
-    kind: "automation",
-    screenData: "external",
-  });
-});
-
-test("matching automation origins preserve or combine every screening payload", () => {
-  assert.deepEqual(
-    resolveTurnOrigin({ origin: { kind: "automation" }, triggered: true, securityScreenData: "legacy" }),
-    { kind: "automation", screenData: "legacy" },
-  );
-  const merged = resolveTurnOrigin({
-    origin: { kind: "automation", screenData: "typed" },
-    triggered: true,
-    securityScreenData: "legacy",
-  });
-  assert.equal(merged.kind, "automation");
-  assert.match(merged.kind === "automation" ? (merged.screenData ?? "") : "", /typed/);
-  assert.match(merged.kind === "automation" ? (merged.screenData ?? "") : "", /legacy/);
+  assert.deepEqual(resolveTurnOrigin({ origin: { kind: "human" }, triggered: true }), { kind: "automation" });
+  assert.deepEqual(resolveTurnOrigin({ origin: { kind: "automation" }, liveActor: true }), { kind: "automation" });
 });
 
 test("the owner-keychain flag survives legacy and typed automation normalization", () => {

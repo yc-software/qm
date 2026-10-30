@@ -7,33 +7,23 @@ import type { SwarmMessage } from "./swarm-store.ts";
 export function createSwarmGoalInbox(deps: {
   swarms: Pick<SwarmService, "queuedMessages" | "handOver" | "held">;
   input: OrchestratorInput;
-  screen(text: string): Promise<string | null>;
   saveGoal(goal: GoalRecord): Promise<void>;
 }): { inbox: GoalInbox; settle(): Promise<void> } {
   const shown = new Map<string, SwarmMessage>();
   const skippedRuns = new Set<string>();
-  let held = false;
   const settled: string[] = [];
   const runOf = (message: SwarmMessage) => message.notifications[deps.input.swarm!.recipientId]?.runId;
   return {
     inbox: {
       async receive(goal) {
         const out: Array<{ id: string; text: string }> = [];
-        if (held) return out;
         for (const message of await deps.swarms.queuedMessages(deps.input, { skipRuns: skippedRuns })) {
           if (shown.has(message.id)) continue;
           const plain = swarmMessageText(message);
           const replaces = message.goal && message.createdAt > goal.createdAt;
-          const text = await deps.screen(replaces ? `${plain}\n\n${goalAssignedNote(message.goal!)}` : plain);
+          const text = replaces ? `${plain}\n\n${goalAssignedNote(message.goal!)}` : plain;
           const runId = runOf(message);
           if (runId) skippedRuns.add(runId);
-          if (text === null) {
-            console.error(
-              `[swarm] goal inbox held message=${message.id} and everything after it: the security screen blocked it mid-turn; it is left for a later turn`,
-            );
-            held = true;
-            break;
-          }
           shown.set(message.id, message);
           out.push({ id: message.id, text });
         }
@@ -59,18 +49,11 @@ export function createSwarmGoalInbox(deps: {
 export async function openSwarmMailbox(deps: {
   swarms: Pick<SwarmService, "queuedMessages" | "handOver">;
   input: OrchestratorInput;
-  screen(text: string): Promise<string | null>;
 }): Promise<{ text: string; settle(): Promise<void> }> {
   const messages = await deps.swarms
     .queuedMessages(deps.input, { mailboxOnly: true })
     .catch(reportFailureAs("swarm: read the mailbox", []));
-  const shown = await Promise.all(
-    messages.map(
-      async (message) =>
-        (await deps.screen(swarmMessageText(message))) ??
-        `[Swarm message ${message.id} from agent ${message.senderId} was withheld by the security screen.]`,
-    ),
-  );
+  const shown = messages.map(swarmMessageText);
   return {
     text: shown.length ? `Swarm messages left in your mailbox since your last turn:\n\n${shown.join("\n\n")}` : "",
     async settle() {

@@ -16,7 +16,7 @@ function record(threadRef: string, createdAt = 1): PendingApprovalRecord {
       conversation: { kind: "dm", threadRef },
       text: "publish report",
     },
-    kind: "input",
+    kind: "approval",
     grantModes: { session: false, always: false },
   };
 }

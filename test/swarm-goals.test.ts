@@ -128,44 +128,6 @@ test("a running goal turn takes its worker's queued messages once, under its lea
   );
 });
 
-test("the goal inbox holds a blocked message and everything after it, and settles only what it handed over", async () => {
-  const f = await swarmFixture();
-  const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
-  await f.service.sweep();
-  const first = (await f.runs.list()).find((run) => run.request.swarm)!;
-  const claimed = (await f.runs.claimById(first.id, "worker", 60_000))!;
-  const input = {
-    ...claimed.request,
-    runId: claimed.id,
-    runLeaseToken: claimed.leaseToken!,
-    attempt: claimed.attempts,
-  };
-  const send = (requestId: string, text: string) =>
-    f.service.send(f.caller, { requestId, audience: [worker!.id], text, notify: true });
-  const ok = await send("ok", "first note");
-  const blocked = await send("blocked", "BLOCK this one");
-  const after = await send("after", "after the blocked one");
-  await f.service.sweep();
-  const { inbox, settle } = createSwarmGoalInbox({
-    swarms: f.service,
-    input,
-    screen: async (text) => (text.includes("BLOCK") ? null : text),
-    saveGoal: async () => {},
-  });
-  const current = createGoalRecord({ objective: "lane A", now: 0 });
-  assert.deepEqual(
-    (await inbox.receive(current)).map(({ id }) => id),
-    [ok.id],
-  );
-  assert.deepEqual(await inbox.receive(current), []);
-  await inbox.acknowledge([ok.id], current);
-  await settle();
-  const states = Object.fromEntries(
-    (await f.store.get(f.root.id))!.messages.map((message) => [message.id, message.notifications[worker!.id]?.state]),
-  );
-  assert.deepEqual([states[ok.id], states[blocked.id], states[after.id]], ["handed", "queued", "queued"]);
-});
-
 test("a goal message is still handed over when saving its adopted goal fails mid-turn", async () => {
   const f = await swarmFixture();
   const [worker] = await f.service.spawn(f.caller, { requestId: "initial", text: "lane A", goal });
@@ -188,7 +150,6 @@ test("a goal message is still handed over when saving its adopted goal fails mid
   const { inbox, settle } = createSwarmGoalInbox({
     swarms: f.service,
     input,
-    screen: async (text) => text,
     saveGoal: async () => {
       throw new Error("database blip");
     },

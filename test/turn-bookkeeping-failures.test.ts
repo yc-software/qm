@@ -69,9 +69,6 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
         await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
         return { reply: "done", modelCalls: 1, ...turnResult };
       },
-      async screenSecurity() {
-        return { decision: "auto" as const };
-      },
     },
   );
   const sessions = createMemorySessionStore();

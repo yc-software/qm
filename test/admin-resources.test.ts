@@ -54,55 +54,6 @@ function start(harnessId = "pi", withLayer = true): { base: string; built: Built
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-test("security flags are visible to an org admin", async () => {
-  const srv = start();
-  try {
-    srv.built.auditLog.record({
-      at: 123,
-      principalId: "U1",
-      action: "security_posture.flagged",
-      resource: "slack",
-      scopeLabel: "channel:C1",
-      status: "pending_approval",
-      detail: JSON.stringify({ cause: "strict-verdict", source: ["overheard"] }),
-    });
-    const flags = await fetch(`${srv.base}/v1/admin/security/flags?limit=1`, { headers: ADMIN });
-    assert.equal(flags.status, 200);
-    assert.deepEqual((await flags.json()) as unknown, {
-      flags: [
-        {
-          at: 123,
-          principal: "U1",
-          scope: "channel:C1",
-          surface: "slack",
-          detail: '{"cause":"strict-verdict","source":["overheard"]}',
-        },
-      ],
-    });
-  } finally {
-    await srv.close();
-  }
-});
-
-test("security flags include quarantines and survive a busy audit log (#868)", async () => {
-  const srv = start();
-  try {
-    const rec = (at: number, action: string) =>
-      srv.built.auditLog.record({ at, principalId: "U1", action, resource: "slack", scopeLabel: "channel:C1" });
-    rec(1, "security_posture.flagged");
-    rec(2, "security_posture.tool_result_quarantine");
-    for (let i = 0; i < 201; i++) rec(10 + i, "tool.call");
-    const r = await fetch(`${srv.base}/v1/admin/security/flags`, { headers: ADMIN });
-    const body = (await r.json()) as { flags: { at: number }[] };
-    assert.deepEqual(
-      body.flags.map((f) => f.at),
-      [2, 1],
-    );
-  } finally {
-    await srv.close();
-  }
-});
-
 test("GET /v1/admin/resources returns a manifest entry for every registered resource", async () => {
   const srv = start();
   try {

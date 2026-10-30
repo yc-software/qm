@@ -115,9 +115,6 @@ export function createTurnFlow(core: SlackCoreClient): TurnFlow {
       inFlightRuns.delete(runId);
       throw coreFailure(err);
     }
-    if (result?.status === "refused" && result.refusalKind === "security_quarantine") {
-      return result;
-    }
     if (result && (result.status === "ok" || result.status === "refused" || result.status === "failed")) {
       if (!hooks.deferDeliveryAck) ackRunDelivery(runId);
     } else {
