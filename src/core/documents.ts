@@ -8,6 +8,7 @@ import { forModelContext } from "../agent/context-compaction.ts";
 import { collectBytes } from "../util/bytes.ts";
 
 export const MAX_DOCUMENT_BYTES = 8_000_000;
+export const MAX_DOCUMENTS = 10;
 const MAX_DOCUMENT_TEXT_CHARS = 200_000;
 const TEXT_EXTENSIONS = new Set(
   "asm bat c cc conf cpp css cxx def dic eml h hh htm html ics ifb in js json ksh list log markdown md mht mhtml mime mjs nws pl py rst s sql srt text txt vcf vtt xml ts tsx jsx sh bash zsh yml yaml toml rs go java rb php swift kt scala lua r jl perl tex cs graphql ndjson json5 dockerfile".split(
@@ -151,7 +152,7 @@ export async function loadDocumentInputs(
   {
     maxBytes = MAX_DOCUMENT_BYTES,
     signal,
-    maxDocuments = 10,
+    maxDocuments = MAX_DOCUMENTS,
     existingDocuments = [],
     maxTokens = Number.POSITIVE_INFINITY,
   }: {

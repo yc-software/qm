@@ -22,6 +22,7 @@ import {
   historicalDocumentMetas,
   loadDocumentInputs,
   MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENTS,
   estimateDocumentTokens,
   isDocumentAttachment,
   isTextDocument,
@@ -2865,7 +2866,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         };
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
-          maxDocuments: 10,
+          maxDocuments: MAX_DOCUMENTS,
           maxTokens: Math.max(0, documentBudget - countTokens(sideDiscussions)),
         };
         const ingestDocuments = async (
