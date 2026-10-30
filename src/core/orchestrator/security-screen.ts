@@ -27,7 +27,7 @@ const unscreenedVerdict = (): SecurityScreenVerdict => ({
 type ScreenStatus = "allow" | "block" | "would_block" | "error";
 type Screened = Pick<SecurityScreenClassification, "verdict"> & Partial<SecurityScreenClassification>;
 
-interface SecurityScreenContext {
+export interface SecurityScreenContext {
   mode: "observe" | "enforce";
   hook?: SecurityScreenHook;
   surface?: string;
@@ -176,4 +176,25 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
     await sleep(250);
     return settle(await attempt(), 2) ?? unscreenedVerdict();
   };
+}
+
+const cleanVerdict = (verdict: SecurityScreenVerdict | undefined): boolean =>
+  verdict?.decision === "auto" && !verdict.unscreened;
+
+export async function screenChunks(
+  chunks: readonly string[],
+  classify: (chunk: string) => Promise<SecurityScreenVerdict | undefined>,
+  { batch = 1, stopUnclean = false, signal }: { batch?: number; stopUnclean?: boolean; signal?: AbortSignal } = {},
+): Promise<SecurityScreenVerdict> {
+  const verdicts: Array<SecurityScreenVerdict | undefined> = [];
+  for (let i = 0; i < chunks.length; i += batch) {
+    signal?.throwIfAborted();
+    const settled = await Promise.all(chunks.slice(i, i + batch).map(classify));
+    verdicts.push(...settled);
+    if (settled.some((verdict) => verdict?.decision === "strict" || (stopUnclean && !cleanVerdict(verdict)))) break;
+  }
+  const strict = verdicts.find((verdict) => verdict?.decision === "strict");
+  if (strict) return strict;
+  if (verdicts.length < chunks.length || !verdicts.every(cleanVerdict)) return unscreenedVerdict();
+  return verdicts[0] ?? { decision: "auto" };
 }

@@ -998,6 +998,51 @@ test("steered documents use the inbound security screen before writing their con
   );
 });
 
+test("inbound files are screened with the request they arrived with, at turn start and on steer", async () => {
+  const blobTransfer = createMemoryBlobTransferStore();
+  const blob = await blobTransfer.put(Buffer.from("plain notes"));
+  const sandbox: Sandbox = {
+    ...readSandbox(),
+    removeDir: async () => {},
+    listDir: async () => [],
+    writeFile: async () => {},
+    writeFileBytes: async () => {},
+  };
+  const agent = createMockAgent();
+  agent.runTurn = async (turn) => {
+    await turn.prepareSteer!("steer request", {
+      surface: "web",
+      actor: { externalId: actor.id },
+      conversation: { kind: "dm", threadRef: "screen-requests" },
+      text: "steer request",
+      attachments: [{ name: "later.txt", mimetype: "text/plain", ...blob }],
+    });
+    return { reply: "done" };
+  };
+  const fileScreens: Array<{ name: unknown; request: unknown }> = [];
+  const securityScreener: SecurityScreener = {
+    provider: "test",
+    classify: async ({ payload, metadata }) => {
+      if (payload.startsWith('{"name":'))
+        fileScreens.push({
+          name: (JSON.parse(payload) as { name: unknown }).name,
+          request: (metadata?.request as { text?: string } | undefined)?.text,
+        });
+      return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
+    },
+  };
+  const { orchestrator } = buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
+  const result = await orchestrator.handleTurn({
+    ...dm("screen-requests", "turn request"),
+    attachments: [{ name: "first.txt", mimetype: "text/plain", ...blob }],
+  });
+  assert.equal(result.status, "ok", result.reason);
+  assert.deepEqual(fileScreens, [
+    { name: "first.txt", request: "turn request" },
+    { name: "later.txt", request: "steer request" },
+  ]);
+});
+
 for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
   test(`steered documents respect the initial turn budget (${budget})`, async () => {
     const blobTransfer = createMemoryBlobTransferStore();

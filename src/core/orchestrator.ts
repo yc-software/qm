@@ -17,6 +17,7 @@ import { memoryRecallQuery } from "../memory/semantic-recall.ts";
 import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
 import {
   documentText,
+  type DocumentInput,
   type ExtractedDocumentText,
   historicalDocumentMetas,
   loadDocumentInputs,
@@ -32,6 +33,8 @@ import { assignedGoal, type GoalRecord, openGoal } from "../agent/goal.ts";
 import { connectorToolsNote, deferredMcpTools } from "../agent/deferred-tools.ts";
 import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
 import type {
+  AttachmentMeta,
+  IncomingAttachment,
   CommandApprovalGrant,
   DeliveryProvenance,
   Destination,
@@ -110,7 +113,6 @@ import {
   toolLabelOf,
   UNSCREENED_REASON,
   unscreenedNotice,
-  type SecurityScreenVerdict,
   type ToolResultScreen,
   type ToolResultScreenInput,
 } from "../security/security-posture.ts";
@@ -213,7 +215,7 @@ import {
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
-import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
+import { createSecurityClassifier, screenChunks, type SecurityScreenContext } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -803,6 +805,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reportFailure("orchestrator: persist security screen request snapshot", err);
         }
       };
+      const classifyAs =
+        (
+          context: Omit<SecurityScreenContext, "mode" | "thread" | "runId" | "origin">,
+          record?: typeof recordScreenRequest,
+        ) =>
+        (chunk: string) =>
+          classifySecurityData(chunk, actor.id, scopeId, record, {
+            ...screenTrace,
+            origin: input.origin.kind,
+            ...context,
+          });
       const buildInboundScreen = async () => {
         let overheard: OverheardEntryPayload[] = [];
         if (screenInbound) {
@@ -887,12 +900,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         void buildInboundScreen()
           .then(({ screenPayload }) =>
             screenPayload && !screenPayload.truncated
-              ? classifySecurityData(screenPayload.content, actor.id, scopeId, undefined, {
-                  ...screenTrace,
-                  hook: "user_input",
-                  surface: input.surface,
-                  origin: input.origin.kind,
-                })
+              ? classifyAs({ hook: "user_input", surface: input.surface })(screenPayload.content)
               : undefined,
           )
           .catch(swallowAs("orchestrator: observed inbound screen", undefined));
@@ -902,12 +910,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const canScreenText =
             !!screenPayload && !screenPayload.truncated && (!!deps.securityScreener || !!deps.agent.screenSecurity);
           const verdict = canScreenText
-            ? await classifySecurityData(screenPayload!.content, actor.id, scopeId, recordScreenRequest, {
-                ...screenTrace,
-                hook: "user_input",
-                surface: input.surface,
-                origin: input.origin.kind,
-              })
+            ? await screenChunks(
+                [screenPayload!.content],
+                classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
+              )
             : undefined;
           let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
           if (hasUnscreenableAttachment || !screenPayload) unscreenableCause = "unscreenable-attachment";
@@ -1171,17 +1177,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               screen = (async () => {
                 if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES)
                   return false;
-                for (const chunk of securityScreenChunks("tool_result:shared_skill", payload)) {
-                  const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                    ...screenTrace,
-                    hook: "tool_response",
-                    request: input.text,
-                    surface: "shared_skill",
-                    origin: input.origin.kind,
-                  });
-                  if (verdict?.decision !== "auto" || verdict.unscreened) return false;
-                }
-                return true;
+                const verdict = await screenChunks(
+                  securityScreenChunks("tool_result:shared_skill", payload),
+                  classifyAs(
+                    { hook: "tool_response", request: input.text, surface: "shared_skill" },
+                    recordScreenRequest,
+                  ),
+                  { stopUnclean: true },
+                );
+                return verdict.decision === "auto" && !verdict.unscreened;
               })();
               carriedSkillScreens.set(key, screen);
             }
@@ -2715,28 +2719,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).entries);
         }
-        const inbound =
-          input.attachments?.length && !strictReadOnly
-            ? await materializeInbound(
+        const receiveInbound = async (
+          attachments: IncomingAttachment[] | undefined,
+          registration: ArtifactRegistration,
+          inboxDir: string,
+          requestText: string,
+        ): ReturnType<typeof materializeInbound> =>
+          attachments?.length && !strictReadOnly
+            ? materializeInbound(
                 deps.sandbox,
                 provision,
-                input.attachments,
+                attachments,
                 blobTransfer,
-                fileRegistration,
-                turnInboxDir,
-                securityPolicy.screening !== "off" && (deps.securityScreener || deps.agent.screenSecurity)
-                  ? ({ content }) =>
-                      classifySecurityData(content, actor.id, scopeId, undefined, {
-                        ...screenTrace,
-                        sessionId: session.id,
-                        hook: "tool_response",
-                        request: input.text,
-                        surface: "inbound_file",
-                        origin: input.origin.kind,
-                      })
+                registration,
+                inboxDir,
+                securityPolicy.screening !== "off"
+                  ? ({ content, name, mimetype }) =>
+                      screenChunks(
+                        [JSON.stringify({ name, mimetype, content })],
+                        classifyAs({
+                          sessionId: session.id,
+                          hook: "tool_response",
+                          request: requestText,
+                          surface: "inbound_file",
+                        }),
+                      )
                   : undefined,
               )
             : { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] };
+        const inbound = await receiveInbound(input.attachments, fileRegistration, turnInboxDir, input.text);
         const manifest = inboundManifest(inbound.metas, turnInboxDir, inbound.unstaged, actor.displayName);
         const inboundIssues = inboundIssueList({
           tooMany: inbound.tooMany,
@@ -2812,14 +2823,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         contextRecovered =
           history !== visibleHistory &&
           history.some((entry) => isObj(entry.payload) && entry.payload.mode === "recent");
-        const documentInputs = strictReadOnly
-          ? { documents: [], notices: [], tokens: 0 }
-          : await loadDocumentInputs(
-              deps.files,
-              [...historicalDocumentMetas(history), ...inbound.metas],
-              mayReadArtifact,
-              { signal: turnAbort.signal, maxTokens: Math.max(0, documentBudget - countTokens(sideDiscussions)) },
-            );
         const screenDocuments = async (
           documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
           requestText: string,
@@ -2840,50 +2843,58 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 documentsUnscreened = true;
                 continue;
               }
-              const verdicts: Array<SecurityScreenVerdict | undefined> = [];
-              for (const chunk of securityScreenChunks("tool_result:inbound_document", extracted.text)) {
-                turnAbort.signal.throwIfAborted();
-                const verdict = await classifySecurityData(chunk, actor.id, scopeId, undefined, {
-                  ...screenTrace,
+              const verdict = await screenChunks(
+                securityScreenChunks("tool_result:inbound_document", extracted.text),
+                classifyAs({
                   sessionId: session.id,
                   hook: "tool_response",
                   request: requestText,
                   surface: "inbound_file",
-                  origin: input.origin.kind,
-                });
-                verdicts.push(verdict);
-                if (verdict?.decision === "strict") break;
-              }
-              const verdict =
-                verdicts.find((value) => value?.decision === "strict") ??
-                verdicts.find((value) => value?.unscreened) ??
-                verdicts[0];
-              if (verdict?.decision === "strict") {
+                }),
+                { signal: turnAbort.signal },
+              );
+              if (verdict.decision === "strict") {
                 documentInputs.documents.splice(documentInputs.documents.indexOf(document), 1);
                 documentInputs.notices.push(
                   `${document.name}: document withheld by the external-data security screen.`,
                 );
-              } else if (
-                !verdicts.every((value) => value?.decision === "auto" && !value.unscreened) ||
-                extracted.truncated
-              )
-                documentsUnscreened = true;
+              } else if (verdict.unscreened || extracted.truncated) documentsUnscreened = true;
             }
           }
           return enforceScreen && documentsUnscreened;
         };
-        const observeDocuments = (inputs: Awaited<ReturnType<typeof loadDocumentInputs>>, requestText: string) =>
-          void screenDocuments(inputs, requestText).catch(swallowAs("orchestrator: observed document screen", false));
-        let documentsUnscreened = false;
-        if (enforceScreen) documentsUnscreened = await screenDocuments(documentInputs, input.text);
-        else observeDocuments(documentInputs, input.text);
-        let remainingDocumentBytes =
-          MAX_DOCUMENT_BYTES -
-          documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
-        let remainingDocumentCount = 10 - documentInputs.documents.length;
-        let remainingDocumentTokens = Math.max(
-          0,
-          documentBudget - countTokens(sideDiscussions) - documentInputs.tokens,
+        const documentRoom = {
+          maxBytes: MAX_DOCUMENT_BYTES,
+          maxDocuments: 10,
+          maxTokens: Math.max(0, documentBudget - countTokens(sideDiscussions)),
+        };
+        const ingestDocuments = async (
+          metas: readonly AttachmentMeta[],
+          requestText: string,
+          existingDocuments: readonly DocumentInput[] = [],
+        ) => {
+          const loaded = strictReadOnly
+            ? { documents: [], notices: [], tokens: 0 }
+            : await loadDocumentInputs(deps.files, metas, mayReadArtifact, {
+                ...documentRoom,
+                signal: turnAbort.signal,
+                existingDocuments,
+              });
+          let unscreened = false;
+          if (enforceScreen) unscreened = await screenDocuments(loaded, requestText);
+          else
+            void screenDocuments(loaded, requestText).catch(swallowAs("orchestrator: observed document screen", false));
+          documentRoom.maxBytes -= loaded.documents.reduce(
+            (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
+            0,
+          );
+          documentRoom.maxDocuments -= loaded.documents.length;
+          documentRoom.maxTokens -= loaded.tokens;
+          return { ...loaded, unscreened };
+        };
+        const documentInputs = await ingestDocuments(
+          [...historicalDocumentMetas(history), ...inbound.metas],
+          input.text,
         );
         const lastUserAt = visibleHistory.findLast((e) => e.type === "user" && !isOverheardEntry(e))?.createdAt;
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef, lastUserAt);
@@ -2892,7 +2903,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ? senderNote(actor.displayName ?? nameOf(actor.id) ?? actor.id)
             : "";
         const unscreenedNote =
-          inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentsUnscreened
+          inputUnscreened || (enforceScreen && inbound.unscreened.length) || documentInputs.unscreened
             ? unscreenedNotice("inbound content")
             : "";
         const screenSwarmMessage = async (text: string): Promise<string | null> => {
@@ -3266,68 +3277,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (refreshedInbox) {
                 let allowed = true;
                 if (securityPolicy.screening !== "off") {
-                  for (const chunk of securityScreenChunks("conversation-header", refreshedInbox)) {
-                    const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                      ...screenTrace,
-                      sessionId: session.id,
-                      hook: "user_input",
-                      request: text,
-                      surface: "steer",
-                      origin: input.origin.kind,
-                    });
-                    if (verdict?.decision !== "auto" || verdict.unscreened) {
-                      allowed = false;
-                      break;
-                    }
-                  }
+                  const verdict = await screenChunks(
+                    securityScreenChunks("conversation-header", refreshedInbox),
+                    classifyAs(
+                      { sessionId: session.id, hook: "user_input", request: text, surface: "steer" },
+                      recordScreenRequest,
+                    ),
+                    { stopUnclean: true },
+                  );
+                  allowed = verdict.decision === "auto" && !verdict.unscreened;
                 }
                 text = `${text}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
               }
               if (!request?.attachments?.length) return { text, author };
               const seed = `${fileRegistration.seed}:steer:${randomUUID()}`;
               const inboxDir = `${turnInboxDir}/${randomUUID()}`;
-              const received = strictReadOnly
-                ? { metas: [], images: [], tooMany: [], unavailable: [], blocked: [], unscreened: [] }
-                : await materializeInbound(
-                    deps.sandbox,
-                    provision,
-                    request.attachments,
-                    blobTransfer,
-                    { ...fileRegistration, seed },
-                    inboxDir,
-                    securityPolicy.screening !== "off"
-                      ? ({ content, name, mimetype }) =>
-                          classifySecurityData(
-                            JSON.stringify({ name, mimetype, content }),
-                            actor.id,
-                            scopeId,
-                            undefined,
-                            {
-                              ...screenTrace,
-                              sessionId: session.id,
-                              hook: "tool_response",
-                              surface: "inbound_file",
-                              origin: input.origin.kind,
-                            },
-                          )
-                      : undefined,
-                  );
-              const steeredDocuments = await loadDocumentInputs(deps.files, received.metas, mayReadArtifact, {
-                maxBytes: remainingDocumentBytes,
-                signal: turnAbort.signal,
-                maxDocuments: remainingDocumentCount,
-                existingDocuments: initialDocuments,
-                maxTokens: remainingDocumentTokens,
-              });
-              let steeredUnscreened = false;
-              if (enforceScreen) steeredUnscreened = await screenDocuments(steeredDocuments, text);
-              else observeDocuments(steeredDocuments, text);
-              remainingDocumentBytes -= steeredDocuments.documents.reduce(
-                (sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"),
-                0,
-              );
-              remainingDocumentCount -= steeredDocuments.documents.length;
-              remainingDocumentTokens -= steeredDocuments.tokens;
+              const received = await receiveInbound(request.attachments, { ...fileRegistration, seed }, inboxDir, text);
+              const steeredDocuments = await ingestDocuments(received.metas, text, initialDocuments);
               documentInputs.documents.push(...steeredDocuments.documents);
               const issues = inboundIssueList({
                 ...received,
@@ -3342,7 +3308,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ...steeredDocuments.notices,
                   inboundIssuesNote(issues),
                   enforceScreen &&
-                  (steeredUnscreened ||
+                  (steeredDocuments.unscreened ||
                     received.unscreened.length ||
                     received.metas.some((a) => !isScreenableTextAttachment(a.mimetype)))
                     ? unscreenedNotice("inbound content")
@@ -3428,15 +3394,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     if (provenance !== "external") return { outcome: "allow" };
                     const toolLabel = toolLabelOf(tool);
                     const sourceLabel = source ? `:${source.replace(/[^A-Za-z0-9_-]/g, "_")}` : "";
-                    const screenChunk = (chunk: string) =>
-                      classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
-                        ...screenTrace,
-                        sessionId: session.id,
-                        hook: "tool_response",
-                        request: input.text,
-                        surface: toolLabel,
-                        origin: input.origin.kind,
-                      });
+                    const screenChunk = classifyAs(
+                      { sessionId: session.id, hook: "tool_response", request: input.text, surface: toolLabel },
+                      recordScreenRequest,
+                    );
                     if (!enforceScreen) {
                       if (!unscreenable)
                         await Promise.all(
@@ -3453,20 +3414,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       });
                       return { outcome: "unscreened" };
                     }
-                    const chunks = unscreenable
-                      ? []
-                      : securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result);
-                    if (!unscreenable && chunks.length === 0) return { outcome: "allow" };
-                    const verdicts: Array<SecurityScreenVerdict | undefined> = [];
-                    for (let i = 0; i < chunks.length && !verdicts.some((v) => v?.decision === "strict"); i += 4) {
-                      verdicts.push(...(await Promise.all(chunks.slice(i, i + 4).map(screenChunk))));
-                    }
-                    const verdict =
-                      verdicts.find((v) => v?.decision === "strict") ??
-                      (verdicts.length === chunks.length &&
-                      verdicts.every((v) => v?.decision === "auto" && !v.unscreened)
-                        ? verdicts[0]
-                        : undefined);
+                    const verdict = unscreenable
+                      ? undefined
+                      : await screenChunks(
+                          securityScreenChunks(`tool_result:${toolLabel}${sourceLabel}`, result),
+                          screenChunk,
+                          { batch: 4 },
+                        );
                     if (verdict?.decision === "auto" && !verdict.unscreened) return { outcome: "allow" };
                     if (verdict?.decision === "strict") {
                       const releaseKey = `security-screen-release:${toolLabel}`;
