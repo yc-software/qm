@@ -3480,6 +3480,19 @@ qm-markdown .tok-in {
   padding-left: calc(var(--subagent-depth, 0) * 14px);
   border-radius: 8px;
 }
+/* A subagent's approval sits inside the scrolling .bg-panel. The composer panel's own
+   scroll box (with overscroll containment) would swallow wheel/touch scrolls without ever
+   scrolling itself, leaving the Allow/Deny buttons stranded below the panel's edge. Let the
+   outer panel own scrolling and keep the command short so the buttons stay in reach. */
+.subagent-row > .composer-approval-panel {
+  flex-basis: 100%;
+  max-height: none;
+  overflow: visible;
+  overscroll-behavior: auto;
+}
+.subagent-row > .composer-approval-panel .approval-cmd-full {
+  max-height: min(140px, 18vh);
+}
 .subagent-row.peeking {
   background: color-mix(in srgb, var(--muted-foreground) 8%, transparent);
 }
