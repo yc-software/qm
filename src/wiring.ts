@@ -60,12 +60,7 @@ import { createSemanticMemory } from "./memory/semantic-memory.ts";
 import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
 import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
-import {
-  createSandboxResources,
-  type SandboxResource,
-  type SandboxDefault,
-  type SandboxResources,
-} from "./sandbox/sandbox-resources.ts";
+import { createSandboxResources, type SandboxResources } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import type { probeModel } from "./harness/pi-harness.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
@@ -250,11 +245,7 @@ import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-san
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
-import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  type LegacyRoute,
-} from "./sandbox/sandbox-resource-upgrade.ts";
+import { createMemorySandboxResourceStores, createSandboxResourceStores } from "./sandbox/sandbox-resource-store.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
 import {
@@ -1170,45 +1161,8 @@ export function buildApp(
   for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
     if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
   }
-  const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
-  const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
-    records: sandboxRecords,
-    defaults: sandboxDefaults,
-    upgrade: () =>
-      upgradeLegacySandboxes({
-        availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
-        records: sandboxRecords,
-        defaults: sandboxDefaults,
-        marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
-        routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
-        lock: advisoryLock,
-        legacyBackend: (scope) =>
-          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
-        specFor: (backend) => sandboxBackends[backend]?.profile.spec,
-        legacyScopes: async () => [
-          ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
-          ...(await environments.list()).map((environment) => environment.id),
-        ],
-        legacySandboxes: async () => {
-          const [e2b, modal, aws, superserve] = await Promise.all([
-            e2bBodies.entries(),
-            modalBodies.entries(),
-            awsBodies.entries(),
-            superserveBodies.entries(),
-          ]);
-          return [
-            ...e2b.map(([scopeId, body]) => ({ scopeId, backend: "e2b" as const, machineId: body.sandboxId })),
-            ...modal.map(([scopeId, body]) => ({ scopeId, backend: "modal" as const, machineId: body.sandboxId })),
-            ...aws.map(([scopeId, body]) => ({ scopeId, backend: "aws" as const, machineId: body.microvmId })),
-            ...superserve.map(([scopeId, body]) => ({
-              scopeId,
-              backend: "superserve" as const,
-              machineId: body.sandboxId,
-            })),
-          ];
-        },
-      }),
+    ...(config.databaseUrl ? createSandboxResourceStores(config.databaseUrl) : createMemorySandboxResourceStores()),
     backends: sandboxBackends,
     defaultBackend: config.sandboxBackend,
     lock: advisoryLock,
