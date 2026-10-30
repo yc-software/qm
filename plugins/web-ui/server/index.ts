@@ -3586,29 +3586,36 @@ const server = createServer((req, res) => {
   });
 });
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  createVite(server)
-    .then((v) => {
-      vite = v;
-      server.listen(PORT, () => {
-        console.log(
-          `[web-ui] surface on http://localhost:${PORT} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
-        );
-        if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
-          console.warn("[web-ui] dist-web/ not built, run `npm run build`");
-        if (ALLOW.length === 0)
-          console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
-        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
-        t.unref?.();
-        void runStateFeed();
-        void runInboxFeed();
-        void sweepDictationSpool();
-      });
-    })
-    .catch(async (err: unknown) => {
-      reportBackendError(err);
-      console.error("[web-ui] failed to start:", String(err));
-      await flushErrorReporting();
-      process.exit(1);
+export async function startServer(port = PORT, host?: string): Promise<Server> {
+  vite = await createVite(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      resolve();
     });
+  });
+  const address = server.address();
+  const bound = typeof address === "object" && address ? address.port : port;
+  console.log(
+    `[web-ui] surface on http://${host ?? "localhost"}:${bound} → core ${CORE} (org ${ORG})${WEB_UI_DEV ? " [vite hmr]" : ""}`,
+  );
+  if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
+    console.warn("[web-ui] dist-web/ not built, run `npm run build`");
+  if (ALLOW.length === 0) console.warn("[web-ui] WEB_UI_PRINCIPALS unset, any principal id may sign in (dev only)");
+  const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
+  t.unref?.();
+  void runStateFeed();
+  void runInboxFeed();
+  void sweepDictationSpool();
+  return server;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  startServer().catch(async (err: unknown) => {
+    reportBackendError(err);
+    console.error("[web-ui] failed to start:", String(err));
+    await flushErrorReporting();
+    process.exit(1);
+  });
 }
