@@ -14,7 +14,7 @@ import type {
   HarnessTurnInput,
   HarnessTurnResult,
 } from "../agent/harness.ts";
-import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
+import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "../model/pi-model-utilities.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../agent/context-compaction.ts";
 

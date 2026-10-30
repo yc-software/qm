@@ -1,11 +1,13 @@
 import type { ErrorLog } from "../admin/error-log.ts";
-import type { Harness } from "../agent/harness.ts";
+import type { HarnessModelUtilities } from "../agent/harness.ts";
+import { commonEntrySeqs, createTranscriptSource } from "../sessions/transcript-source.ts";
+import { isOverheardEntry } from "../sessions/session-store.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { headSlice } from "../util/text.ts";
-import { stripTurnBoilerplate } from "./turn-helpers.ts";
+import { renderTitleTranscript, stripTurnBoilerplate, visibleTitleEntryText } from "./turn-helpers.ts";
 import { TitleRejected } from "./turn-error.ts";
 
 function fallbackSessionTitle(text: string): string | undefined {
@@ -16,7 +18,7 @@ function fallbackSessionTitle(text: string): string | undefined {
 
 export function createSessionTitles(deps: {
   sessions: SessionStore;
-  harness: Harness;
+  models: Pick<HarnessModelUtilities, "generateTitle">;
   sessionStateBus?: SessionStateBus;
   errors?: ErrorLog;
 }) {
@@ -30,7 +32,7 @@ export function createSessionTitles(deps: {
     if (!transcript.trim()) return undefined;
     let title: string | undefined;
     try {
-      title = await deps.harness.models.generateTitle?.(transcript);
+      title = await deps.models.generateTitle?.(transcript);
     } catch (e) {
       deps.errors?.record(
         {
@@ -71,7 +73,7 @@ export function createSessionTitles(deps: {
     void write
       .then(() => announce(session).catch(swallowAs("session title: sidebar refresh", undefined)))
       .then(async () => {
-        if (!deps.harness.models.generateTitle) return;
+        if (!deps.models.generateTitle) return;
         if (await generateAndStore(session.id, scopeId, `User:\n${stripTurnBoilerplate(text)}`))
           await announce(session);
       })
@@ -81,4 +83,38 @@ export function createSessionTitles(deps: {
   }
 
   return { generateAndStore, titleFromFirstMessage };
+}
+
+export function createTitleRegenerator(deps: {
+  sessions: SessionStore;
+  titles: ReturnType<typeof createSessionTitles>;
+}) {
+  const transcripts = createTranscriptSource(deps.sessions);
+  return async function regenerateTitle(
+    sessionId: string,
+    principalId: string,
+    participantIds?: readonly string[],
+  ): Promise<{ title: string | null } | null> {
+    const session = await deps.sessions.get(sessionId);
+    if (!session) return null;
+    let entries = (await transcripts.forViewer(sessionId, principalId)).entries;
+    if (participantIds?.length) {
+      const views = await Promise.all(
+        participantIds.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).entries),
+      );
+      const common = commonEntrySeqs(views);
+      entries = entries.filter((entry) => common.has(entry.seq));
+    }
+    if (entries.length === 0) return null;
+    const transcript = renderTitleTranscript(entries);
+    const fallbackEntry = entries.find((entry) => entry.type === "user" && !isOverheardEntry(entry));
+    const title = await deps.titles.generateAndStore(
+      session.id,
+      session.scopeId,
+      transcript,
+      participantIds?.length ? principalId : undefined,
+      fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
+    );
+    return { title: title ?? (participantIds ? null : (session.title ?? null)) };
+  };
 }

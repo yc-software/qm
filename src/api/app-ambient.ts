@@ -308,7 +308,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const live = await deps.runs.activeForThread(liveRef);
     if (!live || isTerminal(live.status)) return false;
     const session = await deps.sessions.getByThread(liveRef).catch(() => null);
-    const decision = await deps.orchestrator
+    const decision = await deps
       .screenSecuritySteer({
         payload: req.text,
         actor: { id: `system:ambient:${orgIdOf()}`, type: "internal" },

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSecurityScreenProxy } from "../src/security/security-screener.ts";
-import { createSecurityClassifier } from "../src/harness/orchestrator/security-screen.ts";
-import type { OrchestratorDeps } from "../src/harness/orchestrator/types.ts";
+import { createSecurityClassifier, type SecurityClassifierDeps } from "../src/security/security-classifier.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 
 test("the security screen proxy sends the neutral classifier contract and maps its scores", async () => {
@@ -345,9 +344,9 @@ test("observed screening returns immediately and audits each verdict once it set
         return { verdict: { decision: "strict", reason: "example-screen:injection" }, score: 0.9, threshold: 0.5 };
       },
     },
-    harness: { models: {} },
+    models: {},
     auditLog: { record: (event: AuditEvent) => events.push(event) },
-  } as unknown as OrchestratorDeps);
+  } as unknown as SecurityClassifierDeps);
   const verdicts = await Promise.all(
     Array.from({ length: 20 }, (_, i) =>
       classify(JSON.stringify([{ source: "webhook", content: `hostile ${i}` }]), "U1", "personal:U1", undefined, {

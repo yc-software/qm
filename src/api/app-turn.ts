@@ -506,7 +506,7 @@ export function createTurnMethods(
           let injectedText = steerText;
           if (origin.kind === "ambient") {
             const session = await deps.sessions.getByThread(conversation.threadRef);
-            const decision = await deps.orchestrator.screenSecuritySteer({
+            const decision = await deps.screenSecuritySteer({
               payload: steerText,
               actor,
               conversation,

@@ -1,18 +1,19 @@
 import { randomUUID } from "node:crypto";
-import type { ScopeId } from "../../types.ts";
-import type { TurnOrigin } from "../../core/turn-origin.ts";
-import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
-import {
-  securityScreenSystemPrompt,
-  UNSCREENED_REASON,
-  type SecurityScreenVerdict,
-} from "../../security/security-posture.ts";
-import { estimateCostUsd } from "../../ratelimit/budget.ts";
-import type { HarnessLlmRequestRecord } from "../../agent/harness.ts";
-import { swallowAs } from "../../util/errors.ts";
-import { sleep } from "../../util/async.ts";
-import { headSlice } from "../../util/text.ts";
-import type { OrchestratorDeps } from "./types.ts";
+import type { ScopeId } from "../types.ts";
+import type { TurnOrigin } from "../core/turn-origin.ts";
+import type { SecurityScreenClassification, SecurityScreenHook } from "./security-screener.ts";
+import { securityScreenSystemPrompt, UNSCREENED_REASON, type SecurityScreenVerdict } from "./security-posture.ts";
+import { estimateCostUsd } from "../ratelimit/budget.ts";
+import type { HarnessLlmRequestRecord } from "../agent/harness.ts";
+import { swallowAs } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
+import { headSlice } from "../util/text.ts";
+import type { SecurityScreener } from "./security-screener.ts";
+import type { HarnessModelUtilities } from "../agent/harness.ts";
+import type { AuditLog } from "../audit/audit-log.ts";
+import type { ScopedConfigStore } from "../resolution/config-store.ts";
+import type { ModelGateway } from "../model/model-gateway.ts";
+import type { BudgetTracker } from "../ratelimit/budget.ts";
 
 const DEFAULT_SECURITY_SCREEN_TIMEOUT_MS = 15_000;
 const MAX_SCREEN_REQUEST_CHARS = 2_000;
@@ -61,10 +62,20 @@ function screenSources(payload: string): string[] {
   return [...new Set(sources)].slice(0, MAX_AUDITED_SOURCES);
 }
 
-export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
+export interface SecurityClassifierDeps {
+  securityScreener?: SecurityScreener;
+  models: Pick<HarnessModelUtilities, "screenSecurity">;
+  securityScreenTimeoutMs?: number;
+  auditLog: AuditLog;
+  config?: ScopedConfigStore;
+  modelGateway: ModelGateway;
+  budget?: BudgetTracker;
+}
+
+export function createSecurityClassifier(deps: SecurityClassifierDeps): SecurityClassifier {
   return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context) {
     const screener = deps.securityScreener;
-    const model = deps.harness.models.screenSecurity;
+    const model = deps.models.screenSecurity;
     const observe = context.mode === "observe";
     if (!screener && !model) return observe ? { decision: "auto" } : undefined;
     const timeoutMs = deps.securityScreenTimeoutMs ?? DEFAULT_SECURITY_SCREEN_TIMEOUT_MS;

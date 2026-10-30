@@ -14,7 +14,6 @@ import { type ListOwnedOptions } from "../files/file-artifact-store.ts";
 import { isTerminal, type Run } from "../runs/run-store.ts";
 import { sleep } from "../util/async.ts";
 import type { RunSignal } from "../runs/run-signal-store.ts";
-import { processRun } from "../runs/worker.ts";
 import { deployRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { Skill } from "../skills/skill-store.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
@@ -215,24 +214,7 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
-      const shutdown = deps.shutdown?.();
-      if (shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
-      const claimed =
-        run.status === "running" ? null : await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs);
-      if (claimed) {
-        try {
-          const result = await processRun(
-            { runs: deps.runs, orchestrator: deps.orchestrator, leaseTtlMs: deps.leaseTtlMs },
-            claimed,
-            { shutdown },
-          );
-          if (claimed.id === runId && !shutdown?.aborted) return withAdminLink(result);
-        } catch (error) {
-          if (claimed.id === runId && !shutdown?.aborted) throw error;
-          swallow("inline run did not complete", error);
-        }
-        continue;
-      }
+      if (deps.shutdown?.().aborted) return { status: "queued", sessionId: run.sessionId, runId };
       const remaining = deadline - performance.now();
       if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
       await sleep(Math.min(100, remaining));

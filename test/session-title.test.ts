@@ -213,7 +213,7 @@ test("the title lands even when the turn pauses on approval (early titling off t
 });
 
 test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample of what it rejected", async () => {
-  const { sanitizeTitle, titleUserPrompt } = await import("../src/harness/pi-harness.ts");
+  const { sanitizeTitle, titleUserPrompt } = await import("../src/model/pi-model-utilities.ts");
   const rejects = (out: string, rule: string) =>
     assert.throws(() => sanitizeTitle(out), {
       name: "TitleRejected",
