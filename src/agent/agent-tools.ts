@@ -1613,7 +1613,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         let outcome = `Sent ${name} an interrupt request — it stays re-taskable.`;
         if (result.delivered === "queued_turn")
           outcome = result.busy
-            ? `Queued for ${name}: it is busy and starts on this as its next turn.`
+            ? `Queued for ${name}: it is busy and starts on this when its current turn ends. To change what it is doing now, interrupt it and send again.`
             : `Woke ${name}; it is working on this now.`;
         else if (result.delivered !== "interrupted")
           outcome = `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${

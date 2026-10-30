@@ -16,7 +16,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
 import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
-import { isTerminal, type Run, type RunStore } from "../runs/run-store.ts";
+import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStore } from "./session-store.ts";
 import { xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
@@ -805,13 +805,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (!text) return { ok: false, message: "send_message requires `text` (or interrupt: true)." };
               if (text.length > 16_000) return { ok: false, message: "message exceeds 16000 characters" };
               const stamped = renderSubagentMessage({ title: callerTitle, sessionId: binding.session.id }, text);
-              const busy = !!previous && !isTerminal(previous.status);
-              let notWoken: string | undefined;
-              if (input.wake && binding.request.privateSessionMessage)
-                notWoken = "a private turn cannot start work in another session";
-              else if (input.wake && !target.parentSessionId)
-                notWoken = "a message cannot start a turn in a top-level conversation";
-              if (!input.wake || notWoken) {
+              const busy = (await deps.runs.inFlightForThread(target.threadRef)).length > 0;
+              const leaveMail = async (notWoken?: string): Promise<SessionWriteResult> => {
                 const sourceEntrySeq = await deps.sessions.latestEntrySeq(binding.session.id);
                 await deps.mailbox.send({
                   id: input.requestId
@@ -833,7 +828,12 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   busy,
                   ...(notWoken ? { notWoken } : {}),
                 };
-              }
+              };
+              if (!input.wake) return leaveMail();
+              if (binding.request.privateSessionMessage)
+                return leaveMail("a private turn cannot start work in another session");
+              if (!target.parentSessionId)
+                return leaveMail("a message cannot start a turn in a top-level conversation");
 
               const dedupKey = input.requestId
                 ? `subagent-followup:${hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)}`
@@ -849,14 +849,14 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy };
                 }
               }
-              request.origin = sessionTurnOrigin(request.origin, stamped);
-              request.sessionSenderId = binding.session.id;
-              request.delegatingRunId = binding.request.runId;
               if (
                 (await sessionTreeRunCount(deps.sessions, deps.runs, await sessionTreeRoot(deps.sessions, target))) >=
                 cap
               )
-                return { ok: false, message: `all ${cap} session run slots are in use.` };
+                return leaveMail(`all ${cap} session run slots are in use`);
+              request.origin = sessionTurnOrigin(request.origin, stamped);
+              request.sessionSenderId = binding.session.id;
+              request.delegatingRunId = binding.request.runId;
               await deps.runs.enqueue({
                 sessionId: target.threadRef,
                 dedupKey,

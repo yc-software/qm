@@ -3450,7 +3450,10 @@ test("subagents send_message wakes by default and says what happened", async () 
   const send = async (extra: object) =>
     textOut(await call(session, { action: "send_message", target: "child", text: "hi", ...extra }));
   assert.equal(await send({}), 'Woke "child"; it is working on this now.');
-  assert.equal(await send({ wake: true }), 'Queued for "child": it is busy and starts on this as its next turn.');
+  assert.match(
+    await send({ wake: true }),
+    /^Queued for "child": it is busy and starts on this when its current turn ends/,
+  );
   assert.equal(
     await send({ wake: false }),
     `Left in "child"'s mailbox. It is idle and won't see this until something wakes it.`,

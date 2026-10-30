@@ -391,7 +391,7 @@ test("mail envelope attributes stay well-formed and machine-parseable when the t
   assert.equal(head[3], "final_answer");
 });
 
-test("concurrent opens and re-tasking share one admission limit", async () => {
+test("concurrent opens and wakes share one admission limit; a wake past it leaves mail", async () => {
   const r = await rig({ treeRunCap: 1 });
   const opened = await Promise.all([
     r.syscallsFor(r.room).open({ task: "one" }),
@@ -407,7 +407,10 @@ test("concurrent opens and re-tasking share one admission limit", async () => {
   const second = await r.syscallsFor(r.room).open({ task: "another" });
   assert.ok(second.ok);
   const rewritten = await r.syscallsFor(r.room).write({ wake: true, target: child.id, text: "again" });
-  assert.equal(rewritten.ok, false);
+  assert.ok(rewritten.ok);
+  assert.deepEqual([rewritten.delivered, rewritten.notWoken], ["queued_message", "all 1 session run slots are in use"]);
+  assert.equal((await r.runs.inFlightForThread(child.threadRef)).length, 0);
+  assert.equal((await r.mailbox.pending(child.id)).length, 1);
 });
 
 test("session reads hide history outside the viewer's participant tenure", async () => {
