@@ -703,6 +703,8 @@ export interface TurnRequest {
   entryTs?: string;
   gatewayContext?: GatewayContext;
   triggered?: boolean;
+  /** Nobody chose this turn's model just now (cron, webhook or monitor fire): an unusable one falls back instead of refusing. */
+  unattended?: boolean;
   unattendedGrants?: string[];
   securityScreenData?: string;
   triggerDestination?: Destination;

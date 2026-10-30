@@ -281,6 +281,31 @@ export async function resolveRuntimeChoiceDurable(
   return resolveRuntimeChoice(view, orgScopeId, scope, fallback, requested, purpose);
 }
 
+/** The route a turn reports when it took the fallback runtime because its own model can't run here. */
+export const MODEL_FALLBACK_ROUTE = "model fallback";
+
+/**
+ * Unattended turns have nobody to pick another model, so when the requested runtime can't run here
+ * (or names an unknown model) they take the fallback runtime instead of failing.
+ */
+export async function fallBackWhenUnavailable<C>(
+  requested: () => Promise<C>,
+  unavailable: (choice: C) => Promise<string | null>,
+  fallback: (reason: string) => Promise<C>,
+): Promise<{ choice: C; fellBack: boolean }> {
+  let choice: C | undefined;
+  let reason: string | null;
+  try {
+    choice = await requested();
+    reason = await unavailable(choice);
+  } catch (error) {
+    if (!(error instanceof NonRetryableTurnError)) throw error;
+    reason = error.message;
+  }
+  if (choice !== undefined && !reason) return { choice, fellBack: false };
+  return { choice: await fallback(reason!), fellBack: true };
+}
+
 export function createHarnessRouter(
   adapters: ReadonlyMap<HarnessId, Harness>,
   utility: Harness,

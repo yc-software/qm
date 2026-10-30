@@ -1,3 +1,4 @@
+import { NonRetryableTurnError } from "./core/turn-error.ts";
 import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
@@ -323,7 +324,12 @@ import {
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
 import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
-import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
+import {
+  createHarnessRouter,
+  fallBackWhenUnavailable,
+  MODEL_FALLBACK_ROUTE,
+  resolveRuntimeChoiceDurable,
+} from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
@@ -1564,16 +1570,41 @@ export function buildApp(
         ...(input.cancel ? { cancel: input.cancel } : {}),
       }),
     );
-    const routed = await routeTurnRuntime(decision, resolve, async () => {
-      if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
-        if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
-          throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-        return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
-      }
-      return resolve(input.runtime);
-    });
-    if (routed.routedBy) routedBy(routed.routedBy);
-    return routed.choice;
+    const route = () =>
+      routeTurnRuntime(decision, resolve, async () => {
+        if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
+          if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
+            throw new Error(`Unsupported model: ${input.runtime.modelId}`);
+          return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
+        }
+        return resolve(input.runtime);
+      });
+    if (!input.unattended || input.providerKeys || input.claudeOauthToken) {
+      const routed = await route();
+      if (routed.routedBy) routedBy(routed.routedBy);
+      return routed.choice;
+    }
+    const { choice, fellBack } = await fallBackWhenUnavailable(
+      route,
+      (routed) => availableRuntimeError({ deps: runtimeDeps }, input.scopeLabel, routed.choice, input.runtimePurpose),
+      async (reason) => {
+        const target = await resolveRuntimeChoiceDurable(
+          configStore,
+          runtimeOrgScope,
+          input.scopeLabel,
+          fallback,
+          {},
+          hydrateModelCatalog,
+          "fallback",
+        );
+        const unusable = await availableRuntimeError({ deps: runtimeDeps }, input.scopeLabel, target, "fallback");
+        if (unusable) throw new NonRetryableTurnError(`${reason} The fallback runtime can't run either: ${unusable}`);
+        return { choice: target };
+      },
+    );
+    const by = fellBack ? MODEL_FALLBACK_ROUTE : choice.routedBy;
+    if (by) routedBy(by);
+    return choice.choice;
   });
 
   if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
@@ -2720,7 +2751,6 @@ export function buildApp(
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
-    runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,

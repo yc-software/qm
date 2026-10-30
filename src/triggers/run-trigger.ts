@@ -52,7 +52,6 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fa
   readOnly?: boolean;
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
-  notice?: { text: string; idempotencyKey: string };
   onClaimed?: () => Promise<void>;
   deferWhenBusy?: boolean;
 }
@@ -288,6 +287,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         text: typeof spec.input === "string" ? spec.input : spec.input(roster),
         ...(spec.securityScreenData !== undefined ? { securityScreenData: spec.securityScreenData } : {}),
         triggered: true,
+        unattended: true,
         ...(spec.unattendedGrants && grantsStayWithOwner(spec) ? { unattendedGrants: spec.unattendedGrants } : {}),
         ...(spec.runtime ? { model: spec.runtime.modelId, harness: spec.runtime.harnessId } : {}),
         ...turnModelOptions({
@@ -360,15 +360,6 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(sessionId ? { sessionId } : {}),
   };
 
-  if (spec.notice && spec.destination && deliverable && outcome.ran) {
-    await deps.deliveries.enqueue({
-      destination: spec.destination,
-      text: spec.notice.text,
-      idempotencyKey: spec.notice.idempotencyKey,
-      provenance: deliveryProvenance(spec, threadRef),
-      ...(spec.shadow ? { shadow: true } : {}),
-    });
-  }
   if (spec.errorNotice && spec.destination && deliverable && isTriggerFailure(outcome)) {
     await deps.deliveries.enqueue({
       destination: spec.destination,
