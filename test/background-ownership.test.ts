@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("a fresh record has no owner and the first set records who set it and when", async () => {
   const store = createBackgroundOwnershipStore(memoryRows<BackgroundOwnership>(true));

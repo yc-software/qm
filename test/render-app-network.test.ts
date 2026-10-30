@@ -5,6 +5,9 @@ import { createRenderAppNetwork } from "../src/deploy/render-app-network.ts";
 import { RenderApiError } from "../src/deploy/render-api.ts";
 import type { StoredRenderDeploy } from "../src/deploy/render-deploy-provider.ts";
 import { createFakeRenderApi, fakeDeployment, type FakeRenderApiCall } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 interface Environment {
   id: string;

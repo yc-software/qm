@@ -10,6 +10,9 @@ import { createMemorySandboxResourceStores } from "../src/sandbox/sandbox-resour
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fixture(configure?: (backend: Sandbox) => void, existingScopes = ["personal:alice"]) {
   const { records, defaults } = createMemorySandboxResourceStores();

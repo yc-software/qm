@@ -13,6 +13,9 @@ import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SERVER = [
   "const fs = require('fs');",

@@ -13,6 +13,9 @@ import { mintDeployGitAccess } from "../src/deploy/access-token.ts";
 import { memoryArchives } from "./support/deploy-archives.ts";
 import { createDeployStore, createMemoryDeploymentRows, type Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-remote-secret".repeat(3);

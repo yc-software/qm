@@ -7,6 +7,9 @@ import {
   type FlyPeerClaim,
 } from "../src/deploy/fly-peer-claims.ts";
 import { memoryRows } from "../src/persistence/typed-table.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("overlapping tasks get distinct peers and reconnect to their existing claim", async () => {
   const claims = memoryRows<FlyPeerClaim>(true);

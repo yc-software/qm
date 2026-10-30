@@ -21,6 +21,9 @@ import { shq } from "../src/util/shell.ts";
 import { installFakeSuperserve, type FakeSuperserve } from "./support/fake-superserve.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let fake: FakeSuperserve;
 let sandbox: Sandbox;

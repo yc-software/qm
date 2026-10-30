@@ -12,6 +12,9 @@ import { installFakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function withWorkspace<T>(fn: (dir: string) => Promise<T> | T): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "agent-computer-profile-"));

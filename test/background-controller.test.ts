@@ -3,6 +3,9 @@ import test from "node:test";
 import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
 import { createBackgroundController } from "../src/runs/background-controller.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function setup() {
   const store = createBackgroundOwnershipStore(memoryRows<BackgroundOwnership>(true));

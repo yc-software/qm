@@ -10,6 +10,9 @@ import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { renderMinioCommand, renderMinioInitCommand } from "../cli/src/render-minio.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "../src/deploy/render-app-storage.ts";
 import { createFakeRenderApi } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const execute = promisify(execFile);
 const minioContext = fileURLToPath(new URL("../deploy/render-minio", import.meta.url));

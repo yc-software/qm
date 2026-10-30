@@ -16,6 +16,9 @@ import {
   type StoredRenderAppStorage,
 } from "../src/deploy/render-app-storage.ts";
 import { createFakeRenderApi, type FakeRenderApiCall } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type StorageOptions = Parameters<typeof createRenderAppStorage>[0];
 

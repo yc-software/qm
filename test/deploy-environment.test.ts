@@ -10,6 +10,9 @@ import { scopeId } from "../src/types.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 const tmp = () => mkdtempSync(join(tmpdir(), "deployment-env-"));
 
 function svc(deploymentEnv?: (deployment: Deployment) => Promise<Record<string, string>>) {

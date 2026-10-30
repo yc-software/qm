@@ -6,6 +6,9 @@ import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { createDeployStore, createMemoryDeploymentRows } from "../src/deploy/deploy-store.ts";
 import type { Cron } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("crons persist to the backing map (a second store instance reads them back)", async () => {
   const map = createMemoryMap<Cron>();

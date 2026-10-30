@@ -12,6 +12,9 @@ import { createMemorySessionStore } from "../src/sessions/memory-session-store.t
 import type { SpawnMeta } from "../src/types.ts";
 import { assertLateJoinerScopes, assertLeanListing } from "./support/participant-scopes.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("listed sessions leave out spawn metadata; scopes count only sessions with content", async () => {
   await assertLeanListing(createMemorySessionStore(), "mem");

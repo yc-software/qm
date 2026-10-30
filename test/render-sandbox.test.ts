@@ -22,6 +22,9 @@ import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { createMemorySandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function setup(
   t: TestContext,

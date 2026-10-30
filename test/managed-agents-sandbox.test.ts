@@ -24,6 +24,9 @@ import { prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import { installFakeManagedAgents, type FakeManagedAgents } from "./support/fake-managed-agents.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let fake: FakeManagedAgents;
 let sandbox: Sandbox;
