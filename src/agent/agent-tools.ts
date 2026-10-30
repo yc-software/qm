@@ -1469,7 +1469,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
       "open: start one with `task`. " +
-      'send_message: message a subagent, sibling or parent (target="parent"). It wakes the recipient by default: an idle one starts working on it now, a busy one gets it as its next turn. Wake when you need it to do something or answer (more work, a re-review, a question). Set wake:false for FYI it can act on later (status, a finding, an ack): that waits in its mailbox, and an idle recipient sees nothing until something else wakes it. interrupt:true stops its run. ' +
+      'send_message: message a subagent, sibling or parent (target="parent"); it wakes the recipient unless wake:false. Wake when you need it to act or answer (more work, a re-review, a question); use wake:false for FYI it can act on later (status, a finding, an ack), which an idle recipient won\'t see until something else wakes it. interrupt:true stops its run. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
@@ -1511,7 +1511,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       text: Type.Optional(Type.String({ description: "send_message: the message." })),
       wake: Type.Optional(
         Type.Boolean({
-          description: "send_message: false leaves it in the mailbox without starting a turn (default true).",
+          description: "send_message: false leaves it in the mailbox without starting a turn.",
         }),
       ),
       interrupt: Type.Optional(Type.Boolean({ description: "send_message: abort the target's run instead." })),
