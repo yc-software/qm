@@ -257,6 +257,7 @@ import {
 } from "./sandbox/sandbox-resource-upgrade.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
+import { createTenantSettingsStore, type TenantSettingsStore } from "./tenants/settings.ts";
 import {
   createAwsSecretsManagerSource,
   createEnvSecretSource,
@@ -476,6 +477,7 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  tenantSettings: TenantSettingsStore;
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -659,6 +661,10 @@ export function buildApp(
       };
     },
   };
+  const tenantSettings = createTenantSettingsStore({
+    ...(pgArtifactMap ? { db: pgArtifactMap.pool, keyMaterial: config.connectorSecretKey } : {}),
+    harness: config.harness,
+  });
   const advisoryLock: AdvisoryLock = pgArtifactMap
     ? createPostgresAdvisoryLock(pgArtifactMap.pool)
     : createMemoryAdvisoryLock();
@@ -3087,6 +3093,7 @@ export function buildApp(
 
   return {
     app,
+    tenantSettings,
     checkReadiness: async (signal) => {
       await pgArtifactMap?.pool.q("SELECT 1", [], { signal });
     },
@@ -3206,6 +3213,7 @@ export function serverDeps(
     resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
     production: config.production,
     checkReadiness: built.checkReadiness,
+    tenantSettings: built.tenantSettings,
     ...(built.backgroundOwnership
       ? {
           backgroundOwnership: built.backgroundOwnership,
