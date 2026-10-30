@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { ClientConfig, Pool, PoolClient } from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
-import { createKeyedQueue, sleep } from "../util/async.ts";
+import { createKeyedQueue, sleep, withAbort } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 
 export type { Pool, PoolClient };
@@ -476,69 +476,39 @@ export function createPgPool(
   async function query(
     text: string,
     params: unknown[] = [],
-    options: PgQueryOptions = {},
+    { signal, timeoutMs }: PgQueryOptions = {},
   ): Promise<{ rows: Rows; rowCount: number }> {
     const p = await pool();
-    if (!options.signal && options.timeoutMs === undefined) {
+    if (!signal && timeoutMs === undefined) {
       const res = await p.query(text, params);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     }
-    if (!options.signal) {
-      const client = await p.connect();
-      let queryError: Error | undefined;
-      try {
-        return await withStatementTimeout(client, options.timeoutMs, async () => {
-          const res = await client.query({ text, values: params });
-          return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
-        });
-      } catch (error) {
-        queryError = error instanceof Error ? error : new Error(String(error));
-        throw error;
-      } finally {
-        client.release(queryError);
-      }
-    }
-    if (options.signal.aborted) throw new DOMException("Postgres query cancelled", "AbortError");
-    const connectPromise = p.connect();
-    let connectAbort: (() => void) | undefined;
-    const connectAbortPromise = new Promise<never>((_, reject) => {
-      connectAbort = () => reject(new DOMException("Postgres query cancelled", "AbortError"));
-      options.signal!.addEventListener("abort", connectAbort, { once: true });
-    });
+    const connecting = p.connect();
     let client: PoolClient;
     try {
-      client = await Promise.race([connectPromise, connectAbortPromise]);
+      client = await withAbort(() => connecting, signal);
     } catch (error) {
-      void connectPromise
-        .then(
-          (lateClient) => lateClient.release(error instanceof Error ? error : new Error(String(error))),
-          () => undefined,
-        )
-        .catch(() => undefined);
+      void connecting.then(
+        (late) => late.release(true),
+        () => undefined,
+      );
       throw error;
-    } finally {
-      if (connectAbort) options.signal.removeEventListener("abort", connectAbort);
     }
     let queryError: Error | undefined;
-    let released = false;
-    const cancel = () => {
-      if (released) return;
-      released = true;
-      client.release(new Error("Postgres query cancelled"));
-    };
-    options.signal.addEventListener("abort", cancel, { once: true });
     try {
-      if (released) throw new Error("Postgres query cancelled");
-      return await withStatementTimeout(client, options.timeoutMs, async () => {
-        const res = await client.query({ text, values: params });
-        return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
-      });
+      return await withAbort(
+        () =>
+          withStatementTimeout(client, timeoutMs, async () => {
+            const res = await client.query({ text, values: params });
+            return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
+          }),
+        signal,
+      );
     } catch (error) {
       queryError = error instanceof Error ? error : new Error(String(error));
       throw error;
     } finally {
-      options.signal?.removeEventListener("abort", cancel);
-      if (!released) client.release(queryError);
+      client.release(queryError);
     }
   }
   async function q(text: string, params: unknown[] = [], options?: PgQueryOptions): Promise<Rows> {
