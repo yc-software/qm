@@ -4,27 +4,12 @@ type SecretGate =
   | "production"
   | "background-work-control"
   | "postgres"
-  | "sprites"
-  | "smolmachines"
-  | "e2b"
-  | "modal"
-  | "porter"
-  | "agent37"
-  | "superserve"
   | "render"
-  | "do-managed-agents"
   | "porter-deploy"
   | "e2b-deploy"
   | "fly-shared-deploy"
   | "fly-deploy"
-  | "aws-deploy-gate"
-  | "google-oauth"
-  | "dropbox-oauth"
-  | "linear-oauth"
-  | "email-auth"
-  | "model-anthropic"
-  | "model-openai"
-  | "model-openrouter";
+  | "aws-deploy-gate";
 
 export interface RuntimeSecretSpec {
   name: string;
@@ -39,64 +24,30 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "DEPLOYMENT_CONTROL_SECRET", requiredWhen: "background-work-control" },
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
-  { name: "AUTH_ALLOWED_EMAILS", requiredWhen: "email-auth" },
-  { name: "OPENAI_API_KEY", requiredWhen: ["model-openai"] },
-  { name: "ANTHROPIC_API_KEY", requiredWhen: "model-anthropic" },
-  { name: "OPENROUTER_API_KEY", requiredWhen: "model-openrouter" },
   {
     name: "DATABASE_URL",
     requiredWhen: ["production", "postgres"],
     reason:
       "sessions, runs, approvals, audit, locks and leases must survive restarts and be shared across instances, or a blue-green rollout can destroy a scope's resident disk",
   },
-  { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
-  { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
-  { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
   { name: "RENDER_API_KEY", requiredWhen: "render" },
-  { name: "SUPERSERVE_API_KEY", requiredWhen: "superserve" },
-  { name: "E2B_API_KEY", requiredWhen: ["e2b", "e2b-deploy"] },
-  { name: "DO_AGENTS_API_TOKEN", requiredWhen: "do-managed-agents" },
-  { name: "MODAL_TOKEN_ID", requiredWhen: "modal" },
-  { name: "MODAL_TOKEN_SECRET", requiredWhen: "modal" },
-  { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: ["porter", "porter-deploy"] },
+  { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: "porter-deploy" },
+  { name: "E2B_API_KEY", requiredWhen: "e2b-deploy" },
   { name: "FLY_DEPLOY_API_TOKEN", requiredWhen: "fly-deploy" },
   { name: "FLY_DEPLOY_WIREGUARD_PEERS", requiredWhen: "fly-shared-deploy" },
   { name: "AWS_DEPLOY_GATE_SECRET", requiredWhen: "aws-deploy-gate" },
-  { name: "GOOGLE_OAUTH_CLIENT_SECRET", requiredWhen: "google-oauth" },
-  { name: "DROPBOX_OAUTH_CLIENT_SECRET", requiredWhen: "dropbox-oauth" },
-  { name: "LINEAR_OAUTH_CLIENT_SECRET", requiredWhen: "linear-oauth" },
 ];
-
-function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolean {
-  return env.SANDBOX_BACKEND?.trim() === backend;
-}
 
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
   "background-work-control": (env) => Boolean(env.BACKGROUND_DEPLOYMENT_ID?.trim()),
   postgres: (env) => env.SESSION_STORE === "postgres" || env.RUN_STORE === "postgres",
-  sprites: (env) => sandboxBackendSelected(env, "sprites"),
-  smolmachines: (env) => sandboxBackendSelected(env, "smolmachines"),
-  e2b: (env) => sandboxBackendSelected(env, "e2b"),
-  modal: (env) => sandboxBackendSelected(env, "modal"),
-  porter: (env) => sandboxBackendSelected(env, "porter"),
-  agent37: (env) => sandboxBackendSelected(env, "agent37"),
-  superserve: (env) => sandboxBackendSelected(env, "superserve"),
-  render: (env) => sandboxBackendSelected(env, "render") || env.DEPLOY_PROVIDER === "render",
-  "do-managed-agents": (env) => sandboxBackendSelected(env, "do-managed-agents"),
+  render: (env) => env.DEPLOY_PROVIDER === "render",
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",
   "e2b-deploy": (env) => env.DEPLOY_PROVIDER === "e2b",
   "fly-shared-deploy": (env) => env.DEPLOY_PROVIDER === "fly" && Boolean(env.FLY_DEPLOY_SHARED_APP_NAME?.trim()),
   "fly-deploy": (env) => env.DEPLOY_PROVIDER === "fly",
   "aws-deploy-gate": (env) => Boolean(env.AWS_DEPLOY_APPS_DOMAIN || env.DEPLOY_APPS_DOMAIN),
-  "google-oauth": (env) => Boolean(env.GOOGLE_OAUTH_CLIENT_ID),
-  "dropbox-oauth": (env) => Boolean(env.DROPBOX_OAUTH_CLIENT_ID),
-  "linear-oauth": (env) => Boolean(env.LINEAR_OAUTH_CLIENT_ID),
-  "email-auth": (env) => env.AUTH_ALLOWED_EMAILS !== undefined,
-  "model-anthropic": (env) => env.MODEL_PROVIDER?.trim() === "anthropic",
-  "model-openai": (env) =>
-    env.MODEL_PROVIDER?.trim() === "openai" && !(env.CODEX_AUTH_FILE?.trim() || env.CODEX_AUTH_CREDENTIAL?.trim()),
-  "model-openrouter": (env) => env.MODEL_PROVIDER?.trim() === "openrouter",
 };
 
 export function validateCoreSecretEnv(env: NodeJS.ProcessEnv): string[] {

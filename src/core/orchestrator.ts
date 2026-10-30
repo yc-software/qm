@@ -329,6 +329,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   }
 
   const classifySecurityData = createSecurityClassifier(deps);
+  const screenerAvailable = async (): Promise<boolean> =>
+    Boolean(deps.harness.models.screenSecurity) || Boolean(await deps.securityScreener?.());
 
   const titles = createSessionTitles({
     sessions: deps.sessions,
@@ -458,7 +460,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         return "block";
       };
-      if (!deps.securityScreener && !deps.harness.models.screenSecurity) return block("no-screener");
+      if (!(await screenerAvailable())) return block("no-screener");
       if (!(await deps.rateLimiter.check(actor.id)).allowed) return block("rate-limited");
       if (deps.budget && !(await deps.budget.check(actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
@@ -881,10 +883,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       } else if (screenInbound) {
         const { hasUnscreenableAttachment, externalPromptData, screenPayload } = await buildInboundScreen();
         if (screenPayload || hasUnscreenableAttachment) {
-          const canScreenText =
-            !!screenPayload &&
-            !screenPayload.truncated &&
-            (!!deps.securityScreener || !!deps.harness.models.screenSecurity);
+          const canScreenText = !!screenPayload && !screenPayload.truncated && (await screenerAvailable());
           const verdict = canScreenText
             ? await classifySecurityData(screenPayload!.content, actor.id, scopeId, recordScreenRequest, {
                 ...screenTrace,
@@ -896,7 +895,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
           if (hasUnscreenableAttachment || !screenPayload) unscreenableCause = "unscreenable-attachment";
           else if (screenPayload.truncated) unscreenableCause = "oversize-input";
-          else if (!deps.securityScreener && !deps.harness.models.screenSecurity) unscreenableCause = "no-screener";
+          else if (!(await screenerAvailable())) unscreenableCause = "no-screener";
           if (verdict?.decision === "strict") {
             const sources = externalPromptData.map((item) => item.source);
             flaggedScreenedInput = {
@@ -2761,7 +2760,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 blobTransfer,
                 fileRegistration,
                 turnInboxDir,
-                securityPolicy.screening !== "off" && (deps.securityScreener || deps.harness.models.screenSecurity)
+                securityPolicy.screening !== "off" && (await screenerAvailable())
                   ? ({ content }) =>
                       classifySecurityData(content, actor.id, scopeId, undefined, {
                         ...screenTrace,
@@ -2868,7 +2867,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (securityPolicy.screening !== "off") {
             for (const document of documentInputs.documents.slice()) {
               documentsUnscreened ||= !isTextDocument(document);
-              if (!(deps.securityScreener || deps.harness.models.screenSecurity)) {
+              if (!(await screenerAvailable())) {
                 documentsUnscreened = true;
                 continue;
               }

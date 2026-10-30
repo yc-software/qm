@@ -47,7 +47,10 @@ test("updates are validated against the merged settings and empty values clear",
   const store = createTenantSettingsStore({ harness: "pi" });
   await withTenant(randomUUID(), async () => {
     await assert.rejects(store.update({ SANDBOX_BACKEND: "nope" }), /SANDBOX_BACKEND="nope" is not recognized/);
-    await assert.rejects(store.update({ MODEL_GATEWAY_URL: "https://gw.example" }), /MODEL_GATEWAY_API_KEY is required/);
+    await assert.rejects(
+      store.update({ MODEL_GATEWAY_URL: "https://gw.example" }),
+      /MODEL_GATEWAY_API_KEY is required/,
+    );
     await assert.rejects(store.update({ NOT_A_SETTING: "x" } as never), /NOT_A_SETTING is not a tenant setting/);
     await store.update({ PI_MODEL: "model-a" });
     assert.equal((await store.get()).piModel, "model-a");

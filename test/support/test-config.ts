@@ -15,6 +15,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     turnLeaseWaitMs: 50,
     connectorSecretKey: "test-connector-key-distinct-from-ingress-auth",
     capabilitySecret: TEST_CAPABILITY_SECRET,
+    sandboxBackend: "sprites" as const,
+    spritesSandbox: { token: "test-token" },
     dataDir: overrides.dataDir ?? mkdtempSync(join(tmpdir(), "qm-test-")),
     ...overrides,
   };

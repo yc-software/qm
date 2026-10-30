@@ -3,7 +3,13 @@ import {
   type ModelGatewayTransportConfig,
   type ProviderBaseUrls,
 } from "../model/provider-endpoints.ts";
-import { MODEL_PROVIDERS, defaultModelForProvider, isModelProvider, type ModelProvider } from "../model/pi-models.ts";
+import {
+  MODEL_PROVIDERS,
+  defaultModelForProvider,
+  isModelProvider,
+  resolveModel,
+  type ModelProvider,
+} from "../model/pi-models.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
 import { SECURITY_SCREEN_MODES, type SecurityScreenMode } from "../security/security-posture.ts";
 import type { TenantSettingValues } from "./settings.ts";
@@ -89,6 +95,9 @@ export function parseModelGateway(values: TenantSettingValues): ModelGatewayTran
     if (models[source]) throw new Error(`duplicate MODEL_GATEWAY_MODELS source: ${source}`);
     models[source] = target;
   }
+  const unsupported = Object.keys(models).filter((id) => !resolveModel(id));
+  if (unsupported.length)
+    throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unsupported.join(", ")}`);
   return {
     url: parseProviderBaseUrl("MODEL_GATEWAY_URL", values.MODEL_GATEWAY_URL!),
     apiKey: values.MODEL_GATEWAY_API_KEY!,
