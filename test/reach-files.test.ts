@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { reachEnqueue } from "../src/reach/reach.ts";
 import { scopeId } from "../src/types.ts";

@@ -1,7 +1,7 @@
 import { createAdmittedWork } from "../src/util/admitted-work.ts";
 import { renderInboxSyncTask } from "../src/loops/inbox-loop.ts";
 import { createCronStore, type CreateCronInput } from "../src/cron/cron-store.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/harness/scheduler.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";

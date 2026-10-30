@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createServer, createInsecureTestServer } from "../src/api/server.ts";
+import { createServer, createInsecureTestServer } from "../src/edge/http/server.ts";
 import { createPrincipalLinkService, PrincipalLinkError, type PrincipalLink } from "../src/identity/principal-links.ts";
 import { canonicalPerson, installPrincipalLinks, personIds, personKey, samePerson } from "../src/directory/person.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";

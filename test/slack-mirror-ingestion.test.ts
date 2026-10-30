@@ -5,7 +5,7 @@ import { createMirror } from "../src/slack/mirror.ts";
 import { registerSlackEvents } from "../src/slack/events.ts";
 import { createDirectory, type BotIdentity } from "../src/slack/directory.ts";
 import { createTurnHandler, type TurnHandler } from "../src/slack/turn-handler.ts";
-import { toEvent } from "../src/api/routes/surface-cache.ts";
+import { toEvent } from "../src/edge/http/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { createDeduper, createThreadTracker } from "../src/slack/lib.ts";
 import { createDeferredEnvelopeAck } from "../src/slack/deferred-ack.ts";

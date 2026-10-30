@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { buildApp, serverDeps } from "./support/compose.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import type { AddressInfo } from "node:net";
 
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };

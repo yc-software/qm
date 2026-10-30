@@ -10,7 +10,7 @@ import {
 } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { selectEntries, type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
-import { oauthRevoke } from "../src/api/routes/connectors.ts";
+import { oauthRevoke } from "../src/edge/http/routes/connectors.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");

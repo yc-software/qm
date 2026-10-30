@@ -1,5 +1,5 @@
 import { createAdminCall } from "../src/tools/admin.ts";
-import { adminRoutes } from "../src/api/routes/admin.ts";
+import { adminRoutes } from "../src/edge/http/routes/admin.ts";
 import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
 import { createAgentTools } from "../src/harness/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
@@ -12,7 +12,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";

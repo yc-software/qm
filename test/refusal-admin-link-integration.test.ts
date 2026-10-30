@@ -15,7 +15,7 @@ import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { processRun } from "../src/runs/worker.ts";
+import { processRun } from "../src/harness/worker.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";

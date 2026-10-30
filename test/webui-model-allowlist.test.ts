@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/compose.ts";
 import { testConfig } from "./support/test-config.ts";
 

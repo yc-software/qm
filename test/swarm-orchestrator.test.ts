@@ -8,7 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { HarnessTurnInput } from "../src/agent/harness.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { startSignalPoll } from "../src/runs/run-signal-store.ts";

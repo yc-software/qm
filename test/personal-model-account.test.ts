@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp as buildProductionApp } from "./support/compose.ts";

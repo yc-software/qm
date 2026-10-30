@@ -1,13 +1,9 @@
 import type { MemoryEmbedder } from "./model/embeddings.ts";
 import { nonDeploymentCredential, withDeploymentCredentials } from "./credentials/deployment-credentials.ts";
 import { resolveEmbeddingModel } from "./model/pi-models.ts";
-import { createPostgresTeamStore, type TeamStore } from "./teams/teams.ts";
-import type { DecisionBackend } from "./decisions/decisions.ts";
-import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisions/hooks.ts";
-import { createDecisionBackend } from "./decisions/providers.ts";
-import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
-import type { SlackSessionStatusState } from "./slack/session-status.ts";
-import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
+import { createPostgresTeamStore } from "./teams/teams.ts";
+import { createPostgresDecisionStore } from "./decisions/store.ts";
+import { requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
@@ -21,11 +17,9 @@ import {
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
-import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
-import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
+import { flushErrorReporting } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
 import { createAdmittedWork } from "./util/admitted-work.ts";
-import { runSessionSmoke } from "./deployment/postdeploy-smoke.ts";
 import {
   createBackgroundOwnershipStore,
   type BackgroundOwnershipControl,
@@ -38,85 +32,59 @@ import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
-import type { TaskAckState } from "./slack/task-ack.ts";
-import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
+import { createLoopIngress, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
-import { createRuntimeService } from "./harness/runtime-control.ts";
 import {
   createSessionSyscalls,
-  type SessionSyscallsFactory,
-  deliverSubagentMail,
   sessionTreeRoot,
   sessionTreeRunCount,
-  sessionTreeWorking,
   stoppableAncestors,
   SUBAGENT_TREE_RUN_CAP,
 } from "./sessions/session-syscalls.ts";
 import { createMemoryEmbedder } from "./model/embeddings.ts";
 import { createSemanticMemory } from "./memory/semantic-memory.ts";
-import { createPostgresBrokerSessions, type BrokerSessionStore } from "./auth/broker-sessions.ts";
-import { createDirectFileUploads, type DirectFileUploads } from "./files/direct-file-upload.ts";
+import { createPostgresBrokerSessions } from "./auth/broker-sessions.ts";
+import { createDirectFileUploads } from "./files/direct-file-upload.ts";
 import { createPostgresFileUploadStore } from "./files/file-upload-store.ts";
-import {
-  createSandboxResources,
-  type SandboxResource,
-  type SandboxDefault,
-  type SandboxResources,
-} from "./sandbox/sandbox-resources.ts";
-import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
+import { createSandboxResources, type SandboxResource, type SandboxDefault } from "./sandbox/sandbox-resources.ts";
+import { createModelVerifier } from "./model/model-verification.ts";
 import type { probeModel } from "./model/pi-runtime.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
-import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
-import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
+import type { SessionShare } from "./sessions/session-share.ts";
+import { createModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
-import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   baseModelProviders,
   configuredModelForHarness,
   enabledSandboxBackends,
-  harnessCarriedModelAuth,
   providerKeysPresent,
   type Config,
 } from "./config.ts";
-import type { ServerDeps } from "./api/deps.ts";
-import {
-  actorAssertionActive,
-  createIdentityService,
-  type DeactivationRecord,
-  type IdentityService,
-} from "./identity/identity-service.ts";
-import {
-  createPrincipalLinkService,
-  type PrincipalLink,
-  type PrincipalLinkService,
-} from "./identity/principal-links.ts";
-import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
+import { actorAssertionActive, createIdentityService, type DeactivationRecord } from "./identity/identity-service.ts";
+import { createPrincipalLinkService, type PrincipalLink } from "./identity/principal-links.ts";
+import type { SlackAccountLink, ComposioReturn } from "./connectors/account-links.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
-import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { configStoreMaps, createConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
-import { createAclStore, type AclStore } from "./acl/acl-store.ts";
+import { createAclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
 import { createSkillStore, type SkillStore, type Skill } from "./skills/skill-store.ts";
 import { createSkillPackStore, type SkillPack } from "./skills/skill-pack-store.ts";
-import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from "./skills/skill-bundle-store.ts";
-import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
+import { createSkillBundleStore, type SkillBundle } from "./skills/skill-bundle-store.ts";
+import { createGitFetcher, resolvePackAuth } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
-import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
-import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
-import { slackUserClientFactory } from "./loops/sources/slack.ts";
+import type { PersistedUiState } from "./surfaces/ui-state.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
 import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
-  CommandApprovalGrant,
   Cron,
   Loop,
   LoopItem,
@@ -132,12 +100,10 @@ import type {
   Webhook,
 } from "./types.ts";
 import { personalScope, scopeId } from "./types.ts";
-import type { AuditLog } from "./audit/audit-log.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
-import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
-import type { RateLimiter } from "./ratelimit/rate-limiter.ts";
+import { createPostgresAppPageViewLog } from "./deploy/page-views.ts";
 import { createPostgresRateLimiter } from "./ratelimit/postgres-rate-limiter.ts";
-import { estimateCostUsd, type BudgetTracker } from "./ratelimit/budget.ts";
+import { estimateCostUsd } from "./ratelimit/budget.ts";
 import type { SecurityScreenProbe } from "./security/security-screener.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, DROP_RUN_AS_MIGRATION, type CronStore } from "./cron/cron-store.ts";
@@ -147,26 +113,19 @@ import { createPostgresCronFireStore } from "./cron/fire-store.ts";
 import { createLoopStore } from "./loops/loop-store.ts";
 import { createLoopItemLedger } from "./loops/item-ledger.ts";
 import { createPostgresLedgerEventBus, type LedgerEventBus } from "./loops/ledger-events.ts";
-import { createInboxSourceRefresh } from "./loops/inbox-source-refresh.ts";
-import { createInboxRealtime } from "./loops/inbox-realtime.ts";
 import { createLoopOutputStore } from "./loops/output-store.ts";
 import { createShipGrantStore } from "./loops/ship-grant-store.ts";
 import { createLoopFireService, type LoopFireService } from "./loops/loop-fire.ts";
-import type { LoopServiceDeps } from "./api/routes/loops.ts";
-import { createDeliveryStore, type DeliveryStore } from "./delivery/delivery-store.ts";
+import type { LoopServiceDeps } from "./loops/service-deps.ts";
+import { createDeliveryStore } from "./delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "./delivery/postgres-delivery-store.ts";
-import { wireRunResultDeliveries } from "./delivery/run-result-delivery.ts";
-import { adminSessionUrl } from "./util/admin-links.ts";
-import { uuidSchema } from "./util/ids.ts";
 import { withWebTranscriptDeliveries } from "./delivery/web-transcript-delivery.ts";
-import type { DirectoryStore } from "./directory/directory-store.ts";
 import { createPostgresDirectoryStore } from "./directory/postgres-directory-store.ts";
-import { createPostgresEnvironmentStore, type EnvironmentStore } from "./environments/environment-store.ts";
+import { createPostgresEnvironmentStore } from "./environments/environment-store.ts";
 import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
-import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
-import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
+import { createWebhookReceiver } from "./webhooks/webhook-receiver.ts";
 import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
@@ -194,12 +153,12 @@ import {
   type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
 import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
-import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
+import { createLocalWorkspaceStore } from "./workspace/workspace-store.ts";
 import type { MemoryService } from "./memory/memory-service.ts";
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
-import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
-import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
+import { createMcpServerStore, type McpServer } from "./mcp/mcp-server-store.ts";
+import { createMcpToolService } from "./mcp/mcp-tool-service.ts";
 import {
   createLocalBlobTransferStore,
   createS3BlobTransferStore,
@@ -243,7 +202,7 @@ import {
   legacySandboxBackendForScope,
   type LegacyRoute,
 } from "./sandbox/sandbox-resource-upgrade.ts";
-import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
+import { type Sandbox } from "./sandbox/sandbox.ts";
 import { withOperatorTokenFallback } from "./credentials/connector-token.ts";
 import {
   createAwsSecretsManagerSource,
@@ -251,15 +210,12 @@ import {
   createLayeredSecretSource,
 } from "./credentials/secret-source.ts";
 import {
-  credentialRequestHeaders,
   createKeychain,
-  type ConnectorTokenStore,
   type OAuthToken,
   type Keychain,
   type KeychainAsk,
   type KeychainCredential,
   type KeychainGrant,
-  type ServiceCredentialStore,
 } from "./credentials/keychain.ts";
 import {
   fireAskResolution,
@@ -268,12 +224,7 @@ import {
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
-import {
-  createFeatureFlagStore,
-  externalAppSharingAllowed,
-  type FeatureFlagRecord,
-  type FeatureFlagStore,
-} from "./feature-flags.ts";
+import { createFeatureFlagStore, externalAppSharingAllowed, type FeatureFlagRecord } from "./feature-flags.ts";
 import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
@@ -285,38 +236,31 @@ import {
   type BrowserSessionStore,
   type StoredBrowserSession,
 } from "./connectors/browser-session-store.ts";
-import type { CredentialUsageSink } from "./admin/credential-usage-sink.ts";
 import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-usage-sink.ts";
-import type { EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { createConsentLinkStore, type ConsentLinkStore, type ConsentLinkRecord } from "./connectors/consent-link.ts";
 import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
-import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts";
+import { createModelGateway } from "./model/model-gateway.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
-import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
-import { type ModelGatewayTransportConfig, setProviderBaseUrls } from "./model/provider-endpoints.ts";
+import { createUserModelCredentialStore } from "./model/user-model-credential-store.ts";
+import { setProviderBaseUrls } from "./model/provider-endpoints.ts";
 import { setCustomProviders } from "./model/custom-providers.ts";
-import { createCustomProviderStore, type CustomProviderStore } from "./model/custom-provider-store.ts";
+import { createCustomProviderStore } from "./model/custom-provider-store.ts";
 import { createPostgresSessionStore } from "./sessions/postgres-session-store.ts";
 import { createPostgresToolOutputStore } from "./sessions/tool-output.ts";
-import { LLM_CAPTURE_RETENTION_MS, type SessionStore } from "./sessions/session-store.ts";
+import { type SessionStore } from "./sessions/session-store.ts";
 import {
   fileCompanyChatGPTAuth,
   keychainCompanyChatGPTAuth,
   type CompanyChatGPTAuth,
 } from "./model/company-chatgpt-auth.ts";
-import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
-import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
-import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
 import { type ProviderKeys } from "./model/pi-runtime.ts";
-import { createHarnessRouter } from "./harness/harness-router.ts";
 import { resolveRuntimeChoiceDurable } from "./model/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
-import type { Harness } from "./agent/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
-import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./harness/orchestrator.ts";
+import { egressClaimAllowingControlPlane } from "./core/turn-helpers.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -324,41 +268,24 @@ import {
   DEPLOYMENT_CREDENTIAL_TTL_MS,
   EGRESS_PROXY_AUD,
 } from "./auth/capability-token.ts";
-import { createControlService } from "./api/control-service.ts";
 import { createPostgresRunStore } from "./runs/postgres-run-store.ts";
 import type { RunSignalStore } from "./runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "./runs/postgres-run-signal-store.ts";
-import { isTerminal, type Run, type RunStore } from "./runs/run-store.ts";
-import { createRunPreemption, createWorker, type Worker } from "./runs/worker.ts";
-import {
-  createNoopInstanceRegistry,
-  createPostgresInstanceRegistry,
-  type InstanceRegistry,
-} from "./runs/instance-registry.ts";
-import { createDrainController, type DrainController } from "./runs/drain.ts";
-import { createReaper, REAPER_LEASE_KEY, type Reaper } from "./runs/reaper.ts";
-import { createSweeper as createUntrackedSweeper, type Sweeper } from "./util/sweeper.ts";
+import { type RunStore } from "./runs/run-store.ts";
+import { createSweeper as createUntrackedSweeper } from "./util/sweeper.ts";
 import { createPostgresProcessRegistry, type ProcessRegistry } from "./processes/process-registry.ts";
-import { createProcessReaper, createReaperKillHook, type ProcessReaper } from "./processes/process-reaper.ts";
-import { createJobComputerSweep } from "./processes/job-computers.ts";
-import { createMonitorStore, type MonitorStore } from "./monitors/monitor-store.ts";
-import { createMonitorPoller, type MonitorPoller } from "./monitors/monitor-poller.ts";
-import { createSkillSyncEngine, type SkillSyncEngine } from "./skills/skill-sync-engine.ts";
-import { supportsProcessSessions, type SandboxHandle } from "./sandbox/sandbox.ts";
-import { finishProcessCredentials } from "./credentials/execute-files.ts";
+import { createMonitorStore } from "./monitors/monitor-store.ts";
+import { supportsProcessSessions } from "./sandbox/sandbox.ts";
 import { createTurnStream } from "./runs/turn-stream.ts";
 import type { SessionStateBus } from "./runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "./runs/postgres-session-state-bus.ts";
 import type { RunActivityStore } from "./runs/run-activity-store.ts";
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
-import { createApp, type App } from "./api/app.ts";
+import { createApp } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
 import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
-import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
-import { createEngagedRegistry } from "./wake/engaged-registry.ts";
-import { createWakeSweep, type WakeSweep } from "./wake/sweep.ts";
 import { createPostgresSurfaceCache, type SurfaceCache } from "./surface-cache/surface-cache.ts";
 import { createPostgresChannelPolicyStore, type ChannelPolicyStore } from "./surface-cache/channel-policy-store.ts";
 import {
@@ -372,36 +299,28 @@ import {
   codexSubscriptionModelId,
   isOverlayModel,
   modelRequestOverrides,
-  auxiliaryModelForProvider,
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   resolveModel,
   type HarnessId,
-  modelSupportedByHarness,
 } from "./model/pi-models.ts";
-import { createAdminService, parseAdminGrants, type AdminService } from "./admin/admin-service.ts";
+import { createAdminService, parseAdminGrants } from "./admin/admin-service.ts";
 import { createAdminGrantStore } from "./admin/admin-grant-store.ts";
 import { createPostgresAdminGrantStore } from "./admin/postgres-admin-grant-store.ts";
-import { createProjectStore, type Project, type ProjectStore } from "./projects/project-store.ts";
-import { withErrorReporting, type ErrorLog } from "./admin/error-log.ts";
-import { createPostgresReplayDedupe, type ReplayDedupe } from "./auth/replay-dedupe.ts";
-import {
-  emptyDeploymentLayer,
-  loadDeploymentLayer,
-  type BrokeredLayerTool,
-  type DeploymentLayerRuntime,
-} from "./deployment/load-layer.ts";
+import { createProjectStore, type Project } from "./projects/project-store.ts";
+import { withErrorReporting } from "./admin/error-log.ts";
+import { createPostgresReplayDedupe } from "./auth/replay-dedupe.ts";
+import { emptyDeploymentLayer, loadDeploymentLayer, type BrokeredLayerTool } from "./deployment/load-layer.ts";
 import {
   createDeploymentLayerStore,
   LAYER_CREATED_BY,
   LAYER_REVIEWER,
-  type DeploymentLayerStore,
   type StoredDeploymentLayer,
 } from "./deployment/deployment-layer-store.ts";
 import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
-import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
-import { sleep, withTimeout } from "./util/async.ts";
-import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import { errMessage, reportFailureAs } from "./util/errors.ts";
+import { sleep } from "./util/async.ts";
+import { createSlackInstallationStore } from "./surfaces/slack-installation.ts";
 import type { AppDeps } from "./api/app-types.ts";
 import { createPiModelUtilities, piModelConfigOptions } from "./model/pi-model-utilities.ts";
 import type { HarnessModelUtilities } from "./agent/harness.ts";
@@ -452,7 +371,6 @@ export function stopWithBackstop(
     },
   );
 }
-
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 

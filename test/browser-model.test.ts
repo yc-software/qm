@@ -6,7 +6,7 @@ import { createServer as httpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { serverDeps } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import {
   mintCapabilityToken,
   verifyCapabilityToken,

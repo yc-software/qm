@@ -8,8 +8,8 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { sharedMessages, type SessionShare } from "../src/sessions/session-share.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { sessionSharingRoutes } from "../src/api/routes/session-sharing.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { sessionSharingRoutes } from "../src/edge/http/routes/session-sharing.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import { scopeId, type SessionEntry } from "../src/types.ts";
 import { testMap } from "./support/test-database.ts";
 

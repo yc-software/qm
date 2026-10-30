@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/edge/http/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";

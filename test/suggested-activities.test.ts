@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "../src/suggestions/activities.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/harness/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";

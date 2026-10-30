@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "../test/support/compose.ts";
 import { loadConfig } from "../src/config.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";
 import { scopeId } from "../src/types.ts";
 import { buildGoogleWorkspaceReadSmokeCommand } from "./google-workspace-read-smoke-command.ts";

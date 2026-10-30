@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/compose.ts";
 import { baseModelProviders, configuredModelForHarness, providerKeysPresent } from "../src/config.ts";
 import { defaultModelForHarness, modelProviderAvailabilityFor } from "../src/model/pi-models.ts";

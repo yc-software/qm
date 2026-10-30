@@ -3,7 +3,7 @@ import test from "node:test";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "../src/memory/tidy.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/harness/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";

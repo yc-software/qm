@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "./support/compose.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { providerKeysPresent, harnessCarriedModelAuth } from "../src/config.ts";

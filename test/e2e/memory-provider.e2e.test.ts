@@ -8,7 +8,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "../support/compose.ts";
-import { createInsecureTestServer } from "../../src/api/server.ts";
+import { createInsecureTestServer } from "../../src/edge/http/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
 import { startMcpTestServer, type McpTestServer } from "../support/mcp-test-server.ts";

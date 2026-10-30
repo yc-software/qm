@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/harness/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";

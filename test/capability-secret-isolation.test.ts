@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";

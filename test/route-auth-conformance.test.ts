@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
-import { findRoute, type RouteAuth } from "../src/api/routes/route.ts";
+import { apiRoutes, rawRoutes } from "../src/edge/http/routes/index.ts";
+import { findRoute, type RouteAuth } from "../src/edge/http/routes/route.ts";
 import {
   OAUTH_CONSENT_AUD,
   CREDENTIAL_BROKER_AUD,

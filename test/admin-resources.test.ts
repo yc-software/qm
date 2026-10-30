@@ -6,11 +6,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
+import { ADMIN_RESOURCES } from "../src/edge/http/routes/admin-resources.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

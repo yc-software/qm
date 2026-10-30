@@ -8,7 +8,7 @@ import { startFrontDoor } from "./front-door.ts";
 import { createBackgroundController } from "../runs/background-controller.ts";
 import { createManagedSlack } from "../surfaces/slack-managed.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
-import { createServer } from "../api/server.ts";
+import { createServer } from "./http/server.ts";
 import { dockerDaemonFailure } from "../deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "../slack/index.ts";
@@ -117,7 +117,8 @@ const slackAccountRuntimes = slackAccountConfigsFromEnv(process.env).map((accoun
   }),
 );
 const slackRuntimes = [slackRuntime, ...slackAccountRuntimes];
-if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) for (const runtime of slackRuntimes) runtime.start();
+if (config.backgroundWorkEnabled && !config.backgroundDeploymentId)
+  for (const runtime of slackRuntimes) runtime.start();
 
 const backgroundController = core.backgroundOwnership
   ? createBackgroundController({

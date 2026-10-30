@@ -1,7 +1,7 @@
 import "./auto-fake-sprites.ts";
 import type { AddressInfo } from "node:net";
 import { buildApp, serverDeps } from "./compose.ts";
-import { createInsecureTestServer } from "../../src/api/server.ts";
+import { createInsecureTestServer } from "../../src/edge/http/server.ts";
 import { testConfig } from "./test-config.ts";
 
 const config = testConfig({

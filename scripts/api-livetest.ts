@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.ts";
 import { buildApp } from "../test/support/compose.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { scopeId } from "../src/types.ts";
 
 if (!process.env.ANTHROPIC_API_KEY) {

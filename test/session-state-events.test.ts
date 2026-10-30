@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
