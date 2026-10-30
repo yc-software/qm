@@ -180,6 +180,7 @@ const DEPLOYMENT_MIGRATIONS = [
   {
     id: "tenancy/deployment_prep/0001",
     statements: [
+      `ALTER TABLE IF EXISTS app_page_views DROP CONSTRAINT IF EXISTS app_page_views_deployment_id_fkey`,
       `DO $prep$ BEGIN
          IF to_regclass('deployment_access') IS NOT NULL THEN
            UPDATE deployments d SET json = d.json || jsonb_build_object('lastAccessAt', a.last_access_at)
