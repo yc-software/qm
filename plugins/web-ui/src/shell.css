@@ -2771,18 +2771,41 @@ qm-markdown .tok-in {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.work-thinking > .work-head .work-step,
-.work-working > .work-head .work-step {
+.work-head .work-step-icon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  perspective: 60px;
+}
+.work-head .work-step-icon .tool-icon {
+  position: absolute;
+  inset: 0;
+}
+.work-head .work-step-label {
+  position: relative;
+  min-width: 0;
+}
+.work-thinking > .work-head .work-step-label > .sheen-label,
+.work-working > .work-head .work-step-label > .sheen-label,
+.work-thinking > .work-head .work-step-enter-fade .tool-icon,
+.work-working > .work-head .work-step-enter-fade .tool-icon {
   animation: work-step-in 420ms ease-out both;
 }
-.work-head .work-step.work-step-out {
+.work-thinking > .work-head .work-step-enter-roll .tool-icon,
+.work-working > .work-head .work-step-enter-roll .tool-icon {
+  animation: work-icon-in 328ms cubic-bezier(0.2, 0.7, 0.2, 1) 92ms both;
+}
+.work-head .work-step-label .work-step-out {
   position: absolute;
   inset: 0 auto 0 0;
   animation: work-step-out 420ms ease-out both;
+  pointer-events: none;
+}
+.work-head .work-step-icon .tool-icon.work-step-out {
+  animation: work-icon-out 260ms cubic-bezier(0.55, 0, 0.9, 0.45) both;
   pointer-events: none;
 }
 @keyframes work-step-in {
@@ -2801,9 +2824,31 @@ qm-markdown .tok-in {
     opacity: 0;
   }
 }
+@keyframes work-icon-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px) rotateX(-78deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes work-icon-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) rotateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-7px) rotateX(78deg);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  .work-thinking > .work-head .work-step,
-  .work-working > .work-head .work-step {
+  .work-thinking > .work-head .work-step-label > .sheen-label,
+  .work-working > .work-head .work-step-label > .sheen-label,
+  .work-thinking > .work-head .work-step-icon .tool-icon,
+  .work-working > .work-head .work-step-icon .tool-icon {
     animation: none;
   }
   .work-head .work-step-out {

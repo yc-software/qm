@@ -62,6 +62,7 @@ export interface LiveStepLine {
 export function createLiveStepLine(redraw: () => void): LiveStepLine {
   let liveStep: LiveStep | null = null;
   let fadingStep: LiveStep | null = null;
+  let iconEntry: "fade" | "roll" | "still" = "fade";
   let fadingTimer: ReturnType<typeof setTimeout> | null = null;
   let measuredWidth = 0;
   let measuredLabel: string | null = null;
@@ -69,6 +70,7 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
   function reset(): void {
     liveStep = null;
     fadingStep = null;
+    iconEntry = "fade";
     measuredWidth = 0;
     measuredLabel = null;
     if (fadingTimer) clearTimeout(fadingTimer);
@@ -82,6 +84,7 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
     }
     if (liveStep && liveStep.label !== step.label) {
       fadingStep = liveStep;
+      iconEntry = liveStep.icon === step.icon ? "still" : "roll";
       if (fadingTimer) clearTimeout(fadingTimer);
       fadingTimer = setTimeout(() => {
         fadingStep = null;
@@ -120,20 +123,32 @@ export function createLiveStepLine(redraw: () => void): LiveStepLine {
     animating: boolean,
     elapsed: string | DirectiveResult,
   ): TemplateResult {
+    const out = step && fadingStep ? fadingStep : null;
+    const outIcon = out && iconEntry === "roll" ? out : null;
     return html`<span class="work-step-slot"
-        >${
-          step && fadingStep
-            ? html`<span class="work-step work-step-out" aria-hidden="true"
-                ><span class="tool-icon">${icon(fadingStep.icon, 15)}</span>${fadingStep.label}</span
-              >`
-            : nothing
-        }${keyed(
+        >${keyed(
           label,
-          html`<span class="work-step" data-step=${label} ${ref(step ? easeWidth : undefined)}
-            >${step ? html`<span class="tool-icon">${icon(step.icon, 15)}</span>` : nothing}${sheenLabel(
-              label,
-              animating && !step,
-            )}</span
+          html`<span
+            class="work-step ${step ? `work-step-enter-${iconEntry}` : ""}"
+            data-step=${label}
+            ${ref(step ? easeWidth : undefined)}
+            >${
+              step
+                ? html`<span class="work-step-icon"
+                    >${
+                      outIcon
+                        ? html`<span class="tool-icon work-step-out" aria-hidden="true"
+                            >${icon(outIcon.icon, 15)}</span
+                          >`
+                        : nothing
+                    }<span class="tool-icon">${icon(step.icon, 15)}</span></span
+                  >`
+                : nothing
+            }<span class="work-step-label"
+              >${
+                out ? html`<span class="work-step-out" aria-hidden="true">${out.label}</span>` : nothing
+              }${sheenLabel(label, animating && !step)}</span
+            ></span
           >`,
         )}</span
       >${elapsed ? html`<span class="work-elapsed">${elapsed}</span>` : nothing}<span class="activity-chevron"
