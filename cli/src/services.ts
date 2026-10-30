@@ -23,7 +23,8 @@ export const isDeclaredService = (s: string): s is DeclaredServiceName =>
 
 export const serviceHost = (name: string): string => (isVirtualService(name) ? "edge" : name);
 
-export const serviceWorkloads = (name: string): string[] => (name === "core" ? [...CORE_WORKLOADS] : [serviceHost(name)]);
+export const serviceWorkloads = (name: string): string[] =>
+  name === "core" ? [...CORE_WORKLOADS] : [serviceHost(name)];
 
 export const runnableServices = (names: readonly DeclaredServiceName[]): ServiceName[] =>
   [...new Set(names.flatMap(serviceWorkloads))].filter(isServiceName);
@@ -303,4 +304,3 @@ export function ordered(names: ServiceName[]): ServiceDef[] {
 export function teardownOrdered(names: ServiceName[]): ServiceDef[] {
   return ordered(names).reverse();
 }
-

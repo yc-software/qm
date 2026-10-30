@@ -131,7 +131,9 @@ else console.log("ok");
     assert.match(calls, /secrets unset --stage -a acme-harness SECURITY_SCREEN_PROXY_TOKEN/);
     assert.match(
       calls,
-      new RegExp(`deploy --yes -c \\S+harness\\.fly\\.toml --ha=false --image registry\\.fly\\.io/acme-core@sha256:${"b".repeat(64)}`),
+      new RegExp(
+        `deploy --yes -c \\S+harness\\.fly\\.toml --ha=false --image registry\\.fly\\.io/acme-core@sha256:${"b".repeat(64)}`,
+      ),
       "the harness deploys the image the edge just built",
     );
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));

@@ -26,7 +26,10 @@ test("Fly edge and harness defaults can sustain the 16-worker baseline and drain
     assert.match(toml, /\[\[restart\]\]\n\s*policy = "always"/);
     assert.match(toml, /\[\[vm\]\]\n\s*size = "performance-2x"\n\s*memory = "4gb"/);
     assert.match(toml, /^kill_timeout = "300s"$/m);
-    assert.match(toml, /\[checks\.health\]\n\s*type = "http"\n\s*port = 8080\n\s*method = "get"\n\s*path = "\/healthz"/);
+    assert.match(
+      toml,
+      /\[checks\.health\]\n\s*type = "http"\n\s*port = 8080\n\s*method = "get"\n\s*path = "\/healthz"/,
+    );
   }
 });
 
@@ -175,7 +178,10 @@ test("virtual-service env folds into the edge [env] only (core's own block wins)
     env: { ...config.env, core: { ...config.env.core, WEB_UI_PUBLIC_URL: "https://core-wins.example.com" } },
   };
   assert.match(derivedTomlFor(coreWins, "edge", repoRoot), /WEB_UI_PUBLIC_URL = "https:\/\/core-wins\.example\.com"/);
-  assert.match(derivedTomlFor(coreWins, "harness", repoRoot), /WEB_UI_PUBLIC_URL = "https:\/\/core-wins\.example\.com"/);
+  assert.match(
+    derivedTomlFor(coreWins, "harness", repoRoot),
+    /WEB_UI_PUBLIC_URL = "https:\/\/core-wins\.example\.com"/,
+  );
 });
 
 test("a vms.core override sizes edge and harness, and a per-workload entry wins", () => {
