@@ -1,5 +1,5 @@
-import { html, nothing } from "lit";
-import { card, table, badge, renderer } from "./shared.ts";
+import { html } from "lit";
+import { card, table, badge, renderer, stacked, subline as muted } from "./shared.ts";
 
 export async function detail(root: HTMLElement, principal: string, s: Record<string, any>) {
   const paint = renderer(root);
@@ -8,14 +8,12 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
   paint(html`<div class="detail">Loading…</div>`);
   const r = await s.api("GET", "/api/users/" + encodeURIComponent(principal));
   if (!s.current(principal)) return;
-  if (!r.ok) {
-    paint(
+  if (!r.ok)
+    return paint(
       html`<div class="detail">
         ${r.status === 403 ? "You don't have admin access." : r.data?.message || `Failed to load user (${r.status}).`}
       </div>`,
     );
-    return;
-  }
   const d = r.data || {};
   s.pageShell({
     back,
@@ -23,29 +21,15 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
     context: [d.admin?.isAdmin ? s.labelRole(d.admin.role) : "member", d.scopeId || ""].filter(Boolean).join(" · "),
   });
   const personalScope = d.scopeId || "personal:" + principal;
-  let onboarding = d.onboarding || "not_started";
-  let busy = false;
-  let hint = "";
-  let resetHint = "";
-  let credentials: any = null;
-  let credentialError = "";
-  let sort = "default";
-  let selectedGrant: any = null;
-  let usage: any = null;
-  let usageRequest = 0;
-  const stacked = (primary: any, secondary: any) =>
-    html`<div>
-      <div class="primaryline">${primary}</div>
-      ${secondary ? html`<div class="subline">${secondary}</div>` : nothing}
-    </div>`;
-  const muted = (text: string) => html`<span class="subline">${text}</span>`;
+  let [onboarding, busy, hint, resetHint, sort] = [d.onboarding || "not_started", false, "", "", "default"];
+  let [credentials, selectedGrant, usage]: any[] = [null, null, null];
+  let [credentialError, usageRequest] = ["", 0];
   const credName = (id: string) => {
     const c = credentials?.credentials?.find((c: any) => c.id === id);
     return c ? c.service + (c.accountLabel ? " - " + c.accountLabel : "") : id;
   };
   async function setOnboarding(status: string) {
-    busy = true;
-    hint = "Saving…";
+    [busy, hint] = [true, "Saving…"];
     draw();
     try {
       const result = await s.api("PUT", "/api/users/" + encodeURIComponent(principal) + "/onboarding", { status });
@@ -62,14 +46,10 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
     }
   }
   async function reset() {
-    if (
-      !s.confirm(
-        "Delete this person's personal DM sessions (transcripts included) and clear their onboarding?\n\nThis is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.",
-      )
-    )
-      return;
-    busy = true;
-    resetHint = "Resetting…";
+    const warning =
+      "Delete this person's personal DM sessions (transcripts included) and clear their onboarding?\n\nThis is irreversible. Their channel history is untouched. On their next web visit they'll see the new-user welcome greeting, then onboarding.";
+    if (!s.confirm(warning)) return;
+    [busy, resetHint] = [true, "Resetting…"];
     draw();
     try {
       const result = await s.api("POST", "/api/users/" + encodeURIComponent(principal) + "/reset");
@@ -90,13 +70,10 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
     selectedGrant = grant;
     usage = null;
     draw();
+    const resource = encodeURIComponent("grant " + grant.id);
     const result = await s.api(
       "GET",
-      "/api/audit?scope=org:" +
-        encodeURIComponent(s.orgId) +
-        "&action=keychain.materialize&resource=" +
-        encodeURIComponent("grant " + grant.id) +
-        "&limit=2000",
+      `/api/audit?scope=org:${encodeURIComponent(s.orgId)}&action=keychain.materialize&resource=${resource}&limit=2000`,
     );
     if (request !== usageRequest) return;
     usage = result.ok ? result.data?.events || [] : [];
@@ -110,11 +87,11 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
     const grants = credentials.grants || [];
     const group: Record<string, number> = { active: 0, used: 1, expired: 2, revoked: 3 };
     const timestamp = (g: any) => g.usedAt || g.revokedAt || g.createdAt || 0;
-    const sorted = grants.slice().sort((a: any, b: any) => {
-      if (sort === "mode") return String(a.mode).localeCompare(String(b.mode)) || timestamp(b) - timestamp(a);
-      if (sort === "status") return String(a.status).localeCompare(String(b.status)) || timestamp(b) - timestamp(a);
-      return (group[a.status] ?? 9) - (group[b.status] ?? 9) || timestamp(b) - timestamp(a);
-    });
+    const order = (a: any, b: any) =>
+      sort === "default"
+        ? (group[a.status] ?? 9) - (group[b.status] ?? 9)
+        : String(a[sort]).localeCompare(String(b[sort]));
+    const sorted = grants.slice().sort((a: any, b: any) => order(a, b) || timestamp(b) - timestamp(a));
     return html`<div>
       ${card(
         "Credentials (" + creds.length + ")",
@@ -170,19 +147,12 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
                   }`
               : html`<p class="kc-sortbar">
                     Sort:
-                    ${[
-                      ["default", "status group"],
-                      ["mode", "mode"],
-                      ["status", "status A-Z"],
-                    ].map(
+                    ${Object.entries({ default: "status group", mode: "mode", status: "status A-Z" }).map(
                       ([key, label], i) =>
                         html`${i ? " · " : ""}<button
                             type="button"
                             class=${"link" + (sort === key ? " kc-sort-active" : "")}
-                            @click=${() => {
-                              sort = key;
-                              draw();
-                            }}
+                            @click=${() => ((sort = key), draw())}
                           >
                             ${label}
                           </button>`,
@@ -251,11 +221,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
                         [
                           "Command policy",
                           cfg.commandPolicy
-                            ? ruleN +
-                              " rule" +
-                              (ruleN === 1 ? "" : "s") +
-                              " · " +
-                              (cfg.commandPolicy.mode || "denylist")
+                            ? `${ruleN} rule${ruleN === 1 ? "" : "s"} · ${cfg.commandPolicy.mode || "denylist"}`
                             : "default",
                         ],
                         ["Security posture", cfg.securityPosture || "auto"],

@@ -16,11 +16,22 @@ export class SettingState {
   get dirty() {
     return JSON.stringify(this.collect(false)) !== this.baseline;
   }
+  change(field: string, value: unknown) {
+    this.draft[field] = value;
+    this.changed();
+  }
   changed() {
     if (!this.saving) {
       this.message = this.dirty ? "Unsaved changes" : "";
       this.tone = this.dirty ? "dirty" : "";
     }
+    this.render();
+  }
+  loaded() {
+    this.baseline = JSON.stringify(this.collect(false));
+    this.message = "";
+    this.tone = "";
+    this.saving = false;
     this.render();
   }
   commit(body: unknown) {

@@ -1,11 +1,12 @@
-import { mountTemplate } from "./shared.ts";
+import { badge, mountTemplate } from "./shared.ts";
+import { SettingState } from "./setting-state.ts";
+import { textField, toggleField } from "./setting-controls.ts";
 import { html, render } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 let config: any = { label: (id: string) => id, formatTime: String, edit: () => {}, remove: () => {} };
 type Data = Record<string, any>;
-export class CredentialState {
-  draft: Data = {};
+export class CredentialState extends SettingState {
   rows: Data[] = [];
   listMessage = "Loading credentials…";
   listRetry = false;
@@ -17,15 +18,11 @@ export class CredentialState {
   version: number | null = null;
   original: Data | null = null;
   open = false;
-  saving = false;
-  message = "";
-  tone = "";
-  baseline = "";
   query = "";
   picker = false;
   resolutionError = "";
-  render = () => {};
   constructor() {
+    super("service-credentials");
     this.reset();
   }
   reset() {
@@ -102,19 +99,12 @@ export class CredentialState {
     this.saving = false;
     this.changed();
   }
-  change(key: string, value: unknown) {
-    this.draft[key] = value;
-    this.changed();
-  }
   changed() {
     if (!this.saving) {
       this.message = this.dirty ? "Unsaved changes" : "";
       this.tone = "";
     }
     this.render();
-  }
-  get dirty() {
-    return JSON.stringify(this.collect()) !== this.baseline;
   }
   get selected(): string[] {
     return this.draft.people
@@ -217,28 +207,17 @@ export class CredentialState {
   }
 }
 export const credentialState = new CredentialState();
-export function configureCredentials(options: any) {
-  config = options;
-}
-export function credentialStatus(message: string, tone: string) {
-  credentialState.message = message;
-  credentialState.tone = tone;
-  credentialState.saving = tone === "saving";
-  credentialState.render();
-}
-export function credentialLoading(message = "Loading credentials…", retry = false) {
-  credentialState.rows = [];
-  credentialState.listMessage = message;
-  credentialState.listRetry = retry;
-  credentialState.render();
-}
+export const configureCredentials = (options: any) => void (config = options);
+export const credentialStatus = (message: string, tone: string) =>
+  Object.assign(credentialState, { message, tone, saving: tone === "saving" }).render();
+export const credentialLoading = (listMessage = "Loading credentials…", listRetry = false) =>
+  Object.assign(credentialState, { rows: [], listMessage, listRetry }).render();
 export function loadCredentials(rows: Data[], directory: Data[], channels: Data[], scopes: Data[], scope: string) {
   Object.assign(credentialState, { rows, directory, channels, scopes, scope, listMessage: "", listRetry: false });
   if (!credentialState.open) credentialState.baseline = JSON.stringify(credentialState.collect());
   credentialState.render();
 }
 const plural = (n: number, label: string) => n + " " + label + (n === 1 ? "" : "s");
-const badge = (text: string, tone: string) => html`<span class=${"badge " + tone}>${text}</span>`;
 function credentialUsage(c: Data) {
   if (c.usageUnavailable) return "Usage unavailable";
   if (c.usageCount == null) return "Loading usage…";
@@ -345,11 +324,25 @@ function pickerRows() {
   }${channels.length > 15 ? html`<div class="sc-picker-more">${"…" + (channels.length - 15) + " more channels — keep typing"}</div>` : null}`;
 }
 
+const capabilityRows = [
+  ["State", "state"],
+  ["Host", "host"],
+  ["Auth", "auth"],
+  ["Methods", "methods"],
+  ["Paths", "paths"],
+  ["Access", "principals"],
+  ["Secret", "secret"],
+] as const;
+const only = (kind: string) =>
+  classMap({ ["sc-" + kind + "-only"]: true, hidden: (kind === "env") !== (credentialState.draft.delivery === "env") });
+const field = (key: string, label: string, hint: string | number, o: Parameters<typeof textField>[5] = {}) =>
+  textField(label, hint, "sc-" + key, credentialState.draft[key] || "", (v) => credentialState.change(key, v), o);
 function template() {
-  const env = credentialState.draft.delivery === "env";
-  const cap = credentialState.capability();
-  return html` <section
-    class=${classMap({ card: true, "sv-credentials": true, dirty: credentialState.dirty })}
+  const s = credentialState;
+  const env = s.draft.delivery === "env";
+  const cap = s.capability();
+  return html`<section
+    class=${classMap({ card: true, "sv-credentials": true, dirty: s.dirty })}
     id="card-service-credentials"
   >
     <div class="head">
@@ -365,18 +358,10 @@ function template() {
       </div>
     </div>
     <div
-      class=${classMap({ body: true, hidden: !credentialState.open })}
+      class=${classMap({ body: true, hidden: !s.open })}
       id="sc-editor"
       style="border-top: 1px solid var(--border, #2a2a2a); padding-top: 12px"
     >
-      <div class="sc-form-head">
-        <p class="hint" id="sc-form-title">
-          ${credentialState.editing ? "Editing " + credentialState.editing : "Add a credential"}
-        </p>
-        <span class=${"badge " + (credentialState.editing ? "info" : "muted")} id="sc-form-mode"
-          >${credentialState.editing ? "Editing" : "New"}</span
-        >
-      </div>
       <div class="sc-semantics" aria-label="Blank value semantics">
         <div><strong>Blank secret</strong><span id="sc-secret-semantics">${secretSemantics()}</span></div>
         <div><strong>Blank method</strong><span>Uses the broker default: GET only.</span></div>
@@ -384,34 +369,14 @@ function template() {
       </div>
       <div class="editor-grid">
         <div>
-          <label style="display: block; margin-bottom: 8px"
-            >Slug <span class="hint">lowercase identifier</span
-            ><input
-              type="text"
-              id="sc-slug"
-              .value=${credentialState.draft.slug || ""}
-              @input=${(e: Event) => credentialState.change("slug", (e.target as HTMLInputElement).value)}
-              ?disabled=${!!credentialState.editing}
-              placeholder="credential-name"
-              autocomplete="off"
-              style="width: 100%"
-          /></label>
-          <label style="display: block; margin-bottom: 8px"
-            >Display name
-            <input
-              type="text"
-              id="sc-name"
-              .value=${credentialState.draft.name || ""}
-              @input=${(e: Event) => credentialState.change("name", (e.target as HTMLInputElement).value)}
-              placeholder="Credential display name"
-              style="width: 100%"
-          /></label>
+          ${field("slug", "Slug", "lowercase identifier", { placeholder: "credential-name", auto: "off", disabled: !!s.editing })}
+          ${field("name", "Display name", 12, { placeholder: "Credential display name" })}
           <label style="display: block; margin-bottom: 8px"
             >Delivery <span class="hint">how the secret is used</span>
             <select
               id="sc-delivery"
-              .value=${credentialState.draft.delivery || ""}
-              @input=${(e: Event) => credentialState.change("delivery", (e.target as HTMLInputElement).value)}
+              .value=${s.draft.delivery || ""}
+              @input=${(e: Event) => s.change("delivery", (e.target as HTMLInputElement).value)}
               style="width: 100%"
             >
               <option value="broker">
@@ -423,103 +388,26 @@ function template() {
               </option>
             </select>
           </label>
-          <label style="display: block; margin-bottom: 8px" class=${classMap({ "sc-env-only": true, hidden: !env })}
-            >Env var <span class="hint">UPPER_SNAKE_CASE; the skill reads this</span
-            ><input
-              type="text"
-              id="sc-envkey"
-              .value=${credentialState.draft.envkey || ""}
-              @input=${(e: Event) => credentialState.change("envkey", (e.target as HTMLInputElement).value)}
-              placeholder="STEEL_API_KEY"
-              autocomplete="off"
-              style="width: 100%"
-          /></label>
-          <label style="display: block; margin-bottom: 8px" class=${classMap({ "sc-broker-only": true, hidden: env })}
-            >Destination host <span class="hint">bare hostname only</span
-            ><input
-              type="text"
-              id="sc-host"
-              .value=${credentialState.draft.host || ""}
-              @input=${(e: Event) => credentialState.change("host", (e.target as HTMLInputElement).value)}
-              placeholder="service.example"
-              autocomplete="off"
-              style="width: 100%"
-          /></label>
-          <label style="display: block; margin-bottom: 8px"
-            >Secret
-            <input
-              type="password"
-              id="sc-secret"
-              .value=${credentialState.draft.secret || ""}
-              @input=${(e: Event) => credentialState.change("secret", (e.target as HTMLInputElement).value)}
-              autocomplete="new-password"
-              placeholder=${credentialState.original?.hasSecret ? "Stored secret retained when blank" : "Write-only secret"}
-              style="width: 100%"
-          /></label>
+          ${field("envkey", "Env var", "UPPER_SNAKE_CASE; the skill reads this", { placeholder: "STEEL_API_KEY", auto: "off", cls: only("env") })}
+          ${field("host", "Destination host", "bare hostname only", { placeholder: "service.example", auto: "off", cls: only("broker") })}
+          ${field("secret", "Secret", 12, { placeholder: s.original?.hasSecret ? "Stored secret retained when blank" : "Write-only secret", type: "password", auto: "new-password" })}
           <p class="field-hint" id="sc-secret-hint">${secretHint()}</p>
           <div class=${classMap({ "sc-broker-only": true, hidden: env })} style="display: flex; gap: 10px">
-            <label style="display: block; margin-bottom: 8px; flex: 1"
-              >Authentication header <span class="hint">blank = Authorization</span
-              ><input
-                type="text"
-                id="sc-header"
-                .value=${credentialState.draft.header || ""}
-                @input=${(e: Event) => credentialState.change("header", (e.target as HTMLInputElement).value)}
-                placeholder="Default: Authorization"
-                style="width: 100%"
-            /></label>
-            <label style="display: block; margin-bottom: 8px; flex: 1"
-              >Value prefix <span class="hint">blank = Bearer</span
-              ><input
-                type="text"
-                id="sc-scheme"
-                .value=${credentialState.draft.scheme || ""}
-                @input=${(e: Event) => credentialState.change("scheme", (e.target as HTMLInputElement).value)}
-                placeholder="Default: Bearer"
-                style="width: 100%"
-            /></label>
+            ${field("header", "Authentication header", "blank = Authorization", { placeholder: "Default: Authorization", flex: true })}
+            ${field("scheme", "Value prefix", "blank = Bearer", { placeholder: "Default: Bearer", flex: true })}
           </div>
-          <label style="display: block; margin-bottom: 8px" class=${classMap({ "sc-broker-only": true, hidden: env })}
-            >Allowed HTTP methods <span class="hint">comma-separated; blank = GET</span
-            ><input
-              type="text"
-              id="sc-methods"
-              .value=${credentialState.draft.methods || ""}
-              @input=${(e: Event) => credentialState.change("methods", (e.target as HTMLInputElement).value)}
-              placeholder="GET"
-              style="width: 100%"
-          /></label>
+          ${field("methods", "Allowed HTTP methods", "comma-separated; blank = GET", { placeholder: "GET", cls: only("broker") })}
           <label style="display: block; margin-bottom: 8px" class=${classMap({ "sc-broker-only": true, hidden: env })}
             >Allowed path prefixes <span class="hint">one per line; blank = any path</span
             ><textarea
               id="sc-paths"
-              .value=${credentialState.draft.paths || ""}
-              @input=${(e: Event) => credentialState.change("paths", (e.target as HTMLInputElement).value)}
+              .value=${s.draft.paths || ""}
+              @input=${(e: Event) => s.change("paths", (e.target as HTMLInputElement).value)}
               placeholder="/allowed/path/"
             ></textarea>
           </label>
-          <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px"
-            ><input
-              type="checkbox"
-              id="sc-enabled"
-              .checked=${credentialState.draft.enabled !== false}
-              @change=${(e: Event) => credentialState.change("enabled", (e.target as HTMLInputElement).checked)}
-              style="width: auto"
-            />
-            Credential is enabled</label
-          >
-          <label
-            class=${classMap({ "sc-broker-only": true, hidden: env })}
-            style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px"
-            ><input
-              type="checkbox"
-              id="sc-deployments"
-              .checked=${credentialState.draft.deployments !== false}
-              @change=${(e: Event) => credentialState.change("deployments", (e.target as HTMLInputElement).checked)}
-              style="width: auto"
-            />
-            Published apps may use it, acting as their publisher</label
-          >
+          ${toggleField("Credential is enabled", 12, s.draft.enabled !== false, (on) => s.change("enabled", on), { id: "sc-enabled" })}
+          ${toggleField("Published apps may use it, acting as their publisher", 12, s.draft.deployments !== false, (on) => s.change("deployments", on), { id: "sc-deployments", cls: only("broker") })}
           <p class=${classMap({ hint: true, "sc-broker-only": true, hidden: env })} style="margin-bottom: 6px">
             Principals with access
           </p>
@@ -527,38 +415,13 @@ function template() {
             Access: every all-internal conversation. Env delivery is not gated by grants. Rooms with externals get
             nothing, everyone else gets the env var.
           </p>
-          <label
-            class=${classMap({ "sc-broker-only": true, hidden: env })}
-            style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px"
-            ><input
-              type="radio"
-              name="sc-share"
-              id="sc-share-org"
-              .checked=${!!credentialState.draft.org}
-              @change=${() => credentialState.change("org", true)}
-              value="org"
-              style="width: auto"
-            />
-            Everyone in this organization</label
-          >
-          <label
-            class=${classMap({ "sc-broker-only": true, hidden: env })}
-            style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 6px"
-            ><input
-              type="radio"
-              name="sc-share"
-              value="people"
-              .checked=${!credentialState.draft.org}
-              @change=${() => credentialState.change("org", false)}
-              style="width: auto"
-            />
-            Only selected people or teams</label
-          >
+          ${toggleField("Everyone in this organization", 12, !!s.draft.org, () => s.change("org", true), { id: "sc-share-org", name: "sc-share", value: "org", cls: only("broker") })}
+          ${toggleField("Only selected people or teams", 12, !s.draft.org, () => s.change("org", false), { name: "sc-share", value: "people", cls: only("broker") })}
           <input
             type="text"
             id="sc-people"
-            .value=${credentialState.draft.people || ""}
-            @input=${(e: Event) => credentialState.change("people", (e.target as HTMLInputElement).value)}
+            .value=${s.draft.people || ""}
+            @input=${(e: Event) => s.change("people", (e.target as HTMLInputElement).value)}
             class=${classMap({ "sc-broker-only": true, hidden: env })}
             list="sc-people-options"
             placeholder="Principal IDs, comma-separated"
@@ -567,93 +430,63 @@ function template() {
           <datalist id="sc-people-options"></datalist>
           <div
             class=${classMap({ "sc-picker": true, "sc-broker-only": true, hidden: env })}
-            style=${credentialState.draft.org ? "display: none" : ""}
+            style=${s.draft.org ? "display: none" : ""}
             id="sc-picker"
           >
             <input
               type="text"
               id="sc-picker-search"
-              .value=${credentialState.query}
+              .value=${s.query}
               @input=${(e: Event) => {
-                credentialState.query = (e.target as HTMLInputElement).value;
-                credentialState.picker = true;
-                credentialState.render();
+                s.query = (e.target as HTMLInputElement).value;
+                s.picker = true;
+                s.render();
               }}
               @focus=${() => {
-                credentialState.picker = true;
-                credentialState.render();
+                s.picker = true;
+                s.render();
               }}
               @blur=${() =>
                 setTimeout(() => {
-                  credentialState.picker = false;
-                  credentialState.render();
+                  s.picker = false;
+                  s.render();
                 }, 150)}
               placeholder="Search people to grant access…"
               autocomplete="off"
               spellcheck="false"
             />
-            <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!credentialState.picker}>${pickerRows()}</div>
+            <div class="sc-picker-list" id="sc-picker-list" ?hidden=${!s.picker}>${pickerRows()}</div>
           </div>
           <div class=${classMap({ "identity-chips": true, "sc-broker-only": true, hidden: env })} id="sc-people-chips">
-            ${credentialState.draft.org ? null : credentialState.grantees().map((id) => html`<span class="identity-chip">${config.label(id)}${grantTag(id)}</span>`)}
+            ${s.draft.org ? null : s.grantees().map((id) => html`<span class="identity-chip">${config.label(id)}${grantTag(id)}</span>`)}
           </div>
         </div>
         <aside class="editor-panel" aria-live="polite">
           <h3>Effective capability</h3>
           <dl class="capability-summary">
-            <div>
-              <dt>State</dt>
-              <dd id="sc-cap-state">${cap.state}</dd>
-            </div>
-            <div>
-              <dt>Host</dt>
-              <dd id="sc-cap-host">${cap.host}</dd>
-            </div>
-            <div>
-              <dt>Auth</dt>
-              <dd id="sc-cap-auth">${cap.auth}</dd>
-            </div>
-            <div>
-              <dt>Methods</dt>
-              <dd id="sc-cap-methods">${cap.methods}</dd>
-            </div>
-            <div>
-              <dt>Paths</dt>
-              <dd id="sc-cap-paths">${cap.paths}</dd>
-            </div>
-            <div>
-              <dt>Access</dt>
-              <dd id="sc-cap-principals">${cap.principals}</dd>
-            </div>
-            <div>
-              <dt>Secret</dt>
-              <dd id="sc-cap-secret">${cap.secret}</dd>
-            </div>
+            ${capabilityRows.map(
+              ([label, key]) =>
+                html`<div>
+                  <dt>${label}</dt>
+                  <dd id=${"sc-cap-" + key}>${cap[key]}</dd>
+                </div> `,
+            )}
           </dl>
         </aside>
       </div>
     </div>
     <div class="foot">
       <button type="button" class="viewlink" data-viewlink="audit">View usage ›</button
-      ><button
-        type="button"
-        id="sc-add"
-        ?disabled=${!!credentialState.listMessage}
-        class=${credentialState.open ? "hidden" : ""}
-      >
+      ><button type="button" id="sc-add" ?disabled=${!!s.listMessage} class=${s.open ? "hidden" : ""}>
         + Add credential</button
       ><button
-        class=${classMap({ primary: true, hidden: !credentialState.open, dirty: credentialState.dirty })}
+        class=${classMap({ primary: true, hidden: !s.open, dirty: s.dirty })}
         id="sc-save"
-        ?disabled=${!credentialState.dirty || credentialState.saving}
+        ?disabled=${!s.dirty || s.saving}
       >
-        ${credentialState.editing ? "Save changes" : "Save credential"}</button
-      ><button class=${credentialState.open ? "" : "hidden"} id="sc-reset">Cancel</button
-      ><span
-        class=${classMap({ status: true, [credentialState.tone]: !!credentialState.tone })}
-        id="st-service-credentials"
-        >${credentialState.message}</span
-      >
+        ${s.editing ? "Save changes" : "Save credential"}</button
+      ><button class=${s.open ? "" : "hidden"} id="sc-reset">Cancel</button
+      ><span class=${classMap({ status: true, [s.tone]: !!s.tone })} id="st-service-credentials">${s.message}</span>
     </div>
   </section>`;
 }

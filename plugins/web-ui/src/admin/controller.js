@@ -32,7 +32,6 @@ export function startAdmin(host, env) {
   function prepareParityCards() {
     const content = document.querySelector("#view-governance .governance-content");
     const anchor = $("governance-credentials");
-    $("card-approval-grant-modes").classList.add("reference-omitted");
 
     const providers = document.createElement("section");
     providers.className = "card sv-models";
@@ -151,7 +150,6 @@ export function startAdmin(host, env) {
     "history",
     "files",
     "memory",
-    "live",
     "audit",
     "errors",
     "skills",
@@ -159,7 +157,6 @@ export function startAdmin(host, env) {
     "deployments",
   ]);
   const ORG_WIDE = new Set([
-    "retention",
     "users",
     "spend",
     "keychain",
@@ -171,7 +168,7 @@ export function startAdmin(host, env) {
     "customize",
     "slack-settings",
   ]);
-  const ENDPOINT = { history: "sessions", files: "files", live: "runs" };
+  const ENDPOINT = { history: "sessions" };
   const HISTORY_PAGE_SIZE = 50;
   const ERRORS_PAGE_SIZE = 50;
 
@@ -1684,7 +1681,6 @@ export function startAdmin(host, env) {
     "security-posture": "st-security-posture",
     "auto-flagger": "st-auto-flagger",
     "sharing-posture": "st-sharing-posture",
-    "approval-grant-modes": "st-approval-grant-modes",
     "command-policy": "st-policy",
     soul: "st-soul",
     "ambient-policy": "st-ambient-policy",
@@ -2270,13 +2266,11 @@ export function startAdmin(host, env) {
       history: renderHistory,
       files: renderFiles,
       memory: renderMemory,
-      live: renderLive,
       errors: renderErrors,
       audit: renderAudit,
       skills: renderSkills,
       crons: renderCrons,
       deployments: renderDeployments,
-      retention: renderRetention,
       users: renderUsers,
       keychain: renderKeychain,
     })[view](root, data);
@@ -2900,9 +2894,6 @@ export function startAdmin(host, env) {
   }
   function renderMemory(root, d) {
     governanceUI.artifacts.memory(root, d, artifactContext());
-  }
-  function renderRetention(root, d) {
-    governanceUI.artifacts.retention(root, d);
   }
   function renderKeychain(root, d) {
     governanceUI.keychain.keychain(root, d, {
@@ -3934,10 +3925,6 @@ export function startAdmin(host, env) {
     document.body.appendChild(a);
     a.click();
     a.remove();
-  }
-
-  function renderLive(root, d) {
-    governanceUI.artifacts.live(root, d, artifactContext());
   }
 
   route();

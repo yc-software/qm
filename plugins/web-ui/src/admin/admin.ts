@@ -4,6 +4,7 @@ import * as integrations from "./integrations.ts";
 import * as onboarding from "./onboarding.ts";
 import type { GovernanceState } from "./governance-state.ts";
 import type { SlackSetting } from "./integrations-state.ts";
+import { settingRegistry } from "./setting-state.ts";
 export * from "./governance.ts";
 export { settings, integrations };
 export { onboarding };
@@ -16,19 +17,13 @@ export * as activity from "./activity.ts";
 export * as history from "./history.ts";
 export * as artifacts from "./artifacts.ts";
 export * as slackActivity from "./slack-activity.ts";
-export * as shared from "./shared.ts";
 export { charForName } from "../emoji-picker.ts";
 
 const modules = [governance, settings, integrations];
 export const states = new Map<string, GovernanceState | settings.SettingsState | SlackSetting>(
   modules.flatMap((module) => [...module.states]),
 );
-const owner = (key: string) => modules.find((module) => module.owns(key));
-export const owns = (key: string) => !!owner(key);
-export const collect = (key: string) => owner(key)!.collect(key);
-export const capture = (key: string) => owner(key)!.capture(key);
-export const commit = (key: string, body: any) => owner(key)!.commit(key, body);
-export const status = (key: string, message: string, tone: string) => owner(key)!.status(key, message, tone);
+export const { owns, collect, capture, commit, status } = settingRegistry(states);
 export const statusKey = (id: string) => modules.map((module) => module.statusKey(id)).find(Boolean);
 export function mountCards() {
   modules.forEach((module) => module.mountCards());

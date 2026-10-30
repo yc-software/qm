@@ -98,7 +98,6 @@ export const ADMIN_MARKUP = `
         </div>
         <template data-governance-card="card-security-posture"></template>
         <template data-governance-card="card-auto-flagger"></template>
-        <template data-governance-card="card-approval-grant-modes"></template>
         <template data-governance-card="card-command-policy"></template>
         <template data-settings-card="card-soul"></template>
         <template data-governance-card="card-ambient-policy"></template>

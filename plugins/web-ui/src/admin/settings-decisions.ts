@@ -13,9 +13,7 @@ const state = {
   providerStatus: false,
 };
 let redraw = () => {};
-export function configureDecisions(options: any) {
-  config = options;
-}
+export const configureDecisions = (options: any) => void (config = options);
 export function loadDecisions(data: any, scope: string) {
   state.scope = scope;
   state.data = scope.startsWith("org:") ? data.decisions || null : null;

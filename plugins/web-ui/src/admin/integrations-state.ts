@@ -12,9 +12,7 @@ export type Context = {
   fmtTime: (value: string) => string;
 };
 export let context: Context;
-export function configure(value: Context) {
-  context = value;
-}
+export const configure = (value: Context) => void (context = value);
 export class SlackSetting extends SettingState {
   scope = "";
   collect() {
@@ -30,11 +28,7 @@ export class SlackSetting extends SettingState {
     this.available = available;
     this.draft = { on: !!value };
     if (this.key === "ack-emoji") this.draft = { names: [...(value || [])] };
-    this.baseline = JSON.stringify(this.collect());
-    this.message = "";
-    this.tone = "";
-    this.saving = false;
-    this.render();
+    this.loaded();
   }
 }
 export const states = new Map(
@@ -62,7 +56,20 @@ export type Connector = {
   scopes?: string[];
   setupGuide?: { url: string; console: string; steps: string[] };
 };
-export class ConnectorsState {
+class Status {
+  message = "";
+  tone = "";
+  request = 0;
+  render = () => {};
+  setStatus(message: string, tone: string) {
+    this.message = message;
+    this.tone = tone;
+    this.render();
+  }
+}
+const denied = (result: { status?: number; data?: any }, fallback: string) =>
+  result.status === 403 ? "Only an org admin can manage connectors." : result.data?.message || fallback;
+export class ConnectorsState extends Status {
   catalog: Connector[] = [];
   list: Connector[] = [];
   editor = false;
@@ -70,10 +77,6 @@ export class ConnectorsState {
   draft = { provider: "", clientId: "", clientSecret: "", enabled: true };
   revision = 0;
   saving = false;
-  message = "";
-  tone = "";
-  request = 0;
-  render = () => {};
   get displayed(): Connector[] {
     return [
       ...this.list,
@@ -88,13 +91,9 @@ export class ConnectorsState {
     this.render();
   }
   reset() {
-    this.editor = false;
-    this.editing = "";
-    this.draft = { provider: this.catalog[0]?.provider || "", clientId: "", clientSecret: "", enabled: true };
-    this.revision++;
-    this.render();
+    this.edit(undefined, false);
   }
-  edit(connector?: Connector) {
+  edit(connector?: Connector, editor = true) {
     this.editing = connector && !connector.inherited ? connector.provider : "";
     this.draft = {
       provider: connector?.provider || this.catalog[0]?.provider || "",
@@ -102,13 +101,8 @@ export class ConnectorsState {
       clientSecret: "",
       enabled: connector?.enabled !== false,
     };
-    this.editor = true;
+    this.editor = editor;
     this.revision++;
-    this.render();
-  }
-  setStatus(message: string, tone: string) {
-    this.message = message;
-    this.tone = tone;
     this.render();
   }
   async load() {
@@ -121,11 +115,7 @@ export class ConnectorsState {
     if (request !== this.request || scope !== context.orgScope()) return;
     if (!catalog.ok) return this.setStatus(catalog.data?.message || "Failed to load connector setup.", "err");
     this.catalog = catalog.data.catalog || [];
-    if (!result.ok)
-      return this.setStatus(
-        result.status === 403 ? "Only an org admin can manage connectors." : result.data?.message || "Failed to load.",
-        "err",
-      );
+    if (!result.ok) return this.setStatus(denied(result, "Failed to load."), "err");
     this.list = result.data.connectors || [];
     if (!this.editing && !this.catalog.some((c) => c.provider === this.draft.provider))
       this.draft.provider = this.catalog[0]?.provider || "";
@@ -144,11 +134,7 @@ export class ConnectorsState {
     try {
       const result = await context.api("PUT", "/api/scopes/" + encodeURIComponent(scope) + "/connectors", body);
       if (scope !== context.orgScope()) return;
-      if (!result.ok)
-        return this.setStatus(
-          result.status === 403 ? "Only an org admin can manage connectors." : result.data?.message || "Save failed.",
-          "err",
-        );
+      if (!result.ok) return this.setStatus(denied(result, "Save failed."), "err");
       if (revision === this.revision) this.reset();
       await this.load();
       this.setStatus(revision + 1 === this.revision ? "Saved" : "Saved. Your newer edits are not saved.", "ok");
@@ -182,7 +168,7 @@ export class ConnectorsState {
   }
 }
 export const connectors = new ConnectorsState();
-export class SlackInstallationState {
+export class SlackInstallationState extends Status {
   data: Record<string, any> = {};
   editor = false;
   guide = false;
@@ -190,16 +176,7 @@ export class SlackInstallationState {
   appToken = "";
   revision = 0;
   busy = "";
-  message = "";
-  tone = "";
-  request = 0;
   linkStarted = false;
-  render = () => {};
-  setStatus(message: string, tone: string) {
-    this.message = message;
-    this.tone = tone;
-    this.render();
-  }
   async load() {
     const request = ++this.request;
     const result = await context.api("GET", "/api/slack-installation");
@@ -221,28 +198,38 @@ export class SlackInstallationState {
     if (step === "connected" && this.data.configured && this.data.setup?.connected)
       this.setStatus("Connected. You can return to your QM conversation.", "ok");
   }
-  async start(step = "install") {
-    if (this.busy) return;
-    this.busy = "start";
+  async run(busy: string, work: () => Promise<unknown>, failure?: string) {
+    this.busy = busy;
     this.render();
     try {
-      const browser = new URL(location.href);
-      browser.searchParams.set("slack", step);
-      if (await openDesktopBrowser(browser.href)) return;
-      const result = await context.api("POST", "/api/slack-installation/start", { step });
-      if (result.ok && result.data.url) {
+      await work();
+    } catch (error) {
+      if (!failure) throw error;
+      this.setStatus(failure, "err");
+    } finally {
+      this.busy = "";
+      this.render();
+    }
+  }
+  async start(step = "install") {
+    if (this.busy) return;
+    const failure = "Could not start Slack installation. Please try again.";
+    await this.run(
+      "start",
+      async () => {
+        const browser = new URL(location.href);
+        browser.searchParams.set("slack", step);
+        if (await openDesktopBrowser(browser.href)) return;
+        const result = await context.api("POST", "/api/slack-installation/start", { step });
+        if (!result.ok || !result.data.url) return this.setStatus(failure, "err");
         const form = document.createElement("form");
         form.method = "POST";
         form.action = result.data.url;
         document.body.appendChild(form);
         form.submit();
-      } else this.setStatus("Could not start Slack installation. Please try again.", "err");
-    } catch {
-      this.setStatus("Could not start Slack installation. Please try again.", "err");
-    } finally {
-      this.busy = "";
-      this.render();
-    }
+      },
+      failure,
+    );
   }
   async save() {
     if (this.busy) return;
@@ -250,24 +237,23 @@ export class SlackInstallationState {
       appToken = this.appToken.trim(),
       revision = this.revision;
     if (!botToken || !appToken) return this.setStatus("Both Slack tokens are required.", "err");
-    this.busy = "save";
-    this.setStatus("Validating with Slack…", "saving");
-    try {
-      const result = await context.api("PUT", "/api/slack-installation", { botToken, appToken });
-      if (!result.ok) return this.setStatus(result.data?.message || "Slack validation failed.", "err");
-      if (revision === this.revision) {
-        this.botToken = "";
-        this.appToken = "";
-        this.editor = false;
-      }
-      await this.load();
-      this.setStatus("Tokens verified and saved. Allow a few seconds, then test a mention and DM in Slack.", "ok");
-    } catch {
-      this.setStatus("Slack validation failed. Please try again.", "err");
-    } finally {
-      this.busy = "";
-      this.render();
-    }
+    this.message = "Validating with Slack…";
+    this.tone = "saving";
+    await this.run(
+      "save",
+      async () => {
+        const result = await context.api("PUT", "/api/slack-installation", { botToken, appToken });
+        if (!result.ok) return this.setStatus(result.data?.message || "Slack validation failed.", "err");
+        if (revision === this.revision) {
+          this.botToken = "";
+          this.appToken = "";
+          this.editor = false;
+        }
+        await this.load();
+        this.setStatus("Tokens verified and saved. Allow a few seconds, then test a mention and DM in Slack.", "ok");
+      },
+      "Slack validation failed. Please try again.",
+    );
   }
   async remove() {
     if (
@@ -277,17 +263,12 @@ export class SlackInstallationState {
       )
     )
       return;
-    this.busy = "remove";
-    this.render();
-    try {
+    await this.run("remove", async () => {
       const result = await context.api("DELETE", "/api/slack-installation");
       if (!result.ok) return this.setStatus(result.data?.message || "Remove failed.", "err");
       await this.load();
       this.setStatus("Slack disconnected.", "ok");
-    } finally {
-      this.busy = "";
-      this.render();
-    }
+    });
   }
 }
 export const installation = new SlackInstallationState();

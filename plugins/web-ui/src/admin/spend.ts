@@ -1,40 +1,22 @@
 import { html } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { BACKGROUND_SOURCES, spendChart } from "./spend-chart.ts";
-import { table, card, renderer } from "./shared.ts";
+import { table, card, renderer, keepSearch, matches } from "./shared.ts";
 
 type Services = Record<string, any>;
 
 const DAY = 86400000;
-const PRESETS = new Map([
-  ["7d", 7],
-  ["30d", 30],
-  ["90d", 90],
-]);
+const PRESETS = new Map(Object.entries({ "7d": 7, "30d": 30, "90d": 90 }));
 const MAX_CUSTOM_DAYS = 366;
-const COLUMNS: Array<[string, string]> = [
-  ["person", "Person"],
-  ["costUsd", "Total"],
-  ["live", "Live"],
-  ["background", "Background"],
-  ["tokens", "Tokens"],
-  ["cacheHitRatio", "Cache hit"],
-];
-const SCOPE_COLUMNS: Array<[string, string]> = [["person", "Scope"], ...COLUMNS.slice(1)];
-const MODEL_COLUMNS: Array<[string, string]> = [["person", "Model"], ...COLUMNS.slice(1)];
-const SOURCE_COLUMNS: Array<[string, string]> = [
-  ["person", "Source"],
-  ["costUsd", "Total"],
-  ["share", "Share of background"],
-  ["calls", "Calls"],
-  ["tokens", "Tokens"],
-];
-const CRON_COLUMNS: Array<[string, string]> = [
-  ["person", "Cron"],
-  ["costUsd", "Total"],
-  ["tokens", "Tokens"],
-  ["cacheHitRatio", "Cache hit"],
-];
+const LABELS: Record<string, string> = {
+  costUsd: "Total",
+  live: "Live",
+  background: "Background",
+  tokens: "Tokens",
+  cacheHitRatio: "Cache hit",
+  share: "Share of background",
+  calls: "Calls",
+};
 
 const rowName = (row: any) =>
   "model" in row ? row.model || "Unknown model" : row.displayName || row.principalId || row.scopeId || "";
@@ -48,12 +30,7 @@ function dayMs(day: unknown): number | null {
   return Number.isFinite(ms) && isoDay(ms) === day ? ms : null;
 }
 
-interface SpendWindow {
-  from: string;
-  to: string;
-  preset: string | null;
-  bucket: "day" | "week";
-}
+type SpendWindow = { from: string; to: string; preset: string | null; bucket: "day" | "week" };
 
 function windowOf(start: number, end: number, preset: string | null): SpendWindow {
   return { from: isoDay(start), to: isoDay(end), preset, bucket: end - start > 62 * DAY ? "week" : "day" };
@@ -103,49 +80,41 @@ class SpendView {
   renderShell() {
     const s = this.services;
     const org = this.data.org || {};
-    const document = this.root.ownerDocument;
-    const previous = this.search;
-    if (previous && !previous.isConnected) return;
-    const active = document.activeElement as HTMLElement | null;
-    const focused = !!active && !!previous?.contains(active);
-    const exportCsv = document.createElement("button");
-    exportCsv.type = "button";
-    exportCsv.textContent = "Export CSV";
-    exportCsv.onclick = () => s.downloadCsv();
-    s.defaultShell({
-      stats: [
-        [fmtUsd(org.costUsd), "Total spend"],
-        [fmtUsd(org.live?.costUsd), "Live"],
-        [fmtUsd(org.background?.costUsd), "Background"],
-        [org.cacheHitRatio == null ? "n/a" : s.fmtPct(org.cacheHitRatio), "Cache hit rate"],
-      ],
-      tabs: [
-        ...[...PRESETS.keys()].map((range) => ({
-          label: range,
-          active: s.window.preset === range,
-          onClick: () => s.setRange(range),
-        })),
-        {
-          label: "Custom",
-          active: s.window.preset === null,
-          onClick: () => s.setCustomRange(s.window.from, s.window.to),
+    this.search = keepSearch(this.root.ownerDocument, this.search, () => {
+      const exportCsv = this.root.ownerDocument.createElement("button");
+      exportCsv.type = "button";
+      exportCsv.textContent = "Export CSV";
+      exportCsv.onclick = () => s.downloadCsv();
+      s.defaultShell({
+        stats: [
+          [fmtUsd(org.costUsd), "Total spend"],
+          [fmtUsd(org.live?.costUsd), "Live"],
+          [fmtUsd(org.background?.costUsd), "Background"],
+          [org.cacheHitRatio == null ? "n/a" : s.fmtPct(org.cacheHitRatio), "Cache hit rate"],
+        ],
+        tabs: [
+          ...[...PRESETS.keys()].map((range) => ({
+            label: range,
+            active: s.window.preset === range,
+            onClick: () => s.setRange(range),
+          })),
+          {
+            label: "Custom",
+            active: s.window.preset === null,
+            onClick: () => s.setCustomRange(s.window.from, s.window.to),
+          },
+        ],
+        search: {
+          value: this.filter,
+          placeholder: "person, scope, cron or model",
+          onInput: (value: string) => {
+            this.filter = value;
+            this.draw();
+          },
         },
-      ],
-      search: {
-        value: this.filter,
-        placeholder: "person, scope, cron or model",
-        onInput: (value: string) => {
-          this.filter = value;
-          this.draw();
-        },
-      },
-      actions: [exportCsv],
+        actions: [exportCsv],
+      });
     });
-    const search = document.querySelector<HTMLElement>("#shellbar .shell-search");
-    if (previous && search) {
-      search.replaceWith(previous);
-      if (focused) active?.focus({ preventScroll: true });
-    } else this.search = search;
   }
   customRange() {
     const current: SpendWindow = this.services.window;
@@ -168,21 +137,15 @@ class SpendView {
     </form>`;
   }
   sortBy(key: string) {
-    if (this.sortKey === key) this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
-    else {
-      this.sortKey = key;
-      this.sortDir = "asc";
-    }
+    this.sortDir = this.sortKey === key && this.sortDir === "asc" ? "desc" : "asc";
+    this.sortKey = key;
     this.draw();
   }
-  arrow(key: string) {
-    if (this.sortKey !== key) return "";
-    return this.sortDir === "asc" ? " ↑" : " ↓";
-  }
-  header(columns = COLUMNS) {
-    return columns.map(
+  header(first = "Person", keys = "costUsd live background tokens cacheHitRatio") {
+    const arrow = (key: string) => (this.sortKey === key ? { asc: " ↑", desc: " ↓" }[this.sortDir] : "");
+    return [["person", first], ...keys.split(" ").map((key) => [key, LABELS[key]])].map(
       ([key, label]) =>
-        html`<button type="button" class="rowbtn" @click=${() => this.sortBy(key)}>${label}${this.arrow(key)}</button>`,
+        html`<button type="button" class="rowbtn" @click=${() => this.sortBy(key)}>${label}${arrow(key)}</button>`,
     );
   }
   rowCells(row: any) {
@@ -232,28 +195,19 @@ class SpendView {
   }
   draw() {
     const s = this.services;
-    const needle = this.filter.trim().toLowerCase();
-    const matches = (row: any) =>
-      [row.principalId || "", row.scopeId || "", row.displayName || ""].join(" ").toLowerCase().includes(needle);
+    const hit = (...parts: unknown[]) => matches(this.filter, ...parts);
     const sorted = (rows: any[]) =>
       rows.slice().sort((a, b) => {
-        const left = sortValue(a, this.sortKey);
-        const right = sortValue(b, this.sortKey);
-        if (left === right) return 0;
-        const order = left < right ? -1 : 1;
-        return this.sortDir === "asc" ? order : -order;
+        const [left, right] = [sortValue(a, this.sortKey), sortValue(b, this.sortKey)];
+        return left === right ? 0 : (left < right ? -1 : 1) * (this.sortDir === "asc" ? 1 : -1);
       });
-    const people = sorted((this.data.people || []).filter(matches));
-    const scopes = sorted((this.data.scopes || []).filter(matches));
+    const shared = (row: any) => hit(row.principalId || "", row.scopeId || "", row.displayName || "");
+    const people = sorted((this.data.people || []).filter(shared));
+    const scopes = sorted((this.data.scopes || []).filter(shared));
     const crons = sorted(
       (this.data.crons || [])
         .map((row: any) => ({ ...row, displayName: s.cronName({ ...row.info, id: row.cronId }, true) }))
-        .filter((row: any) =>
-          [row.cronId, row.scopeId, row.scopeName, row.info?.ownerScopeId, row.displayName]
-            .join(" ")
-            .toLowerCase()
-            .includes(needle),
-        ),
+        .filter((row: any) => hit(row.cronId, row.scopeId, row.scopeName, row.info?.ownerScopeId, row.displayName)),
     );
     const backgroundTotal = Number(this.data.org?.background?.costUsd) || 0;
     const sources = sorted(
@@ -267,9 +221,9 @@ class SpendView {
           tokens: Number(totals.tokens) || 0,
           share: backgroundTotal > 0 ? (Number(totals.costUsd) || 0) / backgroundTotal : null,
         };
-      }).filter((row) => row.costUsd > 0 && row.displayName.toLowerCase().includes(needle)),
+      }).filter((row) => row.costUsd > 0 && hit(row.displayName)),
     );
-    const models = sorted((this.data.models || []).filter((row: any) => rowName(row).toLowerCase().includes(needle)));
+    const models = sorted((this.data.models || []).filter((row: any) => hit(rowName(row))));
     const series = this.data.series || [];
     const org = this.data.org || {};
     this.paint(
@@ -295,10 +249,7 @@ class SpendView {
                     type="button"
                     aria-pressed=${this.chartBreakdown === mode}
                     ?disabled=${mode !== "category" && !series.every((p: any) => Array.isArray(p[mode === "person" ? "people" : "models"]))}
-                    @click=${() => {
-                      this.chartBreakdown = mode;
-                      this.draw();
-                    }}
+                    @click=${() => ((this.chartBreakdown = mode), this.draw())}
                   >
                     ${{ category: "Category", model: "Model", person: "Person" }[mode]}
                   </button>`,
@@ -321,7 +272,7 @@ class SpendView {
         "Shared scopes",
         "Channels, groups and teams are billed to the scope, not to a speaker. These rows plus the people above make up the org total.",
         table(
-          this.header(SCOPE_COLUMNS),
+          this.header("Scope"),
           scopes.map((row: any) => this.rowCells(row)),
           this.data.scopes?.length ? "No scopes match." : "No shared-scope spend in this window.",
         ),
@@ -329,7 +280,7 @@ class SpendView {
         "Background by source",
         "Where background spend comes from. Subagents count toward the run that started them.",
         table(
-          this.header(SOURCE_COLUMNS),
+          this.header("Source", "costUsd share calls tokens"),
           sources.map((row: any) => this.sourceCells(row)),
           backgroundTotal > 0 ? "No sources match." : "No background spend in this window.",
         ),
@@ -338,7 +289,7 @@ class SpendView {
         "Each cron's scheduled runs, including the subagents they start. A deleted cron keeps its spend under its id.",
         html`<div class="spend-crons">
           ${table(
-            this.header(CRON_COLUMNS),
+            this.header("Cron", "costUsd tokens cacheHitRatio"),
             crons.map((row: any) => this.cronCells(row)),
             this.data.crons?.length ? "No crons match." : "No cron spend in this window.",
             (i) => {
@@ -353,7 +304,7 @@ class SpendView {
         "Same org spend, split by the model recorded on each call. Unknown model covers calls without a model ID.",
         html`<div class="spend-models">
           ${table(
-            this.header(MODEL_COLUMNS),
+            this.header("Model"),
             models.map((row: any) => this.rowCells(row)),
             this.data.models?.length ? "No models match." : "No model breakdown available in this window.",
           )}

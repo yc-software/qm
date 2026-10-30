@@ -1,7 +1,9 @@
 import { html } from "lit";
-import { table, card, renderer } from "./shared.ts";
+import { table, card, renderer, keepSearch, matches, subline, badge } from "./shared.ts";
 
 type Services = Record<string, any>;
+const denied = (r: any, verb: string, fallback: string) =>
+  r.status === 403 ? `Only an admin may ${verb}.` : r.data?.message || fallback;
 export class UsersView {
   root: HTMLElement;
   data: any;
@@ -41,32 +43,24 @@ export class UsersView {
       .catch(() => {});
   }
   renderShell() {
-    const document = this.root.ownerDocument;
-    const previous = this.search;
-    if (previous && !previous.isConnected) return;
-    const active = document.activeElement as HTMLElement | null;
-    const focused = !!active && !!previous?.contains(active);
-    this.services.defaultShell({
-      stats: [
-        [(this.data.users || []).length, "Users"],
-        [(this.data.grants || []).length, "Admins"],
-      ],
-      search: {
-        value: this.filter,
-        placeholder: "principal, role, or scope",
-        onInput: (value: string) => {
-          this.filter = value;
-          this.draw();
+    this.search = keepSearch(this.root.ownerDocument, this.search, () =>
+      this.services.defaultShell({
+        stats: [
+          [(this.data.users || []).length, "Users"],
+          [(this.data.grants || []).length, "Admins"],
+        ],
+        search: {
+          value: this.filter,
+          placeholder: "principal, role, or scope",
+          onInput: (value: string) => {
+            this.filter = value;
+            this.draw();
+          },
         },
-      },
-    });
-    const search = document.querySelector<HTMLElement>("#shellbar .shell-search");
-    if (previous && search) {
-      search.replaceWith(previous);
-      if (focused) active?.focus({ preventScroll: true });
-    } else this.search = search;
+      }),
+    );
   }
-  async action(key: string, work: () => Promise<void>, external = false) {
+  async action(key: string, external: boolean, work: () => Promise<void>) {
     if (this.pending.has(key)) return;
     this.pending.add(key);
     if (external) this.externalMessage = "";
@@ -82,13 +76,8 @@ export class UsersView {
     }
   }
   feedback(message: string, tone: string, external = false) {
-    if (external) {
-      this.externalMessage = message;
-      this.externalTone = tone;
-    } else {
-      this.message = message;
-      this.tone = tone;
-    }
+    if (external) [this.externalMessage, this.externalTone] = [message, tone];
+    else [this.message, this.tone] = [message, tone];
   }
   async refresh() {
     const request = ++this.refreshRequest;
@@ -110,22 +99,15 @@ export class UsersView {
   async admin(user: any, event: Event) {
     event.stopPropagation();
     const revoke = user.admin?.isAdmin;
-    if (
-      !(revoke
-        ? this.services.confirm("Revoke admin access for " + user.principalId + "?")
-        : this.confirmAdmin(user.principalId))
-    )
-      return;
-    await this.action(user.principalId, async () => {
+    const ok = revoke
+      ? this.services.confirm("Revoke admin access for " + user.principalId + "?")
+      : this.confirmAdmin(user.principalId);
+    if (!ok) return;
+    await this.action(user.principalId, false, async () => {
       const r = revoke
         ? await this.services.api(
             "DELETE",
-            "/api/grants/" +
-              encodeURIComponent(user.principalId) +
-              "?scope=" +
-              encodeURIComponent(user.admin.scopeId) +
-              "&role=" +
-              encodeURIComponent(user.admin.role),
+            `/api/grants/${encodeURIComponent(user.principalId)}?scope=${encodeURIComponent(user.admin.scopeId)}&role=${encodeURIComponent(user.admin.role)}`,
           )
         : await this.services.api("POST", "/api/grants", {
             principalId: user.principalId,
@@ -137,28 +119,16 @@ export class UsersView {
     });
   }
   async revoke(member: any) {
-    if (
-      !this.services.confirm(
-        member.status === "active"
-          ? 'Revoke access for "' + member.email + '"? They will no longer be able to sign in.'
-          : 'Remove "' + member.email + '" from the list?',
-      )
-    )
-      return;
-    await this.action(
-      member.email,
-      async () => {
-        const r = await this.services.api("DELETE", "/api/external-users/" + encodeURIComponent(member.email));
-        if (r.ok) await this.refresh();
-        else
-          this.feedback(
-            r.status === 403 ? "Only an admin may revoke." : r.data?.message || "Revoke failed.",
-            "err",
-            true,
-          );
-      },
-      true,
-    );
+    const question =
+      member.status === "active"
+        ? 'Revoke access for "' + member.email + '"? They will no longer be able to sign in.'
+        : 'Remove "' + member.email + '" from the list?';
+    if (!this.services.confirm(question)) return;
+    await this.action(member.email, true, async () => {
+      const r = await this.services.api("DELETE", "/api/external-users/" + encodeURIComponent(member.email));
+      if (r.ok) await this.refresh();
+      else this.feedback(denied(r, "revoke", "Revoke failed."), "err", true);
+    });
   }
   async invite() {
     const body = { email: this.email.trim(), role: this.role };
@@ -171,42 +141,34 @@ export class UsersView {
     this.inviteLink = "";
     this.inviteWarning = "";
     this.copyLabel = "Copy invite link";
-    await this.action(
-      "invite",
-      async () => {
-        const r = await this.services.api("POST", "/api/users/invite", body);
-        if (!r.ok)
-          return this.feedback(
-            r.status === 403 ? "Only an admin may invite." : r.data?.message || "Invite failed.",
-            "err",
-            true,
-          );
-        const member = r.data.member;
-        await this.refresh();
-        this.feedback(r.data.emailSent ? "Invite sent to " + member.email : "Added " + member.email + ".", "ok", true);
-        if (!r.data.emailSent && r.data.signInUrl) {
-          this.inviteLink = r.data.signInUrl;
-          this.inviteWarning =
-            this.data.inviteEmail?.configured === false
-              ? "You'll need to configure RESEND_API_KEY to send magic link emails. Otherwise, share the link directly:"
-              : "Email couldn't be sent. Share the invite link directly.";
-        }
-        if (this.email.trim() === body.email && this.role === body.role) this.inviteOpen = false;
-      },
-      true,
-    );
+    await this.action("invite", true, async () => {
+      const r = await this.services.api("POST", "/api/users/invite", body);
+      if (!r.ok) return this.feedback(denied(r, "invite", "Invite failed."), "err", true);
+      const member = r.data.member;
+      await this.refresh();
+      this.feedback(r.data.emailSent ? "Invite sent to " + member.email : "Added " + member.email + ".", "ok", true);
+      if (!r.data.emailSent && r.data.signInUrl) {
+        this.inviteLink = r.data.signInUrl;
+        this.inviteWarning =
+          this.data.inviteEmail?.configured === false
+            ? "You'll need to configure RESEND_API_KEY to send magic link emails. Otherwise, share the link directly:"
+            : "Email couldn't be sent. Share the invite link directly.";
+      }
+      if (this.email.trim() === body.email && this.role === body.role) this.inviteOpen = false;
+    });
   }
   draw() {
     const s = this.services;
-    const matches = (parts: unknown[]) => parts.join(" ").toLowerCase().includes(this.filter.trim().toLowerCase());
+    const hit = (...parts: unknown[]) => matches(this.filter, ...parts);
     const users = (this.data.users || []).filter((u: any) =>
-      matches([u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"]),
+      hit(u.principalId, u.admin?.role || "", u.admin?.scopeId || "member"),
     );
     const externals = (this.data.externalUsers || []).filter((m: any) =>
-      matches([m.email, m.role, m.invitedBy || "", m.status]),
+      hit(m.email, m.role, m.invitedBy || "", m.status),
     );
     const admins = (this.data.grants || []).filter((g: any) => g.role === "org_admin").length;
     const inviteEmail = this.data.inviteEmail || {};
+    const unset = { node: subline("Not configured") };
     const field = (label: string, input: unknown, cls = "") =>
       html`<div class=${"f" + (cls ? " " + cls : "")}>
         <label for=${"users-" + label.toLowerCase()}>${label}</label>${input}
@@ -222,9 +184,7 @@ export class UsersView {
             spellcheck="false"
             autocapitalize="none"
             .value=${this.email}
-            @input=${(e: Event) => {
-              this.email = (e.target as HTMLInputElement).value;
-            }}
+            @input=${(e: Event) => (this.email = (e.target as HTMLInputElement).value)}
           />`,
           "grow",
         )}${field(
@@ -232,9 +192,7 @@ export class UsersView {
           html`<select
             id="users-role"
             .value=${this.role}
-            @change=${(e: Event) => {
-              this.role = (e.target as HTMLSelectElement).value;
-            }}
+            @change=${(e: Event) => (this.role = (e.target as HTMLSelectElement).value)}
           >
             <option value="member">Member</option>
             <option value="org_admin">Admin</option>
@@ -248,12 +206,12 @@ export class UsersView {
       ["Email", "Role", "Expires", "Invited by", "Status", ""],
       externals.map((m: any) => [
         { text: m.email, cls: "mono" },
-        { node: html`<span class="subline">${s.labelRole(m.role)}</span>` },
+        { node: subline(s.labelRole(m.role)) },
         m.expiresAt === null
           ? "No expiration"
           : (m.status === "active" ? "Ends " : "Ended ") + new Date(m.expiresAt).toISOString().slice(0, 10) + " (UTC)",
         m.invitedBy || "-",
-        { badge: m.status === "active" ? "Active" : "Expired", kind: m.status === "active" ? "ok" : "warn" },
+        { node: badge(m.status === "active" ? "Active" : "Expired", m.status === "active" ? "ok" : "warn") },
         m.status === "active" || (m.kind !== "teammate" && Date.now() - m.expiresAt >= 86400000)
           ? {
               action: {
@@ -271,16 +229,13 @@ export class UsersView {
       ["Principal", "Role", "Last seen", "Sessions", "Turns", "Credentials", "Grants", "", ""],
       users.map((u: any) => [
         { text: u.principalId, cls: "mono" },
-        { node: html`<span class="subline">${u.admin?.isAdmin ? s.labelRole(u.admin.role) : "member"}</span>` },
+        { node: subline(u.admin?.isAdmin ? s.labelRole(u.admin.role) : "member") },
         u.lastSeenAt
           ? { node: html`<span title=${s.fmtTime(u.lastSeenAt)}>${s.relTime(u.lastSeenAt)}</span>`, cls: "num" }
           : { text: "-", cls: "num" },
         { text: String(u.sessionCount), cls: "num" },
         { text: String(u.turnCount), cls: "num" },
-        ...[0, 1].map((i) => ({
-          text: this.counts.has(u.principalId) ? String(this.counts.get(u.principalId)![i]) : "-",
-          cls: "num",
-        })),
+        ...(this.counts.get(u.principalId)?.map(String) || ["-", "-"]).map((text) => ({ text, cls: "num" })),
         {
           action: {
             label: "Impersonate ↗",
@@ -359,9 +314,7 @@ export class UsersView {
               [
                 [
                   "Email domain allowlist",
-                  this.data.access?.emailDomain
-                    ? "@" + this.data.access.emailDomain
-                    : { node: html`<span class="subline">Not configured</span>` },
+                  this.data.access?.emailDomain ? "@" + this.data.access.emailDomain : unset,
                   {
                     node: html`Controls who can create an account at
                       <a href=${(inviteEmail.signInUrl || "/auth/login") + "?provider=primary"}
@@ -375,7 +328,7 @@ export class UsersView {
                     ? this.data.access.slackAllowFrom
                         .map((rule: string) => (rule.includes("@") ? rule : "@" + rule))
                         .join(", ")
-                    : { node: html`<span class="subline">Not configured</span>` },
+                    : unset,
                   "Controls who the bot treats as an internal employee in shared Slack workspaces.",
                 ],
               ],

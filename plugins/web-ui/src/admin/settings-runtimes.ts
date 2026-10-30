@@ -21,9 +21,8 @@ const pickers = new Map<string, ReturnType<typeof picker>>();
 const modelOptions = new WeakMap<object, ModelOption[]>();
 let saveSetting: (key: string) => Promise<void> = async () => {};
 
-export function configureRuntimes(actions: { save: (key: string) => Promise<void> }) {
-  saveSetting = actions.save;
-}
+export const configureRuntimes = (actions: { save: (key: string) => Promise<void> }) =>
+  void (saveSetting = actions.save);
 
 function optionsFor(context: Record<string, any>): ModelOption[] {
   let options = modelOptions.get(context);

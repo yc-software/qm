@@ -83,9 +83,7 @@ export function egress(root: HTMLElement, data: any, s: Record<string, any>) {
         ["Host", "Status", "Source", ...(s.all ? ["Scope"] : []), "Principal", "Detail", "Time"],
         rows.map((r: any) => [
           { text: r.host, cls: "mono" },
-          {
-            node: egressStatus(r),
-          },
+          { node: egressStatus(r) },
           { node: html`<span class="subline">${r.source || "firewall"}</span>` },
           ...(s.all ? [s.shortName(r.scopeLabel)] : []),
           { text: r.principalId || "None", cls: "mono" },
@@ -99,15 +97,13 @@ export function egress(root: HTMLElement, data: any, s: Record<string, any>) {
 }
 
 function egressStatus(row: any) {
-  let tone = row.status === "error" ? "flag-err" : "subline";
-  let label = row.status && row.status !== "ok" ? row.status : "allowed";
-  if (row.allowed === false) {
-    tone = "flag-warn";
-    label = row.status || "denied";
-  }
+  const denied = row.allowed === false;
+  const tone = (denied && "flag-warn") || (row.status === "error" ? "flag-err" : "subline");
+  const label = denied ? row.status || "denied" : (row.status !== "ok" && row.status) || "allowed";
   return html`<span class=${tone}>${label}</span>`;
 }
 
-function time(ts: number, s: Record<string, any>) {
-  return { node: html`<span title=${s.fmtTime(ts)}>${s.relTime(ts)}</span>`, cls: "num" };
-}
+const time = (ts: number, s: Record<string, any>) => ({
+  node: html`<span title=${s.fmtTime(ts)}>${s.relTime(ts)}</span>`,
+  cls: "num",
+});

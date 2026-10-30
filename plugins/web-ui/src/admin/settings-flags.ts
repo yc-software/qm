@@ -15,9 +15,7 @@ const state = {
   selector: null as Node | null,
 };
 let redraw = () => {};
-export function configureFlags(options: any) {
-  config = options;
-}
+export const configureFlags = (options: any) => void (config = options);
 function feature() {
   return state.rows.find((row) => row.featureName === state.feature);
 }

@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { node, renderer, badge, scroller } from "./shared.ts";
 type Row = Record<string, any>;
 let generation = 0;
@@ -22,47 +23,59 @@ const brain = html`<svg
   <path d="M14.8 9.2c-.9.1-1.6.6-2 1.4" />
   <path d="M12 10.7v7.8" />
 </svg>`;
+const activate = (run: () => void) => (e: KeyboardEvent) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    run();
+  }
+};
+const requestCount = (count: number) => count + " request" + (count === 1 ? "" : "s");
+const contextIcon = (label: string, title: string, onClick: (e: Event) => void, expanded?: boolean) =>
+  html`<button
+    type="button"
+    class=${"context-icon" + (expanded ? " active" : "")}
+    aria-expanded=${ifDefined(expanded === undefined ? undefined : String(expanded))}
+    aria-label=${label}
+    title=${title}
+    @click=${onClick}
+  >
+    ${brain}
+  </button>`;
 export function prepare(data: Row, requests: Row[]) {
   const entries: Row[] = data.entries || [],
     events: Row[] = data.deliveryEvents || [],
     llm = new Map<any, Row[]>(),
     byEntry = new Map<any, Row[]>(),
-    dur = new Map<number, number>();
-  for (const req of requests) {
-    const key = req.turnSeq ?? "_orphan";
-    if (!llm.has(key)) llm.set(key, []);
-    llm.get(key)!.push(req);
-  }
+    dur = new Map<number, number>(),
+    seqIndex = new Map(entries.map((e, i) => [e.seq, i])),
+    add = (map: Map<any, Row[]>, key: any, rows: Row[]) => map.set(key, [...(map.get(key) || []), ...rows]);
+  for (const req of requests) add(llm, req.turnSeq ?? "_orphan", [req]);
   for (let i = 1; i < entries.length; i++) {
     const delta = (entries[i].createdAt || 0) - (entries[i - 1].createdAt || 0);
     if (delta >= 0) dur.set(entries[i].seq, delta);
   }
-  const seqIndex = new Map(entries.map((e, i) => [e.seq, i]));
   for (const [turn, reqs] of llm) {
     if (turn === "_orphan" || turn < (entries[0]?.seq || 0)) continue;
     const start = seqIndex.get(turn);
     if (start === undefined) {
-      llm.set("_orphan", [...(llm.get("_orphan") || []), ...reqs]);
+      add(llm, "_orphan", reqs);
       continue;
     }
-    let stop = entries.findIndex((e, i) => i > start && e.type === "user");
-    if (stop < 0) stop = entries.length;
     let anchor = start;
-    for (let i = stop - 1; i > start; i--)
-      if (entries[i].type === "assistant") {
-        anchor = i;
-        break;
-      }
-    byEntry.set(entries[anchor].seq, [
-      ...(byEntry.get(entries[anchor].seq) || []),
-      ...reqs.slice().sort((a, b) => (a.step || 0) - (b.step || 0)),
-    ]);
+    for (let i = start + 1; i < entries.length && entries[i].type !== "user"; i++)
+      if (entries[i].type === "assistant") anchor = i;
+    add(
+      byEntry,
+      entries[anchor].seq,
+      reqs.sort((a, b) => (a.step || 0) - (b.step || 0)),
+    );
   }
   const results = new Map<any, Row>(),
     outbound = new Map<any, Row>(),
     principalIds = new Set(),
     pairedSeqs = new Set(),
-    merged = new Set();
+    merged = new Set(),
+    units: Row[] = [];
   for (const e of entries)
     if (e.type === "tool_result" && e.payload?.callId && !results.has(e.payload.callId))
       results.set(e.payload.callId, e);
@@ -70,28 +83,25 @@ export function prepare(data: Row, requests: Row[]) {
     if (e.deliveryId && e.type === "outbound_delivery" && !outbound.has(e.deliveryId)) outbound.set(e.deliveryId, e);
     if (e.deliveryId && e.type === "principal_delivery") principalIds.add(e.deliveryId);
   }
-  const units: Row[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const e = entries[i];
-    if (e.type === "tool_call" || e.type === "tool_result") {
-      if (e.type === "tool_result" && pairedSeqs.has(e.seq)) continue;
-      let paired: Row | undefined;
-      if (e.type === "tool_call") {
-        if (e.payload?.callId) paired = results.get(e.payload.callId);
-        else if (entries[i + 1]?.type === "tool_result") paired = entries[i + 1];
-      }
-      if (paired) pairedSeqs.add(paired.seq);
-      const deliveryId = (e.type === "tool_result" ? e : paired)?.payload?.deliveryId,
-        delivery = outbound.get(deliveryId);
-      if (delivery) merged.add(deliveryId);
-      units.push({ kind: "tool", primary: e, paired, delivery, llmReqs: byEntry.get(e.seq) });
-    } else units.push({ kind: "entry", entry: e, llmReqs: byEntry.get(e.seq) });
-  }
+  entries.forEach((e, i) => {
+    if (e.type !== "tool_call" && e.type !== "tool_result")
+      return units.push({ kind: "entry", entry: e, llmReqs: byEntry.get(e.seq) });
+    if (e.type === "tool_result" && pairedSeqs.has(e.seq)) return;
+    let paired: Row | undefined;
+    if (e.type === "tool_call") {
+      if (e.payload?.callId) paired = results.get(e.payload.callId);
+      else if (entries[i + 1]?.type === "tool_result") paired = entries[i + 1];
+    }
+    if (paired) pairedSeqs.add(paired.seq);
+    const deliveryId = (e.type === "tool_result" ? e : paired)?.payload?.deliveryId,
+      delivery = outbound.get(deliveryId);
+    if (delivery) merged.add(deliveryId);
+    units.push({ kind: "tool", primary: e, paired, delivery, llmReqs: byEntry.get(e.seq) });
+  });
   for (const event of events)
     if (!event.deliveryId || !merged.has(event.deliveryId)) units.push({ kind: "delivery_event", event });
-  units.sort(
-    (a, b) => ((a.primary || a.entry || a.event)?.createdAt || 0) - ((b.primary || b.entry || b.event)?.createdAt || 0),
-  );
+  const at = (unit: Row) => (unit.primary || unit.entry || unit.event)?.createdAt || 0;
+  units.sort((a, b) => at(a) - at(b));
   if (llm.get("_orphan")?.length) units.push({ kind: "llm", reqs: llm.get("_orphan") });
   return {
     units,
@@ -100,49 +110,40 @@ export function prepare(data: Row, requests: Row[]) {
     originPromptSeq: data.origin && !data.hasMore ? entries.find((e) => e.type === "user")?.seq : null,
   };
 }
+function contextStats(requests: Row[], s: Row, sections?: Row[]) {
+  const latest = requests.at(-1) || { request: {} };
+  sections ??= s.contextSections(s.requestBody(latest), latest.transport);
+  return html`<div class="context-stats">
+    ${s.metaChip((latest.model || "?") + " · " + s.fmtContextSize(latest, sections))}${s.cacheMetaItems(s.sumCacheUsage(requests))}${s.rawJsonLink(requests)}
+  </div>`;
+}
+function begin(s: Row, shell: Row) {
+  const request = ++generation,
+    root = document.getElementById("view-data")!;
+  root.replaceChildren();
+  const draw = renderer(root);
+  s.pageShell(shell);
+  draw(html`<div class="detail">Loading…</div>`);
+  return { request, root, draw };
+}
+const fetchSession = (s: Row, id: string, path: string, query = "") =>
+  s.api("GET", "/api/sessions/" + encodeURIComponent(id) + path + "scope=" + encodeURIComponent(s.scope) + query);
+const failed = (result: Row, what: string) =>
+  html`<div class="detail">${result.data?.message || `Failed to load ${what} (${result.status}).`}</div>`;
 export function requestsPanel(requests: Row[], s: Row, opts: Row = {}) {
   const host = document.createDocumentFragment(),
-    draw = renderer(host as unknown as HTMLElement);
-  let open = !!opts.embedded;
-  const sections = requests.map((q) => s.contextSections(s.requestBody(q), q.transport));
-  const selected = sections.map((list: Row[]) =>
-    opts.selectLargest && list.length ? list.reduce((a, b) => (b.tokens > a.tokens ? b : a)).key : null,
-  );
-  const latest = requests.at(-1) || { request: {} },
-    latestSections = opts.latestSections || sections.at(-1) || [],
+    draw = renderer(host as unknown as HTMLElement),
+    sections: Row[][] = requests.map((q) => s.contextSections(s.requestBody(q), q.transport)),
+    selected = sections.map((list) =>
+      opts.selectLargest && list.length ? list.reduce((a, b) => (b.tokens > a.tokens ? b : a)).key : null,
+    ),
     cache = s.sumCacheUsage(requests);
-  const stats = () =>
-    html`<div class="context-stats">
-      ${s.metaChip((latest.model || "?") + " · " + s.fmtContextSize(latest, latestSections))}${s.cacheMetaItems(cache)}${s.rawJsonLink(requests)}
-    </div>`;
   function paint() {
     draw(
       html`<div
-        class=${classMap({ entry: !opts.embedded, collapsed: !open, llm: true, "context-turn": true, "context-page": !!opts.page, "cache-miss": !!cache && s.isStablePrefixMiss(cache) })}
+        class=${classMap({ llm: true, "context-turn": true, "context-page": !!opts.page, "cache-miss": !!cache && s.isStablePrefixMiss(cache) })}
       >
-        ${
-          opts.page
-            ? nothing
-            : html`<div class="who">
-                ${
-                  opts.embedded
-                    ? nothing
-                    : html`<button
-                          type="button"
-                          class="disclosure"
-                          aria-expanded=${String(open)}
-                          aria-label=${open ? "Collapse model context" : "Expand model context"}
-                          title=${open ? "Collapse model context" : "Expand model context"}
-                          @click=${() => {
-                            open = !open;
-                            paint();
-                          }}
-                        >
-                          ${open ? "▾" : "▸"}</button
-                        ><span class="role">sent to model</span>`
-                }${stats()}
-              </div>`
-        }
+        ${opts.page ? nothing : html`<div class="who">${contextStats(requests, s, sections.at(-1) || [])}</div>`}
         <div class="context-details">
           ${requests.map((q, index) => {
             const list: Row[] = sections[index],
@@ -196,67 +197,45 @@ export function requestsPanel(requests: Row[], s: Row, opts: Row = {}) {
   return host.firstElementChild as HTMLElement;
 }
 export async function contextPage(sessionId: string, turnSeq: string, s: Row) {
-  const request = ++generation,
-    root = document.getElementById("view-data")!;
-  root.replaceChildren();
-  const draw = renderer(root);
-  s.pageShell({ back: { label: "← Back to transcript", onClick: () => history.back() }, title: "Sent to model" });
-  draw(html`<div class="detail">Loading…</div>`);
-  const result = await s.api(
-    "GET",
-    "/api/sessions/" +
-      encodeURIComponent(sessionId) +
-      "/llm?turnSeq=" +
-      encodeURIComponent(turnSeq) +
-      "&scope=" +
-      encodeURIComponent(s.scope),
-  );
+  const { request, draw } = begin(s, {
+    back: { label: "← Back to transcript", onClick: () => history.back() },
+    title: "Sent to model",
+  });
+  const result = await fetchSession(s, sessionId, "/llm?turnSeq=" + encodeURIComponent(turnSeq) + "&");
   if (request !== generation || !s.current(sessionId, turnSeq)) return;
-  if (!result.ok)
-    return draw(
-      html`<div class="detail">${result.data?.message || `Failed to load context (${result.status}).`}</div>`,
-    );
+  if (!result.ok) return draw(failed(result, "context"));
   const requests = (result.data.requests || []).slice().sort((a: Row, b: Row) => (a.step || 0) - (b.step || 0)),
-    label = turnSeq === "orphan" ? "unattributed context" : `turn #${turnSeq}`,
-    latest = requests.at(-1),
-    sections = latest ? s.contextSections(s.requestBody(latest), latest.transport) : [];
+    label = turnSeq === "orphan" ? "unattributed context" : `turn #${turnSeq}`;
   draw(
     html`<div class="detail">
       <div class="context-page-head">
         <h2>${"Sent to model · " + label + (requests.length > 1 ? " · " + requests.length + " steps" : "")}</h2>
-        ${requests.length ? html`<div class="context-stats">${s.metaChip((latest.model || "?") + " · " + s.fmtContextSize(latest, sections))}${s.cacheMetaItems(s.sumCacheUsage(requests))}${s.rawJsonLink(requests)}</div>` : nothing}
+        ${requests.length ? contextStats(requests, s) : nothing}
       </div>
-      ${requests.length ? requestsPanel(requests, s, { embedded: true, page: true, selectLargest: true, latestSections: sections }) : html`<p class="context-empty">No context was captured for this turn.</p>`}
+      ${requests.length ? requestsPanel(requests, s, { page: true, selectLargest: true }) : html`<p class="context-empty">No context was captured for this turn.</p>`}
     </div>`,
   );
 }
 export async function show(sessionId: string, limit: number | undefined, expand: boolean | undefined, s: Row) {
-  const request = ++generation,
-    root = document.getElementById("view-data")!,
-    reqLimit = limit || s.pageSize;
-  root.replaceChildren();
-  const draw = renderer(root),
-    current = () => request === generation && s.current(sessionId);
   const back = (sessionScope?: string) => () => {
     if (history.state?.deepLink)
       s.go({ view: "history", scope: sessionScope || s.scope, session: null, historyKind: s.historyKind });
     else history.back();
   };
-  s.pageShell({
-    back: { label: "← Conversations", onClick: back() },
-    title: "Conversation",
-    context: s.shortName(s.scope),
-  });
+  const { request, root, draw } = begin(s, {
+      back: { label: "← Conversations", onClick: back() },
+      title: "Conversation",
+      context: s.shortName(s.scope),
+    }),
+    reqLimit = limit || s.pageSize,
+    current = () => request === generation && s.current(sessionId);
   let applyVisibility = () => {};
   const header = document.getElementById("header-controls")!;
   header.replaceChildren();
   const paintHeader = renderer(header);
   function controls() {
     paintHeader(
-      html`${[
-        ["thinking", "thinking"],
-        ["tool results", "toolResults"],
-      ].map(
+      html`${Object.entries({ thinking: "thinking", "tool results": "toolResults" }).map(
         ([label, key]) =>
           html`<label class="header-check"
             ><input
@@ -273,20 +252,10 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     );
   }
   controls();
-  draw(html`<div class="detail">Loading…</div>`);
-  const llmPromise = s.api(
-    "GET",
-    "/api/sessions/" + encodeURIComponent(sessionId) + "/llm?scope=" + encodeURIComponent(s.scope),
-  );
-  const result = await s.api(
-    "GET",
-    "/api/sessions/" + encodeURIComponent(sessionId) + "?scope=" + encodeURIComponent(s.scope) + "&limit=" + reqLimit,
-  );
+  const llmPromise = fetchSession(s, sessionId, "/llm?");
+  const result = await fetchSession(s, sessionId, "?", "&limit=" + reqLimit);
   if (!current()) return;
-  if (!result.ok)
-    return draw(
-      html`<div class="detail">${result.data?.message || `Failed to load transcript (${result.status}).`}</div>`,
-    );
+  if (!result.ok) return draw(failed(result, "transcript"));
   const data = result.data,
     session = data.session || {},
     origin = data.origin,
@@ -298,52 +267,48 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       s.shortName(session.scopeId || s.scope) + (session.createdAt ? " · created " + s.relTime(session.createdAt) : ""),
     actions: owner ? [s.webUiAsButton(owner)] : [],
   });
-  let requests: Row[] = [];
-  try {
-    const llm = await llmPromise;
-    if (llm.ok) requests = llm.data.requests || [];
-  } catch {
-    requests = [];
-  }
+  const requests: Row[] = await llmPromise.then((llm: Row) => (llm.ok ? llm.data.requests || [] : [])).catch(() => []);
   if (!current()) return;
   const { units, dur, principalIds, originPromptSeq } = prepare(data, requests),
     open = new Set<Row>(),
     bodyNodes = new Map<Row, Node>(),
     toolNodes = new Map<Row, Row>(),
-    panels = new Map<Row, Node>();
+    panels = new Map<Row, HTMLElement>();
   let errors: Row[] = [],
     first = 0,
     paused = false;
   const observer =
     "IntersectionObserver" in window
-      ? new IntersectionObserver(
-          (entries) => {
-            if (entries.some((e) => e.isIntersecting)) reveal();
-          },
-          { rootMargin: "800px 0px" },
-        )
+      ? new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && reveal(), {
+          rootMargin: "800px 0px",
+        })
       : null;
   s.setObserver(observer);
-  if (observer && !expand) {
-    first = Math.max(0, units.length - 60);
+  const rewind = (from: number) => {
+    first = Math.max(0, from - 60);
     while (first > 0 && units[first].kind === "llm") first--;
-  }
+  };
+  if (observer && !expand) rewind(units.length);
+  const toggle = (unit: Row) => () => {
+    if (open.has(unit)) open.delete(unit);
+    else open.add(unit);
+    paint();
+  };
+  const ends = ({ primary: p, paired }: Row) => [
+    p.type === "tool_call" ? p : null,
+    p.type === "tool_result" ? p : paired,
+  ];
+  const memo = <K, V>(map: Map<K, V>, key: K, make: () => V) => {
+    if (!map.has(key)) map.set(key, make());
+    return map.get(key)!;
+  };
   const contextButton = (turn: any, count: number) =>
-    html`<button
-      type="button"
-      class="context-icon"
-      aria-label="View context sent to the model"
-      title=${"View context sent to the model · " + count + " request" + (count === 1 ? "" : "s")}
-      @click=${(e: Event) => {
-        e.stopPropagation();
-        s.go({ view: "history", scope: s.scope, session: sessionId, turn });
-      }}
-    >
-      ${brain}
-    </button>`;
+    contextIcon("View context sent to the model", "View context sent to the model · " + requestCount(count), (e) => {
+      e.stopPropagation();
+      s.go({ view: "history", scope: s.scope, session: sessionId, turn });
+    });
   const timing = (unit: Row) => {
-    const call = unit.primary.type === "tool_call" ? unit.primary : null,
-      res = unit.primary.type === "tool_result" ? unit.primary : unit.paired;
+    const [call, res] = ends(unit);
     return call && res
       ? [
           [dur.get(call.seq), "model"],
@@ -352,21 +317,14 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       : [[dur.get((call || res)?.seq)]];
   };
   function fullTool(unit: Row) {
-    if (!toolNodes.has(unit)) {
-      const call = unit.primary.type === "tool_call" ? unit.primary : null,
-        res = unit.primary.type === "tool_result" ? unit.primary : unit.paired;
-      toolNodes.set(
-        unit,
-        s.renderToolEntry(
-          call,
-          res,
-          unit.llmReqs?.length ? node(contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length)) : null,
-          s.stepDurEl(timing(unit)),
-          unit.delivery || null,
-        ),
-      );
-    }
-    const built = toolNodes.get(unit)!;
+    const built = memo(toolNodes, unit, () =>
+      s.renderToolEntry(
+        ...ends(unit),
+        unit.llmReqs?.length ? node(contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length)) : null,
+        s.stepDurEl(timing(unit)),
+        unit.delivery || null,
+      ),
+    );
     built.sync?.();
     return built.block;
   }
@@ -380,18 +338,16 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           View cron
         </button>`
       : nothing;
-  function body(entry: Row) {
-    if (!bodyNodes.has(entry)) {
+  const body = (entry: Row) =>
+    memo(bodyNodes, entry, () => {
       const text = s.payloadText(entry.payload);
       let value: Node;
       if (entry.type === "user" && s.isXmlishText(text)) value = s.renderXmlish(text);
       else if (entry.type === "user" || entry.type === "assistant") value = s.renderMarkdown(text);
       else value = node(html`<pre>${text}</pre>`);
       if ((value as Element).tagName === "PRE") value.textContent = text;
-      bodyNodes.set(entry, value);
-    }
-    return bodyNodes.get(entry);
-  }
+      return value;
+    });
   function unitTemplate(unit: Row) {
     if (unit.kind === "llm")
       return html`<div class="entry llm">
@@ -399,25 +355,17 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       </div>`;
     if (unit.kind === "tool") {
       const e = unit.primary,
-        call = e.type === "tool_call" ? e : null,
-        res = e.type === "tool_result" ? e : unit.paired,
+        [call, res] = ends(unit),
         types = unit.paired ? ["tool_call", "tool_result"] : [e.type];
-      if (unit.delivery) {
-        types.push("outbound_delivery");
-        if (principalIds.has(unit.delivery.deliveryId)) types.push("principal_delivery");
-      }
+      if (unit.delivery) types.push("outbound_delivery");
+      if (principalIds.has(unit.delivery?.deliveryId)) types.push("principal_delivery");
       const hidden = s.entryHidden(types, !!unit.delivery),
         full = fullTool(unit);
       full.classList.toggle("filtered", hidden);
       if (unit.delivery || unit.llmReqs?.length) return full;
       const cp = call?.payload,
         rp = res?.payload,
-        name = s.toolName(cp, rp),
-        toggle = () => {
-          if (open.has(unit)) open.delete(unit);
-          else open.add(unit);
-          paint();
-        };
+        name = s.toolName(cp, rp);
       return html`<div
         class=${classMap({ entry: true, "tool-entry": true, "tool-line-entry": true, open: open.has(unit), filtered: hidden })}
       >
@@ -428,14 +376,9 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           title="Toggle full tool card"
           aria-expanded=${String(open.has(unit))}
           @click=${(e: MouseEvent) => {
-            if (!(e.target as Element).closest(".copy")) toggle();
+            if (!(e.target as Element).closest(".copy")) toggle(unit)();
           }}
-          @keydown=${(e: KeyboardEvent) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              toggle();
-            }
-          }}
+          @keydown=${activate(toggle(unit))}
         >
           <span class="tool-line-caret">${open.has(unit) ? "▾" : "▸"}</span
           ><span class="tool-label">${s.toolLabelText(name, cp, rp)}</span
@@ -456,7 +399,8 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         provenance = event.provenance,
         label = event.origin?.label || s.wakeOriginLabel(provenance?.trigger || provenance?.surface),
         mirror = s.slackMirrorRef(event),
-        text = event.text || "";
+        text = event.text || "",
+        shown = open.has(unit) ? "Hide" : "Show";
       let deliveryState = "delivery";
       if (event.shadow) deliveryState = "shadow";
       else if (event.expiredAt) deliveryState = "dropped";
@@ -464,19 +408,17 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       const bodyText = [
         event.destination?.onBehalfOf ? "from " + event.destination.onBehalfOf : null,
         outbound && event.destination?.target ? "to " + event.destination.target : null,
-        event.provenance?.fireKey || event.origin?.fireKey
-          ? "origin " + (event.provenance?.fireKey || event.origin.fireKey)
-          : null,
+        provenance?.fireKey || event.origin?.fireKey ? "origin " + (provenance?.fireKey || event.origin.fireKey) : null,
         outbound && event.recipientThreadRef ? "recipient thread " + event.recipientThreadRef : null,
         text,
       ]
         .filter((x) => x != null)
         .join("\n")
         .trim();
-      if (event.llmRequests?.length && !panels.has(unit))
-        panels.set(unit, requestsPanel(event.llmRequests, s, { embedded: true }));
-      let originLink: unknown = nothing;
-      if (provenance) originLink = s.metaChip(label);
+      const panel = event.llmRequests?.length ? memo(panels, unit, () => requestsPanel(event.llmRequests, s)) : null;
+      panel?.classList.add("inline-context");
+      panel?.classList.toggle("collapsed", !open.has(unit));
+      let originLink: unknown = provenance ? s.metaChip(label) : nothing;
       if (event.sourceSession?.id)
         originLink = html`<button
           type="button"
@@ -486,16 +428,11 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         >
           ${label}
         </button>`;
-      const toggle = () => {
-        if (open.has(unit)) open.delete(unit);
-        else open.add(unit);
-        paint();
-      };
       return html`<div
         class=${classMap({ entry: true, "delivery-event-entry": true, filtered: s.entryHidden([outbound ? "outbound_delivery" : "principal_delivery"], false) })}
       >
         <div class="who">
-          ${event.llmRequests?.length ? html`<button type="button" class=${"context-icon" + (open.has(unit) ? " active" : "")} aria-expanded=${String(open.has(unit))} aria-label=${(open.has(unit) ? "Hide" : "Show") + " context"} title=${(open.has(unit) ? "Hide" : "Show") + " context · " + event.llmRequests.length + " request" + (event.llmRequests.length === 1 ? "" : "s")} @click=${toggle}>${brain}</button>` : nothing}<span
+          ${event.llmRequests?.length ? contextIcon(shown + " context", shown + " context · " + requestCount(event.llmRequests.length), toggle(unit), open.has(unit)) : nothing}<span
             class="entry-label important"
             >${event.shadow || delivery ? s.deliveryLabel(event) : "Delivery event"}</span
           >${event.shadow ? html`<span class="entry-label" title="Recorded for observability, never sent to the human (shadow-mode rollout)">not sent</span>` : nothing}${!event.shadow && event.expiredAt ? html`<span class="entry-label" title="Dropped undelivered — the destination failed permanently or the message aged out">never sent</span>` : nothing}${delivery ? badge(s.deliverySurfaceLabel(event), "info") : nothing}${outbound ? nothing : originLink}${cronLink(event.origin)}${
@@ -515,7 +452,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           }<span class="when">${deliveryState + " · " + s.fmtTime(event.createdAt)}</span
           >${s.copyButton("Copy", () => text)}
         </div>
-        ${panels.has(unit) ? panelVisibility(panels.get(unit)!, open.has(unit)) : nothing}
+        ${panel ?? nothing}
         <pre>${bodyText}</pre>
         ${s.deliveryFileBadges(event.attachments)}
       </div>`;
@@ -528,11 +465,6 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     if (e.type === "assistant") label = s.brandSelfLabel();
     else if (e.type === "user") label = s.payloadName(e.payload) || "User";
     if (isOrigin) label = origin.label || s.wakeOriginLabel(origin.trigger);
-    const toggle = () => {
-      if (open.has(unit)) open.delete(unit);
-      else open.add(unit);
-      paint();
-    };
     const files =
       e.type === "delivery" || (e.type === "tool_result" && e.payload?.tool === "attach")
         ? s.deliveryFileBadges(e.payload?.files || [])
@@ -541,7 +473,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       class=${classMap({ entry: true, noise, collapsed: noise && !open.has(unit), "thinking-entry": e.type === "thinking", "message-entry": e.type === "user" || e.type === "assistant", "user-entry": e.type === "user", "assistant-entry": e.type === "assistant", "cron-prompt-entry": !!isOrigin, "system-entry": e.type === "system", filtered: s.entryHidden([e.type], false) })}
     >
       <div class="who">
-        ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
+        ${unit.llmReqs?.length ? contextButton(unit.llmReqs[0].turnSeq, unit.llmReqs.length) : nothing}${noise ? html`<button type="button" class="disclosure" aria-expanded=${String(open.has(unit))} aria-label=${open.has(unit) ? "Collapse entry" : "Expand entry"} title=${open.has(unit) ? "Collapse entry" : "Expand entry"} @click=${toggle(unit)}>${open.has(unit) ? "▾" : "▸"}</button>` : nothing}<span
           class=${"entry-label" + (isOrigin ? " important" : "")}
           >${label}</span
         >${isOrigin ? cronLink(origin, session.scopeId) : nothing}${e.type !== "user" ? s.stepDurEl([[dur.get(e.seq)]]) : nothing}<span
@@ -551,11 +483,6 @@ export async function show(sessionId: string, limit: number | undefined, expand:
       </div>
       ${body(e)}${files}
     </div>`;
-  }
-  function panelVisibility(panel: Node, visible: boolean) {
-    (panel as HTMLElement).classList.add("inline-context");
-    (panel as HTMLElement).classList.toggle("collapsed", !visible);
-    return panel;
   }
   const load = () => {
     if (first > 0) reveal();
@@ -581,12 +508,7 @@ export async function show(sessionId: string, limit: number | undefined, expand:
                         role=${more ? "button" : "presentation"}
                         tabindex=${more ? 0 : -1}
                         @click=${more ? load : nothing}
-                        @keydown=${(e: KeyboardEvent) => {
-                          if (more && (e.key === "Enter" || e.key === " ")) {
-                            e.preventDefault();
-                            load();
-                          }
-                        }}
+                        @keydown=${more ? activate(load) : nothing}
                       >
                         ${more ? "Load earlier messages" : "Loading earlier messages…"}
                       </div>`
@@ -604,19 +526,14 @@ export async function show(sessionId: string, limit: number | undefined, expand:
     const pane = scroller(root),
       height = pane.scrollHeight,
       top = pane.scrollTop;
-    first = Math.max(0, first - 60);
-    while (first > 0 && units[first].kind === "llm") first--;
+    rewind(first);
     paused = false;
     paint();
     const added = pane.scrollHeight - height;
     pane.scrollTo({ top: top + added });
-    if (first > 0 && observer) {
-      if (added > 1) observe();
-      else {
-        paused = true;
-        paint();
-      }
-    }
+    paused = !!observer && first > 0 && added <= 1;
+    if (paused) paint();
+    else observe();
   }
   function observe() {
     const sentinel = root.querySelector(".load-earlier");

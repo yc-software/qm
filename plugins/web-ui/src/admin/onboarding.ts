@@ -1,5 +1,6 @@
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
 import { swallowAs } from "../../../chassis/src/errors.ts";
+import { mountTemplate } from "./shared.ts";
 type Data = Record<string, any>;
 const providerLabels: Record<string, string> = {
   anthropic: "Anthropic",
@@ -77,14 +78,12 @@ export class Onboarding {
     this.context = context;
   }
   mount() {
-    for (const placeholder of document.querySelectorAll<HTMLTemplateElement>("template[data-onboarding-ui]")) {
-      const kind = placeholder.dataset.onboardingUi!;
-      const fragment = document.createDocumentFragment();
-      const draw = () => render(this.template(kind), fragment);
-      draw();
-      placeholder.replaceWith(fragment.firstElementChild!);
-      this.painters.push(draw);
-    }
+    for (const { dataset } of document.querySelectorAll<HTMLTemplateElement>("template[data-onboarding-ui]"))
+      this.painters.push(
+        mountTemplate(`template[data-onboarding-ui="${dataset.onboardingUi}"]`, () =>
+          this.template(dataset.onboardingUi!),
+        ),
+      );
   }
   draw() {
     for (const paint of this.painters) paint();
@@ -160,12 +159,8 @@ export class Onboarding {
       this.context.api("GET", "/api/scopes/" + encodeURIComponent(this.context.orgScope()) + "?view=onboarding"),
     ]);
     if (token !== this.request || view !== this.context.view()) return;
-    if (!models.ok || !slack.ok || !catalog.ok || !config.ok) {
-      this.providerMessage = "Setup status could not be loaded. Try again.";
-      this.providerTone = "err";
-      this.draw();
-      return;
-    }
+    if (!models.ok || !slack.ok || !catalog.ok || !config.ok)
+      return this.say("Setup status could not be loaded. Try again.", "err");
     this.providers = models.data.providers || [];
     this.models = {};
     this.mergeModels([
@@ -248,22 +243,35 @@ export class Onboarding {
       if (!options.some((option) => option.id === model.id)) options.push(model);
     }
   }
+  say(message: string, tone: string) {
+    this.providerMessage = message;
+    this.providerTone = tone;
+    this.draw();
+  }
+  async busy(work: () => Promise<[string, string]>) {
+    this.providerBusy = true;
+    this.draw();
+    try {
+      const [message, tone] = await work();
+      this.providerMessage = message;
+      this.providerTone = tone;
+    } catch (error) {
+      this.providerMessage = errorText(error);
+      this.providerTone = "err";
+    } finally {
+      this.providerBusy = false;
+      this.draw();
+    }
+  }
   async connect() {
     if (this.providerBusy) return;
     const provider = this.provider,
       apiKey = this.apiKey.trim(),
       modelId = this.model;
-    if (!apiKey) {
-      this.providerMessage = "Enter the provider API key.";
-      this.providerTone = "err";
-      this.draw();
-      return;
-    }
-    this.providerBusy = true;
+    if (!apiKey) return this.say("Enter the provider API key.", "err");
     this.providerMessage = "Validating with " + this.context.connectorName(provider) + "…";
     this.providerTone = "saving";
-    this.draw();
-    try {
+    await this.busy(async () => {
       const saved = await this.context.api("PUT", "/api/model-providers/" + encodeURIComponent(provider), { apiKey });
       if (!saved.ok) throw new Error(saved.data?.message || "The provider rejected this key.");
       const selected = modelId
@@ -274,15 +282,8 @@ export class Onboarding {
       this.apiKey = "";
       await this.load();
       await this.context.loadCustomProviders();
-      this.providerMessage = providerSavedMessage(modelId, selected);
-      this.providerTone = selected.ok ? "ok" : "err";
-    } catch (error) {
-      this.providerMessage = errorText(error);
-      this.providerTone = "err";
-    } finally {
-      this.providerBusy = false;
-      this.draw();
-    }
+      return [providerSavedMessage(modelId, selected), selected.ok ? "ok" : "err"];
+    });
   }
   async disableProvider() {
     if (this.providerBusy) return;
@@ -295,22 +296,13 @@ export class Onboarding {
       )
     )
       return;
-    this.providerBusy = true;
-    this.draw();
-    try {
+    await this.busy(async () => {
       const response = await this.context.api("DELETE", "/api/model-providers/" + encodeURIComponent(provider));
       if (!response.ok) throw new Error(response.data?.message || "Could not disable this provider.");
       await this.load();
       await this.context.loadCustomProviders();
-      this.providerMessage = "Provider disabled.";
-      this.providerTone = "ok";
-    } catch (error) {
-      this.providerMessage = errorText(error);
-      this.providerTone = "err";
-    } finally {
-      this.providerBusy = false;
-      this.draw();
-    }
+      return ["Provider disabled.", "ok"];
+    });
   }
   async lookupModel() {
     if (this.registryBusy) return;
@@ -765,7 +757,5 @@ export class Onboarding {
 }
 const controller = new Onboarding();
 export const mount = () => controller.mount();
-export const configure = (context: Data) => {
-  controller.context = context;
-};
+export const configure = (context: Data) => void (controller.context = context);
 export const load = () => controller.load();
