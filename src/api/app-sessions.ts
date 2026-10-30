@@ -912,7 +912,7 @@ export function createSessionMethods(
 
     async listScopeResources(principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
-      const [page, allCrons, allWebhooks, allDeployments, scopeSkills] = await Promise.all([
+      const [page, allCrons, allWebhooks, allDeployments, scoped] = await Promise.all([
         filesForViewer(principalId, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
@@ -945,18 +945,12 @@ export function createSessionMethods(
             }),
         )
       ).filter((d): d is ScopeDeployment => d != null);
-      const skills = scopeSkills.map((s) => ({
-        id: s.id,
-        name: s.manifest.name,
-        description: s.manifest.description,
-        status: s.status,
-      }));
       return {
         files,
         webhooks: allWebhooks.filter((w) => w.ownerScopeId === scope),
         crons: allCrons.filter((c) => c.ownerScopeId === scope),
         deployments,
-        skills,
+        skills: scoped.map(({ id, status, manifest: { name, description } }) => ({ id, name, description, status })),
         manageable: await principalCanManageScope(principalId, scope),
       };
     },
