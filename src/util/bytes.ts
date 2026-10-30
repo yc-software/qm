@@ -48,7 +48,7 @@ export async function readBoundedText(response: Response, maxBytes: number, tooL
   let size = 0;
   for (;;) {
     const { done, value } = await reader.read();
-    if (done) return Buffer.concat(chunks, size).toString("utf8");
+    if (done) return new TextDecoder().decode(Buffer.concat(chunks, size));
     size += value.byteLength;
     if (size > maxBytes) {
       void reader.cancel().catch(swallowAs("bounded response cancel", undefined));

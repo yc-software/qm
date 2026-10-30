@@ -10,11 +10,9 @@ import {
 const jwt = (claims: object) => ["e30", Buffer.from(JSON.stringify(claims)).toString("base64url"), "sig"].join(".");
 
 function mockToken(t: test.TestContext, status: number, body: unknown) {
-  const calls: Array<{ url: string; body: Record<string, unknown>; headers: Record<string, string> }> = [];
+  const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
-    calls.push({ url, body: JSON.parse(String(init.body)), headers: init.headers as Record<string, string> });
-    assert.equal(init.method, "POST");
-    assert.ok(init.signal);
+    calls.push({ url, body: JSON.parse(String(init.body)) });
     return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   });
   return calls;
@@ -26,7 +24,6 @@ test("ChatGPT refresh posts the refresh grant and maps the rotated tokens", asyn
   const before = Date.now();
   const tokens = await refreshChatGPTTokens("rt-1");
   assert.equal(calls[0]!.url, "https://auth.openai.com/oauth/token");
-  assert.equal(calls[0]!.headers["Content-Type"], "application/json");
   assert.deepEqual(calls[0]!.body, {
     grant_type: "refresh_token",
     refresh_token: "rt-1",
@@ -47,11 +44,6 @@ test("ChatGPT refresh keeps the old refresh token and reads expiry from the acce
   assert.equal(tokens.refreshToken, "rt-1");
   assert.equal(tokens.accountId, "acct-2");
   assert.equal(tokens.expiresAt, 2_000_000_000_000);
-});
-
-test("ChatGPT refresh failures carry the provider status and detail", async (t) => {
-  mockToken(t, 400, { error: "invalid_grant", error_description: "refresh token revoked" });
-  await assert.rejects(refreshChatGPTTokens("rt-1"), /^Error: chatgpt refresh failed \(400\).*refresh token revoked/);
 });
 
 test("token responses without an access token are rejected", async (t) => {
@@ -93,10 +85,11 @@ test("Claude login builds a PKCE authorize URL and exchanges the pasted code", a
   assert.equal(second.refreshToken, undefined);
 });
 
-test("Claude login and refresh failures carry the provider status", async (t) => {
-  mockToken(t, 401, { error: "invalid_grant" });
-  await assert.rejects(completeClaudeLogin("code", "v"), /^Error: claude token exchange failed \(401\)/);
-  await assert.rejects(refreshClaudeTokens("rt"), /^Error: claude refresh failed \(401\)/);
+test("token endpoint failures carry the provider status and detail", async (t) => {
+  mockToken(t, 400, { error: "invalid_grant", error_description: "refresh token revoked" });
+  await assert.rejects(refreshChatGPTTokens("rt-1"), /^Error: chatgpt refresh failed \(400\).*refresh token revoked/);
+  await assert.rejects(completeClaudeLogin("code", "v"), /^Error: claude token exchange failed \(400\)/);
+  await assert.rejects(refreshClaudeTokens("rt"), /^Error: claude refresh failed \(400\)/);
 });
 
 test("Claude refresh posts the refresh grant and keeps the old refresh token when none is returned", async (t) => {

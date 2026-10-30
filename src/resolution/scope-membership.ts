@@ -190,8 +190,8 @@ export function createCanReadScope(deps: ScopeMembershipDeps): CanReadScope {
   };
 }
 
-export function createCanWriteScope(deps: ScopeMembershipDeps): CanReadScope {
-  return async function canWriteScope(principalId, targetScope) {
+export function createCanWriteScope(deps: ScopeMembershipDeps) {
+  return async function canWriteScope(principalId: string, targetScope: ScopeId): Promise<boolean> {
     if (!principalId || !activePrincipal(deps, principalId)) return false;
     const { kind, ref } = parseScopeId(targetScope);
     if (kind === "org") return true;

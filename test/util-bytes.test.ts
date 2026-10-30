@@ -23,6 +23,8 @@ test("readBoundedText returns the whole body when it fits, across chunk boundari
   const { response } = streamed(['{"a":', '"é"}']);
   assert.equal(await readBoundedText(response, 64, tooLarge), '{"a":"é"}');
   assert.equal(await readBoundedText(new Response(null), 64, tooLarge), "");
+  const bom = new Response(new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('{"a":1}')]));
+  assert.deepEqual(JSON.parse(await readBoundedText(bom, 64, tooLarge)), { a: 1 });
 });
 
 test("readBoundedText refuses a declared oversize body before reading it", async () => {
