@@ -281,9 +281,7 @@ export function createTurnMethods(
           requestedHarness = harness;
         }
         if (!individualAuth) {
-          const configuredKeys = deps.providerKeys ??
-            deps.modelProviders ?? { anthropic: false, openai: false, openrouter: false };
-          const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
+          const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : undefined;
           let orgRuntime;
           let runtime;
           try {
@@ -313,12 +311,7 @@ export function createTurnMethods(
           if (req.harness && !isHarnessId(req.harness)) {
             return { status: "refused", reason: `runtime ${req.harness} is not approved` };
           }
-          let providers = deps.modelProviders;
-          if (deps.modelCredentials) {
-            providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys, managedKeys);
-          } else if (deps.providerKeys) {
-            providers = modelProviderAvailabilityFor(runtime.harnessId, configuredKeys);
-          }
+          const providers = managedKeys && modelProviderAvailabilityFor(runtime.harnessId, managedKeys);
           if (providers && !modelServiceable(runtime.modelId, providers)) {
             return {
               status: "refused",

@@ -146,18 +146,19 @@ const PROTOCOLS: Record<
 
 export function createDecisionBackend(opts: {
   providers: (ids: string[]) => readonly DecisionProvider[] | Promise<readonly DecisionProvider[]>;
-  gateway?: { url: string; apiKey: string; apiKeyHeader?: string };
+  gateway?: () => Promise<{ url: string; apiKey: string; apiKeyHeader?: string } | undefined>;
   credential: (slug: string) => Promise<{ host: string; enabled: boolean; headers: Record<string, string> } | null>;
   fetch?: typeof fetch;
 }): DecisionBackend {
   const fetchImpl = opts.fetch ?? fetch;
   const endpoint = async (provider: DecisionProvider): Promise<{ base: string; auth: Record<string, string> }> => {
     if (!provider.baseUrl) {
-      if (!opts.gateway) throw new Error(`decision provider ${provider.id}: no model gateway is configured`);
-      const header = opts.gateway.apiKeyHeader;
+      const gateway = await opts.gateway?.();
+      if (!gateway) throw new Error(`decision provider ${provider.id}: no model gateway is configured`);
+      const header = gateway.apiKeyHeader;
       return {
-        base: opts.gateway.url,
-        auth: header ? { [header]: opts.gateway.apiKey } : { authorization: `Bearer ${opts.gateway.apiKey}` },
+        base: gateway.url,
+        auth: header ? { [header]: gateway.apiKey } : { authorization: `Bearer ${gateway.apiKey}` },
       };
     }
     const rec = await opts.credential(provider.credential!);

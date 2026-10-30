@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { currentTenant } from "./context.ts";
+import { currentTenant, withTenant } from "./context.ts";
+import { reportFailureAs } from "../util/errors.ts";
 import { parseTenantSettings, type TenantSettings } from "./settings-parse.ts";
 
 export type { TenantSettings } from "./settings-parse.ts";
@@ -117,6 +118,7 @@ export function openTenantSecret(sealKey: Buffer, tenant: string, key: TenantSet
 }
 
 interface TenantSettingsBacking {
+  tenants(): Promise<string[]>;
   read(tenant: string): Promise<TenantSettingValues>;
   write(tenant: string, changes: TenantSettingChanges): Promise<void>;
 }
@@ -125,6 +127,7 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
   const sealKey = tenantSettingsKey(keyMaterial);
   const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
   return {
+    tenants: async () => (await db.q("SELECT id::text AS id FROM tenants")).map((row) => String(row.id)),
     async read(tenant) {
       const [row] = await db.q(`SELECT ${columns} FROM tenant_settings WHERE tenant_id = qm_tenant_id()`);
       const values: TenantSettingValues = {};
@@ -156,9 +159,10 @@ function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettin
   };
 }
 
-function memoryBacking(): TenantSettingsBacking {
-  const rows = new Map<string, TenantSettingValues>();
+function memoryBacking(initial: Readonly<Record<string, TenantSettingValues>> = {}): TenantSettingsBacking {
+  const rows = new Map<string, TenantSettingValues>(Object.entries(initial).map(([tenant, values]) => [tenant, { ...values }]));
   return {
+    tenants: async () => [...rows.keys()],
     read: async (tenant) => ({ ...rows.get(tenant) }),
     async write(tenant, changes) {
       rows.set(tenant, applyChanges(rows.get(tenant) ?? {}, changes));
@@ -179,6 +183,8 @@ function applyChanges(values: TenantSettingValues, changes: TenantSettingChanges
 
 export interface TenantSettingsStore {
   get(): Promise<TenantSettings>;
+  peek(): TenantSettings;
+  refreshAll(): Promise<void>;
   update(changes: TenantSettingChanges): Promise<TenantSettings>;
 }
 
@@ -188,29 +194,58 @@ export interface TenantSettingsStoreOptions {
   harness: string;
   cacheMs?: number;
   now?: () => number;
+  onLoad?: (tenant: string, settings: TenantSettings) => void;
+  initial?: Readonly<Record<string, TenantSettingValues>>;
+}
+
+export class TenantSettingsNotLoadedError extends Error {
+  constructor() {
+    super("This tenant's settings have not been loaded yet");
+    this.name = "TenantSettingsNotLoadedError";
+  }
 }
 
 export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): TenantSettingsStore {
   if (opts.db && !opts.keyMaterial) throw new Error("Tenant settings need CONNECTOR_SECRET_KEY to seal secrets");
-  const backing = opts.db ? postgresBacking(opts.db, opts.keyMaterial!) : memoryBacking();
+  const backing = opts.db ? postgresBacking(opts.db, opts.keyMaterial!) : memoryBacking(opts.initial);
   const cacheMs = opts.cacheMs ?? 10_000;
   const now = opts.now ?? Date.now;
-  const cache = new Map<string, { at: number; settings: Promise<TenantSettings> }>();
+  const loading = new Map<string, { at: number; settings: Promise<TenantSettings> }>();
+  const loaded = new Map<string, TenantSettings>();
 
   function load(tenant: string): Promise<TenantSettings> {
-    const hit = cache.get(tenant);
+    const hit = loading.get(tenant);
     if (hit && now() - hit.at < cacheMs) return hit.settings;
     const settings = backing.read(tenant).then((values) => parseTenantSettings(values, opts.harness));
     const entry = { at: now(), settings };
-    cache.set(tenant, entry);
-    settings.catch(() => {
-      if (cache.get(tenant) === entry) cache.delete(tenant);
-    });
+    loading.set(tenant, entry);
+    settings.then(
+      (value) => {
+        if (loading.get(tenant) !== entry) return;
+        loaded.set(tenant, value);
+        opts.onLoad?.(tenant, value);
+      },
+      () => {
+        if (loading.get(tenant) === entry) loading.delete(tenant);
+      },
+    );
     return settings;
   }
 
   return {
     get: () => load(currentTenant()),
+    async refreshAll() {
+      for (const tenant of await backing.tenants()) {
+        await withTenant(tenant, () => load(tenant)).catch(reportFailureAs("tenant settings: refresh", undefined));
+      }
+    },
+    peek() {
+      const tenant = currentTenant();
+      const settings = loaded.get(tenant);
+      if (settings) return settings;
+      void load(tenant).catch(reportFailureAs("tenant settings: load", undefined));
+      throw new TenantSettingsNotLoadedError();
+    },
     async update(changes) {
       const tenant = currentTenant();
       for (const key of Object.keys(changes)) {
@@ -224,7 +259,7 @@ export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): Ten
       }
       parseTenantSettings(applyChanges(await backing.read(tenant), normalized), opts.harness);
       await backing.write(tenant, normalized);
-      cache.delete(tenant);
+      loading.delete(tenant);
       return load(tenant);
     },
   };
