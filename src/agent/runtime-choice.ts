@@ -12,6 +12,7 @@ import type { ScopeId } from "../types.ts";
 import type { Agent, AgentTurnInput, RuntimeChoice } from "./agent.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { governGoal, type GoalGovernorInput } from "./goal.ts";
+import { turnRuntimePurpose } from "../core/turn-options.ts";
 
 export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
 export const NON_INTERACTIVE_FAST_MODE = false;
@@ -25,7 +26,7 @@ export function turnModelOptions(input: {
   thinkingLevel?: string;
   fastMode?: boolean;
 } {
-  const nonInteractiveDefaults = input.triggered && input.surface !== "cron" && input.surface !== "loop";
+  const nonInteractiveDefaults = input.triggered && turnRuntimePurpose(input) !== "cron";
   let thinkingLevel = input.thinkingLevel;
   if (!thinkingLevel && nonInteractiveDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
   let fastMode = input.fastMode;

@@ -1,7 +1,6 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
-import { requestedRuntimeError, validateWebTurnModelOptions } from "./runtime-config.ts";
+import { requestedRuntimeError, userRuntimeConfigBody, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
-import { userRuntimeConfigBody } from "./runtime-config.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
 import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
