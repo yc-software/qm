@@ -1469,8 +1469,8 @@ export function buildApp(
       }),
     auditLog,
   );
-  const judgeModelId = (): string =>
-    tenantSettings.peek().piJudgeModel ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+  const judgeModelId = async (): Promise<string> =>
+    (await tenantSettings.get()).piJudgeModel ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
   const hydrateModelCatalog = async (): Promise<unknown> => {
     await refreshModels();
     if (!(await modelCredentials.availability()).openrouter) return undefined;

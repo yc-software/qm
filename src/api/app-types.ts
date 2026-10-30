@@ -712,7 +712,7 @@ export interface AppDeps {
   ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
-  judgeModelId?: () => string;
+  judgeModelId?: () => Promise<string>;
   harnessId?: string;
   runtimeFallback?: RuntimeChoice;
 }
