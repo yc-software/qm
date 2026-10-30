@@ -1,9 +1,8 @@
 import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
 import { randomUUID } from "node:crypto";
-import { jsonbStringify } from "../persistence/durable-map.ts";
 import { likeContains } from "../persistence/like.ts";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
-import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
+import { jsonbSafeStringify, jsonbStringify, pgTextSafe } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
 import type { GoalRecord } from "../harness/goal.ts";

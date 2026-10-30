@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { jsonbStringify } from "../src/persistence/durable-map.ts";
+import { jsonbStringify } from "../src/util/text.ts";
 
 test("NUL characters are dropped for jsonb", () => {
   const out = jsonbStringify({ name: "a\u0000b" });

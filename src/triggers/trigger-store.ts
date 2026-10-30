@@ -55,11 +55,3 @@ export async function ownedBy<T extends TriggerBase>(backing: DurableMap<T>, sco
   const rows = await backing.select({ where: { field, anyOfFold: [scopeId] } });
   return rows.filter((row) => row.ownerScopeId === scopeId);
 }
-
-export const DROP_RECIPIENT_CONSENT_MIGRATION = {
-  id: "durable-map/triggers/0001-drop-recipient-consent",
-  statements: ["crons", "webhooks", "loops"].flatMap((table) => [
-    `CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-    `UPDATE ${table} SET json = json - 'recipientConsent' WHERE json ? 'recipientConsent'`,
-  ]),
-};

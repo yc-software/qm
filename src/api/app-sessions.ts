@@ -312,7 +312,7 @@ export function createSessionMethods(
       watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
     }
     const cronCounts = new Map<string, number>();
-    for (const c of await deps.crons.list()) {
+    for (const c of await deps.crons.tiedTo(sessions.map((s) => s.threadRef))) {
       if (!cronIsActive(c)) continue;
       for (const ref of new Set([c.destination?.target, c.sessionRef])) {
         if (ref) cronCounts.set(ref, (cronCounts.get(ref) ?? 0) + 1);
@@ -716,7 +716,7 @@ export function createSessionMethods(
           ...(m.lastFiredAt !== undefined ? { lastFiredAt: m.lastFiredAt } : {}),
         }));
       const crons = await Promise.all(
-        (await deps.crons.list())
+        (await deps.crons.tiedTo([session.threadRef]))
           .filter((c) => cronIsActive(c) && cronTiedTo(c, session.threadRef))
           .sort((a, b) => b.createdAt - a.createdAt)
           .map(async (c) => {
@@ -912,10 +912,10 @@ export function createSessionMethods(
 
     async listScopeResources(principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
-      const [page, allCrons, allWebhooks, allDeployments, allSkills] = await Promise.all([
+      const [page, crons, webhooks, allDeployments, allSkills] = await Promise.all([
         filesForViewer(principalId, undefined, scope),
-        deps.crons.list(),
-        deps.webhooks.list(),
+        deps.crons.ownedBy(scope),
+        deps.webhooks.ownedBy(scope),
         deps.deploy.listDeployments(),
         deps.skills.list(),
       ]);
@@ -950,8 +950,8 @@ export function createSessionMethods(
         .map((s) => ({ id: s.id, name: s.manifest.name, description: s.manifest.description, status: s.status }));
       return {
         files,
-        webhooks: allWebhooks.filter((w) => w.ownerScopeId === scope),
-        crons: allCrons.filter((c) => c.ownerScopeId === scope),
+        webhooks,
+        crons,
         deployments,
         skills,
         manageable: await principalCanManageScope(principalId, scope),

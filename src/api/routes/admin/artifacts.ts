@@ -29,9 +29,7 @@ export async function listAdminArtifacts(ctx: ApiCtx): Promise<void> {
   audit(deps, { principalId: actor.id, action: `${resource}.read`, resource, scopeLabel: scope });
   const orgWide = parseScopeId(scope).kind === "org";
   if (resource === "crons") {
-    const crons = (await app.listCrons())
-      .filter((c) => orgWide || c.ownerScopeId === scope)
-      .map((c) => ({
+    const crons = (await app.listCrons(orgWide ? undefined : scope)).map((c) => ({
         id: c.id,
         ownerScopeId: c.ownerScopeId,
         title: c.title,
