@@ -2151,7 +2151,11 @@ export function buildApp(
         return;
       }
       const choice = "error" in resolved ? { ...fallback, ...requested } : resolved;
-      const error = await subagentRuntimeError({ deps: runtimeDeps }, scope, choice);
+      const error = await subagentRuntimeError({ deps: runtimeDeps }, scope, choice).catch((checkError: unknown) => {
+        throw "error" in resolved
+          ? new AggregateError([resolved.error, checkError], errMessage(checkError))
+          : checkError;
+      });
       if ("error" in resolved) throw error ? new Error(error, { cause: resolved.error }) : resolved.error;
       if (error) throw new Error(error);
     },
