@@ -586,3 +586,49 @@ test("fade ranges preserve selected text across many formatted nodes and paragra
   );
   block.remove();
 });
+
+test("inline and display dollar math render through KaTeX", async () => {
+  const block = await mount(
+    "Energy is $E = mc^2$, and\n\n$$\n\\int_0^1 x\\,dx = \\tfrac12\n$$\n\nalso $$a^2 + b^2$$ inline.",
+  );
+  assert.equal(block.querySelectorAll(".katex").length, 3);
+  assert.equal(block.querySelectorAll(".katex-display").length, 2);
+  assert.doesNotMatch(block.textContent!, /\$/);
+  block.remove();
+});
+
+for (const source of [
+  "SPCX priced at $135, opened $150, closed around $161",
+  "costs $5-$10 per seat",
+  "- item\n\n    costs $5 to $6 though",
+  "between $5 and $10 dollars, again $5 and $10",
+]) {
+  test(`currency stays literal text: ${JSON.stringify(source)}`, async () => {
+    const block = await mount(source);
+    assert.equal(block.querySelector(".katex"), null);
+    assert.equal(
+      (block.textContent ?? "").replace(/\s+/g, " ").trim(),
+      source.replace(/^- /, "").replace(/\s+/g, " ").trim(),
+    );
+    block.remove();
+  });
+}
+
+test("dollars in code spans and fenced code stay literal", async () => {
+  const block = await mount(
+    "run `echo $HOME` for $5\n\nand $x$ inline\n\n```sh\necho $PATH $1$\n```\n\n    indented $y$ code",
+  );
+  assert.equal(block.querySelector("p code")?.textContent, "echo $HOME");
+  assert.equal(block.querySelectorAll(".katex").length, 1);
+  const decoded = [...block.querySelectorAll("code-block")].map((code) =>
+    new TextDecoder().decode(Uint8Array.from(atob(code.getAttribute("code") ?? ""), (c) => c.charCodeAt(0))),
+  );
+  assert.deepEqual(decoded, ["echo $PATH $1$\n", "indented $y$ code\n"]);
+  block.remove();
+});
+
+test("latex paren and bracket delimiters still render math", async () => {
+  const block = await mount("Inline \\(x^2\\) here.\n\n\\[y = 1\\]");
+  assert.equal(block.querySelectorAll(".katex").length, 2);
+  block.remove();
+});
