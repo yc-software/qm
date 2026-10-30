@@ -250,6 +250,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
   let errorCode: string | undefined;
   let note: string | undefined;
   let userNote: string | undefined;
+  let routeNote: string | undefined;
   let reply: string | undefined;
   let sessionId: string | undefined;
   let deferred = false;
@@ -309,6 +310,9 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       if (spec.deferWhenBusy && res.refusalKind === "session_busy") throw new FireDeferred();
       status = res.status;
       errorCode = res.errorCode;
+      const change = res.runtime?.change;
+      if (change && "rule" in change)
+        routeNote = `routed by ${change.rule} to ${res.runtime!.harnessId}/${res.runtime!.modelId}`;
       reply = res.reply;
       sessionId = res.sessionId;
       if (res.status === "silent") return;
@@ -354,7 +358,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(deferred ? { deferred } : {}),
     ...(status ? { status } : {}),
     ...(errorCode ? { errorCode } : {}),
-    ...(note ? { note } : {}),
+    ...(note || routeNote ? { note: [routeNote, note].filter(Boolean).join("; ") } : {}),
     ...(userNote ? { userNote } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(sessionId ? { sessionId } : {}),

@@ -1880,3 +1880,21 @@ test("a failing cron posts one notice to its destination, then stays quiet until
     ["refused", "refused", "ok", "failed"],
   );
 });
+
+test("a cron fire that was routed to another model says so in its run log", async () => {
+  const { crons, scheduler } = harness(async () => ({
+    status: "ok",
+    reply: "standup posted",
+    runtime: { harnessId: "pi", modelId: "gpt-6.1-sol", change: { rule: "model fallback" } },
+  }));
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "post the standup",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+  });
+  await runNowSettled(scheduler, cron.id);
+  assert.equal((await crons.listFires(cron.id)).runs[0]?.note, "routed by model fallback to pi/gpt-6.1-sol");
+});
