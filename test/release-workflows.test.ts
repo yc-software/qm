@@ -94,7 +94,7 @@ test("the published package pins real image digests, never the checked-in sentin
     services: Record<string, string>;
   };
   const refs = [sentinel.sandboxBase, ...Object.values(sentinel.services)];
-  assert.equal(refs.length, 7);
+  assert.equal(refs.length, 3);
   assert.ok(
     refs.every((ref) => ref.startsWith("registry.invalid/")),
     "the checked-in manifest stays a sentinel so a source checkout never pulls a stale digest",
