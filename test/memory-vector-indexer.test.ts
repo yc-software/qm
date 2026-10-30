@@ -4,6 +4,9 @@ import { createMemoryVectorIndexer } from "../src/memory/vector-indexer.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import type { MemoryVectorStore, MemoryVector } from "../src/memory/postgres-vector-store.ts";
 import type { MemoryEmbedder } from "../src/model/embeddings.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fixture() {
   let now = 1000;
