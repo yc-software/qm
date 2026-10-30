@@ -6,7 +6,6 @@ import type {
   ThinkingContent,
   ToolCall,
   ToolResultMessage,
-  Usage,
   UserMessage,
 } from "@earendil-works/pi-ai";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../types.ts";
@@ -18,6 +17,7 @@ import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";
 import { isObj } from "../util/objects.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
+import { zeroUsage } from "../model/model-runtime.ts";
 
 export const TURN_STOPPED_KIND = "turn_stopped";
 
@@ -187,17 +187,6 @@ export const AGENT_OPENED_TEXT = "[The agent opened this conversation.]";
 export const OMITTED_IMAGE_TEXT = "[image omitted from replay]";
 
 const ENVELOPE_KEYS = new Set(["step"]);
-
-export function zeroUsage(): Usage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
 
 export function userPromptText(payload: {
   text?: unknown;

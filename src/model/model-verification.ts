@@ -1,12 +1,12 @@
 import { createHmac, scrypt } from "node:crypto";
 import { reportFailure } from "../util/errors.ts";
-import { probeModel } from "../agent/agent-run.ts";
 import { ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
 import { embeddingModelFromDefinition, modelFromOverlay } from "./pi-models.ts";
 import { isEmbeddingModel, type RegisteredModel } from "./model-overlay.ts";
 import { createMemoryEmbedder } from "./embeddings.ts";
 import type { ModelCredentialStore } from "./model-credential-store.ts";
 import { ModelUnavailableError, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { probeModel } from "./model-runtime.ts";
 
 export class ModelVerificationError extends Error {
   readonly code: string;

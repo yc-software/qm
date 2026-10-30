@@ -1,23 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { applyTurnEffort, createAgent } from "../src/agent/agent-run.ts";
+import type { AgentOptions } from "../src/agent/agent-run.ts";
+import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
+import type { NewEntry } from "../src/sessions/session-store.ts";
+import type { SessionEntry } from "../src/types.ts";
+import type { Api, Model, Usage } from "@earendil-works/pi-ai";
+import { defaultInteractiveThinkingLevel, getRequiredModel, modelSupportsFastMode } from "../src/model/pi-models.ts";
 import {
-  applyTurnEffort,
   applyFastSpeed,
   applyThinkingBinding,
   piUsageToCallUsage,
   scaleCost,
   withRequestHeaders,
   FAST_COST_MULTIPLIER,
-  modelSupportsFastMode,
   wantsFastMode,
-  createAgent,
-} from "../src/agent/agent-run.ts";
-import type { AgentOptions } from "../src/agent/agent-run.ts";
-import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
-import type { NewEntry } from "../src/sessions/session-store.ts";
-import type { SessionEntry } from "../src/types.ts";
-import type { Api, Model, Usage } from "@earendil-works/pi-ai";
-import { defaultInteractiveThinkingLevel, getRequiredModel } from "../src/model/pi-models.ts";
+} from "../src/model/model-runtime.ts";
 
 test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
   for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {

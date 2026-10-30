@@ -161,7 +161,6 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
-import { probeModel } from "../src/agent/agent-run.ts";
 import { modelFromOverlay } from "../src/model/pi-models.ts";
 import { parseModelOverlay } from "../src/model/model-overlay.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
@@ -507,6 +506,7 @@ test("environment and gateway credential changes invalidate cached fingerprints"
 });
 
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
+import { probeModel } from "../src/model/model-runtime.ts";
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const built = buildApp(testConfig({ openaiApiKey: "test-key" }));

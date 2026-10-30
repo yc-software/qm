@@ -2,7 +2,6 @@ import type { SlackWebClientFactory } from "../slack/web-client.ts";
 import type { TeamStore } from "../teams/teams.ts";
 import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
-import type { ProviderKeys } from "../agent/agent-run.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { BackgroundOwnershipControl } from "../runs/background-ownership.ts";
@@ -83,6 +82,7 @@ import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
 import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
+import { type ProviderKeys } from "../model/model-runtime.ts";
 
 export interface ServerDeps {
   requestBodyDeadlineMs?: number;

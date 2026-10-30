@@ -301,7 +301,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
 });
 
 import { createServer } from "node:http";
-import { oneShot, createAgent, wantsFastMode } from "../src/agent/agent-run.ts";
+import { oneShot, createAgent } from "../src/agent/agent-run.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 
@@ -492,6 +492,7 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
+import { wantsFastMode } from "../src/model/model-runtime.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = createMemoryConfigStore("default-org");

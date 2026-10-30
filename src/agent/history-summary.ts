@@ -3,7 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import type { SessionEntry } from "../types.ts";
 import { compactTranscript, validateCompactSummary } from "./context-compaction.ts";
-import { providerTurnError } from "./provider-error.ts";
+import { providerTurnError } from "../model/provider-error.ts";
 
 type StreamFn = NonNullable<Parameters<typeof generateSummary>[9]>;
 
