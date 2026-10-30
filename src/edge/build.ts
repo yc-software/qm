@@ -101,7 +101,6 @@ export function buildEdge(config: Config, core: Core) {
   return { slackCore, inboxRealtime, ...(keychainApprovals ? { keychainApprovals } : {}), runtime };
 }
 
-
 export function serverDeps(
   config: Config,
   core: Core,
