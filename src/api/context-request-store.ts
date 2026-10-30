@@ -1,5 +1,5 @@
 import type { SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -54,25 +54,29 @@ const CONTEXT_REQUESTS_MIGRATION = typedTableMigration({
 });
 
 export function createContextRequestStore(): ContextRequestStore {
-  const map = createMemoryMap<SurfaceContextRequest>();
-  const pendingRows = async () => (await map.all()).filter((r) => r.status === "pending");
+  const byTenant = new Map<string, Map<string, SurfaceContextRequest>>();
+  const rows = () => {
+    const tenant = currentTenant();
+    return byTenant.get(tenant) ?? byTenant.set(tenant, new Map()).get(tenant)!;
+  };
+  const pendingRows = () => [...rows().values()].filter((r) => r.status === "pending");
   return {
-    create: (request) => map.put(request.id, request),
-    get: (id) => map.get(id),
-    delete: (id) => map.delete(id),
+    create: async (request) => void rows().set(request.id, request),
+    get: async (id) => rows().get(id) ?? null,
+    delete: async (id) => void rows().delete(id),
     async settle(id, outcome) {
-      const current = await map.get(id);
+      const current = rows().get(id);
       if (!current) return false;
       const { result: _result, error: _error, ...rest } = current;
-      await map.put(id, { ...rest, ...outcome });
+      rows().set(id, { ...rest, ...outcome });
       return true;
     },
     async pending(source, createdSince) {
-      return (await pendingRows()).filter((r) => r.source === source && r.createdAt >= createdSince);
+      return pendingRows().filter((r) => r.source === source && r.createdAt >= createdSince);
     },
     async expirePending(createdBefore) {
-      const stale = (await pendingRows()).filter((r) => r.createdAt < createdBefore);
-      await Promise.all(stale.map((r) => map.delete(r.id)));
+      const stale = pendingRows().filter((r) => r.createdAt < createdBefore);
+      for (const r of stale) rows().delete(r.id);
       return stale.map((r) => r.id);
     },
   };

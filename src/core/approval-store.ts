@@ -1,7 +1,7 @@
 import { swallowAs } from "../util/errors.ts";
 import { pgJsonText, pgTextSafe } from "../util/text.ts";
 import type { PendingApprovalRecord } from "../types.ts";
-import { createMemoryMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -107,24 +107,26 @@ function withDelivery(rows: ApprovalRows, deliveries: Pick<DeliveryStore, "enque
 }
 
 export function createApprovalStore(deliveries: Pick<DeliveryStore, "enqueue">): ApprovalStore {
-  const map = createMemoryMap<PendingApprovalRecord>();
-  const forSessions = async (ids: readonly string[]) => {
-    const wanted = new Set(ids);
-    return (await map.entries()).filter(([, r]) => wanted.has(r.sessionId));
+  const byTenant = new Map<string, Map<string, PendingApprovalRecord>>();
+  const rows = () => {
+    const tenant = currentTenant();
+    return byTenant.get(tenant) ?? byTenant.set(tenant, new Map()).get(tenant)!;
   };
+  const matching = (keep: (r: PendingApprovalRecord) => boolean) =>
+    [...rows()].filter(([, r]) => keep(r)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return withDelivery(
     {
-      get: (id) => map.get(id),
-      put: (id, record) => map.put(id, record),
-      delete: (id) => map.delete(id),
-      forSessions,
+      get: async (id) => rows().get(id) ?? null,
+      put: async (id, record) => void rows().set(id, record),
+      delete: async (id) => void rows().delete(id),
+      async forSessions(ids) {
+        const wanted = new Set(ids);
+        return matching((r) => wanted.has(r.sessionId));
+      },
       async blockingSessionIds() {
-        const blocking = (await map.all()).filter((r) => r.blocksInput !== false);
-        return [...new Set(blocking.map((r) => r.sessionId))];
+        return [...new Set(matching((r) => r.blocksInput !== false).map(([, r]) => r.sessionId))];
       },
-      async slackPending() {
-        return (await map.entries()).filter(([, r]) => r.request?.surface === "slack");
-      },
+      slackPending: async () => matching((r) => r.request?.surface === "slack"),
     },
     deliveries,
   );
