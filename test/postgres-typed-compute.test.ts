@@ -3,6 +3,10 @@ import test from "node:test";
 import { withTenant } from "../src/tenants/context.ts";
 import { createSandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
 import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
+import {
+  createPostgresDeploymentLayerRows,
+  type StoredDeploymentLayer,
+} from "../src/deployment/deployment-layer-store.ts";
 import { seedKeyValueTable, skipWithoutPg as skip, withTypedTableDb } from "./support/typed-table.ts";
 
 const resource = (id: string, extra: Partial<SandboxResource> = {}): SandboxResource => ({
@@ -84,4 +88,34 @@ test("sandbox resources and defaults stay inside their tenant", { skip }, async 
       assert.deepEqual((await store.records.get("a"))?.holders, ["run-2"]);
     });
   });
+});
+
+test("the deployment layer row backfills and stays per tenant", { skip }, async () => {
+  const layer: StoredDeploymentLayer = {
+    contentHash: "abc",
+    version: 3,
+    updatedAt: 1_730_000_000_000,
+    updatedBy: "admin",
+    bundle: { contract: 1, tools: [], skills: [] },
+    resolved: { tools: [], installFiles: [], advertisedTools: [], credentialPaths: [], brokeredTools: [] },
+    pendingAudits: [{ contentHash: "abc", version: 3, updatedAt: 1, updatedBy: "admin" }],
+  } as unknown as StoredDeploymentLayer;
+  await withTypedTableDb(
+    createPostgresDeploymentLayerRows,
+    async ({ store, tenant, otherTenant }) => {
+      await withTenant(tenant, async () => assert.deepEqual(await store.get("current"), layer));
+      await withTenant(otherTenant, async () => {
+        assert.equal(await store.get("current"), null);
+        assert.equal(await store.update("current", (current) => ({ ...current, version: 9 })), null);
+        assert.equal((await store.putIfAbsent("current", { ...layer, contentHash: "mine" })).contentHash, "mine");
+      });
+      await withTenant(tenant, async () => {
+        const next = await store.update("current", (current) => ({ ...current, version: 4, pendingAudits: undefined }));
+        assert.equal(next?.version, 4);
+        const { pendingAudits: _cleared, ...rest } = layer;
+        assert.deepEqual(await store.get("current"), { ...rest, version: 4 });
+      });
+    },
+    (admin) => seedKeyValueTable(admin, "deployment_layer", { current: layer }),
+  );
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { tableConversion, typedTable, type KeyedRows, type TableSpec } from "../persistence/typed-table.ts";
 import type { ScopeId } from "../types.ts";
 import {
   safeSkillFilePath,
@@ -261,8 +261,29 @@ function validateBundle(
   return { bundle, manifests, runtime: resolvedDeploymentLayer(dir, tools, installFiles) };
 }
 
+export type DeploymentLayerRows = Pick<KeyedRows<StoredDeploymentLayer>, "get" | "putIfAbsent" | "update">;
+
+const LAYERS: TableSpec<StoredDeploymentLayer> = {
+  table: "deployment_layer",
+  required: ["contentHash", "version", "updatedAt", "updatedBy", "bundle", "resolved"],
+  columns: {
+    contentHash: "text",
+    version: "bigint",
+    updatedAt: "bigint",
+    updatedBy: "text",
+    bundle: "jsonb",
+    resolved: "jsonb",
+    pendingAudits: "jsonb",
+  },
+};
+
+export function createPostgresDeploymentLayerRows(databaseUrl: string): DeploymentLayerRows {
+  const { get, putIfAbsent, update } = typedTable(databaseUrl, LAYERS, tableConversion(LAYERS));
+  return { get, putIfAbsent, update };
+}
+
 export function createDeploymentLayerStore(opts: {
-  backing: DurableMap<StoredDeploymentLayer>;
+  backing: DeploymentLayerRows;
   runtime: DeploymentLayerRuntime;
   skills: SkillStore;
   skillBundles?: SkillBundleStore;
@@ -436,10 +457,8 @@ export function createDeploymentLayerStore(opts: {
     for (const revision of pending) {
       try {
         await retrying(() => opts.auditPersisted!({ ...record, ...revision }));
-        if (!opts.backing.update)
-          throw new Error("deployment layer backing store must support atomic audit reconciliation");
         await retrying(async () => {
-          const updated = await opts.backing.update!(CURRENT, (current) => ({
+          const updated = await opts.backing.update(CURRENT, (current) => ({
             ...current,
             pendingAudits: (current.pendingAudits ?? []).filter((entry) => entry.version !== revision.version),
           }));
@@ -590,7 +609,6 @@ export function createDeploymentLayerStore(opts: {
           ];
           let record = await opts.backing.putIfAbsent(CURRENT, candidate);
           if (record.contentHash !== hash) {
-            if (!opts.backing.update) throw new Error("deployment layer backing store must support atomic updates");
             const updated = await opts.backing.update(CURRENT, (current) => {
               if (current.contentHash === hash) return current;
               const version = current.version + 1;
