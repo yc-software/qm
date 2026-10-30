@@ -115,7 +115,10 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
   });
 
   it("production refuses an unauthenticated core unless explicitly isolated", () => {
-    assert.throws(() => createServer(built.app, { production: true, cronRuns: built.scheduler }), /CORE_SIGNING_SECRET/);
+    assert.throws(
+      () => createServer(built.app, { production: true, cronRuns: built.scheduler }),
+      /CORE_SIGNING_SECRET/,
+    );
     const server = createServer(built.app, {
       production: true,
       allowUnauthenticatedCore: true,
