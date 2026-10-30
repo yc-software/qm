@@ -19,7 +19,6 @@ export function createApprovalStore(
 ) {
   async function deliver(id: string, record: PendingApprovalRecord): Promise<void> {
     if (record.request?.surface !== "slack") return;
-    if (record.request.actor?.isBot) return;
     const actorId = approvalDeliveryRecipient(record.request.actor);
     if (!actorId) return;
     const threadTs = record.request.conversation?.kind === "dm" ? record.request.slackSource?.replyThreadTs : undefined;

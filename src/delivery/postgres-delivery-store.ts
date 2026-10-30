@@ -194,7 +194,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q(
         `UPDATE deliveries
             SET expired_at = $3, failed_reason = $2, claim_expires_at = NULL
-          WHERE id = $1 AND delivered_at IS NULL AND failed_reason IS NULL
+          WHERE id = $1 AND delivered_at IS NULL AND expired_at IS NULL
           RETURNING *`,
         [id, reason, at],
       );

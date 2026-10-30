@@ -154,7 +154,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     },
     async fail(id, reason, at) {
       const d = deliveries.get(id);
-      if (!d || d.deliveredAt !== null || d.failedReason) return null;
+      if (!d || d.deliveredAt !== null || d.expiredAt !== undefined) return null;
       d.expiredAt = at;
       d.failedReason = reason;
       claimedUntil.delete(id);

@@ -112,7 +112,7 @@ export interface SlackCoreClient {
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
-  failDelivery?(id: string, reason: string): Promise<void>;
+  failDelivery(id: string, reason: string): Promise<void>;
 
   holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
