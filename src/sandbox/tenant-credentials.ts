@@ -5,6 +5,7 @@ import {
   type TenantSettings,
 } from "../tenants/settings.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
+import { legacySandboxBackendForScope, type LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { E2bClient } from "./e2b-client.ts";
 import type { ManagedAgentsClient } from "./managed-agents-client.ts";
 import { modalSandboxLifetimeMs, type ModalClient } from "./modal-client.ts";
@@ -43,19 +44,20 @@ export function tenantDefaultSandboxBackend(
 export function tenantSandboxRouting(
   settings: () => Promise<TenantSettings>,
   backends: Partial<Record<SandboxBackendName, unknown>>,
+  legacyScopeDefaults?: LegacySandboxScopeDefaults,
 ) {
   const constructed = Object.keys(backends) as SandboxBackendName[];
-  const snapshot = async () => {
-    const current = await settings();
-    return {
-      usable: tenantSandboxBackends(current, constructed),
-      fallback: () => tenantDefaultSandboxBackend(current, constructed),
-    };
-  };
   return {
-    snapshot,
-    usable: async () => (await snapshot()).usable,
-    defaultBackend: async () => (await snapshot()).fallback(),
+    usable: async () => tenantSandboxBackends(await settings(), constructed),
+    defaultBackend: async () => tenantDefaultSandboxBackend(await settings(), constructed),
+    legacy: async () => {
+      const current = await settings();
+      const fallback = () => tenantDefaultSandboxBackend(current, constructed);
+      return {
+        available: tenantSandboxBackends(current, constructed),
+        legacyBackend: (scope: string) => legacySandboxBackendForScope(scope, fallback, legacyScopeDefaults),
+      };
+    },
   };
 }
 

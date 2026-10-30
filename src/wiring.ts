@@ -244,11 +244,7 @@ import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-san
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
-import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  type LegacyRoute,
-} from "./sandbox/sandbox-resource-upgrade.ts";
+import { upgradeLegacySandboxes, type LegacyRoute } from "./sandbox/sandbox-resource-upgrade.ts";
 import type { Sandbox } from "./sandbox/sandbox.ts";
 import { createTenantSettingsStore, type TenantSettingsStore } from "./tenants/settings.ts";
 import { tenantSandboxClients, tenantSandboxRouting } from "./sandbox/tenant-credentials.ts";
@@ -1147,7 +1143,11 @@ export function buildApp(
   const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = Object.fromEntries(
     Object.entries(buildBackend).map(([name, build]) => [name, build()]),
   );
-  const tenantRouting = tenantSandboxRouting(() => tenantSettings.get(), sandboxBackends);
+  const tenantRouting = tenantSandboxRouting(
+    () => tenantSettings.get(),
+    sandboxBackends,
+    config.legacySandboxScopeDefaults,
+  );
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
@@ -1155,14 +1155,7 @@ export function buildApp(
     defaults: sandboxDefaults,
     upgrade: () =>
       upgradeLegacySandboxes({
-        backends: async () => {
-          const tenant = await tenantRouting.snapshot();
-          return {
-            available: tenant.usable,
-            legacyBackend: (scope) =>
-              legacySandboxBackendForScope(scope, tenant.fallback, config.legacySandboxScopeDefaults),
-          };
-        },
+        backends: tenantRouting.legacy,
         records: sandboxRecords,
         defaults: sandboxDefaults,
         marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
