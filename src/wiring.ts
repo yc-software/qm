@@ -7,7 +7,7 @@ import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisio
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
-import { availableRuntimeError } from "./api/runtime-config.ts";
+import { availableRuntimeError, subagentRuntimeError } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
@@ -2118,7 +2118,7 @@ export function buildApp(
       start: (actorId, input) => startSession(app, sessions, actorId, input),
     },
     async validateRuntime(input, scope) {
-      await resolveRuntimeChoiceDurable(
+      const choice = await resolveRuntimeChoiceDurable(
         configStore,
         runtimeOrgScope,
         scope,
@@ -2132,6 +2132,23 @@ export function buildApp(
         hydrateModelCatalog,
         "subagent",
       );
+      if (!input.model && !input.harness && !input.thinkingLevel && input.fastMode === undefined) return;
+      const error = await subagentRuntimeError(
+        {
+          deps: {
+            config: configStore,
+            harnessId: fallbackHarness,
+            baseModelDefault: fallback.modelId,
+            providerKeys: providerKeysPresent(config),
+            modelCredentials,
+            modelCredentialFetch: overrides.modelCredentialFetch,
+            refreshModels,
+          },
+        },
+        scope,
+        choice,
+      );
+      if (error) throw new Error(error);
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");

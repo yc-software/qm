@@ -247,6 +247,35 @@ export async function webuiModelEnabled(
   return modelId === orgModel || modelId === purposeModel;
 }
 
+/**
+ * Subagent opens accept a model/harness override. Reject overrides this deployment can't serve
+ * (no provider key, not enabled, harness unapproved) before a child run is enqueued, and name the
+ * models that do work so the caller picks one instead of guessing another unconfigured provider.
+ */
+export async function subagentRuntimeError(
+  ctx: { deps: RuntimeDeps },
+  scope: ScopeId,
+  choice: RuntimeChoice,
+): Promise<string | null> {
+  const error = await availableRuntimeError(ctx, scope, choice, "subagent");
+  if (!error) return null;
+  const choices = await runtimeConfigBody(ctx, scope, undefined, "subagent");
+  const usable: string[] = [];
+  for (const harnessId of choices.approvedHarnesses)
+    for (const modelId of choices.modelsByHarness[harnessId] ?? [])
+      if (await webuiModelEnabled(ctx, modelId, "subagent")) usable.push(`${modelId} (harness ${harnessId})`);
+  const reason =
+    error === "runtime is no longer available or enabled on this deployment"
+      ? "its provider isn't configured here, or it isn't enabled or approved for that harness"
+      : error;
+  const fallback = `${choices.effective.modelId} (harness ${choices.effective.harnessId})`;
+  return [
+    `model ${choice.modelId} on harness ${choice.harnessId} can't run subagents on this deployment: ${reason}.`,
+    `Don't retry with other guessed models or providers. Omit model and harness to use the default, ${fallback}`,
+    usable.length ? `, or choose one of: ${usable.join(", ")}.` : ".",
+  ].join("");
+}
+
 export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,

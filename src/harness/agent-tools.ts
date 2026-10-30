@@ -1497,7 +1497,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "open: no shell, files, browser or computer-backed integrations (memory, history, coordination and read-only connectors remain). Not for tasks that must read email, files or code; say 'do not modify anything' in task instead.",
         }),
       ),
-      model: Type.Optional(Type.String({ description: "open: model override (fails if unavailable)." })),
+      model: Type.Optional(
+        Type.String({
+          description: "open: model override; use one runtime get lists (unconfigured providers are rejected).",
+        }),
+      ),
       harness: Type.Optional(Type.String({ description: "open: harness override." })),
       thinkingLevel: Type.Optional(Type.String({ description: "open: effort override." })),
       fastMode: Type.Optional(Type.Boolean({ description: "open: fast mode." })),
