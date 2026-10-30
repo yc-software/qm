@@ -63,7 +63,10 @@ async function currentSharedScopeMember(
     return kind === "channel" ? deps.directory?.channelMember(ref, id) : deps.directory?.groupMember(ref, id);
   };
   for (const id of ids)
-    if ((await membership(id)?.catch(swallowAs("scope membership: membership", false))) === true) return true;
+    if (
+      (await membership(id)?.catch(swallowAs(`scope membership: ${managed ? "managed group" : kind}`, false))) === true
+    )
+      return true;
   return false;
 }
 
@@ -79,13 +82,13 @@ async function sharedScopeMembership(
     return (
       (await deps.managedGroups
         .membership(ref, principalId)
-        .catch(swallowAs("scope membership: membership", false))) === true
+        .catch(swallowAs("scope membership: managed group", false))) === true
     );
   const membership =
     kind === "channel"
       ? deps.directory?.channelMembership(ref, principalId)
       : deps.directory?.groupMembership(ref, principalId);
-  return membership?.catch(swallowAs("scope membership: membership", undefined));
+  return membership?.catch(swallowAs(`scope membership: ${kind}`, undefined));
 }
 
 async function memberOfSharedScope(

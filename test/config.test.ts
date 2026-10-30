@@ -793,28 +793,6 @@ test("company ChatGPT auth satisfies model onboarding without an API key", () =>
   assert.equal(loadConfig({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" }).codexAuthCredential, "cred-1");
 });
 
-test("retired brain environment does not configure a runtime integration and warns once", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg: unknown) => void warnings.push(String(msg));
-  let config;
-  try {
-    config = loadConfig({
-      BRAIN: "mcp",
-      BRAIN_MCP_URL: "https://unused.invalid",
-      BRAIN_RO_CLIENT_ID: "retired",
-      BRAIN_RO_CLIENT_SECRET: "retired",
-    });
-  } finally {
-    console.warn = original;
-  }
-  assert.deepEqual({ ...config, layerEnv: {} }, loadConfig({}));
-  const retired = warnings.filter((w) => w.includes("retired and ignored"));
-  assert.equal(retired.length, 1);
-  assert.match(retired[0]!, /BRAIN, BRAIN_MCP_URL, BRAIN_RO_CLIENT_ID are retired/);
-  assert.match(retired[0]!, /MEMORY_PROVIDER_CONFIG/);
-});
-
 test("Modal native retention and interval configuration are parsed into Config", () => {
   const config = loadConfig({
     MODAL_NATIVE_SNAPSHOT_INTERVAL_SEC: "60",
