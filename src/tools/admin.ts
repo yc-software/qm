@@ -153,7 +153,7 @@ export const adminOperations = {
   }),
   reset_user: operation("Reset a user's onboarding data (destructive).", "POST", "/users/:id/reset", { id: string }),
   offboard_user: operation(
-    "Offboard a departed person: without value.apply it previews what would change; value.apply true disables and archives their crons and webhooks, revokes keychain grants, archives personal apps and skills, retires personal computers, and turns off sign-in. The admin skill's Offboarding section explains the report.",
+    "Offboard a departed person: preview by default, value.apply true to act. See the admin skill.",
     "POST",
     "/users/:id/offboard",
     { id: string, value: Type.Optional(Type.Object({ apply: Type.Boolean() }, { additionalProperties: false })) },
