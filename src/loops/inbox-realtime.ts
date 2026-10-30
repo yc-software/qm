@@ -6,7 +6,7 @@ import { sourceAdapter } from "./sources/index.ts";
 import { isResolved } from "./ledger-view.ts";
 
 export interface InboxRealtimeDeps {
-  loops: Pick<LoopStore, "list">;
+  loops: Pick<LoopStore, "inboxLoops">;
   items: Pick<LoopItemLedger, "byLoop">;
   enqueue: (loop: { id: string; owner: string }, entries: IngressEntry[]) => Promise<unknown>;
 }
@@ -16,16 +16,13 @@ const LOOP_CACHE_TTL_MS = 60_000;
 export function createInboxRealtime(deps: InboxRealtimeDeps): {
   onConversationEvent(event: ConversationEvent): Promise<void>;
 } {
-  let cachedInboxLoops: Array<{ id: string; owner: string }> = [];
+  let cachedInboxLoops: Array<{ id: string; owner: string; tenantId: string | undefined }> = [];
   let cacheAt = 0;
 
-  async function inboxLoops(): Promise<Array<{ id: string; owner: string }>> {
+  async function inboxLoops(): Promise<typeof cachedInboxLoops> {
     const now = Date.now();
     if (now - cacheAt > LOOP_CACHE_TTL_MS) {
-      const all = await deps.loops.list();
-      cachedInboxLoops = all
-        .filter((loop) => (loop.surface === "inbox" || loop.surface?.startsWith("inbox:")) && loop.state !== "archived")
-        .map((loop) => ({ id: loop.id, owner: loop.owner }));
+      cachedInboxLoops = (await deps.loops.inboxLoops()).map(({ id, owner, tenantId }) => ({ id, owner, tenantId }));
       cacheAt = now;
     }
     return cachedInboxLoops;

@@ -8,7 +8,7 @@ import type {
   Destination,
   ShipActionPolicy,
 } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { createMemoryLoopRows, type LoopRows, type TenantLoop } from "./loop-table.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
@@ -64,6 +64,10 @@ export interface LoopStore {
   get(id: string): Promise<Loop | null>;
   list(): Promise<Loop[]>;
   byCron(cronId: string): Promise<Loop | null>;
+  byOwner(owner: string, surface: string): Promise<Loop | null>;
+  byScope(ownerScopeId: string, surface: string): Promise<Loop | null>;
+  inboxLoops(): Promise<TenantLoop[]>;
+  staleGoverned(now: number): Promise<TenantLoop[]>;
   update(id: string, patch: LoopPatch): Promise<Loop | null>;
   editPlaybook(id: string, edit: PlaybookEdit): Promise<Loop | null>;
   setState(id: string, state: LoopState): Promise<Loop | null>;
@@ -138,9 +142,8 @@ function mergeTriage(current: LoopTriageConfig | undefined, patch: LoopTriageCon
   return next;
 }
 
-export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop>()): LoopStore {
-  if (!backing.update) throw new Error("loops need atomic durable updates");
-  const atomicUpdate = backing.update.bind(backing);
+export function createLoopStore(rows: LoopRows = createMemoryLoopRows()): LoopStore {
+  const atomicUpdate = (id: string, apply: (loop: Loop) => Loop) => rows.update(id, apply);
   const merge = (id: string, fields: Partial<Loop>) => atomicUpdate(id, (loop) => ({ ...loop, ...fields }));
 
   return {
@@ -186,18 +189,15 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         ...(input.governor ? { governor: input.governor } : {}),
         ...(input.cronId ? { cronId: input.cronId } : {}),
       };
-      if (backing.insertIfAbsent) {
-        const created = await backing.insertIfAbsent(contentId, candidate);
-        return { loop: created ? candidate : ((await backing.get(contentId)) ?? candidate), created };
-      }
-      const loop = await backing.putIfAbsent(contentId, candidate);
-      return { loop, created: loop.createdAt === candidate.createdAt };
+      return rows.insertIfAbsent(candidate);
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
-    async byCron(cronId) {
-      return (await backing.all()).find((loop) => loop.cronId === cronId) ?? null;
-    },
+    get: (id) => rows.get(id),
+    list: () => rows.list(),
+    byCron: (cronId) => rows.byCron(cronId),
+    byOwner: (owner, surface) => rows.byOwner(owner, surface),
+    byScope: (ownerScopeId, surface) => rows.byScope(ownerScopeId, surface),
+    inboxLoops: () => rows.inboxLoops(),
+    staleGoverned: (now) => rows.staleGoverned(now),
     async update(id, patch) {
       return atomicUpdate(id, (loop) => {
         if (patch.restore !== undefined) return patch.restore;
@@ -258,6 +258,6 @@ export function createLoopStore(backing: DurableMap<Loop> = createMemoryMap<Loop
         lastFiredAt: Date.now(),
       }));
     },
-    delete: (id) => backing.delete(id),
+    delete: (id) => rows.delete(id),
   };
 }

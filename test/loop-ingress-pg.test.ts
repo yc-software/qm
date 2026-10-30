@@ -3,11 +3,11 @@ import { test } from "node:test";
 import { createHmac } from "node:crypto";
 import { configurePgPooling, createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryIngressDeliveryRows, createMemoryIngressSourceRows } from "../src/loops/ingress-table.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
-import { createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
+import { createLoopIngress } from "../src/loops/ingress.ts";
 
 test(
   "event import and model work reuse one PostgreSQL advisory session",
@@ -30,8 +30,8 @@ test(
       let worked = false;
       const ingress = createLoopIngress({
         enabledFor: async () => true,
-        sources: createMemoryMap<LoopIngress>(),
-        deliveries: createMemoryMap<IngressDelivery>(),
+        sources: createMemoryIngressSourceRows(),
+        deliveries: createMemoryIngressDeliveryRows(),
         loops,
         items,
         outputs: createLoopOutputStore(),

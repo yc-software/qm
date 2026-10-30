@@ -504,9 +504,7 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const loop =
-    (await deps.store.list()).find(
-      (candidate) => candidate.owner === acting.actorId && candidate.surface === "inbox:gmail",
-    ) ?? (await findInboxLoop(deps.store, acting.actorId));
+    (await deps.store.byOwner(acting.actorId, "inbox:gmail")) ?? (await findInboxLoop(deps.store, acting.actorId));
   const cron = loop?.cronId ? await ctx.app.getCron(loop.cronId) : null;
   sendJson(ctx.res, 200, { loop, syncCron: cronSummary(cron) });
 }

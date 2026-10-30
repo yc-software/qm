@@ -49,7 +49,7 @@ function gmailEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
 function realtime(items: ReturnType<typeof createLoopItemLedger>) {
   const calls: IngressEntry[][] = [];
   const rt = createInboxRealtime({
-    loops: { list: async () => [LOOP] },
+    loops: { inboxLoops: async () => [{ ...LOOP, tenantId: undefined }] },
     items,
     enqueue: async (_loop, entries) => {
       calls.push(entries);
