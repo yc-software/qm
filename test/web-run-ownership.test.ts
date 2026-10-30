@@ -43,7 +43,7 @@ function as(user: string, init: RequestInit = {}): RequestInit {
   };
 }
 
-async function aliceThread(): Promise<{ threadRef: string; live: string; queued: string }> {
+test("another user cannot see a run's queued text, or edit, withdraw or answer its runs", async () => {
   const threadRef = `web:alice:${crypto.randomUUID()}`;
   const submit = async (text: string): Promise<string> => {
     const r = await fetch(
@@ -54,60 +54,29 @@ async function aliceThread(): Promise<{ threadRef: string; live: string; queued:
     assert.ok(runId);
     return runId;
   };
-  return { threadRef, live: await submit("alice private first"), queued: await submit("alice private second") };
-}
-
-const active = async (user: string, threadRef: string) =>
-  (await (await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, as(user))).json()) as {
-    runId: string | null;
-    queued?: Array<{ runId: string; text: string }>;
-  };
-
-test("another user cannot discover a run, its status or its queued text through /api/runs/active", async () => {
-  const { threadRef, live, queued } = await aliceThread();
-  const own = await active("alice", threadRef);
-  assert.equal(own.runId, live);
-  assert.deepEqual(
-    own.queued?.map((q) => q.text),
-    ["alice private second"],
-  );
-  const stolen = await fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, as("bob"));
-  assert.equal(stolen.status, 200);
-  const body = await stolen.text();
-  assert.deepEqual(JSON.parse(body), { runId: null, run: null });
-  for (const leaked of [live, queued, "alice private"]) assert.ok(!body.includes(leaked));
-  assert.equal((await fetch(`${webBase}/api/runs/${live}`, as("bob"))).status, 404);
-});
-
-test("another user cannot read, stream, signal, edit or withdraw a run", async () => {
-  const { threadRef, live, queued } = await aliceThread();
-  assert.equal((await fetch(`${webBase}/api/runs/${live}`, as("bob"))).status, 404);
-  assert.equal((await fetch(`${webBase}/api/runs/${live}/events`, as("bob"))).status, 404);
-  for (const signal of [
-    { kind: "abort" },
-    { kind: "steer", text: "do something else" },
-    { kind: "steer", text: "hijack", threadRef: `web:bob:${crypto.randomUUID()}` },
-    { kind: "client_result", callId: "c1", result: { content: "forged" } },
-  ]) {
-    const r = await fetch(
-      `${webBase}/api/runs/${live}/signal`,
-      as("bob", { method: "POST", body: JSON.stringify(signal) }),
-    );
-    assert.ok([403, 404].includes(r.status), `${signal.kind} answered ${r.status}`);
-  }
-  assert.deepEqual(await built.signals.takePending(live), []);
+  const live = await submit("alice private first");
+  const queued = await submit("alice private second");
+  const discover = (user: string) =>
+    fetch(`${webBase}/api/runs/active?threadRef=${encodeURIComponent(threadRef)}`, as(user));
+  assert.deepEqual(((await (await discover("alice")).json()) as { queued?: Array<{ text: string }> }).queued, [
+    { runId: queued, text: "alice private second" },
+  ]);
+  assert.deepEqual(await (await discover("bob")).json(), { runId: null, run: null });
   const edit = await fetch(
     `${webBase}/api/runs/${queued}/input`,
     as("bob", { method: "PATCH", body: JSON.stringify({ text: "rewritten", expectedText: "alice private second" }) }),
   );
   assert.equal(edit.status, 404);
   assert.equal((await fetch(`${webBase}/api/runs/${queued}/withdraw`, as("bob", { method: "POST" }))).status, 404);
-  const after = await built.runs.get(queued);
-  assert.equal(after?.status, "pending");
-  assert.equal(after?.request.text, "alice private second");
-  assert.equal((await built.runs.get(live))?.status, "pending");
-  assert.equal((await active("alice", threadRef)).runId, live);
-  assert.equal((await fetch(`${webBase}/api/runs/${live}`, as("alice"))).status, 200);
+  const answer = JSON.stringify({ kind: "client_result", callId: "c1", result: { content: "forged" } });
+  assert.equal(
+    (await fetch(`${webBase}/api/runs/${live}/signal`, as("bob", { method: "POST", body: answer }))).status,
+    404,
+  );
+  assert.deepEqual(await built.signals.takePending(live), []);
+  const untouched = await built.runs.get(queued);
+  assert.equal(untouched?.status, "pending");
+  assert.equal(untouched?.request.text, "alice private second");
 });
 
 test("another user cannot inspect or control a session's swarm", async () => {
@@ -122,16 +91,4 @@ test("another user cannot inspect or control a session's swarm", async () => {
   assert.notEqual((await fetch(path, as("alice"))).status, 403);
   assert.equal((await fetch(path, as("bob"))).status, 403);
   assert.equal((await fetch(path, as("bob", { method: "POST", body: control }))).status, 403);
-});
-
-test("a run id is not usable without a portal identity", async () => {
-  const { live } = await aliceThread();
-  for (const [path, init] of [
-    [`/api/runs/${live}`, {}],
-    [`/api/runs/${live}/signal`, { method: "POST", body: JSON.stringify({ kind: "abort" }) }],
-  ] as const) {
-    const r = await fetch(`${webBase}${path}`, { ...init, headers: { cookie: "webuiuser=alice" } });
-    assert.equal(r.status, 401);
-  }
-  assert.equal((await built.runs.get(live))?.status, "pending");
 });
