@@ -1,3 +1,4 @@
+import { cronRef, encodeRef, parseRef } from "../acl/resource-ref.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -44,14 +45,27 @@ export async function cronVisibility(deps: AppDeps, h: AppHelpers, principalId: 
     const { kind, ref } = parseScopeId(ownerScopeId);
     return kind !== "group" || deps.projects?.recognizes(ref) !== true || scopeNames.has(ownerScopeId);
   };
+  const grants = (await deps.acl.list()).filter(
+    (grant) => (grant.permission === "read" || grant.permission === "write") && parseRef(grant.ref).kind === "cron",
+  );
+  const grantees = [...new Set(grants.map((grant) => grant.granteeScopeId))];
+  const readable = new Set(
+    (
+      await Promise.all(
+        grantees.map(async (scope) => ((await h.principalCanAccessCurrentScope(principalId, scope)) ? scope : null)),
+      )
+    ).filter((scope): scope is ScopeId => scope !== null),
+  );
+  const shared = grants.filter((grant) => readable.has(grant.granteeScopeId));
   return {
     viewersOwn,
     scopeNames,
-    canSee: (c: Pick<import("../types.ts").Cron, "ownerScopeId" | "owner" | "destination">): boolean =>
-      allowed(c.ownerScopeId) &&
-      (viewersOwn(c.owner) ||
-        scopeNames.has(c.ownerScopeId) ||
-        (c.destination?.type === "principal" && viewersOwn(c.destination.target))),
+    canSee: (c: Pick<import("../types.ts").Cron, "id" | "ownerScopeId" | "owner" | "destination">): boolean =>
+      shared.some((grant) => grant.ownerScopeId === c.ownerScopeId && grant.ref === encodeRef(cronRef(c.id))) ||
+      (allowed(c.ownerScopeId) &&
+        (viewersOwn(c.owner) ||
+          scopeNames.has(c.ownerScopeId) ||
+          (c.destination?.type === "principal" && viewersOwn(c.destination.target)))),
   };
 }
 

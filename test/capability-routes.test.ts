@@ -277,6 +277,92 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     await del(`/v1/crons/${id}`, { "x-agent-capability": await capFor("U1") });
   });
 
+  it("honors read-only cron grants without granting control or re-sharing", async () => {
+    const owner = { "x-agent-capability": await capFor("U1") };
+    const reader = { "x-agent-capability": await capFor("U2") };
+    const created = await post(
+      "/v1/crons",
+      { title: "Shared visibility sentinel", schedule: { everyMs: 60_000 }, text: "shared reminder" },
+      owner,
+    );
+    assert.equal(created.status, 200);
+    const { cron } = (await created.json()) as any;
+    const path = `/v1/crons/${cron.id}`;
+    try {
+      const shared = await post(
+        "/v1/share",
+        { type: "cron", id: cron.id, toScope: "personal:U2", permission: "read" },
+        owner,
+      );
+      assert.equal(shared.status, 200);
+      assert.equal((await get(path, reader)).status, 200);
+      const listed = (await (await get("/v1/crons", reader)).json()) as any;
+      assert.ok(listed.visible.some((c: any) => c.id === cron.id));
+      assert.ok(!listed.crons.some((c: any) => c.id === cron.id));
+      assert.ok((await built.app.searchResources("U2", "visibility sentinel")).hits.some((h) => h.id === cron.id));
+      assert.equal((await patch(path, { title: "changed" }, reader)).status, 403);
+      assert.equal((await post(`${path}/run`, {}, reader)).status, 403);
+      assert.equal((await post(`${path}/disable`, {}, reader)).status, 403);
+      assert.equal((await del(path, reader)).status, 403);
+      assert.equal(
+        (await post("/v1/share", { type: "cron", id: cron.id, toScope: "personal:U8", permission: "read" }, reader))
+          .status,
+        403,
+      );
+      assert.equal(
+        (await get(`${path}?principalId=U1&viewer=U1`, { "x-agent-capability": await capFor("U8") })).status,
+        403,
+      );
+      await built.app.revokeGrant(cron.ownerScopeId, `cron:${cron.id}`, "personal:U2", "U1");
+      assert.equal((await get(path, reader)).status, 403);
+      const revoked = (await (await get("/v1/crons", reader)).json()) as any;
+      assert.ok(!revoked.visible.some((c: any) => c.id === cron.id));
+      assert.ok(!(await built.app.searchResources("U2", "visibility sentinel")).hits.some((h) => h.id === cron.id));
+    } finally {
+      await del(path, owner);
+    }
+  });
+
+  it("removes cron grant visibility when private-channel membership is revoked", async () => {
+    const originalMembers = ["admin-alice", "U1", "U2", "U8"].map((principalId) => ({ channelId: "C", principalId }));
+    const channels = [
+      { channelId: "C", name: "eng", isPrivate: false },
+      { channelId: "C-private", name: "private", isPrivate: true },
+    ];
+    await built.directory.replaceChannels(channels, [
+      ...originalMembers,
+      ...["U1", "U2"].map((principalId) => ({ channelId: "C-private", principalId })),
+    ]);
+    const owner = { "x-agent-capability": await capFor("U1") };
+    const reader = { "x-agent-capability": await capFor("U2") };
+    const created = await post(
+      "/v1/crons",
+      { title: "Private-channel grant", schedule: { everyMs: 60_000 }, text: "private reminder" },
+      owner,
+    );
+    assert.equal(created.status, 200);
+    const { cron } = (await created.json()) as any;
+    const path = `/v1/crons/${cron.id}`;
+    try {
+      const shared = await post(
+        "/v1/share",
+        { type: "cron", id: cron.id, toScope: "channel:C-private", permission: "read" },
+        owner,
+      );
+      assert.equal(shared.status, 200);
+      assert.equal((await get(path, reader)).status, 200);
+      await built.directory.replaceChannels(channels, [
+        ...originalMembers,
+        { channelId: "C-private", principalId: "U1" },
+      ]);
+      assert.equal((await get(path, reader)).status, 403);
+    } finally {
+      await built.app.revokeGrant(cron.ownerScopeId, `cron:${cron.id}`, "channel:C-private", "U1");
+      await del(path, owner);
+      await built.directory.replaceChannels([channels[0]!], originalMembers);
+    }
+  });
+
   it("accepts calendar cron schedules and defaults timezone from the capability", async () => {
     const withTz = await post(
       "/v1/crons",
