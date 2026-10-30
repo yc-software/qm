@@ -47,7 +47,7 @@ test("documents come from the release the live pointer names", async (t) => {
   objects.set("/channels/live.json", JSON.stringify({ id: B }));
   assert.equal(await releases.document("index.html"), "<html>A</html>");
   assert.equal(requests.filter((path) => path === "/channels/live.json").length, 1);
-  t.mock.timers.tick(10_000);
+  t.mock.timers.tick(2_000);
   assert.equal(await releases.document("index.html"), "<html>B</html>");
 });
 
@@ -60,10 +60,10 @@ test("an unreadable pointer keeps serving the last release, but never invents on
   objects.set("/channels/live.json", JSON.stringify({ id: A }));
   assert.equal(await releases.document("index.html"), "<html>A</html>");
   objects.set("/channels/live.json", 503);
-  t.mock.timers.tick(10_000);
+  t.mock.timers.tick(2_000);
   assert.equal(await releases.document("index.html"), "<html>A</html>");
   objects.set("/channels/live.json", JSON.stringify({ id: "../../etc" }));
-  t.mock.timers.tick(10_000);
+  t.mock.timers.tick(2_000);
   assert.equal(await releases.document("index.html"), "<html>A</html>");
 });
 

@@ -3,7 +3,7 @@ import { Readable } from "node:stream";
 
 export type UiDocument = "index.html" | "shared.html";
 
-const POINTER_TTL_MS = 10_000;
+const POINTER_TTL_MS = 2_000;
 const RELEASE_ID = /^[a-f0-9]{16}$/;
 
 export function createUiReleases(baseUrl: string, fetchImpl: typeof fetch = fetch) {

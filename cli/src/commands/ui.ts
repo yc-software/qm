@@ -51,8 +51,18 @@ export function runUiPublish(o: UiPublishOptions): void {
       "--cache-control",
       IMMUTABLE,
     ]);
-    for (const name of DOCUMENTS)
-      capture(aws, ["s3", "cp", join(o.dir, name), `${bucket}/releases/${id}/${name}`, "--cache-control", IMMUTABLE]);
+    capture(aws, [
+      "s3",
+      "cp",
+      o.dir,
+      `${bucket}/releases/${id}`,
+      "--recursive",
+      "--exclude",
+      "*",
+      ...DOCUMENTS.flatMap((name) => ["--include", name]),
+      "--cache-control",
+      IMMUTABLE,
+    ]);
   }
   const scratch = mkdtempSync(join(tmpdir(), "qm-ui-"));
   try {

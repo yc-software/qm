@@ -269,7 +269,7 @@ A web UI deploy is an upload and a pointer flip; no service restarts. `npm run b
 
 The release id is a hash of the two documents, which name every hashed asset. Set
 `WEB_UI_RELEASES_URL` on this service to the bucket's or CDN's public origin. Page loads then
-use the release named by `channels/live.json`, which is re-read every 10 seconds; if the pointer is briefly
+use the release named by `channels/live.json`, which is re-read every 2 seconds; if the pointer is briefly
 unreadable the last one read keeps serving. `/assets/*` is relayed from the bucket, gzip when the
 browser accepts it, or a CDN can serve `/assets/*` directly. Assets from older releases stay in the
 bucket, so open tabs keep loading their lazy chunks after a deploy. Grant the reader

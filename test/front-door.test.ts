@@ -105,7 +105,7 @@ function publish(marker: string): void {
   const bin = join(scratch, "aws");
   writeFileSync(
     bin,
-    `#!/bin/sh\nroot=${JSON.stringify(bucketDir)}\ncase "$1 $2" in\n"s3 sync") d="$root/\${4#s3://*/}"; mkdir -p "$d"; cp -R "$3/." "$d/";;\n"s3 cp") d="$root/\${4#s3://*/}"; mkdir -p "$(dirname "$d")"; cp "$3" "$d";;\n*) exit 1;;\nesac\n`,
+    `#!/bin/sh\nroot=${JSON.stringify(bucketDir)}\ncase "$1 $2" in\n"s3 sync") d="$root/\${4#s3://*/}"; mkdir -p "$d"; cp -R "$3/." "$d/";;\n"s3 cp") d="$root/\${4#s3://*/}"; if [ -d "$3" ]; then mkdir -p "$d"; cp "$3"/*.html "$d/"; else mkdir -p "$(dirname "$d")"; cp "$3" "$d"; fi;;\n*) exit 1;;\nesac\n`,
   );
   chmodSync(bin, 0o755);
   const previous = process.env.AWS_BIN;

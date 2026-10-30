@@ -11,7 +11,7 @@ function withFakeAws(fn: (dir: string, calls: () => string[][]) => void, failHea
   const bin = join(dir, "aws");
   writeFileSync(
     bin,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nfor last; do :; done\ncase "$1 $2" in "s3 cp") case "$3" in /*) [ -f "$3" ] && case "$4" in *channels/live.json) cat "$3" >> ${JSON.stringify(log)};; esac;; esac;; "s3api head-object") ${failHeadObject ? "exit 254" : "exit 0"};; esac\n`,
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nfor last; do :; done\ncase "$1 $2" in "s3 cp") case "$4" in *channels/live.json) cat "$3" >> ${JSON.stringify(log)};; esac;; "s3api head-object") ${failHeadObject ? "exit 254" : "exit 0"};; esac\n`,
   );
   chmodSync(bin, 0o755);
   writeFileSync(log, "");
@@ -60,13 +60,16 @@ test("publishing uploads assets and documents before moving the live pointer", (
     const targets = log.map((args) => args.find((arg) => arg.startsWith("s3://")) ?? args.at(-1));
     assert.deepEqual(targets, [
       "s3://ui-bucket/assets",
-      `s3://ui-bucket/releases/${id}/index.html`,
-      `s3://ui-bucket/releases/${id}/shared.html`,
+      `s3://ui-bucket/releases/${id}`,
       "s3://ui-bucket/channels/live.json",
       `{"id":"${id}"}`,
     ]);
     assert.ok(log[0]!.includes("immutable"));
-    assert.ok(log[3]!.includes("no-cache"));
+    assert.deepEqual(
+      log[1]!.filter((_, i, args) => args[i - 1] === "--include"),
+      ["index.html", "shared.html"],
+    );
+    assert.ok(log[2]!.includes("no-cache"));
   });
 });
 
