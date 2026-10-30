@@ -3460,7 +3460,7 @@ test("subagents send_message wakes by default and says what happened", async () 
   );
   assert.equal(
     await send({ wake: false }),
-    `Left in "child"'s mailbox. It is working and sees this after its current step.`,
+    `Left in "child"'s mailbox. It has work running or queued and sees this at its next step.`,
   );
   assert.match(await send({}), /^Left in "root"'s mailbox without waking it: a message cannot start a turn/);
   assert.deepEqual(

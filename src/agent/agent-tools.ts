@@ -1618,7 +1618,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         else if (result.delivered !== "interrupted")
           outcome = `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${
             result.busy
-              ? "It is working and sees this after its current step."
+              ? "It has work running or queued and sees this at its next step."
               : "It is idle and won't see this until something wakes it."
           }`;
         return recordResult(
