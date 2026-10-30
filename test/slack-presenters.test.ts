@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createAckPresenter, stripAckPrefix, renderGoalNotice, createGoalNoticePresenter } from "../src/slack/lib.ts";
+import { sleep as tick } from "../src/util/async.ts";
 
 function presenterHarness(opts: { reactionDelayMs?: number } = {}) {
   const calls: string[] = [];
@@ -20,8 +21,6 @@ function presenterHarness(opts: { reactionDelayMs?: number } = {}) {
   });
   return { presenter, calls };
 }
-
-const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 test("ack presenter: a short first block posts as the ack and suppresses the fallback reaction", async () => {
   const { presenter, calls } = presenterHarness({ reactionDelayMs: 50 });

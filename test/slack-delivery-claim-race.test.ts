@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createThreadTracker } from "../src/slack/message-gating.ts";
+import { sleep } from "../src/util/async.ts";
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const CLAIM_MS = 300;
 
 function harness() {

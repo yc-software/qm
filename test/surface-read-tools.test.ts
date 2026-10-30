@@ -9,8 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { SurfaceContextResult, TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-readtools-"));

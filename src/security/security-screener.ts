@@ -1,10 +1,9 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 import type { ScopeId } from "../types.ts";
 import type { SecurityScreenVerdict } from "./security-posture.ts";
 import { swallow } from "../util/errors.ts";
-import { retryAfterMs } from "../util/async.ts";
+import { retryAfterMs, sleep } from "../util/async.ts";
 
 export type SecurityScreenHook = "user_input" | "tool_response";
 
@@ -223,7 +222,7 @@ export function createSecurityScreenProxy(opts: {
             if (response.status === 429 && attempt < SECURITY_SCREEN_RETRY_MS.length) {
               const waitMs = retryAfterMs(response.headers) ?? SECURITY_SCREEN_RETRY_MS[attempt]!;
               await cancelResponseBody(response);
-              await delay(waitMs, undefined, { signal: chunkSignal });
+              await sleep(waitMs, { signal: chunkSignal });
               continue;
             }
             if (!response.ok) {

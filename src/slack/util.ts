@@ -9,7 +9,3 @@ export function inlineCode(text: string): string {
 export function clip(text: string, max: number): string {
   return safeClip(text, max);
 }
-
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

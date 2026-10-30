@@ -6,6 +6,7 @@ import { composioRoutes } from "./composio.ts";
 import { composioTwitterMediaRoutes } from "./composio-twitter-media.ts";
 import { loopIngressRoutes, loopIngressRawRoutes } from "./loop-ingress.ts";
 import { sendJson } from "../http.ts";
+import { withAbort } from "../../util/async.ts";
 import { type ApiCtx, type BaseCtx, type Route } from "./route.ts";
 import { connectorRawRoutes, connectorRoutes } from "./connectors.ts";
 import { deploymentRawRoutes, deploymentRoutes } from "./deployments.ts";
@@ -53,21 +54,12 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
     path: "/readyz",
     auth: "public",
     handle: async ({ res, deps }) => {
-      const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          controller.abort();
-          reject(new Error("Readiness deadline exceeded"));
-        }, 1000);
-      });
+      const signal = AbortSignal.timeout(1000);
       try {
-        await Promise.race([Promise.resolve().then(() => deps.checkReadiness?.(controller.signal)), deadline]);
+        await withAbort(async () => deps.checkReadiness?.(signal), signal);
         sendJson(res, 200, { ok: true });
       } catch {
         sendJson(res, 503, { ok: false });
-      } finally {
-        clearTimeout(timer);
       }
     },
   },

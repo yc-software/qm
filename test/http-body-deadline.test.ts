@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { armBodyDeadline, extendBodyDeadline } from "../src/api/http.ts";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
 
 function fakeReq(complete: boolean): IncomingMessage & { destroyedWith: Error | null } {
   const s = new PassThrough() as unknown as IncomingMessage & { destroyedWith: Error | null; complete: boolean };

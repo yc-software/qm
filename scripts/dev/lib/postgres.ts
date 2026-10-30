@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import { run } from "./proc.ts";
-import { sleep } from "./util.ts";
+import { sleep } from "../../../src/util/async.ts";
 
 const POSTGRES_IMAGE =
   "pgvector/pgvector:0.8.1-pg16@sha256:33198da2828a14c30348d2ccb4750833d5ed9a44c88d840a0e523d7417120337";

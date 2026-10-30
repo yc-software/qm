@@ -3,8 +3,7 @@ import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSweeper } from "../src/util/sweeper.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
 
 test("createSweeper ticks fn on the interval until stopped", async () => {
   let ticks = 0;

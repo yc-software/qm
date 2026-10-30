@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { sleep } from "./slack.ts";
+import { sleep } from "../../src/util/async.ts";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 

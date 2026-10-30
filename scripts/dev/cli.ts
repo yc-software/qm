@@ -40,7 +40,8 @@ import {
 } from "./lib/client.ts";
 import { sweepSlackTokenOrphans } from "./lib/orphans.ts";
 import { destroyLocalDevSandboxes } from "./lib/sandbox.ts";
-import { bestEffort, errMessage, formatAge, nowEpoch, sleep, swallowAs } from "./lib/util.ts";
+import { bestEffort, errMessage, formatAge, nowEpoch, swallowAs } from "./lib/util.ts";
+import { sleep } from "../../src/util/async.ts";
 import { runDoctor } from "./commands/doctor.ts";
 import type { BootPhaseEvent, BootResult, DevSandboxChoice, LeaseInfo } from "./lib/types.ts";
 import { CHILD_ORDER, EXIT } from "./lib/types.ts";

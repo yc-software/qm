@@ -11,6 +11,7 @@ import {
   redactCommand,
 } from "../src/sandbox/exec-process-session.ts";
 import type { ExecResult, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { sleep } from "../src/util/async.ts";
 
 function shellIo(home: string): ExecProcessIo {
   return {
@@ -46,8 +47,6 @@ function fixture(): {
   const io = shellIo(home);
   return { proc: createExecProcessSessions(io), handle: { id: "t", rootDir: root }, io, home };
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 test("a started process is reattachable: cursor reads stream its output then exit", async () => {
   const { proc, handle } = fixture();

@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createEnvelopeStaging, envelopeKey, type StagedEnvelope } from "../src/slack/envelope-staging.ts";
 import { createDeferredEnvelopeAck, envelopeStageFor } from "../src/slack/deferred-ack.ts";
-
-const tick = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep as tick } from "../src/util/async.ts";
 
 function envelope(type: string, ts: string, channel = "C1"): Record<string, unknown> {
   return { type: "event_callback", event: { type, channel, ts, text: "hi" } };

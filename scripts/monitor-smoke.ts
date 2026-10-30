@@ -17,13 +17,13 @@ import { loadConfig } from "../src/config.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { sleep } from "../src/util/async.ts";
 
 if (!process.env.SPRITES_TOKEN) {
   console.error("set SPRITES_TOKEN (mint one with `sprite login`)");
   process.exit(1);
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const ok = (cond: boolean, msg: string): void => {
   if (!cond) throw new Error("ASSERT FAILED: " + msg);
   console.log("  ✓", msg);

@@ -8,8 +8,7 @@ import { join } from "node:path";
 import { createTurnStream, goalView } from "../src/runs/turn-stream.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
 
 test("accumulates deltas per run and isolates runs", () => {
   const s = createTurnStream();

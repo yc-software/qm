@@ -17,8 +17,7 @@ import {
   type RunStore,
 } from "./run-store.ts";
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
-import { sleep } from "../util/async.ts";
-import { retryDelay } from "./retry-delay.ts";
+import { retryDelay, sleep } from "../util/async.ts";
 import { traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {

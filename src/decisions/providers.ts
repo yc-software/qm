@@ -1,4 +1,5 @@
 import { posix } from "node:path";
+import { withAbort } from "../util/async.ts";
 import { asError, type DecisionBackend, type DecisionProvider, type DecisionQuestion } from "./decisions.ts";
 
 const MAX_RESPONSE_BYTES = 1_000_000;
@@ -172,16 +173,11 @@ export function createDecisionBackend(opts: {
   };
   return {
     async choose({ questions, state, model, signal }) {
-      signal.throwIfAborted();
-      const aborted = new Promise<never>((_, reject) =>
-        signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true }),
-      );
-      aborted.catch(() => {});
-      const provider = (await Promise.race([opts.providers([model.provider]), aborted])).find(
+      const provider = (await withAbort(async () => opts.providers([model.provider]), signal)).find(
         (p) => p.id === model.provider,
       );
       if (!provider) throw new Error(`decision provider ${model.provider} is not configured`);
-      const { base, auth } = await Promise.race([endpoint(provider), aborted]);
+      const { base, auth } = await withAbort(() => endpoint(provider), signal);
       const keys = Object.keys(questions);
       const wire = PROTOCOLS[provider.protocol];
       const url = new URL(base);

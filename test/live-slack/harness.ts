@@ -1,5 +1,6 @@
 import assert from "node:assert";
-import { SlackClient, sleep, type SlackMessage } from "./slack.ts";
+import { SlackClient, type SlackMessage } from "./slack.ts";
+import { sleep } from "../../src/util/async.ts";
 import { CoreClient } from "./core.ts";
 import { modelGatewayFromEnv } from "../../src/config.ts";
 import { modelGatewayRequest } from "../../src/model/provider-endpoints.ts";

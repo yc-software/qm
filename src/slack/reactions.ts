@@ -1,5 +1,5 @@
 import { EMOJI_NAME_BY_CHAR } from "./emoji-map.ts";
-import { sleep } from "./util.ts";
+import { retryOperation } from "../util/async.ts";
 import { extractDirectives } from "./directives.ts";
 import { slackErrorCode } from "./payloads.ts";
 
@@ -119,26 +119,20 @@ export async function applyReactions(
   const added: string[] = [];
   const failed: string[] = [];
   for (const name of normalizeReactions(names)) {
-    let landed = false;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await client.reactions.add({ channel, timestamp, name });
-        landed = true;
-        break;
-      } catch (err) {
-        const code = slackErrorCode(err);
-        if (code === "already_reacted") {
-          landed = true;
-          break;
+    const landed = await retryOperation(
+      async () => {
+        try {
+          await client.reactions.add({ channel, timestamp, name });
+        } catch (err) {
+          if (slackErrorCode(err) !== "already_reacted") throw err;
         }
-        const delay = REACTION_RETRY_DELAYS_MS[attempt];
-        if (code && REACTION_PROPAGATION_ERRORS.has(code) && delay != null) {
-          await sleep(delay);
-          continue;
-        }
-        break;
-      }
-    }
+      },
+      (err, attempt) =>
+        REACTION_PROPAGATION_ERRORS.has(slackErrorCode(err) ?? "") ? REACTION_RETRY_DELAYS_MS[attempt - 1] : undefined,
+    ).then(
+      () => true,
+      () => false,
+    );
     (landed ? added : failed).push(name);
   }
   return { added, failed };

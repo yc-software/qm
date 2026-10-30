@@ -1,5 +1,5 @@
 import { assert, type Scenario } from "./harness.ts";
-import { sleep } from "./slack.ts";
+import { sleep } from "../../src/util/async.ts";
 import { redeliverChannelMessage, type TwinAdmin } from "./arga.ts";
 
 function pumpTarget(): { signingSecret: string; targetUrl: string } {

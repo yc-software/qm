@@ -3,7 +3,8 @@ import { openSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { writePidFile } from "../lib/lease.ts";
 import { spawnCommand, tcpPortOpen, waitPortFree } from "../lib/proc.ts";
-import { bestEffort, bestEffortValue, sleep } from "../lib/util.ts";
+import { bestEffort, bestEffortValue } from "../lib/util.ts";
+import { sleep } from "../../../src/util/async.ts";
 import type { ChildSpec, ChildState, ChildStatus } from "../lib/types.ts";
 
 const READY_TIMEOUT_MS = Number(process.env.DEV_INSTANCE_READY_TIMEOUT || 40) * 1000;

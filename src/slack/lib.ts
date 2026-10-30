@@ -1,5 +1,5 @@
 export { refusalDelivery, postThenAckRunDelivery, refusalNote } from "./refusals.ts";
-export { inlineCode, clip, sleep } from "./util.ts";
+export { inlineCode, clip } from "./util.ts";
 export { safeChunks } from "./safe-cut.ts";
 export {
   decodeSlackEntities,

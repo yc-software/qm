@@ -18,7 +18,7 @@ import {
   skillRecordPaths,
 } from "../skills/skill-collision.ts";
 import type { SkillBundleStore } from "../skills/skill-bundle-store.ts";
-import { createKeyedQueue, sleep } from "../util/async.ts";
+import { createKeyedQueue, retryOperation } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import {
@@ -283,17 +283,13 @@ export function createDeploymentLayerStore(opts: {
   const advisoryLock = opts.advisoryLock;
   const withFleetLock = <T>(fn: () => Promise<T>): Promise<T> => advisoryLock.withLock(SKILL_MATERIALIZATION_LOCK, fn);
 
-  const retrying = async <T>(fn: () => Promise<T>): Promise<T> => {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await fn();
-      } catch (error) {
-        if (attempt >= retryDelaysMs.length) throw error;
-        console.error(`[deployment-layer] attempt ${attempt + 1} failed, retrying: ${errMessage(error)}`);
-        await sleep(retryDelaysMs[attempt]!);
-      }
-    }
-  };
+  const retrying = <T>(fn: () => Promise<T>): Promise<T> =>
+    retryOperation(fn, (error, attempt) => {
+      const delayMs = retryDelaysMs[attempt - 1];
+      if (delayMs !== undefined)
+        console.error(`[deployment-layer] attempt ${attempt} failed, retrying: ${errMessage(error)}`);
+      return delayMs;
+    });
 
   const reportApplyFailure = (record: StoredDeploymentLayer, error: unknown): void => {
     if (failedHash === record.contentHash) return;

@@ -1,5 +1,5 @@
 import { assert, isLiveStatusText, type Scenario } from "./harness.ts";
-import { sleep } from "./slack.ts";
+import { sleep } from "../../src/util/async.ts";
 
 async function assertSilence(
   ctx: import("./harness.ts").Ctx,

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { withTimeout } from "../util/async.ts";
 import type { AuthEvent, AuthPrompt, OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
@@ -66,17 +67,18 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
         })
         .then(tokensFromCredential);
       void outcome.catch(() => undefined);
-      let startTimer: NodeJS.Timeout | undefined;
       try {
-        const event = await Promise.race([
-          devicePrompt,
-          outcome.then(() => {
-            throw new Error("ChatGPT login finished before showing a device code");
-          }),
-          new Promise<never>((_, reject) => {
-            startTimer = setTimeout(() => reject(new Error("ChatGPT device login start timed out")), START_TIMEOUT_MS);
-          }),
-        ]);
+        const event = await withTimeout(
+          () =>
+            Promise.race([
+              devicePrompt,
+              outcome.then(() => {
+                throw new Error("ChatGPT login finished before showing a device code");
+              }),
+            ]),
+          START_TIMEOUT_MS,
+          "ChatGPT device login start",
+        );
         const loginId = randomUUID();
         const expiresAt = Date.now() + Math.min(LOGIN_TTL_MS, (event.expiresInSeconds ?? Infinity) * 1000);
         const login: PendingLogin = { abort, expiresAt, outcome, settled: false };
@@ -96,8 +98,6 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
       } catch (error) {
         abort.abort();
         throw error;
-      } finally {
-        if (startTimer) clearTimeout(startTimer);
       }
     },
 

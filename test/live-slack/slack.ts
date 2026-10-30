@@ -1,3 +1,4 @@
+import { sleep } from "../../src/util/async.ts";
 import { WebClient } from "@slack/web-api";
 
 export interface SlackMessage {
@@ -98,8 +99,4 @@ export class SlackClient {
     const r = await this.web.conversations.history({ channel, limit: 200, ...(oldest ? { oldest } : {}) });
     return ((r.messages ?? []) as unknown as SlackMessage[]).reverse();
   }
-}
-
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

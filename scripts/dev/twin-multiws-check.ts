@@ -1,5 +1,6 @@
 import { startEventPump, TwinAdmin } from "../../test/live-slack/arga.ts";
-import { SlackClient, sleep } from "../../test/live-slack/slack.ts";
+import { SlackClient } from "../../test/live-slack/slack.ts";
+import { sleep } from "../../src/util/async.ts";
 
 function req(name: string): string {
   const v = process.env[name];

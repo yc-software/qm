@@ -2,11 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryRunSignalStore, startSignalPoll, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { sleep } from "../src/util/async.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the pg run-signal tests";
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const until = async (cond: () => boolean, ms = 3_000): Promise<void> => {
   const deadline = Date.now() + ms;
   while (!cond()) {

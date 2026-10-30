@@ -2,7 +2,8 @@ import { request as httpRequest } from "node:http";
 import { text } from "node:stream/consumers";
 import { createHmac } from "node:crypto";
 import { assert, type Actor, type Env, type Scenario } from "./harness.ts";
-import { sleep, type SlackMessage } from "./slack.ts";
+import { type SlackMessage } from "./slack.ts";
+import { sleep } from "../../src/util/async.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
 

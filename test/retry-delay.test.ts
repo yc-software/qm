@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { retryDelay } from "../src/runs/retry-delay.ts";
+import { retryDelay } from "../src/util/async.ts";
 import { processRun } from "../src/runs/worker.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";

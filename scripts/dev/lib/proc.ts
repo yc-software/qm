@@ -2,7 +2,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { openSync, statSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { join } from "node:path";
-import { bestEffort, sleep } from "./util.ts";
+import { bestEffort } from "./util.ts";
+import { sleep } from "../../../src/util/async.ts";
 
 export function spawnCommand(
   cmd: string,

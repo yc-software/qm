@@ -20,7 +20,8 @@ import { destroyLocalDevSandboxes, resolveSandbox, type SandboxResolution } from
 import { adminGrantCount, checkPostgres, ensureLocalPostgres, firstAdminPrincipal } from "../lib/postgres.ts";
 import { killTree } from "../lib/proc.ts";
 import { envFileGet } from "../lib/envctx.ts";
-import { envSha as computeEnvSha, errMessage, nowEpoch, sleep } from "../lib/util.ts";
+import { envSha as computeEnvSha, errMessage, nowEpoch } from "../lib/util.ts";
+import { sleep } from "../../../src/util/async.ts";
 import { discoverCanaryChannel } from "../lib/canary.ts";
 import { buildChildSpecs, type SpecInputs } from "./specs.ts";
 import { Child } from "./children.ts";

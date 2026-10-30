@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { assert, type Scenario } from "./harness.ts";
-import { sleep, type SlackMessage } from "./slack.ts";
+import { type SlackMessage } from "./slack.ts";
+import { sleep } from "../../src/util/async.ts";
 import { assertRuntimeHandoff } from "./runtime-handoff.ts";
 import { multiUserScenarios } from "./scenarios-multiuser.ts";
 import { twinScenarios } from "./scenarios-twin.ts";

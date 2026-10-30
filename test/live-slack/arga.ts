@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { createKeyedQueue } from "../../src/util/async.ts";
-import { sleep } from "./slack.ts";
+import { sleep } from "../../src/util/async.ts";
 import slackManifest from "../../src/slack/manifest.json" with { type: "json" };
 import qaManifest from "./qa-driver.manifest.json" with { type: "json" };
 

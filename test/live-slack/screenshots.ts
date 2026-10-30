@@ -4,7 +4,7 @@ import os from "node:os";
 import { Cdp } from "./cdp.ts";
 import { renderGallery, type ShotIndex } from "./gallery.ts";
 import type { ScenarioResult, TimelinePost } from "./harness.ts";
-import { sleep } from "./slack.ts";
+import { sleep } from "../../src/util/async.ts";
 
 const OUT_DIR = path.join(import.meta.dirname, "out");
 const SHOTS_DIR = path.join(OUT_DIR, "shots");

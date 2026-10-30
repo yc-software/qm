@@ -17,8 +17,8 @@ import {
   resolveChannelMembership,
   setMentionIndex,
   slackUserTimezone,
-  sleep,
 } from "./lib.ts";
+import { sleep } from "../util/async.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 

@@ -6,8 +6,8 @@ import { createDrainController } from "../src/runs/drain.ts";
 import type { InstanceRegistry } from "../src/runs/instance-registry.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
+import { sleep } from "../src/util/async.ts";
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn: OrchestratorInput = {
   actor,

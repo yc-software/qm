@@ -1,11 +1,21 @@
-import { setTimeout as delay } from "node:timers/promises";
 import { swallowAs } from "./errors.ts";
 
-export const sleep = (ms: number, opts?: { unref?: boolean }): Promise<void> =>
-  new Promise((r) => {
-    const t = setTimeout(r, ms);
-    if (opts?.unref) t.unref?.();
+export function sleep(ms: number, opts: { unref?: boolean; signal?: AbortSignal } = {}): Promise<void> {
+  const { signal } = opts;
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (opts.unref) timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
 
 export async function withTimeout<T>(start: () => Promise<T>, ms: number, label: string): Promise<T> {
   const p = start();
@@ -112,6 +122,8 @@ export interface RetryOptions extends BackoffOptions {
   timeoutMs?: number;
 }
 
+export type RetryDecision = (error: unknown, attempt: number) => number | undefined;
+
 export interface RetryOperationOptions<T> extends RetryOptions {
   statusOf: (error: unknown) => number | undefined;
   networkError?: (error: unknown) => boolean;
@@ -119,37 +131,66 @@ export interface RetryOperationOptions<T> extends RetryOptions {
   onLate?: (value: T) => Promise<unknown>;
 }
 
-export async function retryOperation<T>(
-  operation: (signal: AbortSignal) => Promise<T>,
+export function retryDelay(priorErrors: number): number {
+  const base = Math.min(60_000, 15_000 * 2 ** Math.min(Math.max(0, priorErrors), 2));
+  return Math.min(60_000, Math.round(base * (1 + Math.random() * 0.2)));
+}
+
+function classifiedDelay<T>(retry: RetryClass, opts: RetryOperationOptions<T>): RetryDecision {
+  const attempts = opts.attempts ?? DEFAULT_ATTEMPTS;
+  return (error, attempt) => {
+    const status = opts.statusOf(error);
+    const transient =
+      status === undefined
+        ? retry === "idempotent" && (isNetworkError(error) || opts.networkError?.(error) === true)
+        : retryableStatus(retry, status);
+    if (!transient || attempt >= attempts) return undefined;
+    return opts.retryAfterMsOf?.(error) ?? jitteredBackoffMs(attempt, opts);
+  };
+}
+
+export function retryOperation<T>(
+  operation: (signal: AbortSignal, attempt: number) => Promise<T>,
   retry: RetryClass,
   opts: RetryOperationOptions<T>,
+): Promise<T>;
+export function retryOperation<T>(
+  operation: (signal: AbortSignal, attempt: number) => Promise<T>,
+  retry: RetryDecision,
+  opts?: RetryOptions,
+): Promise<T>;
+export async function retryOperation<T>(
+  operation: (signal: AbortSignal, attempt: number) => Promise<T>,
+  retry: RetryClass | RetryDecision,
+  opts: RetryOptions & Partial<RetryOperationOptions<T>> = {},
 ): Promise<T> {
-  const attempts = opts.attempts ?? DEFAULT_ATTEMPTS;
-  const deadline = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
-  const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
+  const decide = typeof retry === "function" ? retry : classifiedDelay(retry, opts as RetryOperationOptions<T>);
+  const timeoutMs = opts.timeoutMs ?? (typeof retry === "function" ? undefined : 60_000);
+  const bounds = [opts.signal, timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs)].filter(
+    (bound): bound is AbortSignal => bound !== undefined,
+  );
+  const signal = AbortSignal.any(bounds);
   for (let attempt = 1; ; attempt++) {
     const pending: { attempt?: Promise<T> } = {};
     try {
-      return await withAbort(() => (pending.attempt = operation(signal)), signal);
+      return await withAbort(() => (pending.attempt = operation(signal, attempt)), signal);
     } catch (error) {
       if (signal.aborted && pending.attempt && opts.onLate)
         void pending.attempt
           .then(opts.onLate, swallowAs("retryOperation: late attempt failed", undefined))
           .catch(swallowAs("retryOperation: late result handler", undefined));
       signal.throwIfAborted();
-      const status = opts.statusOf(error);
-      const transient =
-        status === undefined
-          ? retry === "idempotent" && (isNetworkError(error) || opts.networkError?.(error) === true)
-          : retryableStatus(retry, status);
-      if (!transient || attempt >= attempts) throw error;
-      try {
-        await delay(opts.retryAfterMsOf?.(error) ?? jitteredBackoffMs(attempt, opts), undefined, { signal });
-      } catch (waitError) {
-        signal.throwIfAborted();
-        throw waitError;
-      }
+      const ms = decide(error, attempt);
+      if (ms === undefined) throw error;
+      await sleep(ms, { signal });
     }
+  }
+}
+
+class RetryableResponse {
+  readonly response: Response;
+  constructor(response: Response) {
+    this.response = response;
   }
 }
 
@@ -159,28 +200,19 @@ export async function fetchWithRetry(
   opts: RetryOptions = {},
 ): Promise<Response> {
   const attempts = opts.attempts ?? DEFAULT_ATTEMPTS;
-  const deadline = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
-  const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
-  const wait = async (ms: number): Promise<void> => {
-    try {
-      await delay(ms, undefined, { signal });
-    } catch (error) {
-      signal.throwIfAborted();
-      throw error;
-    }
-  };
-  for (let attempt = 1; ; attempt++) {
-    let res: Response;
-    try {
-      res = await withAbort(() => send(signal), signal);
-    } catch (e) {
-      signal.throwIfAborted();
-      if (retry !== "idempotent" || attempt >= attempts || isAbortError(e)) throw e;
-      await wait(jitteredBackoffMs(attempt, opts));
-      continue;
-    }
-    if (!retryableStatus(retry, res.status) || attempt >= attempts) return res;
-    await withAbort(() => res.body?.cancel().catch(() => undefined) ?? Promise.resolve(), signal);
-    await wait(retryAfterMs(res.headers) ?? jitteredBackoffMs(attempt, opts));
-  }
+  return retryOperation(
+    async (signal, attempt) => {
+      const res = await send(signal);
+      if (!retryableStatus(retry, res.status) || attempt >= attempts) return res;
+      await withAbort(() => res.body?.cancel().catch(() => undefined) ?? Promise.resolve(), signal);
+      throw new RetryableResponse(res);
+    },
+    retry,
+    {
+      ...opts,
+      statusOf: (e) => (e instanceof RetryableResponse ? e.response.status : undefined),
+      networkError: (e) => !isAbortError(e),
+      retryAfterMsOf: (e) => (e instanceof RetryableResponse ? retryAfterMs(e.response.headers) : undefined),
+    },
+  );
 }

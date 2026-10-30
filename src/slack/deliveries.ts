@@ -6,6 +6,7 @@ import { samePerson } from "../directory/person.ts";
 import { approvalMessage } from "./approval-cards.ts";
 import { deliverKeychainCard } from "./keychain-approvals.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
+import { sleep } from "../util/async.ts";
 import { performance } from "node:perf_hooks";
 import {
   botIdentityArgs,
@@ -86,8 +87,6 @@ export function createDeliveryPoller(deps: {
     deliver: (d: Delivery) => Promise<void>,
     leaseLost?: () => boolean,
   ): Promise<number> {
-    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
     const expiresAt = new Map<string, number>();
 
     const claim = async (): Promise<{ rows: Delivery[]; complete: boolean }> => {

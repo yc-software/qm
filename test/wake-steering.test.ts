@@ -10,6 +10,7 @@ import { jsonbStringify } from "../src/persistence/durable-map.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { sleep } from "../src/util/async.ts";
 
 function freshApp(securityScreener?: SecurityScreener) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-wake-"));
@@ -675,7 +676,6 @@ test("a queued web turn runs on its own — the sender's client need never come 
 
 // ── Orphaned-signal replay: a steer that loses the pickup race is never dropped ────────────────
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 async function until<T>(get: () => Promise<T | undefined>, ms = 3_000): Promise<T> {
   const deadline = Date.now() + ms;
   for (;;) {

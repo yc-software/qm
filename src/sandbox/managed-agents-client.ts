@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { fetchWithRetry } from "../util/async.ts";
+import { fetchWithRetry, sleep } from "../util/async.ts";
 import { errMessage, swallowAs, withRequestId } from "../util/errors.ts";
 import { openManagedAgentsTunnel, SANDBOX_AGENT_PORT, type ManagedAgentsTunnel } from "./managed-agents-tunnel.ts";
 
@@ -419,9 +419,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
       }
       if (Date.now() >= deadline)
         throw new Error(`do-managed-agents session ${sessionId} did not become ready within ${READY_TIMEOUT_MS}ms`);
-      await new Promise((resolve) =>
-        setTimeout(resolve, Date.now() - started < READY_FAST_WINDOW_MS ? READY_FAST_POLL_MS : READY_POLL_MS),
-      );
+      await sleep(Date.now() - started < READY_FAST_WINDOW_MS ? READY_FAST_POLL_MS : READY_POLL_MS);
     }
   }
 

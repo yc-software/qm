@@ -18,8 +18,8 @@ import type { RunStore } from "../src/runs/run-store.ts";
 import { replayableRequest } from "../src/core/orchestrator/turn-helpers.ts";
 import { testConfig } from "./support/test-config.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { sleep } from "../src/util/async.ts";
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn: OrchestratorInput = {
   actor,

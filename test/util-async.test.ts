@@ -429,3 +429,44 @@ test("retryOperation hands a result that arrives after its deadline to the late 
   await sleep(10);
   assert.equal(lateCalls, 0);
 });
+
+test("retryOperation with a caller decision retries on its schedule with 1-based attempts and stops when it declines", async () => {
+  const seen: number[] = [];
+  const decided: Array<[string, number]> = [];
+  const result = await retryOperation(
+    async (_signal, attempt) => {
+      seen.push(attempt);
+      if (attempt < 3) throw new Error(`fail ${attempt}`);
+      return "landed";
+    },
+    (error, attempt) => (decided.push([(error as Error).message, attempt]), [5, 5][attempt - 1]),
+  );
+  assert.equal(result, "landed");
+  assert.deepEqual(seen, [1, 2, 3]);
+  assert.deepEqual(decided, [
+    ["fail 1", 1],
+    ["fail 2", 2],
+  ]);
+  const declined = await retryOperation(
+    async () => {
+      throw new Error("permanent");
+    },
+    () => undefined,
+  ).catch((error: unknown) => (error as Error).message);
+  assert.equal(declined, "permanent");
+});
+
+test("sleep rejects with the signal's reason and stays under mocked timers", async (t) => {
+  const reason = new Error("stop");
+  await assert.rejects(sleep(10_000, { signal: AbortSignal.abort(reason) }), (e) => e === reason);
+  const controller = new AbortController();
+  const pending = sleep(10_000, { signal: controller.signal });
+  controller.abort(reason);
+  await assert.rejects(pending, (e) => e === reason);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let done = false;
+  const mocked = sleep(5_000).then(() => (done = true));
+  t.mock.timers.tick(5_000);
+  await mocked;
+  assert.equal(done, true);
+});

@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { writePidFile } from "./lease.ts";
 import { run } from "./proc.ts";
 import { ensureDockerDaemon } from "./postgres.ts";
-import { bestEffortValue, sleep } from "./util.ts";
+import { bestEffortValue } from "./util.ts";
+import { sleep } from "../../../src/util/async.ts";
 import type { DevSandboxBackend, DevSandboxChoice } from "./types.ts";
 
 export interface SandboxResolution {

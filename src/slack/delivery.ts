@@ -1,6 +1,6 @@
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { safeChunks, safeClip } from "./safe-cut.ts";
-import { sleep } from "./util.ts";
+import { sleep } from "../util/async.ts";
 import { isExternallyShared, isMpim, type ChannelMeta } from "./identity.ts";
 
 export interface SlackReplyArgs {

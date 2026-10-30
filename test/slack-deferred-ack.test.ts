@@ -1,8 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeferredEnvelopeAck } from "../src/slack/deferred-ack.ts";
-
-const tick = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { sleep as tick } from "../src/util/async.ts";
 
 test("gated envelope: the real ack fires only AFTER the fake core has durably queued the turn", async () => {
   const events: string[] = [];

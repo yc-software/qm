@@ -2,7 +2,8 @@ import { request } from "node:http";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readState } from "./lease.ts";
-import { bestEffort, sleep } from "./util.ts";
+import { bestEffort } from "./util.ts";
+import { sleep } from "../../../src/util/async.ts";
 import type { BootPhaseEvent } from "./types.ts";
 
 export function resolveSocketPath(lock: string): string {

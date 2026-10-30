@@ -9,11 +9,10 @@ import {
   createNoopAdvisoryLock,
   createMemoryAdvisoryLock,
 } from "../src/persistence/advisory-lock.ts";
+import { sleep } from "../src/util/async.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the advisory-lock tests";
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 test("no-op mutex: withLock runs fn and returns its value (single-instance dev/test path)", async () => {
   const lock = createNoopAdvisoryLock();

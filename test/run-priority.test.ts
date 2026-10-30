@@ -6,10 +6,10 @@ import { createRunPreemption, createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
+import { sleep } from "../src/util/async.ts";
 
 const URL = process.env.DATABASE_URL;
 const actor: Principal = { id: "internal:U1", type: "internal" };
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const request = (text: string, over: Partial<OrchestratorInput> = {}): OrchestratorInput => ({
   actor,
   conversation: { kind: "dm", threadRef: "t", audience: [actor] },

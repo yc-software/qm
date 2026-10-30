@@ -1,5 +1,6 @@
 import { swallow } from "../util/errors.ts";
-import { sleep, createInFlightThreadMap, type GoalNoticeView } from "./lib.ts";
+import { createInFlightThreadMap, type GoalNoticeView } from "./lib.ts";
+import { sleep } from "../util/async.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnRequest, TurnResult } from "../types.ts";
 import { GENERIC_FAILURE_TEXT } from "../../plugins/chassis/src/failure-copy.ts";

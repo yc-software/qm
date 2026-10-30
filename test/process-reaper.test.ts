@@ -7,8 +7,7 @@ import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions }
 import type { WorkspaceLayer } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { sleep } from "../src/util/async.ts";
 
 const ID = "00000000-0000-0000-0000-000000000abc";
 

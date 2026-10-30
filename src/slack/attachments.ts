@@ -1,4 +1,4 @@
-import { sleep } from "./util.ts";
+import { sleep } from "../util/async.ts";
 import { channelShareTs, parseUploadedFileIds, slackErrorCode } from "./payloads.ts";
 import { BlobTooLargeError } from "../persistence/blob-transfer.ts";
 
