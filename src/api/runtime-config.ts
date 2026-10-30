@@ -1,3 +1,4 @@
+import { errMessage } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { RuntimePurpose } from "../resolution/config-store.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
@@ -255,59 +256,54 @@ export async function availableRuntimeError(
   purpose?: RuntimePurpose,
 ): Promise<string | null> {
   await ctx.deps.refreshModels?.();
-  const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
-  if (
-    !choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) ||
-    !(await webuiModelEnabled(ctx, choice.modelId, purpose))
-  )
-    return "runtime is no longer available or enabled on this deployment";
-  return validateRuntimeChoice({
-    ...choice,
-    effortLevel: choice.effortLevel === "adaptive" || choice.effortLevel === "default" ? choice.effortLevel : undefined,
-  });
-}
-
-export async function assertSubagentRuntime(
-  ctx: { deps: RuntimeDeps },
-  scope: ScopeId,
-  fallback: RuntimeChoice,
-  requested: Partial<RuntimeChoice>,
-  resolve: () => Promise<RuntimeChoice>,
-): Promise<void> {
-  if (Object.keys(requested).length === 0) {
-    await resolve();
-    return;
-  }
-  let choice: RuntimeChoice = { ...fallback, ...requested };
-  let reason: string | null;
-  let cause: unknown;
+  let reason: string;
   try {
-    choice = await resolve();
-    reason = await availableRuntimeError(ctx, scope, choice, "subagent");
+    const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
+    if (
+      choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) &&
+      (await webuiModelEnabled(ctx, choice.modelId, purpose))
+    )
+      return validateRuntimeChoice({
+        ...choice,
+        effortLevel:
+          choice.effortLevel === "adaptive" || choice.effortLevel === "default" ? choice.effortLevel : undefined,
+      });
+    reason = "runtime is no longer available or enabled on this deployment";
   } catch (error) {
     if (!(error instanceof NonRetryableTurnError)) throw error;
     reason = `${error.message}; it may be an unknown model ID`;
-    cause = error;
   }
-  if (!reason) return;
-  const head = `${choice.harnessId}/${choice.modelId} can't run subagents here (${reason}). Don't guess another model. Omit model and harness to use the default`;
-  const listing = async () => {
-    const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(
-      ctx,
-      scope,
-      undefined,
-      "subagent",
-    );
+  const head = `${choice.harnessId}/${choice.modelId} can't run here (${reason}). Pick from this list rather than guessing another model: the default`;
+  try {
+    const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(ctx, scope, undefined, purpose);
     const usable: string[] = [];
     for (const harnessId of approvedHarnesses)
       for (const modelId of modelsByHarness[harnessId] ?? [])
-        if (await webuiModelEnabled(ctx, modelId, "subagent")) usable.push(`${harnessId}/${modelId}`);
-    return `${effective.harnessId}/${effective.modelId}${usable.length ? `, or pick one of: ${usable.join(", ")}` : ""}`;
-  };
-  const options = await listing().catch((listError: unknown) => {
-    throw new Error(`${head} (listing usable models failed)`, {
-      cause: new AggregateError(cause ? [cause, listError] : [listError]),
-    });
+        if (await webuiModelEnabled(ctx, modelId, purpose)) usable.push(`${harnessId}/${modelId}`);
+    return `${head}, ${effective.harnessId}/${effective.modelId}${usable.length ? `, or one of: ${usable.join(", ")}` : ""}.`;
+  } catch (listError) {
+    return `${head} (listing usable models failed: ${errMessage(listError)}).`;
+  }
+}
+
+export async function requestedRuntimeError(
+  ctx: { deps: RuntimeDeps },
+  scope: ScopeId,
+  requested: Partial<RuntimeChoice>,
+  purpose?: RuntimePurpose,
+): Promise<string | null> {
+  const { effective } = await runtimeConfigBody(ctx, scope, undefined, purpose, requested).catch((error: unknown) => {
+    if (!(error instanceof NonRetryableTurnError)) throw error;
+    return runtimeConfigBody(ctx, scope, undefined, purpose);
   });
-  throw new Error(`${head}, ${options}.`, { cause });
+  return availableRuntimeError(
+    ctx,
+    scope,
+    {
+      ...requested,
+      harnessId: requested.harnessId ?? effective.harnessId,
+      modelId: requested.modelId ?? effective.modelId,
+    },
+    purpose,
+  );
 }

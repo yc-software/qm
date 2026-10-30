@@ -1,5 +1,5 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
-import { availableRuntimeError, runtimeConfigBody } from "./runtime-config.ts";
+import { requestedRuntimeError } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { userRuntimeConfigBody } from "./runtime-config.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
@@ -215,33 +215,18 @@ export function createTurnMethods(
       const individualAuth = modelAccount !== "company";
       const runtimePurpose = turnRuntimePurpose(req, isSubagentThreadRef(req.conversation.threadRef));
       if (req.triggered && (req.model || req.harness)) {
-        const choices = await runtimeConfigBody(
+        if (req.harness && !isHarnessId(req.harness)) return { status: "refused", reason: "harness_not_approved" };
+        const error = await requestedRuntimeError(
           { deps },
           conversationScope(req.conversation, actor.id),
-          undefined,
-          runtimePurpose,
           {
             ...(req.harness && isHarnessId(req.harness) ? { harnessId: req.harness } : {}),
             ...(req.model ? { modelId: req.model } : {}),
             ...(req.thinkingLevel ? { effortLevel: req.thinkingLevel } : {}),
             ...(typeof req.fastMode === "boolean" ? { fastMode: req.fastMode } : {}),
           },
+          runtimePurpose,
         );
-        const harness = req.harness ?? choices.effective.harnessId;
-        const model = req.model ?? choices.effective.modelId;
-        const error = !isHarnessId(harness)
-          ? "harness_not_approved"
-          : await availableRuntimeError(
-              { deps },
-              conversationScope(req.conversation, actor.id),
-              {
-                harnessId: harness,
-                modelId: model,
-                effortLevel: req.thinkingLevel,
-                fastMode: req.fastMode,
-              },
-              runtimePurpose,
-            );
         if (error) return { status: "refused", reason: error };
       }
       let requestedModel = req.model;

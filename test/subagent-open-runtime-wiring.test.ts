@@ -24,16 +24,16 @@ async function opener() {
 test("subagent open refuses a known model this deployment does not serve", async () => {
   const out = await (await opener()).open({ task: "draft one article", model: "claude-opus-4-1" });
   assert.ok(!out.ok);
-  assert.match(out.message, /^pi\/claude-opus-4-1 can't run subagents here/);
-  assert.match(out.message, /pick one of: .*pi\/gpt-6\.1-sol/);
-  assert.doesNotMatch(out.message.split("pick one of:")[1]!, /claude-/);
+  assert.match(out.message, /^pi\/claude-opus-4-1 can't run here/);
+  assert.match(out.message, /one of: .*pi\/gpt-6\.1-sol/);
+  assert.doesNotMatch(out.message.split("one of:")[1]!, /claude-/);
 });
 
 test("subagent open refuses an unknown model ID with the same usable list", async () => {
   const out = await (await opener()).open({ task: "draft one article", model: "claude-opus-5.5" });
   assert.ok(!out.ok);
-  assert.match(out.message, /^pi\/claude-opus-5\.5 can't run subagents here \(.*unknown model ID\)/);
-  assert.match(out.message, /pick one of: .*pi\/gpt-6\.1-sol/);
+  assert.match(out.message, /^pi\/claude-opus-5\.5 can't run here \(.*unknown model ID\)/);
+  assert.match(out.message, /one of: .*pi\/gpt-6\.1-sol/);
 });
 
 test("subagent open accepts a model this deployment serves", async () => {

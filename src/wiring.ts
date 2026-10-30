@@ -7,7 +7,7 @@ import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisio
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
-import { availableRuntimeError, assertSubagentRuntime, type RuntimeDeps } from "./api/runtime-config.ts";
+import { availableRuntimeError, requestedRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
@@ -2137,8 +2137,8 @@ export function buildApp(
         ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
         ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
       };
-      await assertSubagentRuntime({ deps: runtimeDeps }, scope, fallback, requested, () =>
-        resolveRuntimeChoiceDurable(
+      if (Object.keys(requested).length === 0) {
+        await resolveRuntimeChoiceDurable(
           configStore,
           runtimeOrgScope,
           scope,
@@ -2146,8 +2146,11 @@ export function buildApp(
           requested,
           hydrateModelCatalog,
           "subagent",
-        ),
-      );
+        );
+        return;
+      }
+      const error = await requestedRuntimeError({ deps: runtimeDeps }, scope, requested, "subagent");
+      if (error) throw new Error(error);
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
