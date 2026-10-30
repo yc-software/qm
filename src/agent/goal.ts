@@ -1,10 +1,74 @@
 import { outermostJsonObject } from "../util/text.ts";
 import { Type, type Static } from "typebox";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
-import { createGrindMeter, type GrindBudget, type GrindMeter, grindState } from "./grind.ts";
 import { withoutWire } from "./context-compaction.ts";
 import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
+
+export interface GrindBudget {
+  minTurns?: number;
+  minMs?: number;
+  minTokens?: number;
+  minUsd?: number;
+}
+
+export interface GrindMeter {
+  turns: number;
+  tokens: number;
+  usd: number;
+  unpricedCalls: number;
+  startedAt: number;
+}
+
+interface GrindState {
+  met: boolean;
+  text: string;
+}
+
+export function createGrindMeter(startedAt = Date.now()): GrindMeter {
+  return { turns: 0, tokens: 0, usd: 0, unpricedCalls: 0, startedAt };
+}
+
+export function meterGrindCall(meter: GrindMeter, usage: LlmCallUsage | null): void {
+  meter.turns++;
+  meter.tokens += Math.max(0, (usage?.input ?? 0) + (usage?.output ?? 0));
+  if (!usage) return;
+  if (usage.costUsd > 0) meter.usd += usage.costUsd;
+  else if (usage.input + usage.output > 0) meter.unpricedCalls++;
+}
+
+export function grindState(grind: GrindBudget, meter: GrindMeter, now = Date.now()): GrindState {
+  const values: string[] = [];
+  let met = true;
+  if (grind.minTurns !== undefined) {
+    met &&= meter.turns >= grind.minTurns;
+    values.push(`${meter.turns}/${grind.minTurns} turns`);
+  }
+  if (grind.minMs !== undefined) {
+    const elapsed = Math.max(0, now - meter.startedAt);
+    met &&= elapsed >= grind.minMs;
+    values.push(`${formatDuration(elapsed)}/${formatDuration(grind.minMs)}`);
+  }
+  if (grind.minTokens !== undefined) {
+    met &&= meter.tokens >= grind.minTokens;
+    values.push(`${meter.tokens}/${grind.minTokens} tokens`);
+  }
+  if (grind.minUsd !== undefined && meter.unpricedCalls > 0) {
+    values.push(
+      `$${grind.minUsd} spend floor waived: a model call in this turn had no price data, so spend cannot be measured`,
+    );
+  } else if (grind.minUsd !== undefined) {
+    met &&= Math.round(meter.usd * 1_000_000) >= Math.round(grind.minUsd * 1_000_000);
+    values.push(`$${meter.usd.toFixed(4)}/$${grind.minUsd}`);
+  }
+  return { met, text: values.join(", ") };
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 3_600_000) return `${(ms / 3_600_000).toFixed(2)}h`;
+  if (ms >= 60_000) return `${(ms / 60_000).toFixed(2)}m`;
+  return `${Math.round(ms / 1000)}s`;
+}
 
 type GoalStatus = "active" | "paused" | "complete" | "cancelled";
 
@@ -474,19 +538,13 @@ export function goalFloorMeter(goal: GoalRecord, meter: GrindMeter, now = Date.n
   };
 }
 
-export interface FloorCapPolicy {
-  remainingCapMs(): number;
-  raceCapMs(): number;
-  extendMs(): number;
-}
-
 export function createFloorCapPolicy(opts: {
   goal: () => GoalRecord | null | undefined;
   meter: GrindMeter;
   promptStart: number;
   turnWallClockMs: number;
   now?: () => number;
-}): FloorCapPolicy {
+}) {
   const now = opts.now ?? Date.now;
   let floorSatisfiedAt: number | undefined;
   const remainingCapMs = (): number => {
@@ -521,26 +579,22 @@ export function goalFloorUnmet(goal: GoalRecord, meter: GrindMeter, now = Date.n
   return !grindState(floor, goalFloorMeter(goal, meter, now), now).met;
 }
 
-export async function enforceGoal<T>(opts: {
+export async function enforceGoal(opts: {
   goal: GoalRecord;
   meter: GrindMeter;
-  outcome: T;
-  ok: T;
   blocked(): boolean;
-  beforePrompt(note: string): void | Promise<void>;
-  prompt(note: string): Promise<T>;
+  prompt(note: string): Promise<boolean>;
   govern?: (previous: GovernorVerdict | undefined) => Promise<GovernorVerdict>;
   inbox?: GoalInbox;
   now?: () => number;
-}): Promise<T> {
+}): Promise<void> {
   const now = opts.now ?? Date.now;
-  let outcome = opts.outcome;
   let capNoticeSent = false;
   let rounds = 0;
   let lastCheck = now();
   const floorUnmet = (): boolean => goalFloorUnmet(opts.goal, opts.meter);
   let enforcedAssignment = opts.goal.createdAt;
-  while (outcome === opts.ok && !opts.blocked()) {
+  while (!opts.blocked()) {
     if (await goalInboxHeld(opts.inbox)) break;
     const arrived = opts.inbox
       ? await takeGoalMessages(opts.inbox, opts.goal, opts.meter, () => !opts.blocked()).catch(
@@ -579,8 +633,6 @@ export async function enforceGoal<T>(opts: {
     else note = "";
     if (capSpent) capNoticeSent = true;
     if (arrived) note = note ? `${arrived}\n\n${note}` : arrived;
-    await opts.beforePrompt(note);
-    outcome = await opts.prompt(note);
+    if (!(await opts.prompt(note))) return;
   }
-  return outcome;
 }

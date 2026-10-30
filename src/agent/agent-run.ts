@@ -116,9 +116,11 @@ import {
   SECURITY_SCREEN_SYSTEM_PROMPT,
 } from "../security/security-posture.ts";
 import { errMessage } from "../util/errors.ts";
-import { createGrindMeter, meterGrindCall } from "./grind.ts";
+
 import {
   createFloorCapPolicy,
+  createGrindMeter,
+  meterGrindCall,
   bankGoalTurn,
   enforceGoal,
   goalPausedNote,
@@ -758,11 +760,6 @@ export function piTurnError(session: AssistantTextSession, thrown: unknown, mess
   const detailed = piAssistantFailure(messagesSince(session, messagesBefore));
   if (detailed) return detailed;
   return thrown instanceof Error ? thrown : new Error(String(thrown));
-}
-
-export function providerRefusalError(session: AssistantTextSession, messagesBefore?: number): string | null {
-  const err = piAssistantFailure(messagesSince(session, messagesBefore));
-  return err && FALLBACK_CODES.has(err.code) ? err.message : null;
 }
 
 export const REFUSAL_FALLBACK_MODEL_IDS = ["claude-opus-5", "claude-sonnet-5"] as const;
@@ -1568,9 +1565,14 @@ export function createAgent(opts?: AgentOptions): Agent {
           promptStart,
           turnWallClockMs,
         });
-        const rawRemainingCapMs = floorCap.remainingCapMs;
         const raceCapMs = floorCap.raceCapMs;
-        const extendCapMs = floorCap.extendMs;
+        const roomToReprompt = () => turnWallClockMs <= 0 || raceCapMs() >= EMPTY_ENDING_MIN_BUDGET_MS;
+        const reprompt = (note: string) =>
+          raceTurnWallClock(entry.agentSession.prompt(note), {
+            capMs: raceCapMs(),
+            extendMs: floorCap.extendMs,
+            abort: () => entry.agentSession.abort(),
+          });
         const refusedModelIds = new Set<string>();
         const attemptRefusalFallback = async (refusal: string): Promise<boolean> => {
           if (userAborted || turn.cancel?.aborted) return false;
@@ -1593,8 +1595,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             refusedModelIds.has(servedModelId(fallbackId))
           )
             return false;
-          const capMs = raceCapMs();
-          if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+          if (!roomToReprompt()) return false;
           console.error(
             `[pi] provider refusal — retrying on fallback model ${fromId} -> ${fallbackId} session=${turn.session.id}: ${refusal}`,
           );
@@ -1608,11 +1609,8 @@ export function createAgent(opts?: AgentOptions): Agent {
             custom?.effortLevel ?? turn.runtime?.effortLevel ?? defaultInteractiveThinkingLevel(fallback);
           applyTurnEffort(entry.agentSession, entry.ref.effortLevel);
           dropFailedAssistant(entry.agentSession, messagesBefore);
-          const outcome = await raceTurnWallClock(
-            entry.agentSession.prompt(
-              refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
-            ),
-            { capMs, extendMs: extendCapMs, abort: () => entry.agentSession.abort() },
+          const outcome = await reprompt(
+            refusalFallbackNote(modelDisplayName(fromId!), modelDisplayName(fallbackId), refusal),
           );
           if (userAborted) return false;
           if (outcome !== "ok") throw new NonRetryableTurnError(refusal);
@@ -1638,15 +1636,10 @@ export function createAgent(opts?: AgentOptions): Agent {
             .slice(messagesBefore)
             .findLast((m) => (m as { role?: string }).role === "assistant") as AssistantMessage | undefined;
           if (lastAssistant && lastAssistant.stopReason !== "error") return false;
-          const capMs = raceCapMs();
-          if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+          if (!roomToReprompt()) return false;
           documentRetried = true;
           dropFailedAssistant(entry.agentSession, messagesBefore);
-          const outcome = await raceTurnWallClock(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), {
-            capMs,
-            extendMs: extendCapMs,
-            abort: () => entry.agentSession.abort(),
-          });
+          const outcome = await reprompt(DOCUMENTS_DROPPED_RETRY_NOTE);
           if (userAborted) return false;
           if (outcome !== "ok")
             throw new NonRetryableTurnError(
@@ -1654,16 +1647,16 @@ export function createAgent(opts?: AgentOptions): Agent {
             );
           return true;
         };
-        const recoverFailedRound = async (): Promise<void> => {
-          if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
-          await retryWithoutDocuments();
-          const refusal = providerRefusalError(entry.agentSession, messagesBefore);
-          if (!refusal) return;
+        const recoverFailedRound = async (thrown?: Error): Promise<boolean> => {
+          const retried = await retryWithoutDocuments();
+          const failure =
+            (retried ? null : thrown) ?? piAssistantFailure(messagesSince(entry.agentSession, messagesBefore));
+          if (!(failure instanceof ProviderTurnError && FALLBACK_CODES.has(failure.code))) return retried;
           try {
-            await attemptRefusalFallback(refusal);
+            return await attemptRefusalFallback(failure.message);
           } catch (e) {
             swallow("pi: refusal fallback", e);
-            throw new NonRetryableTurnError(refusal);
+            throw new NonRetryableTurnError(failure.message);
           }
         };
         try {
@@ -1676,18 +1669,16 @@ export function createAgent(opts?: AgentOptions): Agent {
               : entry.agentSession.prompt(modelPrompt, images ? { images } : undefined),
             {
               capMs: raceCapMs(),
-              extendMs: extendCapMs,
+              extendMs: floorCap.extendMs,
               abort: () => entry.agentSession.abort(),
             },
           );
-          if (wallClock === "ok") await recoverFailedRound();
+          if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
           const goalAfterPrompt = entry.ref.goal;
           if (wallClock === "ok" && goalAfterPrompt && !userAborted && !turn.cancel?.aborted) {
-            wallClock = await enforceGoal({
+            await enforceGoal({
               goal: goalAfterPrompt,
               meter: grindMeter,
-              outcome: wallClock,
-              ok: "ok" as const,
               blocked: () =>
                 userAborted ||
                 !!turn.cancel?.aborted ||
@@ -1707,21 +1698,14 @@ export function createAgent(opts?: AgentOptions): Agent {
                   }
                 : {}),
               ...(turn.goalInbox ? { inbox: turn.goalInbox } : {}),
-              beforePrompt: async () => {
+              prompt: async (note) => {
                 console.error(`[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`);
                 entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
                 entry.ref.silentRequested = false;
                 await thinkTail;
-              },
-              prompt: async (note) => {
-                if (turnWallClockMs > 0 && rawRemainingCapMs() < EMPTY_ENDING_MIN_BUDGET_MS) return "aborted";
-                const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
-                  capMs: raceCapMs(),
-                  extendMs: extendCapMs,
-                  abort: () => entry.agentSession.abort(),
-                });
-                if (outcome === "ok") await recoverFailedRound();
-                return outcome;
+                wallClock = roomToReprompt() ? await reprompt(note) : "aborted";
+                if (wallClock === "ok" && !entry.ref.runtimeHandoff) await recoverFailedRound();
+                return wallClock === "ok";
               },
             });
           }
@@ -1734,25 +1718,16 @@ export function createAgent(opts?: AgentOptions): Agent {
             ref: entry.ref,
             session: entry.agentSession,
             turnWallClockMs,
-            elapsedMs: turnWallClockMs > 0 ? turnWallClockMs - rawRemainingCapMs() : Date.now() - promptStart,
+            elapsedMs: turnWallClockMs > 0 ? turnWallClockMs - floorCap.remainingCapMs() : Date.now() - promptStart,
           });
           if (note) {
             console.error(
               `[pi] empty final response after ${entry.ref.modelCalls} model calls — re-prompting once session=${turn.session.id}`,
             );
             await thinkTail;
-            const capMs = raceCapMs();
-            if (
-              !userAborted &&
-              !turn.cancel?.aborted &&
-              (turnWallClockMs <= 0 || capMs >= EMPTY_ENDING_MIN_BUDGET_MS)
-            ) {
+            if (!userAborted && !turn.cancel?.aborted && roomToReprompt()) {
               try {
-                const outcome = await raceTurnWallClock(entry.agentSession.prompt(note), {
-                  capMs,
-                  extendMs: extendCapMs,
-                  abort: () => entry.agentSession.abort(),
-                });
+                const outcome = await reprompt(note);
                 if (outcome !== "ok" && !userAborted) {
                   recoveryDead = true;
                 } else if (
@@ -1774,19 +1749,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             turn.cancel?.aborted === true && (err as { name?: string } | null)?.name === "AbortError";
           if (!userAborted && !cancelAbortRejection) {
             const turnErr = piTurnError(entry.agentSession, err, messagesBefore);
-            let recovered = false;
-            try {
-              recovered = await retryWithoutDocuments();
-            } catch (e) {
-              swallow("pi: document-free retry", e);
-            }
-            if (!recovered && turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
-              try {
-                recovered = await attemptRefusalFallback(turnErr.message);
-              } catch (e) {
-                swallow("pi: refusal fallback", e);
-              }
-            }
+            const recovered = await recoverFailedRound(turnErr).catch(swallowAs("pi: failed-round recovery", false));
             if (!recovered && !userAborted) throw turnErr;
           }
           wallClock = "ok";
@@ -1821,20 +1784,27 @@ export function createAgent(opts?: AgentOptions): Agent {
               (wallClock === "abandoned" ? " (a stuck operation did not respond to cancellation)" : ""),
           );
         }
+        const settleGoal = async (pause: boolean): Promise<void> => {
+          const g = entry.ref.goal;
+          if (!g) return;
+          bankGoalTurn(g, grindMeter.startedAt);
+          if (pause && g.status === "active") {
+            g.status = "paused";
+            g.updatedAt = Date.now();
+          }
+          await turn.saveGoal?.(g);
+          if (g.status === "complete") entry.ref.goal = null;
+        };
+        const result = (reply: string, extra: Partial<AgentTurnResult>): AgentTurnResult => {
+          const cacheUsage = sumCacheUsage(callUsage);
+          return { reply, ...extra, modelCalls: entry.ref.modelCalls ?? 0, ...(cacheUsage ? { cacheUsage } : {}) };
+        };
         if (entry.ref.runtimeHandoff && !userAborted && !turn.cancel?.aborted) {
           steps.flush();
           await thinkTail;
           if (persistError) throw persistError;
-          if (entry.ref.goal) {
-            bankGoalTurn(entry.ref.goal, grindMeter.startedAt);
-            await turn.saveGoal?.(entry.ref.goal);
-          }
-          return {
-            reply: "",
-            runtimeHandoff: entry.ref.runtimeHandoff,
-            modelCalls: entry.ref.modelCalls ?? 0,
-            cacheUsage: sumCacheUsage(callUsage) ?? undefined,
-          };
+          await settleGoal(false);
+          return result("", { runtimeHandoff: entry.ref.runtimeHandoff });
         }
         const freshStopReason = freshAssistantStopReason();
         const cancelStoppedCleanly =
@@ -1848,38 +1818,17 @@ export function createAgent(opts?: AgentOptions): Agent {
             ? textFromContent((lastFreshAssistant as { content?: unknown }).content)
             : "";
           const reply = partial.trim() ? partial : "(stopped)";
-          if (entry.ref.goal) {
-            const g = entry.ref.goal;
-
-            bankGoalTurn(g, grindMeter.startedAt);
-            if (userAborted && g.status === "active") {
-              g.status = "paused";
-              g.updatedAt = Date.now();
-            }
-            await turn.saveGoal?.(g);
-            if (g.status === "complete") entry.ref.goal = null;
-          }
+          await settleGoal(userAborted);
           await recordStoppedTurn(
             turn,
             partial,
             userAborted ? abortReason : "because the run was cancelled",
             steps.closing(reply),
           );
-          const cacheUsage = sumCacheUsage(callUsage);
-          const base = {
-            reply,
-            stopped: true as const,
-            modelCalls: entry.ref.modelCalls ?? 0,
-          };
-          return cacheUsage ? { ...base, cacheUsage } : base;
+          return result(reply, { stopped: true });
         }
 
-        if (entry.ref.goal) {
-          const g = entry.ref.goal;
-          bankGoalTurn(g, grindMeter.startedAt);
-          await turn.saveGoal?.(g);
-          if (g.status === "complete") entry.ref.goal = null;
-        }
+        await settleGoal(false);
         const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
         const reply = entry.ref.silentRequested ? "" : closingText;
         await turn.emit({
@@ -1888,19 +1837,11 @@ export function createAgent(opts?: AgentOptions): Agent {
           scopeLabel: turn.scopeLabel,
         });
         const pendingApprovals = entry.ref.pendingApprovals ?? [];
-        const modelCalls = entry.ref.modelCalls ?? 0;
-        const cacheUsage = sumCacheUsage(callUsage);
-        const silent = entry.ref.silentRequested ? { silent: true as const } : {};
-        const base = pendingApprovals.length
-          ? {
-              reply,
-              pendingApprovals,
-              ...(entry.ref.pausedOnApproval ? { pausedOnApproval: true as const } : {}),
-              modelCalls,
-              ...silent,
-            }
-          : { reply, modelCalls, ...silent };
-        return cacheUsage ? { ...base, cacheUsage } : base;
+        return result(reply, {
+          ...(pendingApprovals.length ? { pendingApprovals } : {}),
+          ...(pendingApprovals.length && entry.ref.pausedOnApproval ? { pausedOnApproval: true } : {}),
+          ...(entry.ref.silentRequested ? { silent: true } : {}),
+        });
       } finally {
         removeIsolatedDirs(entry);
       }

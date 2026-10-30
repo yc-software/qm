@@ -7,7 +7,6 @@ import { MAX_OUTBOUND_FILES, type OutboundFile } from "../core/attachments.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { createGrindMeter, grindState } from "./grind.ts";
 import type { TurnHandoff, RuntimeRequest } from "./runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
@@ -31,6 +30,8 @@ import { BOT_MODES } from "../surface-cache/channel-policy-store.ts";
 import { WEBHOOK_SCHEMES } from "../webhooks/verifiers.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import {
+  createGrindMeter,
+  grindState,
   applyGovernorVerdict,
   cancelGoal,
   goalFromParams,
@@ -127,7 +128,7 @@ export interface ToolContextRef {
 
   goalRound?: number;
 
-  goalMeter?: import("./grind.ts").GrindMeter;
+  goalMeter?: import("./goal.ts").GrindMeter;
   goalInbox?: GoalInbox;
   modelHasPrices?: () => boolean;
   governGoal?: GoalGovernor;

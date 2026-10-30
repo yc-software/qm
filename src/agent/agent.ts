@@ -15,7 +15,7 @@ import type {
 import type { LlmCallUsage, LlmTransportMeta, NewEntry } from "../sessions/session-store.ts";
 import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
-import type { GrindMeter } from "./grind.ts";
+import type { GrindMeter } from "./goal.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
 import type { ProviderKeys } from "../model/model-runtime.ts";
 import type { ToolContext } from "../tools/primitives.ts";

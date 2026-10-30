@@ -13,7 +13,6 @@ import {
   agentConfigOptions,
   piLastAssistantTextOrThrow,
   piTurnError,
-  providerRefusalError,
   refusalFallbackNote,
   refusalFallbackModelId,
   REFUSAL_FALLBACK_MODEL_IDS,
@@ -1011,23 +1010,6 @@ test("Pi provider errors are classified once into a typed code from structured f
     assert.equal(err.code, code, JSON.stringify(fields));
     assert.equal(err.status, status, JSON.stringify(fields));
   }
-});
-
-test("providerRefusalError finds this prompt's refusal but never a prior turn's", () => {
-  const refusalMsg = {
-    role: "assistant",
-    stopReason: "error",
-    rawStopReason: "refusal",
-    errorMessage:
-      "This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs.",
-    content: [],
-  };
-  const session = {
-    getLastAssistantText: () => undefined,
-    messages: [refusalMsg, { role: "user", content: [] }],
-  } as unknown as Parameters<typeof providerRefusalError>[0];
-  assert.match(providerRefusalError(session) ?? "", /Terms of Service/);
-  assert.equal(providerRefusalError(session, 2), null);
 });
 
 test("refusalFallbackNote names both models, carries the provider's refusal, and tells the agent to inform the user", () => {
