@@ -86,6 +86,14 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       schedule: { everyMs: 60_000 },
       action: "noise",
     });
+    const loopCron = await app.createCron({
+      ownerScopeId: "personal:U1",
+      owner: "U1",
+      createdBy: "U1",
+      schedule: { everyMs: 60_000 },
+      action: "loop fire",
+      loopId: "pending",
+    });
     const { loop } = await s.built.loops.store.create({
       owner: "U1",
       createdBy: "U1",
@@ -93,6 +101,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       name: "inbox",
       playbook: "triage",
       successCondition: "done",
+      cronId: loopCron.id,
     });
     const webhook = await app.createWebhook({
       ownerScopeId: "personal:U1",
@@ -158,6 +167,9 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     assert.equal((await app.getCron(othersCron.id))!.enabled, true, "someone else's cron is untouched");
     assert.equal((await app.getWebhook(webhook.id))!.enabled, false);
     assert.equal((await s.built.loops.store.get(loop.id))!.state, "paused");
+    const pausedLoopCron = (await app.getCron(loopCron.id))!;
+    assert.equal(pausedLoopCron.enabled, false, "the paused loop's schedule stops too");
+    assert.notEqual(pausedLoopCron.archived, true, "the loop keeps its schedule for a later resume");
     assert.equal((await keychain!.getGrant(grant.id))!.status, "revoked");
     assert.equal((await skills.get(personalSkill.id))!.status, "archived");
     assert.notEqual((await skills.get(sharedSkill.id))!.status, "archived");
@@ -217,6 +229,9 @@ test("offboarding refuses non-admins, the admin themselves, and unknown body fie
     assert.equal((await s.offboard("U1", { apply: "yes" })).status, 400);
     assert.equal((await s.offboard("U1", { dryRun: true })).status, 400);
     assert.equal((await s.offboard("nobody-by-that-name", { apply: true })).status, 404);
+    await s.built.identity.deactivate("already-gone@example.com");
+    const gone: any = await (await s.offboard("already-gone@example.com", {})).json();
+    assert.deepEqual(gone.changes, [], "someone already deactivated gets an empty plan, not a 404");
     assert.equal(s.built.identity.deactivationSource("nobody-by-that-name"), undefined);
     const deniedReactivate = await fetch(`${s.base}/v1/admin/users/U1/reactivate`, {
       method: "POST",
