@@ -26,7 +26,7 @@ const COLUMNS = `id, owner_scope_id, owner, created_by, owner_consented_at, dest
 const VALUES = `$1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17, $18,
   $19, $20::text[], $21, $22::jsonb`;
 
-const SELECT = `SELECT tenant_id::text AS tenant_id, ${COLUMNS} FROM crons`;
+const SELECT = `SELECT tenant_id::text AS tenant_id, ${COLUMNS}, runtime::text AS runtime_json FROM crons`;
 
 const json = (value: unknown): string | null => (value === undefined || value === null ? null : jsonbStringify(value));
 const text = (value: string | undefined): string | null => (value === undefined ? null : pgTextSafe(value));
@@ -46,7 +46,7 @@ function cronParams(c: Cron): unknown[] {
     c.lastAttemptAt ?? null,
     c.nextFireAt ?? null,
     c.deferUntil ?? null,
-    json(c.runtime),
+    c.runtime === undefined ? null : jsonbStringify(c.runtime),
     json(c.schedule),
     text(c.title),
     text(c.action),
@@ -75,7 +75,7 @@ function rowToCron(r: Record<string, unknown>): Cron {
     lastAttemptAt: epoch(r.last_attempt_at),
     nextFireAt: epoch(r.next_fire_at),
     deferUntil: epoch(r.defer_until),
-    runtime: (r.runtime ?? undefined) as Cron["runtime"],
+    runtime: typeof r.runtime_json === "string" ? (JSON.parse(r.runtime_json) as Cron["runtime"]) : undefined,
     schedule: r.schedule as Cron["schedule"],
     title: (r.title ?? undefined) as string | undefined,
     action: (r.action ?? undefined) as string | undefined,
@@ -136,7 +136,7 @@ export const CRONS_MIGRATION = typedTableMigration({
     last_attempt_at: jsonEpoch("lastAttemptAt"),
     next_fire_at: jsonEpoch("nextFireAt"),
     defer_until: jsonEpoch("deferUntil"),
-    runtime: jsonObject("runtime"),
+    runtime: "json->'runtime'",
     schedule: "json->'schedule'",
     title: jsonText("title"),
     action: jsonText("action"),
@@ -164,7 +164,7 @@ export function createPostgresCronRows(connectionString: string): CronRows & { c
       const rows = await q(
         `INSERT INTO crons(${COLUMNS}) VALUES (${VALUES})
          ON CONFLICT (tenant_id, id) DO UPDATE SET id = crons.id
-         RETURNING ${COLUMNS}`,
+         RETURNING ${COLUMNS}, runtime::text AS runtime_json`,
         cronParams(cron),
       );
       return rowToCron(rows[0]!);

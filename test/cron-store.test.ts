@@ -761,7 +761,7 @@ test("cron runtime overrides survive store reload, distinguish creation, and cle
   await reloaded.update(overridden.id, { title: "new title" });
   assert.deepEqual((await store.get(overridden.id))?.runtime, runtime);
   const cleared = await reloaded.update(overridden.id, { runtime: null });
-  assert.equal(cleared?.runtime, undefined);
+  assert.equal(cleared?.runtime, null);
   assert.equal(cleared?.action, input.action);
   assert.deepEqual(cleared?.schedule, overridden.schedule);
 });
