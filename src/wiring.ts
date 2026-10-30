@@ -405,6 +405,7 @@ import {
   defaultModelForHarness,
   modelProviderAvailabilityFor,
   resolveModel,
+  resolveBuiltinModel,
   type HarnessId,
   modelSupportedByHarness,
 } from "./model/pi-models.ts";
@@ -629,7 +630,7 @@ export function buildApp(
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap ? pgArtifactMap.map<T>(table, indexedFields) : createMemoryMap<T>();
   setProviderBaseUrls(config.providerBaseUrls);
-  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveModel(id));
+  const unknownGatewayModels = Object.keys(config.modelGateway?.models ?? {}).filter((id) => !resolveBuiltinModel(id));
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
@@ -1422,8 +1423,6 @@ export function buildApp(
             try {
               return [p.id, await customProviders.resolveKey(p.id)] as const;
             } catch (e) {
-              // A corrupt/undecryptable custom key must degrade that one
-              // provider, never the whole turn (built-ins included).
               console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
               return [p.id, null] as const;
             }

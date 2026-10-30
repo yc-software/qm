@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { buildModelRuntime, probeModel } from "../src/harness/pi-harness.ts";
 import { getRequiredModel, modelSupportsFastMode } from "../src/model/pi-models.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const bindingBeta = "thinking-binding-controls-2026-08-01";
 const context = { messages: [{ role: "user" as const, content: "Reply OK.", timestamp: 0 }] };

@@ -5,6 +5,9 @@ import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function sse(events: Array<Record<string, unknown>>): Response {
   const body = events.map((event) => `event: ${event.type as string}\ndata: ${JSON.stringify(event)}\n\n`).join("");

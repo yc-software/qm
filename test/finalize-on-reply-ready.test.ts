@@ -25,6 +25,9 @@ import type { ErrorLog } from "../src/admin/error-log.ts";
 import type { SurfaceCache } from "../src/surface-cache/types.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };

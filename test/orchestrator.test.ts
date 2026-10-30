@@ -26,6 +26,9 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const noDefaultSandbox = new WeakSet<object>();
 function requestScope(req: TurnRequest): string | null {

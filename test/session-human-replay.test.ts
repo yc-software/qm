@@ -5,6 +5,9 @@ import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("human child replay keeps one receipt across acknowledgement failure and a project roster change", async (t) => {
   const built = buildApp(testConfig({ openaiApiKey: "test-openai-key" }));

@@ -6,6 +6,9 @@ import {
   turnModelOptions,
   validateWebTurnModelOptions,
 } from "../src/core/turn-options.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("triggered turns default to extra-high thinking and non-fast mode", () => {
   assert.deepEqual(turnModelOptions({ triggered: true }), {

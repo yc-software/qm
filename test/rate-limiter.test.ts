@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("rate limits are principal-scoped and reset after the window", async () => {
   let now = 1_000;

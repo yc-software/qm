@@ -8,6 +8,9 @@ import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routin
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,

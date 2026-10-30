@@ -9,6 +9,9 @@ import {
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "org:default-org" as const;
 const PERSONAL = "personal:alice" as const;

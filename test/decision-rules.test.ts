@@ -12,6 +12,9 @@ import {
 } from "../src/decisions/decisions.ts";
 import { createDecisionBackend } from "../src/decisions/providers.ts";
 import { turnStartState } from "../src/decisions/hooks.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);

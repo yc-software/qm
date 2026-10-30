@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { countTokens } from "../src/util/tokens.ts";
 import { createPiHarness, stableCwd } from "../src/harness/pi-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;

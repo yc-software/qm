@@ -3,6 +3,9 @@ import { test } from "node:test";
 import { zstdDecompressSync } from "node:zlib";
 import { buildModelRuntime } from "../src/harness/pi-harness.ts";
 import { CODEX_SUBSCRIPTION_PROVIDER, getRequiredModel } from "../src/model/pi-models.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const subscriptionToken = `e30.${Buffer.from(
   JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } }),

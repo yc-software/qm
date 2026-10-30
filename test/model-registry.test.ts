@@ -15,6 +15,9 @@ import {
   modelProviderAvailabilityFor,
 } from "../src/model/pi-models.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("registry model identifiers are unique", () => {
   const ids = MODEL_REGISTRY.map((model) => model.id);

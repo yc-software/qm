@@ -1,4 +1,5 @@
 import { DEFAULT_AGENT_INPUT_USD_PER_MTOK } from "../model/pi-models.ts";
+import { perTenant } from "../tenants/context.ts";
 interface BudgetCheck {
   allowed: boolean;
   spentUsd: number;
@@ -22,10 +23,11 @@ export function createBudgetTracker(
   const limitUsd = opts.limitUsd ?? Infinity;
   const orgLimitUsd = opts.orgLimitUsd ?? Infinity;
   const windowMs = opts.windowMs ?? DEFAULT_BUDGET_WINDOW_MS;
-  const spend = new Map<string, Array<{ at: number; usd: number }>>();
+  const spends = perTenant(() => new Map<string, Array<{ at: number; usd: number }>>());
   const orgKey = "@org";
 
   function spentIn(principalId: string, now: number): number {
+    const spend = spends();
     const cutoff = now - windowMs;
     const kept = (spend.get(principalId) ?? []).filter((e) => e.at >= cutoff);
     spend.set(principalId, kept);
@@ -40,6 +42,7 @@ export function createBudgetTracker(
       return { allowed: orgSpent < orgLimitUsd, spentUsd: orgSpent, limitUsd: orgLimitUsd };
     },
     async record(principalId, costUsd, now = Date.now()) {
+      const spend = spends();
       for (const key of [principalId, orgKey]) {
         const list = spend.get(key) ?? [];
         list.push({ at: now, usd: costUsd });

@@ -10,6 +10,9 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function closedPort(): Promise<number> {
   const server = createServer();

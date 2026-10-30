@@ -14,6 +14,9 @@ import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-stor
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

@@ -9,6 +9,9 @@ import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import { zeroUsage } from "../src/harness/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const model = getRequiredModel("claude-opus-5");
 const summary = "## Goal\nInvestigate migration failures.\n## Constraints & Preferences\nDo not change production.";

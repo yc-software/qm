@@ -43,6 +43,9 @@ import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessi
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const tokensOf = (...texts: string[]): number => texts.reduce((n, t) => n + countTokens(t), 0);

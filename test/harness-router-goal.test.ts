@@ -9,6 +9,9 @@ import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const scope = "personal:goal@example.com" as ScopeId;
 
