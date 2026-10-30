@@ -936,7 +936,7 @@ test("a new Slack thread cannot overwrite an unrelated unthreaded DM card", asyn
 test("followup accepts only typed runtime and staged attachment fields", async () => {
   const w = world();
   const { loop, item } = await seed(w);
-  const path = `/v1/loops/${loop.id}/items/${item.id}/followup`;
+  const path = `/v1/loops/${loop.id}/items/${item.id}/followup?principalId=josh`;
   let received: unknown;
   w.loops.fire!.followUp = async (_loop, held, _message, _actor, options) => {
     received = options;
@@ -959,9 +959,14 @@ test("followup accepts only typed runtime and staged attachment fields", async (
       attachments: [{ ...options.attachments[0], path: "/ignored" }],
       scopeId: "personal:other",
     },
+    capability: PORTAL,
   });
   assert.equal(out.status, 200);
   assert.deepEqual(received, options);
+  received = undefined;
+  const agent = await call(w, { method: "POST", path, body: { message: "hi", attachments: options.attachments } });
+  assert.equal(agent.status, 403);
+  assert.equal(received, undefined);
   for (const invalid of [
     { model: 5 },
     { model: " " },
@@ -980,7 +985,7 @@ test("followup accepts only typed runtime and staged attachment fields", async (
     { attachments: Array(11).fill(options.attachments[0]) },
   ]) {
     received = undefined;
-    const bad = await call(w, { method: "POST", path, body: { message: "hello", ...invalid } });
+    const bad = await call(w, { method: "POST", path, body: { message: "hello", ...invalid }, capability: PORTAL });
     assert.equal(bad.status, 400, JSON.stringify(invalid));
     assert.equal(received, undefined);
   }
