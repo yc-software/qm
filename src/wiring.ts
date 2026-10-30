@@ -174,7 +174,12 @@ import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
 import { createWebhookReceiver, type WebhookReceiver } from "./webhooks/webhook-receiver.ts";
-import { createDeployStore, deployTouchDebounceMs, type Deployment } from "./deploy/deploy-store.ts";
+import {
+  createDeployStore,
+  createPostgresDeploymentRows,
+  deployTouchDebounceMs,
+  type Deployment,
+} from "./deploy/deploy-store.ts";
 import { viewerIdentityKey } from "./deploy/access-token.ts";
 import { deploymentCredentialSlugs } from "./deploy/deployment-credentials.ts";
 import { createDockerDeployProvider } from "./deploy/docker-deploy-provider.ts";
@@ -200,7 +205,7 @@ import {
   type CanManageScope,
   type ManagesArtifactHome,
 } from "./resolution/scope-membership.ts";
-import type { DeployGitArchive } from "./deploy/deploy-git-store.ts";
+import { createPostgresDeployGitArchives } from "./deploy/deploy-git-store.ts";
 import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/workspace-store.ts";
 import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
@@ -1679,12 +1684,11 @@ export function buildApp(
     },
   };
   const deployStore = createDeployStore({
-    deployments: artifactMap<Deployment>("deployments"),
-    ...(pgArtifactMap ? { pg: pgArtifactMap.pool } : {}),
+    ...(config.databaseUrl ? { deployments: createPostgresDeploymentRows(config.databaseUrl) } : {}),
     touchDebounceMs: deployTouchDebounceMs(config.deployIdleTtlMs),
     git: {
       repoRoot: config.deployGitDir,
-      archiveStore: artifactMap<DeployGitArchive>("deploy_git_repos"),
+      ...(config.databaseUrl ? { archiveStore: createPostgresDeployGitArchives(config.databaseUrl) } : {}),
       ...(config.snapshotStore === "s3" && config.s3Bucket
         ? {
             archiveBytes: createS3DurableByteStore({

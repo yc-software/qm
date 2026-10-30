@@ -8,14 +8,14 @@ import { connect, type AddressInfo } from "node:net";
 import { mock, test, type TestContext } from "node:test";
 import { createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { memoryArchives } from "./support/deploy-archives.ts";
+import { createDeployStore, createMemoryDeploymentRows } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import {
   createRenderDeployArtifacts,
   type StoredRenderDeployCredential,
 } from "../src/deploy/render-deploy-artifacts.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
@@ -42,8 +42,8 @@ const signingSecret = "render-runner-secret".repeat(3);
 async function fixture(t: TestContext, appSource?: string, entrypoint = "node app.cjs") {
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
+  const deployments = createMemoryDeploymentRows();
+  const archiveStore = memoryArchives();
   const credentials = createMemoryMap<StoredRenderDeployCredential>();
   const gitDir = join(root, "writer");
   const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore } });

@@ -10,9 +10,8 @@ import assert from "node:assert/strict";
 import { createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { mintDeployGitAccess } from "../src/deploy/access-token.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
-import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryArchives } from "./support/deploy-archives.ts";
+import { createDeployStore, createMemoryDeploymentRows, type Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 
 const execFileP = promisify(execFile);
@@ -23,8 +22,8 @@ async function fixture(): Promise<{
   close: () => Promise<void>;
   deployment: Deployment;
 }> {
-  const deployments = createMemoryMap<Deployment>();
-  const archiveStore = createMemoryMap<DeployGitArchive>();
+  const deployments = createMemoryDeploymentRows();
+  const archiveStore = memoryArchives();
   const writerStore = createDeployStore({
     deployments,
     git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-git-remote-writer-")), archiveStore },

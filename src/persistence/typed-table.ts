@@ -15,6 +15,7 @@ export interface TableSpec<T = Record<string, unknown>, K extends string = never
   fieldKey?: K;
   global?: boolean;
   required?: readonly Extract<keyof T, string>[];
+  preserve?: readonly Extract<keyof T, string>[];
   columns: Columns<T, K>;
 }
 
@@ -77,11 +78,14 @@ export function typedTable<T extends object, K extends string = never>(
   databaseUrl: string,
   spec: TableSpec<T, K>,
   migration: PgMigrationDefinition,
+  before: readonly PgMigrationDefinition[] = [],
 ) {
-  const db = createPgPool(databaseUrl, [migration]);
+  const db = createPgPool(databaseUrl, [...before, migration]);
   const key = keyOf(spec as TableSpec<never, string>);
   const types = spec.columns as Readonly<Record<string, ColumnType>>;
   const fields = Object.keys(types);
+  const preserved = new Set<string>(spec.preserve ?? []);
+  const written = fields.filter((field) => !preserved.has(field));
   const cols = fields.map(columnName);
   const scoped = (where: string) => (spec.global ? where : `tenant_id = ${TENANT} AND ${where}`);
   const select = `SELECT ${[key, ...cols].join(", ")} FROM ${spec.table}`;
@@ -151,8 +155,8 @@ export function typedTable<T extends object, K extends string = never>(
         const next = fn(current);
         if (next !== current)
           await client.query(
-            `UPDATE ${spec.table} SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE ${scoped(`${key} = $1`)}`,
-            values(id, next, fields),
+            `UPDATE ${spec.table} SET ${written.map((f, i) => `${columnName(f)} = $${i + 2}`).join(", ")} WHERE ${scoped(`${key} = $1`)}`,
+            values(id, next, written),
           );
         return next;
       }),

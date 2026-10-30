@@ -57,6 +57,7 @@ export interface SandboxDefaults {
 export function createSandboxResourceStores(databaseUrl: string): {
   records: SandboxResourceRecords;
   defaults: SandboxDefaults;
+  close(): Promise<void>;
 } {
   const records = typedTable(databaseUrl, RESOURCES, SANDBOX_RESOURCE_MIGRATIONS[0]);
   const defaults = typedTable(databaseUrl, DEFAULTS, SANDBOX_RESOURCE_MIGRATIONS[1]);
@@ -84,6 +85,9 @@ export function createSandboxResourceStores(databaseUrl: string): {
         (await records.db.q(`${records.select} WHERE ${records.scoped("job_only")} ORDER BY id`)).map(records.row),
     },
     defaults: { get: defaults.get, put: defaults.put },
+    close: async () => {
+      await Promise.all([records.db.close(), defaults.db.close()]);
+    },
   };
 }
 
