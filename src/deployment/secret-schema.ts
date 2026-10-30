@@ -8,9 +8,6 @@ type SecretGate =
   | "smolmachines"
   | "e2b"
   | "modal"
-  | "porter"
-  | "agent37"
-  | "superserve"
   | "render"
   | "do-managed-agents"
   | "porter-deploy"
@@ -51,14 +48,12 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   },
   { name: "SPRITES_TOKEN", requiredWhen: "sprites" },
   { name: "SMOLMACHINES_TOKEN", requiredWhen: "smolmachines" },
-  { name: "AGENT37_API_KEY", requiredWhen: "agent37" },
   { name: "RENDER_API_KEY", requiredWhen: "render" },
-  { name: "SUPERSERVE_API_KEY", requiredWhen: "superserve" },
   { name: "E2B_API_KEY", requiredWhen: ["e2b", "e2b-deploy"] },
   { name: "DO_AGENTS_API_TOKEN", requiredWhen: "do-managed-agents" },
   { name: "MODAL_TOKEN_ID", requiredWhen: "modal" },
   { name: "MODAL_TOKEN_SECRET", requiredWhen: "modal" },
-  { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: ["porter", "porter-deploy"] },
+  { name: "PORTER_DEPLOY_API_TOKEN", requiredWhen: "porter-deploy" },
   { name: "FLY_DEPLOY_API_TOKEN", requiredWhen: "fly-deploy" },
   { name: "FLY_DEPLOY_WIREGUARD_PEERS", requiredWhen: "fly-shared-deploy" },
   { name: "AWS_DEPLOY_GATE_SECRET", requiredWhen: "aws-deploy-gate" },
@@ -79,9 +74,6 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   smolmachines: (env) => sandboxBackendSelected(env, "smolmachines"),
   e2b: (env) => sandboxBackendSelected(env, "e2b"),
   modal: (env) => sandboxBackendSelected(env, "modal"),
-  porter: (env) => sandboxBackendSelected(env, "porter"),
-  agent37: (env) => sandboxBackendSelected(env, "agent37"),
-  superserve: (env) => sandboxBackendSelected(env, "superserve"),
   render: (env) => sandboxBackendSelected(env, "render") || env.DEPLOY_PROVIDER === "render",
   "do-managed-agents": (env) => sandboxBackendSelected(env, "do-managed-agents"),
   "porter-deploy": (env) => env.DEPLOY_PROVIDER === "porter",

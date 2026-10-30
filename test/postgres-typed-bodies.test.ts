@@ -4,11 +4,9 @@ import { withTenant } from "../src/tenants/context.ts";
 import { globalConversion, tableConversion, typedTable, type TableSpec } from "../src/persistence/typed-table.ts";
 import { E2B_SANDBOX_BODIES } from "../src/sandbox/e2b-sandbox.ts";
 import { MODAL_SANDBOX_BODIES } from "../src/sandbox/modal-sandbox.ts";
-import { AWS_SANDBOX_BODIES } from "../src/sandbox/aws-sandbox.ts";
 import { MANAGED_AGENTS_SANDBOX_BODIES } from "../src/sandbox/managed-agents-sandbox.ts";
 import { SMOLMACHINES_SANDBOX_BODIES } from "../src/sandbox/smolmachines-sandbox.ts";
 import { SPRITES_INITIALIZATION } from "../src/sandbox/sprites-sandbox.ts";
-import { SUPERSERVE_CONFIG_EPOCHS, SUPERSERVE_SANDBOX_BODIES } from "../src/sandbox/superserve-sandbox.ts";
 import { RENDER_SANDBOX_BODIES, RENDER_SANDBOX_CLEANUP, RENDER_SCRATCH_BODIES } from "../src/sandbox/render-sandbox.ts";
 import { AWS_DEPLOY_BODIES } from "../src/deploy/aws-deploy-provider.ts";
 import { E2B_DEPLOY_BODIES } from "../src/deploy/e2b-deploy-provider.ts";
@@ -51,11 +49,6 @@ const rows: Array<[Spec, string, Record<string, unknown>]> = [
     },
   ],
   [
-    AWS_SANDBOX_BODIES as Spec,
-    "personal:bob",
-    { microvmId: "vm-1", endpoint: "https://vm-1", createdAtMs: 1, provisioning: true, lastActivityMs: 2 },
-  ],
-  [
     MANAGED_AGENTS_SANDBOX_BODIES as Spec,
     "channel:C1",
     {
@@ -70,7 +63,6 @@ const rows: Array<[Spec, string, Record<string, unknown>]> = [
   ],
   [SMOLMACHINES_SANDBOX_BODIES as Spec, "personal:carol", { initializationPending: true, snapshotError: "boom" }],
   [SPRITES_INITIALIZATION as Spec, "qm-sandbox-1", { pending: true }],
-  [SUPERSERVE_SANDBOX_BODIES as Spec, "personal:dan", { sandboxId: "ss-1", createdAtMs: 9 }],
   [
     RENDER_SANDBOX_BODIES as Spec,
     "personal:erin",
@@ -168,13 +160,11 @@ for (const [spec, key, row] of rows) {
 test("global infra tables backfill without a tenant and are shared by every tenant", { skip }, async () => {
   const make = (url: string) => {
     const claims = typedTable(url, FLY_PEER_CLAIMS, globalConversion(FLY_PEER_CLAIMS));
-    const epochs = typedTable(url, SUPERSERVE_CONFIG_EPOCHS, globalConversion(SUPERSERVE_CONFIG_EPOCHS));
     return {
       claims,
-      epochs,
       ports: createFlyPortClaims(url),
       close: async () => {
-        await Promise.all([claims.close(), epochs.close()]);
+        await claims.close();
       },
     };
   };
@@ -183,7 +173,6 @@ test("global infra tables backfill without a tenant and are shared by every tena
     async ({ store, tenant, otherTenant, admin }) => {
       await withTenant(tenant, async () => {
         assert.deepEqual(await store.claims.get("peer-1"), { taskArn: "arn:task/1" });
-        assert.deepEqual(await store.epochs.get("gen-a"), { generation: 2 });
         assert.equal(await store.ports.claim("company-app", 20001, "dep-z"), "dep-1");
         assert.equal(await store.ports.claim("company-app", 20002, "dep-z"), "dep-z");
       });
@@ -196,13 +185,12 @@ test("global infra tables backfill without a tenant and are shared by every tena
       const { rows: columns } = await admin.query(
         `SELECT count(*)::int AS n FROM pg_attribute
           WHERE attname = 'tenant_id' AND NOT attisdropped
-            AND attrelid IN ('fly_peer_claims'::regclass, 'superserve_config_epochs'::regclass, 'fly_deploy_ports'::regclass)`,
+            AND attrelid IN ('fly_peer_claims'::regclass, 'fly_deploy_ports'::regclass)`,
       );
       assert.equal(columns[0].n, 0);
     },
     async (admin) => {
       await seedKeyValueTable(admin, "fly_peer_claims", { "peer-1": { taskArn: "arn:task/1" } });
-      await seedKeyValueTable(admin, "superserve_config_epochs", { "gen-a": { generation: 2 } });
       await admin.query(`CREATE TABLE fly_deploy_ports(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
       await admin.query(`INSERT INTO fly_deploy_ports VALUES ('company-app:20001', '"dep-1"')`);
     },

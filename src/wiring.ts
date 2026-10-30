@@ -68,7 +68,7 @@ import type { SessionShare, SessionShareStore } from "./sessions/session-share.t
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   baseModelProviders,
@@ -225,18 +225,9 @@ import {
 } from "./files/durable-byte-store.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "./files/file-artifact-store.ts";
 import { createPostgresFileArtifactStore } from "./files/postgres-file-artifact-store.ts";
-import { AWS_SANDBOX_BODIES, createAwsSandbox } from "./sandbox/aws-sandbox.ts";
 import { createLocalSandbox } from "./sandbox/local-sandbox.ts";
 import { createSpritesSandbox, SPRITES_INITIALIZATION } from "./sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox, SMOLMACHINES_SANDBOX_BODIES } from "./sandbox/smolmachines-sandbox.ts";
-import { createAgent37Sandbox } from "./sandbox/agent37-sandbox.ts";
-import {
-  createConfigEpochResolver,
-  createSuperserveSandbox,
-  SUPERSERVE_CONFIG_EPOCHS,
-  SUPERSERVE_SANDBOX_BODIES,
-} from "./sandbox/superserve-sandbox.ts";
-import { createSdkSuperserveClient } from "./sandbox/superserve-client.ts";
 import { createE2bSandbox, E2B_SANDBOX_BODIES, E2B_TEMPLATE_TOOLS } from "./sandbox/e2b-sandbox.ts";
 import { createSdkE2bClient, type E2bClient } from "./sandbox/e2b-client.ts";
 import {
@@ -249,7 +240,6 @@ import { s3Client } from "./persistence/s3.ts";
 import { createS3SnapshotStore } from "./sandbox/home-snapshot.ts";
 import { createModalSandbox, MODAL_SANDBOX_BODIES } from "./sandbox/modal-sandbox.ts";
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
-import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
 import { createMemorySandboxResourceStores, createSandboxResourceStores } from "./sandbox/sandbox-resource-store.ts";
 import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
@@ -908,7 +898,6 @@ export function buildApp(
   };
   const e2bBodies = keyedRows(config.databaseUrl, E2B_SANDBOX_BODIES);
   const modalBodies = keyedRows(config.databaseUrl, MODAL_SANDBOX_BODIES);
-  const awsBodies = keyedRows(config.databaseUrl, AWS_SANDBOX_BODIES);
   const renderBodies = keyedRows(config.databaseUrl, RENDER_SANDBOX_BODIES);
   const renderScratch = keyedRows(config.databaseUrl, RENDER_SCRATCH_BODIES);
   const renderCleanup = keyedRows(config.databaseUrl, RENDER_SANDBOX_CLEANUP);
@@ -1031,98 +1020,6 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
-  const buildAgent37 = (): Sandbox =>
-    createAgent37Sandbox(workspace, {
-      ...config.agent37Sandbox,
-      advisoryLock,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
-    });
-  const superserveBodies = keyedRows(config.databaseUrl, SUPERSERVE_SANDBOX_BODIES);
-  const superserveEpochs = keyedRows(config.databaseUrl, SUPERSERVE_CONFIG_EPOCHS);
-  const buildSuperserve = (): Sandbox => {
-    const ss = config.superserveSandbox;
-    if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
-    if (!ss.template)
-      throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
-    const keepWarmSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
-    const generationKey = createHash("sha256")
-      .update(
-        JSON.stringify([
-          config.buildSha ?? "",
-          ss.template,
-          ss.namePrefix ?? "",
-          ss.homeDir ?? "",
-          ss.idlePauseSec ?? null,
-          ss.retentionSec ?? null,
-          keepWarmSec,
-          [...(ss.egressAllow ?? [])].sort(),
-          [...(ss.egressDeny ?? [])].sort(),
-        ]),
-      )
-      .digest("hex")
-      .slice(0, 32);
-    return createSuperserveSandbox(workspace, {
-      configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
-      client: createSdkSuperserveClient({
-        apiKey: ss.apiKey,
-        ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
-        ...(ss.template ? { template: ss.template } : {}),
-      }),
-      ...(ss.namePrefix ? { namePrefix: ss.namePrefix } : {}),
-      template: ss.template,
-      ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
-      ...(ss.idlePauseSec !== undefined ? { idlePauseSec: ss.idlePauseSec } : {}),
-      keepWarmSec,
-      ...(ss.retentionSec !== undefined ? { retentionSec: ss.retentionSec } : {}),
-      ...(ss.egressAllow ? { egressAllow: ss.egressAllow } : {}),
-      ...(ss.egressDeny ? { egressDeny: ss.egressDeny } : {}),
-      ...(ss.defaultTimeoutSec ? { defaultTimeoutSec: ss.defaultTimeoutSec } : {}),
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      layerToolFiles: () => deploymentLayer.installFiles,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: superserveBodies,
-      onError: sandboxOnError,
-    });
-  };
-  const buildAws = (): Sandbox => {
-    if (!config.awsSandbox.s3Bucket) throw new Error("SANDBOX_BACKEND=aws requires AWS_SANDBOX_S3_BUCKET");
-    return createAwsSandbox(workspace, {
-      ...config.awsSandbox,
-      s3Bucket: config.awsSandbox.s3Bucket,
-      advisoryLock,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      blobTransfer,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      store: awsBodies,
-      onError: sandboxOnError,
-    });
-  };
-  const buildPorter = (): Sandbox =>
-    createPorterSandbox(workspace, {
-      ...config.porterSandbox,
-      advisoryLock,
-      blobTransfer,
-      extraTools: deploymentLayer.advertisedTools,
-      credentialPaths: deploymentLayer.credentialPaths,
-      ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-      ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-      ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-      onError: sandboxOnError,
-    });
   const buildRender = (): Sandbox => {
     const render = config.renderSandbox;
     if (!render.apiKey || !render.workspaceId) {
@@ -1154,11 +1051,7 @@ export function buildApp(
     smolmachines: buildSmolmachines,
     e2b: buildE2b,
     modal: buildModal,
-    aws: buildAws,
-    porter: buildPorter,
-    agent37: buildAgent37,
     render: buildRender,
-    superserve: buildSuperserve,
     "do-managed-agents": buildManagedAgents,
   };
   const enabledBackends = new Set(enabledSandboxBackends(config));
@@ -1753,7 +1646,6 @@ export function buildApp(
   const buildAwsDeploy = (): DeployProvider =>
     createAwsDeployProvider({
       ...config.awsDeploy,
-      ...(!config.awsDeploy.dataBucket && config.awsSandbox.s3Bucket ? { dataBucket: config.awsSandbox.s3Bucket } : {}),
       advisoryLock,
       store: keyedRows(config.databaseUrl, AWS_DEPLOY_BODIES),
       onError: sandboxOnError,
@@ -1808,10 +1700,8 @@ export function buildApp(
     throw new Error("Fly durable application storage requires DATABASE_URL for persistent rollback configuration");
   }
   const deployProvider: DeployProvider = buildDeployProvider[config.deployProvider]();
-  if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket && !config.awsSandbox.s3Bucket) {
-    console.warn(
-      "[wiring] aws deploy: no data bucket resolved (AWS_DEPLOY_DATA_BUCKET unset, sandbox is not aws) — deployed apps have NO durable /data",
-    );
+  if (config.deployProvider === "aws" && !config.awsDeploy.dataBucket) {
+    console.warn("[wiring] aws deploy: AWS_DEPLOY_DATA_BUCKET is unset — deployed apps have NO durable /data");
   }
   const adminGrantPersist = config.databaseUrl
     ? createPostgresAdminGrantStore(config.databaseUrl)

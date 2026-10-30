@@ -191,16 +191,12 @@ export interface Config {
   };
   reachExecEnabled: boolean;
   surfaceDebugFooter: boolean;
-  awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
   smolmachinesSandbox: SmolmachinesSandboxEnv;
-  agent37Sandbox: Agent37SandboxEnv;
-  superserveSandbox: SuperserveSandboxEnv;
   e2bSandbox: E2bSandboxEnv;
   managedAgentsSandbox: ManagedAgentsSandboxEnv;
   modalSandbox: ModalSandboxEnv;
-  porterSandbox: PorterSandboxEnv;
   renderSandbox: RenderSandboxEnv;
   renderDeploy: RenderDeployEnv;
   porterDeploy: PorterDeployEnv;
@@ -245,82 +241,6 @@ export function harnessCarriedModelAuth(config: Config): ModelProvider | undefin
     return "anthropic";
   if (config.codexAuthCredential || config.codexAuthFile) return "openai";
   return undefined;
-}
-
-interface AwsSandboxEnv {
-  region: string;
-  profile?: string;
-  imageIdentifier: string;
-  imageVersion?: string;
-  executionRoleArn?: string;
-  ingressConnectorArns?: string[];
-  egressConnectorArns?: string[];
-  s3Bucket?: string;
-  s3Prefix?: string;
-  agentPort?: number;
-  maxIdleDurationSeconds?: number;
-  suspendedDurationSeconds?: number;
-  maximumDurationInSeconds?: number;
-  rotateAfterSeconds?: number;
-  snapshotIntervalMs?: number;
-  defaultTimeoutSec?: number;
-  cpus?: number;
-  memoryMb?: number;
-  diskGb?: number;
-}
-
-function awsSandboxEnv(env: NodeJS.ProcessEnv): AwsSandboxEnv {
-  const csv = (s: string | undefined): string[] | undefined =>
-    s
-      ? s
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean)
-      : undefined;
-  const ingress = csv(env.AWS_SANDBOX_INGRESS_CONNECTORS);
-  const egress = csv(env.AWS_SANDBOX_EGRESS_CONNECTORS);
-  return {
-    region: env.AWS_SANDBOX_REGION ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-west-2",
-    ...(env.AWS_SANDBOX_PROFILE ? { profile: env.AWS_SANDBOX_PROFILE } : {}),
-    imageIdentifier: env.AWS_SANDBOX_IMAGE ?? "qm-microvm-sandbox",
-    ...(env.AWS_SANDBOX_IMAGE_VERSION ? { imageVersion: env.AWS_SANDBOX_IMAGE_VERSION } : {}),
-    ...(env.AWS_SANDBOX_EXEC_ROLE_ARN ? { executionRoleArn: env.AWS_SANDBOX_EXEC_ROLE_ARN } : {}),
-    ...(ingress ? { ingressConnectorArns: ingress } : {}),
-    ...(egress ? { egressConnectorArns: egress } : {}),
-    ...(env.AWS_SANDBOX_S3_BUCKET ? { s3Bucket: env.AWS_SANDBOX_S3_BUCKET } : {}),
-    ...(env.AWS_SANDBOX_S3_PREFIX ? { s3Prefix: env.AWS_SANDBOX_S3_PREFIX } : {}),
-    ...(numEnvStrict("AWS_SANDBOX_AGENT_PORT", env.AWS_SANDBOX_AGENT_PORT) !== undefined
-      ? { agentPort: numEnvStrict("AWS_SANDBOX_AGENT_PORT", env.AWS_SANDBOX_AGENT_PORT) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MAX_IDLE_SEC", env.AWS_SANDBOX_MAX_IDLE_SEC) !== undefined
-      ? { maxIdleDurationSeconds: numEnvStrict("AWS_SANDBOX_MAX_IDLE_SEC", env.AWS_SANDBOX_MAX_IDLE_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_SUSPENDED_SEC", env.AWS_SANDBOX_SUSPENDED_SEC) !== undefined
-      ? { suspendedDurationSeconds: numEnvStrict("AWS_SANDBOX_SUSPENDED_SEC", env.AWS_SANDBOX_SUSPENDED_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MAX_DURATION_SEC", env.AWS_SANDBOX_MAX_DURATION_SEC) !== undefined
-      ? { maximumDurationInSeconds: numEnvStrict("AWS_SANDBOX_MAX_DURATION_SEC", env.AWS_SANDBOX_MAX_DURATION_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_ROTATE_AFTER_SEC", env.AWS_SANDBOX_ROTATE_AFTER_SEC) !== undefined
-      ? { rotateAfterSeconds: numEnvStrict("AWS_SANDBOX_ROTATE_AFTER_SEC", env.AWS_SANDBOX_ROTATE_AFTER_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", env.AWS_SANDBOX_SNAPSHOT_INTERVAL_MS) !== undefined
-      ? { snapshotIntervalMs: numEnvStrict("AWS_SANDBOX_SNAPSHOT_INTERVAL_MS", env.AWS_SANDBOX_SNAPSHOT_INTERVAL_MS) }
-      : {}),
-    ...(env.QM_CORE_CONTAINER ? { coreContainer: env.QM_CORE_CONTAINER } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_CPUS", env.AWS_SANDBOX_CPUS) !== undefined
-      ? { cpus: numEnvStrict("AWS_SANDBOX_CPUS", env.AWS_SANDBOX_CPUS) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_MEMORY_MB", env.AWS_SANDBOX_MEMORY_MB) !== undefined
-      ? { memoryMb: numEnvStrict("AWS_SANDBOX_MEMORY_MB", env.AWS_SANDBOX_MEMORY_MB) }
-      : {}),
-    ...(numEnvStrict("AWS_SANDBOX_DISK_GB", env.AWS_SANDBOX_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("AWS_SANDBOX_DISK_GB", env.AWS_SANDBOX_DISK_GB) }
-      : {}),
-  };
 }
 
 interface LocalSandboxEnv {
@@ -633,17 +553,6 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
   };
 }
 
-interface PorterSandboxEnv {
-  image?: string;
-  token?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  homeDir?: string;
-  ttlSec?: number;
-  egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
-}
-
 interface PorterDeployEnv {
   token?: string;
   baseUrl?: string;
@@ -695,110 +604,6 @@ function porterDeployEnv(env: NodeJS.ProcessEnv): PorterDeployEnv {
     ...(visibility ? { visibility } : {}),
     ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
     ...(ttlSec !== undefined ? { ttlSec } : {}),
-  };
-}
-
-function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
-  const token = env.PORTER_DEPLOY_API_TOKEN;
-  const baseUrl = porterApiBaseUrl(env);
-  const ttlSec = numEnvStrict("PORTER_SANDBOX_TTL_SEC", env.PORTER_SANDBOX_TTL_SEC);
-  return {
-    ...(env.PORTER_SANDBOX_IMAGE ? { image: env.PORTER_SANDBOX_IMAGE } : {}),
-    ...(token ? { token } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-    ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
-    ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
-    ...(ttlSec !== undefined ? { ttlSec } : {}),
-    ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-  };
-}
-
-interface Agent37SandboxEnv {
-  apiKey?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  template?: string;
-  cpus?: number;
-  memoryGb?: number;
-  diskGb?: number;
-  egressProxyUrl?: string;
-  defaultTimeoutSec?: number;
-}
-
-function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
-  return {
-    ...(env.AGENT37_API_KEY ? { apiKey: env.AGENT37_API_KEY } : {}),
-    ...(env.AGENT37_API_BASE_URL ? { baseUrl: env.AGENT37_API_BASE_URL } : {}),
-    ...(env.AGENT37_NAME_PREFIX ? { namePrefix: env.AGENT37_NAME_PREFIX } : {}),
-    ...(env.AGENT37_TEMPLATE ? { template: env.AGENT37_TEMPLATE } : {}),
-    ...(numEnvStrict("AGENT37_CPUS", env.AGENT37_CPUS) !== undefined
-      ? { cpus: numEnvStrict("AGENT37_CPUS", env.AGENT37_CPUS) }
-      : {}),
-    ...(numEnvStrict("AGENT37_MEMORY_GB", env.AGENT37_MEMORY_GB) !== undefined
-      ? { memoryGb: numEnvStrict("AGENT37_MEMORY_GB", env.AGENT37_MEMORY_GB) }
-      : {}),
-    ...(numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) !== undefined
-      ? { diskGb: numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) }
-      : {}),
-    ...(env.AGENT37_EGRESS_PROXY_URL ? { egressProxyUrl: env.AGENT37_EGRESS_PROXY_URL } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-  };
-}
-
-interface SuperserveSandboxEnv {
-  apiKey?: string;
-  baseUrl?: string;
-  namePrefix?: string;
-  template?: string;
-  homeDir?: string;
-  idlePauseSec?: number;
-  retentionSec?: number;
-  egressAllow?: string[];
-  egressDeny?: string[];
-  defaultTimeoutSec?: number;
-  configGeneration?: number;
-}
-
-const csvList = (value: string | undefined): string[] | undefined => {
-  const items = (value ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-};
-
-function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
-  const egressAllow = csvList(env.SUPERSERVE_EGRESS_ALLOW);
-  const egressDeny = csvList(env.SUPERSERVE_EGRESS_DENY);
-  const configGeneration = numEnvStrict("SUPERSERVE_CONFIG_GENERATION", env.SUPERSERVE_CONFIG_GENERATION);
-  if (configGeneration !== undefined && (!Number.isSafeInteger(configGeneration) || configGeneration < 0)) {
-    throw new Error(
-      `SUPERSERVE_CONFIG_GENERATION=${JSON.stringify(env.SUPERSERVE_CONFIG_GENERATION)} must be a nonnegative safe integer, or unset it.`,
-    );
-  }
-  return {
-    ...(env.SUPERSERVE_API_KEY ? { apiKey: env.SUPERSERVE_API_KEY } : {}),
-    ...(env.SUPERSERVE_BASE_URL?.trim() ? { baseUrl: env.SUPERSERVE_BASE_URL.trim() } : {}),
-    ...(env.SUPERSERVE_NAME_PREFIX ? { namePrefix: env.SUPERSERVE_NAME_PREFIX } : {}),
-    ...(env.SUPERSERVE_TEMPLATE?.trim() ? { template: env.SUPERSERVE_TEMPLATE.trim() } : {}),
-    ...(env.SUPERSERVE_HOME_DIR ? { homeDir: env.SUPERSERVE_HOME_DIR } : {}),
-    ...(numEnvStrict("SUPERSERVE_IDLE_PAUSE_SEC", env.SUPERSERVE_IDLE_PAUSE_SEC) !== undefined
-      ? { idlePauseSec: numEnvStrict("SUPERSERVE_IDLE_PAUSE_SEC", env.SUPERSERVE_IDLE_PAUSE_SEC) }
-      : {}),
-    ...(numEnvStrict("SUPERSERVE_RETENTION_SEC", env.SUPERSERVE_RETENTION_SEC) !== undefined
-      ? { retentionSec: numEnvStrict("SUPERSERVE_RETENTION_SEC", env.SUPERSERVE_RETENTION_SEC) }
-      : {}),
-    ...(egressAllow ? { egressAllow } : {}),
-    ...(egressDeny ? { egressDeny } : {}),
-    ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
-      ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
-      : {}),
-    ...(configGeneration !== undefined ? { configGeneration } : {}),
   };
 }
 
@@ -1085,13 +890,9 @@ export function enabledSandboxBackends(config: Config): Array<Config["sandboxBac
     local: Boolean(config.localSandbox?.image),
     sprites: Boolean(config.spritesSandbox?.token),
     smolmachines: Boolean(config.smolmachinesSandbox?.token),
-    agent37: Boolean(config.agent37Sandbox?.apiKey),
-    superserve: Boolean(config.superserveSandbox?.apiKey && config.superserveSandbox?.template),
     e2b: Boolean(config.e2bSandbox?.apiKey),
     "do-managed-agents": Boolean(config.managedAgentsSandbox?.apiToken),
     modal: Boolean(config.modalSandbox?.tokenId && config.modalSandbox?.tokenSecret),
-    aws: Boolean(config.awsSandbox?.s3Bucket),
-    porter: Boolean(config.porterSandbox?.token),
     render: Boolean(config.renderSandbox?.apiKey && config.renderSandbox?.workspaceId),
   };
   const enabled = new Set<Config["sandboxBackend"]>([config.sandboxBackend]);
@@ -1105,21 +906,17 @@ function sandboxBackendEnvStrict(value: string | undefined): Config["sandboxBack
   if (value === undefined || value.trim() === "") return "local";
   const backend = value.trim();
   if (
-    backend === "aws" ||
     backend === "local" ||
     backend === "sprites" ||
     backend === "smolmachines" ||
     backend === "e2b" ||
     backend === "modal" ||
-    backend === "agent37" ||
-    backend === "superserve" ||
     backend === "do-managed-agents" ||
-    backend === "porter" ||
     backend === "render"
   )
     return backend;
   throw new Error(
-    `SANDBOX_BACKEND=${JSON.stringify(value)} is not recognized — use aws, local, sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, or render, or unset it.`,
+    `SANDBOX_BACKEND=${JSON.stringify(value)} is not recognized — use local, sprites, smolmachines, e2b, modal, do-managed-agents, or render, or unset it.`,
   );
 }
 
@@ -1376,30 +1173,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
-  const porterSandboxSelected = env.SANDBOX_BACKEND === "porter";
-  if (porterSandboxSelected && !env.PORTER_SANDBOX_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=porter without PORTER_SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set PORTER_SANDBOX_EGRESS_PROXY_URL to the egress proxy to force sandbox traffic through it.",
-    );
-  }
   if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !env.DEPLOY_APPS_DOMAIN) {
     console.warn(
       "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps are reachable signed-in at /d/<app>/ only; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",
     );
   }
-  for (const [selected, label] of [
-    [porterSandboxSelected, "SANDBOX_BACKEND=porter"],
-    [env.DEPLOY_PROVIDER === "porter", "DEPLOY_PROVIDER=porter"],
-  ] as const) {
-    if (selected && !porterLocatorPresent(env)) {
-      throw new Error(
-        `${label} requires PORTER_DEPLOY_PROJECT_ID and PORTER_DEPLOY_CLUSTER_ID (or PORTER_SANDBOX_BASE_URL, or PORTER_CLUSTER_ID) to locate the Porter sandbox API.`,
-      );
-    }
+  if (env.DEPLOY_PROVIDER === "porter" && !porterLocatorPresent(env)) {
+    throw new Error(
+      "DEPLOY_PROVIDER=porter requires PORTER_DEPLOY_PROJECT_ID and PORTER_DEPLOY_CLUSTER_ID (or PORTER_SANDBOX_BASE_URL, or PORTER_CLUSTER_ID) to locate the Porter sandbox API.",
+    );
   }
   if (env.NODE_ENV === "production" && !env.SANDBOX_BACKEND?.trim()) {
     throw new Error(
-      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, porter, agent37, superserve, do-managed-agents, render, aws, or local.",
+      "SANDBOX_BACKEND must be set explicitly in production — use sprites, smolmachines, e2b, modal, do-managed-agents, render, or local.",
     );
   }
   const sandboxBackend = sandboxBackendEnvStrict(env.SANDBOX_BACKEND);
@@ -1415,12 +1201,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error(
         `SANDBOX_TIMEOUT_SEC must stay more than 60 seconds below the ${RENDER_SANDBOX_TTL_SEC} second Render sandbox lifetime`,
       );
-  }
-  const superserveSelected = sandboxBackend === "superserve";
-  if (superserveSelected && !env.SUPERSERVE_TEMPLATE?.trim()) {
-    throw new Error(
-      "SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE, the ready qm-agent-<release> template that carries the agent toolchain.",
-    );
   }
 
   if (env.SANDBOX_SECONDARY_BACKEND?.trim()) {
@@ -1751,13 +1531,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     securityScreenTimeoutMs,
     reachExecEnabled: boolEnvStrict("REACH_EXEC", env.REACH_EXEC) ?? false,
     surfaceDebugFooter: boolEnvStrict("SURFACE_DEBUG_FOOTER", env.SURFACE_DEBUG_FOOTER) ?? false,
-    awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),
     smolmachinesSandbox: smolmachinesSandboxEnv(env),
-    agent37Sandbox: agent37SandboxEnv(env),
-    superserveSandbox: superserveSandboxEnv(env),
-    porterSandbox: porterSandboxEnv(env),
     renderSandbox: renderSandboxEnv(env),
     renderDeploy: renderDeployEnv(env),
     porterDeploy: porterDeployEnv(env),

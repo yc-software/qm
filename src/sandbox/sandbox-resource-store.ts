@@ -34,7 +34,23 @@ const DEFAULTS: TableSpec<SandboxDefault> = {
   columns: { sandboxId: "text" },
 };
 
-export const SANDBOX_RESOURCE_MIGRATIONS = [tableConversion(RESOURCES), tableConversion(DEFAULTS)] as const;
+const RETIRED_BACKEND_TABLES = ["aws_sandbox_bodies", "superserve_sandbox_bodies", "superserve_config_epochs"];
+
+export const SANDBOX_RESOURCE_MIGRATIONS = [
+  tableConversion(RESOURCES),
+  tableConversion(DEFAULTS),
+  {
+    id: "tenancy/retired-sandbox-backends/0001",
+    statements: [
+      `DROP TABLE IF EXISTS ${RETIRED_BACKEND_TABLES.join(", ")}`,
+      `DO $versions$ BEGIN
+         IF to_regclass('durable_map_versions') IS NOT NULL THEN
+           DELETE FROM durable_map_versions WHERE tbl IN (${RETIRED_BACKEND_TABLES.map((t) => `'${t}'`).join(", ")});
+         END IF;
+       END $versions$`,
+    ],
+  },
+] as const;
 
 export interface SandboxResourceRecords {
   get(id: string): Promise<SandboxResource | null>;
@@ -57,7 +73,7 @@ export function createSandboxResourceStores(databaseUrl: string): {
   close(): Promise<void>;
 } {
   const records = typedTable(databaseUrl, RESOURCES, SANDBOX_RESOURCE_MIGRATIONS[0]);
-  const defaults = typedTable(databaseUrl, DEFAULTS, SANDBOX_RESOURCE_MIGRATIONS[1]);
+  const defaults = typedTable(databaseUrl, DEFAULTS, SANDBOX_RESOURCE_MIGRATIONS[1], [SANDBOX_RESOURCE_MIGRATIONS[2]]);
   const visible = "job_only IS NOT TRUE";
   return {
     records: {

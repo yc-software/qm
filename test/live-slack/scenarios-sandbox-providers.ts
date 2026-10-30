@@ -8,14 +8,10 @@ import type { Scenario } from "./harness.ts";
 
 const providerCoverage: Record<SandboxBackendName, true> = {
   sprites: true,
-  aws: true,
   local: true,
   smolmachines: true,
   e2b: true,
   modal: true,
-  porter: true,
-  agent37: true,
-  superserve: true,
   render: true,
   "do-managed-agents": true,
 };

@@ -103,8 +103,7 @@ export interface StatusReport {
   children: Record<string, ChildStatus & { slack?: SlackHealth }>;
 }
 
-export type DevSandboxBackend =
-  "local" | "sprites" | "smolmachines" | "e2b" | "porter" | "agent37" | "superserve" | "do-managed-agents";
+export type DevSandboxBackend = "local" | "sprites" | "smolmachines" | "e2b" | "do-managed-agents";
 export type DevSandboxChoice = DevSandboxBackend | "auto";
 
 export interface BootSpec {
