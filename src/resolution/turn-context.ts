@@ -127,9 +127,6 @@ export async function resolveTurnContext(input: ContextInput) {
     },
     listFiles: () => handles,
     listSkills: async (sources?: readonly string[]) => {
-      const sharingSources = input.external
-        ? []
-        : await sharingSourcesForTurn({ ...input, posture: resolution.sharingPosture });
       const skillScopes = [
         ...new Set([
           memoryScopeId,
