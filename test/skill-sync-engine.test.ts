@@ -4,6 +4,9 @@ import { createSkillPackStore, type NewSkillPack } from "../src/skills/skill-pac
 import { createSkillSyncEngine } from "../src/skills/skill-sync-engine.ts";
 import type { SkillPackFetcher } from "../src/skills/pack-fetcher.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const base: NewSkillPack = {
   kind: "git",

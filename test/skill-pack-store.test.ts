@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSkillPackStore, type NewSkillPack } from "../src/skills/skill-pack-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const base: NewSkillPack = {
   kind: "git",

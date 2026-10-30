@@ -33,6 +33,9 @@ import { scopeId, type Conversation, type Principal, type ScopeId, type TurnRequ
 import type { ManagedGroupDirectory } from "../src/resolution/scope-membership.ts";
 import type { IsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };

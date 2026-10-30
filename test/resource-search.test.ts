@@ -6,6 +6,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fresh() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "resource-search-")), seedSkills: false }));
