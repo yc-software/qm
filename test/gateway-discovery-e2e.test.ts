@@ -11,6 +11,9 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const metadata = {
   model_group: "acme/future",

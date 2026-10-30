@@ -1,14 +1,13 @@
 import { availableRuntimeError } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  createMemoryConfigStore,
-  type PersistedApprovedHarnesses,
-  type PersistedBaseModel,
-} from "../src/resolution/config-store.ts";
+import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "org:default-org" as const;
 const PERSONAL = "personal:alice" as const;
@@ -110,10 +109,9 @@ test("runtime resolution falls back to the first approved harness when deploymen
 });
 
 test("runtime resolution reads approvals and selections from shared durable state on every turn", async () => {
-  const baseModels = createMemoryMap<PersistedBaseModel>();
-  const approvedHarnesses = createMemoryMap<PersistedApprovedHarnesses>();
-  const writer = createMemoryConfigStore("default-org", { baseModels, approvedHarnesses });
-  const reader = createMemoryConfigStore("default-org", { baseModels, approvedHarnesses });
+  const tables = createMemoryConfigTables();
+  const writer = createMemoryConfigStore("default-org", { tables });
+  const reader = createMemoryConfigStore("default-org", { tables });
   const fallback = { harnessId: "pi" as const, modelId: "claude-opus-4-8" };
 
   await writer.setApprovedHarnesses(["pi"]);

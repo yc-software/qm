@@ -6,6 +6,9 @@ import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const active: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {

@@ -32,6 +32,9 @@ import { createSessionMailbox, type SessionMessage } from "../src/sessions/sessi
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fakeSandbox(): Sandbox {
   const unreached = () => {

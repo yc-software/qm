@@ -6,6 +6,9 @@ import { createAckEmojiPicker } from "../src/slack/ack-emoji.ts";
 import { CURATED_ACK_EMOJI, DEFAULT_ACK_REACTIONS, createAckPresenter } from "../src/slack/presenters.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "org:test" as const;
 

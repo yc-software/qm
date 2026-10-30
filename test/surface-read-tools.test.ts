@@ -9,6 +9,9 @@ import { buildApp } from "./support/build-app.ts";
 import type { SurfaceContextResult, TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

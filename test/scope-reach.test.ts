@@ -20,6 +20,9 @@ import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts"
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("resolveReachableChannel: a public channel is reachable by any internal member", async () => {
   const d = createDirectoryStore();

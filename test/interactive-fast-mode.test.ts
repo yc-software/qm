@@ -1,13 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
+import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { scopeId } from "../src/types.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
+import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("interactive fast mode defaults off and persists across instances", async () => {
-  const interactiveFastMode = createMemoryMap<PersistedScopedFlag>();
-  const first = createMemoryConfigStore("org", { interactiveFastMode });
+  const tables = createMemoryConfigTables();
+  const first = createMemoryConfigStore("org", { tables });
   await first.hydrate!();
   assert.equal(first.getInteractiveFastMode(), false);
   assert.equal(await first.getInteractiveFastModeDurable(), false);
@@ -15,7 +18,7 @@ test("interactive fast mode defaults off and persists across instances", async (
   await first.setInteractiveFastMode(true);
   assert.equal(first.getInteractiveFastMode(), true);
 
-  const second = createMemoryConfigStore("org", { interactiveFastMode });
+  const second = createMemoryConfigStore("org", { tables });
   await second.hydrate!();
   assert.equal(second.getInteractiveFastMode(), true);
   assert.equal(await second.getInteractiveFastModeDurable(), true);
@@ -30,11 +33,11 @@ test("the org default reaches only human turns that expressed no preference", ()
 });
 
 test("refreshScope picks up an interactive fast mode change written elsewhere", async () => {
-  const interactiveFastMode = createMemoryMap<PersistedScopedFlag>();
-  const store = createMemoryConfigStore("org", { interactiveFastMode });
+  const tables = createMemoryConfigTables();
+  const store = createMemoryConfigStore("org", { tables });
   await store.hydrate!();
   const org = scopeId("org", "org");
-  await interactiveFastMode.put(org, { scopeId: org, on: true });
+  await tables.updateScopeSetting(org, (row) => ({ ...row, interactiveFastMode: true }));
   await store.refreshScope(org);
   assert.equal(store.getInteractiveFastMode(), true);
 });

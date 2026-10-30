@@ -99,7 +99,8 @@ import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts"
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import { configStoreMaps, createMemoryConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { createMemoryConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { createPostgresConfigTables } from "./resolution/config-tables-pg.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
@@ -674,12 +675,11 @@ export function buildApp(
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
   const configStore = createMemoryConfigStore(config.orgId, {
-    ...configStoreMaps(artifactMap),
+    ...(config.databaseUrl ? { tables: createPostgresConfigTables(config.databaseUrl) } : {}),
     defaultSecurityPosture: config.securityPosture,
     defaultSharingPosture: config.sharingPosture,
     ...(config.connectorSecretKey ? { connectorSecretKey: config.connectorSecretKey } : {}),
   });
-  void configStore.hydrate?.().catch(reportFailureAs("startup: hydrate configuration", undefined));
   const skills: SkillStore = createSkillStore({
     backing: artifactMap<Skill>("skills", ["scopeId"]),
     advisoryLock,

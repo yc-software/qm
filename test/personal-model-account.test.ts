@@ -5,20 +5,23 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
+import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "personal-account-test-signing-secret";
 
 test("personal account choice persists across instances without changing anyone else's choice", async () => {
-  const individualModelAuth = createMemoryMap<PersistedScopedFlag>();
-  const first = createMemoryConfigStore("default-org", { individualModelAuth });
-  const second = createMemoryConfigStore("default-org", { individualModelAuth });
+  const tables = createMemoryConfigTables();
+  const first = createMemoryConfigStore("default-org", { tables });
+  const second = createMemoryConfigStore("default-org", { tables });
   assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
   await first.setPersonalModelAuth("alice", true);
   assert.equal(await second.getIndividualModelAuthDurable("alice"), true);

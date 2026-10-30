@@ -11,6 +11,9 @@ import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import type { ApiCtx, Route } from "../src/api/routes/route.ts";
 import { scopeId, type Loop, type ShipGrant } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
