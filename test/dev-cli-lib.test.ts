@@ -64,8 +64,6 @@ test("slotPorts derive the full port block from the slot number", () => {
   const ports = slotPorts("pool3", 8080);
   assert.deepEqual(ports, {
     core: 8083,
-    web: 8099,
-    admin: 8115,
     portal: 8131,
     prodProxy: 8147,
     slackHealth: 8163,
@@ -83,7 +81,7 @@ test("port blocks preserve legacy slots and stay disjoint through the port ceili
         assert.ok(port > base && port <= 65535);
         assert.ok(!used.has(port), `port ${port} overlaps at slot ${num}`);
         used.add(port);
-        if (num <= 16) assert.equal(port, base + num + index * 16);
+        if (num <= 16) assert.equal(port, base + num + [0, 3, 4, 5, 6][index]! * 16);
       }
     }
     assert.throws(() => slotPorts(`pool${count + 1}`, base), /No valid port block/);
@@ -487,7 +485,7 @@ test("leaseOrgId reads the stale lease's booted org", () => {
   rmSync(store, { recursive: true, force: true });
 });
 
-test("supervised children share the selected dev org", () => {
+test("the dev core hosts the web front door with the selected org", () => {
   const inputs: SpecInputs = {
     worktree: "/tmp/worktree",
     ports: slotPorts("pool1"),
@@ -509,20 +507,17 @@ test("supervised children share the selected dev org", () => {
     portalDevPrincipal: "U1",
     sandboxEnv: {},
   };
-  const specs = buildChildSpecs(inputs);
-  assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
-  assert.equal(specs.find((spec) => spec.name === "core")!.env.CODEX_AUTH_FILE, "/tmp/codex-auth.json");
-  for (const spec of specs.filter((spec) => spec.name !== "core")) {
-    assert.equal(spec.env.CODEX_AUTH_FILE, "");
-    assert.equal(spec.env.HOME, undefined);
-    assert.equal(spec.env.CODEX_HOME, undefined);
-  }
-  for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
-  assert.equal(specs.find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
+  const [core, ...rest] = buildChildSpecs(inputs);
+  assert.deepEqual(rest, []);
+  assert.equal(core!.env.ORG_ID, "beta");
+  assert.equal(core!.env.CORE_ORG_ID, "beta");
+  assert.equal(core!.env.CODEX_AUTH_FILE, "/tmp/codex-auth.json");
+  assert.equal(core!.env.PUBLIC_PORT, String(inputs.ports.portal));
+  assert.equal(core!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
   inputs.baseEnv.PORTAL_LOCAL_AUTH_BYPASS = "0";
-  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
+  assert.equal(buildChildSpecs(inputs)[0]!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
   inputs.baseEnv = {};
-  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
+  assert.equal(buildChildSpecs(inputs)[0]!.env.ORG_ID, "acme");
 });
 
 test("child specs disable environment Slack tokens when no Slack tokens are supplied", () => {
@@ -558,11 +553,7 @@ test("child specs disable environment Slack tokens when no Slack tokens are supp
   assert.equal(slackOnly[0]!.env.SLACK_BOT_TOKEN, "xoxb-test");
   assert.equal(slackOnly[0]!.env.DEV_INSTANCE_NO_SLACK, "0");
   assert.equal(slackOnly[0]!.env.PUBLIC_WEB_URL, "");
-  inputs.web = true;
-  assert.deepEqual(
-    buildChildSpecs(inputs).map((spec) => spec.name),
-    ["core", "web", "portal"],
-  );
+  assert.equal(slackOnly[0]!.env.PUBLIC_PORT, undefined);
 });
 
 test("formatAge renders the bash-compatible shapes", () => {

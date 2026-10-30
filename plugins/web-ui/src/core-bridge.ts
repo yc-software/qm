@@ -16,6 +16,7 @@ import { groupDmText } from "./group-dm-label.ts";
 import { base64ToBytes } from "./paste-text.ts";
 import { defaultEffortForModel, harnessSupportsEffort } from "./runtime-capabilities.ts";
 import { SIGNIN_REQUIRED_EVENT, signinRedirect } from "./signin-return.ts";
+import { UI_OUTDATED_EVENT, UI_RELEASE_META, UI_VERSION_HEADER, uiVersion } from "../../chassis/src/ui-release.ts";
 import { messageEntrySeqs } from "./message-link.ts";
 import type { GoalStripState } from "./goal-strip.ts";
 
@@ -791,19 +792,37 @@ function reportSigninRequired(detail: SigninRequired): void {
   onSigninRequired?.(detail);
 }
 
+const UI_VERSION = uiVersion(
+  typeof document === "undefined"
+    ? undefined
+    : document.querySelector<HTMLMetaElement>(`meta[name="${UI_RELEASE_META}"]`)?.content,
+);
+
 export async function webFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const startMs = Date.now();
   const request = input instanceof Request ? input : null;
   const url = request?.url ?? String(input);
   const method = init?.method ?? request?.method ?? "GET";
+  const headers = new Headers(init?.headers ?? request?.headers);
+  headers.set(UI_VERSION_HEADER, UI_VERSION);
   let response: Response;
   try {
-    response = await fetch(input, init);
+    response = await fetch(input, { ...init, headers });
   } catch (error) {
     reportRequestTiming(url, method, startMs, null);
     throw error;
   }
   reportRequestTiming(url, method, startMs, response.status);
+  if (
+    response.status === 409 &&
+    (
+      (await response
+        .clone()
+        .json()
+        .catch(() => null)) as { error?: unknown } | null
+    )?.error === "ui_outdated"
+  )
+    window.dispatchEvent(new Event(UI_OUTDATED_EVENT));
   if (response.status !== 401) return response;
   stopBrowserErrors();
   stopAnalytics();

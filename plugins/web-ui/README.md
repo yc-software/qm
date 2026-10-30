@@ -256,6 +256,25 @@ the CSS media queries, the composer, and the split canvas.
     shared, and archived views. Detail and restore routes expose authorized metadata and bring an
     archived version back online; running apps open through the surface's signed deployment proxy.
 
+## Releases from object storage
+
+`npm run build` writes `dist-web/release.json` (`{"id", "protocol"}`; the id hashes the built documents). `qm ui publish --bucket <bucket> [--distribution <id>] [--channel <name>]` uploads the build:
+
+| Object                                                    | Cache      | Written                       |
+| --------------------------------------------------------- | ---------- | ----------------------------- |
+| `assets/<hashed file>`                                    | immutable  | once; shared by every release |
+| `releases/<id>/index.html`, `shared.html`, `release.json` | immutable  | once per release              |
+| `channels/<name>.json`                                    | `no-cache` | last; this is the pointer     |
+
+Point a CDN at the bucket for `/assets/*`, `/releases/*` and `/channels/*`, send every other path to core's public port, and set `WEB_UI_RELEASES_URL` on core to the CDN's origin. Core then answers page loads with the document of the `live` channel's release (re-read every 10 seconds; the last good pointer is kept if the bucket is briefly unreachable). Without `WEB_UI_RELEASES_URL`, core serves the `dist-web/` baked into its image. Give the CDN `s3:ListBucket` as well as `s3:GetObject`, so a missing object is a 404 rather than a 403: only a 404 means "not published"; any other bucket error keeps serving the last pointer read and is logged.
+
+- **Rollback:** `qm ui publish --bucket <bucket> --release <older id>` repoints `live` without uploading.
+- **Previews:** publish with `--channel pr-<n>`, then open `/?ui=pr-<n>`. The browser stays on that channel until `/?ui=live`. A channel with no release shows an error page instead of falling back.
+
+### Protocol between the UI and core
+
+The UI can ship before core, so changes to `/api` and `/me` are add-only: a new UI must work against an older core (treat a missing route as a missing feature). Every request carries `x-qm-ui-version: <protocol>+<release id>`. Bump `UI_PROTOCOL` (`plugins/chassis/src/ui-release.ts`) only when a release stops working with a core that lacks something it needs, and raise `MIN_UI_PROTOCOL` (`server/ui-releases.ts`) in the core change that removes something older releases use. Core refuses requests from an older protocol with `409 ui_outdated`, and the page shows a Reload prompt (requests without the header, such as other apps calling the API, are not checked); it also refuses to serve a channel whose release is older than the minimum.
+
 ## Notes
 
 - **No browser-side model keys.** The real agent loop (model +

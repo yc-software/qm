@@ -2,6 +2,7 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import { signedHeaders } from "../../chassis/src/core-client.ts";
 import { withVary } from "../../chassis/src/http.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { UI_CHANNEL_COOKIE, UI_VERSION_HEADER } from "../../chassis/src/ui-release.ts";
 
 const IDENTITY_TTL_MS = 60_000;
 
@@ -12,6 +13,7 @@ const FORWARD_REQUEST_HEADERS = [
   "user-agent",
   "accept-encoding",
   "sec-fetch-dest",
+  UI_VERSION_HEADER,
 ];
 
 const DROP_RESPONSE_HEADERS = new Set([
@@ -108,6 +110,7 @@ export interface SurfaceTarget {
   impersonator?: string;
   identitySecret?: string;
   authenticatedPrincipal?: string;
+  uiChannel?: string;
   nowMs?: number;
 }
 
@@ -116,7 +119,8 @@ export function proxyToSurface(req: IncomingMessage, res: ServerResponse, t: Sur
   const cookie =
     `${t.cookieName}=${encodeURIComponent(t.principal)}` +
     (t.displayName ? `; ${t.cookieName}_name=${encodeURIComponent(t.displayName)}` : "") +
-    (t.impersonator ? `; webui_impersonator=${encodeURIComponent(t.impersonator)}` : "");
+    (t.impersonator ? `; webui_impersonator=${encodeURIComponent(t.impersonator)}` : "") +
+    (t.uiChannel ? `; ${UI_CHANNEL_COOKIE}=${t.uiChannel}` : "");
   const base: Record<string, string> = { host: upstream.host, cookie };
   if (t.identitySecret) {
     const now = t.nowMs ?? Date.now();

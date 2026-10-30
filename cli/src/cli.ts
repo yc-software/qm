@@ -28,6 +28,7 @@ import { cliVersion } from "./manifest.ts";
 import { gitTopLevel, promptHidden, writeEnvValue } from "./util.ts";
 import { scopeStorageKey } from "./scope-storage-key.ts";
 import { runAdminLogin } from "./commands/admin-login.ts";
+import { runUiPublish } from "./commands/ui.ts";
 import { syncDeploymentLayer } from "./deployment-layer.ts";
 
 interface Parsed {
@@ -174,6 +175,10 @@ ${bold("DEPLOY (operator)")} ${dim("— runs in the deployment directory")}
                                            or a release label from qm status, a commit, or a deploy ID)
   sandbox build [--from <img>] [--tag <t>] [--dry-run]
                                            build and validate the sandbox image locally
+  ui publish --bucket <name> [--channel <name>] [--release <id>] [--distribution <id>] [--dir <path>]
+                                           upload the built web UI to the bucket and point a channel
+                                           (default live; pr-<n> for previews) at it; --release
+                                           repoints the channel at an earlier release (rollback)
 
   ${dim("Options (apply to all deploy commands):")}
     --config <path>                        path to deploy config (default: qm.config.jsonc in deploy dir)
@@ -555,6 +560,27 @@ async function dispatch(argv: string[]): Promise<void> {
         ...(from ? { from } : {}),
         ...(tag ? { tag } : {}),
         dryRun: boolFlag(flags, "dry-run"),
+      });
+      return;
+    }
+
+    case "ui": {
+      if (positionals[0] !== "publish")
+        throw new CliError(
+          `usage: ${CLI_NAME} ui publish --bucket <name> [--channel <name>] [--release <id>] [--distribution <id>] [--dir <path>]`,
+        );
+      rejectExtraPositionals(positionals, 1);
+      rejectUnknownFlags(flags, ["bucket", "channel", "release", "distribution", "dir"]);
+      const bucket = strFlag(flags, "bucket");
+      if (!bucket) throw new CliError("--bucket is required", { clause: "cli.invocation" });
+      const release = strFlag(flags, "release");
+      const distribution = strFlag(flags, "distribution");
+      runUiPublish({
+        bucket,
+        channel: strFlag(flags, "channel") ?? "live",
+        dir: resolve(strFlag(flags, "dir") ?? "plugins/web-ui/dist-web"),
+        ...(release ? { release } : {}),
+        ...(distribution ? { distribution } : {}),
       });
       return;
     }

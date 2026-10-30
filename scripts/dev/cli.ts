@@ -86,7 +86,7 @@ const commandOptions: Record<string, readonly string[]> = {
   doctor: ["json", "fix", "no-slack"],
 };
 
-const devServiceNames = [...CHILD_ORDER, "web-ui"];
+const devServiceNames: string[] = [...CHILD_ORDER];
 
 const allowedOptions = commandOptions[command];
 if (allowedOptions) {
@@ -220,8 +220,6 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `worktree=${worktree}`,
       `branch=${branch}`,
       `port=${ports.core}`,
-      `web_port=${ports.web}`,
-      `admin_port=${ports.admin}`,
       `portal_port=${ports.portal}`,
       `slack=${withSlack ? "1" : "0"}`,
       `web=${withWeb ? "1" : "0"}`,
@@ -318,10 +316,7 @@ function printSuccess(result: BootResult, branch: string): void {
     `   core   : http://localhost:${ports.core}  (org=${orgId}, session_store=${meta.session_store}, run_store=${meta.run_store})`,
   );
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
-  if (result.webEnabled !== false)
-    out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
-  if (result.webEnabled !== false)
-    out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.web}/admin/)`);
+  if (result.webEnabled !== false) out(`   admin  : http://localhost:${ports.portal}/admin/`);
   out(`   logs   : ${lock}`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
@@ -568,7 +563,7 @@ async function cmdStatus(): Promise<number> {
       [
         String(r.slot).padEnd(7),
         state.padEnd(18),
-        (ports ? `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}` : "-").padEnd(21),
+        (ports ? `${ports.core}/${ports.portal}` : "-").padEnd(21),
         age.padEnd(8),
         (r.mine ? "this" : "").padEnd(5),
         String(r.branch ?? "-").padEnd(28),
@@ -596,12 +591,8 @@ async function withMySupervisor<T>(fn: (sock: string, lease: LeaseInfo) => Promi
   return await fn(sock, mine);
 }
 
-const supervisorChildNames = (names: string[]): string[] => [
-  ...new Set(names.map((name) => (name === "web-ui" ? "web" : name))),
-];
-
 async function cmdRestart(): Promise<number> {
-  const children = supervisorChildNames(positionals.slice(1));
+  const children = [...new Set(positionals.slice(1))];
   const res = await withMySupervisor((sock) =>
     supervisorRequest(sock, "POST", "/restart", { children: children.length ? children : undefined }, 180_000),
   );
@@ -632,7 +623,7 @@ async function cmdLogs(): Promise<number> {
     out("no dev instance for this worktree.");
     return EXIT.ok;
   }
-  const names = positionals.length > 1 ? supervisorChildNames(positionals.slice(1)) : [...CHILD_ORDER, "supervisor"];
+  const names = positionals.length > 1 ? [...new Set(positionals.slice(1))] : [...CHILD_ORDER, "supervisor"];
   const files = names.map((n) => join(mine.lockDir, `${n}.log`)).filter((f) => existsSync(f));
   if (opts.follow) {
     const child = spawn("tail", ["-f", ...files], { stdio: "inherit" });

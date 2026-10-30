@@ -116,6 +116,7 @@ import { applyTheme, renderSettings, loadOpenNewChat, watchSystemTheme } from ".
 import { contextsState, ensureContexts, renderContexts, resetContextsState, resolveProjectScope } from "./contexts";
 import { appState, can, canView, isView, type AuthMode, type Me, type View } from "./shell-state";
 import { trapDialogFocus } from "./dialog-focus";
+import { UI_OUTDATED_EVENT } from "../../chassis/src/ui-release.ts";
 import { activeSessionForDocumentTitle, updateDocumentTitle } from "./document-title";
 export { appState, can, type Me, type View } from "./shell-state";
 
@@ -153,6 +154,23 @@ setSigninRequiredHandler((detail) => {
 });
 
 onExitCanvas(() => exitSplitIfActive());
+
+window.addEventListener(UI_OUTDATED_EVENT, () => {
+  let host = document.getElementById("ui-outdated");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "ui-outdated";
+    document.body.append(host);
+  }
+  render(
+    html`<div class="top-banner" role="alert">
+      <span>This page is out of date. Reload to continue.</span>
+      <button class="top-banner-action" type="button" @click=${() => location.reload()}>Reload</button>
+    </div>`,
+    host,
+  );
+  document.querySelector(".layout")?.classList.add("bannered");
+});
 
 export const ADMIN_BASE = (() => {
   const base = ((import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/").replace(/\/$/, "");
