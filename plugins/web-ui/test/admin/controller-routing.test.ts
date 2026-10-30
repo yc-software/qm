@@ -30,6 +30,17 @@ test("session deep links stay on their path and load the session", async () => {
   assert.equal((await landing("/settings/history/s/sess-1?turn=4")).location, "/settings/history/s/sess-1?turn=4");
 });
 
+test("returning to a deep-linked session leaves the seeded history untouched", async () => {
+  const admin = await mountAdmin("/settings/history/s/sess-1?turn=4", routes);
+  await admin.settle();
+  const length = admin.window.history.length;
+  admin.controller.route();
+  await admin.settle();
+  assert.equal(admin.window.history.length, length);
+  assert.equal(admin.location(), "/settings/history/s/sess-1?turn=4");
+  admin.close();
+});
+
 test("legacy query-param session links canonicalize to the path form", async () => {
   const legacy = await landing(`/settings/history?scope=${SCOPE_ENC}&session=sess-1`);
   assert.equal(legacy.location, "/settings/history/s/sess-1");
@@ -90,7 +101,7 @@ test("a bare history URL is the org scope, while other views keep the last viewe
   await admin.settle();
   const visit = async (url: string) => {
     admin.window.history.pushState({}, "", url);
-    admin.window.dispatchEvent(new admin.window.PopStateEvent("popstate"));
+    admin.controller.route();
     await admin.settle();
   };
   await visit("/settings/skills");

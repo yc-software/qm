@@ -7,7 +7,7 @@ export const ADMIN_SECTIONS = [
   { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
 ];
 
-export const ADMIN_VIEWS = new Set([
+const ADMIN_VIEWS = new Set([
   ...ADMIN_SECTIONS.flatMap((section) => section.views),
   "onboarding",
   "user",
@@ -31,15 +31,36 @@ export const VIEW_TITLE: Record<string, string> = {
   history: "Sessions",
   files: "Files",
   memory: "Memory",
-  live: "Live",
   errors: "Errors",
   audit: "Audit",
   skills: "Skills",
   crons: "Crons",
   deployments: "Apps",
-  retention: "Retention",
   slack: "Slack messages",
   "slack-settings": "Slack",
   judgments: "Judgments",
   ackemoji: "Ack emoji",
 };
+
+const decode = (segment: string | undefined) => {
+  try {
+    return segment ? decodeURIComponent(segment) : null;
+  } catch {
+    return null;
+  }
+};
+
+export function settingsRoute(base: string) {
+  const params = new URLSearchParams(location.search);
+  const rel = location.pathname.startsWith(base) ? location.pathname.slice(base.length) : "";
+  const [first, kind, id] = rel.replace(/^\/+/, "").split("/");
+  const path = decode(first);
+  const history = path === "history";
+  const session = (history && kind === "s" ? decode(id) : null) || params.get("session") || null;
+  const slackStep = ["setup", "install", "connected"].includes(params.get("slack") ?? "");
+  const raw = params.get("setup") === "slack" || slackStep ? "slack-settings" : params.get("view") || path;
+  const named = raw === "skill-packs" ? "skills" : (raw ?? "");
+  const fallback = session || raw ? "history" : "general";
+  const view = ADMIN_VIEWS.has(named) ? named : fallback;
+  return { view, params, session, pathScope: history && kind === "scopes" ? decode(id) : null };
+}

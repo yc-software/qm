@@ -148,7 +148,7 @@ test("resetting the auto flagger restores the default and ignores a reply for a 
   admin.document.getElementById("auto-flagger-reset")!.click();
   await admin.settle();
   admin.window.history.pushState({}, "", "/settings/governance?scope=personal%3Aother");
-  admin.window.dispatchEvent(new admin.window.PopStateEvent("popstate"));
+  admin.controller.route();
   await admin.settle();
   const reads = admin.requests.filter((r) => r.path === "/scopes/org%3Aacme").length;
   release();

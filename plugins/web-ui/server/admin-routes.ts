@@ -29,53 +29,39 @@ interface AdminRouteDeps {
 
 const PREFIX = "/api/admin/";
 
-const WRITES = new Map<string, string[]>([
-  ["grants", ["POST", "DELETE"]],
-  ["principal-links", ["POST", "DELETE"]],
-  ["external-users", ["POST", "DELETE"]],
-  ["memory", ["POST", "PATCH", "DELETE"]],
-  ["crons", ["PUT"]],
-  ["skills", ["DELETE"]],
-  ["skill-packs", ["POST", "PATCH", "DELETE"]],
-  ["users", ["PUT", "POST"]],
-  ["slack-installation", ["POST", "PUT", "DELETE"]],
-  ["model-providers", ["PUT", "DELETE"]],
-  ["model-registry", ["POST", "PUT", "DELETE"]],
-  ["custom-providers", ["PUT", "DELETE"]],
-  ["mcp-servers", ["PUT", "DELETE"]],
-]);
-
-const READS = new Set([
-  "whoami",
-  "scopes",
-  "resources",
-  "spend",
-  "egress",
-  "errors",
-  "audit",
-  "crons",
-  "deployments",
-  "skills",
-  "skill-packs",
-  "sessions",
-  "runs",
-  "files",
-  "retention",
-  "users",
-  "directory",
-  "keychain",
-  "memory",
-  "slack-mirror",
-  "ambient-judgments",
-  "ack-emoji-picks",
-  "slack-installation",
-  "slack-emoji",
-  "model-providers",
-  "model-registry",
-  "custom-providers",
-  "mcp-servers",
-  "principal-links",
-]);
+const ALLOWED: Record<string, string> = {
+  whoami: "GET",
+  scopes: "GET",
+  resources: "GET",
+  spend: "GET",
+  egress: "GET",
+  errors: "GET",
+  audit: "GET",
+  deployments: "GET",
+  sessions: "GET",
+  runs: "GET",
+  files: "GET",
+  retention: "GET",
+  directory: "GET",
+  keychain: "GET",
+  "slack-mirror": "GET",
+  "ambient-judgments": "GET",
+  "ack-emoji-picks": "GET",
+  "slack-emoji": "GET",
+  grants: "POST DELETE",
+  "external-users": "POST DELETE",
+  "principal-links": "GET POST DELETE",
+  memory: "GET POST PATCH DELETE",
+  crons: "GET PUT",
+  skills: "GET DELETE",
+  "skill-packs": "GET POST PATCH DELETE",
+  users: "GET PUT POST",
+  "slack-installation": "GET POST PUT DELETE",
+  "model-providers": "GET PUT DELETE",
+  "model-registry": "GET POST PUT DELETE",
+  "custom-providers": "GET PUT DELETE",
+  "mcp-servers": "GET PUT DELETE",
+};
 
 export function adminRoutes(d: AdminRouteDeps) {
   const actorHeaders = (user: string) => ({ "x-admin-actor": `${user}@${d.org}`, ...d.portalHeaders() });
@@ -171,10 +157,10 @@ export function adminRoutes(d: AdminRouteDeps) {
         return c.res.end(saved.text);
       }
     }
-    if (WRITES.get(first)?.includes(method)) {
-      return relay(c, method as HttpMethod, corePath, method === "DELETE" ? "" : await d.readBody(c.req));
+    if (Object.hasOwn(ALLOWED, first) && ALLOWED[first]!.split(" ").includes(method)) {
+      const body = method === "GET" || method === "DELETE" ? "" : await d.readBody(c.req);
+      return relay(c, method as HttpMethod, corePath, body);
     }
-    if (method === "GET" && READS.has(first)) return relay(c, "GET", corePath);
     c.req.resume();
     return d.json(c.res, 404, { error: "not_found" });
   };

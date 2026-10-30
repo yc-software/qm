@@ -17,7 +17,7 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
-import { ADMIN_SECTIONS, ADMIN_VIEWS, VIEW_TITLE } from "./admin/sections";
+import { ADMIN_SECTIONS, VIEW_TITLE, settingsRoute } from "./admin/sections";
 import type { AdminController } from "./admin/controller.js";
 import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
@@ -547,56 +547,28 @@ function accountRow(): TemplateResult {
 
 const SETTINGS_BASE = `${UI_BASE}/settings`;
 
-let section = "general";
 let adminHost: HTMLElement | null = null;
 let admin: AdminController | null = null;
-let adminLoad: Promise<AdminController> | null = null;
+let adminLoad: Promise<void> | null = null;
 
-function sectionFromUrl(): string {
-  const rel = location.pathname.startsWith(SETTINGS_BASE) ? location.pathname.slice(SETTINGS_BASE.length) : "";
-  const params = new URLSearchParams(location.search);
-  const slackStep = ["setup", "install", "connected"].includes(params.get("slack") ?? "");
-  if (params.get("setup") === "slack" || slackStep) return "slack-settings";
-  const first = decodeURIComponent(rel.replace(/^\/+/, "").split("/")[0] ?? "");
-  const view = first === "skill-packs" ? "skills" : first;
-  return ADMIN_VIEWS.has(view) ? view : "general";
-}
+const settingsSection = () => (can("admin") ? settingsRoute(SETTINGS_BASE).view : "general");
 
-function loadAdmin(): Promise<AdminController> {
+function loadAdmin(): void {
   adminLoad ??= import("./admin/entry").then(({ startAdmin }) => {
-    const host = document.createElement("div");
-    host.id = "app-view";
-    host.className = "admin-app";
-    adminHost = host;
+    adminHost = Object.assign(document.createElement("div"), { id: "app-view", className: "admin-app" });
     drawSettings();
-    admin = startAdmin(host, {
+    admin = startAdmin(adminHost, {
       org: appState.me?.org ?? "",
       productName: brandName(),
       apiBase: withBase("/api/admin"),
       pageBase: SETTINGS_BASE,
-      onView: (view) => {
-        section = view;
-        drawSettings();
-      },
+      onView: drawSettings,
     });
-    return admin;
   });
-  return adminLoad;
 }
 
-function showSection(view: string): void {
-  if (admin) return admin.show(view);
-  if (view !== "general" && can("admin")) {
-    history.pushState(null, "", `${SETTINGS_BASE}/${encodeURIComponent(view)}`);
-    void loadAdmin();
-    return;
-  }
-  section = "general";
-  history.pushState(null, "", SETTINGS_BASE);
-  drawSettings();
-}
-
-function navItem(view: string): TemplateResult {
+function navItem(view: string, section: string): TemplateResult {
+  const href = view === "general" ? SETTINGS_BASE : `${SETTINGS_BASE}/${encodeURIComponent(view)}`;
   const active =
     view === section ||
     (view === "judgments" && section === "ackemoji") ||
@@ -604,26 +576,28 @@ function navItem(view: string): TemplateResult {
   return html`
     <a
       class="settings-nav-item ${active ? "active" : ""}"
-      href=${view === "general" ? SETTINGS_BASE : `${SETTINGS_BASE}/${encodeURIComponent(view)}`}
+      href=${href}
       aria-current=${active ? "page" : nothing}
       @click=${(e: MouseEvent) => {
         if (!isPlainLeftClick(e)) return;
         e.preventDefault();
-        showSection(view);
+        if (admin) return admin.show(view);
+        history.pushState(null, "", href);
+        renderSettings();
       }}
       >${VIEW_TITLE[view] ?? view}</a
     >
   `;
 }
 
-function settingsNav(): TemplateResult {
+function settingsNav(section: string): TemplateResult {
   return html`
     <nav class="settings-nav" aria-label="Settings sections">
-      ${navItem("general")}
+      ${navItem("general", section)}
       ${ADMIN_SECTIONS.map(
         (group) => html`
           <div class="settings-nav-label">${group.label}</div>
-          ${group.views.map(navItem)}
+          ${group.views.map((view) => navItem(view, section))}
         `,
       )}
     </nav>
@@ -652,6 +626,7 @@ function generalPane(): TemplateResult {
 }
 
 function settingsPane(): TemplateResult {
+  const section = settingsSection();
   const general = section === "general";
   if (adminHost) adminHost.hidden = general;
   return html`
@@ -665,7 +640,7 @@ function settingsPane(): TemplateResult {
         : nothing
     }
     <div class="settings-layout ${can("admin") ? "with-nav" : ""}">
-      ${can("admin") ? settingsNav() : nothing}
+      ${can("admin") ? settingsNav(section) : nothing}
       <div class="settings-content">${general || !adminHost ? generalPane() : nothing} ${adminHost ?? nothing}</div>
     </div>
   `;
@@ -682,11 +657,9 @@ function drawSettings(): void {
 }
 
 export function renderSettings(): void {
-  const wanted = sectionFromUrl();
-  if (wanted !== "general" && !can("admin")) history.replaceState(null, "", SETTINGS_BASE);
-  section = can("admin") ? wanted : "general";
+  admin?.route();
+  if (!can("admin") && settingsRoute(SETTINGS_BASE).view !== "general") history.replaceState(null, "", SETTINGS_BASE);
   drawSettings();
-  if (admin) admin.route();
-  else if (section !== "general") void loadAdmin();
+  if (settingsSection() !== "general") loadAdmin();
   void loadAiStatus();
 }

@@ -1,5 +1,5 @@
 import * as governanceUI from "./admin.ts";
-import { ADMIN_VIEWS, VIEW_TITLE } from "./sections.ts";
+import { VIEW_TITLE, settingsRoute } from "./sections.ts";
 import { ADMIN_MARKUP } from "./markup.ts";
 
 function backArrow() {
@@ -28,7 +28,6 @@ export function startAdmin(host, env) {
   const $ = (id) => document.getElementById(id);
   const root = $("app-view");
   const EFFECT_LABELS = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
-  const VIEWS = [...ADMIN_VIEWS];
   function prepareParityCards() {
     const content = document.querySelector("#view-governance .governance-content");
     const anchor = $("governance-credentials");
@@ -151,27 +150,13 @@ export function startAdmin(host, env) {
     "history",
     "files",
     "memory",
-    "live",
     "audit",
     "errors",
     "skills",
     "crons",
     "deployments",
   ]);
-  const ORG_WIDE = new Set([
-    "retention",
-    "users",
-    "spend",
-    "keychain",
-    "connectors",
-    "judgments",
-    "ackemoji",
-    "models",
-    "credentials",
-    "customize",
-    "slack-settings",
-  ]);
-  const ENDPOINT = { history: "sessions", files: "files", live: "runs" };
+  const ORG_WIDE = new Set(["users", "spend", "keychain"]);
   const HISTORY_PAGE_SIZE = 50;
   const ERRORS_PAGE_SIZE = 50;
 
@@ -521,40 +506,11 @@ export function startAdmin(host, env) {
     const path = st.view === "general" ? PAGE_BASE : PAGE_BASE + "/" + encodeURIComponent(st.view || DEFAULT_VIEW);
     return q ? path + "?" + q : path;
   }
-  function decodePathSegment(seg) {
-    if (!seg) return null;
-    try {
-      return decodeURIComponent(seg);
-    } catch {
-      return null;
-    }
-  }
   function urlToState() {
-    const p = new URLSearchParams(location.search);
-
-    const rel = location.pathname.startsWith(PAGE_BASE) ? location.pathname.slice(PAGE_BASE.length) : location.pathname;
-    const segs = rel.replace(/^\/+/, "").split("/");
-    const fromPath = decodePathSegment(segs[0] ?? "");
-    let pathSession = null;
-    let pathScope = null;
-    if (fromPath === "history") {
-      if (segs[1] === "s") pathSession = decodePathSegment(segs[2] ?? "");
-      else if (segs[1] === "scopes") pathScope = decodePathSegment(segs[2] ?? "");
-    }
-    const slackStep = ["setup", "install", "connected"].includes(p.get("slack"));
-    const raw = p.get("setup") === "slack" || slackStep ? "slack-settings" : p.get("view") || fromPath;
-
-    const v = raw === "skill-packs" ? "skills" : raw;
-    const session = pathSession || p.get("session") || null;
-    const kindRaw = p.get("kind");
-    const normalizedHistoryKind = ["conversation", "cron", "background"].includes(kindRaw) ? kindRaw : "conversation";
-
-    const turnRaw = p.get("turn");
-    let resolvedView = DEFAULT_VIEW;
-    if (VIEWS.includes(v)) resolvedView = v;
-    else if (session) resolvedView = "history";
-    else if (!raw) resolvedView = "general";
+    const { view: resolvedView, params: p, session, pathScope } = settingsRoute(PAGE_BASE);
+    const optional = "turn principal cron own mem range from to cursor container ts decision jid".split(" ");
     return {
+      ...Object.fromEntries(optional.map((key) => [key, p.get(key) || null])),
       view: resolvedView,
       setup: p.get("setup"),
       slack: p.get("slack"),
@@ -563,21 +519,8 @@ export function startAdmin(host, env) {
         p.get("scope") ||
         (resolvedView === "history" || resolvedView === "errors" ? "org:" + orgId : scope),
       session,
-      turn: turnRaw == null || turnRaw === "" ? null : turnRaw,
-      principal: p.get("principal") || null,
-      cron: p.get("cron") || null,
-      own: p.get("own") || null,
-      mem: p.get("mem") || null,
-      range: p.get("range") || null,
-      from: p.get("from") || null,
-      to: p.get("to") || null,
-      historyKind: normalizedHistoryKind,
+      historyKind: ["cron", "background"].includes(p.get("kind")) ? p.get("kind") : "conversation",
       page: Math.max(1, parseInt(p.get("page"), 10) || 1),
-      cursor: p.get("cursor") || null,
-      container: p.get("container") || null,
-      ts: p.get("ts") || null,
-      decision: p.get("decision") || null,
-      jid: p.get("jid") || null,
     };
   }
 
@@ -673,37 +616,35 @@ export function startAdmin(host, env) {
     history.pushState(st, "", stateToUrl(st));
     render(st);
   }
-  function go(st) {
-    const leavingDraft = hasGovernanceDraft() && (st.view !== view || st.scope !== scope);
-    if (!leavingDraft) return commitGo(st);
-    if (governanceSaveInFlight()) {
-      void reviewGovernanceChange({
-        title: "Governance save in progress",
-        subtitle: "Wait for the current save to finish before leaving.",
-        facts: [
-          ["Current scope", governanceScopeName()],
-          ["Destination", VIEW_TITLE[st.view] || titleCase(st.view)],
-        ],
-        warning: "The change may already be committing and cannot be safely discarded.",
-        confirmLabel: null,
+  async function confirmLeave(next) {
+    const facts = [
+      ["Current scope", governanceScopeName()],
+      ["Destination", VIEW_TITLE[next.view] || titleCase(next.view)],
+    ];
+    if (!governanceSaveInFlight())
+      return reviewGovernanceChange({
+        title: "Discard unsaved governance changes?",
+        subtitle: "This page has a draft that has not been applied.",
+        facts,
+        warning: "Leaving now discards every unsaved setting on this Governance page.",
+        confirmLabel: "Discard and leave",
+        danger: true,
       });
-      return;
-    }
-    void reviewGovernanceChange({
-      title: "Discard unsaved governance changes?",
-      subtitle: "This page has a draft that has not been applied.",
-      facts: [
-        ["Current scope", governanceScopeName()],
-        ["Destination", VIEW_TITLE[st.view] || titleCase(st.view)],
-      ],
-      warning: "Leaving now discards every unsaved setting on this Governance page.",
-      confirmLabel: "Discard and leave",
-      danger: true,
-    }).then((confirmed) => {
-      if (confirmed) {
-        if (view === "governance") governanceReadyScope = null;
-        commitGo(st);
-      }
+    await reviewGovernanceChange({
+      title: "Governance save in progress",
+      subtitle: "Wait for the current save to finish before leaving.",
+      facts,
+      warning: "The change may already be committing and cannot be safely discarded.",
+      confirmLabel: null,
+    });
+    return false;
+  }
+  function go(st) {
+    if (!hasGovernanceDraft() || (st.view === view && st.scope === scope)) return commitGo(st);
+    void confirmLeave(st).then((confirmed) => {
+      if (!confirmed) return;
+      if (view === "governance") governanceReadyScope = null;
+      commitGo(st);
     });
   }
   function setView(v) {
@@ -719,65 +660,22 @@ export function startAdmin(host, env) {
   });
   $("add-custom-provider").onclick = () => openCustomProviderEditor();
   $("onboarding-add-custom-provider").onclick = () => openCustomProviderEditor();
-  function route() {
-    const st = urlToState();
-    if (st.view === "history" && st.session) {
-      const list = { ...st, session: null, turn: null };
-      history.replaceState(list, "", stateToUrl(list));
-
-      if (st.turn != null)
-        history.pushState({ ...st, turn: null, deepLink: true }, "", stateToUrl({ ...st, turn: null }));
-      history.pushState({ ...st, deepLink: true }, "", stateToUrl(st));
-    } else if (st.view === "user" && st.principal) {
-      const list = { ...st, view: "users", principal: null };
-      history.replaceState(list, "", stateToUrl(list));
-      history.pushState(st, "", stateToUrl(st));
-    } else {
-      history.replaceState(st, "", stateToUrl(st));
-    }
-    render(st);
-  }
   let allowGovernancePop = false;
-  window.addEventListener("popstate", () => {
-    if (!root.isConnected) return;
-    if (allowGovernancePop) {
-      allowGovernancePop = false;
-      return render(urlToState());
-    }
+  function route() {
     const next = urlToState();
-    if (!hasGovernanceDraft()) return render(next);
+    if (allowGovernancePop || !hasGovernanceDraft()) {
+      allowGovernancePop = false;
+      return render(next);
+    }
     if (next.view === view && next.scope === scope) return;
     const current = { view, scope, session: null, page };
     history.pushState(current, "", stateToUrl(current));
-    if (governanceSaveInFlight()) {
-      void reviewGovernanceChange({
-        title: "Governance save in progress",
-        subtitle: "Wait for the current save to finish before leaving.",
-        facts: [
-          ["Current scope", governanceScopeName()],
-          ["Destination", VIEW_TITLE[next.view] || titleCase(next.view)],
-        ],
-        warning: "The change may already be committing and cannot be safely discarded.",
-        confirmLabel: null,
-      });
-      return;
-    }
-    void reviewGovernanceChange({
-      title: "Discard unsaved governance changes?",
-      subtitle: "This page has a draft that has not been applied.",
-      facts: [
-        ["Current scope", governanceScopeName()],
-        ["Destination", VIEW_TITLE[next.view] || titleCase(next.view)],
-      ],
-      warning: "Leaving now discards every unsaved setting on this Governance page.",
-      confirmLabel: "Discard and leave",
-      danger: true,
-    }).then((confirmed) => {
+    void confirmLeave(next).then((confirmed) => {
       if (!confirmed) return;
       allowGovernancePop = true;
       history.back();
     });
-  });
+  }
   window.addEventListener("beforeunload", (event) => {
     if (!hasGovernanceDraft()) return;
     event.preventDefault();
@@ -2270,13 +2168,11 @@ export function startAdmin(host, env) {
       history: renderHistory,
       files: renderFiles,
       memory: renderMemory,
-      live: renderLive,
       errors: renderErrors,
       audit: renderAudit,
       skills: renderSkills,
       crons: renderCrons,
       deployments: renderDeployments,
-      retention: renderRetention,
       users: renderUsers,
       keychain: renderKeychain,
     })[view](root, data);
@@ -2286,7 +2182,7 @@ export function startAdmin(host, env) {
     const reqId = ++dataReq;
     const reqView = view;
     const q = "scope=" + encodeURIComponent(scope);
-    const ep = ENDPOINT[view] || view;
+    const ep = view === "history" ? "sessions" : view;
     let path = ORG_WIDE.has(view) ? `/api/${ep}` : `/api/${ep}?${q}`;
 
     if (view === "memory" && orgWideView() && urlToState().mem !== "edit") path = "/api/memory/scopes";
@@ -2900,9 +2796,6 @@ export function startAdmin(host, env) {
   }
   function renderMemory(root, d) {
     governanceUI.artifacts.memory(root, d, artifactContext());
-  }
-  function renderRetention(root, d) {
-    governanceUI.artifacts.retention(root, d);
   }
   function renderKeychain(root, d) {
     governanceUI.keychain.keychain(root, d, {
@@ -3936,13 +3829,14 @@ export function startAdmin(host, env) {
     a.remove();
   }
 
-  function renderLive(root, d) {
-    governanceUI.artifacts.live(root, d, artifactContext());
-  }
-
-  route();
-  return {
-    route,
-    show: (v) => (v === "general" ? go({ view: "general", scope, session: null }) : setView(v)),
-  };
+  const landing = urlToState();
+  const below =
+    (landing.view === "history" && landing.session && { ...landing, session: null, turn: null }) ||
+    (landing.view === "user" && landing.principal && { ...landing, view: "users", principal: null });
+  history.replaceState(below || landing, "", stateToUrl(below || landing));
+  if (below && landing.turn != null)
+    history.pushState({ ...landing, turn: null, deepLink: true }, "", stateToUrl({ ...landing, turn: null }));
+  if (below) history.pushState({ ...landing, deepLink: true }, "", stateToUrl(landing));
+  render(landing);
+  return { route, show: setView };
 }
