@@ -2,12 +2,13 @@ const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
   turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
+  turn_end: { actions: ["keep", "retry"], decide: "most_confident" },
   goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
 } as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
 export type DecisionHook = keyof typeof DECISION_HOOK_POINTS;
 type DecisionAction<H extends DecisionHook = DecisionHook> = (typeof DECISION_HOOK_POINTS)[H]["actions"][number];
 const DECISION_HOOKS = Object.keys(DECISION_HOOK_POINTS) as DecisionHook[];
-const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start"];
+const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start", "turn_end"];
 const rank = (hook: DecisionHook, action: string) =>
   (DECISION_HOOK_POINTS[hook].actions as readonly string[]).indexOf(action);
 
@@ -141,6 +142,8 @@ export function parseDecisionRule(
     const rt = o.runtime as Record<string, unknown> | undefined;
     if ((o.action === "use_runtime") !== (rt !== undefined))
       return { error: `${r.id}.${key}: runtime is required with use_runtime and only allowed there` };
+    if (o.action === "retry" && !(typeof o.message === "string" && o.message.trim()))
+      return { error: `${r.id}.${key}: retry needs a message telling the agent what to change` };
     if (
       rt !== undefined &&
       (typeof rt !== "object" ||
@@ -172,6 +175,8 @@ export function parseDecisionRule(
   if (count < 2 || count > MAX_OPTIONS) return { error: `${r.id}: needs 2 to ${MAX_OPTIONS} options` };
   if (typeof r.onError !== "string" || !Object.hasOwn(options, r.onError))
     return { error: `${r.id}: onError must name one of its options` };
+  if (options[r.onError]!.action === "retry")
+    return { error: `${r.id}: onError must name a keep option; a classifier failure must not rewrite the reply` };
   const m = (r.model ?? {}) as Record<string, unknown>;
   if (typeof m.provider !== "string" || !providers.some((p) => p.id === m.provider))
     return { error: `${r.id}: model.provider must name a configured decision provider` };

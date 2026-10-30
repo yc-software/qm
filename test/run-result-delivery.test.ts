@@ -497,3 +497,11 @@ for (const surface of ["slack", "web"] as const) {
     });
   }
 }
+
+test("runResultDelivery notes a reply the reply check retracted and rewrote", () => {
+  const d = runResultDelivery(
+    run({ result: { status: "ok", reply: "the reply", retracted: ["em dash", "too long", "em dash"] } }),
+  );
+  assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
+  assert.equal(runResultDelivery(run({}))?.destination.editNote, undefined);
+});

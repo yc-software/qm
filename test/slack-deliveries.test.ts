@@ -405,3 +405,19 @@ for (const type of ["slack", "group", "principal"]) {
     assert.deepEqual(recovered.acknowledgements, ["D1"]);
   });
 }
+
+for (const type of ["slack", "group", "principal"]) {
+  test(`${type} replies revised by the reply check carry a plain-text edit note footer`, async () => {
+    const { posts } = await deliver(
+      { type, editNote: "Edited after a reply check: em dash" },
+      undefined,
+      undefined,
+      "Clean reply",
+    );
+    const blocks = posts.at(-1)!.blocks as Array<{ type: string; elements?: unknown[] }>;
+    assert.deepEqual(blocks.at(-1), {
+      type: "context",
+      elements: [{ type: "plain_text", text: "Edited after a reply check: em dash", emoji: false }],
+    });
+  });
+}

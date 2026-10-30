@@ -489,3 +489,110 @@ test("a turn_start rule only counts as routing the turn when it changes the runt
     { choice: haiku },
   );
 });
+
+const guidanceCheck = (): DecisionRule =>
+  injection({
+    id: "house-style",
+    hook: "turn_end",
+    onError: "ok",
+    options: {
+      ok: { description: "The reply follows the guidance", action: "keep" },
+      table: {
+        description: "The reply has a table the user did not ask for",
+        action: "retry",
+        message: "Drop the table and write it as prose.",
+      },
+    },
+  });
+
+test("turn_end rules accept keep and retry, and a retry option needs a message", () => {
+  assert.ok("rule" in parse(guidanceCheck()));
+  assert.match(
+    err(
+      parse({
+        ...guidanceCheck(),
+        options: { ...guidanceCheck().options, table: { description: "t", action: "retry" } },
+      }),
+    ),
+    /retry needs a message/,
+  );
+  assert.match(
+    err(
+      parse({
+        ...guidanceCheck(),
+        options: { ok: { description: "a", action: "keep" }, no: { description: "b", action: "block" } },
+      }),
+    ),
+    /turn_end must be one of keep, retry/,
+  );
+});
+
+test("turn_end state carries the guidance, the user's message, measured facts and the draft", async () => {
+  const { turnEndState, replyFacts } = await import("../src/decisions/hooks.ts");
+  const reply =
+    "Here you go \u2014 two of them.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```\nx \u2014 y\n|---|---|\n```\n\nDone.";
+  assert.deepEqual(replyFacts(reply), [
+    "- paragraphs: 3",
+    "- markdown tables: 1",
+    "- em dashes: 2",
+    `- characters: ${reply.length}`,
+  ]);
+  const state = turnEndState({ guidance: "No tables unless asked.", input: "status?", reply });
+  assert.match(state, /Guidance for this conversation:\nNo tables unless asked\./);
+  assert.match(state, /Latest message from the user:\nstatus\?/);
+  assert.match(state, /- markdown tables: 1/);
+  assert.ok(state.endsWith(`Draft reply:\n${reply}`));
+  assert.match(turnEndState({ input: "hi", reply: "hello" }), /Guidance for this conversation:\n\(none\)/);
+  const long = turnEndState({ guidance: "g", input: "i", reply: "x".repeat(10_000) });
+  assert.match(long, /\[truncated 7000 characters\]$/);
+});
+
+test("turn_end onError must name a keep option", () => {
+  assert.match(err(parse({ ...guidanceCheck(), onError: "table" })), /onError must name a keep option/);
+});
+
+test("the reply check is armed only when a turn_end rule is active, enforces only with an enforcing rule, and returns the retraction reason and message", async () => {
+  const { createDecisionHooks, createReplyCheck } = await import("../src/decisions/hooks.ts");
+  const audit = { record: () => {} } as never;
+  const states: string[] = [];
+  const backend = (p: Record<string, number>): DecisionBackend => ({
+    async choose({ questions, state }) {
+      states.push(state);
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, p]));
+    },
+  });
+  const turn = { scopeLabel: "personal:a", sessionId: "s1" };
+  const factory = (rules: DecisionRule[], p: Record<string, number>) =>
+    createReplyCheck(
+      { rules: async () => rules },
+      createDecisionHooks({ rules: async () => rules } as never, backend(p), audit),
+    );
+  let guidanceReads = 0;
+  const context = (guidance = "") => ({
+    surfaceName: "web",
+    runtimePurpose: "interactive",
+    guidance: async () => (guidanceReads++, guidance),
+    input: "status?",
+    turn,
+  });
+  const armed = await factory([guidanceCheck()], { ok: 0.1, table: 0.9 })(context("No tables."));
+  assert.ok(armed?.enforce);
+  assert.deepEqual(await armed.check("| a |\n|---|"), {
+    reason: "table",
+    message: "Drop the table and write it as prose.",
+  });
+  assert.match(states[0]!, /- surface: web\n- purpose: interactive/);
+  assert.match(states[0]!, /No tables\./);
+  const passing = await factory([guidanceCheck()], { ok: 0.9, table: 0.1 })(context());
+  assert.equal(await passing!.check("fine"), undefined);
+  const observed = await factory([{ ...guidanceCheck(), mode: "observe" }], { ok: 0.1, table: 0.9 })(context());
+  assert.equal(observed?.enforce, false);
+  assert.equal(await observed!.check("| a |"), undefined);
+  assert.equal(guidanceReads, 3);
+  assert.equal(await factory([], {})(context()), undefined);
+  assert.equal(
+    await createReplyCheck(undefined, createDecisionHooks(undefined, backend({}), audit))(context()),
+    undefined,
+  );
+  assert.equal(guidanceReads, 3, "guidance is not read when no rule is active");
+});

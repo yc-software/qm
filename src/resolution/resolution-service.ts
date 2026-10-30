@@ -99,6 +99,7 @@ export function createResolutionService(
         approvalGrantModes,
         orgScopeId: orgScope,
         grantedHandles,
+        ...(scopeSoul?.trim() ? { guidance: scopeSoul } : {}),
       };
     },
   };

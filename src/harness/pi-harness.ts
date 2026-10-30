@@ -94,6 +94,8 @@ import {
 import {
   defineHarness,
   promptEnvelopeWithoutHistory,
+  REPLY_CHECK_RETRIES,
+  replyCheckPrompt,
   type Harness,
   type HarnessCompactInput,
   type HarnessDetectInput,
@@ -1770,6 +1772,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           let triggerSeen = continueTurn;
           const toolAbort = new AbortController();
           const pendingSteers: Array<SteerIntake & { prompt: string }> = [];
+          const unrecordedPrompts = new Set<string>();
+          const retracted: string[] = [];
           let persistError: Error | undefined;
           const persist = (write: () => Promise<unknown>): void => {
             thinkTail = thinkTail.then(async () => {
@@ -1794,6 +1798,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             else if (role === "user") {
               steps.flush();
               const text = textFromContent((message as { content?: unknown }).content);
+              if (unrecordedPrompts.delete(text)) return;
               const steerAt = pendingSteers.findIndex((steer) => steer.prompt === text);
               const steer = steerAt >= 0 ? pendingSteers.splice(steerAt, 1)[0]! : undefined;
               persist(() =>
@@ -2153,6 +2158,39 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 }
               }
             }
+            const checkable = () =>
+              wallClock === "ok" &&
+              !userAborted &&
+              !turn.cancel?.aborted &&
+              !recoveryDead &&
+              !entry.ref.silentRequested &&
+              !entry.ref.runtimeHandoff &&
+              !entry.ref.pausedOnApproval &&
+              !entry.ref.pendingApprovals?.length &&
+              !endedOnPurpose(entry.ref) &&
+              (turnWallClockMs <= 0 || rawRemainingCapMs() >= EMPTY_ENDING_MIN_BUDGET_MS);
+            while (turn.checkReply && retracted.length < REPLY_CHECK_RETRIES && checkable()) {
+              const draft = (entry.agentSession.getLastAssistantText() ?? "").trim();
+              if (!draft) break;
+              const verdict = await turn.checkReply(draft).catch(swallowAs("pi: reply check", undefined));
+              if (!verdict || !checkable()) break;
+              console.error(
+                `[pi] reply check retracted the reply session=${turn.session.id} reason=${verdict.reason} round=${retracted.length + 1}`,
+              );
+              retracted.push(verdict.reason);
+              steps.retract(verdict.reason);
+              await thinkTail;
+              if (persistError) throw persistError;
+              await turn.onTextBlockStart?.();
+              const prompt = replyCheckPrompt(verdict.message);
+              unrecordedPrompts.add(prompt);
+              wallClock = await raceTurnWallClock(entry.agentSession.prompt(prompt), {
+                capMs: raceCapMs(),
+                extendMs: extendCapMs,
+                abort: () => entry.agentSession.abort(),
+              });
+              if (wallClock === "ok") await recoverFailedRound();
+            }
           } catch (err) {
             if (persistError) throw persistError;
             const cancelAbortRejection =
@@ -2286,7 +2324,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 ...silent,
               }
             : { reply, modelCalls, ...silent };
-          return cacheUsage ? { ...base, cacheUsage } : base;
+          const withRetractions = retracted.length ? { ...base, retracted } : base;
+          return cacheUsage ? { ...withRetractions, cacheUsage } : withRetractions;
         } finally {
           removeIsolatedDirs(entry);
         }

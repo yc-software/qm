@@ -2149,7 +2149,7 @@ function deliveredSilence(a: ToolActivity): boolean {
 }
 
 function isFinishedReplyEntry(entry: SessionEntry): boolean {
-  if (entry.type !== "text") return false;
+  if (entry.type !== "text" || (entry.payload as { retracted?: unknown } | null)?.retracted) return false;
   const step = (entry.payload as { step?: { stopReason?: unknown } } | null)?.step;
   if (step?.stopReason !== "stop") return false;
   return Boolean((entry.payload as { text?: string } | null)?.text?.trim());

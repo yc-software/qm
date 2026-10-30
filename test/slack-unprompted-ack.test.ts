@@ -187,3 +187,16 @@ test("the bot's own mention reaches the agent instead of being stripped", async 
   await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT> check &amp; report" }, h.client);
   assert.equal(h.turns[0].text, "@qm check & report");
 });
+
+test("a reply the reply check rewrote is posted with an edit-note footer", async () => {
+  const h = harness(async () => ({ status: "ok", reply: "Clean reply.", retracted: ["em dash"] }));
+  await h.handler.handleIncoming({ ...h.followup, unprompted: false, rawText: "<@UBOT> compare them" }, h.client);
+  assert.deepEqual(h.posts, ["Clean reply."]);
+  assert.deepEqual((h.postArgs[0]!.blocks as unknown[]).at(-1), {
+    type: "context",
+    elements: [{ type: "plain_text", text: "Edited after a reply check: em dash", emoji: false }],
+  });
+  const plain = harness(async () => ({ status: "ok", reply: "Clean reply." }));
+  await plain.handler.handleIncoming({ ...plain.followup, unprompted: false, rawText: "<@UBOT> hi" }, plain.client);
+  assert.equal(plain.postArgs[0]!.blocks, undefined);
+});

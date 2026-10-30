@@ -79,10 +79,14 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
   let last: ReplayStep | undefined;
   let streamingStep: string | undefined;
   const write = (entry: RecordedEntry) => persist(() => turn.emit(entry as TurnEntry));
-  const flush = (): void => {
+  const flush = (retracted?: string): void => {
     if (!pending) return;
     for (const { index, block } of pending.parts)
-      write({ type: "text", payload: { ...block, step: { ...pending.step, index } }, scopeLabel: turn.scopeLabel });
+      write({
+        type: "text",
+        payload: { ...block, step: { ...pending.step, index }, ...(retracted ? { retracted } : {}) },
+        scopeLabel: turn.scopeLabel,
+      });
     pending = null;
   };
   const recordResult = (callId: string, content: ToolResultMessage["content"], isError: boolean): void => {
@@ -158,7 +162,8 @@ export function createStepRecorder(turn: Pick<HarnessTurnInput, "emit" | "scopeL
     toolResult(message: ToolResultMessage): void {
       recordResult(message.toolCallId, message.content, message.isError);
     },
-    flush,
+    flush: () => flush(),
+    retract: (reason: string) => flush(reason),
     settleResults(): void {
       for (const entry of executing.values()) write(entry);
       executing.clear();

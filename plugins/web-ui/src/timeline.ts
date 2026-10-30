@@ -369,8 +369,24 @@ export function streamingTextTail(text: string, activity: ToolActivity[]): strin
   return tail;
 }
 
+export function retractedReason(activity: ToolActivity): string | null {
+  if (activity.type !== "text") return null;
+  const reason = (activity.payload as { retracted?: unknown } | null)?.retracted;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+}
+
+export function retractedReplies(work: WorkBlock): Array<{ activity: ToolActivity; reason: string; text: string }> {
+  return work.activity.flatMap((activity) => {
+    const reason = retractedReason(activity);
+    const text = (activity.payload as { text?: string } | null)?.text ?? "";
+    return reason && text.trim() ? [{ activity, reason, text }] : [];
+  });
+}
+
 export function messageWorkTimeline(work: WorkBlock, finalText: string): TimelineItem[] {
-  const timeline = buildTimeline(work);
+  const timeline = buildTimeline(work).filter(
+    (item) => !(finalText.trim() && item.kind === "text" && retractedReason(item.activity)),
+  );
   const lastText = finalText.trim() ? timeline.findLastIndex((item) => item.kind === "text") : -1;
   return timeline.filter((item, index) => {
     if (item.kind === "thinking") {

@@ -162,7 +162,10 @@ export function createDeliveryPoller(deps: {
     const base = deps.webUiPublicUrl?.trim().replace(/\/+$/, "");
     const id = d.provenance?.trigger === "cron" ? cronIdOf(d.provenance.sourceThreadRef) : null;
     const sender = d.destination.relaySender?.trim().replace(/^@+/, "");
-    const attribution = sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : [];
+    const attribution = [
+      ...(sender ? [{ type: "plain_text", text: `Sent for @${sender}`, emoji: false }] : []),
+      ...(d.destination.editNote ? [{ type: "plain_text", text: d.destination.editNote, emoji: false }] : []),
+    ];
     if (!base || !id) return attribution;
     const title = escapeSlackText(d.provenance?.sourceTitle?.trim() || "Cron");
     return [

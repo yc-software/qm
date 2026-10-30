@@ -4,9 +4,9 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { activityDescription, activityLabel, sessionPresentation, thinkingPresentation } from "./activity-presentation";
 import type { WorkBlock } from "./core-bridge";
-import { BookOpen, Bot, Brain, ChevronRight, MessageSquare, Search, type IconNode } from "lucide";
+import { BookOpen, Bot, Brain, ChevronRight, MessageSquare, RotateCcw, Search, type IconNode } from "lucide";
 import { icon } from "./icons";
-import { messageWorkTimeline, postSpeechText, type TimelineItem, type ToolPayload } from "./timeline";
+import { messageWorkTimeline, postSpeechText, retractedReason, type TimelineItem, type ToolPayload } from "./timeline";
 import { sheenLabel } from "./ui";
 
 export interface LiveStep {
@@ -33,6 +33,8 @@ export function currentStep(
 ): LiveStep | null {
   for (let i = timeline.length - 1; i >= 0; i--) {
     const item = timeline[i]!;
+    const retracted = item.kind === "text" ? retractedReason(item.activity) : null;
+    if (retracted) return { icon: RotateCcw, label: `Retrying: ${retracted}` };
     if (item.kind === "thinking") {
       const title = thinkingPresentation((item.activity.payload as { thinking?: string }).thinking ?? "").title;
       return { icon: Brain, label: title };

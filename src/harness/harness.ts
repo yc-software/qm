@@ -144,13 +144,25 @@ export interface HarnessTurnInput {
   onReasoningDelta?(step: string, index: number, chunk: string): void;
   onTextBlockStart?(phase?: "commentary" | "final_answer"): void | Promise<void>;
   onToolCallStart?(name: string): void;
+  checkReply?(draft: string): Promise<ReplyRetraction | undefined>;
   screenToolResult?(input: ToolResultScreenInput): Promise<ToolResultScreen>;
   governGoal?: import("./goal.ts").GoalGovernor;
 }
 
+export interface ReplyRetraction {
+  reason: string;
+  message: string;
+}
+
+export const REPLY_CHECK_RETRIES = 2;
+
+export const replyCheckPrompt = (message: string): string =>
+  `[system] The reply check retracted your reply above; the user sees it marked as retracted. ${message} Write the full reply again now.`;
+
 export interface HarnessTurnResult {
   runtimeHandoff?: HarnessHandoff;
   reply: string;
+  retracted?: string[];
   silent?: boolean;
   stopped?: true;
   stoppedByUser?: true;

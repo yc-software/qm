@@ -55,12 +55,14 @@ import {
   resolveReactionTargets,
   shouldSurfaceReaction,
   slackReplyArgs,
+  slackSectionBlocks,
   threadHasBotStake,
   toSlackMrkdwn,
   uploadAttachments,
   uploadFailureNote,
 } from "./lib.ts";
 import type { GatewayContext, TurnResult } from "../types.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { AckGate } from "./deferred-ack.ts";
 import type { AckPresenter } from "./presenters.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
@@ -672,7 +674,14 @@ export function createTurnHandler(deps: {
           }
         }
         await ack?.drain();
-        if (postText) await postReply(postText, undefined, runKey);
+        const editNote = replyEditNote(result.retracted);
+        const noteBlocks = editNote
+          ? [
+              ...slackSectionBlocks(postText),
+              { type: "context", elements: [{ type: "plain_text", text: editNote, emoji: false }] },
+            ]
+          : undefined;
+        if (postText) await postReply(postText, noteBlocks, runKey);
         if (uploadError) await postReply(uploadFailureNote(uploadError));
         const { directives, dropped } = resolveReactionTargets(reactions, allowedTs);
         if (dropped) console.error(`[slack-plugin] dropped ${dropped} reaction(s) with an unresolvable message id`);

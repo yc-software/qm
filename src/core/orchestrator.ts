@@ -50,6 +50,7 @@ import { resolveTurnContext } from "../resolution/turn-context.ts";
 import { resolveReachableChannel } from "../resolution/scope-reach.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
+import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
@@ -3210,6 +3211,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
+        const replyCheck = await deps
+          .replyCheck?.({
+            surfaceName,
+            ...(runtimePurpose ? { runtimePurpose } : {}),
+            guidance: async () => {
+              const orders =
+                conversation.kind !== "dm" && conversation.channelRef
+                  ? ((await deps.channelPolicy?.get(conversation.channelRef))?.orders ?? "")
+                  : "";
+              return [resolution.guidance ?? "", orders].filter((text) => text.trim()).join("\n\n");
+            },
+            input: baseText,
+            turn: {
+              actorId: actor.id,
+              scopeLabel: scopeId,
+              sessionId: session.id,
+              ...(input.runId ? { runId: input.runId } : {}),
+              cancel: turnAbort.signal,
+            },
+          })
+          .catch(swallowAs("orchestrator: reply check setup", undefined));
+        const checkReply = replyCheck?.enforce ? replyCheck.check : undefined;
         const runHarnessSegment = async (
           harnessInput: string,
           extras: {
@@ -3650,6 +3673,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             goal: sessionGoal,
             saveGoal,
             ...(goalInbox ? { goalInbox } : {}),
+            ...(checkReply ? { checkReply } : {}),
             scopeLabel: scopeId,
             orgScopeId: resolution.orgScopeId,
             onModelRequest: () => dispatchTrace?.modelRequest(),
@@ -3758,6 +3782,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
+        if (replyCheck && !replyCheck.enforce && result.reply.trim() && !result.silent && !result.stopped)
+          void replyCheck.check(result.reply).catch(swallowAs("orchestrator: observed reply check", undefined));
         if (
           input.addressed &&
           !strictReadOnly &&
@@ -3775,9 +3801,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (primaryReply && defaultDestination && deps.deliveries) {
             try {
               const directKey = postKeys.key(defaultDestination, postKeys.take());
+              const editNote = replyEditNote(result.retracted);
               await reachEnqueue({
                 deliveries: deps.deliveries,
-                destination: defaultDestination,
+                destination: editNote ? { ...defaultDestination, editNote } : defaultDestination,
                 text: primaryReply,
                 idempotencyKey: directKey,
                 provenance: postProvenance(directKey),
@@ -3990,6 +4017,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             status: "ok",
             sessionId: session.id,
             reply,
+            ...(result.retracted?.length ? { retracted: result.retracted } : {}),
             ...(result.stopped ? { stopped: true } : {}),
             ...(stagedAttachments.length ? { attachments: stagedAttachments } : {}),
             ...(sourceUserSeq !== undefined ? { sourceUserSeq } : {}),

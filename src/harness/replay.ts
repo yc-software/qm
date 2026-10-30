@@ -334,6 +334,13 @@ export function reconstructMessagesFromHistory(
     const cid = (e.payload as { callId?: unknown } | null)?.callId;
     if (typeof cid === "string" && cid) (e.type === "tool_call" ? callById : resultByCallId).set(cid, e);
   }
+  const retractedSteps = new Set(
+    history.flatMap((e) => {
+      const payload = e.payload as { retracted?: unknown } | null;
+      const step = payload?.retracted ? entryStep(e) : undefined;
+      return step ? [step.id] : [];
+    }),
+  );
   const stopped = stoppedToolCalls(history, resultByCallId);
   const raw: PiReplayMessage[] = [];
   const stepped = new Set<PiReplayMessage>();
@@ -358,7 +365,7 @@ export function reconstructMessagesFromHistory(
     }
     const step = entryStep(e);
     if (step) {
-      if (step.stopReason === "aborted" || step.stopReason === "error") continue;
+      if (step.stopReason === "aborted" || step.stopReason === "error" || retractedSteps.has(step.id)) continue;
       const blocks = stepBlocks(e, step);
       if (!blocks.length) continue;
       let message = steps.get(step.id);

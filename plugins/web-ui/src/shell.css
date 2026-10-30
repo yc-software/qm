@@ -2869,6 +2869,36 @@ qm-markdown .tok-in {
   display: block;
   min-width: 0;
 }
+.retracted-reply {
+  display: block;
+  min-width: 0;
+  margin: 2px 0 6px;
+}
+.retracted-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
+  line-height: 1.35;
+}
+.retracted-summary::-webkit-details-marker {
+  display: none;
+}
+.retracted-reply[open] > .retracted-summary > .activity-chevron {
+  transform: rotate(90deg);
+}
+.retracted-body {
+  margin: 5px 0 8px 19px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: max(min(12px, calc(var(--chat-font-size) - 1px)), calc((var(--chat-font-size) - 1px) * var(--text-scale)));
+  line-height: 1.55;
+}
 .thinking-summary {
   display: flex;
   align-items: center;
