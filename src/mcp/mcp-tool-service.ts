@@ -8,7 +8,8 @@
 
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
-import { errMessage, reportFailureAs } from "../util/errors.ts";
+import { errMessage, reportFailureAs, swallow } from "../util/errors.ts";
+import { withTimeout } from "../util/async.ts";
 import { setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -20,6 +21,9 @@ const CATALOG_TTL_MS = 60_000;
 const CATALOG_CACHE_MAX = 1_000;
 const CATALOG_MAX_TOOLS = 5_000;
 const CATALOG_SEARCH_LIMIT = 50;
+const CATALOG_INSTRUCTIONS_WAIT_MS = 1_500;
+const CATALOG_INSTRUCTIONS_TTL_MS = REFRESH_INTERVAL_MS;
+const CATALOG_DESCRIPTION_MAX_CHARS = 8_000;
 const CATALOG_OPERATIONS = ["search", "describe", "invoke"];
 const DROPPED_OPTIONAL_PARAMS = ["intent", "locale"];
 
@@ -93,6 +97,23 @@ export interface McpToolService {
 class SignInRequired extends Error {}
 
 type RemoteTool = NonNullable<McpServer["tools"]>[number];
+
+interface CatalogListing {
+  tools: RemoteTool[];
+  instructions: string;
+}
+
+function clampLines(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.lastIndexOf("\n", max - 2);
+  return `${text.slice(0, cut > 0 ? cut : max - 2)}\n…`;
+}
+
+function withInstructions(def: McpToolDescriptor, instructions: string): McpToolDescriptor {
+  if (!instructions) return def;
+  const description = `${def.description}\n\nFrom the ${def.serverName} server:\n${instructions}`;
+  return { ...def, description: clampLines(description, CATALOG_DESCRIPTION_MAX_CHARS) };
+}
 
 function catalogDescriptor(server: McpServer): McpToolDescriptor {
   return {
@@ -177,7 +198,9 @@ export function createMcpToolService(opts: {
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
   let snapshot: McpToolDescriptor[] = [];
   let perUserServers = new Map<string, McpServer>();
-  const catalogs = new LRUCache<string, Promise<RemoteTool[]>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS });
+  let catalogServers = new Map<string, McpServer>();
+  const catalogs = new LRUCache<string, Promise<CatalogListing>>({ max: CATALOG_CACHE_MAX, ttl: CATALOG_TTL_MS });
+  const catalogInstructionsKnown = new LRUCache<string, { text: string; at: number }>({ max: CATALOG_CACHE_MAX });
 
   function signInMessage(server: McpServer): string {
     const url = opts.signInUrl?.(server.id);
@@ -224,20 +247,56 @@ export function createMcpToolService(opts: {
     return createMcpClient({ url: server.url, auth: { mode: "bearer", token } });
   }
 
-  async function catalogTools(server: McpServer, principalId?: string): Promise<RemoteTool[]> {
-    const client = await callerClient(server, principalId);
-    const perPerson = server.attestActor || server.credentialScope === "per-user";
-    const key = `${server.id}\0${server.updatedAt}\0${perPerson ? (principalId ?? "") : ""}`;
+  function perPerson(server: McpServer): boolean {
+    return Boolean(server.attestActor) || server.credentialScope === "per-user";
+  }
+
+  function catalogKey(server: McpServer, principalId: string | undefined): string {
+    return `${server.id}\0${server.updatedAt}\0${perPerson(server) ? (principalId ?? "") : ""}`;
+  }
+
+  function catalogListing(server: McpServer, principalId: string | undefined): Promise<CatalogListing> {
+    const key = catalogKey(server, principalId);
     const cached = catalogs.get(key);
     if (cached) return cached;
-    const listing = client
-      .listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS })
-      .then((listed) => listed.tools);
+    const listing = callerClient(server, principalId)
+      .then((client) => client.listTools({ headers: headersFor(server, principalId), maxTools: CATALOG_MAX_TOOLS }))
+      .then((listed) => {
+        const instructions = (listed.instructions ?? "").slice(0, CATALOG_DESCRIPTION_MAX_CHARS);
+        catalogInstructionsKnown.set(key, { text: instructions, at: now() });
+        return { tools: listed.tools, instructions };
+      });
     catalogs.set(key, listing);
     listing.catch(() => {
       if (catalogs.peek(key) === listing) catalogs.delete(key);
     });
     return listing;
+  }
+
+  async function catalogTools(server: McpServer, principalId?: string): Promise<RemoteTool[]> {
+    return (await catalogListing(server, principalId)).tools;
+  }
+
+  async function catalogInstructions(server: McpServer, principalId: string | undefined): Promise<string> {
+    if (perPerson(server) && !principalId) return "";
+    const key = catalogKey(server, principalId);
+    const known = catalogInstructionsKnown.get(key);
+    if (known && now() - known.at < CATALOG_INSTRUCTIONS_TTL_MS) return known.text;
+    const stampUnlessNewer = (text: string): void => {
+      if (catalogInstructionsKnown.peek(key) === known) catalogInstructionsKnown.set(key, { text, at: now() });
+    };
+    const listing = catalogListing(server, principalId);
+    listing.catch((e: unknown) => {
+      stampUnlessNewer(known?.text ?? "");
+      if (!(e instanceof SignInRequired)) swallow("mcp: catalog instructions", e);
+    });
+    if (known) return known.text;
+    return withTimeout(() => listing, CATALOG_INSTRUCTIONS_WAIT_MS, `${server.id} catalog listing`)
+      .then((listed) => listed.instructions)
+      .catch(() => {
+        stampUnlessNewer("");
+        return "";
+      });
   }
 
   async function catalogEntry(server: McpServer, principalId: string | undefined, name: unknown): Promise<RemoteTool> {
@@ -288,11 +347,13 @@ export function createMcpToolService(opts: {
     const servers = all.filter((s) => s.enabled);
     const next: McpToolDescriptor[] = [];
     const nextPerUser = new Map<string, McpServer>();
+    const nextCatalogs = new Map<string, McpServer>();
     for (const server of servers) {
       try {
         let tools: NonNullable<McpServer["tools"]>;
         let about = server.about;
         if (server.catalog) {
+          nextCatalogs.set(server.id, server);
           next.push(catalogDescriptor(server));
           continue;
         }
@@ -338,6 +399,7 @@ export function createMcpToolService(opts: {
     const seen = new Set<string>();
     snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
     perUserServers = nextPerUser;
+    catalogServers = nextCatalogs;
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -349,8 +411,14 @@ export function createMcpToolService(opts: {
   }
 
   async function toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]> {
-    const current = snapshot;
     const gated = perUserServers;
+    const catalogued = catalogServers;
+    const current = await Promise.all(
+      snapshot.map(async (t) => {
+        const server = t.catalog ? catalogued.get(t.serverId) : undefined;
+        return server ? withInstructions(t, await catalogInstructions(server, principalId)) : t;
+      }),
+    );
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
     const ready = new Set<string>();

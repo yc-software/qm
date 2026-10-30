@@ -5,8 +5,9 @@ import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createServer } from "node:http";
+import { createServer, request, type ServerResponse } from "node:http";
 import { once } from "node:events";
+import { sleep } from "../src/util/async.ts";
 import type { AddressInfo } from "node:net";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { settle } from "./support/settle.ts";
@@ -52,9 +53,11 @@ test("mcp client keeps the server's own description, else its instructions", asy
   const both = await startMcpTestServer(t, { description: "Track orders.", instructions: "Call search first." });
   const listed = await createMcpClient({ url: both.url, auth: { mode: "none" } }).listTools();
   assert.equal(listed.about, "Track orders.");
+  assert.equal(listed.instructions, "Call search first.");
   const told = await startMcpTestServer(t, { instructions: "  Call search first.\nThen update.  " });
-  const about = (await createMcpClient({ url: told.url, auth: { mode: "none" } }).listTools()).about;
+  const { about, instructions } = await createMcpClient({ url: told.url, auth: { mode: "none" } }).listTools();
   assert.equal(about, "Call search first.\nThen update.");
+  assert.equal(instructions, "Call search first.\nThen update.");
 });
 
 test("mcp client caps a server's tool list", async (t) => {
@@ -264,6 +267,142 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     "refresh drops the cache and parallel lookups share one listing",
   );
   service.close();
+});
+
+const ACME_INSTRUCTIONS =
+  "Acme: search and run Acme tools.\n\nSkills (Acme playbooks): when a request matches one, read it with the read_skill tool before acting, then follow it.\n- party-setup: Party setup procedure. Use when setting up a casual social event.";
+
+async function catalogService(
+  t: Parameters<typeof startMcpTestServer>[0],
+  mcpUrl: string,
+  id = "acme",
+  now?: () => number,
+) {
+  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000, ...(now ? { now } : {}) });
+  t.after(async () => service.close());
+  await store.put(server({ id, name: "Acme", url: mcpUrl, catalog: true, attestActor: true }));
+  await service.refresh();
+  return service;
+}
+
+test("a catalog server's instructions reach each person through its tool description", async (t) => {
+  const mcp = await startMcpTestServer(t, {
+    instructions: (actor) => (actor === "bob@example.com" ? "Bob's private note." : ACME_INSTRUCTIONS),
+  });
+  const service = await catalogService(t, mcp.url);
+  const plain = service.toolDefs()[0]!;
+  const [alice] = await service.toolDefsFor("alice@example.com");
+  assert.equal(alice!.description, `${plain.description}\n\nFrom the Acme server:\n${ACME_INSTRUCTIONS}`);
+  assert.deepEqual({ ...alice, description: plain.description }, plain);
+  const [bob] = await service.toolDefsFor("bob@example.com");
+  assert.equal(bob!.description, `${plain.description}\n\nFrom the Acme server:\nBob's private note.`);
+  assert.deepEqual(await service.toolDefsFor("alice@example.com"), [alice]);
+  assert.equal(mcp.requests.filter((r) => r.rpc === "tools/list").length, 2, "one listing per person");
+  assert.equal(plain.description, service.toolDefs()[0]!.description, "the shared snapshot stays plain");
+  assert.deepEqual(await service.toolDefsFor(), service.toolDefs(), "no attested person, no instructions");
+});
+
+test("a catalog's last-known instructions serve the turn while a stale listing refreshes behind it", async (t) => {
+  let version = 1;
+  let clock = 1_000;
+  const mcp = await startMcpTestServer(t, { instructions: () => `Version ${version}.` });
+  const service = await catalogService(t, mcp.url, "acme", () => clock);
+  const listings = () => mcp.requests.filter((r) => r.rpc === "initialize").length;
+  const describe = async () => (await service.toolDefsFor("alice@example.com"))[0]!.description;
+  const first = await describe();
+  assert.ok(first.endsWith("Version 1."));
+  version = 2;
+  await service.refresh();
+  assert.equal(await describe(), first, "a fresh value is served without listing again");
+  assert.equal(listings(), 1);
+  clock += 10 * 60_000;
+  assert.equal(await describe(), first, "the stale value is served without waiting");
+  await settle(async () => listings() === 2);
+  await settle(async () => (await describe()).endsWith("Version 2."));
+  assert.ok((await describe()).endsWith("Version 2."));
+  assert.equal(listings(), 2);
+  clock += 10 * 60_000;
+  await service.refresh();
+  mcp.unavailable = true;
+  assert.ok((await describe()).endsWith("Version 2."), "a failed refresh keeps the last-known text");
+  await settle(async () => listings() === 3);
+  assert.ok((await describe()).endsWith("Version 2."), "a failure is not retried on the next turn");
+  assert.equal(listings(), 3);
+});
+
+test("a listing that fails after a newer one succeeded does not roll the instructions back", async (t) => {
+  let version = 1;
+  let clock = 1_000;
+  const mcp = await startMcpTestServer(t, { instructions: () => `Version ${version}.` });
+  const held: ServerResponse[] = [];
+  let holding = false;
+  const proxy = createServer((req, res) => {
+    if (holding) return void held.push(res);
+    const upstream = request(`${mcp.url}${req.url}`, { method: req.method, headers: req.headers }, (up) => {
+      res.writeHead(up.statusCode ?? 502, up.headers);
+      up.pipe(res);
+    });
+    req.pipe(upstream);
+  });
+  proxy.listen(0, "127.0.0.1");
+  await once(proxy, "listening");
+  t.after(async () => {
+    proxy.closeAllConnections();
+    await new Promise<void>((resolve) => proxy.close(() => resolve()));
+  });
+  const service = await catalogService(
+    t,
+    `http://127.0.0.1:${(proxy.address() as AddressInfo).port}/mcp`,
+    "acme",
+    () => clock,
+  );
+  const describe = async () => (await service.toolDefsFor("alice@example.com"))[0]!.description;
+  assert.ok((await describe()).endsWith("Version 1."));
+  clock += 10 * 60_000;
+  await service.refresh();
+  holding = true;
+  assert.ok((await describe()).endsWith("Version 1."), "the stale value is served while the old listing hangs");
+  await settle(async () => held.length === 1);
+  holding = false;
+  version = 2;
+  await service.refresh();
+  await settle(async () => (await describe()).endsWith("Version 2."));
+  for (const res of held) res.destroy();
+  await sleep(100);
+  assert.ok((await describe()).endsWith("Version 2."), "the late failure leaves the newer text in place");
+});
+
+test("a catalog whose listing is slow or empty leaves the description untouched", async (t) => {
+  const silent = createServer(() => undefined);
+  silent.listen(0, "127.0.0.1");
+  await once(silent, "listening");
+  t.after(async () => {
+    silent.closeAllConnections();
+    await new Promise<void>((resolve) => silent.close(() => resolve()));
+  });
+  const slow = await catalogService(t, `http://127.0.0.1:${(silent.address() as AddressInfo).port}/mcp`, "slow");
+  const started = Date.now();
+  assert.deepEqual(await slow.toolDefsFor("alice@example.com"), slow.toolDefs());
+  assert.ok(Date.now() - started < 5_000);
+  const again = Date.now();
+  assert.deepEqual(await slow.toolDefsFor("alice@example.com"), slow.toolDefs());
+  assert.ok(Date.now() - again < 500, "a timed-out listing is not awaited again on the next turn");
+  const mcp = await startMcpTestServer(t);
+  const quiet = await catalogService(t, mcp.url, "quiet");
+  assert.deepEqual(await quiet.toolDefsFor("alice@example.com"), quiet.toolDefs());
+});
+
+test("a catalog's instructions are cut at a line boundary past the description cap", async (t) => {
+  const lines = Array.from({ length: 400 }, (_, i) => `- skill-${i}: ${"x".repeat(40)}`);
+  const mcp = await startMcpTestServer(t, { instructions: lines.join("\n") });
+  const service = await catalogService(t, mcp.url);
+  const [def] = await service.toolDefsFor("alice@example.com");
+  assert.ok(def!.description.length <= 8_000);
+  assert.ok(def!.description.length > 7_900);
+  const body = def!.description.split("\n");
+  assert.equal(body.at(-1), "…");
+  assert.match(body.at(-2)!, /^- skill-\d+: x{40}$/);
 });
 
 test("disabled server's tools disappear and calls fail", async (t) => {

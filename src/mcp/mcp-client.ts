@@ -24,6 +24,7 @@ interface McpRemoteTool {
 export interface McpListing {
   tools: McpRemoteTool[];
   about?: string;
+  instructions?: string;
 }
 
 export type McpAuth =
@@ -91,10 +92,12 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
               });
             cursor = page.nextCursor;
           } while (cursor && tools.length < (opts?.maxTools ?? MAX_TOOLS));
-          const about = (client.getServerVersion()?.description || client.getInstructions() || "").trim();
+          const instructions = (client.getInstructions() || "").trim();
+          const about = (client.getServerVersion()?.description || "").trim() || instructions;
           return {
             tools: tools.slice(0, opts?.maxTools ?? MAX_TOOLS),
             ...(about ? { about } : {}),
+            ...(instructions ? { instructions } : {}),
           };
         },
         opts?.headers,
