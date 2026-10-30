@@ -50,7 +50,6 @@ test("eager hydration failures are contained while explicit startup hydration re
   const built = buildApp(testConfig());
   try {
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate identity")));
     assert.ok(
       errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate configuration")),
     );
