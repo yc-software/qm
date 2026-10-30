@@ -84,7 +84,7 @@ test("the published package pins real image digests, never the checked-in sentin
     workflow.indexOf("Pin published image digests") < workflow.indexOf("npm publish"),
     "digests are resolved before the package is published",
   );
-  assert.match(workflow, /for service in core web-ui admin portal auth egress-proxy sandbox-base; do/);
+  assert.match(workflow, /for service in core egress-proxy sandbox-base; do/);
   assert.match(workflow, /printf '%s\\n' "\$out" > cli\/manifest\.json/);
   assert.match(workflow, /no published image for \$repo at \$IMAGES_REF/);
   assert.match(workflow, /\{63\}\$"\) \| not\)/);
