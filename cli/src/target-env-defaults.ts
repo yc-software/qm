@@ -11,18 +11,10 @@ export const ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, strin
   core: { HARNESS: "pi" },
 };
 
-const AWS_RENDER_ENV_DEFAULTS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  core: { SANDBOX_BACKEND: "aws" },
-};
-
 export const TARGET_ENV_DEFAULTS: Record<Target, TargetEnvDefaults> = {
   docker: (_config, service, name) => ENV_DEFAULTS[service]?.[name],
   fly: (_config, service, name) => ENV_DEFAULTS[service]?.[name],
   render: (_config, service, name) => ENV_DEFAULTS[service]?.[name],
-  aws: (config, service, name) => {
-    const rendered = AWS_RENDER_ENV_DEFAULTS[service]?.[name];
-    if (rendered === undefined) return ENV_DEFAULTS[service]?.[name];
-    if (name === "SANDBOX_BACKEND") return config.sandbox?.backend ?? rendered;
-    return rendered;
-  },
+  aws: (config, service, name) =>
+    service === "core" && name === "SANDBOX_BACKEND" ? config.sandbox?.backend : ENV_DEFAULTS[service]?.[name],
 };

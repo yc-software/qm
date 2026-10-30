@@ -27,7 +27,7 @@ import {
   waitPorterRunning,
   type PorterClientLike,
   type PorterSandboxLike,
-} from "../sandbox/porter-client.ts";
+} from "./porter-client.ts";
 import { memoryRows, type KeyedRows, type TableSpec } from "../persistence/typed-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
