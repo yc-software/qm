@@ -5,6 +5,7 @@ import type { TenantSettings, TenantSettingsStore } from "../tenants/settings.ts
 import { errMessage } from "../util/errors.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./company-chatgpt-auth.ts";
 import { createGatewayCatalog } from "./gateway-catalog.ts";
+import { setGatewayModels } from "./gateway-models.ts";
 import {
   CODEX_SUBSCRIPTION_PROVIDER,
   DEFAULT_CODEX_MODEL_ID,
@@ -67,7 +68,7 @@ export function createTenantModels(deps: {
 
   function gatewayFor(tenant: string, settings: TenantSettings): ModelGatewayTransportConfig | undefined {
     if (!settings.modelGateway) {
-      gateways.delete(tenant);
+      if (gateways.delete(tenant)) setGatewayModels([]);
       return undefined;
     }
     const fingerprint = JSON.stringify(settings.modelGateway);
