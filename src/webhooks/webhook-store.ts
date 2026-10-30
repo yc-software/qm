@@ -1,14 +1,12 @@
 import type { Webhook } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
   contentPart,
-  createDeduped,
-  setTriggerEnabled,
   type CreateTriggerInput,
-  ownedBy,
+  withFields,
 } from "../triggers/trigger-store.ts";
+import { createMemoryWebhookRows, type WebhookEvent, type WebhookRows } from "./webhook-table.ts";
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
 
@@ -18,15 +16,7 @@ export interface CreateWebhookInput extends CreateTriggerInput {
   filters?: Webhook["filters"];
 }
 
-export interface WebhookEvent {
-  deliveryId: string;
-  receivedAt: number;
-  payload: string;
-}
-
-export interface WebhookHistory {
-  events: WebhookEvent[];
-}
+export type { WebhookEvent };
 
 export interface WebhookStore {
   recordEvent(id: string, event: WebhookEvent): Promise<void>;
@@ -40,33 +30,13 @@ export interface WebhookStore {
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
-export function createWebhookStore(
-  backing: DurableMap<Webhook> = createMemoryMap<Webhook>(),
-  history: DurableMap<WebhookHistory> = createMemoryMap<WebhookHistory>(),
-): WebhookStore {
-  if (!history.update) throw new Error("webhook history requires atomic updates");
-  const updateHistory = history.update.bind(history);
+export function createWebhookStore(rows: WebhookRows = createMemoryWebhookRows()): WebhookStore {
+  const edit = (id: string, fields: Partial<Webhook>) => rows.update(id, (webhook) => withFields(webhook, fields));
   return {
     async recordEvent(id, event) {
-      await history.putIfAbsent(id, { events: [] });
-      await updateHistory(id, (value) => {
-        if (value.events.some((e) => e.deliveryId === event.deliveryId)) return value;
-        return {
-          events: [
-            ...value.events,
-            {
-              ...event,
-              payload: event.payload.slice(0, 16_100),
-            },
-          ]
-            .sort((a, b) => b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId))
-            .slice(0, 50),
-        };
-      });
+      await rows.recordEvent(id, { ...event, payload: event.payload.slice(0, 16_100) });
     },
-    async listEvents(id) {
-      return structuredClone((await history.get(id))?.events ?? []);
-    },
+    listEvents: (id) => rows.listEvents(id),
     async create(input) {
       assertNoEscalation(input);
       if (!getVerifier(input.verification.scheme) || !input.verification.secret) {
@@ -80,7 +50,7 @@ export function createWebhookStore(
         throw new Error("every webhook filter requires a path and at least one value");
       }
       const filters = input.filters?.length ? input.filters : undefined;
-      const contentId = hashId([
+      const id = hashId([
         contentPart(input.owner),
         contentPart(input.ownerScopeId),
         contentPart(input.action),
@@ -88,27 +58,25 @@ export function createWebhookStore(
         contentPart(filters),
         contentPart(input.destination),
       ]);
-      const webhook = await createDeduped(backing, contentId, (id) => ({
+      const webhook = await rows.insertIfAbsent({
         ...buildTriggerBase(input, id, Date.now()),
         action: input.action,
         verification: input.verification,
         ...(filters ? { filters } : {}),
-      }));
+      });
       if (webhook.enabled) return webhook;
-      await setTriggerEnabled(backing, webhook.id, true);
+      await edit(webhook.id, { enabled: true });
       return { ...webhook, enabled: true };
     },
-    get: (id) => backing.get(id),
-    list: () => backing.all(),
-    ownedBy: (scopeId) => ownedBy(backing, scopeId),
-    setEnabled(id, enabled) {
-      return setTriggerEnabled(backing, id, enabled);
+    get: (id) => rows.get(id),
+    list: () => rows.list(),
+    ownedBy: (scopeId) => rows.ownedBy(scopeId),
+    async setEnabled(id, enabled) {
+      await edit(id, { enabled });
     },
-    update(id, patch) {
-      return backing.merge(id, { action: patch.action });
-    },
+    update: (id, patch) => edit(id, { action: patch.action }),
     async recordFire(id, info) {
-      await backing.merge(id, {
+      await edit(id, {
         lastFiredAt: info.at,
         ...(info.deliveryId ? { lastDeliveryId: info.deliveryId } : {}),
         lastError: info.error,
