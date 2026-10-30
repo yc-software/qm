@@ -180,7 +180,10 @@ export function createDeliveryPoller(deps: {
       const code = slackErrorCode(err);
       if (stage === "post" && code && TERMINAL_POST_ERRORS.has(code)) {
         deliveryTracker.clear(id);
-        console.error(`[slack-plugin] delivery ${id} post refused permanently (${code}) — failing it, no retry`);
+        console.error(
+          `[slack-plugin] delivery ${id} post refused permanently (${code}) — failing it, no retry:`,
+          (err as Error).message,
+        );
         void core.failDelivery(id, code).catch(swallowAs("slack-plugin: fail delivery", undefined));
         return;
       }

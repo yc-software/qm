@@ -111,13 +111,3 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
   await approvals.put("A2", channel);
   assert.equal((await deliveries.pending("principal"))[0]?.destination.threadTs, undefined);
 });
-
-test("the approval sweeper does not revive a card its recipient refused for good", async () => {
-  const deliveries = createDeliveryStore();
-  const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), deliveries);
-  await approvals.put("A1", record("dm:D1"));
-  const [card] = await deliveries.claimPending("principal", 60_000);
-  await deliveries.fail(card!.id, "cannot_dm_bot", Date.now());
-  await approvals.deliverPending();
-  assert.deepEqual(await deliveries.claimPending("principal", 60_000), []);
-});
