@@ -1,9 +1,8 @@
 import type { OAuthToken, OAuthRefresh } from "../credentials/keychain.ts";
 import { createEnvSecretSource, type SecretSource } from "../credentials/secret-source.ts";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
-import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { swallow } from "../util/errors.ts";
+import { jwtClaims } from "../util/jwt.ts";
 import { isObj } from "../util/objects.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
@@ -176,16 +175,28 @@ function makeTokenAdapters(opts: {
 
 const { exchange: defaultExchange, refresh: defaultRefresh } = makeTokenAdapters({});
 
+const GOOGLE_ID_TOKEN_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
+const ID_TOKEN_CLOCK_SKEW_MS = 60_000;
+
+function googleIdTokenIsOurs(claims: Record<string, unknown>, clientId: string, now: number): boolean {
+  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  return (
+    audiences.includes(clientId) &&
+    (claims.azp === undefined ? audiences.length === 1 : claims.azp === clientId) &&
+    typeof claims.iss === "string" &&
+    GOOGLE_ID_TOKEN_ISSUERS.includes(claims.iss) &&
+    typeof claims.exp === "number" &&
+    claims.exp * 1000 + ID_TOKEN_CLOCK_SKEW_MS > now
+  );
+}
+
 const googleExchange: OAuthExchangeAdapter = async (args) => {
-  const { client, accountType } = args;
+  const { client, accountType, now } = args;
   const { hosts, token, raw } = await defaultExchange(args);
   if (accountType === "company" && client.hostedDomain) {
-    const idToken = typeof raw?.id_token === "string" ? raw.id_token : "";
-    let claims: Record<string, unknown> | undefined;
-    try {
-      if (idToken) claims = decodeJwt(idToken);
-    } catch (e) {
-      swallow("google id_token decode", e);
+    const claims = jwtClaims(raw?.id_token);
+    if (claims && !googleIdTokenIsOurs(claims, client.id, now)) {
+      throw new Error("google id_token failed audience, issuer, or expiry checks");
     }
     const hd = typeof claims?.hd === "string" ? claims.hd : "";
     if (hd.toLowerCase() !== client.hostedDomain.toLowerCase()) {
