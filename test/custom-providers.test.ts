@@ -9,10 +9,9 @@ import {
   validateCustomProviderSpec,
 } from "../src/model/custom-providers.ts";
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
-import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
+import { createCustomProviderStore, type StoredCustomProvider } from "../src/model/model-credential-store.ts";
 import { modelSupported, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { StoredCustomProvider } from "../src/model/custom-provider-store.ts";
 
 afterEach(() => setCustomProviders([]));
 
