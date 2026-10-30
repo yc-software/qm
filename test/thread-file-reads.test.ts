@@ -11,7 +11,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import { encodeTs } from "../src/slack/reactions.ts";
-import { textPng } from "./live-slack/text-png.ts";
+import { textPng } from "./support/text-png.ts";
 import { visionImage } from "../src/core/attachments.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));

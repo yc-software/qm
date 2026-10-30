@@ -25,29 +25,6 @@ const GLYPHS: Record<string, string[]> = {
   Y: ["10001", "10001", "01010", "00100", "00100", "00100", "00100"],
   Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
 };
-const WORDS = [
-  "CACTUS",
-  "WALRUS",
-  "LANTERN",
-  "HAMMER",
-  "VELVET",
-  "MAGNET",
-  "PEPPER",
-  "TUNDRA",
-  "ZEPHYR",
-  "JACKAL",
-  "KETTLE",
-  "BREEZE",
-  "SPHINX",
-  "WAFFLE",
-  "CANDLE",
-  "PRETZEL",
-];
-
-export function randomCodeword(): string {
-  return WORDS[Math.floor(Math.random() * WORDS.length)]!;
-}
-
 function chunk(type: string, data: Buffer): Buffer {
   const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
   const out = Buffer.alloc(12 + data.length);

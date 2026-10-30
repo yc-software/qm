@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { textPng } from "./live-slack/text-png.ts";
+import { textPng } from "./support/text-png.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
