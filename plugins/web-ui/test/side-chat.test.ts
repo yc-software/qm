@@ -41,8 +41,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
       if (path.startsWith("/api/runtime-config"))
         return Response.json({
           scopeId: "personal:tester",
-          approvedHarnesses: ["pi"],
-          modelsByHarness: { pi: ["m"] },
+          models: ["m"],
           modelCatalog: {
             m: {
               id: "m",
@@ -56,9 +55,9 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             },
           },
-          orgDefault: { harnessId: "pi", modelId: "m", revision: 1 },
+          orgDefault: { modelId: "m", revision: 1 },
           scopeOverride: null,
-          effective: { harnessId: "pi", modelId: "m" },
+          effective: { modelId: "m" },
           upgradeAvailable: false,
         });
       if (path === "/api/sessions/source/side-chats") return Response.json({ sessions: fork ? [fork] : [] });
