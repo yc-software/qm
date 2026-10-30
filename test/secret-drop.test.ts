@@ -9,7 +9,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/edge/http/server.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";

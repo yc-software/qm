@@ -20,7 +20,7 @@ const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-c
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
-  scheduler: built.scheduler,
+  cronRuns: built.cronRuns,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;

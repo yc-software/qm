@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { serverDeps } from "../src/wiring.ts";
+import { serverDeps } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import type { ServerDeps } from "../src/edge/http/deps.ts";

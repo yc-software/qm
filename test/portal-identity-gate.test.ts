@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/edge/http/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
@@ -34,7 +34,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       capabilitySecret: CAP,
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
-      scheduler: built.scheduler,
+      cronRuns: built.cronRuns,
       identity: built.identity,
       sessionShares: built.sessionShares,
     });

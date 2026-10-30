@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { serverDeps } from "../src/wiring.ts";
+import { serverDeps } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { testConfig } from "./support/test-config.ts";

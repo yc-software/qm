@@ -7,7 +7,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../../src/wiring.ts";
+import { buildApp } from "../support/compose.ts";
 import { createInsecureTestServer } from "../../src/edge/http/server.ts";
 import { scopeId } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";

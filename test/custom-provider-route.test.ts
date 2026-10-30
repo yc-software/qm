@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/edge/http/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";

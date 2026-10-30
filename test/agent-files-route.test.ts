@@ -4,7 +4,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/edge/http/server.ts";
 import { contentTypeWithUtf8Charset } from "../src/api/http.ts";

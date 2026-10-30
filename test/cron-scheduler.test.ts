@@ -897,7 +897,7 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
     },
     jobQueue: {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = handlers!.onFire;
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -941,7 +941,7 @@ for (const queued of [false, true]) {
     let onFire: ((job: CronFireJob) => Promise<void>) | undefined;
     const jobQueue: CronJobQueue = {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = handlers!.onFire;
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -1074,7 +1074,7 @@ test("queue mode: concurrent reconciliation cannot consume an overdue slot while
     },
     jobQueue: {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = handlers!.onFire;
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -1169,7 +1169,7 @@ test("queue mode: an authz-failed fire disables the cron but gives the slot back
     },
     jobQueue: {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = handlers!.onFire;
       },
       async enqueueFire() {},
       healthy: () => true,
@@ -1483,7 +1483,7 @@ test("queue mode: a busy fire releases its slot and is re-queued to run after th
     now: () => clock,
     jobQueue: {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = handlers!.onFire;
       },
       async enqueueFire(job) {
         enqueued.push(job);
@@ -1621,7 +1621,7 @@ test("scheduler relinquishes queue claims before a long turn drains and preserve
     },
     jobQueue: {
       start: async (handlers) => {
-        onFire = handlers.onFire;
+        onFire = handlers!.onFire;
       },
       enqueueFire: async () => {},
       healthy: () => true,
@@ -1709,7 +1709,7 @@ test("scheduler resumes new queue claims while an older admitted turn remains al
     jobQueue: {
       start: async (handlers) => {
         starts++;
-        onFire = handlers.onFire;
+        onFire = handlers!.onFire;
       },
       enqueueFire: async () => {},
       healthy: () => true,

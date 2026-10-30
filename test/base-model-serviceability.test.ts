@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/edge/http/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/compose.ts";
 import { baseModelProviders, configuredModel, providerKeysPresent } from "../src/config.ts";
 import { defaultModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";

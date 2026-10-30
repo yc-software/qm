@@ -5,7 +5,7 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/edge/http/server.ts";
 import { mintCapabilityToken, CONTROL_PLANE_AUD, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -33,7 +33,7 @@ describe("capability tokens verify under the core-only capability secret, not th
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       capabilitySecret: CAP,
-      scheduler: built.scheduler,
+      cronRuns: built.cronRuns,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -64,7 +64,7 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
     createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
-      scheduler: built.scheduler,
+      cronRuns: built.cronRuns,
       requireSignedPortalIdentity: true,
       ...extra,
     });
@@ -108,7 +108,7 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
     const server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
-      scheduler: built.scheduler,
+      cronRuns: built.cronRuns,
     });
     assert.ok(server);
     server.close();
@@ -116,13 +116,13 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
 
   it("production refuses an unauthenticated core unless explicitly isolated", () => {
     assert.throws(
-      () => createServer(built.app, { production: true, scheduler: built.scheduler }),
+      () => createServer(built.app, { production: true, cronRuns: built.cronRuns }),
       /CORE_SIGNING_SECRET/,
     );
     const server = createServer(built.app, {
       production: true,
       allowUnauthenticatedCore: true,
-      scheduler: built.scheduler,
+      cronRuns: built.cronRuns,
     });
     server.close();
   });
@@ -134,7 +134,7 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
           replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
           production: true,
           signingSecret: SOURCE,
-          scheduler: built.scheduler,
+          cronRuns: built.cronRuns,
         }),
       /CAPABILITY_SECRET is not set/,
     );

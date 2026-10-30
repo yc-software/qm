@@ -103,7 +103,7 @@ test("Project trigger access follows current membership while Slack-group owner 
     verification: { scheme: "github", secret: "slack-hook-secret" },
   });
 
-  const control = createControlService(built.app, built.scheduler);
+  const control = createControlService(built.app, built.cronRuns);
   assert.ok((await control.listCrons(claims("member"))).crons.some((cron) => cron.id === projectCron.id));
   assert.ok((await control.listCrons(claims("owner"))).visible.some((cron) => cron.id === projectCron.id));
   assert.ok((await control.listWebhooks(claims("owner"))).some((webhook) => webhook.id === projectWebhook.id));
@@ -111,7 +111,7 @@ test("Project trigger access follows current membership while Slack-group owner 
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    scheduler: built.scheduler,
+    cronRuns: built.cronRuns,
   });
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));

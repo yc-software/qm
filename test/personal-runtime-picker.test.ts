@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
-import { buildApp as buildProductionApp } from "../src/wiring.ts";
+import { buildApp as buildProductionApp } from "./support/compose.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { testConfig } from "./support/test-config.ts";
