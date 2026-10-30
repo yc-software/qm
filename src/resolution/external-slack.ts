@@ -3,12 +3,12 @@ import type { RunStore } from "../runs/run-store.ts";
 import { samePerson } from "../directory/person.ts";
 import { conversationScope } from "./resolution-service.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "../slack/external-access.ts";
-import type { TurnRequest } from "../types.ts";
+import { type TurnRequest, turnSource } from "../types.ts";
 
 export type ExternalSlackPolicies = Readonly<Record<string, ExternalSlackAccess>>;
 
 export function externalSlackRequestAllowed(
-  request: Pick<TurnRequest, "externalSlack" | "slackSource" | "surface"> & {
+  request: Pick<TurnRequest, "externalSlack" | "source" | "slackSource" | "surface"> & {
     conversation: Pick<TurnRequest["conversation"], "kind" | "channelRef" | "threadRef">;
   },
   policies: ExternalSlackPolicies = {},
@@ -31,13 +31,13 @@ export function externalSlackRequestAllowed(
     );
   }
   if (ref.includes("external-slack:")) return false;
-  if (request.slackSource) {
-    const source = request.slackSource;
-    const policy = policies[source.accountId];
+  const source = request.surface === "slack" ? turnSource(request) : undefined;
+  if (source) {
+    const policy = policies[source.account];
     return (
       !policy ||
       (request.conversation.kind === "dm" &&
-        source.externalPolicyNamespace === externalSlackNamespace(source.teamId, policy))
+        source.policyNamespace === externalSlackNamespace(source.workspaceId, policy))
     );
   }
   if (ref.startsWith("slack-account:")) return false;

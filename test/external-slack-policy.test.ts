@@ -157,7 +157,7 @@ test("external account directory lookups admit only company workspace DMs", asyn
     assert.equal(turns.length, trusted ? 1 : 0);
     assert.deepEqual(personalScopes, trusted ? ["personal:employee@company.example"] : []);
     if (trusted) {
-      assert.equal(turns[0]?.slackSource?.externalPolicyNamespace, externalSlackNamespace("TPARTNER", policy));
+      assert.equal(turns[0]?.source?.policyNamespace, externalSlackNamespace("TPARTNER", policy));
       assert.equal(turns[0]?.externalSlack, undefined);
     }
   }
@@ -247,7 +247,7 @@ test("handoff preserves request and participant list, runs in requester DM, and 
   assert.equal(request.actor.externalId, f.source.actor.externalId);
   assert.equal(request.conversation.kind, "dm");
   assert.equal(request.externalSlack, undefined);
-  assert.equal(request.slackSource?.externalPolicyNamespace, externalSlackNamespace("TPARTNER", policy));
+  assert.equal(request.source?.policyNamespace, externalSlackNamespace("TPARTNER", policy));
   assert.equal(request.deliveryTarget, "DPRIVATE");
   assert.match(request.conversation.threadRef, /^slack-account:TPARTNER:/);
   assert.match(request.text, /Invite Alex and Morgan/);

@@ -1,13 +1,14 @@
-import type {
-  CandidateDestination,
-  CommandApprovalGrant,
-  Destination,
-  EgressPolicy,
-  Principal,
-  ScopeId,
-  SessionEntry,
-  TurnRequest,
-  ActorAssertion,
+import {
+  type CandidateDestination,
+  type CommandApprovalGrant,
+  type Destination,
+  type EgressPolicy,
+  type Principal,
+  type ScopeId,
+  type SessionEntry,
+  type TurnRequest,
+  type ActorAssertion,
+  turnSource,
 } from "../../types.ts";
 import { turnOriginRequestFields } from "../turn-origin.ts";
 import { isOverheardEntry } from "../../sessions/session-store.ts";
@@ -181,7 +182,7 @@ export function replayableRequest(input: OrchestratorInput): TurnRequest {
   const c = input.conversation;
   return {
     surface: input.surface ?? "unknown",
-    ...(input.slackSource ? { slackSource: input.slackSource } : {}),
+    ...(turnSource(input) ? { source: turnSource(input) } : {}),
     ...(input.externalSlack ? { externalSlack: input.externalSlack } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),

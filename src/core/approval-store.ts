@@ -1,5 +1,5 @@
 import { swallowAs } from "../util/errors.ts";
-import type { PendingApprovalRecord } from "../types.ts";
+import { type PendingApprovalRecord, turnSource } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
@@ -21,15 +21,14 @@ export function createApprovalStore(
     if (record.request?.surface !== "slack") return;
     const actorId = approvalDeliveryRecipient(record.request.actor);
     if (!actorId) return;
-    const threadTs = record.request.conversation?.kind === "dm" ? record.request.slackSource?.replyThreadTs : undefined;
+    const source = turnSource(record.request);
+    const threadTs = record.request.conversation?.kind === "dm" ? source?.replyThread : undefined;
     await deliveries.enqueue({
       destination: {
         ...principalDestination(actorId, actorId),
         commandApprovalId: id,
         ...(threadTs ? { threadTs } : {}),
-        ...(record.request.slackSource
-          ? { slackAccountId: record.request.slackSource.accountId, slackTeamId: record.request.slackSource.teamId }
-          : {}),
+        ...(source ? { account: source.account, workspaceId: source.workspaceId } : {}),
       },
       text: `Approval needed: ${record.summary ?? record.command}`,
       idempotencyKey: approvalDeliveryKey(id, record),

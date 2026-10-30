@@ -83,7 +83,8 @@ export interface SurfaceBriefing {
 }
 
 export interface SpawnMeta {
-  slackSource?: TurnRequest["slackSource"];
+  source?: TurnSource;
+  slackSource?: LegacySlackSource;
   externalSlack?: TurnRequest["externalSlack"];
   surfaceTools?: boolean;
   deliveryCandidates?: TurnRequest["deliveryCandidates"];
@@ -210,10 +211,39 @@ export interface TriggerBase {
   lastFiredAt?: number;
 }
 
-export interface Destination {
+export interface DestinationSource {
+  account?: string;
+  workspaceId?: string;
+  policyNamespace?: string;
+}
+
+interface LegacySlackDestination {
   slackAccountId?: string;
   slackTeamId?: string;
   slackPolicyNamespace?: string;
+}
+
+export function destinationSource(destination: DestinationSource & LegacySlackDestination): DestinationSource {
+  const account = destination.account ?? destination.slackAccountId;
+  const workspaceId = destination.workspaceId ?? destination.slackTeamId;
+  const policyNamespace = destination.policyNamespace ?? destination.slackPolicyNamespace;
+  return {
+    ...(account !== undefined ? { account } : {}),
+    ...(workspaceId !== undefined ? { workspaceId } : {}),
+    ...(policyNamespace !== undefined ? { policyNamespace } : {}),
+  };
+}
+
+export function sourceDestination(source: TurnSource | undefined): DestinationSource {
+  if (!source) return {};
+  return {
+    account: source.account,
+    workspaceId: source.workspaceId,
+    ...(source.policyNamespace ? { policyNamespace: source.policyNamespace } : {}),
+  };
+}
+
+export interface Destination extends DestinationSource, LegacySlackDestination {
   keychainAskId?: string;
   deploymentAccess?: { deploymentId: string; requesterId: string };
   commandApprovalId?: string;
@@ -662,15 +692,39 @@ export interface ClientToolResult {
   isError?: boolean;
 }
 
+export interface TurnSource {
+  account: string;
+  workspaceId: string;
+  userId: string;
+  policyNamespace?: string;
+  replyThread?: string;
+}
+
+interface LegacySlackSource {
+  accountId: string;
+  teamId: string;
+  userId: string;
+  externalPolicyNamespace?: string;
+  replyThreadTs?: string;
+}
+
+export function turnSource(request: { source?: TurnSource; slackSource?: LegacySlackSource }): TurnSource | undefined {
+  if (request.source) return request.source;
+  const legacy = request.slackSource;
+  if (!legacy) return undefined;
+  return {
+    account: legacy.accountId,
+    workspaceId: legacy.teamId,
+    userId: legacy.userId,
+    ...(legacy.externalPolicyNamespace ? { policyNamespace: legacy.externalPolicyNamespace } : {}),
+    ...(legacy.replyThreadTs ? { replyThread: legacy.replyThreadTs } : {}),
+  };
+}
+
 export interface TurnRequest {
   desktopClientId?: string;
-  slackSource?: {
-    accountId: string;
-    teamId: string;
-    userId: string;
-    externalPolicyNamespace?: string;
-    replyThreadTs?: string;
-  };
+  source?: TurnSource;
+  slackSource?: LegacySlackSource;
   externalSlack?: {
     accountId: string;
     teamId: string;

@@ -1,5 +1,11 @@
 import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
-import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
+import {
+  type DeliveryProvenance,
+  type Destination,
+  type OutgoingAttachment,
+  sourceDestination,
+  turnSource,
+} from "../types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
 import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
@@ -40,12 +46,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   const destination: Destination = {
     type: surface,
     target,
-    ...(run.request.slackSource
-      ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
-      : {}),
-    ...(run.request.slackSource?.externalPolicyNamespace
-      ? { slackPolicyNamespace: run.request.slackSource.externalPolicyNamespace }
-      : {}),
+    ...sourceDestination(turnSource(run.request)),
     ...(editRef ? { editRef } : {}),
     ...(webTranscript ? { webTranscript } : {}),
   };

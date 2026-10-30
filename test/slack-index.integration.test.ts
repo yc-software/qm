@@ -609,7 +609,7 @@ test("a DM becomes one scoped live turn and one Slack reply", async () => {
     assert.match(f.core.turns[0].redeliveryKey, /^slack:[^:]+:D1:100\.1$/);
     assert.equal(f.core.turns[0].conversation.audience[0].externalId, "U1");
     assert.equal(f.core.turns[0].deliveryTarget, "D1");
-    assert.equal(f.core.turns[0].slackSource.replyThreadTs, undefined);
+    assert.equal(f.core.turns[0].source.replyThread, undefined);
     assert.equal(f.core.turns[0].liveActor, true);
     assert.equal(f.core.turns[0].triggerTs, "100.1");
     assert.equal(f.core.turns[0].gatewayContext.botHandle, "qmbot");
@@ -1243,7 +1243,7 @@ test("a DM thread reply carries its reply thread as a typed Slack source field",
     });
     assert.equal(f.core.turns.length, 1);
     assert.equal(f.core.turns[0].conversation.kind, "dm");
-    assert.equal(f.core.turns[0].slackSource.replyThreadTs, "100.1");
+    assert.equal(f.core.turns[0].source.replyThread, "100.1");
   } finally {
     await f.stop();
   }

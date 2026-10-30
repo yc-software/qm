@@ -113,6 +113,7 @@ function publicTurnOrigin(body: TurnRequest): { origin?: TurnOrigin; error?: str
 
 function sanitizedTurnRequest(body: TurnRequest): { request: TurnRequest } | { error: string } {
   const {
+    source: _source,
     slackSource: _slackSource,
     externalSlack: _externalSlack,
     ownerKeychainUnion: _ownerKeychainUnion,

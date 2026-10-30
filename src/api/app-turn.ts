@@ -3,7 +3,7 @@ import { requestedRuntimeError } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { userRuntimeConfigBody } from "./runtime-config.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
-import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.ts";
+import { type Conversation, type Principal, type TurnRequest, type TurnResult, turnSource } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
@@ -363,7 +363,7 @@ export function createTurnMethods(
 
       const input = {
         surface: req.surface,
-        ...(req.slackSource ? { slackSource: req.slackSource } : {}),
+        ...(turnSource(req) ? { source: turnSource(req) } : {}),
         ...(req.externalSlack ? { externalSlack: req.externalSlack } : {}),
         ...(req.spawned && req.sessionSenderId ? { sessionSenderId: req.sessionSenderId } : {}),
         ...(req.spawned && req.delegatingRunId ? { delegatingRunId: req.delegatingRunId } : {}),

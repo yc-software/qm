@@ -48,11 +48,11 @@ export async function continueInPrivate(
   );
   const result = await core.submitTurn({
     actor,
-    slackSource: {
-      accountId: origin.accountId,
-      teamId: origin.teamId,
+    source: {
+      account: origin.accountId,
+      workspaceId: origin.teamId,
       userId: origin.userId,
-      externalPolicyNamespace: externalSlackNamespace(origin.teamId, policy),
+      policyNamespace: externalSlackNamespace(origin.teamId, policy),
     },
     conversation: {
       kind: "dm",

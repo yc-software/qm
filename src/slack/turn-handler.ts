@@ -499,14 +499,14 @@ export function createTurnHandler(deps: {
       actor,
       ...(inc.userId
         ? {
-            slackSource: {
-              accountId: deps.accountId ?? "default",
-              teamId: ids.ownTeamId,
+            source: {
+              account: deps.accountId ?? "default",
+              workspaceId: ids.ownTeamId,
               userId: inc.userId,
               ...(deps.externalAccess
-                ? { externalPolicyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
+                ? { policyNamespace: externalSlackNamespace(ids.ownTeamId, deps.externalAccess) }
                 : {}),
-              ...(replyThreadTs ? { replyThreadTs } : {}),
+              ...(replyThreadTs ? { replyThread: replyThreadTs } : {}),
             },
           }
         : {}),

@@ -25,18 +25,19 @@ import { goalView } from "../runs/turn-stream.ts";
 import { assignedGoal, type GoalRecord, openGoal } from "../harness/goal.ts";
 import { connectorToolsNote, deferredMcpTools } from "../harness/deferred-tools.ts";
 import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
-import type {
-  CommandApprovalGrant,
-  DeliveryProvenance,
-  Destination,
-  EntryType,
-  ScopeId,
-  SessionEntry,
-  SessionType,
-  TurnResult,
-  TurnRuntime,
-  PendingApproval,
-  PendingApprovalRecord,
+import {
+  type CommandApprovalGrant,
+  type DeliveryProvenance,
+  type Destination,
+  type EntryType,
+  type ScopeId,
+  type SessionEntry,
+  type SessionType,
+  type TurnResult,
+  type TurnRuntime,
+  type PendingApproval,
+  type PendingApprovalRecord,
+  turnSource,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
@@ -1139,10 +1140,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           "\n\nMemories recalled for a message arrive under `## What you remember`. Use them freely, but a preference tagged with another scope heading or `(said in …)` applies only there.";
 
       const delivery = deliveryCandidatesFor(input.surface, input.deliveryTarget, input.deliveryCandidates, scopeId);
-      if (input.slackSource)
+      const source = turnSource(input);
+      if (source)
         for (const candidate of delivery.candidates) {
-          candidate.slackAccountId = input.slackSource.accountId;
-          candidate.slackTeamId = input.slackSource.teamId;
+          candidate.account = source.account;
+          candidate.workspaceId = source.workspaceId;
         }
       const defaultCandidate = delivery.candidates.find((c) => c.key === delivery.defaultKey);
       let defaultDestination: Destination | undefined;
@@ -1150,8 +1152,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         defaultDestination = {
           type: defaultCandidate.type,
           target: defaultCandidate.target,
-          ...(defaultCandidate.slackAccountId ? { slackAccountId: defaultCandidate.slackAccountId } : {}),
-          ...(defaultCandidate.slackTeamId ? { slackTeamId: defaultCandidate.slackTeamId } : {}),
+          ...(defaultCandidate.account ? { account: defaultCandidate.account } : {}),
+          ...(defaultCandidate.workspaceId ? { workspaceId: defaultCandidate.workspaceId } : {}),
           ...(defaultCandidate.audienceScopeId ? { audienceScopeId: defaultCandidate.audienceScopeId } : {}),
         };
       } else if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination) {

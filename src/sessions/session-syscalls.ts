@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import type { CoreSearch } from "../search/core-search.ts";
-import type { ScopeId, Session, SessionEntry, SpawnMeta } from "../types.ts";
+import { type ScopeId, type Session, type SessionEntry, type SpawnMeta, turnSource } from "../types.ts";
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import type { Run, RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -206,6 +206,7 @@ interface SessionSyscallBinding {
     | "readOnly"
     | "scopeVersion"
     | "sessionParticipantIds"
+    | "source"
     | "slackSource"
     | "externalSlack"
   > & { origin?: OrchestratorInput["origin"] };
@@ -355,7 +356,7 @@ function childRunRequest(child: Session, meta: SpawnMeta, text: string, displayT
     ...(meta.scopeVersion ? { scopeVersion: meta.scopeVersion } : {}),
     ...(meta.sessionParticipantIds ? { sessionParticipantIds: meta.sessionParticipantIds } : {}),
     surface: meta.surface,
-    ...(meta.slackSource ? { slackSource: meta.slackSource } : {}),
+    ...(turnSource(meta) ? { source: turnSource(meta) } : {}),
     ...(meta.externalSlack ? { externalSlack: meta.externalSlack } : {}),
     ...(meta.deliveryTarget ? { deliveryTarget: meta.deliveryTarget } : {}),
     ...(meta.deliveryCandidates ? { deliveryCandidates: meta.deliveryCandidates } : {}),
@@ -688,7 +689,7 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                   : {}),
                 ...(caller.unattendedGrants ? { unattendedGrants: [...caller.unattendedGrants] } : {}),
                 openFingerprint: fingerprint,
-                ...(binding.request.slackSource ? { slackSource: binding.request.slackSource } : {}),
+                ...(turnSource(binding.request) ? { source: turnSource(binding.request) } : {}),
                 ...(binding.request.externalSlack ? { externalSlack: binding.request.externalSlack } : {}),
                 ...(binding.request.scopeVersion ? { scopeVersion: binding.request.scopeVersion } : {}),
                 ...(binding.request.sessionParticipantIds
