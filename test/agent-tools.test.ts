@@ -492,6 +492,10 @@ test("sandbox advertises available management actions and retires migrate", asyn
     "restart",
   ]);
   assert.match(textOut(await call(sandbox, { action: "migrate", purpose: "p" })), /invalid sandbox arguments/);
+  assert.match(
+    textOut(await call(disabled, { action: "create", backend: "e2b", purpose: "p" })),
+    /invalid sandbox arguments/,
+  );
   assert.match(textOut(await call(execute, { command: "", computer: "migrate" })), /invalid execute arguments/);
 });
 
