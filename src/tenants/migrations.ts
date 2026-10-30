@@ -108,7 +108,7 @@ export const TENANCY_BASE: PgMigrationDefinition = {
   ],
 };
 
-export function tenantPolicies(table: string): string[] {
+function tenantPolicies(table: string): string[] {
   return [
     `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
     `DROP POLICY IF EXISTS tenant_app ON ${table}`,
