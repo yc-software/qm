@@ -7553,8 +7553,6 @@ h3.ambient-field-label {
   display: inline-flex;
 }
 
-/* Multi-tab groups: tabs shrink from 150px to a floor, then move into the strip's
-   overflow menu; the active tab never shrinks, so it is never the one clipped. */
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
   height: var(--split-tab-h);
   flex: 0 1 auto;
@@ -7588,8 +7586,6 @@ h3.ambient-field-label {
   display: none;
 }
 
-/* Tabs the strip can no longer fit collapse into its overflow control — a chevron and a
-   count sitting with the pane actions, in their idiom. */
 .dockview-theme-qm .dv-tabs-overflow-dropdown-default {
   height: 26px;
   padding: 0 6px;
@@ -7601,14 +7597,9 @@ h3.ambient-field-label {
 }
 
 .dockview-theme-qm .dv-tabs-overflow-dropdown-default:hover {
-  border-radius: var(--radius-sm);
   background: var(--secondary);
 }
 
-/* Its menu is anchored in a layer the pane render-overlays and the sashes (z-index 1 and
-   99) would otherwise paint over, and dockview ships it unstyled — lift it clear of both
-   and dress it as one of the app's own popovers. The anchor is a stacking context, so this
-   is the ceiling for everything inside it: keep it at dockview's own overlay level. */
 .dockview-theme-qm .dv-popover-anchor {
   z-index: 1000;
 }
