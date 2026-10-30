@@ -131,6 +131,34 @@ test("seeding creates the install tenant, then pushes its settings with the oper
   }
 });
 
+test("seeding reads missing operator and tenant secrets from the target's secret store", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
+  try {
+    const bodies: string[] = [];
+    const link = async (): Promise<CoreLink> => ({
+      request: async (_path, init) => {
+        bodies.push(String(init.body));
+        return { status: 200, body: "{}" };
+      },
+      close: () => {},
+    });
+    const stored: Record<string, string> = {
+      CORE_SIGNING_SECRET: signing,
+      DEPLOYMENT_CONTROL_SECRET: control,
+      ANTHROPIC_API_KEY: "sk-stored",
+    };
+    await quietly(() =>
+      seedTenantSettings({ config: config(), configDir: dir }, link, (name) => {
+        if (!(name in stored)) throw new Error(`no ${name}`);
+        return stored[name];
+      }),
+    );
+    assert.equal(JSON.parse(bodies[1]!).env.ANTHROPIC_API_KEY, "sk-stored");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("seeding refuses without a distinct operator credential, surfaces rejections and defers when core is unreachable", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-tenant-seed-"));
   try {

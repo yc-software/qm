@@ -8,7 +8,7 @@ import {
   migrateRegisteredPgSchemas,
   ownerDatabaseUrl,
 } from "../src/persistence/pg-pool.ts";
-import { setLoginPasswords } from "../src/persistence/login-passwords.ts";
+import { setLoginPasswords, setPoolLoginPasswords } from "../src/persistence/login-passwords.ts";
 import { scramVerifier } from "../cli/src/scram-verifier.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -110,3 +110,16 @@ test(
     }
   },
 );
+
+test("instances booting together serialize their login password updates", { skip }, async () => {
+  const pools = Array.from({ length: 8 }, () => new pg.Pool({ connectionString: URL!, max: 1 }));
+  await pools[0]!.query(
+    `DO $$ BEGIN CREATE ROLE qm_app LOGIN NOSUPERUSER NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+  );
+  try {
+    for (let round = 0; round < 5; round++)
+      await Promise.all(pools.map((pool) => setPoolLoginPasswords(pool, ["postgres://qm_app:same-password@db/qm"])));
+  } finally {
+    await Promise.all(pools.map((pool) => pool.end()));
+  }
+});

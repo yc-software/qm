@@ -5,7 +5,7 @@ import { parseIntoClientConfig } from "pg-connection-string";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
 import { tenantPgPool } from "../tenants/pg.ts";
-import { setLoginPasswords } from "./login-passwords.ts";
+import { setPoolLoginPasswords } from "./login-passwords.ts";
 
 export type { Pool, PoolClient };
 
@@ -46,10 +46,7 @@ let loginPasswordsSet = false;
 
 async function setManagedLoginPasswords(connectionString: string, pool: Pool): Promise<void> {
   if (loginPasswordsSet || connectionString !== poolingConfig.databaseUrl || !poolingConfig.ownerUrl) return;
-  loginPasswordsSet = await setLoginPasswords(
-    (text, params) => pool.query(text, params),
-    [poolingConfig.databaseUrl, poolingConfig.readerUrl],
-  );
+  loginPasswordsSet = await setPoolLoginPasswords(pool, [poolingConfig.databaseUrl, poolingConfig.readerUrl]);
 }
 
 const migrationQueue = createKeyedQueue();

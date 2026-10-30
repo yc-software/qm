@@ -892,3 +892,19 @@ test("dedicated ALBs retain direct core app routing when portal declares the sam
     /core_public_hosts\s+= \[\s+"\*\.apps\.agent\.acme\.example",\s+"api\.agent\.acme\.example"\s+\]/,
   );
 });
+
+test("infra render refuses a vendored AWS scaffold that still hands core the table owner", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qm-terraform-logins-"));
+  try {
+    const infra = join(dir, "infra");
+    mkdirSync(infra);
+    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
+    writeFileSync(join(infra, "variables.tf"), 'variable "org_id" { type = string }\n');
+    writeFileSync(join(infra, "main.tf"), 'resource "aws_secretsmanager_secret_version" "database" {}\n');
+    assert.throws(() => renderTerraformVars(config, dir), /predates the split database logins/);
+    writeFileSync(join(infra, "variables.tf"), 'variable "deployment_id" { type = string }\n');
+    assert.throws(() => renderTerraformVars(config, dir), /predates the split database logins/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

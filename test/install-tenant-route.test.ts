@@ -49,12 +49,12 @@ test("the install tenant route needs both the source signature and the operator 
     return { tenant: "00000000-0000-4000-8000-000000000001", created: calls === 1 };
   });
   try {
-    for (const overrides of [
+    const invalid: Record<string, string>[] = [
       { authorization: "" },
       { authorization: `Bearer ${sourceSecret}` },
       { "x-signature": "x" },
-    ])
-      assert.equal((await srv.request(overrides)).status, 401);
+    ];
+    for (const overrides of invalid) assert.equal((await srv.request(overrides)).status, 401);
     assert.equal(calls, 0);
     const created = await srv.request();
     assert.equal(created.status, 200);

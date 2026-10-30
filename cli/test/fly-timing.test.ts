@@ -21,7 +21,7 @@ const cmd = args.join(" ");
 if (process.env.FAKE_FLY_LOG) fs.appendFileSync(process.env.FAKE_FLY_LOG, JSON.stringify(args) + "\\n");
 if (args[0] === "apps" && args[1] === "create") {
   console.log("created");
-} else if (args[0] === "secrets" && args[1] === "set") {
+} else if (args[0] === "secrets" && (args[1] === "set" || args[1] === "unset")) {
   console.log("staged");
 } else if (args[0] === "secrets" && args[1] === "list") {
   console.log("ADMIN_GRANTS\\nANTHROPIC_API_KEY\\nAWS_ACCESS_KEY_ID\\nAWS_ENDPOINT_URL_S3\\nAWS_SECRET_ACCESS_KEY\\nCAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nDEPLOYMENT_CONTROL_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nPUBLIC_API_URL\\n" + (process.env.FAKE_FLY_FRESH_PG ? "" : process.env.FAKE_FLY_PRESPLIT ? "DATABASE_URL\\n" : "DATABASE_OWNER_URL\\nDATABASE_URL\\nDATABASE_READER_URL\\n") + "SLACK_BOT_TOKEN\\nSLACK_APP_TOKEN");

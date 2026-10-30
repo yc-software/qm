@@ -60,7 +60,17 @@ export async function seedTenantSettings(
   mode: "up" | "push" = "push",
 ): Promise<void> {
   const envPath = opts.envFile ?? join(opts.configDir, ".env");
-  const values = existsSync(envPath) ? readEnvFile(envPath) : new Map<string, string>();
+  const values = new Map(existsSync(envPath) ? readEnvFile(envPath) : []);
+  for (const { name, aliases } of fallback ? computedSecrets(opts.config) : []) {
+    if (deploymentSecretValue(name, values.get(name)) !== undefined) continue;
+    if (!isTenantSetting(name) && !(aliases ?? []).some((alias) => isTenantSetting(alias.name))) continue;
+    try {
+      const stored = fallback!(name);
+      if (stored) values.set(name, stored);
+    } catch {
+      continue;
+    }
+  }
   let credentials: ReturnType<typeof operatorCredentials>;
   try {
     credentials = operatorCredentials(values, fallback);

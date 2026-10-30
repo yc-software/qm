@@ -275,6 +275,17 @@ function declaredInDir(configDir: string): string[] | undefined {
   return existsSync(path) ? declaredVariables(readFileSync(path, "utf8")) : undefined;
 }
 
+function assertTerraformScaffoldSplitsDatabaseLogins(configDir: string): void {
+  const read = (name: string): string | undefined =>
+    existsSync(join(configDir, "infra", name)) ? readFileSync(join(configDir, "infra", name), "utf8") : undefined;
+  const [variables, main] = [read("variables.tf"), read("main.tf")];
+  if (variables === undefined || main === undefined) return;
+  if (!/variable\s+"deployment_id"/.test(variables) || !/database_logins\s*=/.test(main))
+    throw new CliError(
+      "the vendored AWS scaffold predates the split database logins; update infra/variables.tf and infra/main.tf from the current scaffold so core stops running as the table owner",
+    );
+}
+
 export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDir: string): void {
   const services = Object.values(config.aws?.services ?? {});
   const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
@@ -322,6 +333,7 @@ export function renderTerraformVars(config: QmConfig, configDir: string): void {
   const path = join(configDir, "infra", "terraform.tfvars");
   if (!existsSync(path)) throw new CliError(`${path} does not exist; scaffold it with qm init --target aws`);
   assertTerraformScaffoldSupportsConfig(config, configDir);
+  assertTerraformScaffoldSplitsDatabaseLogins(configDir);
   const existing = readFileSync(path, "utf8");
   const declared = declaredInDir(configDir);
   writeFileSync(path, terraformVars(config, existing, ...(declared ? [declared] : [])));

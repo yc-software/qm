@@ -988,12 +988,12 @@ function runFlyDeploy(args: string[], cwd: string): Promise<void> {
   });
 }
 
-function unsetDisabledSecurityScreenToken(config: QmConfig, appPrefix: string): void {
-  if (config.securityScreen?.classifier === "proxy") return;
+function unsetTenantSettingsFromCore(appPrefix: string): void {
   const app = `${appPrefix}-core`;
-  if (!secretNames(app)?.has("SECURITY_SCREEN_PROXY_TOKEN")) return;
-  fly(["secrets", "unset", "--stage", "-a", app, "SECURITY_SCREEN_PROXY_TOKEN"]);
-  note(`removed the disabled security screen token from ${app}`);
+  const stale = [...(secretNames(app) ?? [])].filter(isTenantSetting);
+  if (!stale.length) return;
+  fly(["secrets", "unset", "--stage", "-a", app, ...stale]);
+  note(`removed tenant-owned settings from ${app} env: ${stale.join(", ")}`);
 }
 
 function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): void {
@@ -1167,7 +1167,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
       die("\naborting `up`: set the missing secrets above first (use --stage, the deploy applies them)");
     }
     if (services.includes("core")) {
-      unsetDisabledSecurityScreenToken(config, ctx.appPrefix);
+      unsetTenantSettingsFromCore(ctx.appPrefix);
       unsetDisabledFlyPublisherToken(config, ctx.appPrefix);
     }
     unsetCorelessPluginCoreSecrets(plugins, ctx.appPrefix);
@@ -1350,7 +1350,12 @@ function livePublishedApps(config: QmConfig): string[] {
     (app) => app === shared || app.startsWith(`${deployAppPrefix}-`),
   );
   return candidates.filter((app) => {
-    const parsed = JSON.parse(fly(["status", "-a", app, "--json"]) || "{}") as { Machines?: { state?: string }[] };
+    let parsed: { Machines?: { state?: string }[] };
+    try {
+      parsed = JSON.parse(fly(["status", "-a", app, "--json"]) || "{}") as typeof parsed;
+    } catch {
+      throw new CliError(`could not read machine state for published app ${app}; stop it before qm down`);
+    }
     return (parsed.Machines ?? []).some((machine) => machine.state === "started");
   });
 }
@@ -1697,7 +1702,7 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
   for (const workload of runnableServices(config.services))
     ensureApp(`${prefix}-${workload}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
   for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
-  unsetDisabledSecurityScreenToken(config, prefix);
+  unsetTenantSettingsFromCore(prefix);
   unsetDisabledFlyPublisherToken(config, prefix);
   unsetCorelessPluginCoreSecrets(plugins, prefix);
   const stagedApps = new Set<string>();
