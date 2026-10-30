@@ -1088,22 +1088,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       legacySandboxScopeDefaults[parsed] = parseSandboxBackend("SANDBOX_SCOPE_BACKENDS." + kind, value);
     }
   }
-  const tenantSandboxEnv = [
-    "SANDBOX_BACKEND",
-    "SANDBOX_SECONDARY_BACKEND",
-    "SPRITES_TOKEN",
-    "SMOLMACHINES_TOKEN",
-    "AGENT37_API_KEY",
-    "SUPERSERVE_API_KEY",
-    "DO_AGENTS_API_TOKEN",
-    "MODAL_TOKEN_ID",
-    "MODAL_TOKEN_SECRET",
-  ].filter((name) => env[name]?.trim());
-  if (tenantSandboxEnv.length) {
-    console.warn(
-      `[config] ${tenantSandboxEnv.join(", ")} ${tenantSandboxEnv.length === 1 ? "is" : "are"} ignored — the sandbox backend and provider keys are per-tenant settings. Remove the variables.`,
-    );
-  }
   const retiredBrainEnv = ["BRAIN", "BRAIN_MCP_URL", "BRAIN_RO_CLIENT_ID", "BRAIN_RW_CLIENT_ID"].filter((name) =>
     env[name]?.trim(),
   );

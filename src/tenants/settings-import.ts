@@ -39,6 +39,7 @@ export function tenantEnvPresent(env: NodeJS.ProcessEnv): string[] {
 }
 
 const RETIRED_ENV = [
+  "SANDBOX_SECONDARY_BACKEND",
   "BROKER_CREDENTIALS",
   "CODEX_AUTH_FILE",
   "CLAUDE_CODE_OAUTH_TOKEN",
