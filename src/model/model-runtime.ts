@@ -141,6 +141,9 @@ export async function buildModelRuntime(
     );
     const hasConfiguredAuth = runtime.hasConfiguredAuth.bind(runtime);
     runtime.hasConfiguredAuth = (provider) => providers.has(provider) || hasConfiguredAuth(provider);
+    const checkAuth = runtime.checkAuth.bind(runtime);
+    runtime.checkAuth = async (provider) =>
+      providers.has(provider) ? { type: "api_key", source: "model gateway" } : checkAuth(provider);
     const getAuth = runtime.getAuth.bind(runtime);
     runtime.getAuth = (async (model, overrides) => {
       if (typeof model === "string") return getAuth(model, overrides);

@@ -52,7 +52,7 @@ const TURN_EFFORT_LEVELS = new Set<string>([
   "default",
   "adaptive",
 ]);
-import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
+import type { ConversationTurn, SessionEntry } from "../types.ts";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../core/turn-error.ts";
 import { providerTurnError } from "../model/provider-error.ts";
@@ -65,7 +65,6 @@ import {
   defaultInteractiveThinkingLevel,
   modelSupportsAdaptiveThinking,
   modelSupportsProviderDefault,
-  modelDisplayName,
   resolveModel,
   getRequiredModel,
   contextTokenBudgetForModel,

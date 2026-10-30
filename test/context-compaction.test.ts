@@ -576,6 +576,7 @@ test("a model-overridden session's background pass sizes against the override's 
     "the background pass judges fullness by the override model's budget — under the scope default it would never fire",
   );
   assert.equal(compactCalls.length, 1, "exactly one background compaction against the override's budget");
+  assert.equal(compactCalls[0]!.runtime?.modelId, OVERRIDE, "and summarizes on the session's own model");
 });
 
 test("a rapid follow-up that outran the background pass AND is over the HARD limit blocks and compacts inline", async () => {

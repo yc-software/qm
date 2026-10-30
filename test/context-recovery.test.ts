@@ -217,3 +217,36 @@ test("recent recovery drops an oversized request inside a completed turn", async
     await f.sessions.releaseLease(f.input.lease);
   }
 });
+
+test("a trim says why the summary failed and keeps the last saved summary, not the previous failure", async () => {
+  const f = await fixture();
+  try {
+    const entries = await f.sessions.getEntries(f.input.session.id);
+    await f.sessions.append(f.input.lease, {
+      type: "system",
+      payload: createContextSummaryPayload(entries[1]!.seq, "Saved work summary."),
+      scopeLabel: "personal:test",
+    });
+    const reasons = ["gateway budget exhausted", "provider key revoked"];
+    let marker = "";
+    for (const reason of reasons) {
+      f.agent.compactHistory = async () => {
+        throw new Error(reason);
+      };
+      for (let i = 0; i < 12; i++)
+        await f.sessions.append(f.input.lease, {
+          type: "user",
+          payload: { text: `newer message ${i} `.repeat(100) },
+          scopeLabel: "personal:test",
+        });
+      const visibleHistory = forModelContext((await f.sessions.getContextWindow(f.input.session.id)).entries);
+      const history = await f.compaction.compactContextIfNeeded({ ...f.input, visibleHistory });
+      marker = contextSummaryPayload(history.find((e) => contextSummaryPayload(e))!)!.text;
+      assert.ok(marker.includes(reason));
+      assert.ok(marker.includes("Saved work summary."));
+    }
+    assert.ok(!marker.includes(reasons[0]!));
+  } finally {
+    await f.sessions.releaseLease(f.input.lease);
+  }
+});
