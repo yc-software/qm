@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { spawn } from "node:child_process";
-import { deriveKey, seal, openSession, type SessionClaims } from "../src/session.ts";
+import { deriveKey, seal } from "../../chassis/src/signed-token.ts";
+import { openSession, type SessionClaims } from "../../chassis/src/portal-session.ts";
 
 const claimed = new Set<string>();
 let claimCalls = 0;

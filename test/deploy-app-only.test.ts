@@ -14,7 +14,7 @@ import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
-import { deriveKey, seal } from "../plugins/portal/src/session.ts";
+import { deriveKey, seal } from "../plugins/chassis/src/signed-token.ts";
 import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";

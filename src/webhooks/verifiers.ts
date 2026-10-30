@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import type { Webhook } from "../types.ts";
-import { constantTimeEqual } from "../util/crypto.ts";
+import { safeEqual } from "../../plugins/chassis/src/signed-token.ts";
 
 export interface VerifierInput {
   secret?: string;
@@ -44,7 +44,7 @@ const github: Verifier = {
     if (!secret) return false;
     const sig = header(headers, "x-hub-signature-256");
     if (!sig) return false;
-    return constantTimeEqual(sig, `sha256=${hmacHex(secret, rawBody)}`);
+    return safeEqual(sig, `sha256=${hmacHex(secret, rawBody)}`);
   },
   deliveryId({ rawBody }) {
     return bodyHash(rawBody);
@@ -65,7 +65,7 @@ const slack: Verifier = {
     const tsSeconds = Number(ts);
     if (!Number.isFinite(tsSeconds)) return false;
     if (Math.abs(Date.now() / 1000 - tsSeconds) > SLACK_TS_TOLERANCE_SECONDS) return false;
-    return constantTimeEqual(sig, `v0=${hmacHex(secret, `v0:${ts}:${rawBody}`)}`);
+    return safeEqual(sig, `v0=${hmacHex(secret, `v0:${ts}:${rawBody}`)}`);
   },
   deliveryId({ rawBody }) {
     return signedBodyId(rawBody, "event_id");
@@ -88,7 +88,7 @@ const stripe: Verifier = {
     const v1s = parts.filter(([k, v]) => k === "v1" && v).map(([, v]) => v);
     if (!t || v1s.length === 0) return false;
     const expected = hmacHex(secret, `${t}.${rawBody}`);
-    return v1s.some((v1) => constantTimeEqual(v1, expected));
+    return v1s.some((v1) => safeEqual(v1, expected));
   },
   deliveryId({ rawBody }) {
     return signedBodyId(rawBody, "id");
@@ -101,7 +101,7 @@ const hmacSha256: Verifier = {
     const raw = header(headers, "x-signature");
     if (!raw) return false;
     const sig = raw.startsWith("sha256=") ? raw.slice("sha256=".length) : raw;
-    return constantTimeEqual(sig, hmacHex(secret, rawBody));
+    return safeEqual(sig, hmacHex(secret, rawBody));
   },
   deliveryId({ rawBody }) {
     return bodyHash(rawBody);
@@ -115,7 +115,7 @@ const linear: Verifier = {
     if (!secret) return false;
     const sig = header(headers, "linear-signature");
     if (!sig) return false;
-    if (!constantTimeEqual(sig, hmacHex(secret, rawBody))) return false;
+    if (!safeEqual(sig, hmacHex(secret, rawBody))) return false;
     let body: unknown;
     try {
       body = JSON.parse(rawBody);

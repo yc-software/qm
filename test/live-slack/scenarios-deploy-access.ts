@@ -4,7 +4,8 @@ import { createHmac } from "node:crypto";
 import { assert, type Actor, type Env, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
+import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
+import { PORTAL_IDENTITY_HEADER } from "../../plugins/chassis/src/portal-identity.ts";
 
 const CORE = () => (process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "");
 const SECRET = () => process.env.CORE_SIGNING_SECRET ?? "";

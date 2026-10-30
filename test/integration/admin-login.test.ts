@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { adminLoginUrl } from "../../cli/src/commands/admin-login.ts";
-import { deriveKey, openSession, seal } from "../../plugins/portal/src/session.ts";
+import { deriveKey, seal } from "../../plugins/chassis/src/signed-token.ts";
+import { openSession } from "../../plugins/chassis/src/portal-session.ts";
 
 const envPath = process.env.QM_ADMIN_LOGIN_ENV_FILE;
 const env = envPath ? (JSON.parse(readFileSync(envPath, "utf8")) as Record<string, string>) : null;

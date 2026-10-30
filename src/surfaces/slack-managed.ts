@@ -1,6 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { App as BoltApp, Receiver } from "@slack/bolt";
+import { safeEqual } from "../../plugins/chassis/src/signed-token.ts";
 import type { SlackInstallationStore } from "./slack-installation.ts";
 import type { EnvelopeStaging } from "../slack/envelope-staging.ts";
 import {
@@ -26,11 +26,8 @@ export function createManagedSlack(opts: {
     throw new Error("Managed Slack requires an HTTPS service URL and credential");
   }
   let active: { app: BoltApp; installId: string; staging?: EnvelopeStaging } | undefined;
-  const authenticated = (req: IncomingMessage): boolean => {
-    const actual = Buffer.from(req.headers.authorization ?? "");
-    const expected = Buffer.from(`Bearer ${opts.token}`);
-    return actual.length === expected.length && timingSafeEqual(actual, expected);
-  };
+  const authenticated = (req: IncomingMessage): boolean =>
+    safeEqual(req.headers.authorization ?? "", `Bearer ${opts.token}`);
   return {
     async setupStatus(): Promise<{ companyOwned: boolean; appReady: boolean; connected: boolean } | undefined> {
       const response = await (opts.fetchImpl ?? fetch)(new URL("/install/status", serviceUrl), {

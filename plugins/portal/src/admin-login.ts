@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { deriveKey, open } from "./session.ts";
+import { deriveKey, open } from "../../chassis/src/signed-token.ts";
 
 export function openAdminLogin(token: string, secret: string, publicUrl: string, nowMs = Date.now()) {
   if (secret.trim().length < 32 || token.length > 4096) return null;

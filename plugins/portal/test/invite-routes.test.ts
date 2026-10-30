@@ -5,7 +5,8 @@ import type { AddressInfo } from "node:net";
 import { runInNewContext } from "node:vm";
 import { canonicalPayload, signRequest } from "../../chassis/src/source-auth-sign.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "../src/invite-login.ts";
-import { deriveKey, openSession } from "../src/session.ts";
+import { deriveKey } from "../../chassis/src/signed-token.ts";
+import { openSession } from "../../chassis/src/portal-session.ts";
 
 const coreSecret = "invite-route-core-secret";
 const sessionSecret = "invite-route-session-secret";

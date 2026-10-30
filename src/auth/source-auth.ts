@@ -1,6 +1,6 @@
 import { signRequest as signCanonical } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { createMemoryReplayDedupe, type ReplayDedupe } from "./replay-dedupe.ts";
-import { constantTimeEqual } from "../util/crypto.ts";
+import { safeEqual } from "../../plugins/chassis/src/signed-token.ts";
 
 export const SOURCE_AUTH_REPLAY_WINDOW_MS = 5 * 60_000;
 export const MIN_SIGNING_SECRET_LENGTH = 32;
@@ -52,7 +52,7 @@ export function verifySignature(
   if (Math.abs(now - req.timestamp * 1000) > replayWindowMs) {
     return { ok: false, reason: "stale timestamp (replay protection)" };
   }
-  if (!constantTimeEqual(signRequest(secret, req.timestamp, req.body), req.signature)) {
+  if (!safeEqual(signRequest(secret, req.timestamp, req.body), req.signature)) {
     return { ok: false, reason: "signature mismatch" };
   }
   return { ok: true };

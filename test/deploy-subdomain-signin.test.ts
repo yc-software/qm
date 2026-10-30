@@ -14,7 +14,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { PORTAL_IDENTITY_HEADER } from "../src/auth/portal-identity.ts";
+import { PORTAL_IDENTITY_HEADER } from "../plugins/chassis/src/portal-identity.ts";
 import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";

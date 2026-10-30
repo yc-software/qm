@@ -1,8 +1,8 @@
 import { pgConnectionOptions, resolvePgCaTrust } from "../persistence/pg-pool.ts";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
-import { mintSignedPayload } from "../auth/signed-token.ts";
+import { PORTAL_IDENTITY_HEADER } from "../../plugins/chassis/src/portal-identity.ts";
+import { mintPortalIdentity } from "../auth/portal-identity.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
@@ -99,7 +99,7 @@ export async function stagingApiHeaders(
   base: Record<string, string> = {},
   nowMs = Date.now(),
 ): Promise<Record<string, string>> {
-  const portalIdentity = await mintSignedPayload({ p: principalId, exp: nowMs + 60_000 }, portalIdentitySecret);
+  const portalIdentity = await mintPortalIdentity({ p: principalId, exp: nowMs + 60_000 }, portalIdentitySecret);
   return signedRequestHeaders(
     sourceSecret,
     method,

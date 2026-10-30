@@ -7,7 +7,7 @@ import type { App } from "../app.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { SourceAuth } from "../../auth/source-auth.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
-import type { PortalIdentity } from "../../auth/portal-identity.ts";
+import type { PortalIdentity } from "../../../plugins/chassis/src/portal-identity.ts";
 
 export interface BaseCtx {
   req: IncomingMessage;

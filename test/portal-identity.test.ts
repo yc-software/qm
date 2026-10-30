@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mintPortalIdentity, verifyPortalIdentity } from "../plugins/chassis/src/portal-identity.ts";
+import {
+  mintPortalIdentity as mintCoreIdentity,
+  verifyPortalIdentity as verifyCoreIdentity,
+} from "../src/auth/portal-identity.ts";
 
 const SECRET = "portal-identity-test-secret";
 const now = 1_000_000;
@@ -39,4 +43,10 @@ test("malformed tokens and missing claims are rejected", () => {
   assert.equal(verifyPortalIdentity(".sig", SECRET, now), null);
   const token = mintPortalIdentity({ exp: now + 60_000 } as never, SECRET);
   assert.equal(verifyPortalIdentity(token, SECRET, now), null);
+});
+
+test("core reads portal-minted identity headers, and the portal format never accepts a core-minted JWS", async () => {
+  const claims = { p: "U1", exp: Date.now() + 60_000 };
+  assert.deepEqual(await verifyCoreIdentity(mintPortalIdentity(claims, SECRET), SECRET, Date.now()), claims);
+  assert.equal(verifyPortalIdentity(await mintCoreIdentity(claims, SECRET), SECRET, Date.now()), null);
 });

@@ -16,10 +16,8 @@ import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./a
 import { LRUCache } from "lru-cache";
 import { createTrustedEntry, trustedEntryConfig } from "./trusted-entry.ts";
 import { answerPreflight, parseAllowedOrigins, prepareCors } from "./cors.ts";
+import { deriveKey, safeEqual, seal } from "../../chassis/src/signed-token.ts";
 import {
-  deriveKey,
-  seal,
-  openSession,
   openImpersonation,
   openTmp,
   setCookie,
@@ -27,9 +25,7 @@ import {
   clearCookie,
   readCookie,
   randomToken,
-  safeEqual,
   sanitizeReturnTo,
-  type SessionClaims,
   type ImpersonationClaims,
   type TmpClaims,
 } from "./session.ts";
@@ -59,6 +55,7 @@ import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-clien
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { openSession, portalSessionKey, type SessionClaims } from "../../chassis/src/portal-session.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import {
   json,
@@ -220,7 +217,7 @@ const PRINCIPAL_RULE: PrincipalRule = {
 };
 
 const DEV_SECRET = "dev-only-insecure-portal-session-secret";
-const sessionKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.session.v1");
+const sessionKey = portalSessionKey(SESSION_SECRET ?? DEV_SECRET);
 const tmpKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.tmp.v1");
 const impersonateKey = deriveKey(SESSION_SECRET ?? DEV_SECRET, "portal.impersonate.v1");
 const trustedOidc = trustedEntryConfig(process.env, PUBLIC_URL);

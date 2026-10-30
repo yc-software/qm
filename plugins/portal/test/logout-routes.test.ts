@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { deriveKey, seal } from "../src/session.ts";
+import { deriveKey, seal } from "../../chassis/src/signed-token.ts";
 
 let idpRequests = 0;
 const idp = createServer((_req, res) => {

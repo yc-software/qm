@@ -1,42 +1,5 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-
-export function deriveKey(secret: string, label: string): Buffer {
-  return createHmac("sha256", secret).update(label).digest();
-}
-
-export function seal(payload: unknown, key: Buffer): string {
-  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const sig = createHmac("sha256", key).update(body).digest("base64url");
-  return `${body}.${sig}`;
-}
-
-export function open(token: string | null | undefined, key: Buffer): Record<string, unknown> | null {
-  if (!token) return null;
-  const dot = token.indexOf(".");
-  if (dot <= 0 || dot === token.length - 1) return null;
-  const body = token.slice(0, dot);
-  const got = Buffer.from(token.slice(dot + 1));
-  const expected = Buffer.from(createHmac("sha256", key).update(body).digest("base64url"));
-  if (got.length !== expected.length || !timingSafeEqual(got, expected)) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
-}
-
-export interface SessionClaims {
-  k: "session";
-  sub: string;
-  org: string;
-  name?: string;
-  auth?: number;
-  anon?: boolean;
-  appOnly?: boolean;
-  iat: number;
-  exp: number;
-}
+import { randomBytes } from "node:crypto";
+import { open } from "../../chassis/src/signed-token.ts";
 
 export interface ImpersonationClaims {
   k: "impersonate";
@@ -55,32 +18,6 @@ export interface TmpClaims {
   returnTo: string;
   iat: number;
   exp: number;
-}
-
-export function openSession(
-  token: string | null,
-  key: Buffer,
-  now: number,
-  expectedOrg?: string,
-  maxAgeSeconds?: number,
-): SessionClaims | null {
-  const p = open(token, key);
-  if (!p || p.k !== "session") return null;
-  if (
-    typeof p.sub !== "string" ||
-    !p.sub ||
-    typeof p.org !== "string" ||
-    !p.org ||
-    typeof p.iat !== "number" ||
-    typeof p.exp !== "number"
-  )
-    return null;
-  if (p.appOnly !== undefined && typeof p.appOnly !== "boolean") return null;
-  if (expectedOrg !== undefined && p.org !== expectedOrg) return null;
-  if (now >= p.exp * 1000) return null;
-  const authenticatedAt = typeof p.auth === "number" ? p.auth : p.iat;
-  if (maxAgeSeconds !== undefined && now >= (authenticatedAt + maxAgeSeconds) * 1000) return null;
-  return p as unknown as SessionClaims;
 }
 
 export function openImpersonation(token: string | null, key: Buffer, now: number): ImpersonationClaims | null {
@@ -163,12 +100,6 @@ export function readCookie(header: string | undefined, name: string): string | n
 
 export function randomToken(bytes = 32): string {
   return randomBytes(bytes).toString("hex");
-}
-
-export function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
 }
 
 function sanitizeAppsReturnTo(value: string, appsDomain: string): string | null {

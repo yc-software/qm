@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildAuthorizeUrl, exchangeCode, fetchUserinfo, pkcePair, verifyIdToken, type OidcConfig } from "./oidc.ts";
-import { deriveKey, openTmp, randomToken, safeEqual, seal, type TmpClaims } from "./session.ts";
+import { deriveKey, safeEqual, seal } from "../../chassis/src/signed-token.ts";
+import { openTmp, randomToken, type TmpClaims } from "./session.ts";
 
 export function trustedEntryConfig(env: NodeJS.ProcessEnv, publicUrl: string): OidcConfig | null {
   const raw = env.PORTAL_TRUSTED_OIDC;

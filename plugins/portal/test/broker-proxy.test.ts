@@ -1,4 +1,4 @@
-import { deriveKey, seal } from "../src/session.ts";
+import { deriveKey, seal } from "../../chassis/src/signed-token.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { deriveKey, open, randomToken, safeEqual, seal, type SessionClaims } from "./session.ts";
+import type { SessionClaims } from "../../chassis/src/portal-session.ts";
+import { deriveKey, open, safeEqual, seal } from "../../chassis/src/signed-token.ts";
+import { randomToken } from "./session.ts";
 
 export const DESKTOP_LAUNCH_SCRIPT = `window.location.href = document.getElementById("desktop-launch").href;`;
 export const DESKTOP_LAUNCH_SCRIPT_HASH = `sha256-${createHash("sha256").update(DESKTOP_LAUNCH_SCRIPT).digest("base64")}`;

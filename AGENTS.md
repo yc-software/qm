@@ -33,8 +33,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   (memory line grammar). Plugins are separate packages and keep their own local
   copies rather than importing core code — the one exception is the shared
   `plugins/chassis` package (the sanctioned home for the plugin↔core plumbing:
-  source-auth signer, signed core-client, node:http helpers, error helpers, CORE_*
-  env), imported by relative path and never importing core. The bar cuts both ways:
+  source-auth signer, signed core-client, signed-token seal/open, node:http helpers,
+  error helpers, CORE_* env), imported by relative path and never importing core. The bar cuts both ways:
   don't manufacture an abstraction for a pattern with one caller.
 - **Never merge to `main` without a fresh-context pass that tries to break the change.**
   Not a blessing — hunt for the bug, the missed edge case, the unstated assumption, the

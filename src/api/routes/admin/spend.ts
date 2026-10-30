@@ -1,7 +1,7 @@
 import { canonicalPerson } from "../../../directory/person.ts";
 import { parseScopeId, personalScope, type Cron, type ScopeId } from "../../../types.ts";
 import type { SessionOrigin, SessionStore, SpendRow } from "../../../sessions/session-store.ts";
-import { constantTimeEqual } from "../../../util/crypto.ts";
+import { safeEqual } from "../../../../plugins/chassis/src/signed-token.ts";
 import { contentDispositionAttachment, contentTypeWithUtf8Charset, sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import { discoverScopes } from "./common.ts";
@@ -506,7 +506,7 @@ export async function spendExport(ctx: BaseCtx): Promise<void> {
   const token = deps.spendExportToken;
   if (!token) return sendJson(res, 404, { error: "not_found" });
   const authorization = req.headers.authorization;
-  if (typeof authorization !== "string" || !constantTimeEqual(authorization, `Bearer ${token}`))
+  if (typeof authorization !== "string" || !safeEqual(authorization, `Bearer ${token}`))
     return sendJson(res, 401, { error: "unauthorized" });
   if (!deps.sessions) return sendJson(res, 503, { error: "spend_unavailable" });
   const from = parseDay(url.searchParams.get("from") ?? "");

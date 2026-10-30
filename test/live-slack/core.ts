@@ -1,7 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { mintCapabilityToken } from "../../src/auth/capability-token.ts";
-import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
+import { mintPortalIdentity } from "../../src/auth/portal-identity.ts";
+import { PORTAL_IDENTITY_HEADER } from "../../plugins/chassis/src/portal-identity.ts";
 
 const ADMIN_PRINCIPAL = process.env.LIVE_E2E_ADMIN_PRINCIPAL || "admin-alice";
 

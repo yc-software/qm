@@ -115,7 +115,7 @@ const SESSION_TTL_S = 28800;
 process.env.PORTAL_SESSION_TTL_S = String(SESSION_TTL_S);
 
 const { server } = await import("../src/index.ts");
-const { deriveKey, seal, open } = await import("../src/session.ts");
+const { deriveKey, seal, open } = await import("../../chassis/src/signed-token.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 

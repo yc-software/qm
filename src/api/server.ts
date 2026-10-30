@@ -21,7 +21,8 @@ import {
   type SourceAuth,
 } from "../auth/source-auth.ts";
 import { verifyCapabilityToken, CONTROL_PLANE_AUD, type CapabilityClaims } from "../auth/capability-token.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../auth/portal-identity.ts";
+import { verifyPortalIdentity } from "../auth/portal-identity.ts";
+import { PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../../plugins/chassis/src/portal-identity.ts";
 import { errMessage } from "../util/errors.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { canonicalPayload } from "../../plugins/chassis/src/source-auth-sign.ts";

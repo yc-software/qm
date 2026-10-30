@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
-import { deriveKey, open, seal, readCookie } from "../src/session.ts";
+import { deriveKey, open, seal } from "../../chassis/src/signed-token.ts";
+import { readCookie } from "../src/session.ts";
 import { coreEmailAdmission, coreEmailAllowed } from "../../chassis/src/external-members.ts";
 
 const secret = "app-only-session-test-secret";

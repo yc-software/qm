@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { adminLoginUrl } from "../cli/src/commands/admin-login.ts";
 import { openAdminLogin } from "../plugins/portal/src/admin-login.ts";
-import { deriveKey, seal } from "../plugins/portal/src/session.ts";
+import { deriveKey, seal } from "../plugins/chassis/src/signed-token.ts";
 
 const secret = "admin-login-contract-test-secret-32-characters";
 const publicUrl = "https://qm.example.com";

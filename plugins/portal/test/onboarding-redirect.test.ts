@@ -32,7 +32,7 @@ process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 
 const { server } = await import("../src/index.ts");
-const { deriveKey, seal } = await import("../src/session.ts");
+const { deriveKey, seal } = await import("../../chassis/src/signed-token.ts");
 await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 

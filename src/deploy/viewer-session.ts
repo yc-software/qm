@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { openSession, portalSessionKey } from "../../plugins/chassis/src/portal-session.ts";
 
 export const FRAME_SESSION_COOKIE = "portal_session_x";
 
@@ -21,34 +21,12 @@ export function portalSessionFrom(
   secret: string,
   now = Date.now(),
 ): PortalViewerSession | null {
+  const key = portalSessionKey(secret);
   for (const token of readCookies(cookieHeader, name)) {
-    const session = verifySessionToken(token, secret, now);
-    if (session) return session;
+    const session = openSession(token, key, now);
+    if (session) return { sub: session.sub, appOnly: session.appOnly === true };
   }
   return null;
-}
-
-function verifySessionToken(token: string, secret: string, now: number): PortalViewerSession | null {
-  const key = createHmac("sha256", secret).update("portal.session.v1").digest();
-  const dot = token.indexOf(".");
-  if (dot <= 0 || dot === token.length - 1) return null;
-  const body = token.slice(0, dot);
-  const got = Buffer.from(token.slice(dot + 1));
-  const expected = Buffer.from(createHmac("sha256", key).update(body).digest("base64url"));
-  if (got.length !== expected.length || !timingSafeEqual(got, expected)) return null;
-  let claims: Record<string, unknown>;
-  try {
-    const parsed = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object") return null;
-    claims = parsed as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-  if (claims.k !== "session") return null;
-  if (typeof claims.sub !== "string" || !claims.sub) return null;
-  if (typeof claims.exp !== "number" || now >= claims.exp * 1000) return null;
-  if (claims.appOnly !== undefined && typeof claims.appOnly !== "boolean") return null;
-  return { sub: claims.sub, appOnly: claims.appOnly === true };
 }
 
 function readCookies(header: string | undefined, name: string): string[] {

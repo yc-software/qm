@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { deriveKey, seal } from "../src/session.ts";
+import { deriveKey, seal } from "../../chassis/src/signed-token.ts";
 import { PORTAL_IDENTITY_HEADER, verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
 const identitySecret = "self-connect-portal-identity-secret-32+";

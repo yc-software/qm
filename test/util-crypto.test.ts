@@ -1,14 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { constantTimeEqual, hashId } from "../src/util/crypto.ts";
-
-test("constantTimeEqual: equal, unequal, and length-mismatched inputs", () => {
-  assert.equal(constantTimeEqual("secret-token", "secret-token"), true);
-  assert.equal(constantTimeEqual("secret-token", "secret-tokeX"), false);
-  assert.equal(constantTimeEqual("short", "longer-string"), false);
-  assert.equal(constantTimeEqual("", ""), true);
-  assert.equal(constantTimeEqual("", "x"), false);
-});
+import { hashId } from "../src/util/crypto.ts";
 
 test("hashId: byte-identical to every pre-consolidation call-site shape", () => {
   assert.equal(hashId(["personal:user@acme.com"], 6), "7d4ccb");
