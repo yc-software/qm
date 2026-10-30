@@ -2744,7 +2744,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 securityPolicy.screening !== "off"
                   ? ({ content, name, mimetype }) =>
                       screenChunks(
-                        [JSON.stringify({ name, mimetype, content })],
+                        securityScreenChunks("tool_result:inbound_file", JSON.stringify({ name, mimetype, content })),
                         classifyAs({
                           sessionId: session.id,
                           hook: "tool_response",
