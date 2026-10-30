@@ -41,9 +41,7 @@ secretEnv:
   DEPLOY_APPS_DOMAIN: ""
   PORTER_DEPLOY_APPS_DOMAIN: ""
   AUTH_ALLOWED_EMAILS: ""
-  AUTH_CLIENT_ID: ""
   AUTH_CLIENT_SECRET: ""
-  OIDC_CLIENT_ID: ""
   OIDC_CLIENT_SECRET: ""
   AUTH_TOKEN_SECRET: ""
   AUTH_SIGNING_JWK: ""
@@ -63,12 +61,9 @@ ingress:
 
 services:
   core:
-    enabled: true
     image: core
-    type: web
     port: 8080
-    replicas: 1
-    command: ["node", "src/index.ts"]
+    publicPort: 8000
     healthPath: /healthz
     readinessPath: /readyz
     startupProbe:
@@ -83,73 +78,38 @@ services:
       existingClaim: ""
       size: 10Gi
       storageClass: null
-    resources:
-      requests:
-        cpu: 500m
-        memory: 1Gi
-      limits:
-        memory: 2Gi
+    env: {}
+    edge:
+      replicas: 1
+      command: ["node", "src/edge/main.ts"]
+      terminationGracePeriodSeconds: 300
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          memory: 2Gi
+    harness:
+      replicas: 1
+      command: ["node", "src/harness/main.ts"]
+      terminationGracePeriodSeconds: 300
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          memory: 2Gi
+
+  portal:
+    enabled: true
     env: {}
 
   auth:
     enabled: true
-    image: auth
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "src/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
-    env: {}
-
-  web-ui:
-    enabled: true
-    image: web-ui
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "server/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
     env: {}
 
   admin:
     enabled: true
-    image: admin
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "src/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
-    env:
-      ADMIN_BASE_PATH: /admin
-
-  portal:
-    enabled: true
-    image: portal
-    type: web
-    port: 8080
-    replicas: 1
-    command: ["node", "src/index.ts"]
-    resources:
-      requests:
-        cpu: 100m
-        memory: 256Mi
-      limits:
-        memory: 512Mi
     env: {}
 
   egress-proxy:

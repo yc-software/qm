@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { gunzipSync } from "node:zlib";
 import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting, traceQueued } from "../plugins/chassis/src/error-reporting.ts";
-import { createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/harness/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";

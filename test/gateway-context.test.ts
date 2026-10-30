@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderGatewayContext } from "../src/core/orchestrator/prompt-blocks.ts";
+import { renderGatewayContext } from "../src/harness/orchestrator/prompt-blocks.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";
@@ -124,7 +124,7 @@ test("triggered destination turns tell the agent to return the deliverable, not 
 });
 
 test("a web turn's default delivery destination is its own web session", async () => {
-  const { deliveryCandidatesFor } = await import("../src/core/orchestrator/turn-helpers.ts");
+  const { deliveryCandidatesFor } = await import("../src/core/turn-helpers.ts");
   const delivery = deliveryCandidatesFor("web", "web:session-1", undefined, scopeId("personal", "a@example.com"));
   const chosen = delivery.candidates.find((c) => c.key === delivery.defaultKey);
   assert.equal(chosen?.type, "web");

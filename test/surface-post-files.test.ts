@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
+import { createAttachStaging } from "../src/harness/orchestrator/attach-tool.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -8,8 +8,8 @@ import {
   MAX_ATTACHMENT_BYTES,
   type ArtifactRegistration,
 } from "../src/core/attachments.ts";
-import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/surfaces/surface-tools.ts";
-import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
+import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/harness/orchestrator/surface-tools.ts";
+import { turnPostKeys } from "../src/core/turn-helpers.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";

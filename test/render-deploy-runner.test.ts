@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { connect, type AddressInfo } from "node:net";
 import { mock, test, type TestContext } from "node:test";
 import { createApp } from "../src/api/app.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import {

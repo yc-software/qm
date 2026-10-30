@@ -203,7 +203,7 @@ test(
       });
       assert.match(flyPlan, /Plan only/);
       assert.doesNotMatch(flyPlan, /source checkout|deploy\/core\/Dockerfile/);
-      const generatedCore = join(deployment, ".generated", "fly", "acme", "core.fly.toml");
+      const generatedCore = join(deployment, ".generated", "fly", "acme", "edge.fly.toml");
       assert.ok(existsSync(generatedCore));
       const generatedCoreToml = readFileSync(generatedCore, "utf8");
       assert.doesNotMatch(generatedCoreToml, /^\s*PI_(?:MODEL|DETECT_MODEL)\s*=/m);
@@ -219,8 +219,8 @@ test(
         webUiUrl?: string;
         adminOnboardingUrl?: string;
       };
-      assert.equal(outputs.webUiUrl, "https://acme-portal.fly.dev");
-      assert.equal(outputs.adminOnboardingUrl, "https://acme-portal.fly.dev/admin/onboarding");
+      assert.equal(outputs.webUiUrl, "https://acme-core.fly.dev");
+      assert.equal(outputs.adminOnboardingUrl, "https://acme-core.fly.dev/admin/onboarding");
       execFileSync(bin, ["slack", "render"], { cwd: deployment, stdio: "pipe", env });
       execFileSync(bin, ["conformance", "--static"], { cwd: deployment, stdio: "pipe", env });
       assert.match(execFileSync(awsBin, ["check"], { cwd: awsDeployment, encoding: "utf8", env }), /check passed/);
@@ -256,7 +256,7 @@ else if (command === "ecs describe-services") {
     status: "ACTIVE",
     desiredCount: 0,
     taskDefinition: "arn:task/" + serviceName + ":1",
-    loadBalancers: serviceName.endsWith("-portal") ? [{ targetGroupArn: ${JSON.stringify(portalTarget)} }] : [],
+    loadBalancers: serviceName.endsWith("-core") ? [{ targetGroupArn: ${JSON.stringify(portalTarget)}, containerName: "core", containerPort: 8000 }] : [],
     tags: [{ key: "Deployment", value: "acme-aws" }, { key: "ManagedBy", value: "terraform" }],
   })) });
 } else if (command === "ecs describe-task-definition") json({ taskDefinition: { family: "legacy", containerDefinitions: [] } });
@@ -300,7 +300,8 @@ else if (command === "secretsmanager get-secret-value") {
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/deployment.md"));
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/references/fly.md"));
       assert.ok(packed[0]!.files.some(({ path }) => path === "templates/deployment/references/porter.md"));
-      assert.ok(packed[0]!.files.some(({ path }) => path === "templates/fly/core.toml"));
+      assert.ok(packed[0]!.files.some(({ path }) => path === "templates/fly/edge.toml"));
+      assert.ok(packed[0]!.files.some(({ path }) => path === "templates/fly/harness.toml"));
       assert.ok(!packed[0]!.files.some(({ path }) => path === "src/contract.ts" || path === "bin/qm.ts"));
     } finally {
       if (registry) await new Promise<void>((resolve) => registry!.close(() => resolve()));

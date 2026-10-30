@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
@@ -213,7 +213,7 @@ test("the title lands even when the turn pauses on approval (early titling off t
 });
 
 test("sanitizeTitle rejects reply-shaped output and names the rule plus a sample of what it rejected", async () => {
-  const { sanitizeTitle, titleUserPrompt } = await import("../src/agent/agent-run.ts");
+  const { sanitizeTitle, titleUserPrompt } = await import("../src/model/model-utilities.ts");
   const rejects = (out: string, rule: string) =>
     assert.throws(() => sanitizeTitle(out), {
       name: "TitleRejected",

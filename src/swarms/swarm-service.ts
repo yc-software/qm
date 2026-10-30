@@ -2,7 +2,7 @@ import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import { isUnstarted } from "../runs/run-store.ts";

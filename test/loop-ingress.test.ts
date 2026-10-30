@@ -7,8 +7,8 @@ import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push.ts";
-import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { loopIngressRoutes } from "../src/edge/http/routes/loop-ingress.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 async function world() {

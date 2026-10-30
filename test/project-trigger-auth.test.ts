@@ -11,7 +11,7 @@ import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../sr
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";

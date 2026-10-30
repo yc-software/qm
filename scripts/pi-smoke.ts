@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.ts";
 import { DEFAULT_AGENT_MODEL_ID } from "../src/model/pi-models.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "../test/support/compose.ts";
 import type { TurnRequest } from "../src/types.ts";
 
 if (!process.env.ANTHROPIC_API_KEY) {

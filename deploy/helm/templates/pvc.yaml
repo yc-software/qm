@@ -1,5 +1,5 @@
 {{- $core := .Values.services.core }}
-{{- if and $core.enabled $core.persistence.enabled (not $core.persistence.existingClaim) }}
+{{- if and $core.persistence.enabled (not $core.persistence.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

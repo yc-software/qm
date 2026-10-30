@@ -2,7 +2,7 @@ import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import type { App, RedeployInput } from "../src/api/app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { scopeId } from "../src/types.ts";

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyReasoningMode, createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/harness/agent-run.ts";
+import { applyReasoningMode } from "../src/model/pi-runtime.ts";
 import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/model/pi-models.ts";
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
@@ -183,7 +184,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
 
 test("runtime scope writes and turn dispatch reject unsupported modes without changing legacy selections", async () => {
   const { resolveRuntimeChoice } = await import("../src/agent/runtime-choice.ts");
-  const { createRuntimeService } = await import("../src/agent/runtime-control.ts");
+  const { createRuntimeService } = await import("../src/harness/runtime-control.ts");
   const config = testConfigStore("default-org");
   const active = { modelId: "claude-sonnet-5", effortLevel: "auto" };
   await config.setRuntimeSelection("personal:test", active);

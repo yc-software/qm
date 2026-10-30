@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyTurnEffort, createAgent } from "../src/agent/agent-run.ts";
-import type { AgentOptions } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/harness/agent-run.ts";
+import { applyTurnEffort } from "../src/model/pi-runtime.ts";
+import type { AgentOptions } from "../src/harness/agent-run.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput } from "../src/agent/agent.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";

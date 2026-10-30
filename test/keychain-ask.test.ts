@@ -8,10 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createServer } from "../src/api/server.ts";
-import { keychainRoutes } from "../src/api/routes/keychain.ts";
+import { createServer } from "../src/edge/http/server.ts";
+import { keychainRoutes } from "../src/edge/http/routes/keychain.ts";
 import {
   createKeychain,
   askResolutionEvents,

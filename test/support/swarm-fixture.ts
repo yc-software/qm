@@ -7,7 +7,7 @@ import { createSwarmService, type SwarmCaller } from "../../src/swarms/swarm-ser
 import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
-import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../../src/core/turn-input.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
 import { claimTurn, testRunStore } from "./turns.ts";

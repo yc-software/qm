@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type App, type AppDeps } from "../src/api/app.ts";
-import { postSoul } from "../src/api/routes/surface.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { postSoul } from "../src/edge/http/routes/surface.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";

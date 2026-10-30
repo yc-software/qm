@@ -1,11 +1,13 @@
 import type { ErrorLog } from "../admin/error-log.ts";
-import type { Agent } from "../agent/agent.ts";
+import type { ModelUtilities } from "../agent/agent.ts";
+import { commonEntrySeqs, createTranscriptSource } from "../sessions/transcript-source.ts";
+import { isOverheardEntry } from "../sessions/session-store.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { headSlice } from "../util/text.ts";
-import { stripTurnBoilerplate } from "./orchestrator/turn-helpers.ts";
+import { renderTitleTranscript, stripTurnBoilerplate, visibleTitleEntryText } from "./turn-helpers.ts";
 import { TitleRejected } from "./turn-error.ts";
 
 function fallbackSessionTitle(text: string): string | undefined {
@@ -16,7 +18,7 @@ function fallbackSessionTitle(text: string): string | undefined {
 
 export function createSessionTitles(deps: {
   sessions: SessionStore;
-  agent: Agent;
+  agent: Pick<ModelUtilities, "generateTitle">;
   sessionStateBus?: SessionStateBus;
   errors?: ErrorLog;
 }) {
@@ -81,4 +83,38 @@ export function createSessionTitles(deps: {
   }
 
   return { generateAndStore, titleFromFirstMessage };
+}
+
+export function createTitleRegenerator(deps: {
+  sessions: SessionStore;
+  titles: ReturnType<typeof createSessionTitles>;
+}) {
+  const transcripts = createTranscriptSource(deps.sessions);
+  return async function regenerateTitle(
+    sessionId: string,
+    principalId: string,
+    participantIds?: readonly string[],
+  ): Promise<{ title: string | null } | null> {
+    const session = await deps.sessions.get(sessionId);
+    if (!session) return null;
+    let entries = (await transcripts.forViewer(sessionId, principalId)).entries;
+    if (participantIds?.length) {
+      const views = await Promise.all(
+        participantIds.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).entries),
+      );
+      const common = commonEntrySeqs(views);
+      entries = entries.filter((entry) => common.has(entry.seq));
+    }
+    if (entries.length === 0) return null;
+    const transcript = renderTitleTranscript(entries);
+    const fallbackEntry = entries.find((entry) => entry.type === "user" && !isOverheardEntry(entry));
+    const title = await deps.titles.generateAndStore(
+      session.id,
+      session.scopeId,
+      transcript,
+      participantIds?.length ? principalId : undefined,
+      fallbackEntry ? visibleTitleEntryText(fallbackEntry) : undefined,
+    );
+    return { title: title ?? (participantIds ? null : (session.title ?? null)) };
+  };
 }

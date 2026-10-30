@@ -1,4 +1,4 @@
-import type { OrchestratorInput } from "../core/orchestrator/types.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import type { ClientToolResult, TurnRequest } from "../types.ts";
 import { swallowAs } from "../util/errors.ts";
 

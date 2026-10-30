@@ -8,7 +8,7 @@ import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { startSignalPoll } from "../src/runs/run-signal-store.ts";
@@ -221,7 +221,7 @@ test("HTTP root spawns three peers and receives their replies using real orchest
     };
   };
   captureIssuedTokens();
-  const { serverDeps } = await import("../src/wiring.ts");
+  const { serverDeps } = await import("./support/compose.ts");
   let server = createServer(built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   let base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

@@ -2,7 +2,7 @@ import { countTokens } from "../util/tokens.ts";
 import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { Session } from "../types.ts";
-import { visibleTitleEntryText } from "./orchestrator/turn-helpers.ts";
+import { visibleTitleEntryText } from "./turn-helpers.ts";
 import { promptText } from "../util/text.ts";
 
 export const SIDE_CHAT_GUIDANCE = [
