@@ -176,7 +176,7 @@ const DEPLOYMENTS: TableSpec<Deployment, "id"> = {
   },
 };
 
-export const DEPLOYMENT_MIGRATIONS = [
+const DEPLOYMENT_MIGRATIONS = [
   {
     id: "tenancy/deployment_prep/0001",
     statements: [

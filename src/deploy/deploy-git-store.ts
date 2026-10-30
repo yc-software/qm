@@ -69,7 +69,7 @@ const ARCHIVES: TableSpec<DeployGitArchive, "deploymentId"> = {
   columns: { bundleB64: "text", blobKey: "text", etag: "text", updatedAt: "bigint" },
 };
 
-export const DEPLOY_GIT_ARCHIVE_MIGRATION = tableConversion(ARCHIVES);
+const DEPLOY_GIT_ARCHIVE_MIGRATION = tableConversion(ARCHIVES);
 
 export function createPostgresDeployGitArchives(databaseUrl: string): DeployGitArchives {
   const { get, put, update, delete: remove } = typedTable(databaseUrl, ARCHIVES, DEPLOY_GIT_ARCHIVE_MIGRATION);
