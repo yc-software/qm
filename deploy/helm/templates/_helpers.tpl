@@ -56,3 +56,128 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- printf "%s%s%s:%s" .root.Values.image.repository (.root.Values.image.separator | default "/") .service.image $tag -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "qm.deployment" -}}
+{{- $root := .root -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "qm.fullname" $root }}-{{ .name }}
+  labels:
+    {{- include "qm.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ .name }}
+spec:
+  replicas: {{ .replicas }}
+  {{- if .claim }}
+  {{- if gt (int .replicas) 1 }}
+  {{- fail "core persistence supports at most one replica; shared-storage multi-replica operation is not supported" }}
+  {{- end }}
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "qm.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: {{ .name }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret-env: {{ include (print $root.Template.BasePath "/secret.yaml") $root | sha256sum }}
+      labels:
+        {{- include "qm.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ .name }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "qm.serviceAccountName" $root }}
+      {{- with .grace }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
+      {{- if .claim }}
+      {{- if .colocateWith }}
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "qm.selectorLabels" $root | nindent 18 }}
+                  app.kubernetes.io/component: {{ .colocateWith }}
+      {{- end }}
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .claim | quote }}
+      {{- end }}
+      containers:
+        - name: {{ .name }}
+          image: {{ include "qm.image" (dict "root" $root "name" .imageName "service" .svc) | quote }}
+          {{- if .claim }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          {{- with .command }}
+          command:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            {{- range .ports }}
+            - name: {{ .name }}
+              containerPort: {{ .port }}
+            {{- end }}
+          {{- if .env }}
+          env:
+            {{- range $k, $v := .env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if or (include "qm.hasSecretEnv" $root) $root.Values.envFrom }}
+          envFrom:
+            {{- if include "qm.hasSecretEnv" $root }}
+            - secretRef:
+                name: {{ include "qm.fullname" $root }}-env
+            {{- end }}
+            {{- with $root.Values.envFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- with .startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .healthPath }}
+          readinessProbe:
+            timeoutSeconds: 2
+            httpGet:
+              path: {{ .readinessPath | default .healthPath }}
+              port: {{ .probePort }}
+          livenessProbe:
+            httpGet:
+              path: {{ .healthPath }}
+              port: {{ .probePort }}
+          {{- else }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .probePort }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .probePort }}
+          {{- end }}
+          {{- with .resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end -}}

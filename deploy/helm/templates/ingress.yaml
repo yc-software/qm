@@ -1,13 +1,15 @@
 {{- if .Values.ingress.enabled }}
-{{- $svcKey := .Values.ingress.service }}
-{{- $svc := index .Values.services $svcKey }}
-{{- if or (not $svc) (not (has $svcKey (list "portal" "core" "web-ui"))) }}
-{{- fail "ingress.service must name an enabled HTTP service: portal, core, or web-ui (auth and admin are embedded)" }}
+{{- $core := .Values.services.core }}
+{{- $port := dict "portal" $core.publicPort "core" $core.port }}
+{{- $target := .Values.ingress.service }}
+{{- if not (hasKey $port $target) }}
+{{- fail "ingress.service must be portal (the edge's public front door) or core (the edge's API port)" }}
 {{- end }}
-{{- if not $svc.enabled }}
-{{- fail (printf "ingress.service %s is disabled" $svcKey) }}
+{{- if and (eq $target "portal") (not .Values.services.portal.enabled) }}
+{{- fail "ingress.service portal is disabled" }}
 {{- end }}
-{{- $svcName := printf "%s-%s" (include "qm.fullname" .) $svcKey }}
+{{- $svcName := printf "%s-core" (include "qm.fullname" .) }}
+{{- $svcPort := index $port $target }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -44,6 +46,6 @@ spec:
               service:
                 name: {{ $svcName }}
                 port:
-                  number: {{ $svc.port }}
+                  number: {{ $svcPort }}
     {{- end }}
 {{- end }}
