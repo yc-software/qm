@@ -1,8 +1,14 @@
 import { reportBackendError } from "../../plugins/chassis/src/error-reporting.ts";
 import { errChain as errMessage, errDetail, failureCode } from "../../plugins/chassis/src/errors.ts";
+import type { ZodError } from "zod";
 import { WorkAdmissionClosed } from "./admitted-work.ts";
 
 export { errChain as errMessage, failureCode, swallow, swallowAs } from "../../plugins/chassis/src/errors.ts";
+
+export function zodMessage(field: string, error: ZodError): string {
+  const issue = error.issues[0]!;
+  return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
+}
 
 export function asError(e: unknown): Error {
   return e instanceof Error ? e : new Error(errMessage(e), { cause: e });

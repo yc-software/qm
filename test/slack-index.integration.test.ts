@@ -338,6 +338,11 @@ class FakeCore implements SlackCoreClient {
     this.directories.push(body);
     return true;
   }
+  readonly observations: any[] = [];
+  async recordDirectoryObservation(observation: any): Promise<boolean> {
+    this.observations.push(observation);
+    return true;
+  }
   holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null> {
     return fn(new Promise<void>(() => {}));
   }
@@ -1315,6 +1320,11 @@ test("a group-DM thread-follow runs unprompted yet attests its author's liveness
     assert.equal(f.core.turns[0].liveActor, true, "a member's own verbatim follow-up is a live act");
     assert.equal(f.core.turns[0].conversation.kind, "group");
     assert.equal(f.core.turns[0].conversation.threadRef, "grp:G1:300.1");
+    const [observed] = f.core.observations;
+    assert.equal(observed?.kind, "group", "the verified roster is recorded before admission");
+    assert.equal(observed.id, "G1");
+    assert.deepEqual([...observed.memberIds].sort(), ["U1", "U2"]);
+    assert.ok(observed.observedAt > 0);
   } finally {
     await f.stop();
   }

@@ -492,6 +492,17 @@ test("pg live channel observations survive older snapshots but yield to later re
   await directoryObservationCases(store);
 });
 
+test("pg live group-DM observations survive older crawls but yield to later removal", { skip }, async () => {
+  const { groupObservationCases } = await import("./support/directory-observation-cases.ts");
+  const store = createPostgresDirectoryStore(URL!);
+  await store.replaceGroups([], Date.now());
+  const pg = (await import("pg")).default;
+  const pool = new pg.Pool({ connectionString: URL! });
+  await pool.query("UPDATE directory_sync SET groups_synced_at = NULL, groups_hash = NULL");
+  await pool.end();
+  await groupObservationCases(store);
+});
+
 test("pg directory: room membership follows a person's linked identities", { skip }, async () => {
   const { installPrincipalLinks } = await import("../src/directory/person.ts");
   const store = createPostgresDirectoryStore(URL!);

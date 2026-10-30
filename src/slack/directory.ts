@@ -21,6 +21,7 @@ import {
 } from "./lib.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
+import type { DirectoryObservation } from "../directory/directory-store.ts";
 
 export interface BotIdentity {
   ownTeamId: string;
@@ -619,21 +620,22 @@ export function createDirectory(deps: {
     } catch {
       return { audience: [actor, externalMarker()] };
     }
-    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot && !info?.is_mpim) {
-      if (!info?.name || typeof info.is_private !== "boolean" || info.is_member === false || observedAt === undefined)
+    if (CORE_SINGLETON && !deps.externalAccess && !actor.isBot) {
+      const kind = info?.is_mpim === true ? "group" : "channel";
+      const { name, is_private: isPrivate } = info ?? {};
+      if (
+        (kind === "channel" && (!name || typeof isPrivate !== "boolean")) ||
+        info?.is_member === false ||
+        observedAt === undefined
+      )
         return { audience: [actor, externalMarker()] };
       if (membership.publishMembers) {
-        const applied = await core.pushDirectory({
-          channels: [{ channelId: channel, name: info.name, isPrivate: info.is_private }],
-          channelMembers: membership.publishMembers.map((member) => ({
-            channelId: channel,
-            principalId: member.externalId,
-          })),
-          channelRosterIds: [channel],
-          channelsSyncedAt: observedAt,
-          partialChannels: true,
-        });
-        if (!applied) throw new Error("Slack channel membership was not persisted before admission");
+        const memberIds = membership.publishMembers.map((member) => member.externalId);
+        const roster = { id: channel, memberIds, observedAt };
+        const observation: DirectoryObservation =
+          kind === "group" ? { kind, ...roster } : { kind, ...roster, name: name!, isPrivate: isPrivate! };
+        if (!(await core.recordDirectoryObservation(observation)))
+          throw new Error(`Slack ${kind} membership was not persisted before admission`);
       }
     }
     return membership;

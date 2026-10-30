@@ -6,6 +6,7 @@ import {
   type SlackSessionStatus,
   type SlackSessionStatusState,
 } from "../slack/session-status.ts";
+import type { DirectoryObservation } from "../directory/directory-store.ts";
 import type { FeatureFlagStore } from "../feature-flags.ts";
 import { decideDeploymentAccess } from "../slack/deploy-access.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -75,7 +76,6 @@ interface DirectoryPush {
   workspaceUrl?: string;
   membersSyncedAt?: number;
   channelsSyncedAt?: number;
-  partialChannels?: boolean;
   groupsSyncedAt?: number;
 }
 
@@ -108,6 +108,7 @@ export interface SlackCoreClient {
   reportRunEditRef(runId: string, editRef: string): Promise<void>;
   getApproval(requestId: string): Promise<StoredApprovalView | null>;
   pushDirectory(body: DirectoryPush): Promise<boolean>;
+  recordDirectoryObservation(observation: DirectoryObservation): Promise<boolean>;
   claimDeliveries(type: string, claimMs: number): Promise<Delivery[]>;
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
@@ -433,7 +434,6 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
             body.channelsSyncedAt,
             body.channelRosterIds,
             body.channelRevocations,
-            body.partialChannels,
           )) && applied;
       }
       if (body.groupMembers) {
@@ -442,6 +442,10 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
           applied;
       }
       return applied;
+    },
+
+    recordDirectoryObservation(observation) {
+      return deps.app.recordDirectoryObservation(observation);
     },
 
     claimDeliveries(type, claimMs) {

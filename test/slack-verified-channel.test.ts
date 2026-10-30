@@ -9,7 +9,11 @@ import { createHttpEventsReceiver } from "../src/slack/http-events.ts";
 import { createDeduper, dedupedRun } from "../src/slack/message-gating.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
+import {
+  createDirectoryStore,
+  directoryObservation,
+  type DirectoryObservation,
+} from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 
@@ -34,18 +38,12 @@ function fixture(options: { secondary?: boolean; failWrite?: boolean; throwWrite
   const directory = createDirectory({
     core: {
       holdDirectorySync: async () => null,
-      pushDirectory: async (body: Parameters<SlackCoreClient["pushDirectory"]>[0]) => {
+      recordDirectoryObservation: async (observation: DirectoryObservation) => {
         state.writes++;
         if (options.throwWrite) throw new Error("directory transport unavailable");
         if (options.failWrite) return false;
-        return store.replaceChannels(
-          body.channels!,
-          body.channelMembers,
-          body.channelsSyncedAt,
-          body.channelRosterIds,
-          body.channelRevocations,
-          body.partialChannels,
-        );
+        const parsed = directoryObservation.safeParse(observation);
+        return parsed.success && store.recordObservation(parsed.data);
       },
     } as unknown as SlackCoreClient,
     coreSingleton: !options.secondary,
@@ -114,10 +112,22 @@ test("unknown, external and group metadata never publish an ordinary channel", a
     { name: "room", is_private: true, is_ext_shared: true },
     { name: "room", is_private: true, is_mpim: true },
   ]) {
-    const { state, observe } = fixture();
+    const { store, observe } = fixture();
     await observe(info);
-    assert.equal(state.writes, 0);
+    assert.equal(await store.channelPrivacy("C_ONE"), undefined);
   }
+});
+
+test("a verified group-DM roster persists before admission without listing it as a channel or touching another group", async () => {
+  const { store, state, observe } = fixture();
+  state.memberIds = ["U_ONE", "U_TWO"];
+  await store.replaceGroups([{ groupId: "G_OTHER", principalId: "U_ONE" }], 1, ["G_OTHER"], ["G_OTHER"]);
+  assert.equal(await store.groupMembership("C_ONE", "U_ONE"), false);
+  assert.ok((await observe({ name: "mpdm-one--two-1", is_private: true, is_mpim: true })).publishMembers);
+  assert.equal(await store.groupMember("C_ONE", "U_ONE"), true);
+  assert.equal(await store.groupMember("C_ONE", "U_TWO"), true);
+  assert.equal(await store.groupMember("G_OTHER", "U_ONE"), true);
+  assert.equal(await store.channelPrivacy("C_ONE"), undefined);
 });
 
 test("newer removal rejects an older in-flight live observation", async () => {

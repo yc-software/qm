@@ -4,6 +4,7 @@ import { resolveTurnOrigin } from "../../core/turn-origin.ts";
 import { renderSurfaceBriefing } from "../../core/orchestrator/prompt-blocks.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
+import { zodMessage } from "../../util/errors.ts";
 import { isObj } from "./shared.ts";
 import { type ApiCtx, type Route } from "./route.ts";
 
@@ -85,11 +86,6 @@ const clientResultSchema = z.object({
       .optional(),
   }),
 });
-
-function zodMessage(field: string, error: z.ZodError): string {
-  const issue = error.issues[0]!;
-  return `${[field, ...issue.path.map(String)].join(".")}: ${issue.message}`;
-}
 
 function publicOrigin(origin: TurnOrigin | undefined): TurnOrigin | undefined {
   if (origin?.kind !== "automation") return origin;

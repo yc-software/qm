@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { PrincipalType } from "../types.ts";
 import { rosterIds, samePerson } from "./person.ts";
 
@@ -46,6 +47,31 @@ export type RecipientResolution =
 export type ChannelResolution =
   { kind: "one"; channel: DirectoryChannel } | { kind: "ambiguous"; candidates: DirectoryChannel[] } | { kind: "none" };
 
+const observedRoster = {
+  id: z.string().min(1),
+  memberIds: z.array(z.string().min(1)).min(1),
+  observedAt: z.number().int().nonnegative(),
+};
+
+export const directoryObservation = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("channel"), ...observedRoster, name: z.string().min(1), isPrivate: z.boolean() }).strict(),
+  z.object({ kind: z.literal("group"), ...observedRoster }).strict(),
+]);
+
+export type DirectoryObservation = z.infer<typeof directoryObservation>;
+
+export function staleObservation(
+  observation: DirectoryObservation,
+  crawledAt: number | undefined,
+  storedAt: number | undefined,
+): string | undefined {
+  let reason: string | undefined;
+  if (storedAt !== undefined && storedAt >= observation.observedAt) reason = "an equal or newer observation is stored";
+  else if (crawledAt !== undefined && crawledAt >= observation.observedAt) reason = "an equal or newer crawl is stored";
+  if (reason) console.warn(`[directory] rejected ${observation.kind} observation for ${observation.id}: ${reason}`);
+  return reason;
+}
+
 export interface DirectoryStore {
   replace(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
   replaceChannels(
@@ -54,8 +80,8 @@ export interface DirectoryStore {
     syncedAt?: number,
     channelRosterIds?: string[],
     revocations?: ChannelMembership[],
-    partial?: boolean,
   ): Promise<boolean>;
+  recordObservation(observation: DirectoryObservation): Promise<boolean>;
   list(): Promise<DirectoryMember[]>;
   listChannels(): Promise<DirectoryChannel[]>;
   get(principalId: string): Promise<DirectoryMember | null>;
@@ -118,6 +144,7 @@ export function createDirectoryStore(): DirectoryStore {
   let workspaceUrl: string | undefined;
   const syncedAts = new Map<string, number>();
   const channelObservedAts = new Map<string, number>();
+  const groupObservedAts = new Map<string, number>();
 
   function acceptSync(section: string, syncedAt: number | undefined): boolean {
     if (syncedAt === undefined) return true;
@@ -128,6 +155,10 @@ export function createDirectoryStore(): DirectoryStore {
     }
     syncedAts.set(section, syncedAt);
     return true;
+  }
+
+  function newerObservations(observedAts: Map<string, number>, syncedAt: number | undefined) {
+    return new Set([...observedAts].filter(([, at]) => syncedAt !== undefined && at > syncedAt).map(([id]) => id));
   }
 
   return {
@@ -142,35 +173,15 @@ export function createDirectoryStore(): DirectoryStore {
       members = next.filter((m) => m.principalId && m.type === "internal");
       return true;
     },
-    async replaceChannels(
-      nextChannels,
-      nextChannelMembers,
-      syncedAt,
-      nextChannelRosterIds,
-      revocations = [],
-      partial = false,
-    ) {
-      if (partial && (syncedAt === undefined || !Number.isFinite(syncedAt) || nextChannelMembers === undefined))
-        return false;
-      if (partial && (syncedAts.get("channels") ?? 0) >= syncedAt!) return false;
-      const protectedIds = new Set(
-        [...channelObservedAts]
-          .filter(([, at]) => syncedAt !== undefined && (partial ? at >= syncedAt : at > syncedAt))
-          .map(([id]) => id),
-      );
-      if (partial && nextChannels.some((channel) => protectedIds.has(channel.channelId))) return false;
-      if (!partial && !acceptSync("channels", syncedAt)) return false;
+    async replaceChannels(nextChannels, nextChannelMembers, syncedAt, nextChannelRosterIds, revocations = []) {
+      const protectedIds = newerObservations(channelObservedAts, syncedAt);
+      if (!acceptSync("channels", syncedAt)) return false;
       const updatedIds = new Set(nextChannels.map((channel) => channel.channelId));
       channels = [
-        ...channels.filter((channel) =>
-          partial ? !updatedIds.has(channel.channelId) : protectedIds.has(channel.channelId),
-        ),
+        ...channels.filter((channel) => protectedIds.has(channel.channelId)),
         ...nextChannels.filter((c) => c.channelId && c.name && !protectedIds.has(c.channelId)),
       ];
-      for (const id of updatedIds) {
-        if (partial) channelObservedAts.set(id, syncedAt!);
-        else if (!protectedIds.has(id)) channelObservedAts.delete(id);
-      }
+      for (const id of updatedIds) if (!protectedIds.has(id)) channelObservedAts.delete(id);
       const listed = new Set(channels.map((channel) => channel.channelId));
       knownChannelRosters = knownChannelRosters
         ? new Set([...knownChannelRosters].filter((channelId) => listed.has(channelId)))
@@ -220,10 +231,13 @@ export function createDirectoryStore(): DirectoryStore {
       return channel ? channel.isPrivate === true : undefined;
     },
     async replaceGroups(nextGroupMembers, syncedAt, nextGroupIds, nextGroupRosterIds) {
+      const protectedIds = newerObservations(groupObservedAts, syncedAt);
       if (!acceptSync("groups", syncedAt)) return false;
+      const updated = new Set((nextGroupIds ?? nextGroupMembers.map((member) => member.groupId)).filter(Boolean));
+      for (const groupId of protectedIds) updated.delete(groupId);
       const legacy = nextGroupIds === undefined || nextGroupRosterIds === undefined;
-      const listed = new Set((nextGroupIds ?? nextGroupMembers.map((member) => member.groupId)).filter(Boolean));
-      const rosterIds = new Set((nextGroupRosterIds ?? [...listed]).filter((groupId) => listed.has(groupId)));
+      const listed = new Set([...updated, ...protectedIds]);
+      const rosterIds = new Set((nextGroupRosterIds ?? [...updated]).filter((groupId) => updated.has(groupId)));
       const byGroup = new Map(
         [...(groupMembers ?? [])].filter(([groupId]) => listed.has(groupId) && !rosterIds.has(groupId)),
       );
@@ -234,11 +248,33 @@ export function createDirectoryStore(): DirectoryStore {
       }
       groupMembers = byGroup;
       listedGroupIds = listed;
-      knownGroupRosters = legacy
-        ? new Set(rosterIds)
-        : new Set([...(knownGroupRosters ?? [])].filter((groupId) => listed.has(groupId)));
+      knownGroupRosters = new Set(
+        [...(knownGroupRosters ?? [])].filter(
+          (groupId) => listed.has(groupId) && (!legacy || protectedIds.has(groupId)),
+        ),
+      );
       for (const groupId of rosterIds) knownGroupRosters.add(groupId);
+      for (const groupId of updated) groupObservedAts.delete(groupId);
+      for (const groupId of groupObservedAts.keys()) if (!listed.has(groupId)) groupObservedAts.delete(groupId);
       groupsSynced = true;
+      return true;
+    },
+    async recordObservation(observation) {
+      const observedAts = observation.kind === "channel" ? channelObservedAts : groupObservedAts;
+      if (staleObservation(observation, syncedAts.get(`${observation.kind}s`), observedAts.get(observation.id)))
+        return false;
+      const roster = new Set(observation.memberIds);
+      if (observation.kind === "channel") {
+        const { id: channelId, name, isPrivate } = observation;
+        channels = [...channels.filter((c) => c.channelId !== channelId), { channelId, name, isPrivate }];
+        (channelMembers ??= new Map()).set(channelId, roster);
+        (knownChannelRosters ??= new Set()).add(channelId);
+      } else {
+        (groupMembers ??= new Map()).set(observation.id, roster);
+        (listedGroupIds ??= new Set()).add(observation.id);
+        (knownGroupRosters ??= new Set()).add(observation.id);
+      }
+      observedAts.set(observation.id, observation.observedAt);
       return true;
     },
     async upsertGroup(groupId, principalIds) {
@@ -269,10 +305,10 @@ export function createDirectoryStore(): DirectoryStore {
       return hasPerson(groupMembers?.get(groupId), principalId);
     },
     async groupMembership(groupId, principalId) {
+      if (listedGroupIds?.has(groupId) && knownGroupRosters?.has(groupId))
+        return hasPerson(groupMembers?.get(groupId), principalId);
       if (!groupsSynced) return undefined;
-      if (!listedGroupIds?.has(groupId)) return false;
-      if (!knownGroupRosters?.has(groupId)) return undefined;
-      return hasPerson(groupMembers?.get(groupId), principalId);
+      return listedGroupIds?.has(groupId) ? undefined : false;
     },
     async listGroupsFor(principalId) {
       const memberships = groupMembers;

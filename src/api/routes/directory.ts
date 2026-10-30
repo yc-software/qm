@@ -1,5 +1,6 @@
 import { isPrincipalType, PRINCIPAL_TYPES } from "../../types.ts";
-import type { DirectoryMember } from "../../directory/directory-store.ts";
+import { directoryObservation, type DirectoryMember } from "../../directory/directory-store.ts";
+import { zodMessage } from "../../util/errors.ts";
 import { canonicalPerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
@@ -49,26 +50,15 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     workspaceUrl?: unknown;
     membersSyncedAt?: unknown;
     channelsSyncedAt?: unknown;
-    partialChannels?: unknown;
     groupsSyncedAt?: unknown;
   };
+  if (isObj(body) && ("partialChannels" in body || "partialGroups" in body)) {
+    return sendJson(res, 400, { error: "bad_request", message: "partial pushes moved to /v1/directory/observations" });
+  }
   if (!Array.isArray(b.members) && !Array.isArray(b.channels) && !Array.isArray(b.groupMembers)) {
     return sendJson(res, 400, {
       error: "bad_request",
       message: "members[], channels[], and/or groupMembers[] required",
-    });
-  }
-  if (
-    b.partialChannels !== undefined &&
-    (typeof b.partialChannels !== "boolean" ||
-      (b.partialChannels &&
-        (!Array.isArray(b.channels) ||
-          !Array.isArray(b.channelMembers) ||
-          numOrUndef(b.channelsSyncedAt) === undefined)))
-  ) {
-    return sendJson(res, 400, {
-      error: "bad_request",
-      message: "partial channels require channels[], channelMembers[] and channelsSyncedAt",
     });
   }
   if (Array.isArray(b.members) && b.members.some((m) => isObj(m) && !isPrincipalType(m.type))) {
@@ -118,15 +108,13 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
             isObj(m) && typeof m.channelId === "string" && typeof m.principalId === "string",
         )
       : undefined;
-    const applied = await app.upsertChannels(
+    await app.upsertChannels(
       channels,
       channelMembers,
       numOrUndef(b.channelsSyncedAt),
       channelRosterIds,
       channelRevocations,
-      b.partialChannels === true,
     );
-    if (b.partialChannels && !applied) return sendJson(res, 409, { error: "stale_directory_observation" });
     channelCount = channels.length;
   }
   let groupMemberCount: number | undefined;
@@ -150,6 +138,15 @@ async function pushDirectory(ctx: ApiCtx): Promise<void> {
     ...(channelCount !== undefined ? { channels: channelCount } : {}),
     ...(groupMemberCount !== undefined ? { groupMembers: groupMemberCount } : {}),
   });
+}
+
+async function recordObservation(ctx: ApiCtx): Promise<void> {
+  const parsed = directoryObservation.safeParse(ctx.body);
+  if (!parsed.success)
+    return sendJson(ctx.res, 400, { error: "bad_request", message: zodMessage("observation", parsed.error) });
+  if (!(await ctx.app.recordDirectoryObservation(parsed.data)))
+    return sendJson(ctx.res, 409, { error: "stale_directory_observation" });
+  return sendJson(ctx.res, 200, { ok: true });
 }
 
 async function directoryMeta(ctx: ApiCtx): Promise<void> {
@@ -193,5 +190,6 @@ export const directoryRoutes: ReadonlyArray<Route<ApiCtx>> = [
     { method: "POST", path: "/v1/principals/:id/deactivate", auth: "source", handle: deactivatePrincipal },
     { method: "POST", path: "/v1/principals/:id/reactivate", auth: "source", handle: reactivatePrincipal },
     { method: "POST", path: "/v1/directory", auth: "source", handle: pushDirectory },
+    { method: "POST", path: "/v1/directory/observations", auth: "source", handle: recordObservation },
   ]),
 ];

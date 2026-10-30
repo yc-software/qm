@@ -398,3 +398,8 @@ it("live channel observations survive older snapshots but yield to later removal
   const { directoryObservationCases } = await import("./support/directory-observation-cases.ts");
   await directoryObservationCases(createDirectoryStore());
 });
+
+it("live group-DM observations survive older crawls but yield to later removal", async () => {
+  const { groupObservationCases } = await import("./support/directory-observation-cases.ts");
+  await groupObservationCases(createDirectoryStore());
+});

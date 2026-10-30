@@ -127,35 +127,49 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     const res = await fetch(`${base}/v1/directory/resolve?q=carol`);
     assert.equal(res.status, 401);
   });
-  it("source pushes persist one observed room and reject malformed or stale partial writes", async () => {
-    const post = (body: object) => {
+  it("a source records one observed room or group DM and rejects malformed or stale observations untouched", async () => {
+    const post = (body: unknown, path = "/v1/directory/observations") => {
       const raw = JSON.stringify(body);
-      return fetch(`${base}/v1/directory`, {
+      return fetch(`${base}${path}`, {
         method: "POST",
         headers: {
-          ...signedRequestHeaders(SECRET, "POST", "/v1/directory", raw),
+          ...signedRequestHeaders(SECRET, "POST", path, raw),
           "content-type": "application/json",
         },
         body: raw,
       });
     };
     await built.app.upsertChannels([{ channelId: "C_OTHER", name: "other" }], [], 10);
-    const body = {
-      channels: [{ channelId: "C_LIVE", name: "live", isPrivate: true }],
-      channelMembers: [{ channelId: "C_LIVE", principalId: "U1" }],
-      channelsSyncedAt: 30,
-      partialChannels: true,
-    };
-    assert.equal((await post(body)).status, 200);
-    assert.equal(await built.directory.channelPrivacy("C_OTHER"), false);
+    await built.app.upsertGroups([{ groupId: "G_OTHER", principalId: "U1" }], 10, ["G_OTHER"], ["G_OTHER"]);
+    const room = { kind: "channel", id: "C_LIVE", name: "live", isPrivate: true, memberIds: ["U1"], observedAt: 30 };
+    const group = { kind: "group", id: "G_LIVE", memberIds: ["U1"], observedAt: 30 };
+    const bad = { ...group, id: "G_BAD", memberIds: ["U2"] };
+    for (const [invalid, reason] of [
+      [{ ...bad, kind: "dm" }, /observation\.kind/],
+      [{ ...bad, observedAt: undefined }, /observation\.observedAt/],
+      [{ ...room, id: "C_BAD", channelsSyncedAt: 30 }, /channelsSyncedAt/],
+      [{ ...bad, name: "mpdm-u2-1" }, /name/],
+      [{ ...bad, observedAt: 123.5 }, /observation\.observedAt/],
+      [{ ...bad, observedAt: 1e30 }, /observation\.observedAt/],
+      [{ ...bad, observedAt: -1 }, /observation\.observedAt/],
+    ] as const) {
+      const res = await post(invalid);
+      assert.equal(res.status, 400, JSON.stringify(invalid));
+      assert.match(((await res.json()) as { message: string }).message, reason);
+    }
+    const legacy = { groupMembers: [{ groupId: "G_BAD", principalId: "U2" }], groupIds: ["G_BAD"], groupsSyncedAt: 30 };
+    assert.equal((await post({ ...legacy, partialGroups: true }, "/v1/directory")).status, 400, "legacy partial push");
+    assert.equal((await post(room)).status, 200);
+    assert.equal((await post(group)).status, 200);
+    assert.equal((await post({ ...bad, observedAt: 5 })).status, 409, "older than the last group crawl");
+    assert.equal((await post({ ...room, memberIds: ["U2"] })).status, 409, "not newer than the stored observation");
     assert.equal(await built.directory.channelMember("C_LIVE", "U1"), true);
-    assert.equal((await post({ ...body, channelsSyncedAt: 20 })).status, 409);
-    for (const invalid of [
-      { ...body, channelsSyncedAt: undefined },
-      { ...body, channelMembers: undefined },
-      { ...body, partialChannels: "true" },
-    ])
-      assert.equal((await post(invalid)).status, 400);
+    assert.equal(await built.directory.channelMember("C_LIVE", "U2"), false);
+    assert.equal(await built.directory.groupMember("G_LIVE", "U1"), true);
+    assert.equal(await built.directory.groupMembership("G_BAD", "U2"), false);
+    assert.equal(await built.directory.channelPrivacy("C_BAD"), undefined);
+    assert.equal(await built.directory.channelPrivacy("C_OTHER"), false);
+    assert.equal(await built.directory.groupMember("G_OTHER", "U1"), true);
   });
 });
 
