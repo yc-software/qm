@@ -41,6 +41,11 @@ export function createWebhookDeliveryWorker(
       if (!(await recordWebhookTranscript(delivery, sessions))) return;
       let status = await post(delivery);
       if ([400, 413, 422].includes(status)) {
+        reportFailure(
+          "webhook payload rejected; sending bounded notice",
+          new Error(`Delivery receiver returned HTTP ${status}`),
+          `delivery=${delivery.id}`,
+        );
         const provenance = delivery.provenance;
         status = await post({
           ...delivery,

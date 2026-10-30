@@ -162,7 +162,8 @@ test("server and authentication failures remain queued", async (t) => {
   }
 });
 
-test("permanent payload rejection delivers a bounded notice and unblocks later updates", async () => {
+test("permanent payload rejection delivers a bounded notice and unblocks later updates", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
   for (const status of [400, 413, 422]) {
     const { sessions, deliveries, delivery } = await setup();
     delivery.attachments = Array.from({ length: 11 }, (_, i) => ({
@@ -186,6 +187,12 @@ test("permanent payload rejection delivers a bounded notice and unblocks later u
     assert.equal(received[1]!.provenance?.sourceRunId, undefined);
     assert.equal(received[1]!.provenance?.sourceRequestId, "original-request");
     assert.match(received[1]!.text, /limits/);
+    assert.ok(
+      errors.mock.calls.some(
+        ({ arguments: args }) =>
+          args.join(" ").includes(`delivery=${delivery.id}`) && args.join(" ").includes(`HTTP ${status}`),
+      ),
+    );
     assert.notEqual((await deliveries.get(next.id))?.deliveredAt, null);
   }
 });
