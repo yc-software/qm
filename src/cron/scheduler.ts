@@ -357,7 +357,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         status: outcome.status ?? (outcome.authzFailed ? "refused" : "ok"),
         ...(outcome.note || runtimeFallback
           ? {
-              note: truncate(outcome.note ?? `ran on the default model: ${runtimeFallback}`, CRON_FIRE_REPLY_MAX_CHARS),
+              note: truncate(
+                [runtimeFallback && `ran on the default model: ${runtimeFallback}`, outcome.note]
+                  .filter(Boolean)
+                  .join(" — "),
+                CRON_FIRE_REPLY_MAX_CHARS,
+              ),
             }
           : {}),
         ...(outcome.reply !== undefined ? { reply: cronFireLogReply(outcome.reply) } : {}),

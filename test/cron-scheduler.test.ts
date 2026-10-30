@@ -1921,3 +1921,25 @@ test("a cron whose model is unavailable runs on its default model and says so on
   await runNowSettled(scheduler, cron.id);
   assert.equal(calls.at(-1)?.model, "claude-opus-5-5", "the owner's model is used again once it is available");
 });
+
+test("a cron that falls back and then fails keeps both reasons in its run log", async () => {
+  const { crons, scheduler } = harness(async () => ({ status: "failed" }), undefined, undefined, {
+    runtimeError: async () => "pi/claude-sonnet-5 can't run here (runtime is no longer available).",
+  });
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "post the standup",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+    runtime: { harnessId: "pi", modelId: "claude-sonnet-5" },
+  });
+  await runNowSettled(scheduler, cron.id);
+  const fire = (await crons.listFires(cron.id)).runs[0]!;
+  assert.equal(fire.status, "failed");
+  assert.equal(
+    fire.note,
+    "ran on the default model: pi/claude-sonnet-5 can't run here (runtime is no longer available). — failed",
+  );
+});
