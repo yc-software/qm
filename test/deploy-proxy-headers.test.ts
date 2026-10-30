@@ -7,7 +7,8 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
+import { TENANT_HEADERS, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -448,8 +449,9 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
     const res = await fetch(`${base}${path}`, {
       headers: {
         "x-admin-actor": actor,
+        ...TENANT_HEADERS,
         "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `GET\n${path}\n${actor}`),
+        "x-signature": signRequest(SECRET, ts, canonicalPayload("GET", path, actor, TEST_TENANT)),
       },
     });
     assert.equal(res.status, 200);

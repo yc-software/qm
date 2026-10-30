@@ -73,11 +73,10 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   const identitySecret = "deployment-route-identity-secret";
   const server = createInsecureTestServer(TEST_TENANT, app, {
     portalIdentitySecret: identitySecret,
-    requireSignedPortalIdentity: true,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const identity = await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, identitySecret);
+  const identity = await mintSignedPayload({ t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 }, identitySecret);
   const post = (path: string, body: unknown) =>
     fetch(base + path, {
       method: "POST",

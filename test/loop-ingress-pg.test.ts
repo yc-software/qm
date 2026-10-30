@@ -8,6 +8,9 @@ import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test(
   "event import and model work reuse one PostgreSQL advisory session",
@@ -36,6 +39,7 @@ test(
         items,
         outputs: createLoopOutputStore(),
         lock,
+        rowTenants: async () => [TEST_TENANT],
         fire: {
           fire: async () =>
             lock.withLock(`loop-lifecycle:${loop.id}`, async () => {

@@ -16,7 +16,8 @@ import { scopeId } from "../src/types.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { PORTAL_IDENTITY_HEADER, mintPortalIdentity } from "../src/auth/portal-identity.ts";
+import { TENANT_HEADERS, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -282,7 +283,11 @@ test("HTTP: each /v1/deployments row carries an authed, clonable gitUrl when ing
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
     const path = "/v1/deployments?principalId=U2";
-    const headers = signedRequestHeaders(secret, "GET", path, "", {}) as Record<string, string>;
+    const identity = await mintPortalIdentity({ t: TEST_TENANT, p: "U2", exp: Date.now() + 60_000 }, secret);
+    const headers = signedRequestHeaders(secret, "GET", path, "", {
+      ...TENANT_HEADERS,
+      [PORTAL_IDENTITY_HEADER]: identity,
+    });
     const r = await fetch(`${base}${path}`, { headers });
     assert.equal(r.status, 200);
     const body = (await r.json()) as { deployments: Array<{ id: string; permission: string; gitUrl?: string }> };

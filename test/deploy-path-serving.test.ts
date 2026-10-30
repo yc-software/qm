@@ -75,7 +75,7 @@ async function fixture(
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(TEST_TENANT, app, deps);
+  const server = createInsecureTestServer(TEST_TENANT, app, { rowTenants: async () => [TEST_TENANT], ...deps });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
   const close = async () => {

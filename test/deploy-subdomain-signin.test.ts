@@ -19,7 +19,7 @@ import { portalSession } from "../src/deploy/viewer-session.ts";
 import { scopeId } from "../src/types.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -30,7 +30,13 @@ const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
 
-function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SECRET, appOnly?: true): string {
+function mintPortalSession(
+  sub: string,
+  expInSeconds = 3600,
+  secret = SESSION_SECRET,
+  appOnly?: true,
+  tenant = TEST_TENANT,
+): string {
   const key = createHmac("sha256", secret).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
   const body = Buffer.from(
@@ -38,6 +44,7 @@ function mintPortalSession(sub: string, expInSeconds = 3600, secret = SESSION_SE
       k: "session",
       sub,
       org: "acme",
+      tenant,
       iat: now,
       exp: now + expInSeconds,
       ...(appOnly ? { appOnly } : {}),
@@ -64,6 +71,8 @@ test("portalSession: verifies, and rejects tampering, expiry, wrong kind, wrong 
     "an app's junk same-named cookie cannot shadow the real session",
   );
   assert.deepEqual(portalSession(`portal_session=${good}`, "other-secret"), null, "wrong secret");
+  const foreign = mintPortalSession("alice@example.com", 3600, SESSION_SECRET, undefined, OTHER_TENANT);
+  assert.deepEqual(portalSession(`portal_session=${foreign}`, SESSION_SECRET), null, "another tenant's session");
   assert.deepEqual(
     portalSession(`portal_session=${mintPortalSession("alice@example.com", -10)}`, SESSION_SECRET),
     null,
@@ -125,6 +134,7 @@ test("app sign-in uses the configured trusted entry and preserves the app return
       deployAppsSessionSecret: SESSION_SECRET,
       deployAppsLoginUrl: LOGIN_URL,
       deployAppsLoginPath: "/auth/trusted/login",
+      rowTenants: async () => [TEST_TENANT],
     },
   );
   server.listen(0);
@@ -214,6 +224,7 @@ test("subdomain ingress: portal sign-in admits the owner, denies strangers, boun
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
+    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
@@ -413,6 +424,7 @@ test("org-wide app access admits only signed-in org members", async () => {
     deployGateSecret: "gate-secret",
     deployAppsSessionSecret: SESSION_SECRET,
     deployAppsLoginUrl: LOGIN_URL,
+    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
@@ -471,6 +483,7 @@ test("subdomain ingress: without the session config the domain has no door — a
     featureFlags: externalSharingOn,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
+    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;

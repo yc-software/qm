@@ -7,7 +7,7 @@ import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { TENANT_HEADERS, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -91,7 +91,6 @@ test("authenticated swarm API binds agent operations to the token and human oper
     signingSecret: secret,
     capabilitySecret,
     portalIdentitySecret,
-    requireSignedPortalIdentity: true,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -123,7 +122,10 @@ test("authenticated swarm API binds agent operations to the token and human oper
     assert.equal((await fetch(`${base}/v1/swarm`, { headers: { "x-agent-capability": forgedToken } })).status, 400);
     const path = `/v1/sessions/${fixture.root.id}/swarm`;
     assert.equal((await fetch(`${base}${path}`, { headers })).status, 403);
-    const portal = await mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, portalIdentitySecret);
+    const portal = await mintPortalIdentity(
+      { t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 },
+      portalIdentitySecret,
+    );
     const body = JSON.stringify({
       action: "send",
       requestId: "human",
@@ -133,6 +135,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
     const human = await fetch(`${base}${path}`, {
       method: "POST",
       headers: signedRequestHeaders(secret, "POST", path, body, {
+        ...TENANT_HEADERS,
         "x-portal-identity": portal,
         "content-type": "application/json",
       }),
@@ -142,7 +145,9 @@ test("authenticated swarm API binds agent operations to the token and human oper
     const humanData = (await human.json()) as { message: { author: string; actorId: string } };
     assert.equal(humanData.message.author, "human");
     assert.equal(humanData.message.actorId, "alice");
-    const unsigned = await fetch(`${base}${path}`, { headers: signedRequestHeaders(secret, "GET", path) });
+    const unsigned = await fetch(`${base}${path}`, {
+      headers: signedRequestHeaders(secret, "GET", path, "", TENANT_HEADERS),
+    });
     assert.equal(unsigned.status, 403);
     const bodyWithoutIdentity = JSON.stringify({ ...spawn, requestId: "forged-human" });
     assert.equal(
@@ -150,6 +155,7 @@ test("authenticated swarm API binds agent operations to the token and human oper
         await fetch(`${base}/v1/swarm`, {
           method: "POST",
           headers: signedRequestHeaders(secret, "POST", "/v1/swarm", bodyWithoutIdentity, {
+            ...TENANT_HEADERS,
             "x-portal-identity": portal,
             "content-type": "application/json",
           }),

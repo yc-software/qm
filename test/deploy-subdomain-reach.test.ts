@@ -42,14 +42,15 @@ const SESSION_SECRET = "portal-session-secret";
 const SESSION_DEPS = {
   deployAppsSessionSecret: SESSION_SECRET,
   deployAppsLoginUrl: "https://portal.example.com",
+  rowTenants: async () => [TEST_TENANT],
 } as const;
 
 function mintPortalSession(sub: string): string {
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + 3600 })).toString(
-    "base64url",
-  );
+  const body = Buffer.from(
+    JSON.stringify({ k: "session", sub, org: "acme", tenant: TEST_TENANT, iat: now, exp: now + 3600 }),
+  ).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
 
