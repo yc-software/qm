@@ -150,10 +150,10 @@ test("routing: anthropic api key -> pi harness with a claude model", () => {
   assert.equal((r as { apiKey: string }).apiKey, "sk-ant-x");
 });
 
-test("routing: anthropic OAuth login -> claude harness (not pi)", () => {
+test("routing: anthropic OAuth login -> pi harness with a claude model", () => {
   const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
   assert.equal(r?.kind, "oauth");
-  assert.equal(r?.harness, "claude");
+  assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "claude-opus-5");
 });
 
@@ -174,11 +174,6 @@ test("routing: a requested openai model is namespaced to the subscription provid
   const r = resolveIndividualAuthRouting(null, oauth("openai"), "gpt-5.6-terra");
   assert.equal(r?.harness, "pi");
   assert.equal(r?.model, "codex/gpt-5.6-terra");
-});
-
-test("routing: an anthropic OAuth login still uses the claude harness", () => {
-  const r = resolveIndividualAuthRouting(oauth("anthropic"), null, undefined);
-  assert.equal(r?.harness, "claude");
 });
 
 test("codex-subscription model ids resolve to pi-ai's openai-codex provider", () => {

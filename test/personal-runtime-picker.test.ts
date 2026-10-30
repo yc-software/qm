@@ -73,8 +73,9 @@ for (const provider of ["anthropic", "openai"] as const) {
       await s.built.config.setPersonalModelAuth("U1", true, provider);
       const config = await s.get();
       if (provider === "anthropic") {
-        assert.deepEqual(config.modelsByHarness.pi, []);
-        assert.ok(config.modelsByHarness.claude!.includes("claude-sonnet-5"));
+        assert.ok(config.modelsByHarness.pi!.includes("claude-sonnet-5"));
+        assert.ok(config.modelsByHarness.pi!.every((id: string) => resolveModel(id)?.provider === "anthropic"));
+        assert.deepEqual(config.modelsByHarness.claude, []);
       } else {
         assert.ok(config.modelsByHarness.pi!.includes("codex/gpt-5.6-sol"));
         assert.ok(!config.modelsByHarness.pi!.includes("gpt-5.6-sol"));

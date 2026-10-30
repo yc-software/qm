@@ -8,10 +8,11 @@ const subscriptionToken = `e30.${Buffer.from(
   JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company-account" } }),
 ).toString("base64url")}.test`;
 
-function recordFetch(t: TestContext): string[] {
+function recordFetch(t: TestContext, headers: Headers[] = []): string[] {
   const urls: string[] = [];
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     urls.push(String(input instanceof Request ? input.url : input));
+    headers.push(new Headers(input instanceof Request ? input.headers : init?.headers));
     return new Response(JSON.stringify({ error: { message: "offline test response" } }), { status: 400 });
   });
   return urls;
@@ -73,4 +74,20 @@ test("a subscription-only deployment's default utility model is served by the Ch
     urls.some((url) => url.startsWith("https://chatgpt.com/backend-api/")),
     JSON.stringify(urls),
   );
+});
+
+test("a Claude subscription token as Pi's Anthropic key is sent as OAuth bearer auth", async (t) => {
+  const headers: Headers[] = [];
+  const urls = recordFetch(t, headers);
+  const harness = createPiHarness({
+    modelId: "claude-sonnet-5",
+    captureRequests: false,
+    resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-company" }),
+  });
+  await assert.rejects(async () => harness.models.oneShot?.("system", "hi"), /offline test response/);
+  const index = urls.findIndex((url) => new URL(url).hostname === "api.anthropic.com");
+  assert.ok(index >= 0, JSON.stringify(urls));
+  assert.equal(headers[index]!.get("authorization"), "Bearer sk-ant-oat01-company");
+  assert.equal(headers[index]!.get("x-api-key"), null);
+  assert.match(headers[index]!.get("anthropic-beta") ?? "", /oauth-2025-04-20/);
 });

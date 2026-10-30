@@ -227,7 +227,7 @@ export function configuredModelForHarness(config: Config, harness: string): stri
 
 export function providerKeysPresent(config: Config): ModelProviderAvailability {
   return {
-    anthropic: Boolean(config.anthropicApiKey),
+    anthropic: Boolean(config.anthropicApiKey || config.claudeAuthCredential),
     openai: Boolean(config.openaiApiKey),
     openrouter: Boolean(config.openrouterApiKey),
     ...(config.codexAuthCredential || config.codexAuthFile ? { codexOAuth: true } : {}),
@@ -240,7 +240,7 @@ export function baseModelProviders(config: Config): ModelProviderAvailability | 
 
 export function harnessCarriedModelAuth(config: Config): ModelProvider | undefined {
   if (
-    config.harness === "claude" &&
+    !config.claudeProcessEnv.ANTHROPIC_API_KEY &&
     (config.claudeAuthCredential ||
       config.claudeProcessEnv.CLAUDE_CODE_OAUTH_TOKEN ||
       config.claudeProcessEnv.ANTHROPIC_AUTH_TOKEN)
@@ -1304,6 +1304,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const harness = harnessEnvStrict(env.HARNESS);
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
+  const anthropicApiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
   const codexAuthFile = codexAuthCredential ? undefined : codexAuthFileForEnv(env);
   if (env.NODE_ENV === "production" && codexAuthFile) {
     throw new Error(
@@ -1616,7 +1617,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
     ...(env.PI_TITLE_MODEL ? { titleModelId: env.PI_TITLE_MODEL } : {}),
     ...(env.PI_JUDGE_MODEL ? { judgeModelId: env.PI_JUDGE_MODEL } : {}),
-    ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
+    ...(anthropicApiKey ? { anthropicApiKey } : {}),
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
     ...(modelProvider ? { modelProvider } : {}),

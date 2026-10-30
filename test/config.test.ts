@@ -816,6 +816,27 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
 });
 
+test("a company Claude subscription token is Pi's Anthropic key unless an API key is set", () => {
+  const subscription = loadConfig({ HARNESS: "pi", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-company" });
+  assert.equal(subscription.anthropicApiKey, "sk-ant-oat01-company");
+  assert.equal(providerKeysPresent(subscription).anthropic, true);
+  assert.equal(harnessCarriedModelAuth(subscription), "anthropic");
+  assert.equal(
+    loadConfig({ HARNESS: "pi", ANTHROPIC_AUTH_TOKEN: "sk-ant-oat01-auth" }).anthropicApiKey,
+    "sk-ant-oat01-auth",
+  );
+  const both = loadConfig({
+    HARNESS: "pi",
+    ANTHROPIC_API_KEY: "sk-ant-api",
+    CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-company",
+  });
+  assert.equal(both.anthropicApiKey, "sk-ant-api");
+  assert.equal(harnessCarriedModelAuth(both), undefined);
+  const keychainHeld = loadConfig({ HARNESS: "pi", CLAUDE_AUTH_CREDENTIAL: "cred-1" });
+  assert.equal(providerKeysPresent(keychainHeld).anthropic, true);
+  assert.equal(harnessCarriedModelAuth(keychainHeld), "anthropic");
+});
+
 test("company ChatGPT auth satisfies model onboarding on any harness without an API key", () => {
   const config = { ...loadConfig({}), harness: "pi" as const };
   assert.equal(harnessCarriedModelAuth({ ...config, codexAuthCredential: "cred-1" }), "openai");

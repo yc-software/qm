@@ -1117,7 +1117,7 @@ export async function buildModelRuntime(
           ? codexProviderModelId(model.id)
           : (modelRequestOverrides(model.id)?.model ?? custom?.upstreamId ?? model.id);
       const unregistered = !custom && hasCustomModelPrefix(model.id);
-      const candidate = withRequestHeaders(model, true, false);
+      const candidate = withSubscriptionBetas(withRequestHeaders(model, true, false), apiKeys[String(model.provider)]);
       const passthrough = {
         ...retained(options),
         onPayload: async (payload: unknown) => {
@@ -1412,6 +1412,15 @@ export function resolveConfiguredModelId(configured: string | undefined, default
     swallow("pi: configured model id not in registry, falling back to default", new Error(candidate));
   }
   return DEFAULT_AGENT_MODEL_ID;
+}
+
+const CLAUDE_SUBSCRIPTION_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
+
+function withSubscriptionBetas(model: Model<Api>, apiKey: string | undefined): Model<Api> {
+  const prior = model.headers?.["anthropic-beta"];
+  if (!prior || !apiKey?.includes("sk-ant-oat")) return model;
+  const beta = [...new Set([...CLAUDE_SUBSCRIPTION_BETAS, ...prior.split(",").map((value) => value.trim())])].join(",");
+  return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
 }
 
 export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean): Model<Api> {

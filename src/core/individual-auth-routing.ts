@@ -15,8 +15,7 @@ import type { UserModelCredential } from "../model/user-model-credential-store.t
 
 export type IndividualAuthRouting =
   | { kind: "apikey"; provider: ModelProvider; harness: "pi"; model: string | undefined; apiKey: string }
-  | { kind: "oauth"; provider: "anthropic"; harness: "claude"; model: string }
-  | { kind: "oauth"; provider: "openai"; harness: "pi"; model: string }
+  | { kind: "oauth"; provider: "anthropic" | "openai"; harness: "pi"; model: string }
   | null;
 
 export function resolveIndividualAuthRouting(
@@ -65,11 +64,11 @@ export function resolveIndividualAuthRouting(
       return {
         kind: "oauth",
         provider: "anthropic",
-        harness: "claude",
+        harness: "pi",
         model:
           requestedModel && requestedProvider === "anthropic"
             ? requestedModel
-            : defaultModelForHarness("claude", DEFAULT_AGENT_MODEL_ID),
+            : defaultModelForHarness("pi", DEFAULT_AGENT_MODEL_ID),
       };
     }
     return {
