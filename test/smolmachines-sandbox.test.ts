@@ -153,6 +153,18 @@ test("exec on a stopped machine restarts it and retries", async () => {
   assert.equal(fake.machine(h.id)?.state.toLowerCase(), "running");
 });
 
+test("an exec interrupted by the machine stopping is not replayed", async () => {
+  const h = await sandbox.provision(layers);
+  const execs = () => fake.calls.filter((c) => c.path.endsWith("/exec")).length;
+  const before = execs();
+  fake.failNext(503, {
+    body: JSON.stringify({ code: "machine_interrupted", detail: "the machine stopped while the command ran" }),
+    match: (c) => c.path.endsWith("/exec"),
+  });
+  await assert.rejects(sandbox.run(h, "echo once"), /503/);
+  assert.equal(execs(), before + 1);
+});
+
 test("a fresh core adopts a machine the API reports as Running without restarting it", async () => {
   const h = await sandbox.provision(layers);
   assert.equal(fake.machine(h.id)?.state, "Running");

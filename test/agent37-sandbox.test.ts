@@ -160,6 +160,28 @@ test("exec on a stopping instance waits for it to stop, then starts it", async (
   assert.equal(fake.instance(h.id)?.status, "running");
 });
 
+test("an invalid exec request on a running instance is surfaced, not retried", async () => {
+  const h = await sandbox.provision(layers);
+  const execs = () => fake.calls.filter((c) => c.method === "POST" && c.path.endsWith("/exec")).length;
+  const before = execs();
+  fake.failNext(400, {
+    body: JSON.stringify({
+      error: { code: "invalid_request", message: "Only running instances can execute commands." },
+    }),
+    match: (c) => c.path.endsWith("/exec"),
+  });
+  await assert.rejects(sandbox.run(h, "echo once"), /http 400/);
+  assert.equal(execs(), before + 1);
+  fake.failNext(400, {
+    body: JSON.stringify({
+      error: { code: "invalid_request", message: "Only running instances can execute commands." },
+    }),
+    match: (c) => c.path.endsWith("/exec"),
+  });
+  fake.failNext(401, { match: (c) => c.method === "GET" && c.path.startsWith("/v1/instances/") });
+  await assert.rejects(sandbox.run(h, "echo once"), /http 400/, "a failed status lookup keeps the exec error");
+});
+
 test("a failed instance is surfaced, not replaced, and destroy deletes it", async () => {
   const h = await sandbox.provision(layers);
   fake.fail(h.id);
