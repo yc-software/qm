@@ -18,6 +18,10 @@ export function enterTenant(id: string): void {
   bound.enterWith(tenantId(id));
 }
 
+export function withoutTenant<T>(fn: () => T): T {
+  return bound.exit(fn);
+}
+
 export function boundTenant(): string | undefined {
   return bound.getStore();
 }
