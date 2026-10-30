@@ -1,7 +1,6 @@
 import { isGatewayModelId } from "./gateway-models.ts";
 import { boundTenant } from "../tenants/context.ts";
 
-
 export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;
 type ProviderId = (typeof PROVIDER_IDS)[number];
 

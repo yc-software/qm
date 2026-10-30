@@ -95,7 +95,7 @@ export function parseModelGateway(values: TenantSettingValues): ModelGatewayTran
     if (models[source]) throw new Error(`duplicate MODEL_GATEWAY_MODELS source: ${source}`);
     models[source] = target;
   }
-  const unsupported = Object.keys(models).filter((id) => !resolveModel(id));
+  const unsupported = Object.keys(models).filter((id) => !resolveModel(id, false));
   if (unsupported.length)
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unsupported.join(", ")}`);
   return {

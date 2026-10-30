@@ -78,3 +78,30 @@ test("boot names the tenant settings still present in the environment", () => {
     "ANTHROPIC_API_KEY",
   ]);
 });
+
+test("the import never replaces values an admin already stored", async () => {
+  const d = deps();
+  await withTenant(randomUUID(), async () => {
+    await d.modelCredentials.set("anthropic", "admin-key", "admin");
+    await d.config.setSecurityPosture(root, "strict");
+    await d.config.setBranding(root, { orgName: "Admin Name" });
+    await d.config.setConnectorClient(root, "google", { clientId: "admin-id", clientSecret: "admin-secret" });
+    await importTenantSettings(
+      {
+        ANTHROPIC_API_KEY: "env-key",
+        OPENAI_API_KEY: "env-openai",
+        HARNESS_SECURITY_POSTURE: "dangerous",
+        ORG_BRAND_ORG_NAME: "Env Name",
+        ORG_BRAND_ACCENT: "#ff6600",
+        GOOGLE_OAUTH_CLIENT_ID: "env-id",
+        GOOGLE_OAUTH_CLIENT_SECRET: "env-secret",
+      },
+      d,
+    );
+    assert.equal(await d.modelCredentials.resolve("anthropic"), "admin-key");
+    assert.equal(await d.modelCredentials.resolve("openai"), "env-openai");
+    assert.equal(await d.config.getSecurityPostureDurable(root), "strict");
+    assert.deepEqual(await d.config.getBrandingDurable(root), { orgName: "Admin Name", accent: "#ff6600" });
+    assert.equal((await d.config.getConnectorClientSecret(root, "google"))?.clientId, "admin-id");
+  });
+});
