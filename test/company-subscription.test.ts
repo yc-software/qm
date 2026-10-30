@@ -74,19 +74,3 @@ test("a subscription-only deployment's default utility model is served by the Ch
     JSON.stringify(urls),
   );
 });
-
-test("a Claude subscription token as Pi's Anthropic key is sent as OAuth bearer auth", async (t) => {
-  const headers: Headers[] = [];
-  const urls = recordFetch(t, headers);
-  const agent = createAgent({
-    modelId: "claude-sonnet-5",
-    captureRequests: false,
-    resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-company" }),
-  });
-  await assert.rejects(async () => agent.oneShot?.("system", "hi"), /offline test response/);
-  const index = urls.findIndex((url) => new URL(url).hostname === "api.anthropic.com");
-  assert.ok(index >= 0, JSON.stringify(urls));
-  assert.equal(headers[index]!.get("authorization"), "Bearer sk-ant-oat01-company");
-  assert.equal(headers[index]!.get("x-api-key"), null);
-  assert.match(headers[index]!.get("anthropic-beta") ?? "", /oauth-2025-04-20/);
-});

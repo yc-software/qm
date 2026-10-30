@@ -211,35 +211,6 @@ test("web subscription selections use the namespaced model and personal OAuth on
   }
 });
 
-test("a personal Claude subscription login runs on Pi with its OAuth token as the Anthropic key", async () => {
-  turns.length = 0;
-  const built = buildApp(testConfig({ anthropicApiKey: "company-anthropic" }));
-  await built.userModelCredentials.setOAuth("U1", "anthropic", {
-    accessToken: "sk-ant-oat01-personal",
-    expiresAt: Date.now() + 3_600_000,
-  });
-  await built.config.setPersonalModelAuth("U1", true, "anthropic");
-  const submitted = await built.app.turn({
-    surface: "slack",
-    actor: { externalId: "U1" },
-    conversation: { kind: "dm", threadRef: "personal-claude-oauth" },
-    text: "hello",
-    liveActor: true,
-    async: true,
-  });
-  assert.ok(submitted.runId, JSON.stringify(submitted));
-  built.runtime.start();
-  try {
-    const finished = await built.runs.waitFor(submitted.runId!, 5_000);
-    assert.equal(finished.status, "done", JSON.stringify(finished.result));
-    assert.equal(turns.length, 1);
-    assert.deepEqual(turns[0]!.providerKeys, { anthropic: "sk-ant-oat01-personal" });
-    assert.equal(resolveModel(turns[0]!.runtime!.modelId!)?.provider, "anthropic");
-  } finally {
-    await built.runtime.stop();
-  }
-});
-
 test("a company ChatGPT login feeds pi's subscription provider while personal ChatGPT OAuth turns use their own token", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "qm-company-chatgpt-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

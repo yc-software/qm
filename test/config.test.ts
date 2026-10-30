@@ -790,18 +790,11 @@ test("the deploy-apps sign-in address defaults to the public web URL", () => {
   );
 });
 
-test("a company Claude subscription token is Pi's Anthropic key unless an API key is set", () => {
-  const subscription = loadConfig({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-company" });
-  assert.equal(subscription.anthropicApiKey, "sk-ant-oat01-company");
+test("a Claude subscription token in ANTHROPIC_API_KEY or a keychain credential counts as company subscription auth", () => {
+  const subscription = loadConfig({ ANTHROPIC_API_KEY: "sk-ant-oat01-company" });
   assert.equal(providerKeysPresent(subscription).anthropic, true);
   assert.equal(companySubscriptionAuth(subscription), "anthropic");
-  assert.equal(loadConfig({ ANTHROPIC_AUTH_TOKEN: "sk-ant-oat01-auth" }).anthropicApiKey, "sk-ant-oat01-auth");
-  const both = loadConfig({
-    ANTHROPIC_API_KEY: "sk-ant-api",
-    CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-company",
-  });
-  assert.equal(both.anthropicApiKey, "sk-ant-api");
-  assert.equal(companySubscriptionAuth(both), undefined);
+  assert.equal(companySubscriptionAuth(loadConfig({ ANTHROPIC_API_KEY: "sk-ant-api" })), undefined);
   const keychainHeld = loadConfig({ CLAUDE_AUTH_CREDENTIAL: "cred-1" });
   assert.equal(providerKeysPresent(keychainHeld).anthropic, true);
   assert.equal(companySubscriptionAuth(keychainHeld), "anthropic");

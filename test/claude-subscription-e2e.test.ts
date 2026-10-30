@@ -1,7 +1,6 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { loadConfig } from "../src/config.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgent } from "../src/agent/agent-run.ts";
@@ -143,12 +142,10 @@ test("a personal Claude subscription turn runs end to end on Pi with OAuth beare
   }
 });
 
-test("a company Claude subscription token from CLAUDE_CODE_OAUTH_TOKEN serves company turns on the wired agent", async (t) => {
+test("a company Claude subscription token in ANTHROPIC_API_KEY serves company turns on the wired agent", async (t) => {
   const seen = fakeAnthropic(t);
   const companyToken = "sk-ant-oat01-company-e2e";
-  const { anthropicApiKey } = loadConfig({ CLAUDE_CODE_OAUTH_TOKEN: companyToken });
-  assert.equal(anthropicApiKey, companyToken);
-  const built = buildApp(testConfig({ anthropicApiKey }), { agent: undefined });
+  const built = buildApp(testConfig({ anthropicApiKey: companyToken }), { agent: undefined });
   const submitted = await built.app.turn({
     surface: "slack",
     actor: { externalId: "U1" },

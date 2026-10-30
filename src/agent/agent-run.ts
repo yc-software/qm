@@ -1,3 +1,4 @@
+import { claudeSubscriptionBetas } from "../model/claude-subscription.ts";
 import {
   recordSteerIntake,
   recordStoppedTurn,
@@ -374,54 +375,6 @@ const ACK_EMOJI_PROMPT = [
   "- When nothing topical or fun fits, prefer a neutral acknowledgment (eyes, mag, hourglass_flowing_sand).",
   'Output STRICT JSON only: {"emoji":"<name>"}. Nothing else.',
 ].join("\n");
-
-async function directAnthropicJson(
-  model: Model<Api>,
-  apiKey: string,
-  systemPrompt: string,
-  userPrompt: string,
-  modelGateway?: ModelGatewayTransportConfig,
-): Promise<string | undefined> {
-  if (
-    !String(model.provider ?? "")
-      .toLowerCase()
-      .includes("anthropic")
-  )
-    return undefined;
-  await modelGateway?.refresh?.();
-  const gateway = modelGatewayRequest(modelGateway, model);
-  const requestModel = gateway?.model ?? model;
-  const requestKey = gateway?.apiKey ?? apiKey;
-  const subscription = requestKey.includes("sk-ant-oat");
-  const res = await fetch(`${requestModel.baseUrl}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(subscription
-        ? { authorization: `Bearer ${requestKey}`, "anthropic-beta": CLAUDE_SUBSCRIPTION_BETAS.join(",") }
-        : { "x-api-key": requestKey }),
-      "anthropic-version": "2023-06-01",
-      ...gateway?.headers,
-    },
-    body: JSON.stringify({
-      model: gateway?.target ?? requestModel.id,
-      max_tokens: 64,
-      // Haiku 5.5 thinks by default; a 64-token budget would go entirely to thinking.
-      thinking: { type: "disabled" },
-      system: subscription
-        ? [
-            { type: "text", text: CLAUDE_CODE_IDENTITY },
-            { type: "text", text: systemPrompt },
-          ]
-        : systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
-    signal: AbortSignal.timeout(2_000),
-  });
-  if (!res.ok) return undefined;
-  const json = (await res.json()) as { content?: Array<{ type?: string; text?: string }> };
-  return json.content?.find((block) => block.type === "text")?.text;
-}
 
 const APPROVAL_SUMMARY_PROMPT = [
   "A command hit a human-approval gate. Explain, in ONE plain-English sentence, what running THIS",
@@ -1123,7 +1076,7 @@ export async function buildModelRuntime(
           ? codexProviderModelId(model.id)
           : (modelRequestOverrides(model.id)?.model ?? custom?.upstreamId ?? model.id);
       const unregistered = !custom && hasCustomModelPrefix(model.id);
-      const candidate = withSubscriptionBetas(withRequestHeaders(model, true, false), apiKeys[String(model.provider)]);
+      const candidate = withRequestHeaders(model, true, false, apiKeys[String(model.provider)]);
       const passthrough = {
         ...retained(options),
         onPayload: async (payload: unknown) => {
@@ -1420,23 +1373,19 @@ export function resolveConfiguredModelId(configured: string | undefined, default
   return DEFAULT_AGENT_MODEL_ID;
 }
 
-const CLAUDE_SUBSCRIPTION_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
-const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
-
-function withSubscriptionBetas(model: Model<Api>, apiKey: string | undefined): Model<Api> {
-  const prior = model.headers?.["anthropic-beta"];
-  if (!prior || !apiKey?.includes("sk-ant-oat")) return model;
-  const beta = [...new Set([...CLAUDE_SUBSCRIPTION_BETAS, ...prior.split(",").map((value) => value.trim())])].join(",");
-  return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
-}
-
-export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean): Model<Api> {
+export function withRequestHeaders(model: Model<Api>, direct: boolean, fast: boolean, apiKey?: string): Model<Api> {
   const api = String((model as { api?: unknown }).api ?? "").toLowerCase();
   if (api.startsWith("openai") || !direct) return model;
   const betas = [...(thinkingBindingApplies(model) ? [THINKING_BINDING_BETA] : []), ...(fast ? [FAST_MODE_BETA] : [])];
   if (!betas.length) return model;
   const prior = model.headers?.["anthropic-beta"];
-  const beta = [...new Set([...(prior ? prior.split(",").map((value) => value.trim()) : []), ...betas])].join(",");
+  const beta = [
+    ...new Set([
+      ...claudeSubscriptionBetas(apiKey),
+      ...(prior ? prior.split(",").map((value) => value.trim()) : []),
+      ...betas,
+    ]),
+  ].join(",");
   return { ...model, headers: { ...model.headers, "anthropic-beta": beta } };
 }
 
@@ -2412,10 +2361,15 @@ export function createAgent(opts?: AgentOptions): Agent {
       try {
         const model = requiredModel(ackModelId);
         const providerKeys = await resolveProviderKeys();
-        const apiKey = keyForModel(providerKeys, model);
-        if (!apiKey) return undefined;
+        if (!keyForModel(providerKeys, model)) return undefined;
         const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-        const raw = await directAnthropicJson(model, apiKey, ACK_EMOJI_PROMPT, prompt, modelGateway);
+        const runtime = await buildModelRuntime(providerKeys, modelGateway);
+        const reply = await runtime.completeSimple(
+          model,
+          { systemPrompt: ACK_EMOJI_PROMPT, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
+          { maxTokens: 64, signal: AbortSignal.timeout(2_000) },
+        );
+        const raw = reply.content.find((block) => block.type === "text")?.text;
         if (!raw) return undefined;
         const emoji = (JSON.parse(raw.replace(/```json|```/g, "").trim()) as { emoji?: unknown }).emoji;
         return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;

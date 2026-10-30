@@ -1,3 +1,4 @@
+import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
 import { codexAuthFileForEnv, loadCodexAuthFile } from "./model/chatgpt-auth-file.ts";
 import { githubRepoUrl, isGitBranchName } from "../cli/src/render-source.ts";
 import { RENDER_SANDBOX_TTL_SEC } from "./sandbox/render-limits.ts";
@@ -233,7 +234,7 @@ export function baseModelProviders(config: Config): ModelProviderAvailability | 
 }
 
 export function companySubscriptionAuth(config: Config): ModelProvider | undefined {
-  if (config.anthropicApiKey ? config.anthropicApiKey.includes("sk-ant-oat") : config.claudeAuthCredential)
+  if (config.anthropicApiKey ? isClaudeSubscriptionToken(config.anthropicApiKey) : config.claudeAuthCredential)
     return "anthropic";
   if (config.codexAuthCredential || config.codexAuthFile) return "openai";
   return undefined;
@@ -1283,7 +1284,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const codexAuthCredential = env.CODEX_AUTH_CREDENTIAL?.trim() || undefined;
   const claudeAuthCredential = env.CLAUDE_AUTH_CREDENTIAL?.trim() || undefined;
-  const anthropicApiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_AUTH_TOKEN;
   const codexAuthFile = codexAuthCredential ? undefined : codexAuthFileForEnv(env);
   if (env.NODE_ENV === "production" && codexAuthFile) {
     throw new Error(
@@ -1573,7 +1573,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.PI_DETECT_MODEL ? { detectModelId: env.PI_DETECT_MODEL } : {}),
     ...(env.PI_TITLE_MODEL ? { titleModelId: env.PI_TITLE_MODEL } : {}),
     ...(env.PI_JUDGE_MODEL ? { judgeModelId: env.PI_JUDGE_MODEL } : {}),
-    ...(anthropicApiKey ? { anthropicApiKey } : {}),
+    ...(env.ANTHROPIC_API_KEY ? { anthropicApiKey: env.ANTHROPIC_API_KEY } : {}),
     ...(env.OPENAI_API_KEY ? { openaiApiKey: env.OPENAI_API_KEY } : {}),
     ...(env.OPENROUTER_API_KEY ? { openrouterApiKey: env.OPENROUTER_API_KEY } : {}),
     ...(modelProvider ? { modelProvider } : {}),

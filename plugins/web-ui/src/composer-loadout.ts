@@ -53,8 +53,7 @@ export function parseLoadout(raw: string | null): LoadoutEntry[] {
         !EFFORT_LEVELS.some(({ value }) => value === entry.effort)
       )
         continue;
-      const value = entry.value.replace(/^(?:pi|claude):/, "");
-      entries.push({ value, effort: entry.effort, fast: entry.fast === true });
+      entries.push({ value: entry.value, effort: entry.effort, fast: entry.fast === true });
     }
     return uniqueLoadout(entries).slice(0, LOADOUT_CAP);
   } catch {

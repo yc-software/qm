@@ -87,6 +87,38 @@ test("the agent exposes no session-reset hook after removing session state", () 
   assert.equal(createAgent().resetSession, undefined);
 });
 
+function ackStream(text: string): Response {
+  const events = [
+    {
+      type: "message_start",
+      message: {
+        id: "m",
+        type: "message",
+        role: "assistant",
+        model: "x",
+        content: [],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ];
+  return new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+async function ackRequest(input: string | URL | Request, init?: RequestInit) {
+  const url = String(input instanceof Request ? input.url : input);
+  const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
+  const body = JSON.parse(input instanceof Request ? await input.text() : String(init?.body ?? "{}"));
+  return { url, headers, body };
+}
+
 test("ack emoji keeps working on a non-Anthropic base model when an Anthropic key is present", async () => {
   const agent = createAgent({
     defaultModelId: "gpt-5.6-sol",
@@ -94,18 +126,10 @@ test("ack emoji keeps working on a non-Anthropic base model when an Anthropic ke
   });
   const realFetch = globalThis.fetch;
   const calls: Array<{ url: string; model: unknown; thinking: unknown }> = [];
-  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body ?? "{}"));
-    calls.push({ url: String(url), model: body.model, thinking: body.thinking });
-    return new Response(
-      JSON.stringify({
-        content: [
-          { type: "thinking", thinking: "" },
-          { type: "text", text: '{"emoji":"eyes"}' },
-        ],
-      }),
-      { status: 200 },
-    );
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const { url, body } = await ackRequest(input, init);
+    calls.push({ url, model: body.model, thinking: body.thinking });
+    return ackStream('{"emoji":"eyes"}');
   }) as typeof globalThis.fetch;
   try {
     const picked = await agent.pickAckEmoji?.("ship it", ["eyes", "rocket"]);
@@ -185,9 +209,10 @@ test("ack emoji on a Claude subscription token signs the call as a subscription 
   });
   const realFetch = globalThis.fetch;
   const seen: Array<{ headers: Headers; system: unknown }> = [];
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-    seen.push({ headers: new Headers(init?.headers), system: JSON.parse(String(init?.body ?? "{}")).system });
-    return new Response(JSON.stringify({ content: [{ type: "text", text: '{"emoji":"eyes"}' }] }), { status: 200 });
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const { headers, body } = await ackRequest(input, init);
+    seen.push({ headers, system: body.system });
+    return ackStream('{"emoji":"eyes"}');
   }) as typeof globalThis.fetch;
   try {
     assert.equal(await agent.pickAckEmoji?.("ship it", ["eyes"]), "eyes");
