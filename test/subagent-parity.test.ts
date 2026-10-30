@@ -145,7 +145,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     ...singleProcessDeps(),
     config,
     runtime: createRuntimeService(
-      { config, harnessId: "pi", baseModelDefault: "claude-opus-5" },
+      { config, harnessId: "pi", baseModelDefault: () => "claude-opus-5" },
       { authorizesCapabilityScope: async () => true },
     ),
     identity: createIdentityService(),

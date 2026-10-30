@@ -95,6 +95,7 @@ function buildOrchestrator(
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
 ) {
+  const { securityScreener, ...rest } = extra;
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -134,7 +135,8 @@ function buildOrchestrator(
     },
     signingSecret: "test-signing-secret",
     apiBaseUrl: "https://api.test",
-    ...extra,
+    ...rest,
+    ...(securityScreener ? { securityScreener: async () => securityScreener } : {}),
   });
   return { orchestrator, memory, config, workspace, sessions, files, auditLog, acl };
 }

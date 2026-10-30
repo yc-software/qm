@@ -5,15 +5,17 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { jsonbStringify } from "../src/persistence/durable-map.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 
-function freshApp(securityScreener?: SecurityScreener) {
+async function freshApp(securityScreener?: SecurityScreener) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-wake-"));
-  return buildApp(testConfig({ dataDir }), securityScreener ? { securityScreener } : {});
+  const built = buildApp(testConfig({ dataDir }), securityScreener ? { securityScreener } : {});
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "test");
+  return built;
 }
 
 const actor = { externalId: "U1" };
@@ -70,7 +72,7 @@ function web(text: string, threadRef: string): TurnRequest {
 }
 
 test("spine ON: a mid-turn DM message STEERS the live run instead of forking a second reply", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "D1";
   const first = await built.app.turn(dm("why did you choose this for me", channel));
   const liveRunId = first.runId!;
@@ -91,7 +93,7 @@ test("spine ON: a mid-turn DM message STEERS the live run instead of forking a s
 });
 
 test("a mid-turn message from a DIFFERENT person is attributed and its author durably recorded", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C_FOREIGN";
   const root = "100.9";
   const first = await built.app.turn(mention("@bot file the ticket", channel, root));
@@ -122,7 +124,7 @@ test("a mid-turn message from a DIFFERENT person is attributed and its author du
 });
 
 test("spine ON: a mid-turn message STEERS the live run instead of forking a second turn", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C1";
   const root = "100.1";
   const first = await built.app.turn(mention("@bot start the task", channel, root));
@@ -144,7 +146,7 @@ test("spine ON: a mid-turn message STEERS the live run instead of forking a seco
 });
 
 test("spine ON: an empty mid-turn message DROPS (attaches to the live run) — no second turn, no signal", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C5";
   const root = "500.5";
   const first = await built.app.turn(mention("@bot go", channel, root));
@@ -161,7 +163,7 @@ test("spine ON: an empty mid-turn message DROPS (attaches to the live run) — n
 });
 
 test("spine ON: a bare 'stop' mid-turn routes through the ABORT interrupt (not a steer)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C2";
   const root = "200.2";
   const first = await built.app.turn(mention("@bot do a long thing", channel, root));
@@ -176,7 +178,7 @@ test("spine ON: a bare 'stop' mid-turn routes through the ABORT interrupt (not a
 });
 
 test("spine ON: an OVERHEARD thread-follow (unprompted, not addressed) STEERS the live run", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C6";
   const root = "600.6";
   const first = await built.app.turn(mention("@bot make custom emoji for :gruel:", channel, root));
@@ -195,7 +197,7 @@ test("spine ON: an OVERHEARD thread-follow (unprompted, not addressed) STEERS th
 });
 
 test("Auto blocks a prompt-injection attempt from an unprompted mid-turn coworker update", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C-risk";
   const root = "601.6";
   const first = await built.app.turn(mention("@bot prepare the report", channel, root));
@@ -212,7 +214,7 @@ test("Auto blocks a prompt-injection attempt from an unprompted mid-turn coworke
 });
 
 test("Auto fails open on a mid-turn coworker update when the screener is unavailable", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C-down";
   const root = "601.9";
   const first = await built.app.turn(mention("@bot prepare the report", channel, root));
@@ -228,7 +230,7 @@ test("Auto fails open on a mid-turn coworker update when the screener is unavail
 
 test("the proxy receives ambient provenance for an unprompted mid-turn coworker update", async () => {
   const metadata: Array<Readonly<Record<string, unknown>> | undefined> = [];
-  const built = freshApp({
+  const built = await freshApp({
     provider: "example-screen",
     async classify(input) {
       metadata.push(input.metadata);
@@ -249,7 +251,7 @@ test("the proxy receives ambient provenance for an unprompted mid-turn coworker 
 });
 
 test("Auto screens the author label that is injected with an unprompted mid-turn steer", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C-risk-name";
   const root = "601.7";
   const first = await built.app.turn(mention("@bot prepare the report", channel, root));
@@ -263,7 +265,7 @@ test("Auto screens the author label that is injected with an unprompted mid-turn
 });
 
 test("spine ON: the steer signal carries the message's real surface ts (so the harness can persist + dedupe it)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C8";
   const root = "800.8";
   const first = await built.app.turn(mention("@bot start", channel, root));
@@ -279,7 +281,7 @@ test("spine ON: the steer signal carries the message's real surface ts (so the h
 });
 
 test("spine ON: an overheard bare 'stop' folds in as steer text (a bystander does NOT abort)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C7";
   const root = "700.7";
   const first = await built.app.turn(mention("@bot do a long thing", channel, root));
@@ -293,7 +295,7 @@ test("spine ON: an overheard bare 'stop' folds in as steer text (a bystander doe
 });
 
 test("an ADDRESSED mention never steers into a live UNPROMPTED run — it enqueues its own turn", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C9";
   const root = "900.9";
   const first = await built.app.turn(overheard("hm, interesting", channel, root));
@@ -311,7 +313,7 @@ test("an ADDRESSED mention never steers into a live UNPROMPTED run — it enqueu
 });
 
 test("an overheard follow still steers a live UNPROMPTED run (a stranded one re-imports from the mirror)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C10";
   const root = "1000.1";
   const first = await built.app.turn(overheard("hm, interesting", channel, root));
@@ -325,7 +327,7 @@ test("an overheard follow still steers a live UNPROMPTED run (a stranded one re-
 });
 
 test("an addressed bare 'stop' still ABORTS a live UNPROMPTED run", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C11";
   const root = "1100.1";
   const first = await built.app.turn(overheard("hm, interesting", channel, root));
@@ -352,7 +354,7 @@ function automationRun(channel: string, root: string): TurnRequest {
 }
 
 test("a person's reply never steers into a live AUTOMATION run — it enqueues behind it with its own claims", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C12";
   const root = "1200.1";
   const first = await built.app.turn(automationRun(channel, root));
@@ -370,7 +372,7 @@ test("a person's reply never steers into a live AUTOMATION run — it enqueues b
 });
 
 test("a person's verbatim thread-follow (authored detection) also enqueues behind a live AUTOMATION run", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C13";
   const root = "1300.1";
   const first = await built.app.turn(automationRun(channel, root));
@@ -382,7 +384,7 @@ test("a person's verbatim thread-follow (authored detection) also enqueues behin
 });
 
 test("an addressed bare 'stop' still ABORTS a live AUTOMATION run", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C14";
   const root = "1400.1";
   const first = await built.app.turn(automationRun(channel, root));
@@ -397,7 +399,7 @@ test("an addressed bare 'stop' still ABORTS a live AUTOMATION run", async () => 
 });
 
 test("a SYNTHETIC detection (no live author) still steers a live AUTOMATION run — screened, no authority", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C15";
   const root = "1500.1";
   const first = await built.app.turn(automationRun(channel, root));
@@ -436,7 +438,7 @@ function spawnedWorker(channel: string, askTs: string): TurnRequest {
 }
 
 test("a keyed live turn does NOT steer (it routes to enqueue where it dedupes); an unkeyed one DOES", async () => {
-  const built = freshApp();
+  const built = await freshApp();
 
   const kFirst = await built.app.turn(mention("@bot start", "C14", "1400.1"));
   const keyed = await built.app.turn({
@@ -456,7 +458,7 @@ test("a keyed live turn does NOT steer (it routes to enqueue where it dedupes); 
 });
 
 test("a same-key REDELIVERY of a live keyed turn never steers — it dedupes to the existing run", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C17";
   const root = "1700.1";
   const keyed = { ...mention("@bot start the task", channel, root), idempotencyKey: "slack:evt:1700" };
@@ -475,7 +477,7 @@ test("a same-key REDELIVERY of a live keyed turn never steers — it dedupes to 
 });
 
 test("an approval decision reusing the original send's key is never deduped against that turn", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const keyed = { ...dm("run the risky thing", "D18"), idempotencyKey: "web:U1:gesture-18" };
   const first = await built.app.turn(keyed);
   const approved = await built.app.turn({
@@ -491,7 +493,7 @@ test("an approval decision reusing the original send's key is never deduped agai
 });
 
 test("a spawned worker turn never steers — a duplicate spawn DEDUPES at enqueue", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C15";
   const askTs = "1500.1";
   const first = await built.app.turn(spawnedWorker(channel, askTs));
@@ -511,7 +513,7 @@ test("a spawned worker turn never steers — a duplicate spawn DEDUPES at enqueu
 });
 
 test("reverse race: an addressed mention steers into the live ambient run, not a second reply", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C16";
   const askTs = "1600.1";
   const ambientRef = `slack:${channel}:ambient:${askTs}`;
@@ -531,7 +533,7 @@ test("reverse race: an addressed mention steers into the live ambient run, not a
 
 for (const personalSide of ["ambient", "mention"] as const) {
   test(`reverse race: ${personalSide} personal access cannot share the other run's company account`, async () => {
-    const built = freshApp();
+    const built = await freshApp();
     const channel = `C-account-${personalSide}`;
     const askTs = "1600.2";
     const ambientRef = `slack:${channel}:ambient:${askTs}`;
@@ -551,7 +553,7 @@ for (const personalSide of ["ambient", "mention"] as const) {
 }
 
 test("spine ON: the FIRST message (no live run) engages normally — no steer", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C4";
   const root = "400.4";
   const first = await built.app.turn(mention("@bot hello", channel, root));
@@ -563,7 +565,7 @@ test("spine ON: the FIRST message (no live run) engages normally — no steer", 
 });
 
 test("web is excluded from core-side steering: a mid-turn message forks a SECOND run, never a signal", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const threadRef = "web:U1:default";
   const first = await built.app.turn(web("summarize the incident", threadRef));
   const second = await built.app.turn(web("actually, just the timeline", threadRef));
@@ -579,7 +581,7 @@ test("web is excluded from core-side steering: a mid-turn message forks a SECOND
 });
 
 test("web's queued second run waits for the lock: not claimable until the live run finishes", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const threadRef = "web:U1:queued";
   const first = await built.app.turn(web("summarize the incident", threadRef));
   const second = await built.app.turn(web("actually, just the timeline", threadRef));
@@ -604,7 +606,7 @@ test("web's queued second run waits for the lock: not claimable until the live r
 });
 
 test("web's queue is durable and readable: core names the live run, then what waits behind it", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const threadRef = "web:U1:visible";
   const first = await built.app.turn(web("summarize the incident", threadRef));
   await built.runs.claimById(first.runId!, "w1", 30_000);
@@ -638,7 +640,7 @@ test("web's queue is durable and readable: core names the live run, then what wa
 });
 
 test("an automation wake queued behind a live turn stays out of the composer queue", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const threadRef = "web:U1:wake";
   const first = await built.app.turn(web("summarize the incident", threadRef));
   await built.runs.claimById(first.runId!, "w1", 30_000);
@@ -661,7 +663,7 @@ test("an automation wake queued behind a live turn stays out of the composer que
 });
 
 test("a queued web turn runs on its own — the sender's client need never come back", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const threadRef = "web:U1:unattended";
   const first = await built.app.turn(web("the long one", threadRef));
   const live = await built.runs.claimById(first.runId!, "w1", 30_000);
@@ -687,7 +689,7 @@ async function until<T>(get: () => Promise<T | undefined>, ms = 3_000): Promise<
 }
 
 test("orphan replay: a steer unconsumed at run completion replays as a fresh turn (prod 93a5c5ba)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C9";
   const root = "900.9";
   const threadRef = `ch:${channel}:${root}`;
@@ -712,7 +714,7 @@ test("orphan replay: a steer unconsumed at run completion replays as a fresh tur
 });
 
 test("orphan replay: a stale abort is drained; a request-less steer replays on the run's own request", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C10";
   const root = "1000.1";
   const threadRef = `ch:${channel}:${root}`;
@@ -730,7 +732,7 @@ test("orphan replay: a stale abort is drained; a request-less steer replays on t
 });
 
 test("signalRun: a web steer that races the run's end is replayed and reports the fresh run", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C14";
   const root = "1400.1";
   const first = await built.app.turn(mention("@bot go", channel, root));
@@ -748,7 +750,7 @@ test("signalRun: a web steer that races the run's end is replayed and reports th
 });
 
 test("signalRun: a steer already terminal at send is refused up front", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C11";
   const root = "1100.1";
   const first = await built.app.turn(mention("@bot go", channel, root));
@@ -762,7 +764,7 @@ test("signalRun: a steer already terminal at send is refused up front", async ()
   assert.equal((await built.signals.takePending(liveRunId)).length, 0, "nothing left rotting in the queue");
 });
 
-function completeOnSend(built: ReturnType<typeof freshApp>, sanitize = false): void {
+function completeOnSend(built: Awaited<ReturnType<typeof freshApp>>, sanitize = false): void {
   const origSend = built.signals.send.bind(built.signals);
   built.signals.send = async (runId, signal) => {
     const sent = await origSend(runId, sanitize ? JSON.parse(jsonbStringify(signal)) : signal);
@@ -773,7 +775,7 @@ function completeOnSend(built: ReturnType<typeof freshApp>, sanitize = false): v
 }
 
 test("signalRun: a steer whose run goes terminal mid-send is REFUSED, never a false accept", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C12";
   const root = "1200.1";
   const first = await built.app.turn(mention("@bot go", channel, root));
@@ -788,7 +790,7 @@ test("signalRun: a steer whose run goes terminal mid-send is REFUSED, never a fa
 
 for (const sanitize of [false, true])
   test(`steer path: a message whose run goes terminal mid-send returns the fresh run (sanitize=${sanitize})`, async () => {
-    const built = freshApp();
+    const built = await freshApp();
     const channel = "C13";
     const root = "1300.1";
     const threadRef = `ch:${channel}:${root}`;
@@ -818,7 +820,7 @@ for (const sanitize of [false, true])
   });
 
 test("reverse race: a sanitized mention follows its fresh run after the ambient run ends", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C-ambient-unicode";
   const askTs = "1600.2";
   const ambientRef = `slack:${channel}:ambient:${askTs}`;
@@ -834,7 +836,7 @@ test("reverse race: a sanitized mention follows its fresh run after the ambient 
 });
 
 test("screening off delivers ambient updates to the existing run without a classifier", async () => {
-  const built = buildApp(testConfig({ securityScreen: "off" }));
+  const built = buildApp(testConfig(), { tenantSettings: testTenantSettings({ SECURITY_SCREEN: "off" }) });
   const first = await built.app.turn(mention("start work", "C-off", "100.1"));
   const follow = await built.app.turn(overheard("build finished", "C-off", "100.1"));
   assert.equal(follow.runId, first.runId);
@@ -846,7 +848,7 @@ test("screening off delivers ambient updates to the existing run without a class
 });
 
 test("queued web edits require the author and preserve queue identity", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const threadRef = "web:U1:edit";
   const first = await built.app.turn(web("first", threadRef));
   await built.runs.claimById(first.runId!, "worker", 30000);
@@ -875,7 +877,7 @@ test("queued web edits require the author and preserve queue identity", async ()
 });
 
 test("run snapshots expose authorized durable web input with safe attachment metadata", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const turn = await built.app.turn({
     ...web("pending input", "web:U1:pending-input"),
     attachments: [{ name: "notes.txt", mimetype: "text/plain", sizeBytes: 50, blobId: "private-blob" }],
@@ -914,7 +916,7 @@ test("run snapshots expose authorized durable web input with safe attachment met
 });
 
 test("an addressed stop withdraws queued work before a worker can claim it", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const first = await built.app.turn(mention("start the task", "C_STOP_QUEUED", "100.1"));
   const stop = await built.app.turn(mention("stop", "C_STOP_QUEUED", "100.1"));
   assert.equal(stop.runId, first.runId);

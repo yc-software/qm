@@ -4,7 +4,8 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import "./support/auto-fake-sprites.ts";
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { Config } from "../src/config.ts";
@@ -13,8 +14,10 @@ import { sleep } from "../src/util/async.ts";
 
 // Full application/tool/materializer path, with deterministic model commands and
 // the repo's host-backed Sprites transport. This does not test VM isolation.
-async function fixture(t: TestContext, config: Partial<Config> = {}) {
-  const built = buildApp(testConfig({ memoryCapture: "off", ...config }));
+async function fixture(t: TestContext, config: Partial<Config> = {}, settings: TenantSettingValues = {}) {
+  const built = buildApp(testConfig({ memoryCapture: "off", ...config }), {
+    tenantSettings: testTenantSettings(settings),
+  });
   await built.config.hydrate?.();
   await built.identity.hydrate();
   await built.deploymentLayerReady;
@@ -464,7 +467,7 @@ test("sharing e2e: local notebooks retain late facts while unclassified carried 
 });
 
 test("sharing e2e: screening off preserves carried skills without model calls", async (t) => {
-  const b = await fixture(t, { securityScreen: "off" });
+  const b = await fixture(t, {}, { SECURITY_SCREEN: "off" });
   await b.skill("personal:U1", "unscreened-helper", "SHARED_SKILL_OK");
   await assert.equal(
     await b.turn("!skill-run unscreened-helper python3 {dir}/scripts/value.py", true),
