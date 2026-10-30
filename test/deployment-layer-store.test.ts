@@ -747,10 +747,8 @@ test("two stores serialize the durable head and shared skill projection under on
     ...createNoopAdvisoryLock(),
     async withLock<T>(_key: string, fn: () => Promise<T>): Promise<T> {
       const previous = tail;
-      let release!: () => void;
-      tail = new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      const { promise, resolve: release } = Promise.withResolvers<void>();
+      tail = promise;
       await previous;
       active++;
       maxActive = Math.max(maxActive, active);

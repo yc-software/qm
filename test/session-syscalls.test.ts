@@ -21,10 +21,9 @@ import {
   delegatedAuthorizationOrigin,
   stopSessionTree,
 } from "../src/sessions/session-syscalls.ts";
-import type { Run } from "../src/runs/run-store.ts";
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
-import type { RunStore } from "../src/runs/run-store.ts";
+import type { Run, RunStore } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alex" };

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { headSlice, tailSlice, hasLoneSurrogate, jsonbStringify } from "../src/util/text.ts";
+import { headSlice, tailSlice, jsonbStringify } from "../src/util/text.ts";
 
 test("headSlice and tailSlice pass short strings through and cut long ones", () => {
   assert.equal(headSlice("abc", 5), "abc");
@@ -19,8 +19,8 @@ test("headSlice and tailSlice return empty for zero or negative budgets (slice(-
 test("headSlice and tailSlice never strand half a surrogate pair", () => {
   const s = "😀".repeat(10);
   for (let n = 1; n < s.length; n++) {
-    assert.ok(!hasLoneSurrogate(headSlice(s, n)), `headSlice at ${n}`);
-    assert.ok(!hasLoneSurrogate(tailSlice(s, n)), `tailSlice at ${n}`);
+    assert.ok(headSlice(s, n).isWellFormed(), `headSlice at ${n}`);
+    assert.ok(tailSlice(s, n).isWellFormed(), `tailSlice at ${n}`);
   }
 });
 
@@ -30,7 +30,7 @@ test("jsonbStringify drops NUL characters", () => {
 
 test("jsonbStringify replaces a lone surrogate from a cut emoji with U+FFFD", () => {
   const out = JSON.parse(jsonbStringify({ title: "prefix 😀".slice(0, 8) })) as { title: string };
-  assert.equal(hasLoneSurrogate(out.title), false);
+  assert.equal(out.title.isWellFormed(), true);
   assert.equal(out.title, "prefix \uFFFD");
 });
 

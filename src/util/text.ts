@@ -12,18 +12,8 @@ export function tailSlice(s: string, n: number): string {
   return /^[\uDC00-\uDFFF]/.test(cut) ? cut.slice(1) : cut;
 }
 
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-const LONE_SURROGATE_ALL = new RegExp(LONE_SURROGATE, "g");
-
-export function hasLoneSurrogate(s: string): boolean {
-  return LONE_SURROGATE.test(s);
-}
-
 export function pgTextSafe(s: string): string {
-  let out = s;
-  if (out.includes("\u0000")) out = out.replaceAll("\u0000", "");
-  if (hasLoneSurrogate(out)) out = out.replace(LONE_SURROGATE_ALL, "\uFFFD");
-  return out;
+  return s.replaceAll("\u0000", "").toWellFormed();
 }
 
 function jsonbSafe(_key: string, value: unknown): unknown {

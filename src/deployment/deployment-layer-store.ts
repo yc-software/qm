@@ -20,7 +20,6 @@ import {
 import type { SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
-import { hasLoneSurrogate } from "../util/text.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import {
   declaredInstallFiles,
@@ -108,7 +107,7 @@ function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
             `deployment layer ${kind} entry contains a NUL character, which the store cannot persist: ${file.path}`,
           );
         }
-        if (hasLoneSurrogate(file.path) || hasLoneSurrogate(file.content)) {
+        if (!file.path.isWellFormed() || !file.content.isWellFormed()) {
           throw new Error(
             `deployment layer ${kind} entry contains an unpaired Unicode surrogate, which the store cannot persist: ${file.path}`,
           );
