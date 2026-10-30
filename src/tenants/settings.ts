@@ -3,6 +3,7 @@ import type { PgPool } from "../persistence/pg-pool.ts";
 import { currentTenant, withTenant } from "./context.ts";
 import { reportFailureAs } from "../util/errors.ts";
 import { parseTenantSettings, type TenantSettings } from "./settings-parse.ts";
+import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "./migrations.ts";
 
 export type { TenantSettings } from "./settings-parse.ts";
 
@@ -124,6 +125,8 @@ interface TenantSettingsBacking {
 }
 
 function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettingsBacking {
+  db.registerMigration(TENANCY_BASE);
+  db.registerMigration(TENANT_SETTINGS_MIGRATION);
   const sealKey = tenantSettingsKey(keyMaterial);
   const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
   return {
