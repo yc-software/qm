@@ -4,6 +4,9 @@ import { test, type TestContext } from "node:test";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const channel = (id: string, isPrivate = false) => ({
   id,

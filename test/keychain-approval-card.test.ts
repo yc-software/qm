@@ -16,6 +16,9 @@ import type { App } from "../src/api/app.ts";
 import type { Directory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function fixture() {
   let now = Date.now();

@@ -4,6 +4,9 @@ import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import { createThreadTracker, createDeduper } from "../src/slack/lib.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT", botHandle: "qm" } as BotIdentity;
 const actor = { externalId: "U1", displayName: "Teammate" };

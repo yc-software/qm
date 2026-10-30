@@ -37,26 +37,31 @@ import { createHttpEventsReceiver } from "./http-events.ts";
 import { parseChannelPage, parseLogLevel } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { AuthTestResponse } from "@slack/web-api";
+import { perTenant } from "../tenants/context.ts";
 const { App } = bolt;
 
 export type { SlackCoreClient };
 export type { SlackPluginConfig };
 export { normalizeSlackApiUrl, slackAccountConfigsFromEnv, slackPluginConfigFromEnv };
 
-const slackAccountClients = new Map<
-  string,
-  {
-    client: any;
-    teamId: string;
-    policy?: ExternalSlackAccess;
-    inFlightRuns?: { add(id: string): void; delete(id: string): void };
-  }
->();
+const slackAccountClients = perTenant(
+  () =>
+    new Map<
+      string,
+      {
+        client: any;
+        teamId: string;
+        policy?: ExternalSlackAccess;
+        inFlightRuns?: { add(id: string): void; delete(id: string): void };
+      }
+    >(),
+);
 
 export async function startSlackPlugin(
   cfg: SlackPluginConfig,
   core: SlackCoreClient,
 ): Promise<{ stop(): Promise<void> }> {
+  const accounts = slackAccountClients();
   const EVENTS_MODE = cfg.eventsMode ?? "socket";
   if (!cfg.botToken) {
     throw new Error("Slack plugin needs botToken (SLACK_BOT_TOKEN, xoxb-…)");
@@ -331,7 +336,7 @@ export async function startSlackPlugin(
   const handler = createTurnHandler({
     accountId: ACCOUNT_LABEL,
     ...(cfg.externalAccess ? { externalAccess: cfg.externalAccess } : {}),
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
+    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
     onEngaged: (runId, channel, threadTs) => {
       void core.sessionStatus
         ?.start(statusClient, statusAccount(), runId, channel, threadTs)
@@ -424,15 +429,15 @@ export async function startSlackPlugin(
   });
   const deliveries = createDeliveryPoller({
     clientForAccount: (id, teamId) => {
-      const account = slackAccountClients.get(id);
+      const account = slackAccountClients().get(id);
       if (!account || (teamId && account.teamId !== teamId)) return undefined;
       return account.client;
     },
     externalNamespace: (id) => {
-      const account = slackAccountClients.get(id);
+      const account = slackAccountClients().get(id);
       return account?.policy ? externalSlackNamespace(account.teamId, account.policy) : undefined;
     },
-    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients.get(id)),
+    continuePrivate: (runId, task) => continueInPrivate(core, runId, task, (id) => slackAccountClients().get(id)),
     core,
     flow,
     threads,
@@ -460,8 +465,8 @@ export async function startSlackPlugin(
       }
     }
     await directory.getUserSnapshot(app.client);
-    if (slackAccountClients.has(ACCOUNT_LABEL)) throw new Error(`Duplicate Slack account id: ${ACCOUNT_LABEL}`);
-    slackAccountClients.set(ACCOUNT_LABEL, {
+    if (accounts.has(ACCOUNT_LABEL)) throw new Error(`Duplicate Slack account id: ${ACCOUNT_LABEL}`);
+    accounts.set(ACCOUNT_LABEL, {
       client: app.client,
       inFlightRuns: flow.inFlightRuns,
       teamId: ids.ownTeamId,
@@ -470,7 +475,7 @@ export async function startSlackPlugin(
     await app.start();
     replaySweeper?.start();
   } catch (err) {
-    if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
+    if (accounts.get(ACCOUNT_LABEL)?.client === app.client) accounts.delete(ACCOUNT_LABEL);
     stopped = true;
     await devIntrospection?.close().catch(swallowAs("slack: dev-introspection close on failed start", undefined));
     try {
@@ -575,7 +580,7 @@ export async function startSlackPlugin(
         return;
       }
       stopped = true;
-      if (slackAccountClients.get(ACCOUNT_LABEL)?.client === app.client) slackAccountClients.delete(ACCOUNT_LABEL);
+      if (accounts.get(ACCOUNT_LABEL)?.client === app.client) accounts.delete(ACCOUNT_LABEL);
       await statusSweep.stop();
       await replaySweeper?.stop();
       if (deliveriesTimer) clearInterval(deliveriesTimer);
