@@ -7,6 +7,7 @@ import { createSandboxResources, type SandboxResource } from "../../src/sandbox/
 import { createSandboxRouter } from "../../src/sandbox/sandbox-routing.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createSwarmStore, type SwarmStore } from "../../src/swarms/swarm-store.ts";
+import { createMemorySwarmRows } from "../../src/swarms/swarm-table.ts";
 import { createSwarmService, type SwarmCaller } from "../../src/swarms/swarm-service.ts";
 import type { SessionStore } from "../../src/sessions/session-store.ts";
 import type { RunStore } from "../../src/runs/run-store.ts";
@@ -26,7 +27,7 @@ export async function swarmFixture(
   const sessions = options.sessions ?? createMemorySessionStore();
   const runs = options.runs ?? createMemoryRunStore().runs;
   const lock = options.lock ?? createMemoryAdvisoryLock();
-  const store = options.store ?? createSwarmStore(createMemoryMap(), { runs, sessions });
+  const store = options.store ?? createSwarmStore(createMemorySwarmRows({ runs, sessions }));
   const records = createMemoryMap<SandboxResource>();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];

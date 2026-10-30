@@ -7,6 +7,9 @@ import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("swarm HTTP rejects body identity selectors and completed capabilities while allowing arbitrary context keys", async () => {
   const fixture = await swarmFixture();

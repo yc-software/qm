@@ -8,6 +8,9 @@ import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orches
 import { processRun } from "../src/runs/worker.ts";
 import type { Orchestrator } from "../src/core/orchestrator.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("delayed ready acknowledgment cannot roll back a delivered worker across phase locks", async (context) => {
   const fixture = await swarmFixture();
