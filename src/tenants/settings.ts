@@ -1,0 +1,231 @@
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
+import type { PgPool } from "../persistence/pg-pool.ts";
+import { currentTenant } from "./context.ts";
+import { parseTenantSettings, type TenantSettings } from "./settings-parse.ts";
+
+export type { TenantSettings } from "./settings-parse.ts";
+
+export const TENANT_SETTING_KEYS = [
+  "MODEL_PROVIDER",
+  "PI_MODEL",
+  "PI_DETECT_MODEL",
+  "PI_TITLE_MODEL",
+  "PI_JUDGE_MODEL",
+  "CLAUDE_MODEL",
+  "ANTHROPIC_BASE_URL",
+  "OPENAI_BASE_URL",
+  "OPENROUTER_BASE_URL",
+  "MODEL_GATEWAY_URL",
+  "MODEL_GATEWAY_API_KEY",
+  "MODEL_GATEWAY_API_KEY_HEADER",
+  "MODEL_GATEWAY_MODELS",
+  "CODEX_AUTH_CREDENTIAL",
+  "CLAUDE_AUTH_CREDENTIAL",
+  "SANDBOX_BACKEND",
+  "SPRITES_TOKEN",
+  "E2B_API_KEY",
+  "MODAL_TOKEN_ID",
+  "MODAL_TOKEN_SECRET",
+  "DO_AGENTS_API_TOKEN",
+  "SMOLMACHINES_TOKEN",
+  "AGENT37_API_KEY",
+  "SUPERSERVE_API_KEY",
+  "RENDER_SANDBOX_API_KEY",
+  "RENDER_SANDBOX_WORKSPACE_ID",
+  "SECURITY_SCREEN",
+  "SECURITY_SCREEN_CLASSIFIER",
+  "SECURITY_SCREEN_PROXY_PROVIDER",
+  "SECURITY_SCREEN_PROXY_ENDPOINT",
+  "SECURITY_SCREEN_PROXY_TOKEN",
+  "AUTH_ALLOWED_EMAILS",
+  "AUTH_ALLOWED_EMAIL_DOMAIN",
+  "TRUSTED_OIDC_ADMIN_ISSUER",
+  "SUGGESTED_ACTIVITIES_CONTEXT",
+] as const;
+
+export type TenantSettingKey = (typeof TENANT_SETTING_KEYS)[number];
+export type TenantSettingValues = Partial<Record<TenantSettingKey, string>>;
+export type TenantSettingChanges = Partial<Record<TenantSettingKey, string | null>>;
+
+export const TENANT_SECRET_KEYS: ReadonlySet<TenantSettingKey> = new Set<TenantSettingKey>([
+  "MODEL_GATEWAY_API_KEY",
+  "SPRITES_TOKEN",
+  "E2B_API_KEY",
+  "MODAL_TOKEN_ID",
+  "MODAL_TOKEN_SECRET",
+  "DO_AGENTS_API_TOKEN",
+  "SMOLMACHINES_TOKEN",
+  "AGENT37_API_KEY",
+  "SUPERSERVE_API_KEY",
+  "RENDER_SANDBOX_API_KEY",
+  "SECURITY_SCREEN_PROXY_TOKEN",
+]);
+
+export function isTenantSettingKey(key: string): key is TenantSettingKey {
+  return (TENANT_SETTING_KEYS as readonly string[]).includes(key);
+}
+
+export function tenantSettingColumn(key: TenantSettingKey): string {
+  return key.toLowerCase();
+}
+
+export class TenantSettingMissingError extends Error {
+  readonly status = 503;
+  readonly key: string;
+  constructor(key: string) {
+    super(`${key} is not set in this tenant's settings`);
+    this.name = "TenantSettingMissingError";
+    this.key = key;
+  }
+}
+
+export function requireTenantSetting(settings: TenantSettings, key: TenantSettingKey): string {
+  const value = settings.values[key];
+  if (!value) throw new TenantSettingMissingError(key);
+  return value;
+}
+
+const SEAL_VERSION = 1;
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
+
+export function tenantSettingsKey(material: string | Buffer): Buffer {
+  return Buffer.from(hkdfSync("sha256", material, "qm.tenant-settings", "tenant-settings.v1", 32));
+}
+
+function associatedData(tenant: string, key: TenantSettingKey): Buffer {
+  return Buffer.from(`tenant_settings:${tenant}:${key}`, "utf8");
+}
+
+export function sealTenantSecret(sealKey: Buffer, tenant: string, key: TenantSettingKey, plain: string): Buffer {
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", sealKey, iv);
+  cipher.setAAD(associatedData(tenant, key));
+  const body = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  return Buffer.concat([Buffer.from([SEAL_VERSION]), iv, cipher.getAuthTag(), body]);
+}
+
+export function openTenantSecret(sealKey: Buffer, tenant: string, key: TenantSettingKey, sealed: Buffer): string {
+  if (sealed.length < 1 + IV_BYTES + TAG_BYTES || sealed[0] !== SEAL_VERSION)
+    throw new Error(`${key} in this tenant's settings is not a sealed value`);
+  const iv = sealed.subarray(1, 1 + IV_BYTES);
+  const tag = sealed.subarray(1 + IV_BYTES, 1 + IV_BYTES + TAG_BYTES);
+  const decipher = createDecipheriv("aes-256-gcm", sealKey, iv);
+  decipher.setAAD(associatedData(tenant, key));
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(sealed.subarray(1 + IV_BYTES + TAG_BYTES)), decipher.final()]).toString("utf8");
+}
+
+interface TenantSettingsBacking {
+  read(tenant: string): Promise<TenantSettingValues>;
+  write(tenant: string, changes: TenantSettingChanges): Promise<void>;
+}
+
+function postgresBacking(db: PgPool, keyMaterial: string | Buffer): TenantSettingsBacking {
+  const sealKey = tenantSettingsKey(keyMaterial);
+  const columns = TENANT_SETTING_KEYS.map(tenantSettingColumn).join(", ");
+  return {
+    async read(tenant) {
+      const [row] = await db.q(`SELECT ${columns} FROM tenant_settings WHERE tenant_id = qm_tenant_id()`);
+      const values: TenantSettingValues = {};
+      if (!row) return values;
+      for (const key of TENANT_SETTING_KEYS) {
+        const raw = row[tenantSettingColumn(key)];
+        if (raw === null || raw === undefined) continue;
+        values[key] = TENANT_SECRET_KEYS.has(key)
+          ? openTenantSecret(sealKey, tenant, key, raw as Buffer)
+          : String(raw);
+      }
+      return values;
+    },
+    async write(tenant, changes) {
+      const keys = TENANT_SETTING_KEYS.filter((key) => changes[key] !== undefined);
+      if (!keys.length) return;
+      const params = keys.map((key) => {
+        const value = changes[key];
+        if (value === null || value === undefined) return null;
+        return TENANT_SECRET_KEYS.has(key) ? sealTenantSecret(sealKey, tenant, key, value) : value;
+      });
+      const names = keys.map(tenantSettingColumn);
+      await db.q(
+        `INSERT INTO tenant_settings(tenant_id, ${names.join(", ")}) VALUES (qm_tenant_id(), ${names.map((_, i) => `$${i + 1}`).join(", ")})
+         ON CONFLICT (tenant_id) DO UPDATE SET ${names.map((name) => `${name} = EXCLUDED.${name}`).join(", ")}, updated_at = now()`,
+        params,
+      );
+    },
+  };
+}
+
+function memoryBacking(): TenantSettingsBacking {
+  const rows = new Map<string, TenantSettingValues>();
+  return {
+    read: async (tenant) => ({ ...rows.get(tenant) }),
+    async write(tenant, changes) {
+      rows.set(tenant, applyChanges(rows.get(tenant) ?? {}, changes));
+    },
+  };
+}
+
+function applyChanges(values: TenantSettingValues, changes: TenantSettingChanges): TenantSettingValues {
+  const next: TenantSettingValues = { ...values };
+  for (const key of TENANT_SETTING_KEYS) {
+    const change = changes[key];
+    if (change === undefined) continue;
+    if (change === null || change === "") delete next[key];
+    else next[key] = change;
+  }
+  return next;
+}
+
+export interface TenantSettingsStore {
+  get(): Promise<TenantSettings>;
+  update(changes: TenantSettingChanges): Promise<TenantSettings>;
+}
+
+export interface TenantSettingsStoreOptions {
+  db?: PgPool;
+  keyMaterial?: string | Buffer;
+  harness: string;
+  cacheMs?: number;
+  now?: () => number;
+}
+
+export function createTenantSettingsStore(opts: TenantSettingsStoreOptions): TenantSettingsStore {
+  if (opts.db && !opts.keyMaterial) throw new Error("Tenant settings need CONNECTOR_SECRET_KEY to seal secrets");
+  const backing = opts.db ? postgresBacking(opts.db, opts.keyMaterial!) : memoryBacking();
+  const cacheMs = opts.cacheMs ?? 10_000;
+  const now = opts.now ?? Date.now;
+  const cache = new Map<string, { at: number; settings: Promise<TenantSettings> }>();
+
+  function load(tenant: string): Promise<TenantSettings> {
+    const hit = cache.get(tenant);
+    if (hit && now() - hit.at < cacheMs) return hit.settings;
+    const settings = backing.read(tenant).then((values) => parseTenantSettings(values, opts.harness));
+    const entry = { at: now(), settings };
+    cache.set(tenant, entry);
+    settings.catch(() => {
+      if (cache.get(tenant) === entry) cache.delete(tenant);
+    });
+    return settings;
+  }
+
+  return {
+    get: () => load(currentTenant()),
+    async update(changes) {
+      const tenant = currentTenant();
+      for (const key of Object.keys(changes)) {
+        if (!isTenantSettingKey(key)) throw new Error(`${key} is not a tenant setting`);
+      }
+      const normalized: TenantSettingChanges = {};
+      for (const key of TENANT_SETTING_KEYS) {
+        const change = changes[key];
+        if (change === undefined) continue;
+        normalized[key] = change === null || change.trim() === "" ? null : change.trim();
+      }
+      parseTenantSettings(applyChanges(await backing.read(tenant), normalized), opts.harness);
+      await backing.write(tenant, normalized);
+      cache.delete(tenant);
+      return load(tenant);
+    },
+  };
+}
