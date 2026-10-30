@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { JSDOM } from "jsdom";
 import {
   effortLevelsForModel,
   loadoutActions,
+  loadLoadout,
   ultrafastChoice,
   modelLoadoutOptions,
   parseLoadout,
@@ -11,6 +13,37 @@ import {
   type LoadoutEntry,
 } from "../src/composer-loadout.ts";
 import type { ModelOption } from "../src/model-options.ts";
+
+test("saved loadouts migrate harness prefixes once across default and account preferences", () => {
+  const dom = new JSDOM("", { url: "http://localhost/" });
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: dom.window.localStorage });
+  try {
+    for (const key of ["web-ui:loadout", "web-ui:loadout:account:a", "web-ui:loadout:account:b"]) {
+      localStorage.setItem(
+        key,
+        JSON.stringify([
+          entry("pi:alpha", "high", true),
+          entry("claude:alpha", "low"),
+          entry("pi:gpt-6.1-sol-ultrafast", "xhigh"),
+          entry("provider:model", "medium"),
+        ]),
+      );
+      const expected = [
+        entry("alpha", "high", true),
+        entry("gpt-6.1-sol-ultrafast", "xhigh"),
+        entry("provider:model", "medium"),
+      ];
+      assert.deepEqual(loadLoadout(key), expected);
+      assert.deepEqual(JSON.parse(localStorage.getItem(key)!), expected);
+      assert.deepEqual(loadLoadout(key), expected);
+    }
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+    dom.window.close();
+  }
+});
 
 function entry(value: string, effort: LoadoutEntry["effort"] = "auto", fast = false): LoadoutEntry {
   return { value, effort, fast };

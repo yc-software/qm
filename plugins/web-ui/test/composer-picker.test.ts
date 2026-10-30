@@ -141,11 +141,12 @@ test("the personal-account picker preserves composer choices and saves context d
   localStorage.setItem(
     "web-ui:loadout",
     JSON.stringify([
-      { value: "beta", effort: "xhigh", fast: false },
-      { value: "alpha", effort: "high", fast: true },
+      { value: "pi:beta", effort: "xhigh", fast: false },
+      { value: "claude:alpha", effort: "high", fast: true },
       { value: "gamma", effort: "medium", fast: false },
     ]),
   );
+  localStorage.setItem("web-ui:model-picks", JSON.stringify([["web:tester:picker-test", "pi:alpha"]]));
   const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom" });
   let composer: ComposerSurface | undefined;
   let siblingComposer: ComposerSurface | undefined;
@@ -208,6 +209,13 @@ test("the personal-account picker preserves composer choices and saves context d
     assert.match(composer!.state.error, /Could not load runtime settings/);
     await composer!.refreshRuntimeSelection(null, agent);
     assert.equal(composer!.state.error, "", "a successful retry clears the runtime-load notice");
+    assert.equal(agent.state.model.id, "alpha", "saved prefixed selection resolves against the current catalog");
+    assert.deepEqual(JSON.parse(localStorage.getItem("web-ui:model-picks")!), [["web:tester:picker-test", "alpha"]]);
+    assert.deepEqual(saved(), [
+      { value: "beta", effort: "xhigh", fast: false },
+      { value: "alpha", effort: "high", fast: true },
+      { value: "gamma", effort: "medium", fast: false },
+    ]);
     composer!.state.error = "Couldn't attach the files, so the message wasn't sent. Try again.";
     await composer!.refreshRuntimeSelection(null, agent, true);
     assert.match(

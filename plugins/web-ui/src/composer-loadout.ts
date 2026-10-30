@@ -1,6 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelMetadata } from "./pi-models.ts";
-import { EFFORT_LEVELS, type EffortLevel, type ModelOption } from "./model-options.ts";
+import { EFFORT_LEVELS, migrateStoredModelValue, type EffortLevel, type ModelOption } from "./model-options.ts";
 
 export interface LoadoutEntry {
   value: string;
@@ -106,7 +106,11 @@ const LOADOUT_STORAGE_KEY = "web-ui:loadout";
 
 export function loadLoadout(key = LOADOUT_STORAGE_KEY): LoadoutEntry[] {
   try {
-    return parseLoadout(localStorage.getItem(key));
+    const entries = parseLoadout(localStorage.getItem(key));
+    const migrated = entries.map((entry) => ({ ...entry, value: migrateStoredModelValue(entry.value) }));
+    const normalized = uniqueLoadout(migrated);
+    if (migrated.some((entry, index) => entry.value !== entries[index]!.value)) saveLoadout(normalized, key);
+    return normalized;
   } catch {
     return [];
   }

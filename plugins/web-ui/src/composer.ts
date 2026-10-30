@@ -41,6 +41,7 @@ import {
   defaultEffortForModel,
   defaultModelValue,
   getModelOptions,
+  migrateStoredModelValue,
   type EffortLevel,
   type ModelOption,
   type ModelOptionValue,
@@ -81,7 +82,10 @@ function loadThreadPicks(): Map<string, ModelOptionValue> {
       const pairs = raw.filter(
         (p): p is [string, string] => Array.isArray(p) && typeof p[0] === "string" && typeof p[1] === "string",
       );
-      return new Map(pairs.slice(-THREAD_PICKS_CAP));
+      const migrated = pairs.map(([ref, value]): [string, string] => [ref, migrateStoredModelValue(value)]);
+      if (migrated.some(([, value], index) => value !== pairs[index]![1]))
+        persistPreference(THREAD_PICKS_STORAGE_KEY, JSON.stringify(migrated));
+      return new Map(migrated.slice(-THREAD_PICKS_CAP));
     }
   } catch {
     void 0;

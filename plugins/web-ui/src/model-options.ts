@@ -3,6 +3,14 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBaseModel, type ModelMetadata } from "./pi-models.ts";
 
 export type ModelOptionValue = string;
+
+export function migrateStoredModelValue(value: string): string {
+  for (const prefix of ["pi:", "claude:"]) {
+    if (value.startsWith(prefix)) return value.slice(prefix.length);
+  }
+  return value;
+}
+
 export interface ModelOption {
   value: ModelOptionValue;
   model: Model<Api>;
