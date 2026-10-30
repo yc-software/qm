@@ -28,7 +28,6 @@ function deployment(id: string, ownerScopeId: string, createdBy: string): Deploy
 
 async function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-offboard-")) }));
-  await built.identity.hydrate();
   const deployments = [
     deployment("app-personal", "personal:U1", "U1"),
     deployment("app-shared", "channel:C1", "U1"),
