@@ -1,0 +1,22 @@
+{
+  "id": "transient-state",
+  "description": "Status snapshots, a delegated agent brief, a one-off request and a third party's details; only the standing preference and the project's existence are durable.",
+  "turns": [
+    {
+      "input": "make the deploy pipeline faster",
+      "reply": "On it. The pipeline has open PRs #123 and #456; #123 is green and ready to merge, #456 is blocked on a half-resolved conflict between the cache step and the lint step. I paused the nightly deploy watch while I work."
+    },
+    {
+      "input": "<subagent-task>You are the subagent session \"deploy speedup\". I (your parent) need you to profile the build. DO NOT push anything until parent approves.</subagent-task>",
+      "reply": "Profiled: the dependency install is 70% of wall clock. I plan to add caching for it next."
+    },
+    {
+      "input": "fyi my teammate Dana Lee (she/her, dana@example.com) owns the release calendar. Support queue is down to 7, the oldest ticket has been unanswered four days.",
+      "reply": "Noted. I'll keep an eye on the queue."
+    },
+    {
+      "input": "from now on, always show me the build time before and after any pipeline change.",
+      "reply": "Will do — every pipeline change will come with a before/after build time."
+    }
+  ]
+}

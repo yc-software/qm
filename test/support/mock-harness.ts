@@ -12,6 +12,7 @@ import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/harness/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
+import { MEMORY_EXTRACTION_PROMPT } from "../../src/memory/strategies/per-turn.ts";
 import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
 import {
   SECURITY_SCREEN_STEP,
@@ -989,7 +990,7 @@ export function createMockHarness(): Harness {
       },
 
       oneShot(systemPrompt: string, prompt: string): Promise<string | undefined> {
-        if (systemPrompt.startsWith("You extract durable facts worth remembering")) {
+        if (systemPrompt === MEMORY_EXTRACTION_PROMPT) {
           const facts: string[] = [];
           for (const match of prompt.matchAll(/User said:\n([\s\S]*?)\n\nAssistant replied:/g)) {
             for (const raw of (match[1] ?? "").split(/[\n.!?]+/)) {
