@@ -91,7 +91,10 @@ test("plan --build-from <path> shows local builds instead of registry pulls", ()
     writeConfig(dir, { orgId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--build-from", checkout], { cwd: dir });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /edge: image build deploy\/core\/Dockerfile[\s\S]*harness: image build deploy\/core\/Dockerfile/);
+    assert.match(
+      r.out,
+      /edge: image build deploy\/core\/Dockerfile[\s\S]*harness: image build deploy\/core\/Dockerfile/,
+    );
     assert.doesNotMatch(r.out, /pull/);
   } finally {
     rmDir(dir);
@@ -105,7 +108,10 @@ test("bare plan --build-from builds from the enclosing qm checkout", () => {
     const cfg = writeConfig(stack, { orgId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--build-from", "--config", cfg], { cwd: repoRoot });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /edge: image build deploy\/core\/Dockerfile[\s\S]*harness: image build deploy\/core\/Dockerfile/);
+    assert.match(
+      r.out,
+      /edge: image build deploy\/core\/Dockerfile[\s\S]*harness: image build deploy\/core\/Dockerfile/,
+    );
   } finally {
     rmDir(stack);
   }
