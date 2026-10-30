@@ -71,7 +71,7 @@ export type FetchLike = (
   json(): Promise<unknown>;
 }>;
 
-const realFetch: FetchLike = publicFetch;
+const realFetch: FetchLike = (url, init) => publicFetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
 
 function parseScopes(raw: unknown): string[] | undefined {
   if (Array.isArray(raw)) return raw.map(String);

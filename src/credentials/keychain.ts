@@ -923,7 +923,10 @@ export function createKeychain(deps: {
     if (refresh && rec.refresh?.refreshTokenEnc && rec.host && refreshDue(rec)) {
       let pending = inflightRefreshes.get(rec.id);
       if (!pending) {
-        pending = refreshAndStore(rec.id, rec.host, refresh);
+        pending = refreshAndStore(rec.id, rec.host, refresh).catch((e) => {
+          console.error(`[keychain] connector token refresh could not run for ${rec.host}: ${errMessage(e)}`);
+          return unexpiredAccessToken(rec);
+        });
         inflightRefreshes.set(rec.id, pending);
         void pending.finally(() => inflightRefreshes.delete(rec.id));
       }
@@ -1423,9 +1426,8 @@ export function createKeychain(deps: {
     },
 
     async setServiceCredentialIfCurrent(orgScopeId, input, expectedUpdatedAt) {
-      if (!deps.creds.update) throw new Error("credential store does not support atomic updates");
       let updatedAt: number | null = null;
-      await deps.creds.update(brokerId(orgScopeId, input.slug), (prior) => {
+      await updateCred(brokerId(orgScopeId, input.slug), (prior) => {
         if (prior.kind !== "broker" || prior.ownerId !== orgScopeId || prior.updatedAt !== expectedUpdatedAt)
           return prior;
         const next = serviceCredentialRecord(orgScopeId, input, prior);

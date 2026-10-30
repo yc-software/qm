@@ -115,3 +115,21 @@ test("a failed refresh inside the margin falls back to the still-valid access to
   await k.setConnectorToken(HOST, "U2", { accessToken: "expired", refreshToken: "rt", expiresAt: Date.now() - 1 });
   assert.equal(await k.connectorAccessToken(HOST, "U2"), null);
 });
+
+test("a refresh that cannot take its lock still serves the unexpired token", async () => {
+  const lock: AdvisoryLock = {
+    ...createMemoryAdvisoryLock(),
+    withLock: async () => {
+      throw new Error("timeout acquiring advisory lock");
+    },
+  };
+  const k = keychain(createMemoryMap<KeychainCredential>(), lock, async () => ({ accessToken: "unused" }));
+  await k.setConnectorToken(HOST, "U1", {
+    accessToken: "still-valid",
+    refreshToken: "rt",
+    expiresAt: Date.now() + 60_000 * 5,
+  });
+  assert.equal(await k.connectorAccessToken(HOST, "U1"), "still-valid");
+  await k.setConnectorToken(HOST, "U2", { accessToken: "expired", refreshToken: "rt", expiresAt: Date.now() - 1 });
+  assert.equal(await k.connectorAccessToken(HOST, "U2"), null);
+});
