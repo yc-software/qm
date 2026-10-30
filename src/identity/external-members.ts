@@ -81,7 +81,8 @@ export function createExternalMemberStore(): ExternalMemberStore {
   };
   return {
     list: async () => [...rows().values()],
-    put: async (member) => void rows().set(foldPrincipalId(member.email), member),
+    put: async (member) =>
+      void rows().set(foldPrincipalId(member.email), { ...member, email: foldPrincipalId(member.email) }),
     async remove(emails) {
       for (const email of emails) rows().delete(foldPrincipalId(email));
     },

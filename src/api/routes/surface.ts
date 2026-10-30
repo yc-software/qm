@@ -647,7 +647,7 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 413, { error: "payload_too_large", message: "ui state too large" });
   if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
   const claimed = typeof b.updatedAt === "number" && Number.isFinite(b.updatedAt) ? b.updatedAt : Date.now();
-  const updatedAt = Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS);
+  const updatedAt = Math.max(0, Math.trunc(Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS)));
   const result = await deps.uiState.putNewer(principalId, key, { value: b.value, updatedAt });
   return sendJson(res, 200, result);
 }

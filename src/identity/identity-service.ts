@@ -48,7 +48,11 @@ export function createDeactivationStore(): DeactivationStore {
   };
   return {
     list: async () => [...rows().values()],
-    put: async (record) => void rows().set(foldPrincipalId(record.principalId), record),
+    put: async (record) =>
+      void rows().set(foldPrincipalId(record.principalId), {
+        ...record,
+        principalId: foldPrincipalId(record.principalId),
+      }),
     async remove(principalIds) {
       for (const id of principalIds) rows().delete(foldPrincipalId(id));
     },

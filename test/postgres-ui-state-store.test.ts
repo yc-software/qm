@@ -100,13 +100,14 @@ test("the conversion splits principal and key on the last separator and drops th
         updatedAt: 3,
       });
       const { rows } = await admin.query(
-        `SELECT tenant_id::text AS tenant, principal_id, key, to_regclass('web_ui_state_kv') IS NULL AS dropped,
+        `SELECT tenant_id::text AS tenant, principal_id, key, updated_at::text AS at, to_regclass('web_ui_state_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'web_ui_state') AS versions
            FROM web_ui_state ORDER BY principal_id, key`,
       );
       assert.deepEqual(rows, [
-        { tenant, principal_id: "U#1", key: "canvas:s1", dropped: true, versions: 0 },
-        { tenant, principal_id: "alice@example.com", key: "inbox-filter", dropped: true, versions: 0 },
+        { tenant, principal_id: "U#1", key: "canvas:s1", at: "3", dropped: true, versions: 0 },
+        { tenant, principal_id: "U3", key: "decimal", at: "1730000000001", dropped: true, versions: 0 },
+        { tenant, principal_id: "alice@example.com", key: "inbox-filter", at: "2", dropped: true, versions: 0 },
       ]);
     },
     (admin) =>
@@ -115,6 +116,9 @@ test("the conversion splits principal and key on the last separator and drops th
         "alice@example.com#inbox-filter": { value: "all", updatedAt: 2 },
         "no-separator": { value: 1, updatedAt: 1 },
         "U2#theme": { value: "dark" },
+        "U3#decimal": { value: 1, updatedAt: 1730000000000.5 },
+        "U4#huge": { value: 1, updatedAt: -1e300 },
+        "U5#text": { value: 1, updatedAt: "soon" },
       }),
   );
 });

@@ -36,9 +36,10 @@ const WEB_UI_STATE_MIGRATION = typedTableMigration({
     principal_id: "substring(id FROM '^(.*)#[^#]*$')",
     key: "substring(id FROM '#([^#]*)$')",
     value: "COALESCE(json->'value', 'null'::jsonb)",
-    updated_at: "(json->>'updatedAt')::bigint",
+    updated_at: "round((json->>'updatedAt')::numeric)::bigint",
   },
-  where: "id ~ '^.+#[^#]+$' AND json->>'updatedAt' IS NOT NULL",
+  where: `id ~ '^.+#[^#]+$' AND CASE WHEN jsonb_typeof(json->'updatedAt') = 'number'
+    THEN abs((json->>'updatedAt')::numeric) < 9e15 ELSE false END`,
 });
 
 const SELECT = `SELECT value, updated_at FROM web_ui_state WHERE tenant_id = ${TENANT} AND principal_id = $1 AND key = $2`;

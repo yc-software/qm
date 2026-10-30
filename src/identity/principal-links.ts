@@ -62,10 +62,11 @@ export function createPrincipalLinkStore(): PrincipalLinkStore {
   return {
     list: async () => [...rows().values()],
     async insertIfAbsent(link) {
-      const existing = rows().get(foldPrincipalId(link.principalId));
+      const principalId = foldPrincipalId(link.principalId);
+      const existing = rows().get(principalId);
       if (existing) return existing;
-      rows().set(foldPrincipalId(link.principalId), link);
-      return link;
+      rows().set(principalId, { ...link, principalId });
+      return { ...link, principalId };
     },
     async take(principalId) {
       const link = rows().get(foldPrincipalId(principalId)) ?? null;

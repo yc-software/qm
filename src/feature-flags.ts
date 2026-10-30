@@ -90,14 +90,15 @@ export function createFeatureFlagStore(opts: { now?: () => number } = {}): Featu
     const tenant = currentTenant();
     return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
   };
+  const current = () => [...rows().values()].filter((row) => FEATURE_NAMES.includes(row.featureName));
   const enabledFor = (scope: ScopeId): ReadonlySet<FeatureName> =>
     new Set(
-      [...rows().values()]
+      current()
         .filter((row) => row.enabledScopes.includes(orgScope) || row.enabledScopes.includes(scope))
         .map((row) => row.featureName),
     );
   return {
-    list: async () => [...rows().values()],
+    list: async () => current(),
     enabled: async (featureName, scope) => enabledFor(scope).has(featureName),
     enabledFor: async (scope) => enabledFor(scope),
     async setEnabled(featureName, scope, on, updatedBy) {
