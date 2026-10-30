@@ -10,9 +10,6 @@ import {
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const ORG = "default-org";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
@@ -35,8 +32,8 @@ function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAc
   };
   const sessions = { listByParticipant: async (_p: string) => [], participantScopes: async (_p: string) => [] };
   const auditLog = { record: () => undefined };
-  const crons = { list: async () => [] };
-  const webhooks = { list: async () => [] };
+  const crons = { ownedBy: async () => [] };
+  const webhooks = { ownedBy: async () => [] };
   const skills = { list: async () => [] };
   const deploy = { listDeployments: async () => [] };
   return createApp({

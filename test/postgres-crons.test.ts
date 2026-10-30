@@ -164,7 +164,7 @@ test(
           await crons.setEnabled(mine.id, false);
           await crons.delete(mine.id);
           const twin = await crons.create(input());
-          assert.equal(twin.id, mine.id);
+          assert.notEqual(twin.id, mine.id);
         });
         const kept = await withTenant(tenant, () => crons.get(mine.id));
         assert.equal(kept?.enabled, true);
@@ -183,7 +183,7 @@ test(
     await withTypedTableDb(
       (url) => createPostgresCronRows(url),
       async ({ store: rows, admin, tenant }) => {
-        const { fireLog: _fireLog, runtime: _runtime, ...expected } = LEGACY_CRON;
+        const { fireLog: _fireLog, ...expected } = LEGACY_CRON;
         assert.deepEqual(await withTenant(tenant, () => rows.get("legacy-1")), expected as Cron);
         const { rows: meta } = await admin.query(
           `SELECT tenant_id::text AS tenant, to_regclass('crons_kv') IS NULL AS dropped,

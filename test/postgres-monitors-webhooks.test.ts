@@ -157,7 +157,7 @@ test("webhooks dedupe per tenant and keep the newest events per webhook", { skip
         assert.deepEqual(await webhooks.listEvents(mine.id), []);
         assert.equal(await webhooks.update(mine.id, { action: "stolen" }), null);
         const twin = await webhooks.create(hook());
-        assert.equal(twin.id, mine.id);
+        assert.notEqual(twin.id, mine.id);
       });
       assert.equal((await withTenant(tenant, () => webhooks.get(mine.id)))?.action, "triage the event");
       await assert.rejects(webhooks.list(), /No tenant is bound/);

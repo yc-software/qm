@@ -17,6 +17,7 @@ import {
   type CreateTriggerInput,
 } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 export interface CreateLoopInput extends CreateTriggerInput {
   name: string;
@@ -152,6 +153,7 @@ export function createLoopStore(rows: LoopRows = createMemoryLoopRows()): LoopSt
       const now = Date.now();
       const name = normalizeName(input.name);
       const contentId = hashId([
+        contentPart(currentTenant()),
         contentPart(input.owner),
         contentPart(input.ownerScopeId),
         contentPart(name),

@@ -7,6 +7,7 @@ import {
   withFields,
 } from "../triggers/trigger-store.ts";
 import { createMemoryWebhookRows, type WebhookEvent, type WebhookRows } from "./webhook-table.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
 
@@ -51,6 +52,7 @@ export function createWebhookStore(rows: WebhookRows = createMemoryWebhookRows()
       }
       const filters = input.filters?.length ? input.filters : undefined;
       const id = hashId([
+        contentPart(currentTenant()),
         contentPart(input.owner),
         contentPart(input.ownerScopeId),
         contentPart(input.action),

@@ -4,6 +4,9 @@ import { loadConfig } from "../src/config.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { resolveSwarmSettings, SWARM_DEFAULTS } from "../src/swarms/swarm-settings.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("backend defaults validate every setting and preserve unspecified defaults", () => {
   assert.deepEqual(loadConfig({}).swarmDefaults, SWARM_DEFAULTS);

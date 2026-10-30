@@ -36,7 +36,7 @@ export function buildTriggerBase(input: CreateTriggerInput, id: string, createdA
 export function withFields<T extends object>(record: T, fields: Partial<T>): T {
   const next = { ...record } as Record<string, unknown>;
   for (const [key, value] of Object.entries(fields)) {
-    if (value === undefined || value === null) delete next[key];
+    if (value === undefined) delete next[key];
     else next[key] = value;
   }
   return next as unknown as T;

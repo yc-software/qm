@@ -9,9 +9,6 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { installConnectorSdk, loadConnectorSdk, withConnectorSdk } from "../src/sandbox/connector-sdk.ts";
 import type { LayerToolInstallIo } from "../src/sandbox/layer-tool-install.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const exec = promisify(execFile);
 

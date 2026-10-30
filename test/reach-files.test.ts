@@ -1,7 +1,4 @@
 import { installGlobalFakeSprites } from "./support/fake-sprites.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const fakeSprites = installGlobalFakeSprites();
 import { describe, it, before, after } from "node:test";
