@@ -9,7 +9,7 @@ import { createSwarmStore, SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
 import { createPostgresSwarmRows, type SwarmRows } from "../src/swarms/swarm-table.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -18,6 +18,12 @@ const schema = `swarm_test_${process.pid}`;
 const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
 isolatedUrl?.searchParams.set("options", `-c search_path=${schema}`);
 const databaseUrl = isolatedUrl?.toString();
+const opened: SwarmRows[] = [];
+const swarmRows = (): SwarmRows => {
+  const rows = createPostgresSwarmRows(databaseUrl!);
+  opened.push(rows);
+  return rows;
+};
 before(async () => {
   if (!baseUrl) return;
   const { default: pg } = await import("pg");
@@ -25,8 +31,9 @@ before(async () => {
   try {
     await pool.query(`CREATE SCHEMA ${schema}`);
     createPostgresSessionStore(databaseUrl!);
+    swarmRows();
     await migrateRegisteredPgSchemas(databaseUrl!);
-    await pool.query(`INSERT INTO ${schema}.tenants(id, slug, name) VALUES ($1, 'test', 'Test')`, [TEST_TENANT]);
+    await seedTenant(databaseUrl!);
   } finally {
     await pool.end();
   }
@@ -42,12 +49,6 @@ after(async () => {
     await pool.end();
   }
 });
-const opened: SwarmRows[] = [];
-const swarmRows = (): SwarmRows => {
-  const rows = createPostgresSwarmRows(databaseUrl!);
-  opened.push(rows);
-  return rows;
-};
 const skip = databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
 
 test(
