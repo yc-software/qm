@@ -29,3 +29,13 @@ test("keys are sanitized too", () => {
   const out = jsonbStringify({ ["k\u0000ey"]: 1 });
   assert.equal(out, '{"key":1}');
 });
+
+test("jsonbStringify serializes values with toJSON (Date, URL) the way JSON.stringify does, not as {}", () => {
+  const value = { at: new Date(0), link: new URL("https://example.com/a"), nested: [new Date(1000)], name: "a\u0000b" };
+  assert.deepEqual(JSON.parse(jsonbStringify(value)), {
+    at: "1970-01-01T00:00:00.000Z",
+    link: "https://example.com/a",
+    nested: ["1970-01-01T00:00:01.000Z"],
+    name: "ab",
+  });
+});
