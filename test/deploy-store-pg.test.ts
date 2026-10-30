@@ -51,6 +51,10 @@ test("touch keeps the max across instances and a full rewrite never regresses it
       assert.equal((await b.get(d.id))!.lastAccessAt, 2_000);
       await b.setStatus(d.id, "running");
       assert.equal((await a.get(d.id))!.lastAccessAt, 2_000);
+      const stale = (await store.rows[1]!.get(d.id))!;
+      await a.touch(d.id, 2_500);
+      await store.rows[1]!.put(d.id, { ...stale, status: "stopped" });
+      assert.equal((await a.get(d.id))!.lastAccessAt, 2_500);
       await b.touch(d.id, 3_000);
       assert.equal((await a.get(d.id))!.lastAccessAt, 3_000);
       assert.equal(await store.rows[0]!.touch("missing-id", 5), false);
@@ -98,9 +102,10 @@ test("deployments backfill with their access times and keep the lowest id on a d
         assert.equal((await s.getByName("doubled"))!.id, "dep-a");
       });
       const { rows } = await admin.query(
-        "SELECT to_regclass('deployment_access') AS access, to_regclass('deployments_kv') AS kv",
+        `SELECT to_regclass('deployment_access') AS access, to_regclass('deployments_kv') AS kv,
+                (SELECT count(*)::int FROM app_page_views) AS views`,
       );
-      assert.deepEqual(rows[0], { access: null, kv: null });
+      assert.deepEqual(rows[0], { access: null, kv: null, views: 1 });
     },
     async (admin) => {
       await seedKeyValueTable(admin, "deployments", {
@@ -112,6 +117,10 @@ test("deployments backfill with their access times and keep the lowest id on a d
            last_access_at BIGINT NOT NULL)`,
       );
       await admin.query("INSERT INTO deployment_access VALUES ('dep-a', 4242)");
+      await admin.query(
+        `CREATE TABLE app_page_views(id BIGSERIAL PRIMARY KEY, deployment_id TEXT NOT NULL REFERENCES deployments(id))`,
+      );
+      await admin.query("INSERT INTO app_page_views(deployment_id) VALUES ('dep-a')");
     },
   );
 });

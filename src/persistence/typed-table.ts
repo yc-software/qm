@@ -156,7 +156,7 @@ export function typedTable<T extends object, K extends string = never>(
   const assign = (picked: readonly string[]) => picked.map((f) => `${columnName(f)} = EXCLUDED.${columnName(f)}`);
   const put = (id: string, record: T) =>
     db.q(
-      `${insert(fields)} DO UPDATE SET ${[`${key} = EXCLUDED.${key}`, ...assign(fields)].join(", ")}`,
+      `${insert(fields)} DO UPDATE SET ${[`${key} = EXCLUDED.${key}`, ...assign(written)].join(", ")}`,
       values(id, record, fields),
     );
   return {
@@ -264,8 +264,9 @@ export function memoryRows<T extends object>(global = false): KeyedRows<T> {
     async update(id, fn) {
       const current = rows().get(id);
       if (!current) return null;
-      const next = fn(structuredClone(current));
-      rows().set(id, structuredClone(next));
+      const draft = structuredClone(current);
+      const next = fn(draft);
+      if (next !== draft) rows().set(id, structuredClone(next));
       return next;
     },
     async delete(id) {
