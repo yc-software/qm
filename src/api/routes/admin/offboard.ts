@@ -68,7 +68,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
     steps.push({
       kind: "cron",
       id: cron.id,
-      label: cron.title || cron.action?.slice(0, 80) || cron.message?.slice(0, 80) || cron.id,
+      label: cron.title || cron.action || cron.message || cron.id,
       scopeId: cron.ownerScopeId,
       action: "disable_and_archive",
       run: () => app.updateCron(cron.id, { enabled: false, archived: true }),
@@ -79,7 +79,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
     steps.push({
       kind: "webhook",
       id: webhook.id,
-      label: webhook.action.slice(0, 80),
+      label: webhook.action,
       scopeId: webhook.ownerScopeId,
       action: "disable",
       run: () => app.setWebhookEnabled(webhook.id, false),
@@ -172,7 +172,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
         scopeId: computer.ownerScopeId,
         action: "retire",
         run: async () => {
-          const selected = await resources.resolve(computer.ownerScopeId).catch(() => null);
+          const selected = await resources.resolve(computer.ownerScopeId);
           if (selected?.id === computer.id) await resources.setDefault(actorId, computer.ownerScopeId, null);
           await resources.retire(actorId, computer.id);
         },
