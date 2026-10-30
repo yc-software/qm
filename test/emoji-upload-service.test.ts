@@ -15,6 +15,7 @@ import {
   type StoredBrowserSession,
 } from "../src/connectors/browser-session-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryLinkTables } from "../src/connectors/link-tables.ts";
 
 const ACTOR = "U_ACTOR";
 const FALLBACK = "U_FALLBACK";
@@ -35,7 +36,7 @@ const STATE = (v: string) =>
 
 function memSessionStore(): BrowserSessionStore {
   return createBrowserSessionStore({
-    sessions: createMemoryMap<StoredBrowserSession>(),
+    sessions: memoryLinkTables().browserSessions,
     key: deriveConnectorKey(Buffer.alloc(32, 1)),
   });
 }

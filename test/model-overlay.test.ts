@@ -119,7 +119,7 @@ test("strict overlay validation rejects malformed fields, prices, bounds, reserv
 });
 
 test("store reload and independent readers observe edits and soft deletion without mutating in-flight models", async () => {
-  const backing = createMemoryMap<StoredModelOverlay>();
+  const backing = memoryModelTables().registry;
   const writer = createModelOverlayStore(backing);
   const reader = createModelOverlayStore(backing);
   await writer.upsert(spec, "admin");
@@ -405,7 +405,7 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
 });
 
 test("hydration isolates promoted builtins, incompatible providers, missing templates and malformed rows", async () => {
-  const backing = createMemoryMap<StoredModelOverlay>();
+  const backing = memoryModelTables().registry;
   const store = createModelOverlayStore(backing);
   const builtin = getRequiredModel("gpt-5.5");
   const row = (value: unknown) =>
@@ -436,7 +436,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const backing = createMemoryMap<StoredModelOverlay>();
+  const backing = memoryModelTables().registry;
   await backing.put("stale", {
     spec: { ...spec, id: "stale", template: "missing" },
     disabled: false,
@@ -495,6 +495,7 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
+import { memoryModelTables } from "../src/model/model-tables.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = createMemoryConfigStore("default-org");

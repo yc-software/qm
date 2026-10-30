@@ -16,6 +16,7 @@ import { createToolContext, type ToolContextDeps } from "../src/tools/primitives
 import type { ProcessSandbox, ProcessState, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 
 const run = promisify(execFile);
 const SECRET_TOKEN = "synthetic-background-token-123";
@@ -30,9 +31,7 @@ async function fixture(t: TestContext) {
   t.after(() => rm(root, { recursive: true, force: true }));
   const keychain = createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    ...memoryKeychainRows(),
     key: deriveConnectorKey("synthetic-test-key"),
   });
   const credential = await keychain.save({

@@ -4,10 +4,10 @@ import { randomBytes } from "node:crypto";
 import { validateHeaderName, validateHeaderValue } from "node:http";
 import { HOP_BY_HOP } from "../util/http-proxy.ts";
 import { scopeId as toScopeId, parseScopeId, type Destination, type ScopeId } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeychainAskRows, KeychainCredentialRows, KeychainGrantRows } from "./keychain-rows.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
 import { errMessage } from "../util/errors.ts";
-import { canonicalPerson, personIds, personKey, samePerson } from "../directory/person.ts";
+import { canonicalPerson, personKey, samePerson } from "../directory/person.ts";
 import { cronIdOf } from "../sessions/session-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { shq } from "../util/shell.ts";
@@ -156,6 +156,7 @@ export interface KeychainCredential {
   targets?: string[];
   host?: string;
   accountLabel?: string;
+  username?: string;
   fields?: CredentialFieldMeta[];
   broker?: BrokerDelivery;
   refresh?: CredentialRefresh;
@@ -559,7 +560,7 @@ function isPersonalCredentialEnvKey(envKey: string): boolean {
   return ENV_KEY_RE.test(envKey) && !envKey.startsWith("AGENT_");
 }
 
-function legacyUsernameEnvKey(passwordEnvKey: string): string {
+function usernameEnvKey(passwordEnvKey: string): string {
   const base = passwordEnvKey.replace(/_(PASSWORD|PASS|TOKEN|SECRET|API_KEY|KEY)$/i, "");
   return `${base || passwordEnvKey}_USERNAME`;
 }
@@ -586,10 +587,6 @@ function toMeta(rec: Omit<KeychainCredential, "secretEnc"> & { secretEnc?: strin
   };
 }
 
-function byOwners(ownerIds: string[]): { field: "ownerId"; anyOfFold: string[] } {
-  return { field: "ownerId", anyOfFold: ownerIds.flatMap((id) => personIds(id)) };
-}
-
 function bucketByOwner<C extends { ownerId: string }, T>(
   creds: Iterable<C>,
   ownerIds: string[],
@@ -610,9 +607,9 @@ function bucketByOwner<C extends { ownerId: string }, T>(
 }
 
 export function createKeychain(deps: {
-  creds: DurableMap<KeychainCredential>;
-  grants: DurableMap<KeychainGrant>;
-  asks: DurableMap<KeychainAsk>;
+  creds: KeychainCredentialRows;
+  grants: KeychainGrantRows;
+  asks: KeychainAskRows;
   key: SecretKey;
   lock: AdvisoryLock;
   refreshConnector?: OAuthRefresh;
@@ -639,8 +636,7 @@ export function createKeychain(deps: {
     } else {
       const envKey = rec.envKey ?? defaultEnvKey(rec.service);
       env = [{ key: envKey, value: raw }];
-      const legacyUsername = (rec as { username?: string }).username;
-      if (legacyUsername) env.push({ key: legacyUsernameEnvKey(envKey), value: legacyUsername, secret: false });
+      if (rec.username) env.push({ key: usernameEnvKey(envKey), value: rec.username, secret: false });
     }
     return {
       credentialId: rec.id,
@@ -679,16 +675,13 @@ export function createKeychain(deps: {
 
   async function activeGrantsFor(scopeId: ScopeId): Promise<KeychainGrant[]> {
     const t = now();
-    return (await deps.grants.all()).filter(
-      (g) => g.audienceScopeId === scopeId && g.status === "active" && !consumedGrant(g) && !expired(g, t),
-    );
+    return (await deps.grants.activeFor(scopeId)).filter((g) => !consumedGrant(g) && !expired(g, t));
   }
 
   async function freshAsk(rec: KeychainAsk, t: number): Promise<KeychainAsk> {
     if (rec.status !== "pending" && rec.status !== "expired") return rec;
     const grant = await deps.grants.get(hashId([rec.credentialId, "ask", rec.id]));
     if (grant?.askId === rec.id) {
-      if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic resolution");
       return (
         (await deps.asks.update(rec.id, (current) =>
           current.status === "pending" || current.status === "expired"
@@ -698,7 +691,6 @@ export function createKeychain(deps: {
       );
     }
     if (rec.status !== "pending" || rec.expiresAt >= t) return rec;
-    if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic expiry");
     return (
       (await deps.asks.update(rec.id, (current) =>
         current.status === "pending" && current.expiresAt < t
@@ -782,18 +774,17 @@ export function createKeychain(deps: {
     credId(principalId, host.toLowerCase(), oauthSlot(accountType));
   const inflightRefreshes = new Map<string, Promise<string | null>>();
 
-  async function putConnectorToken(
+  function connectorTokenRecord(
     host: string,
     principalId: string,
     token: OAuthToken,
-    accountType?: string,
-  ): Promise<KeychainCredential> {
+    accountType: string | undefined,
+    prior: KeychainCredential | null,
+  ): KeychainCredential {
     const t = now();
-    const id = oauthId(host, principalId, accountType);
-    const prior = await deps.creds.get(id);
     const at = token.accountType ?? accountType;
-    const rec: KeychainCredential = {
-      id,
+    return {
+      id: oauthId(host, principalId, accountType),
       ownerId: principalId,
       orgId: token.orgId ?? configOrgId(),
       service: host.toLowerCase(),
@@ -816,8 +807,16 @@ export function createKeychain(deps: {
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
     };
-    await deps.creds.put(id, rec);
-    return rec;
+  }
+
+  async function putConnectorToken(
+    host: string,
+    principalId: string,
+    token: OAuthToken,
+    accountType?: string,
+  ): Promise<void> {
+    const prior = await deps.creds.get(oauthId(host, principalId, accountType));
+    await deps.creds.put(connectorTokenRecord(host, principalId, token, accountType, prior));
   }
 
   async function connectorRecord(
@@ -849,12 +848,11 @@ export function createKeychain(deps: {
 
   async function markConnectorRefreshFailure(rec: KeychainCredential, message: string): Promise<void> {
     const t = now();
-    const current = await deps.creds.get(rec.id);
-    if (!current || current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint) return;
-    await deps.creds.merge(rec.id, {
-      refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
-      updatedAt: t,
-    });
+    await deps.creds.update(rec.id, (current) =>
+      current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint
+        ? current
+        : { ...current, refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message }, updatedAt: t },
+    );
   }
 
   async function refreshAndStore(
@@ -880,15 +878,14 @@ export function createKeychain(deps: {
         ...(stored.accountId ? { accountId: stored.accountId } : {}),
         ...fresh,
       };
-      // Compare-and-set: if another flight already rotated this credential,
-      // keep its result rather than clobbering a newer refresh token.
-      const current = await deps.creds.get(rec.id);
-      if (current && (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint)) {
-        const latest = tryDecrypt(current, recToOAuthToken);
-        return latest?.accessToken ?? null;
-      }
-      await putConnectorToken(host, principalId, merged, accountType);
-      return merged.accessToken;
+      const saved = await deps.creds.update(rec.id, (current) =>
+        current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint
+          ? current
+          : connectorTokenRecord(host, principalId, merged, accountType, current),
+      );
+      if (!saved) return null;
+      if (saved.fingerprint === fingerprintOf(merged.accessToken)) return merged.accessToken;
+      return tryDecrypt(saved, recToOAuthToken)?.accessToken ?? null;
     } catch (e) {
       const message = storedRefreshError(e);
       console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
@@ -986,7 +983,7 @@ export function createKeychain(deps: {
       };
     };
     const rec = buildRec(await deps.creds.get(id));
-    await deps.creds.put(id, rec);
+    await deps.creds.put(rec);
     return toMeta(rec);
   }
 
@@ -1030,7 +1027,6 @@ export function createKeychain(deps: {
 
   async function claimOnceGrant(grant: KeychainGrant, scopeId: ScopeId, usedBy: string): Promise<void> {
     if (grant.mode !== "once") return;
-    if (!deps.grants.update) throw new KeychainError(503, "grant store does not support atomic one-time use");
     const usedAt = now();
     const claimed = await deps.grants.update(grant.id, (current) => {
       if (current.audienceScopeId !== scopeId) throw new KeychainError(403, "grant is for a different conversation");
@@ -1116,17 +1112,13 @@ export function createKeychain(deps: {
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
       ...(input.askId ? { askId: input.askId } : {}),
     };
-    if (input.askId) return deps.grants.putIfAbsent(grant.id, grant);
-    await deps.grants.put(grant.id, grant);
+    if (input.askId) return deps.grants.putIfAbsent(grant);
+    await deps.grants.put(grant);
     return grant;
   }
 
   async function deleteCredential(id: string): Promise<void> {
-    for (const grant of await deps.grants.all()) {
-      if (grant.credentialId === id && grant.status === "active") {
-        await deps.grants.merge(grant.id, { status: "revoked", revokedAt: now() });
-      }
-    }
+    await deps.grants.revokeActive({ credentialId: id }, now());
     await deps.creds.delete(id);
   }
 
@@ -1140,7 +1132,6 @@ export function createKeychain(deps: {
       const fingerprint = credentialFilesFingerprint;
       if (fingerprint(normalized) === fingerprint(materialized.files)) return;
 
-      if (!deps.creds.update) throw new Error("credential store does not support atomic file refresh");
       const updated = await deps.creds.update(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
@@ -1178,22 +1169,15 @@ export function createKeychain(deps: {
     },
 
     async listAllMetadata() {
-      return (await deps.creds.select({ omit: ["secretEnc"] })).filter(listed).map(toMeta);
+      return (await deps.creds.all()).filter(listed).map(toMeta);
     },
 
     async listByOwner(ownerId) {
-      return (await deps.creds.select({ omit: ["secretEnc"], where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && listed(c))
-        .map(toMeta);
+      return (await deps.creds.byOwners([ownerId])).filter(listed).map(toMeta);
     },
 
     async listByOwners(ownerIds) {
-      return bucketByOwner(
-        await deps.creds.select({ omit: ["secretEnc"], where: byOwners(ownerIds) }),
-        ownerIds,
-        listed,
-        toMeta,
-      );
+      return bucketByOwner(await deps.creds.byOwners(ownerIds), ownerIds, listed, toMeta);
     },
 
     async getCredential(id) {
@@ -1221,15 +1205,8 @@ export function createKeychain(deps: {
       const id = oauthId(host, principalId, accountType);
       const cred = await deps.creds.get(id);
       if (!cred) return null;
-      for (const g of await deps.grants.all()) {
-        if (
-          g.credentialId === id &&
-          g.audienceScopeId === audienceScopeId &&
-          g.mode === "standing" &&
-          g.status === "active"
-        ) {
-          return g;
-        }
+      for (const g of await deps.grants.forCredential(id)) {
+        if (g.audienceScopeId === audienceScopeId && g.mode === "standing" && g.status === "active") return g;
       }
       return mintGrant({ credentialId: id, ownerId: principalId, audienceScopeId, mode: "standing", purpose });
     },
@@ -1240,20 +1217,14 @@ export function createKeychain(deps: {
 
     async listGrants(filter) {
       const grants =
-        filter.ownerId === undefined
-          ? await deps.grants.all()
-          : await deps.grants.select({ where: byOwners([filter.ownerId]) });
-      return grants.filter(
-        (g) =>
-          (filter.ownerId === undefined || samePerson(g.ownerId, filter.ownerId)) &&
-          (filter.audienceScopeId === undefined || g.audienceScopeId === filter.audienceScopeId),
-      );
+        filter.ownerId === undefined ? await deps.grants.all() : await deps.grants.byOwners([filter.ownerId]);
+      return grants.filter((g) => filter.audienceScopeId === undefined || g.audienceScopeId === filter.audienceScopeId);
     },
 
     async revokeGrant(ownerId, grantId) {
       const g = await deps.grants.get(grantId);
       if (!g || !samePerson(g.ownerId, ownerId)) return false;
-      if (g.status === "active") await deps.grants.merge(grantId, { status: "revoked", revokedAt: now() });
+      await deps.grants.revokeActive({ id: grantId }, now());
       return true;
     },
 
@@ -1284,7 +1255,10 @@ export function createKeychain(deps: {
         throw new KeychainError(403, "personal requests require the credential owner's own conversation");
       }
       const origin = cronIdOf(input.requesterThreadRef) ?? input.requesterThreadRef;
-      for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
+      for (const rec of await deps.asks.newestFirst({
+        credentialId: cred.id,
+        requesterScopeId: input.requesterScopeId,
+      })) {
         const a = await freshAsk(rec, t);
         const sameOrigin = (cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef) === origin;
         if (a.credentialId !== cred.id || a.requesterScopeId !== input.requesterScopeId || !sameOrigin) continue;
@@ -1314,7 +1288,7 @@ export function createKeychain(deps: {
         createdAt: t,
         expiresAt: input.expiresAt ?? t + ASK_TTL_MS,
       };
-      await deps.asks.put(ask.id, ask);
+      await deps.asks.put(ask);
       return { ask, existing: false };
     },
 
@@ -1326,14 +1300,8 @@ export function createKeychain(deps: {
     async listAsks(filter) {
       const t = now();
       const out: KeychainAsk[] = [];
-      for (const rec of await deps.asks.all()) {
-        const a = await freshAsk(rec, t);
-        if (filter.requesterId !== undefined && !samePerson(a.requesterId, filter.requesterId)) continue;
-        if (filter.ownerId !== undefined && !samePerson(a.ownerId, filter.ownerId)) continue;
-        if (filter.requesterScopeId !== undefined && a.requesterScopeId !== filter.requesterScopeId) continue;
-        out.push(a);
-      }
-      return out.sort((x, y) => x.createdAt - y.createdAt);
+      for (const rec of (await deps.asks.newestFirst(filter)).reverse()) out.push(await freshAsk(rec, t));
+      return out;
     },
 
     async approveAsk(input) {
@@ -1352,9 +1320,13 @@ export function createKeychain(deps: {
           ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
           askId: ask.id,
         });
-        const patch = { status: "approved" as const, resolvedAt: t, grantId: grant.id, notifiedAt: undefined };
-        await deps.asks.merge(ask.id, patch);
-        return { ask: { ...ask, ...patch }, grant };
+        const approve = ({ notifiedAt: _notifiedAt, ...current }: KeychainAsk): KeychainAsk => ({
+          ...current,
+          status: "approved",
+          resolvedAt: t,
+          grantId: grant.id,
+        });
+        return { ask: (await deps.asks.update(ask.id, approve)) ?? approve(ask), grant };
       });
     },
 
@@ -1368,16 +1340,20 @@ export function createKeychain(deps: {
         const ask = await freshAsk(rec, t);
         if (ask.status !== "pending") throw new KeychainError(410, `ask already ${ask.status}`);
         const note = input.note?.trim();
-        const patch = { status: "declined" as const, resolvedAt: t, ...(note ? { note } : {}) };
-        await deps.asks.merge(ask.id, patch);
-        return { ...ask, ...patch };
+        const decline = (current: KeychainAsk): KeychainAsk => ({
+          ...current,
+          status: "declined",
+          resolvedAt: t,
+          ...(note ? { note } : {}),
+        });
+        return (await deps.asks.update(ask.id, decline)) ?? decline(ask);
       });
     },
 
     async unnotifiedResolvedAsks(nowAt) {
       const out: KeychainAsk[] = [];
       const taskDecisions = new Set<string>();
-      for (const rec of (await deps.asks.all()).reverse().sort((a, b) => b.createdAt - a.createdAt)) {
+      for (const rec of await deps.asks.newestFirst({})) {
         const a = await freshAsk(rec, nowAt);
         const origin = cronIdOf(a.requesterThreadRef) ?? a.requesterThreadRef;
         const task = JSON.stringify([a.credentialId, a.requesterScopeId, origin]);
@@ -1392,7 +1368,6 @@ export function createKeychain(deps: {
     },
 
     async markAskNotified(id, status) {
-      if (!deps.asks.update) throw new KeychainError(503, "ask store does not support atomic notification");
       await deps.asks.update(id, (current) =>
         current.status === status ? { ...current, notifiedAt: now() } : current,
       );
@@ -1400,18 +1375,15 @@ export function createKeychain(deps: {
 
     async setServiceCredential(orgScopeId, input) {
       const prior = await brokerRecord(orgScopeId, input.slug);
-      const rec = serviceCredentialRecord(orgScopeId, input, prior);
-      await deps.creds.put(rec.id, rec);
+      await deps.creds.put(serviceCredentialRecord(orgScopeId, input, prior));
     },
 
     async setServiceCredentialIfAbsent(orgScopeId, input) {
-      if (!deps.creds.insertIfAbsent) throw new Error("credential store does not support atomic inserts");
       const rec = serviceCredentialRecord(orgScopeId, input, null);
-      return (await deps.creds.insertIfAbsent(rec.id, rec)) ? rec.updatedAt : null;
+      return (await deps.creds.insertIfAbsent(rec)) ? rec.updatedAt : null;
     },
 
     async setServiceCredentialIfCurrent(orgScopeId, input, expectedUpdatedAt) {
-      if (!deps.creds.update) throw new Error("credential store does not support atomic updates");
       let updatedAt: number | null = null;
       await deps.creds.update(brokerId(orgScopeId, input.slug), (prior) => {
         if (prior.kind !== "broker" || prior.ownerId !== orgScopeId || prior.updatedAt !== expectedUpdatedAt)
@@ -1424,7 +1396,7 @@ export function createKeychain(deps: {
     },
 
     async listServiceCredentials(orgScopeId) {
-      return (await deps.creds.select({ where: byOwners([orgScopeId]) }))
+      return (await deps.creds.byOwners([orgScopeId]))
         .filter((c) => c.kind === "broker" && c.ownerId === orgScopeId)
         .map(brokerToPublic);
     },
@@ -1434,7 +1406,6 @@ export function createKeychain(deps: {
     },
 
     async deleteServiceCredentialIfCurrent(orgScopeId, slug, expectedUpdatedAt) {
-      if (!deps.creds.deleteIf) throw new Error("credential store does not support atomic deletes");
       return deps.creds.deleteIf(
         brokerId(orgScopeId, slug),
         (prior) => prior.kind === "broker" && prior.ownerId === orgScopeId && prior.updatedAt === expectedUpdatedAt,
@@ -1513,7 +1484,7 @@ export function createKeychain(deps: {
     async listConnectorsByOwners(ownerIds) {
       const t = now();
       return bucketByOwner(
-        await deps.creds.select({ omit: ["secretEnc"], where: byOwners(ownerIds) }),
+        await deps.creds.byOwners(ownerIds),
         ownerIds,
         (c) => c.managed === "connector",
         (c) => connectorMeta(c, t, oauthSkew),
@@ -1546,22 +1517,15 @@ export function createKeychain(deps: {
 
     async materializeOwn(ownerId) {
       const t = now();
-      return (await deps.creds.select({ where: byOwners([ownerId]) }))
-        .filter(
-          (c) =>
-            samePerson(c.ownerId, ownerId) &&
-            c.kind === "env" &&
-            !c.managed &&
-            !isBackendCredential(c) &&
-            !expired(c, t),
-        )
+      return (await deps.creds.byOwners([ownerId]))
+        .filter((c) => c.kind === "env" && !c.managed && !isBackendCredential(c) && !expired(c, t))
         .map((c) => tryDecrypt(c, decryptToEnv))
         .filter((c): c is MaterializedEnvCred => c !== null);
     },
 
     async materializeOwnFiles(ownerId) {
-      return (await deps.creds.select({ where: byOwners([ownerId]) }))
-        .filter((c) => samePerson(c.ownerId, ownerId) && c.kind === "file" && listed(c))
+      return (await deps.creds.byOwners([ownerId]))
+        .filter((c) => c.kind === "file" && listed(c))
         .map((c) => tryDecrypt(c, decryptToFiles))
         .filter((c): c is MaterializedFileCred => c !== null);
     },

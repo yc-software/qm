@@ -39,6 +39,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -46,9 +47,7 @@ const SECRET = "keychain-ask-route-secret".repeat(3);
 function kcAt(now: () => number): Keychain {
   return createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    ...memoryKeychainRows(),
     key: KEY,
     now,
   });

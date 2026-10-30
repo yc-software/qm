@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createBrowserSessionStore, type StoredBrowserSession } from "../src/connectors/browser-session-store.ts";
+import { memoryLinkTables } from "../src/connectors/link-tables.ts";
 
 const KEY = deriveConnectorKey(Buffer.alloc(32, 7));
 const STATE = JSON.stringify({ cookies: [{ name: "sid", value: "abc", domain: ".doordash.com" }] });
 
 function build(key = KEY) {
-  const map = createMemoryMap<StoredBrowserSession>();
+  const map = memoryLinkTables().browserSessions;
   return { store: createBrowserSessionStore({ sessions: map, key }), map };
 }
 

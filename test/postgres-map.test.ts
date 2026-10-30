@@ -5,17 +5,7 @@ import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/du
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore, type WebhookHistory } from "../src/webhooks/webhook-store.ts";
 import { scopeId, type Webhook, type Cron } from "../src/types.ts";
-import {
-  createKeychain,
-  KeychainError,
-  type KeychainAsk,
-  type KeychainCredential,
-  type KeychainGrant,
-} from "../src/credentials/keychain.ts";
-import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
-import { materializeGrant } from "./support/materialize-grant.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -26,7 +16,7 @@ before(async () => {
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(
-    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_wide_widgets, map_scoped_widgets, map_crons, map_owned_crons, map_keychain_creds, map_keychain_grants, map_keychain_asks, process_sessions, durable_map_versions CASCADE",
+    "DROP TABLE IF EXISTS map_webhooks, map_webhook_history, map_widgets, map_wide_widgets, map_scoped_widgets, map_crons, map_owned_crons, process_sessions, durable_map_versions CASCADE",
   );
   await p.end();
 });
@@ -318,87 +308,6 @@ test("pg map: original folded-index migration upgrades without changing its ledg
   } finally {
     await unindexed.delete("legacy");
     await factory.pool.close();
-  }
-});
-
-test("pg keychain: listByOwner is a per-owner projected read with no secret material", { skip }, async () => {
-  const factory = createPostgresMapFactory(URL!);
-  const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
-    creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
-    grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
-    asks: factory.map<KeychainAsk>("map_keychain_asks"),
-    key: deriveConnectorKey("postgres-keychain-test-key"),
-  });
-  try {
-    await keychain.save({ ownerId: "Owner-A@X.com", service: "github", secret: "ghp_a", envKey: "GITHUB_TOKEN" });
-    await keychain.save({ ownerId: "U-other", service: "github", secret: "ghp_b", envKey: "GITHUB_TOKEN" });
-    await keychain.save({ ownerId: "İstanbul@X.com", service: "gitlab", secret: "glpat_c", envKey: "GITLAB_TOKEN" });
-
-    const turkish = await keychain.listByOwner("İstanbul@X.com");
-    assert.equal(turkish.length, 1, "an owner id where SQL and JS case folding diverge still lists its credentials");
-    assert.equal(turkish[0]!.service, "gitlab");
-
-    const listed = await keychain.listByOwner("owner-a@x.COM");
-    assert.equal(listed.length, 1);
-    assert.equal(listed[0]!.service, "github");
-    assert.ok(!("secretEnc" in listed[0]!));
-    assert.ok(!JSON.stringify(listed).includes("ghp_a"));
-
-    const own = await keychain.materializeOwn("owner-a@x.com");
-    assert.deepEqual(
-      own.flatMap((m) => m.env),
-      [{ key: "GITHUB_TOKEN", value: "ghp_a" }],
-      "the owner's own materialization still decrypts the secret",
-    );
-  } finally {
-    await factory.pool.close();
-  }
-});
-
-test("pg map: concurrent keychain instances claim a once grant exactly once", { skip }, async () => {
-  const first = createPostgresMapFactory(URL!);
-  const second = createPostgresMapFactory(URL!);
-  const key = deriveConnectorKey("postgres-keychain-test-key");
-  const build = (factory: ReturnType<typeof createPostgresMapFactory>) =>
-    createKeychain({
-      lock: createMemoryAdvisoryLock(),
-      creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
-      grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
-      asks: factory.map<KeychainAsk>("map_keychain_asks"),
-      key,
-    });
-  const owner = build(first);
-  const peer = build(second);
-  try {
-    const credential = await owner.save({
-      ownerId: "U1",
-      service: "github",
-      secret: "ghp_secret",
-      envKey: "GITHUB_TOKEN",
-    });
-    const grant = await owner.createGrant({
-      credentialId: credential.id,
-      ownerId: "U1",
-      audienceScopeId: scopeId("channel", "C1"),
-      mode: "once",
-      purpose: "single use",
-    });
-    const results = await Promise.allSettled([
-      materializeGrant(owner, grant.id, scopeId("channel", "C1"), "U2"),
-      materializeGrant(peer, grant.id, scopeId("channel", "C1"), "U3"),
-    ]);
-    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-    assert.equal(
-      results.filter(
-        (result) =>
-          result.status === "rejected" && result.reason instanceof KeychainError && result.reason.status === 410,
-      ).length,
-      1,
-    );
-  } finally {
-    await first.pool.close();
-    await second.pool.close();
   }
 });
 

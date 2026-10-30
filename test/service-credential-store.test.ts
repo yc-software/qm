@@ -5,16 +5,17 @@ import { createKeychain, isValidCredentialSlug, type KeychainCredential } from "
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { memoryKeychainRows, type KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 
 const ORG = scopeId("org", "default-org");
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
-function store(opts: { creds?: DurableMap<KeychainCredential> } = {}) {
+function store(opts: { creds?: KeychainCredentialRows } = {}) {
   return createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: opts.creds ?? createMemoryMap<KeychainCredential>(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    creds: opts.creds ?? memoryKeychainRows().creds,
+    grants: memoryKeychainRows().grants,
+    asks: memoryKeychainRows().asks,
     key: KEY,
   });
 }
@@ -83,7 +84,7 @@ test("an explicit new secret REPLACES the stored one", async () => {
 });
 
 test("conditional credential updates and deletes are atomic across store instances", async () => {
-  const creds = createMemoryMap<KeychainCredential>();
+  const creds = memoryKeychainRows().creds;
   const left = store({ creds });
   const right = store({ creds });
   await left.setServiceCredential(ORG, { slug: "k", name: "K", secret: "old", host: "h.example" });

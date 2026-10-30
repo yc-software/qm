@@ -32,6 +32,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";
@@ -194,12 +195,12 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
 
   it("the keychain stores new credentials under the canonical owner and lists legacy ones from either id", async () => {
     await installed();
-    const creds = createMemoryMap<KeychainCredential>();
+    const creds = memoryKeychainRows().creds;
     const keychain = createKeychain({
       lock: createMemoryAdvisoryLock(),
       creds,
-      grants: createMemoryMap(),
-      asks: createMemoryMap(),
+      grants: memoryKeychainRows().grants,
+      asks: memoryKeychainRows().asks,
       key: deriveConnectorKey("principal-links-test-key"),
     });
     const saved = await keychain.save({ ownerId: OIDC, service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });
@@ -208,7 +209,7 @@ describe("person primitives fold a linked sign-in to its canonical principal", (
     assert.equal(rotated.id, saved.id, "the same person saving the same service rotates one record");
     assert.equal(await keychain.readOwnSecret(OIDC, saved.id), "ghp_y");
     const legacy = await keychain.save({ ownerId: EMAIL, service: "linear", secret: "lin_x", envKey: "LINEAR_KEY" });
-    await creds.merge(legacy.id, { ownerId: OIDC });
+    await creds.update(legacy.id, (current) => ({ ...current, ownerId: OIDC }));
     const mine = await keychain.listByOwner(EMAIL);
     assert.deepEqual(mine.map((c) => c.service).sort(), ["github", "linear"]);
     const viaSignIn = await keychain.listByOwner(OIDC);

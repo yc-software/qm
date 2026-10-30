@@ -1,5 +1,5 @@
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { ModelCredentialRows } from "./model-tables.ts";
 import { MODEL_PROVIDERS, type ModelProvider, type ModelProviderAvailability } from "./pi-models.ts";
 
 export { isModelProvider, type ModelProvider } from "./pi-models.ts";
@@ -29,7 +29,7 @@ export interface ModelCredentialStore {
 }
 
 export function createModelCredentialStore(input: {
-  backing: DurableMap<StoredModelCredential>;
+  backing: ModelCredentialRows;
   keyMaterial: string | Buffer;
   fallback?: Partial<Record<ModelProvider, string>>;
 }): ModelCredentialStore {
@@ -51,7 +51,7 @@ export function createModelCredentialStore(input: {
       if (!secret) throw new Error("API key is required");
       const actor = updatedBy.trim();
       if (!actor) throw new Error("updatedBy is required");
-      await input.backing.put(provider, {
+      await input.backing.put({
         provider,
         secretEnc: encryptSecret(secret, key),
         disabled: false,
@@ -61,7 +61,7 @@ export function createModelCredentialStore(input: {
     },
 
     async delete(provider, updatedBy) {
-      await input.backing.put(provider, {
+      await input.backing.put({
         provider,
         disabled: true,
         updatedAt: Date.now(),

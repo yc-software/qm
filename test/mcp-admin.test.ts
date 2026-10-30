@@ -14,13 +14,14 @@ import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-stor
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
+import { memoryLinkTables } from "../src/connectors/link-tables.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 test("MCP admin validates and preserves credential scope, without returning secrets", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
@@ -168,7 +169,7 @@ test("production wiring never uses operator fallback tokens for per-user MCP cal
 test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadata, and never shadows built-in connectors", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-oauth-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     auditLog: built.auditLog,
@@ -245,7 +246,7 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints from metadat
 test("MCP admin save stores the server's own description from the probe", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "mcp-admin-about-"));
   const built = buildApp(testConfig({ dataDir: dir }));
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   const remote = await startMcpTestServer(t, { instructions: "Search and update CRM records.\nAlways query first." });
   const server = createInsecureTestServer(built.app, {

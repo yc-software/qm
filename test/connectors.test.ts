@@ -17,6 +17,7 @@ import {
 } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { memoryKeychainRows, type KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -25,14 +26,14 @@ function makeKeychain(
     now?: () => number;
     skewMs?: number;
     refresh?: OAuthRefresh;
-    creds?: DurableMap<KeychainCredential>;
+    creds?: KeychainCredentialRows;
   } = {},
 ) {
   const keychain = createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: opts.creds ?? createMemoryMap<KeychainCredential>(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    creds: opts.creds ?? memoryKeychainRows().creds,
+    grants: memoryKeychainRows().grants,
+    asks: memoryKeychainRows().asks,
     key: KEY,
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.skewMs !== undefined ? { oauthSkewMs: opts.skewMs } : {}),
@@ -208,7 +209,7 @@ test("connector token refresh failures are logged and never poison the stored to
     errors.push(args.map(String).join(" "));
   });
 
-  const creds = createMemoryMap<KeychainCredential>();
+  const creds = memoryKeychainRows().creds;
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0, refresh: async () => ({ accessToken: "" }) });
   await keychain.setConnectorToken("api.github.com", "U1", {
     accessToken: "stale",
@@ -278,64 +279,29 @@ test("connector tokens: expired non-refreshable connector tokens need reconnect"
 });
 
 test("connector token keys are Postgres-safe (no NUL byte) — round-trip through a NUL-rejecting backing", async () => {
-  const store = new Map<string, KeychainCredential>();
   const seenKeys: string[] = [];
   const rejectNul = (k: string): void => {
     if (k.includes("\u0000")) throw new Error('invalid byte sequence for encoding "UTF8": 0x00');
     seenKeys.push(k);
   };
-  const creds: DurableMap<KeychainCredential> = {
-    async mutateMany() {
-      throw new Error("unused in connector token test");
-    },
-    async all() {
-      return [...store.values()];
-    },
-    async entries() {
-      return [...store.entries()];
-    },
-    async select<K extends Extract<keyof KeychainCredential, string> = never>(
-      query: DurableMapSelect<KeychainCredential, K>,
-    ) {
-      return selectEntries([...store.entries()], query).map(([, value]) => value);
-    },
-    async selectEntries<K extends Extract<keyof KeychainCredential, string> = never>(
-      query: DurableMapSelect<KeychainCredential, K>,
-    ) {
-      return selectEntries([...store.entries()], query);
-    },
-    async get(k: string) {
+  const base = memoryKeychainRows().creds;
+  const creds: KeychainCredentialRows = {
+    ...base,
+    async get(k) {
       rejectNul(k);
-      return store.get(k) ?? null;
+      return base.get(k);
     },
-    async put(k: string, v: KeychainCredential) {
-      rejectNul(k);
-      store.set(k, v);
+    async put(rec) {
+      rejectNul(rec.id);
+      return base.put(rec);
     },
-    async putIfAbsent(k: string, v: KeychainCredential) {
+    async update(k, fn) {
       rejectNul(k);
-      const e = store.get(k);
-      if (e) return e;
-      store.set(k, v);
-      return v;
+      return base.update(k, fn);
     },
-    async merge(k: string, patch: Partial<KeychainCredential>) {
+    async delete(k) {
       rejectNul(k);
-      const v = store.get(k);
-      if (!v) return null;
-      const merged = { ...v, ...patch };
-      store.set(k, merged);
-      return merged;
-    },
-    async delete(k: string) {
-      rejectNul(k);
-      store.delete(k);
-    },
-    async take(k: string) {
-      rejectNul(k);
-      const v = store.get(k) ?? null;
-      store.delete(k);
-      return v;
+      return base.delete(k);
     },
   };
   const keychain = makeKeychain({ creds });
@@ -401,7 +367,7 @@ test("disconnect revokes connector grants so reconnect cannot restore old access
 });
 
 test("connector tokens are hidden from keychain listings and own-credential materialization", async () => {
-  const creds = createMemoryMap<KeychainCredential>();
+  const creds = memoryKeychainRows().creds;
   const keychain = makeKeychain({ creds, now: () => 10_000, skewMs: 0 });
   await keychain.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "tok" });
   await keychain.save({ ownerId: "U1", service: "github", secret: "ghp_x", envKey: "GITHUB_TOKEN" });

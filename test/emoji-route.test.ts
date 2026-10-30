@@ -16,6 +16,7 @@ import {
 } from "../src/connectors/browser-session-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
+import { memoryLinkTables } from "../src/connectors/link-tables.ts";
 
 const SECRET = "emoji-route-secret".repeat(3);
 const ACTOR = "U_E1";
@@ -38,7 +39,7 @@ describe("POST /v1/emoji", async () => {
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
     sessions = createBrowserSessionStore({
-      sessions: createMemoryMap<StoredBrowserSession>(),
+      sessions: memoryLinkTables().browserSessions,
       key: deriveConnectorKey(Buffer.alloc(32, 1)),
     });
     await sessions.put(ACTOR, JSON.stringify({ cookies: [] }));
