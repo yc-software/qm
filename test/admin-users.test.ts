@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { computeUsers } from "../src/admin/users.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -247,12 +247,9 @@ test("/v1/admin/users/:principalId: a grant-holder with no sessions still resolv
 });
 
 test("/v1/admin/directory: org_admin resolves a name or id to candidates; empty query → []; non-admin denied", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-dir-")),
-      emailAuthPrincipals: ["new@example.com"],
-    }),
-  );
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-dir-")) }), {
+    tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "new@example.com" }),
+  });
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     sessions: built.sessions,

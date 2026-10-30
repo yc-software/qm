@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
@@ -1327,19 +1327,16 @@ test("admin governance: browse step limit round-trips, validates, and is org-sco
 });
 
 test("an OpenAI-only deployment still gets a browse model picker, and Anthropic picks are refused", async () => {
-  const built = buildApp(
-    testConfig({
-      dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-oa-")),
-      modelId: "gpt-5.6-sol",
-      openaiApiKey: "sk-openai-test",
-    }),
-  );
+  const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-browsemodel-oa-")) }), {
+    tenantSettings: testTenantSettings({ PI_MODEL: "gpt-5.6-sol" }),
+  });
+  await built.modelCredentials.set("openai", "sk-openai-test", "admin");
   const server = createInsecureTestServer(built.app, {
     admin: built.admin,
     config: built.config,
     auditLog: built.auditLog,
-    baseModelDefault: "gpt-5.6-sol",
-    providerKeys: { anthropic: false, openai: true, openrouter: false },
+    modelCredentials: built.modelCredentials,
+    baseModelDefault: () => "gpt-5.6-sol",
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

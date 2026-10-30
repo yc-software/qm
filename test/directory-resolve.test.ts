@@ -6,13 +6,16 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
+
+enterTenant(TEST_TENANT);
 
 const SECRET = "directory-resolve-secret".repeat(3);
 
@@ -28,6 +31,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dir-resolve-")), signingSecret: SECRET }));
+    await built.tenantSettings.get();
     server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -170,13 +174,10 @@ describe("a deployment without the Slack surface (the directory store is never p
   );
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")),
-        signingSecret: SECRET,
-        emailAuthPrincipals: ["dana@acme.com"],
-      }),
-    );
+    built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dir-web-only-")), signingSecret: SECRET }), {
+      tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "dana@acme.com" }),
+    });
+    await built.tenantSettings.get();
     server = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

@@ -37,7 +37,9 @@ import {
 } from "../scripts/dev/lib/lease.ts";
 import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
-import { loadConfig, providerKeysPresent } from "../src/config.ts";
+import { loadConfig } from "../src/config.ts";
+import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
+import { codexAuthFileForEnv, readCodexOAuthAuthFile } from "../src/model/chatgpt-auth-file.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
 
 function tmpStore(): string {
@@ -434,11 +436,8 @@ test("dev security secrets are stable, complete, and distinct", () => {
   );
 });
 
-test("harness config is strict and a ChatGPT auth file feeds the company subscription", () => {
-  assert.equal(
-    loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8", CLAUDE_BIN: "/bin/claude" }).claudeModel,
-    "claude-opus-4-8",
-  );
+test("harness config is strict and a ChatGPT auth file is readable as a company subscription login", () => {
+  assert.equal(parseTenantSettings({ CLAUDE_MODEL: "claude-opus-4-8" }, "claude").claudeModel, "claude-opus-4-8");
   assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_BIN: "/bin/claude" }).claudeBinPath, "/bin/claude");
   const source = mkdtempSync(join(tmpdir(), "qm-codex-config-"));
   const authFile = join(source, "auth.json");
@@ -455,14 +454,9 @@ test("harness config is strict and a ChatGPT auth file feeds the company subscri
     }),
   );
   chmodSync(authFile, 0o600);
-  const oauthConfig = loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: authFile });
-  assert.equal(oauthConfig.codexAuthFile, authFile);
-  assert.equal(providerKeysPresent(oauthConfig).openai, false);
-  assert.equal(providerKeysPresent(oauthConfig).codexOAuth, true);
-  assert.throws(
-    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(source, "missing.json") }),
-    /CODEX_AUTH_FILE is unusable/,
-  );
+  assert.equal(codexAuthFileForEnv({ CODEX_AUTH_FILE: authFile }), authFile);
+  assert.equal(readCodexOAuthAuthFile(authFile)?.auth_mode, "chatgpt");
+  assert.equal(readCodexOAuthAuthFile(join(source, "missing.json")), null);
   rmSync(source, { recursive: true, force: true });
   assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use pi or claude/);
   assert.throws(() => loadConfig({ HARNESS: "PI" }), /use pi or claude/);
