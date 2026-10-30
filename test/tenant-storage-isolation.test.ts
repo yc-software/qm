@@ -78,15 +78,24 @@ function fakeS3() {
         return {};
       }
       if (command instanceof CopyObjectCommand) {
-        const source = decodeURIComponent(command.input.CopySource!).split("/").slice(1).join("/");
+        const source = decodeURIComponent(command.input.CopySource!.split("/").slice(1).join("/"));
         objects.set(command.input.Key!, { ...objects.get(source)!, at: new Date() });
         return {};
       }
       if (command instanceof ListObjectsV2Command) {
-        const Contents = [...objects]
-          .filter(([key]) => key.startsWith(command.input.Prefix ?? ""))
+        const prefix = command.input.Prefix ?? "";
+        const matching = [...objects].filter(([key]) => key.startsWith(prefix));
+        const folder = (key: string): string | null => {
+          const at = command.input.Delimiter ? key.indexOf(command.input.Delimiter, prefix.length) : -1;
+          return at < 0 ? null : key.slice(0, at + 1);
+        };
+        const Contents = matching
+          .filter(([key]) => folder(key) === null)
           .map(([Key, v]) => ({ Key, Size: v.body.length, LastModified: v.at }));
-        return { Contents };
+        const CommonPrefixes = [...new Set(matching.map(([key]) => folder(key)).filter((f) => f !== null))].map(
+          (Prefix) => ({ Prefix }),
+        );
+        return { Contents, CommonPrefixes };
       }
       throw new Error(`unexpected ${(command as object).constructor.name}`);
     },
@@ -194,19 +203,26 @@ test("storage migration moves legacy objects under the only tenant and keeps new
   s3.objects.set("p/files/abc", { body: Buffer.from("file"), at: new Date(1) });
   s3.objects.set("p/files/uploads/0123", { body: Buffer.from("upload"), at: new Date(1) });
   s3.objects.set("modal-home/personal%3Aa.tar", { body: Buffer.from("old"), at: new Date(1) });
+  s3.objects.set("modal-home/personal%3Ab.tar", { body: Buffer.from("legacy"), at: new Date(1) });
+  s3.objects.set("deploy-data/0123/litestream/generations/x", { body: Buffer.from("wal"), at: new Date(1) });
   s3.objects.set(`modal-home/${A}/personal%3Aa.tar`, { body: Buffer.from("new"), at: new Date(2) });
   const tenants = new Set([A]);
   const docstore = { client: s3.client, bucket: "b", from: "p/files/", to: "p/docstore/", under: "files/" };
   const homes = { client: s3.client, bucket: "b", from: "modal-home/", to: "modal-home/" };
   assert.equal(await migrateObjects(docstore, tenants), 2);
-  assert.equal(await migrateObjects(homes, tenants), 1);
+  const data = { client: s3.client, bucket: "b", from: "deploy-data/", to: "deploy-data/" };
+  assert.equal(await migrateObjects(homes, tenants), 2);
+  assert.equal(await migrateObjects(data, tenants), 1);
   assert.deepEqual([...s3.objects.keys()].sort(), [
+    `deploy-data/${A}/0123/litestream/generations/x`,
     `modal-home/${A}/personal%3Aa.tar`,
+    `modal-home/${A}/personal%3Ab.tar`,
     `p/docstore/${A}/files/abc`,
     `p/docstore/${A}/files/uploads/0123`,
   ]);
   assert.equal(s3.objects.get(`modal-home/${A}/personal%3Aa.tar`)!.body.toString(), "new");
   assert.equal(await migrateObjects(homes, tenants), 0);
+  assert.equal(await migrateObjects(data, tenants), 0);
 });
 
 test("storage migration refuses legacy data when the owner is ambiguous", async () => {

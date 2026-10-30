@@ -65,24 +65,47 @@ function soleTenant(tenants: ReadonlySet<string>, where: string): string {
   return [...tenants][0]!;
 }
 
-async function* listed(area: ObjectArea): AsyncGenerator<Listed> {
+async function* pages(area: ObjectArea, Prefix: string, Delimiter?: string) {
   let token: string | undefined;
   do {
     const page = (await area.client.send(
       new ListObjectsV2Command({
         Bucket: area.bucket,
-        Prefix: area.from,
+        Prefix,
+        ...(Delimiter ? { Delimiter } : {}),
         ...(token ? { ContinuationToken: token } : {}),
       }),
-    )) as { Contents?: Array<Partial<Listed>>; IsTruncated?: boolean; NextContinuationToken?: string };
-    for (const o of page.Contents ?? [])
-      if (o.Key) yield { Key: o.Key, Size: o.Size ?? 0, LastModified: o.LastModified ?? new Date(0) };
+    )) as {
+      Contents?: Array<Partial<Listed>>;
+      CommonPrefixes?: Array<{ Prefix?: string }>;
+      IsTruncated?: boolean;
+      NextContinuationToken?: string;
+    };
+    yield {
+      objects: (page.Contents ?? []).flatMap((o) =>
+        o.Key ? [{ Key: o.Key, Size: o.Size ?? 0, LastModified: o.LastModified ?? new Date(0) }] : [],
+      ),
+      folders: (page.CommonPrefixes ?? []).flatMap((p) => (p.Prefix ? [p.Prefix] : [])),
+    };
     token = page.IsTruncated ? page.NextContinuationToken : undefined;
   } while (token);
 }
 
+async function* legacyObjects(area: ObjectArea, tenants: ReadonlySet<string>): AsyncGenerator<Listed> {
+  if (area.from !== area.to) {
+    for await (const page of pages(area, area.from)) yield* page.objects;
+    return;
+  }
+  const folders: string[] = [];
+  for await (const page of pages(area, area.from, "/")) {
+    yield* page.objects;
+    folders.push(...page.folders.filter((folder) => !tenants.has(folder.slice(area.from.length, -1))));
+  }
+  for (const folder of folders) for await (const page of pages(area, folder)) yield* page.objects;
+}
+
 async function copyObject(area: ObjectArea, source: Listed, Key: string): Promise<void> {
-  const CopySource = encodeURIComponent(`${area.bucket}/${source.Key}`);
+  const CopySource = `${area.bucket}/${encodeURIComponent(source.Key).replace(/%2F/g, "/")}`;
   if (source.Size <= SINGLE_COPY_MAX) {
     await area.client.send(new CopyObjectCommand({ Bucket: area.bucket, Key, CopySource }));
     return;
@@ -132,9 +155,8 @@ async function newer(area: ObjectArea, Key: string, than: Date): Promise<boolean
 
 export async function migrateObjects(area: ObjectArea, tenants: ReadonlySet<string>): Promise<number> {
   let moved = 0;
-  for await (const source of listed(area)) {
+  for await (const source of legacyObjects(area, tenants)) {
     const rest = source.Key.slice(area.from.length);
-    if (area.from === area.to && tenants.has(rest.split("/")[0]!)) continue;
     const Key = `${area.to}${soleTenant(tenants, `s3://${area.bucket}/${source.Key}`)}/${area.under ?? ""}${rest}`;
     if (!(await newer(area, Key, source.LastModified))) await copyObject(area, source, Key);
     await area.client.send(new DeleteObjectCommand({ Bucket: area.bucket, Key: source.Key }));
