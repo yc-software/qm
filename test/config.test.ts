@@ -208,6 +208,13 @@ test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unl
   assert.equal(loadConfig({}).e2bSandbox.egressProxyUrl, undefined);
 });
 
+test("a retired per-provider egress proxy setting stops boot instead of leaving that provider unproxied", () => {
+  assert.throws(
+    () => loadConfig({ MODAL_EGRESS_PROXY_URL: "https://egress.test" }),
+    /MODAL_EGRESS_PROXY_URL is no longer read.*Set EGRESS_PROXY_URL/,
+  );
+});
+
 test("a default sandbox backend left outside the egress proxy warns that it runs fail-open", () => {
   const warnings: string[] = [];
   const original = console.warn;

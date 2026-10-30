@@ -362,9 +362,18 @@ interface SpritesSandboxEnv {
   defaultTimeoutSec?: number;
 }
 
+const csvList = (value: string | undefined): string[] | undefined => {
+  const items = (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length ? items : undefined;
+};
+
 function egressProxyFor(env: NodeJS.ProcessEnv, backend: string): { egressProxyUrl?: string } {
-  const exempt = (env.EGRESS_PROXY_EXEMPT_BACKENDS ?? "").split(",").map((name) => name.trim());
-  return env.EGRESS_PROXY_URL && !exempt.includes(backend) ? { egressProxyUrl: env.EGRESS_PROXY_URL } : {};
+  return env.EGRESS_PROXY_URL && !csvList(env.EGRESS_PROXY_EXEMPT_BACKENDS)?.includes(backend)
+    ? { egressProxyUrl: env.EGRESS_PROXY_URL }
+    : {};
 }
 
 function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
@@ -771,14 +780,6 @@ interface SuperserveSandboxEnv {
   defaultTimeoutSec?: number;
   configGeneration?: number;
 }
-
-const csvList = (value: string | undefined): string[] | undefined => {
-  const items = (value ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-};
 
 function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
   const egressAllow = csvList(env.SUPERSERVE_EGRESS_ALLOW);
@@ -1348,10 +1349,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "[config] smolmachines sandbox backend enabled without SMOLMACHINES_SNAPSHOT_S3_BUCKET — stopping a machine is not a backup; set SMOLMACHINES_SNAPSHOT_S3_BUCKET for durable home recovery snapshots.",
     );
   }
+  const retiredEgressKeys = ["SPRITES", "E2B", "DO_AGENTS", "MODAL", "SMOLMACHINES", "PORTER_SANDBOX", "AGENT37"]
+    .map((prefix) => `${prefix}_EGRESS_PROXY_URL`)
+    .filter((key) => env[key]);
+  if (retiredEgressKeys.length) {
+    throw new Error(
+      `${retiredEgressKeys.join(", ")} is no longer read, so sandboxes would run without the egress proxy. Set EGRESS_PROXY_URL instead (it applies to every provider; list any to leave out in EGRESS_PROXY_EXEMPT_BACKENDS).`,
+    );
+  }
   if (
-    ["sprites", "e2b", "do-managed-agents", "modal", "smolmachines", "porter", "agent37"].includes(
-      env.SANDBOX_BACKEND ?? "",
-    ) &&
+    ["sprites", "e2b", "do-managed-agents", "modal", "smolmachines", "porter"].includes(env.SANDBOX_BACKEND ?? "") &&
     !egressProxyFor(env, env.SANDBOX_BACKEND ?? "").egressProxyUrl
   ) {
     console.warn(
