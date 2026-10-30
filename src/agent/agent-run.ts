@@ -93,11 +93,9 @@ import {
 } from "./agent-tools.ts";
 import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.ts";
 import {
-  planColdStartSeed,
   reconstructMessagesFromHistory,
   dayMarkerPrefix,
   recordedMessageTimestamps,
-  replayPreamble,
   userPromptText,
   seedPriorTurns,
   legacyAssistant,
@@ -1162,16 +1160,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     tools: ToolDefinition[],
     loadImage: ReplayImageLoader | undefined,
   ): Promise<{ entry: TurnSession }> {
-    let reconstructed: PiReplayMessage[] | null;
-    try {
-      reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
-    } catch (err) {
-      console.error("[agent] history reconstruction failed; will fall back:", errMessage(err));
-      reconstructed = null;
-    }
-    const seedSource = reconstructed;
-    const seedPlan = planColdStartSeed(seedSource, !!priorTurns?.length);
-    const composedPrompt = systemPrompt + (seedPlan === "preamble" ? replayPreamble(history) : "");
+    const reconstructed = await restoreReplayImages(reconstructMessagesFromHistory(history), loadImage);
 
     const modelRuntime = await buildModelRuntime(
       turnProviderKeys ?? (await resolveProviderKeys()),
@@ -1180,7 +1169,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     );
     const { resourceLoader, settingsManager, cwd, agentDir, ephemeralCwd } = await createIsolatedResources(
       tempDirPrefix,
-      composedPrompt,
+      systemPrompt,
     );
 
     let session: AgentSession;
@@ -1201,15 +1190,15 @@ export function createAgent(opts?: AgentOptions): Agent {
       throw err;
     }
 
-    if (seedPlan === "structured") {
+    if (reconstructed.length) {
       try {
-        seedRawMessagesIntoSession(session, seedSource!);
+        seedRawMessagesIntoSession(session, reconstructed);
       } catch (err) {
         console.error("[agent] failed to seed reconstructed history (continuing without it):", errMessage(err));
       }
-    } else if (seedPlan === "priorTurns") {
+    } else if (priorTurns?.length) {
       try {
-        seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns!, []).map(toPiMessage));
+        seedRawMessagesIntoSession(session, seedPriorTurns(priorTurns, []).map(toPiMessage));
       } catch (err) {
         console.error("[agent] failed to seed prior turns (continuing without them):", errMessage(err));
       }
@@ -1265,7 +1254,7 @@ export function createAgent(opts?: AgentOptions): Agent {
     const entry: TurnSession = {
       agentSession: session,
       ref,
-      composedPromptTokens: countTokens(composedPrompt),
+      composedPromptTokens: countTokens(systemPrompt),
       cwd,
       agentDir,
       ...(ephemeralCwd ? { ephemeralCwd } : {}),

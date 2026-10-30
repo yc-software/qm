@@ -39,56 +39,20 @@ function storedChoice(stored: RuntimeChoice): RuntimeChoice {
   };
 }
 
-export function resolveRuntimeChoice(
-  config: Pick<ScopedConfigStore, "getRuntimeSelection" | "getBaseModel"> &
-    Partial<Pick<ScopedConfigStore, "getPurposeRuntime">>,
-  orgScopeId: ScopeId,
-  scope: ScopeId,
-  fallback: RuntimeChoice,
-  requested?: Partial<RuntimeChoice>,
-  purpose?: RuntimePurpose,
-): RuntimeChoice {
-  const purposeRuntime = purpose ? config.getPurposeRuntime?.(purpose) : undefined;
-  if (purposeRuntime) {
-    const explicit = Object.fromEntries(Object.entries(requested ?? {}).filter(([, value]) => value !== undefined));
-    const choice: RuntimeChoice = { ...purposeRuntime, ...explicit };
-    if (!modelSupported(choice.modelId)) throw new NonRetryableTurnError(`runtime ${choice.modelId} is not approved`);
-    const unavailable = modelUnavailableReason(choice.modelId);
-    if (unavailable) throw new NonRetryableTurnError(`${choice.modelId}: ${unavailable}`);
-    if (choice.effortLevel !== undefined && !thinkingLevelsFor(choice.modelId).includes(choice.effortLevel))
-      throw new NonRetryableTurnError(`${choice.effortLevel} reasoning is not supported by ${choice.modelId}`);
-    if (choice.fastMode && !fastModeModelIds().includes(choice.modelId))
-      throw new NonRetryableTurnError(`fast mode is not supported by ${choice.modelId}`);
-    return choice;
-  }
-  if (purpose === "cron")
-    requested = { effortLevel: NON_INTERACTIVE_THINKING_LEVEL, fastMode: NON_INTERACTIVE_FAST_MODE, ...requested };
-
-  const orgStored = config.getRuntimeSelection(orgScopeId);
-  const orgLegacy = config.getBaseModel(orgScopeId);
-  const configuredOrg: RuntimeChoice = orgStored ? storedChoice(orgStored) : { modelId: orgLegacy ?? fallback.modelId };
-  const configuredId =
-    requested?.modelId ??
-    (scope !== orgScopeId ? (config.getRuntimeSelection(scope)?.modelId ?? config.getBaseModel(scope)) : null) ??
-    configuredOrg.modelId;
-  const unavailableReason = modelUnavailableReason(configuredId);
-  if (unavailableReason) throw new NonRetryableTurnError(`${configuredId}: ${unavailableReason}`);
-  const safeFallback = modelSupported(fallback.modelId) ? fallback : { modelId: defaultModel(fallback.modelId) };
-  const org = modelSupported(configuredOrg.modelId) ? configuredOrg : safeFallback;
-  const scopedStored = scope === orgScopeId ? null : config.getRuntimeSelection(scope);
-  const scopedLegacy = scope === orgScopeId ? null : config.getBaseModel(scope);
-  let inherited: RuntimeChoice = org;
-  if (scopedStored) inherited = storedChoice(scopedStored);
-  else if (scopedLegacy) inherited = { modelId: scopedLegacy };
-  const choice = { ...inherited, ...requested };
-  if (!modelSupported(choice.modelId)) {
-    if (requested?.modelId) throw new NonRetryableTurnError(`runtime ${choice.modelId} is not approved`);
-    return normalizeRuntimeChoice({ ...org, ...requested });
-  }
-  return normalizeRuntimeChoice(choice);
+function purposeChoice(purposeRuntime: RuntimeChoice, requested: Partial<RuntimeChoice> | undefined): RuntimeChoice {
+  const explicit = Object.fromEntries(Object.entries(requested ?? {}).filter(([, value]) => value !== undefined));
+  const choice: RuntimeChoice = { ...purposeRuntime, ...explicit };
+  if (!modelSupported(choice.modelId)) throw new NonRetryableTurnError(`runtime ${choice.modelId} is not approved`);
+  const unavailable = modelUnavailableReason(choice.modelId);
+  if (unavailable) throw new NonRetryableTurnError(`${choice.modelId}: ${unavailable}`);
+  if (choice.effortLevel !== undefined && !thinkingLevelsFor(choice.modelId).includes(choice.effortLevel))
+    throw new NonRetryableTurnError(`${choice.effortLevel} reasoning is not supported by ${choice.modelId}`);
+  if (choice.fastMode && !fastModeModelIds().includes(choice.modelId))
+    throw new NonRetryableTurnError(`fast mode is not supported by ${choice.modelId}`);
+  return choice;
 }
 
-export async function resolveRuntimeChoiceDurable(
+export async function resolveRuntimeChoice(
   config: ScopedConfigStore,
   orgScopeId: ScopeId,
   scope: ScopeId,
@@ -108,18 +72,24 @@ export async function resolveRuntimeChoiceDurable(
     const candidates = [requested?.modelId, purposeRuntime?.modelId, scopedStored?.modelId, orgStored?.modelId];
     if (candidates.some((modelId) => modelId && !resolveModel(modelId))) await hydrateModelCatalog();
   }
-  const view: Pick<ScopedConfigStore, "getRuntimeSelection" | "getBaseModel" | "getPurposeRuntime"> = {
-    getPurposeRuntime: () => purposeRuntime,
-    getRuntimeSelection: (id: ScopeId) => {
-      if (id === orgScopeId) return orgStored;
-      return id === scope ? scopedStored : null;
-    },
-    getBaseModel: (id: ScopeId) => {
-      if (id === orgScopeId) return orgLegacy;
-      return id === scope ? scopedLegacy : null;
-    },
-  };
-  return resolveRuntimeChoice(view, orgScopeId, scope, fallback, requested, purpose);
+  if (purposeRuntime) return purposeChoice(purposeRuntime, requested);
+  if (purpose === "cron")
+    requested = { effortLevel: NON_INTERACTIVE_THINKING_LEVEL, fastMode: NON_INTERACTIVE_FAST_MODE, ...requested };
+  const configuredOrg: RuntimeChoice = orgStored ? storedChoice(orgStored) : { modelId: orgLegacy ?? fallback.modelId };
+  const configuredId = requested?.modelId ?? scopedStored?.modelId ?? scopedLegacy ?? configuredOrg.modelId;
+  const unavailableReason = modelUnavailableReason(configuredId);
+  if (unavailableReason) throw new NonRetryableTurnError(`${configuredId}: ${unavailableReason}`);
+  const safeFallback = modelSupported(fallback.modelId) ? fallback : { modelId: defaultModel(fallback.modelId) };
+  const org = modelSupported(configuredOrg.modelId) ? configuredOrg : safeFallback;
+  let inherited: RuntimeChoice = org;
+  if (scopedStored) inherited = storedChoice(scopedStored);
+  else if (scopedLegacy) inherited = { modelId: scopedLegacy };
+  const choice = { ...inherited, ...requested };
+  if (!modelSupported(choice.modelId)) {
+    if (requested?.modelId) throw new NonRetryableTurnError(`runtime ${choice.modelId} is not approved`);
+    return normalizeRuntimeChoice({ ...org, ...requested });
+  }
+  return normalizeRuntimeChoice(choice);
 }
 
 export function withResolvedRuntime(

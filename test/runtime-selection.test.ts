@@ -2,7 +2,7 @@ import { availableRuntimeError } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
-import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/agent/runtime-choice.ts";
+import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
@@ -34,12 +34,12 @@ test("runtime resolution uses explicit choice, then scope, then org and rejects 
   await config.setRuntimeSelection(PERSONAL, { modelId: "gpt-5.5" });
   const fallback = { modelId: "claude-opus-4-8" };
 
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, PERSONAL, fallback), { modelId: "gpt-5.5" });
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "claude-sonnet-4-6" }), {
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback), { modelId: "gpt-5.5" });
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "claude-sonnet-4-6" }), {
     modelId: "claude-sonnet-4-6",
   });
-  assert.throws(
-    () => resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "no-such-model" }),
+  await assert.rejects(
+    async () => await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "no-such-model" }),
     /not approved/,
   );
 });
@@ -51,13 +51,13 @@ test("runtime resolution carries reasoning and fast-mode defaults into turns", a
     effortLevel: "high",
     fastMode: true,
   });
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, PERSONAL, { modelId: "claude-fable-5" }), {
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, { modelId: "claude-fable-5" }), {
     modelId: "claude-opus-5",
     effortLevel: "high",
     fastMode: true,
   });
   assert.deepEqual(
-    resolveRuntimeChoice(
+    await resolveRuntimeChoice(
       config,
       ORG,
       PERSONAL,
@@ -73,7 +73,7 @@ test("runtime resolution carries reasoning and fast-mode defaults into turns", a
     },
   );
   assert.deepEqual(
-    resolveRuntimeChoice(
+    await resolveRuntimeChoice(
       config,
       ORG,
       PERSONAL,
@@ -93,10 +93,10 @@ test("runtime resolution reads selections from shared durable state on every tur
   const fallback = { modelId: "claude-opus-4-8" };
 
   await writer.setRuntimeSelection(ORG, fallback);
-  assert.deepEqual(await resolveRuntimeChoiceDurable(reader, ORG, PERSONAL, fallback), fallback);
+  assert.deepEqual(await resolveRuntimeChoice(reader, ORG, PERSONAL, fallback), fallback);
 
   await writer.setRuntimeSelection(ORG, { modelId: "claude-sonnet-5" });
-  assert.deepEqual(await resolveRuntimeChoiceDurable(reader, ORG, PERSONAL, fallback), {
+  assert.deepEqual(await resolveRuntimeChoice(reader, ORG, PERSONAL, fallback), {
     modelId: "claude-sonnet-5",
   });
 });
@@ -128,7 +128,7 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
   await config.setRuntimeSelection(PERSONAL, { modelId: "testvendor/cold-router-model" });
   const fallback = { modelId: "claude-opus-4-8" };
 
-  assert.deepEqual(await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback), fallback);
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback), fallback);
 
   let hydrations = 0;
   const hydrate = async () => {
@@ -143,25 +143,18 @@ test("durable runtime resolution hydrates the model catalog before rejecting an 
       cost: { input: 0, output: 0 },
     });
   };
-  assert.deepEqual(await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback, undefined, hydrate), {
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, undefined, hydrate), {
     modelId: "testvendor/cold-router-model",
   });
   assert.equal(hydrations, 1);
 
   assert.deepEqual(
-    await resolveRuntimeChoiceDurable(
-      config,
-      ORG,
-      PERSONAL,
-      fallback,
-      { modelId: "testvendor/cold-router-model" },
-      hydrate,
-    ),
+    await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, { modelId: "testvendor/cold-router-model" }, hydrate),
     { modelId: "testvendor/cold-router-model" },
   );
 
   const before = hydrations;
-  await resolveRuntimeChoiceDurable(config, ORG, PERSONAL, fallback, undefined, hydrate);
+  await resolveRuntimeChoice(config, ORG, PERSONAL, fallback, undefined, hydrate);
   assert.equal(hydrations, before);
 });
 

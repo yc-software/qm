@@ -24,7 +24,7 @@ import {
   resolveModel,
 } from "../model/pi-models.ts";
 import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
-import { resolveRuntimeChoiceDurable } from "../agent/runtime-choice.ts";
+import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";
@@ -261,8 +261,8 @@ export function createTurnMethods(
               storedOrgRuntime?.modelId ?? (await deps.config.getBaseModelOwnDurable(org)) ?? runtimeFallback.modelId;
             orgRuntime = modelUnavailableReason(orgModel)
               ? { modelId: orgModel }
-              : await resolveRuntimeChoiceDurable(deps.config, org, org, runtimeFallback);
-            runtime = await resolveRuntimeChoiceDurable(
+              : await resolveRuntimeChoice(deps.config, org, org, runtimeFallback);
+            runtime = await resolveRuntimeChoice(
               deps.config,
               org,
               targetScope,

@@ -1,5 +1,5 @@
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "../src/agent/runtime-choice.ts";
+import { withResolvedRuntime, resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -1216,7 +1216,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
     },
   };
   const router = withResolvedRuntime(adapter, (input) =>
-    resolveRuntimeChoiceDurable(
+    resolveRuntimeChoice(
       built.config,
       "org:default-org",
       input.scopeLabel,
@@ -1257,7 +1257,7 @@ test("human child continuations respect non-fast category defaults", async () =>
     },
   };
   const router = withResolvedRuntime(adapter, (input) =>
-    resolveRuntimeChoiceDurable(
+    resolveRuntimeChoice(
       built.config,
       "org:default-org",
       input.scopeLabel,
@@ -1313,7 +1313,7 @@ test("verified swarm workers resolve their own defaults instead of copying the r
       },
     };
     const router = withResolvedRuntime(adapter, (input) =>
-      resolveRuntimeChoiceDurable(
+      resolveRuntimeChoice(
         built.config,
         "org:default-org",
         input.scopeLabel,
@@ -1395,7 +1395,7 @@ test("swarm workers keep the runtime chosen at spawn over the category and scope
         },
       };
       const router = withResolvedRuntime(adapter, (input) =>
-        resolveRuntimeChoiceDurable(
+        resolveRuntimeChoice(
           built.config,
           "org:default-org",
           input.scopeLabel,

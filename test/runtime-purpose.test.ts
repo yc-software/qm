@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/agent/runtime-choice.ts";
+import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { createRuntimeService } from "../src/agent/runtime-control.ts";
 import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
 import { turnModelOptions } from "../src/core/turn-options.ts";
@@ -23,11 +23,11 @@ async function setup() {
 
 test("unset categories preserve legacy conversation, child, and cron behavior", async () => {
   const config = await setup();
-  const legacy = resolveRuntimeChoice(config, ORG, SCOPE, fallback);
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "subagent"), legacy);
+  const legacy = await resolveRuntimeChoice(config, ORG, SCOPE, fallback);
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "subagent"), legacy);
   assert.deepEqual(
-    resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "cron"),
-    resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "xhigh", fastMode: false }),
+    await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "cron"),
+    await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "xhigh", fastMode: false }),
   );
   assert.deepEqual(turnModelOptions({ triggered: true }), { thinkingLevel: "xhigh", fastMode: false });
 });
@@ -44,30 +44,52 @@ test("cron and loop entry points defer legacy injections until runtime resolutio
 
 test("each purpose ignores conversation overrides and explicit fields including false win", async () => {
   const config = await setup();
-  const conversation = resolveRuntimeChoice(config, ORG, SCOPE, fallback);
+  const conversation = await resolveRuntimeChoice(config, ORG, SCOPE, fallback);
   for (const purpose of ["cron", "subagent", "fallback"] as const) {
     await config.setPurposeRuntime(purpose, category);
-    assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, purpose), category);
+    assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, purpose), category);
     assert.deepEqual(
-      resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: undefined, fastMode: undefined }, purpose),
+      await resolveRuntimeChoice(
+        config,
+        ORG,
+        SCOPE,
+        fallback,
+        { effortLevel: undefined, fastMode: undefined },
+        undefined,
+        purpose,
+      ),
       category,
     );
-    assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, { fastMode: false }, purpose), {
-      ...category,
-      fastMode: false,
-    });
     assert.deepEqual(
-      resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "gpt-6-sol", effortLevel: "high" }, purpose),
+      await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { fastMode: false }, undefined, purpose),
+      {
+        ...category,
+        fastMode: false,
+      },
+    );
+    assert.deepEqual(
+      await resolveRuntimeChoice(
+        config,
+        ORG,
+        SCOPE,
+        fallback,
+        { modelId: "gpt-6-sol", effortLevel: "high" },
+        undefined,
+        purpose,
+      ),
       {
         ...category,
         modelId: "gpt-6-sol",
         effortLevel: "high",
       },
     );
-    assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback), conversation);
+    assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback), conversation);
   }
   await config.clearPurposeRuntime("cron");
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "subagent"), category);
+  assert.deepEqual(
+    await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "subagent"),
+    category,
+  );
 });
 
 test("durable purpose defaults refresh between child followups", async () => {
@@ -76,12 +98,12 @@ test("durable purpose defaults refresh between child followups", async () => {
   const reader = createMemoryConfigStore("default-org", { baseModels });
   await writer.setPurposeRuntime("subagent", category);
   assert.deepEqual(
-    await resolveRuntimeChoiceDurable(reader, ORG, SCOPE, fallback, undefined, undefined, "subagent"),
+    await resolveRuntimeChoice(reader, ORG, SCOPE, fallback, undefined, undefined, "subagent"),
     category,
   );
   await writer.setPurposeRuntime("subagent", { ...category, modelId: "gpt-6-sol" });
   assert.deepEqual(
-    await resolveRuntimeChoiceDurable(reader, ORG, SCOPE, fallback, { fastMode: false }, undefined, "subagent"),
+    await resolveRuntimeChoice(reader, ORG, SCOPE, fallback, { fastMode: false }, undefined, "subagent"),
     {
       ...category,
       modelId: "gpt-6-sol",
@@ -93,16 +115,19 @@ test("durable purpose defaults refresh between child followups", async () => {
 test("configured purpose fails closed for unapproved or incompatible merged choices", async () => {
   const config = await setup();
   await config.setPurposeRuntime("cron", category);
-  assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "nonsense" }, "cron"),
+  await assert.rejects(
+    async () =>
+      await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { effortLevel: "nonsense" }, undefined, "cron"),
     /not supported/,
   );
-  assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "claude-sonnet-5" }, "cron"),
+  await assert.rejects(
+    async () =>
+      await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "claude-sonnet-5" }, undefined, "cron"),
     /fast mode is not supported/,
   );
-  assert.throws(
-    () => resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "no-such-model" }, "cron"),
+  await assert.rejects(
+    async () =>
+      await resolveRuntimeChoice(config, ORG, SCOPE, fallback, { modelId: "no-such-model" }, undefined, "cron"),
     /not approved/,
   );
 });
@@ -153,13 +178,13 @@ test("runtime get and inherit use job execution defaults, and handoffs survive r
     },
   ] as SessionEntry[];
   const restored = recoveredRuntime(entries, "run", "alice");
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, "cron"), {
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, restored?.choice, undefined, "cron"), {
     ...category,
     ...explicit,
     modelId: "gpt-6-sol",
   });
   assert.equal(recoveredRuntime(entries, "another-run", "alice"), undefined);
-  assert.deepEqual(resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, "cron"), category);
+  assert.deepEqual(await resolveRuntimeChoice(config, ORG, SCOPE, fallback, undefined, undefined, "cron"), category);
 });
 
 test("scope inheritance in a human child continuation retains its configured purpose", async () => {

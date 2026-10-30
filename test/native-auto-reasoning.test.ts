@@ -192,21 +192,21 @@ test("runtime scope writes and turn dispatch reject unsupported modes without ch
   for (const effort of ["adaptive", "default"]) {
     const result = await service(claims, active, { action: "set", effort, lifetime: "scope" });
     assert.equal(result.ok, true);
-    assert.equal(resolveRuntimeChoice(config, "org:default-org", "personal:test", active).effortLevel, effort);
+    assert.equal((await resolveRuntimeChoice(config, "org:default-org", "personal:test", active)).effortLevel, effort);
   }
   assert.deepEqual(
     await service(claims, active, { action: "set", effort: "adaptive", model: "gpt-6-astra", lifetime: "scope" }),
     { ok: false, error: "effort_not_supported" },
   );
   assert.equal(config.getRuntimeSelection("personal:test")?.effortLevel, "default");
-  assert.throws(
-    () =>
-      resolveRuntimeChoice(config, "org:default-org", "personal:test", active, {
+  await assert.rejects(
+    async () =>
+      await resolveRuntimeChoice(config, "org:default-org", "personal:test", active, {
         modelId: "gpt-6-astra",
         effortLevel: "adaptive",
       }),
     /not supported/,
   );
   await config.setRuntimeSelection("personal:test", active);
-  assert.equal(resolveRuntimeChoice(config, "org:default-org", "personal:test", active).effortLevel, "auto");
+  assert.equal((await resolveRuntimeChoice(config, "org:default-org", "personal:test", active)).effortLevel, "auto");
 });

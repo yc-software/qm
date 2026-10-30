@@ -1,7 +1,7 @@
 import { errMessage } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { RuntimePurpose } from "../resolution/config-store.ts";
-import { resolveRuntimeChoiceDurable } from "../agent/runtime-choice.ts";
+import { resolveRuntimeChoice } from "../agent/runtime-choice.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
 import { gatewayModelCatalog } from "../model/gateway-models.ts";
 import type { AppDeps } from "./app-types.ts";
@@ -104,7 +104,7 @@ export async function runtimeConfigBody(
   if (stored) scopeOverride = { ...storedChoice(stored), orgRevision: stored.orgRevision };
   else if (legacyModel) scopeOverride = { modelId: legacyModel, orgRevision: 0 };
   const effective = purpose
-    ? await resolveRuntimeChoiceDurable(config, org, scope, fallback, requested, undefined, purpose)
+    ? await resolveRuntimeChoice(config, org, scope, fallback, requested, undefined, purpose)
     : (scopeOverride ?? orgDefault);
   const purposeDefault = purpose ? await config.getPurposeRuntimeDurable(purpose) : undefined;
   const selected = [orgDefault, scopeOverride, effective, purposeDefault].filter((choice) => choice != null);

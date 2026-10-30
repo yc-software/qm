@@ -242,10 +242,16 @@ test("removed gateway selections never fall back to a different org or direct mo
   const personal = "personal:alice" as const;
   const fallback = { modelId: "claude-opus-5" };
   await store.setRuntimeSelection(org, { modelId: "gateway/removed" });
-  assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
+  await assert.rejects(
+    async () => await resolveRuntimeChoice(store, org, personal, fallback),
+    /Gateway model is unavailable/,
+  );
   await store.setRuntimeSelection(org, fallback);
   await store.setRuntimeSelection(personal, { modelId: "gateway/removed" });
-  assert.throws(() => resolveRuntimeChoice(store, org, personal, fallback), /Gateway model is unavailable/);
+  await assert.rejects(
+    async () => await resolveRuntimeChoice(store, org, personal, fallback),
+    /Gateway model is unavailable/,
+  );
 });
 
 test("gateway aliases hide duplicate picker options while preserving saved routes", async () => {

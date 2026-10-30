@@ -502,10 +502,10 @@ test("runtime normalization preserves native capabilities and reflects overlay c
   const overlay = validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", fastMode: true });
   setModelOverlays([overlay]);
   const requested = { modelId: MODEL_ID, effortLevel: "max", fastMode: true };
-  assert.deepEqual(resolveRuntimeChoice(config, org, scope, fallback, requested), requested);
+  assert.deepEqual(await resolveRuntimeChoice(config, org, scope, fallback, requested), requested);
   setModelOverlays([{ ...overlay, fastMode: false }]);
-  assert.equal(resolveRuntimeChoice(config, org, scope, fallback, requested).fastMode, false);
-  const native = resolveRuntimeChoice(config, org, scope, fallback, {
+  assert.equal((await resolveRuntimeChoice(config, org, scope, fallback, requested)).fastMode, false);
+  const native = await resolveRuntimeChoice(config, org, scope, fallback, {
     modelId: "claude-opus-4-8",
     effortLevel: "max",
     fastMode: true,

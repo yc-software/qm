@@ -18,7 +18,7 @@ import {
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
 } from "../../model/pi-models.ts";
-import { resolveRuntimeChoiceDurable } from "../../agent/runtime-choice.ts";
+import { resolveRuntimeChoice } from "../../agent/runtime-choice.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
 import {
   credentialInjectionError,
@@ -535,7 +535,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           };
         const current =
           runtime ??
-          (await resolveRuntimeChoiceDurable(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
+          (await resolveRuntimeChoice(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
             modelId: defaultModel(ctx.deps.baseModelDefault),
           }));
         await ctx.deps.config!.setRuntimeSelection(scope, {

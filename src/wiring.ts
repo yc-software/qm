@@ -319,7 +319,7 @@ import {
 } from "./model/company-chatgpt-auth.ts";
 import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
 import { createAgent, agentConfigOptions } from "./agent/agent-run.ts";
-import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "./agent/runtime-choice.ts";
+import { withResolvedRuntime, resolveRuntimeChoice } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Agent } from "./agent/agent.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
@@ -1530,7 +1530,7 @@ export function buildApp(
   };
   const agent = withResolvedRuntime(baseAgent, async (input, routedBy) => {
     const resolve = (requested: typeof input.runtime) =>
-      resolveRuntimeChoiceDurable(
+      resolveRuntimeChoice(
         configStore,
         runtimeOrgScope,
         input.scopeLabel,
@@ -2129,7 +2129,7 @@ export function buildApp(
         ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
       };
       if (Object.keys(requested).length === 0) {
-        await resolveRuntimeChoiceDurable(
+        await resolveRuntimeChoice(
           configStore,
           runtimeOrgScope,
           scope,
