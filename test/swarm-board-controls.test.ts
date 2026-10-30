@@ -98,3 +98,17 @@ test("pausing and stopping the root's direct children cascades across a 120-work
   assert.ok(workers.every((w) => swarm.messages[0]!.notifications[w.id]?.state !== "queued"));
   assert.equal((await fixture.service.inspect(fixture.caller)).peers.length, 121);
 });
+
+test("inspect marks only peers with in-flight turns as running", async () => {
+  const fixture = await swarmFixture();
+  const [first, second] = await fixture.service.spawn(fixture.caller, { requestId: "pool", text: "Work", count: 2 });
+  await fixture.service.sweep();
+  const running = async () =>
+    (await fixture.service.inspect(fixture.caller)).peers
+      .filter((peer) => peer.depth > 0 && peer.running)
+      .map((peer) => peer.id);
+  assert.deepEqual((await running()).sort(), [first!.id, second!.id].sort());
+  const run = (await fixture.runs.list()).find((r) => r.request.swarm?.recipientId === first!.id)!;
+  assert.equal(await fixture.runs.withdraw(run.id), true);
+  assert.deepEqual(await running(), [second!.id]);
+});

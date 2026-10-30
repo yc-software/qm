@@ -2,27 +2,9 @@ import { html, nothing, type TemplateResult } from "lit";
 import { Users, ChevronRight } from "lucide";
 import { api } from "./core-bridge.ts";
 import { icon } from "./icons.ts";
-
-interface SwarmPeer {
-  id: string;
-  parentId?: string;
-  sessionId?: string;
-  sessionUrl?: string;
-  state: "reserved" | "ready" | "failed";
-  control?: "paused" | "stopped";
-  depth: number;
-}
-
-interface SwarmView {
-  id: string;
-  self: SwarmPeer;
-  peers: SwarmPeer[];
-  board?: { sandboxId: string };
-  expiresAt?: number;
-}
+import { needsRefresh, statuses, summary, type Status, type SwarmPeer, type SwarmView } from "./swarm-status.ts";
 
 type Control = "active" | "paused" | "stopped";
-type Status = Control | "starting" | "failed";
 
 const PAGE = 20;
 const REFRESH_MS = 4_000;
@@ -31,29 +13,6 @@ const BULK: Record<Control, { label: string; from: (peer: SwarmPeer) => boolean 
   active: { label: "Resume all", from: (peer) => peer.control === "paused" },
   stopped: { label: "Stop all", from: (peer) => peer.control !== "stopped" },
 };
-
-function effective(peer: SwarmPeer, inherited: Status): Status {
-  if (peer.control === "stopped" || inherited === "stopped") return "stopped";
-  if (peer.state === "failed") return "failed";
-  if (peer.control === "paused" || inherited === "paused") return "paused";
-  return peer.state === "reserved" ? "starting" : "active";
-}
-
-function statuses(view: SwarmView): Map<string, Status> {
-  const byId = new Map(view.peers.map((peer) => [peer.id, peer]));
-  const result = new Map<string, Status>();
-  const resolve = (peer: SwarmPeer, seen = new Set<string>()): Status => {
-    const known = result.get(peer.id);
-    if (known) return known;
-    const parent = peer.parentId && !seen.has(peer.parentId) ? byId.get(peer.parentId) : undefined;
-    const inherited = parent ? resolve(parent, seen.add(peer.id)) : "active";
-    const status = effective(peer, inherited);
-    result.set(peer.id, status);
-    return status;
-  };
-  for (const peer of view.peers) resolve(peer);
-  return result;
-}
 
 export function createSwarmStrip(redraw: () => void) {
   const ui = {
@@ -78,11 +37,7 @@ export function createSwarmStrip(redraw: () => void) {
     const view = await api<SwarmView>(`/api/sessions/${encodeURIComponent(sessionId)}/swarm`).catch(() => null);
     if (ui.sessionId !== sessionId) return;
     ui.view = Array.isArray(view?.peers) ? view : null;
-    const status = ui.view ? statuses(ui.view) : new Map();
-    schedule(
-      sessionId,
-      [...status.entries()].some(([id, s]) => id !== ui.view?.id && (s === "active" || s === "starting")),
-    );
+    schedule(sessionId, ui.view ? needsRefresh(ui.view, statuses(ui.view, Date.now())) : false);
     redraw();
   };
   const post = (sessionId: string, memberId: string, state: Control) =>
@@ -149,7 +104,7 @@ export function createSwarmStrip(redraw: () => void) {
     const walk = (peer: SwarmPeer, seen: Set<string>): void => {
       if (seen.has(peer.id)) return;
       seen.add(peer.id);
-      out.push(row(peer, status.get(peer.id) ?? "active", view));
+      out.push(row(peer, status.get(peer.id) ?? "idle", view));
       const kids = children.get(peer.id) ?? [];
       const limit = ui.shown.get(peer.id) ?? PAGE;
       for (const kid of kids.slice(0, limit)) walk(kid, seen);
@@ -182,13 +137,7 @@ export function createSwarmStrip(redraw: () => void) {
       }
       const view = ui.view;
       if (!view || view.peers.length < 2) return nothing;
-      const status = statuses(view);
-      const counts: Record<Status, number> = { active: 0, starting: 0, paused: 0, stopped: 0, failed: 0 };
-      for (const peer of view.peers) if (peer.depth > 0) counts[status.get(peer.id) ?? "active"]++;
-      const summary = (["active", "starting", "paused", "stopped", "failed"] as const)
-        .filter((key) => key === "active" || counts[key])
-        .map((key) => `${counts[key]} ${key}`)
-        .join(" · ");
+      const status = statuses(view, Date.now());
       const canBulk = view.self.depth === 0;
       return html`<section class="bg-activity swarm-activity ${ui.open ? "expanded" : ""}">
         <button
@@ -201,7 +150,7 @@ export function createSwarmStrip(redraw: () => void) {
             redraw();
           }}
         >
-          ${icon(Users, 13)}<span class="bg-activity-label">Swarm · ${summary}</span>
+          ${icon(Users, 13)}<span class="bg-activity-label">Swarm · ${summary(view, status)}</span>
           <span class="bg-activity-toggle">${icon(ChevronRight, 14)}</span>
         </button>
         ${
