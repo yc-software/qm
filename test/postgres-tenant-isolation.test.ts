@@ -156,7 +156,11 @@ test(
       await withTenant(tenant, () => app.q(insertItem, [sessionId, 0]));
       const pool = await app.pool();
       const limited = await withTenant(tenant, () =>
-        pool.query({ text: "SELECT seq::int AS seq FROM items WHERE session_id = $1", values: [sessionId], rows: 1 }),
+        pool.query({
+          text: "SELECT seq::int AS seq FROM items WHERE session_id = $1",
+          values: [sessionId],
+          rows: 1,
+        } as pg.QueryConfig),
       );
       assert.deepEqual(limited.rows, [{ seq: 0 }]);
       const client = await pool.connect();

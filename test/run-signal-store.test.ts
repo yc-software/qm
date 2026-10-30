@@ -15,7 +15,12 @@ async function liveRunIds(count: number): Promise<string[]> {
   const { runs, close } = createPostgresRunStore(URL!);
   try {
     const actor = { id: "internal:U1", type: "internal" as const };
-    const request = { actor, conversation: { kind: "dm" as const, threadRef: "t", audience: [actor] }, text: "x" };
+    const request = {
+      actor,
+      conversation: { kind: "dm" as const, threadRef: "t", audience: [actor] },
+      origin: { kind: "direct" as const },
+      text: "x",
+    };
     const ids: string[] = [];
     for (let i = 0; i < count; i++)
       ids.push((await runs.enqueue({ sessionId: `signals-${randomUUID()}`, request })).run.id);
@@ -350,7 +355,7 @@ test("pg store: NOTIFY doorbell reaches a listener on a different connection", {
 
 test("pg store: pending retains steers until acknowledged and leaves aborts for terminal drain", { skip }, async () => {
   const store = createPostgresRunSignalStore(URL!);
-  const [runId] = await liveRunIds(1);
+  const [runId] = (await liveRunIds(1)) as [string];
   try {
     await store.send(runId, { kind: "steer", text: "a" });
     await store.send(runId, { kind: "abort" });
@@ -436,7 +441,7 @@ test("memory store: pendingRuns lists runs with unconsumed signals; prune is a n
 
 test("pg store: pendingRuns lists unconsumed runs; prune deletes only old consumed rows", { skip }, async () => {
   const store = createPostgresRunSignalStore(URL!);
-  const [a, b] = await liveRunIds(2);
+  const [a, b] = (await liveRunIds(2)) as [string, string];
   try {
     await store.send(a, { kind: "steer", text: "x" });
     await store.send(b, { kind: "steer", text: "y" });

@@ -14,9 +14,8 @@ export async function provisionTestTenants(url: string): Promise<void> {
   const pool = new pg.Pool({ connectionString: url });
   try {
     if (!(await pool.query("SELECT to_regclass('tenants') AS t")).rows[0].t) {
-      const sessions = createPostgresSessionStore(url);
+      createPostgresSessionStore(url);
       await migrateRegisteredPgSchemas(url);
-      await sessions.close?.();
     }
     await pool.query(
       `INSERT INTO tenants(id, slug, name) VALUES ($1, 'test-tenant', 'Test'), ($2, 'other-tenant', 'Other')
