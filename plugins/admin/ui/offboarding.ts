@@ -79,7 +79,7 @@ export function offboardingCard(
     return card(
       "Offboarding",
       "Turn off a departed person's sign-in and clean up what they own. Conversations, memory and files stay as the record.",
-      html`<div>
+      html`<div class="offboard">
         ${
           deactivated
             ? html`<p class="obstatus">
@@ -106,23 +106,21 @@ export function offboardingCard(
         }
         ${
           kept.length
-            ? html`<div style="margin-top:16px">
-                ${table(
-                  ["Kept", "Item", "Scope", "Why"],
-                  kept.map((k: any) => [
-                    { node: muted(noun(k.kind)) },
-                    { node: stacked(k.label, k.id), cls: "mono" },
-                    { node: muted(k.scopeId) },
-                    { node: muted(k.reason) },
-                  ]),
-                  "",
-                  undefined,
-                  { cols: COLS },
-                )}
-              </div>`
+            ? table(
+                ["Kept", "Item", "Scope", "Why"],
+                kept.map((k: any) => [
+                  { node: muted(noun(k.kind)) },
+                  { node: stacked(k.label, k.id), cls: "mono" },
+                  { node: muted(k.scopeId) },
+                  { node: muted(k.reason) },
+                ]),
+                "",
+                undefined,
+                { cols: COLS },
+              )
             : nothing
         }
-        <div class="obactions" style="margin-top:14px">
+        <div class="obactions">
           ${
             pending && changes.length
               ? html`<button type="button" class="danger" ?disabled=${busy} @click=${confirmApply}>
