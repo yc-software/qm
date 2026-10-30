@@ -11,6 +11,7 @@ import {
   buildTriggerBase,
   contentPart,
   type CreateTriggerInput,
+  withFields,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
 import { hashId } from "../util/crypto.ts";
@@ -96,15 +97,6 @@ function normalizeTitle(title: string | undefined): string | undefined {
   return trimmed.length > 80 ? `${trimmed.slice(0, 79)}...` : trimmed;
 }
 
-function patched(cron: Cron, fields: Partial<Cron>): Cron {
-  const next: Record<string, unknown> = { ...cron };
-  for (const [key, value] of Object.entries(fields)) {
-    if (value === undefined || value === null) delete next[key];
-    else next[key] = value;
-  }
-  return next as unknown as Cron;
-}
-
 function editFields(before: Cron, patch: CronPatch): Partial<Cron> {
   assertCronRuntime({ ...before, ...patch });
   const fields: Partial<Cron> = {};
@@ -160,7 +152,7 @@ function claimed(cron: Cron, scheduledAt: number, at: number): Cron | null {
   if (cron.archived || !cron.enabled) return null;
   if (recoverNextFireAt(cron.schedule, cron.createdAt, cron.lastFiredAt, cron.nextFireAt) !== scheduledAt) return null;
   const advanceFrom = isCalendarSchedule(cron.schedule) ? scheduledAt : at;
-  return patched(cron, {
+  return withFields(cron, {
     lastFiredAt: at,
     nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
     deferUntil: undefined,
@@ -173,7 +165,7 @@ export function createCronStore(
 ): CronStore {
   const staleRunningMs = opts?.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
   const fires = opts?.fires ?? createMemoryCronFireStore();
-  const edit = async (id: string, fields: Partial<Cron>) => rows.update(id, (cron) => patched(cron, fields));
+  const edit = async (id: string, fields: Partial<Cron>) => rows.update(id, (cron) => withFields(cron, fields));
   return {
     async create(input) {
       assertNoEscalation(input);
@@ -186,7 +178,7 @@ export function createCronStore(
     tiedTo: (threadRefs) => rows.tiedTo(threadRefs),
     scheduled: () => rows.scheduled(),
     async update(id, patch) {
-      return rows.update(id, (before) => patched(before, editFields(before, patch)));
+      return rows.update(id, (before) => withFields(before, editFields(before, patch)));
     },
     delete: (id) => rows.delete(id),
     async setEnabled(id, enabled) {
@@ -225,7 +217,7 @@ export function createCronStore(
     async markFired(id, at, scheduledAt) {
       await rows.update(id, (cron) => {
         const advanceFrom = isCalendarSchedule(cron.schedule) ? (scheduledAt ?? at) : at;
-        return patched(cron, {
+        return withFields(cron, {
           lastFiredAt: at,
           nextFireAt: advanceNextFireAt(cron.schedule, advanceFrom),
           deferUntil: undefined,
@@ -243,7 +235,7 @@ export function createCronStore(
     },
     async unclaimSlot(id, scheduledAt, at, priorLastFiredAt) {
       await rows.update(id, (cron) =>
-        cron.lastFiredAt === at ? patched(cron, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt }) : cron,
+        cron.lastFiredAt === at ? withFields(cron, { lastFiredAt: priorLastFiredAt, nextFireAt: scheduledAt }) : cron,
       );
     },
     async markAttempted(id, at) {

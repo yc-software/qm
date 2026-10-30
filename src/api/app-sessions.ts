@@ -307,7 +307,7 @@ export function createSessionMethods(
       jobCounts.set(rec.sessionRef, (jobCounts.get(rec.sessionRef) ?? 0) + 1);
     }
     const watchCounts = new Map<string, number>();
-    for (const m of (await deps.monitors?.enabled()) ?? []) {
+    for (const m of (await deps.monitors?.watching(sessions.map((s) => s.threadRef))) ?? []) {
       if (m.expiresAt <= now) continue;
       watchCounts.set(m.threadRef, (watchCounts.get(m.threadRef) ?? 0) + 1);
     }
@@ -702,8 +702,8 @@ export function createSessionMethods(
           startedAt: r.startedAt,
           expiresAt: r.expiresAt,
         }));
-      const watches = ((await deps.monitors?.enabled()) ?? [])
-        .filter((m) => m.threadRef === session.threadRef && m.expiresAt > now)
+      const watches = ((await deps.monitors?.watching([session.threadRef])) ?? [])
+        .filter((m) => m.expiresAt > now)
         .sort((a, b) => b.createdAt - a.createdAt)
         .map((m) => ({
           id: m.id,
