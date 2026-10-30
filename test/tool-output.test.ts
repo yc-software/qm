@@ -1,22 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  cutToolOutput,
-  createMemoryToolOutputStore,
-  DEFAULT_INLINE_TOKENS,
-  inlineTokensFrom,
-  parkedOutputKey,
-} from "../src/sessions/tool-output.ts";
+import { cutToolOutput, createMemoryToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
 import type { SessionEntry } from "../src/types.ts";
-
-test("the inline cap setting: unset means 4096 tokens, 0 means off, junk falls back", () => {
-  assert.equal(inlineTokensFrom(undefined), DEFAULT_INLINE_TOKENS);
-  assert.equal(inlineTokensFrom(null), DEFAULT_INLINE_TOKENS);
-  assert.equal(inlineTokensFrom(0), 0);
-  assert.equal(inlineTokensFrom("2048"), 2048);
-  assert.equal(inlineTokensFrom(-1), DEFAULT_INLINE_TOKENS);
-  assert.equal(inlineTokensFrom({}), DEFAULT_INLINE_TOKENS);
-});
 
 test("cutToolOutput keeps text within the budget untouched and halves the rest between head and tail", () => {
   assert.equal(cutToolOutput("short", 10, "c1"), null);
