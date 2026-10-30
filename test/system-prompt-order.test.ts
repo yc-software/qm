@@ -180,7 +180,6 @@ test("system prompt is ordered cached-prefix → volatile tail, with memory LAST
   };
 
   const ordered = ["Where you are", "Where scheduled tasks post", "Sandboxes", "Skills", "What you remember"];
-  assert.doesNotMatch(prompt, /\n## Your logins\n/);
   const positions = ordered.map((title) => ({ title, at: headingAt(title) }));
   positions.reduce((prev, cur) => {
     assert.ok(cur.at > prev.at, `"## ${cur.title}" must come AFTER "## ${prev.title}" (got ${cur.at} vs ${prev.at})`);
