@@ -16,6 +16,9 @@ import { parseTar } from "../src/sandbox/tar.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
 import { memoryRows } from "../src/persistence/typed-table.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const TOKEN = "FlyV1-test-token";
 const PREFIX = "qm-d";

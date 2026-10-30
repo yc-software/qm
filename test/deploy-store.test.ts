@@ -17,6 +17,9 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { memoryArchives } from "./support/deploy-archives.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("deploy versions are immutable and rollback flips the pointer", async () => {
   const s = createDeployStore();

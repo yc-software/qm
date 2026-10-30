@@ -8,6 +8,9 @@ import {
 } from "../src/deploy/render-deploy-provider.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { fakeDeployment } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const sha = "a".repeat(40);
 const readyProbes = 40;

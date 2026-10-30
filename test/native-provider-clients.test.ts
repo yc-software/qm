@@ -25,6 +25,9 @@ import {
 import { singleProcessDeps } from "./support/single-process.ts";
 import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const modalCalls: unknown[][] = [];
 const modalCreateParams: Record<string, unknown>[] = [];
