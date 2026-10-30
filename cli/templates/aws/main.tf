@@ -1,20 +1,26 @@
 locals {
-  qm_scaffold_version     = 3
+  qm_scaffold_version     = 4
   tags                    = { Deployment = var.org_id, ManagedBy = "terraform" }
   azs                     = length(data.aws_availability_zones.available.names) >= 2 ? slice(data.aws_availability_zones.available.names, 0, 2) : []
   subnet_ids              = values(aws_subnet.public)[*].id
   vpc_id                  = aws_vpc.this.id
-  has_portal              = contains(keys(var.services), "portal")
+  has_portal              = var.public_port > 0
+  core_workloads          = ["edge", "harness"]
+  container_names         = { for name in keys(var.services) : name => name == "edge" ? "core" : name }
   public_path_services    = { for name, service in var.services : name => service.public_paths if length(service.public_paths) > 0 }
   public_service_names    = concat(local.has_portal ? concat(["portal"], length(var.core_public_hosts) > 0 ? ["core"] : []) : ["core"], keys(local.public_path_services))
-  ingress_services        = { for name, service in var.services : name => service if contains(local.public_service_names, name) }
+  ingress_owners          = { for name in local.public_service_names : name => contains(["portal", "core"], name) ? "edge" : name }
+  ingress_services        = { for name, owner in local.ingress_owners : name => merge(var.services[owner], { container_port = name == "portal" ? var.public_port : var.services[owner].internal_port }) }
+  owned_ingress           = { for name in keys(var.services) : name => [for route, owner in local.ingress_owners : route if owner == name] }
   egress_proxy            = { for name, service in var.services : name => service if name == "egress-proxy" }
+  rolling_services        = concat(keys(local.egress_proxy), ["harness"])
+  image_owners            = { for name, service in var.services : name => service if name != "harness" }
   direct_path_services    = merge(local.has_portal ? {} : { core = ["/v1/*"] }, local.public_path_services)
   alb_name                = "${substr(var.cluster_name, 0, 23)}-${substr(sha1(var.cluster_name), 0, 8)}"
   service_security_groups = [aws_security_group.services.id]
   default_task_role_arn   = aws_iam_role.task.arn
   core_task_role_arn      = aws_iam_role.core_task.arn
-  assume_role_services    = { for name, service in var.services : name => service if try(length(service.assume_role_arns), 0) > 0 }
+  assume_role_services    = { for name, service in local.image_owners : name => service if try(length(service.assume_role_arns), 0) > 0 }
   managed_assume_role_services = {
     for name, service in var.services : name => service if service.manage_task_role
   }
@@ -28,7 +34,7 @@ locals {
     for name, service in var.services : name => coalesce(
       service.task_role_arn,
       try(service.manage_task_role ? aws_iam_role.assume_role_task[name].arn : null, null),
-      name == "core" ? local.core_task_role_arn : local.default_task_role_arn,
+      contains(local.core_workloads, name) ? local.core_task_role_arn : local.default_task_role_arn,
     )
   }
   default_execution_role_arn = aws_iam_role.task_execution.arn
@@ -124,7 +130,7 @@ resource "aws_security_group" "services" {
   name   = "${var.cluster_name}-services"
   vpc_id = local.vpc_id
   dynamic "ingress" {
-    for_each = toset([for service in values(local.ingress_services) : tostring(service.internal_port)])
+    for_each = toset([for service in values(local.ingress_services) : tostring(service.container_port)])
     content {
       from_port       = tonumber(ingress.value)
       to_port         = tonumber(ingress.value)
@@ -155,7 +161,7 @@ resource "aws_ecs_cluster" "this" {
   tags = local.tags
 }
 resource "aws_ecr_repository" "service" {
-  for_each     = var.services
+  for_each     = local.image_owners
   name         = each.value.ecr_repository
   force_delete = var.ecr_force_delete
   image_scanning_configuration { scan_on_push = true }
@@ -421,7 +427,7 @@ resource "aws_iam_role_policy" "github_deploy" {
         Sid      = "RunCoreMigrationTask"
         Effect   = "Allow"
         Action   = ["ecs:RunTask"]
-        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.services["core"].ecs_service}:*"]
+        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.services["edge"].ecs_service}:*"]
         Condition = {
           ArnEquals = { "ecs:cluster" = aws_ecs_cluster.this.arn }
         }
@@ -436,7 +442,7 @@ resource "aws_iam_role_policy" "github_deploy" {
         Sid      = "RunDeploymentCanaries"
         Effect   = "Allow"
         Action   = ["ecs:RunTask"]
-        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.services["core"].ecs_service}:*"]
+        Resource = ["arn:aws:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:task-definition/${var.services["edge"].ecs_service}:*"]
         Condition = {
           ArnEquals = { "ecs:cluster" = aws_ecs_cluster.this.arn }
         }
@@ -936,7 +942,7 @@ resource "aws_cloudfront_distribution" "portal" {
 resource "aws_lb_listener_rule" "production" {
   for_each     = local.ingress_services
   listener_arn = aws_lb_listener.public.arn
-  priority     = contains(keys(local.public_path_services), each.key) ? 1 + index(sort(keys(local.public_path_services)), each.key) : (length(local.public_path_services) > 0 ? 1000 : 10) + index(sort(keys(var.services)), each.key)
+  priority     = contains(keys(local.public_path_services), each.key) ? 1 + index(sort(keys(local.public_path_services)), each.key) : (length(local.public_path_services) > 0 ? 1000 : 10) + index(sort(keys(local.ingress_services)), each.key)
   lifecycle {
     ignore_changes = [action]
   }
@@ -1027,7 +1033,7 @@ resource "aws_ecs_task_definition" "bootstrap" {
     operating_system_family = "LINUX"
     cpu_architecture        = each.value.architecture == "amd64" ? "X86_64" : "ARM64"
   }
-  container_definitions = jsonencode([{ name = each.key, image = "public.ecr.aws/docker/library/alpine:3.20", essential = true, command = ["sh", "-c", "while true; do nc -l -p ${each.value.internal_port} -e echo ok; done"], portMappings = [merge({ name = each.key, containerPort = each.value.internal_port }, contains(keys(local.egress_proxy), each.key) ? {} : { appProtocol = "http" })], logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.service[each.key].name, awslogs-region = var.region, awslogs-stream-prefix = each.key } } }])
+  container_definitions = jsonencode([{ name = local.container_names[each.key], image = "public.ecr.aws/docker/library/alpine:3.20", essential = true, command = ["sh", "-c", "while true; do nc -l -p ${each.value.internal_port} -e echo ok; done"], portMappings = concat([merge({ name = local.container_names[each.key], containerPort = each.value.internal_port }, contains(keys(local.egress_proxy), each.key) ? {} : { appProtocol = "http" })], contains(local.owned_ingress[each.key], "portal") ? [{ name = "public", containerPort = var.public_port, appProtocol = "http" }] : []), logConfiguration = { logDriver = "awslogs", options = { awslogs-group = aws_cloudwatch_log_group.service[each.key].name, awslogs-region = var.region, awslogs-stream-prefix = local.container_names[each.key] } } }])
   tags                  = local.tags
 }
 
@@ -1048,8 +1054,8 @@ resource "aws_ecs_service" "service" {
     enabled   = true
     namespace = aws_service_discovery_private_dns_namespace.this.arn
     service {
-      port_name      = each.key
-      discovery_name = each.key
+      port_name      = local.container_names[each.key]
+      discovery_name = local.container_names[each.key]
       dynamic "timeout" {
         for_each = contains(keys(local.egress_proxy), each.key) ? [] : [each.key]
         content {
@@ -1058,7 +1064,7 @@ resource "aws_ecs_service" "service" {
         }
       }
       client_alias {
-        dns_name = "${each.key}.${var.cloud_map_namespace}"
+        dns_name = "${local.container_names[each.key]}.${var.cloud_map_namespace}"
         port     = each.value.internal_port
       }
     }
@@ -1069,27 +1075,29 @@ resource "aws_ecs_service" "service" {
     rollback = true
   }
   deployment_configuration {
-    strategy             = contains(keys(local.egress_proxy), each.key) ? "ROLLING" : "BLUE_GREEN"
-    bake_time_in_minutes = contains(keys(local.egress_proxy), each.key) ? null : var.ecs_blue_green_bake_minutes
+    strategy             = contains(local.rolling_services, each.key) ? "ROLLING" : "BLUE_GREEN"
+    bake_time_in_minutes = contains(local.rolling_services, each.key) ? null : var.ecs_blue_green_bake_minutes
   }
   dynamic "alarms" {
-    for_each = contains(keys(local.ingress_services), each.key) ? [each.key] : []
+    for_each = length(local.owned_ingress[each.key]) > 0 ? [each.key] : []
     content {
-      alarm_names = [
-        aws_cloudwatch_metric_alarm.primary_target_5xx[alarms.value].alarm_name,
-        aws_cloudwatch_metric_alarm.alternate_target_5xx[alarms.value].alarm_name,
-      ]
+      alarm_names = flatten([
+        for route in local.owned_ingress[each.key] : [
+          aws_cloudwatch_metric_alarm.primary_target_5xx[route].alarm_name,
+          aws_cloudwatch_metric_alarm.alternate_target_5xx[route].alarm_name,
+        ]
+      ])
       enable   = true
       rollback = true
     }
   }
   sigint_rollback = true
   dynamic "load_balancer" {
-    for_each = contains(keys(local.ingress_services), each.key) ? [each.key] : []
+    for_each = local.owned_ingress[each.key]
     content {
       target_group_arn = aws_lb_target_group.service[load_balancer.value].arn
-      container_name   = each.key
-      container_port   = each.value.internal_port
+      container_name   = local.container_names[each.key]
+      container_port   = local.ingress_services[load_balancer.value].container_port
       advanced_configuration {
         alternate_target_group_arn = aws_lb_target_group.alternate[load_balancer.value].arn
         production_listener_rule   = aws_lb_listener_rule.production[load_balancer.value].arn
@@ -1109,4 +1117,29 @@ resource "aws_ecs_service" "service" {
     ignore_changes = [task_definition, desired_count]
   }
   tags = local.tags
+}
+
+moved {
+  from = aws_ecr_repository.service["core"]
+  to   = aws_ecr_repository.service["edge"]
+}
+
+moved {
+  from = aws_cloudwatch_log_group.service["core"]
+  to   = aws_cloudwatch_log_group.service["edge"]
+}
+
+moved {
+  from = aws_ecs_task_definition.bootstrap["core"]
+  to   = aws_ecs_task_definition.bootstrap["edge"]
+}
+
+moved {
+  from = aws_ecs_service.service["core"]
+  to   = aws_ecs_service.service["edge"]
+}
+
+moved {
+  from = aws_iam_role_policy.configured_service_assume_role["core"]
+  to   = aws_iam_role_policy.configured_service_assume_role["edge"]
 }
