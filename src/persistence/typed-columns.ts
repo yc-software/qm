@@ -17,6 +17,7 @@ function toParam(cast: ColumnCast, value: unknown): unknown {
   if (cast === "text") return pgTextSafe(String(value));
   if (cast === "jsonb") return jsonbStringify(value);
   if (cast === "text[]") return (value as string[]).map(pgTextSafe);
+  if (cast === "bigint") return Math.round(Number(value));
   return value;
 }
 

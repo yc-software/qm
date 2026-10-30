@@ -127,6 +127,18 @@ test("a refresh that lands while another writer holds the row keeps the newer to
   });
 });
 
+test("a provider expiry with a fractional millisecond is stored rounded", { skip }, async () => {
+  await withTypedTableDb(createPostgresKeychainRows, async ({ store, tenant }) =>
+    withTenant(tenant, async () => {
+      const k = keychain(store);
+      const expiresAt = Date.now() + 3_600_000.5;
+      await k.setConnectorToken("api.github.com", "U1", { accessToken: "fresh", refreshToken: "rt", expiresAt });
+      assert.equal(await k.connectorAccessToken("api.github.com", "U1"), "fresh");
+      assert.equal((await store.creds.all())[0]!.expiresAt, Math.round(expiresAt));
+    }),
+  );
+});
+
 test("credentials, grants and asks stay inside their tenant", { skip }, async () => {
   await withTypedTableDb(createPostgresKeychainRows, async ({ store, admin, tenant, otherTenant }) => {
     const k = keychain(store);
