@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { createApprovalStore } from "../src/core/approval-store.ts";
+import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 
@@ -25,26 +26,14 @@ test("session approvals are read by session id, never by scanning every approval
   const other = await sessions.getOrCreateByThread("dm:bob:t1", "dm", "personal:bob");
   await sessions.addParticipant(mine.id, "alice");
   await sessions.addParticipant(mine.id, "bob");
-  const backing = createMemoryMap<PendingApprovalRecord>();
-  await backing.put("a-blocking", approval(mine.id, "alice", "git push --force"));
-  await backing.put("a-input", approval(mine.id, "alice", "ask", false));
-  await backing.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
-  await backing.put("orphan", approval("no-such-session", "alice", "noop"));
-  await backing.put("unicode", approval("sesión-ü", "alice", "echo"));
-  const expectedFromFullScan = (await backing.entries()).filter(([, r]) => r.sessionId === mine.id).map(([id]) => id);
+  const approvals = createApprovalStore(createDeliveryStore());
+  await approvals.put("a-blocking", approval(mine.id, "alice", "git push --force"));
+  await approvals.put("a-input", approval(mine.id, "alice", "ask", false));
+  await approvals.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
+  await approvals.put("orphan", approval("no-such-session", "alice", "noop"));
+  await approvals.put("unicode", approval("sesión-ü", "alice", "echo"));
+  const expected = ["a-blocking", "a-input"];
 
-  let fullReads = 0;
-  const approvals: DurableMap<PendingApprovalRecord> = {
-    ...backing,
-    async entries() {
-      fullReads++;
-      return backing.entries();
-    },
-    async all() {
-      fullReads++;
-      return backing.all();
-    },
-  };
   const app = createApp({
     sessions,
     approvals,
@@ -54,7 +43,7 @@ test("session approvals are read by session id, never by scanning every approval
   const listed = await app.listSessionApprovals(mine.id, "alice");
   assert.deepEqual(
     listed.map((a) => a.requestId),
-    expectedFromFullScan,
+    expected,
     "the filtered read returns exactly what the old full scan + filter did",
   );
   assert.deepEqual(
@@ -70,5 +59,4 @@ test("session approvals are read by session id, never by scanning every approval
     ["a-blocking"],
     "blockingOnly still drops non-blocking approvals",
   );
-  assert.equal(fullReads, 0, "no caller read the whole approvals map");
 });

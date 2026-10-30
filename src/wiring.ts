@@ -8,7 +8,10 @@ import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
 import { availableRuntimeError } from "./api/runtime-config.ts";
-import { createApprovalStore } from "./core/approval-store.ts";
+import { createApprovalStore, createPostgresApprovalStore } from "./core/approval-store.ts";
+import { createApprovalGrantStore, createPostgresApprovalGrantStore } from "./core/approval-grant-store.ts";
+import { createContextRequestStore, createPostgresContextRequestStore } from "./api/context-request-store.ts";
+import { createAmbientCursorStore, createPostgresAmbientCursorStore } from "./api/ambient-cursor-store.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
 import { createRenderAppStorage, type StoredRenderAppStorage } from "./deploy/render-app-storage.ts";
@@ -126,17 +129,14 @@ import {
   type AdvisoryLock,
 } from "./persistence/advisory-lock.ts";
 import type {
-  CommandApprovalGrant,
   Cron,
   Loop,
   LoopItem,
   LoopOutput,
   Monitor,
   ShipGrant,
-  PendingApprovalRecord,
   ScopeId,
   Session,
-  SurfaceContextRequest,
   TurnRequest,
   TurnResult,
   Webhook,
@@ -1587,13 +1587,10 @@ export function buildApp(
       : createMemoryRunStore({ maxClaims: config.maxClaims });
   const blockingApprovalSessions = async (sessionIds: readonly string[]): Promise<Set<string>> => {
     if (!sessionIds.length) return new Set();
-    const wanted = new Set(sessionIds);
     return new Set(
-      (await approvals.select({ where: { field: "sessionId", anyOfFold: sessionIds } }))
-        .filter(
-          (r) => wanted.has(r.sessionId) && r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor),
-        )
-        .map((r) => r.sessionId),
+      (await approvals.forSessions(sessionIds))
+        .filter(([, r]) => r.blocksInput !== false && actorAssertionActive(identity, r.request?.actor))
+        .map(([, r]) => r.sessionId),
     );
   };
   const workingAncestors = async (session: Session) => {
@@ -2054,7 +2051,9 @@ export function buildApp(
       `UPDATE webhooks SET json = jsonb_set(json, '{enabled}', 'false'::jsonb) WHERE (json ->> 'enabled')::boolean`,
     ],
   });
-  const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
+  const approvals = config.databaseUrl
+    ? createPostgresApprovalStore(config.databaseUrl, deliveries)
+    : createApprovalStore(deliveries);
   let securityScreener = overrides.securityScreener;
   if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
     securityScreener = createSecurityScreenProxy({
@@ -2224,7 +2223,9 @@ export function buildApp(
     serviceCreds,
     deliveries,
     approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
+    approvalGrants: config.databaseUrl
+      ? createPostgresApprovalGrantStore(config.databaseUrl)
+      : createApprovalGrantStore(),
     ...(processes ? { processes } : {}),
     monitors,
     crons,
@@ -2412,7 +2413,9 @@ export function buildApp(
     approvals,
     sessionStateBus,
     ledgerEventBus,
-    contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
+    contextRequests: config.databaseUrl
+      ? createPostgresContextRequestStore(config.databaseUrl)
+      : createContextRequestStore(),
     engaged,
     reaperPoke: pokeReaper,
     surfaceCache,
@@ -2421,7 +2424,9 @@ export function buildApp(
       ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
       : {}),
     ...(screenSecurity ? { screenSecurity } : {}),
-    ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
+    ambientCursors: config.databaseUrl
+      ? createPostgresAmbientCursorStore(config.databaseUrl)
+      : createAmbientCursorStore(),
     ambientJudgments,
     ackEmojiPicks,
     judgeModelId,

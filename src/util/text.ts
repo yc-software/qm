@@ -39,3 +39,7 @@ export function outermostJsonObject(text: string): string | undefined {
 export function promptText(value: string): string {
   return value.replaceAll("```", "ʼʼʼ");
 }
+
+export function pgJsonText(value: unknown): string {
+  return JSON.stringify(value, (_k, v: unknown) => (typeof v === "string" ? pgTextSafe(v) : v));
+}

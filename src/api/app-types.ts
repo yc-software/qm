@@ -105,7 +105,9 @@ import type {
   ReachOptions,
   DeploymentGrantee,
 } from "../deploy/deploy-service.ts";
-import { type DurableMap } from "../persistence/durable-map.ts";
+import type { ApprovalStore } from "../core/approval-store.ts";
+import type { ContextRequestStore } from "./context-request-store.ts";
+import type { AmbientCursorStore } from "./ambient-cursor-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
@@ -700,10 +702,10 @@ export interface AppDeps {
   deploymentGitPrincipals?: DeploymentGitPrincipals;
   deploymentLayer?: DeploymentLayerRuntime;
   files: FileArtifactStore;
-  approvals?: DurableMap<PendingApprovalRecord>;
+  approvals?: ApprovalStore;
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
-  contextRequests?: DurableMap<SurfaceContextRequest>;
+  contextRequests?: ContextRequestStore;
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
@@ -713,7 +715,7 @@ export interface AppDeps {
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;
-  ambientCursors?: DurableMap<{ lastJudgedTs: string; lastJudgedAt?: number }>;
+  ambientCursors?: AmbientCursorStore;
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
   judgeModelId?: () => string;
