@@ -27,7 +27,7 @@ import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
@@ -305,7 +305,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   assert.equal(fired[0]!.status, "expired");
 
   const swept: number[] = [];
-  const idStore = createIdempotencyStore(createMemoryMap<IdempotencyRecord>());
+  const idStore = createIdempotencyStore();
   const scheduler = createScheduler({
     ...singleProcessDeps(),
     crons: createCronStore(createMemoryMap()),
@@ -379,7 +379,7 @@ test("runTrigger marks every trigger-fired turn `triggered` (the consent-gate cl
   const outcome = await runTrigger(
     {
       deliveries: createDeliveryStore(),
-      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(),
       identity: createIdentityService(createMemoryMap()),
       run: async (req) => ((seen = req), { status: "ok" } as TurnResult),
     },
@@ -404,7 +404,7 @@ test("runTrigger: silent markers never silence a notification-shaped fire (keych
   const outcome = await runTrigger(
     {
       deliveries,
-      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(),
       identity: createIdentityService(createMemoryMap()),
       run: async () => ({ status: "ok", reply: "The keychain ask was approved." }) as TurnResult,
     },
@@ -440,7 +440,7 @@ test("fireAskResolution: a turn that fires but doesn't land falls back to a plai
     const deliveries = createDeliveryStore();
     return {
       deliveries,
-      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(),
       identity: createIdentityService(createMemoryMap()),
       run,
       getAsk: async () => current,

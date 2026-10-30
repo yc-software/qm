@@ -174,7 +174,7 @@ import {
   createPostgresEnvironmentStore,
   type EnvironmentStore,
 } from "./environments/environment-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "./idempotency/idempotency-store.ts";
+import { createIdempotencyStore, createPostgresIdempotencyStore } from "./idempotency/idempotency-store.ts";
 import { createScheduler, type Scheduler } from "./cron/scheduler.ts";
 import { createPgBossCronQueue } from "./cron/job-queue.ts";
 import { createWebhookStore, type WebhookHistory } from "./webhooks/webhook-store.ts";
@@ -2246,7 +2246,9 @@ export function buildApp(
         uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
   const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
-  const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
+  const idempotency = config.databaseUrl
+    ? createPostgresIdempotencyStore(config.databaseUrl)
+    : createIdempotencyStore();
   const skillFetcher = createGitFetcher(
     keychain
       ? {

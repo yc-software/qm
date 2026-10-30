@@ -6,7 +6,6 @@ import type { Cron } from "../src/types.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 
 const members = [
@@ -24,7 +23,7 @@ function captureDeps(): { deps: TriggerDeps; seen: TurnRequest[] } {
   return {
     deps: {
       deliveries: createDeliveryStore(),
-      idempotency: createIdempotencyStore(createMemoryMap()),
+      idempotency: createIdempotencyStore(),
       identity: createIdentityService(),
       run,
     },

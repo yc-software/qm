@@ -16,7 +16,7 @@ import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/se
 import { fireDropResolution, type DropResolution } from "../src/triggers/keychain-ask.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
+import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import {
   mintCapabilityToken,
@@ -96,7 +96,7 @@ describe("SecretDropStore", () => {
 describe("fireDropResolution", () => {
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
+    idempotency: createIdempotencyStore(),
     identity: createIdentityService(createMemoryMap()),
     run,
   });
@@ -151,7 +151,7 @@ describe("fireDropResolution", () => {
     const deliveries = createDeliveryStore();
     const deps = {
       deliveries,
-      idempotency: createIdempotencyStore(createMemoryMap<IdempotencyRecord>()),
+      idempotency: createIdempotencyStore(),
       identity: createIdentityService(createMemoryMap()),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
     };
