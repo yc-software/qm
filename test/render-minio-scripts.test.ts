@@ -10,6 +10,9 @@ import { renderMinioCommand, renderMinioInitCommand } from "../cli/src/render-mi
 import { createRenderAppStorage, type StoredRenderAppStorage } from "../src/deploy/render-app-storage.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFakeRenderApi } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const execute = promisify(execFile);
 const minioContext = fileURLToPath(new URL("../deploy/render-minio", import.meta.url));

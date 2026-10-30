@@ -1613,11 +1613,6 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     throw new CliError(`${path}: "sandbox" must be an object (e.g. { "app": "acme-sandboxes" })`);
   }
   const o = raw;
-  const assertEnvName = (name: string, field: string): void => {
-    if (!isEnvVarName(name)) {
-      throw new CliError(`${path}: ${field} ${JSON.stringify(name)} is not a valid env var name`);
-    }
-  };
   const out: SandboxConfig = target === "render" ? { backend: "render" } : {};
   if (o["backend"] !== undefined) {
     if (!isSandboxBackendId(o["backend"])) {
