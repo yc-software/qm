@@ -9,7 +9,8 @@ import { createHash } from "node:crypto";
 import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { verifyPortalIdentity, portalTenant, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { boundTenant, perTenant, withTenant } from "../../../src/tenants/context.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import {
@@ -74,20 +75,17 @@ async function fetchBrand(): Promise<OrgBranding> {
     ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
   };
 }
-const brandCache = createBrandingCache(fetchBrand);
-async function refreshBrandNow(): Promise<void> {
-  await brandCache.refreshNow();
-  shellCache = null;
-}
+const brandCache = perTenant(() => createBrandingCache(fetchBrand));
 type Shell = { key: string; html: string; gzip: Buffer; etag: string; gzipEtag: string };
-let shellCache: Shell | null = null;
+const shellCache = perTenant(() => ({ shell: null as Shell | null }));
 function brandedShell(branding: OrgBranding): Shell {
   const key = JSON.stringify([branding.accent, branding.mark, branding.markUrl, branding.selfLabel]);
-  if (shellCache?.key === key) return shellCache;
+  const slot = boundTenant() ? shellCache() : { shell: null };
+  if (slot.shell?.key === key) return slot.shell;
   const html = injectBranding(BASE_HTML, branding, { titleSuffix: "Admin" });
   const digest = createHash("sha256").update(html).digest("hex").slice(0, 16);
-  shellCache = { key, html, gzip: gzipSync(html), etag: `"${digest}"`, gzipEtag: `"${digest}-gzip"` };
-  return shellCache;
+  slot.shell = { key, html, gzip: gzipSync(html), etag: `"${digest}"`, gzipEtag: `"${digest}-gzip"` };
+  return slot.shell;
 }
 const ALLOW_UNSIGNED_TEST_IDENTITY =
   process.env.NODE_ENV === "test" && process.env.ALLOW_UNSIGNED_TEST_IDENTITY === "1";
@@ -347,13 +345,13 @@ const READS = [
 export async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
-  await portalTokenStore
-    .run(token, () => handle(req, res))
-    .catch((err: unknown) => {
-      reportBackendError(err);
-      console.error("[admin] unhandled request error:", String(err));
-      json(res, 500, { error: "internal_error", message: "internal server error" });
-    });
+  const tenant = portalTenant(token, PORTAL_IDENTITY_SECRET, Date.now());
+  const route = () => portalTokenStore.run(token, () => handle(req, res));
+  await (tenant ? withTenant(tenant, route) : route()).catch((err: unknown) => {
+    reportBackendError(err);
+    console.error("[admin] unhandled request error:", String(err));
+    json(res, 500, { error: "internal_error", message: "internal server error" });
+  });
 }
 
 const server = createServer((req, res) => {
@@ -372,7 +370,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   const serveShell = async (): Promise<void> => {
     if (process.env.QM_SLACK_SERVICE_URL) res.setHeader("referrer-policy", "strict-origin");
-    const shell = brandedShell(await brandCache.forRender());
+    const shell = brandedShell(boundTenant() ? await brandCache().forRender() : {});
     const gz = gzipAccepted(req);
     const etag = gz ? shell.gzipEtag : shell.etag;
     if (req.headers["if-none-match"] === etag) {
@@ -467,7 +465,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           body: putBody,
         });
         const text = await r.text();
-        if (r.ok) await refreshBrandNow();
+        if (r.ok) await brandCache().refreshNow();
         res.writeHead(r.status, { "content-type": "application/json" });
         res.end(text);
       } catch (err) {

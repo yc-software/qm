@@ -5,6 +5,7 @@ export interface PortalIdentity {
   authenticatedAs?: string;
   n?: string;
   imp?: string;
+  t?: string;
   exp: number;
 }
 
@@ -35,6 +36,11 @@ export function verifyPortalIdentity(token: string, secret: string, nowMs: numbe
     return null;
   if (nowMs > claims.exp) return null;
   return claims;
+}
+
+export function portalTenant(token: string | undefined, secret: string | undefined, nowMs: number): string | undefined {
+  const tenant = token && secret ? verifyPortalIdentity(token, secret, nowMs)?.t : undefined;
+  return typeof tenant === "string" ? tenant : undefined;
 }
 
 export const PORTAL_IDENTITY_HEADER = "x-portal-identity";

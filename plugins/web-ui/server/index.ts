@@ -33,8 +33,11 @@ import {
   sendBuffered,
   serveFavicon,
 } from "../../chassis/src/http.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
+import { verifyPortalIdentity, portalTenant, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
+import { boundTenant, currentTenant, perTenant, withTenant } from "../../../src/tenants/context.ts";
+import { activeRuns, forgetRun, rememberRun } from "./active-runs.ts";
+import { addDeliveryClient, connectedUsers, deliveryClientsOf, everyDeliveryClient } from "./delivery-clients.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 
@@ -86,21 +89,27 @@ async function hasInboxLoopPreview(user: string): Promise<boolean> {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
 
-const brandingCache = createBrandingCache(async () => {
-  const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
-  if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
-  const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
-  return {
-    ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
-    ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
-    ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
-    ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
-    ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
-  };
-});
+const brandingCache = perTenant(() =>
+  createBrandingCache(async () => {
+    const r = await coreFetch("GET", "/v1/surface-config", "", 2_000);
+    if (r.status !== 200) throw new Error(`surface-config ${r.status}`);
+    const b = (JSON.parse(r.text) as { branding?: Record<string, unknown> }).branding;
+    return {
+      ...(typeof b?.orgName === "string" ? { orgName: b.orgName } : {}),
+      ...(typeof b?.accent === "string" ? { accent: b.accent } : {}),
+      ...(typeof b?.mark === "string" ? { mark: b.mark } : {}),
+      ...(typeof b?.markUrl === "string" ? { markUrl: b.markUrl } : {}),
+      ...(typeof b?.selfLabel === "string" ? { selfLabel: b.selfLabel } : {}),
+    };
+  }),
+);
+
+function brandingForRender(): Promise<OrgBranding> {
+  return boundTenant() ? brandingCache().forRender() : Promise.resolve({});
+}
 
 async function serveWebManifest(res: ServerResponse): Promise<void> {
-  const branding = await brandingCache.forRender();
+  const branding = await brandingForRender();
   const name = branding.selfLabel || "QM";
   const manifest = {
     name,
@@ -125,43 +134,11 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
 }
 
 async function brandIndexHtml(html: string): Promise<string> {
-  const branding = await brandingCache.forRender();
+  const branding = await brandingForRender();
   return injectBranding(html, branding, { titleSuffix: "· Web" });
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
-
-const runOwners = new Map<string, string>();
-const runThreadKeys = new Map<string, string>();
-const activeRunsByThread = new Map<string, string[]>();
-
-function threadKey(user: string, threadRef: string): string {
-  return `${user}\0${threadRef}`;
-}
-
-function forgetRun(runId: string): void {
-  runOwners.delete(runId);
-  const key = runThreadKeys.get(runId);
-  if (key) {
-    const remaining = (activeRunsByThread.get(key) ?? []).filter((id) => id !== runId);
-    if (remaining.length) activeRunsByThread.set(key, remaining);
-    else activeRunsByThread.delete(key);
-  }
-  runThreadKeys.delete(runId);
-}
-
-function rememberRun(runId: string, user: string, threadRef: string): void {
-  if (runOwners.size > 5000) {
-    const oldest = runOwners.keys().next().value;
-    if (oldest !== undefined) forgetRun(oldest);
-  }
-  runOwners.set(runId, user);
-  const key = threadKey(user, threadRef);
-  runThreadKeys.set(runId, key);
-  activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
-}
-
-const deliveryClients = new Map<string, Set<ServerResponse>>();
 
 function ownerOfWebThread(threadRef: string): string | null {
   if (!threadRef.startsWith("web:")) return null;
@@ -496,9 +473,10 @@ function sessionCookie(id: string): string {
 const MAX_BODY_BYTES = 1_000_000;
 const readBody = (req: IncomingMessage): Promise<string> => readBodyCapped(req, MAX_BODY_BYTES);
 
-const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1, ttl: 5 * 60_000 });
+const slackUrlCache = new LRUCache<string, { url: string | null }>({ max: 1000, ttl: 5 * 60_000 });
 async function slackWorkspaceUrl(): Promise<string | null> {
-  const hit = slackUrlCache.get("url");
+  const tenant = currentTenant();
+  const hit = slackUrlCache.get(tenant);
   if (hit) return hit.url;
   let urlValue: string | null = null;
   try {
@@ -507,7 +485,7 @@ async function slackWorkspaceUrl(): Promise<string | null> {
   } catch {
     void 0;
   }
-  slackUrlCache.set("url", { url: urlValue });
+  slackUrlCache.set(tenant, { url: urlValue });
   return urlValue;
 }
 
@@ -547,12 +525,15 @@ function noteDeliveriesPoll(failure: unknown): void {
 async function pollWebDeliveries(): Promise<unknown> {
   const r = await coreFetch("GET", "/v1/deliveries?type=web");
   if (r.status !== 200) return new Error(`GET /v1/deliveries http ${r.status}: ${r.text.slice(0, 200)}`);
-  const pending = (JSON.parse(r.text) as { deliveries?: PendingWebDelivery[] }).deliveries ?? [];
+  const { tenant, deliveries: pending = [] } = JSON.parse(r.text) as {
+    tenant?: string;
+    deliveries?: PendingWebDelivery[];
+  };
   const now = Date.now();
   let failure: unknown;
   for (const d of pending) {
     const target = d.destination?.target ?? "";
-    const conns = deliveryClients.get(ownerOfWebThread(target) ?? "");
+    const conns = deliveryClientsOf(tenant, ownerOfWebThread(target) ?? "");
     if (conns && conns.size) {
       for (const res of conns) sseEvent(res, "delivery", { threadRef: target });
     } else if (now - (d.createdAt ?? 0) < WEB_DELIVERY_GIVEUP_MS) {
@@ -573,6 +554,7 @@ const SSE_HEARTBEAT_MS = 15_000;
 const STATE_FEED_RECONNECT_MS = Number(process.env.STATE_FEED_RECONNECT_MS ?? 3_000);
 
 interface SessionStateFrame {
+  tenant?: string;
   threadRef?: string;
   state?: string;
   participants?: string[];
@@ -589,9 +571,9 @@ function forwardSessionState(frame: SessionStateFrame): void {
     const owner = ownerOfWebThread(threadRef);
     if (owner) targets.add(owner);
   }
-  const { participants: _participants, ...visible } = frame;
+  const { participants: _participants, tenant, ...visible } = frame;
   for (const user of targets) {
-    for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "session_state", visible);
+    for (const res of deliveryClientsOf(tenant, user)) sseEvent(res, "session_state", visible);
   }
 }
 
@@ -653,7 +635,7 @@ function runStateFeed(): Promise<void> {
     "session_state",
     (data) => forwardSessionState(data as SessionStateFrame),
     () => {
-      for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "session_state_resync", {});
+      for (const res of everyDeliveryClient()) sseEvent(res, "session_state_resync", {});
     },
   );
 }
@@ -662,22 +644,21 @@ function runInboxFeed(): Promise<void> {
   return consumeCoreFeed(
     "/v1/loop-items/events",
     "loop_item",
-    (data) => void forwardInboxItem(data as { loopId?: string; itemId?: string; op?: string }),
+    (data) => void forwardInboxItem(data as { tenant?: string; loopId?: string; itemId?: string; op?: string }),
     resyncInbox,
   );
 }
 
 function resyncInbox(): void {
-  for (const conns of deliveryClients.values()) for (const res of conns) sseEvent(res, "inbox_resync", {});
+  for (const res of everyDeliveryClient()) sseEvent(res, "inbox_resync", {});
 }
 
-async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: string }): Promise<void> {
-  if (!ev.loopId || !ev.itemId || !deliveryClients.size) return;
-  const r = await coreFetch(
-    "POST",
-    "/v1/inbox/viewers",
-    JSON.stringify({ loopId: ev.loopId, candidates: [...deliveryClients.keys()] }),
-  ).catch(() => null);
+async function forwardInboxItem(ev: { tenant?: string; loopId?: string; itemId?: string; op?: string }): Promise<void> {
+  const candidates = connectedUsers(ev.tenant);
+  if (!ev.loopId || !ev.itemId || !candidates.length) return;
+  const r = await coreFetch("POST", "/v1/inbox/viewers", JSON.stringify({ loopId: ev.loopId, candidates })).catch(
+    () => null,
+  );
   if (r?.status === 404) return;
   let viewers: string[] | undefined;
   try {
@@ -687,7 +668,7 @@ async function forwardInboxItem(ev: { loopId?: string; itemId?: string; op?: str
   }
   if (!viewers) return resyncInbox();
   const frame = { loopId: ev.loopId, itemId: ev.itemId, op: ev.op ?? "" };
-  for (const user of viewers) for (const res of deliveryClients.get(user) ?? []) sseEvent(res, "inbox_item", frame);
+  for (const user of viewers) for (const res of deliveryClientsOf(ev.tenant, user)) sseEvent(res, "inbox_item", frame);
 }
 
 async function coreFetch(
@@ -1440,7 +1421,7 @@ const apiRoutes: readonly WebRoute[] = [
         coreFetch("GET", "/v1/suggested-activities", "", 2_000)
           .then((response) => response.status === 200 && JSON.parse(response.text).enabled === true)
           .catch(() => false),
-        brandingCache.forRender(),
+        brandingCache().forRender(),
       ]);
       if (authStatus === null || authStatus.status !== 200) {
         return json(res, 503, {
@@ -2726,6 +2707,7 @@ const apiRoutes: readonly WebRoute[] = [
     path: "/api/deliveries/events",
     handle: async (c) => {
       const { req, res, user } = c;
+      const removeClient = addDeliveryClient(user, res);
       res.writeHead(200, {
         "content-type": "text/event-stream; charset=utf-8",
         "cache-control": "no-cache, no-transform",
@@ -2733,21 +2715,11 @@ const apiRoutes: readonly WebRoute[] = [
         "x-accel-buffering": "no",
       });
       res.write(": open\n\n");
-      let set = deliveryClients.get(user);
-      if (!set) {
-        set = new Set();
-        deliveryClients.set(user, set);
-      }
-      set.add(res);
       const beat = setInterval(() => res.write(": ping\n\n"), SSE_HEARTBEAT_MS);
       beat.unref?.();
       req.on("close", () => {
         clearInterval(beat);
-        const s = deliveryClients.get(user);
-        if (s) {
-          s.delete(res);
-          if (!s.size) deliveryClients.delete(user);
-        }
+        removeClient();
       });
       return;
     },
@@ -2795,7 +2767,7 @@ const apiRoutes: readonly WebRoute[] = [
         return true;
       };
       if (durableRunId && (await tryRun(durableRunId, false))) return;
-      for (const runId of Array.from(activeRunsByThread.get(threadKey(user, threadRef)) ?? [])) {
+      for (const runId of activeRuns(user, threadRef)) {
         if (await tryRun(runId)) return;
       }
       json(res, 200, { runId: null, run: null, ...(queued.length ? { queued } : {}) });
@@ -3565,8 +3537,10 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("x-frame-options", "DENY");
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
+  const tenant = portalTenant(token, PORTAL_IDENTITY_SECRET, Date.now());
+  const route = () => portalTokenStore.run(token, () => routeRequest(req, res));
   try {
-    await portalTokenStore.run(token, () => routeRequest(req, res));
+    await (tenant ? withTenant(tenant, route) : route());
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });
