@@ -729,7 +729,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       ): Promise<PendingApproval> => {
         const { grantModes, ...rest } = fields;
         const record: PendingApprovalRecord = {
-          ...(Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as typeof rest),
+          ...(Object.fromEntries(
+            Object.entries(rest).filter(([, value]) => value !== undefined && value !== ""),
+          ) as typeof rest),
           createdAt: Date.now(),
           request: replayableRequest(input),
           ...grantModesWithin(resolution.approvalGrantModes, grantModes),
