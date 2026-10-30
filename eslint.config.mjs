@@ -66,7 +66,13 @@ export default tseslint.config(
   },
   {
     files: ["src/**/*.ts"],
-    ignores: ["src/config.ts", "src/index.ts", "src/runs/worker-main.ts", "src/egress-authz-main.ts"],
+    ignores: [
+      "src/config.ts",
+      "src/index.ts",
+      "src/runs/worker-main.ts",
+      "src/egress-authz-main.ts",
+      "src/tenants/settings-import-main.ts",
+    ],
     rules: {
       "no-restricted-syntax": [
         "error",
