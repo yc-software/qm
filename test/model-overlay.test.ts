@@ -42,10 +42,13 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
 
 import { afterEach } from "node:test";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createModelOverlayStore as createStore, type StoredModelOverlay } from "../src/model/model-overlay-store.ts";
 import {
+  createModelOverlayStore as createStore,
   setModelOverlays,
   validateModelOverlay,
+  type StoredModelOverlay,
+} from "../src/model/model-overlay-store.ts";
+import {
   resolveModel,
   contextTokenBudgetForModel,
   safeModelMetadata,

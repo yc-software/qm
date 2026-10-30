@@ -12,7 +12,8 @@ import { providerKeysPresent, companySubscriptionAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
+import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
+import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

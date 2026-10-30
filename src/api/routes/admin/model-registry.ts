@@ -1,7 +1,8 @@
 import { isEmbeddingModel } from "../../../model/model-overlay.ts";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { ModelVerificationError } from "../../../model/model-verification.ts";
-import { embeddingModelCatalog, MODEL_REGISTRY, safeModelMetadata } from "../../../model/pi-models.ts";
+import { embeddingModelCatalog, safeModelMetadata } from "../../../model/pi-models.ts";
+import { MODEL_REGISTRY } from "../../../model/model-registry.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";

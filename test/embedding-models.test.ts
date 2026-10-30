@@ -15,7 +15,6 @@ import { createModelCredentialStore } from "../src/model/model-credential-store.
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
 import {
-  setModelOverlays,
   resolveModel,
   resolveEmbeddingModel,
   embeddingModelCatalog,
@@ -23,6 +22,7 @@ import {
   defaultWebuiModelIds,
   modelSupported,
 } from "../src/model/pi-models.ts";
+import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 
 const definition = {

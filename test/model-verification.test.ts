@@ -26,7 +26,8 @@ import {
   createModelVerifier,
   type ModelVerifier,
 } from "../src/model/model-verification.ts";
-import { setModelOverlays, resolveModel, modelUnavailableReason } from "../src/model/pi-models.ts";
+import { resolveModel, modelUnavailableReason } from "../src/model/pi-models.ts";
+import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import type { StoredModelOverlay } from "../src/model/model-overlay-store.ts";
 import { ProviderTurnError, type ProviderErrorCode } from "../src/core/turn-error.ts";
 import { GatewayModelUnavailableError } from "../src/model/provider-endpoints.ts";

@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  MODEL_REGISTRY,
   SELECTABLE_BASE_MODELS,
   DEFAULT_WEBUI_MODEL_IDS,
   FAST_MODE_MODEL_IDS,
@@ -13,6 +12,7 @@ import {
   modelServiceable,
   serviceableModelIds,
 } from "../src/model/pi-models.ts";
+import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
 
 test("registry model identifiers are unique", () => {

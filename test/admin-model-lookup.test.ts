@@ -32,7 +32,7 @@ import { createModelCredentialStore } from "../src/model/model-credential-store.
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { setModelOverlays } from "../src/model/pi-models.ts";
+import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { afterEach } from "node:test";
 
 afterEach(() => {
