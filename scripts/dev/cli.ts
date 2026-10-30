@@ -85,7 +85,7 @@ const commandOptions: Record<string, readonly string[]> = {
   doctor: ["json", "fix", "no-slack"],
 };
 
-const devServiceNames = [...CHILD_ORDER, "web-ui"];
+const devServiceNames: string[] = CHILD_ORDER;
 
 const allowedOptions = commandOptions[command];
 if (allowedOptions) {
@@ -219,8 +219,7 @@ async function bootOnSlot(slot: string, worktree: string, branch: string): Promi
       `worktree=${worktree}`,
       `branch=${branch}`,
       `port=${ports.core}`,
-      `web_port=${ports.web}`,
-      `admin_port=${ports.admin}`,
+      `harness_port=${ports.harness}`,
       `portal_port=${ports.portal}`,
       `slack=${withSlack ? "1" : "0"}`,
       `web=${withWeb ? "1" : "0"}`,
@@ -310,14 +309,13 @@ function printSuccess(result: BootResult, branch: string): void {
       : `[ok] dev instance up -- slot ${result.slot} (browser only -- Slack off)`,
   );
   out(`   branch : ${branch}`);
-  if (result.webEnabled !== false)
-    out(`   portal : http://localhost:${ports.portal}  -> prod-style front door: the assistant at / and /admin`);
-  out(`   core   : http://localhost:${ports.core}  (org=${orgId})`);
+  if (result.webEnabled !== false) {
+    out(`   web    : http://localhost:${ports.portal}/  -> prod-style front door served by the edge`);
+    out(`   admin  : http://localhost:${ports.portal}/admin/`);
+  }
+  out(`   api    : http://localhost:${ports.core}  (edge, org=${orgId})`);
+  out(`   harness: health on :${ports.harness}`);
   if (slackLive) out(`   slack  : @${result.handle}  -> mention it in example.slack.com to test`);
-  if (result.webEnabled !== false)
-    out(`   web    : http://localhost:${ports.portal}/  (direct: http://localhost:${ports.web})`);
-  if (result.webEnabled !== false)
-    out(`   admin  : http://localhost:${ports.portal}/admin/   (direct: http://localhost:${ports.web}/admin/)`);
   out(`   logs   : ${lock}`);
   out(`   status : dev status   |   diagnose: dev doctor   |   apply env/code changes: dev up (reloads in place)`);
   out(`   down   : dev down   (auto-reaped if this worktree is removed)`);
@@ -564,7 +562,7 @@ async function cmdStatus(): Promise<number> {
       [
         String(r.slot).padEnd(7),
         state.padEnd(18),
-        (ports ? `${ports.core}/${ports.web}/${ports.admin}/${ports.portal}` : "-").padEnd(21),
+        (ports ? `${ports.core}/${ports.harness}/${ports.portal}` : "-").padEnd(21),
         age.padEnd(8),
         (r.mine ? "this" : "").padEnd(5),
         String(r.branch ?? "-").padEnd(28),
@@ -592,9 +590,7 @@ async function withMySupervisor<T>(fn: (sock: string, lease: LeaseInfo) => Promi
   return await fn(sock, mine);
 }
 
-const supervisorChildNames = (names: string[]): string[] => [
-  ...new Set(names.map((name) => (name === "web-ui" ? "web" : name))),
-];
+const supervisorChildNames = (names: string[]): string[] => [...new Set(names)];
 
 async function cmdRestart(): Promise<number> {
   const children = supervisorChildNames(positionals.slice(1));
