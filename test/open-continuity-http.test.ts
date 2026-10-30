@@ -9,6 +9,9 @@ import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capabili
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 mock.module("./support/mock-harness.ts", {
   namedExports: {
