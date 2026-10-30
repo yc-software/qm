@@ -4,6 +4,7 @@ import pg from "pg";
 import { subscribePostgresChannel } from "../src/persistence/postgres-listener.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { awaitContextOutcome } from "../src/api/surface-context-puller.ts";
 
 const url = process.env.DATABASE_URL;
 const skip = !url;
@@ -122,5 +123,35 @@ test("immediate unsubscribe and replacement do not leak a pending connection", {
     await until(() => ready);
   } finally {
     await second();
+  }
+});
+
+test("a context fulfilled on another instance wakes the waiter through NOTIFY", { skip }, async () => {
+  const waiterBus = createPostgresNotifyBus<string>(url!, "context_request_settled", "test");
+  const fulfillerBus = createPostgresNotifyBus<string>(url!, "context_request_settled", "test");
+  let status = "pending";
+  let reads = 0;
+  try {
+    const outcome = awaitContextOutcome(
+      {
+        onContextRequestSettled: (listener, onResync) => waiterBus.subscribe(listener, { onResync }),
+        getContextRequest: async () => {
+          reads++;
+          return { status };
+        },
+        deleteContextRequest: async () => {},
+      },
+      "req-1",
+      { waitMs: 20_000, recheckMs: 20_000 },
+    );
+    await until(() => reads === 2);
+    status = "done";
+    fulfillerBus.emit("req-1");
+    const started = Date.now();
+    assert.equal((await outcome).status, "done");
+    assert.ok(Date.now() - started < 5_000);
+    assert.equal(reads, 3);
+  } finally {
+    await Promise.all([waiterBus.close!(), fulfillerBus.close!()]);
   }
 });
