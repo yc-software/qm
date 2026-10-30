@@ -274,8 +274,9 @@ export interface AttributedTurn {
 
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
-const STABLE_ORIGIN_RE = /^agent:main:(cron|webhook|monitor|loop|swarm):[^:]+$/;
-const BARE_ORIGIN_RE = /^(cron|webhook|monitor|loop|swarm):[^:]+(:.+)?$/;
+const ORIGINS = "(cron|webhook|monitor|loop|swarm)";
+const STABLE_ORIGIN_RE = new RegExp(`^agent:main:${ORIGINS}:[^:]+$`);
+const BARE_ORIGIN_RE = new RegExp(`^${ORIGINS}:[^:]+(:.+)?$`);
 const STABLE_CRON_ID_RE = /^agent:main:cron:([^:]+)$/;
 const BARE_CRON_ID_RE = /^cron:([^:]+)(:.+)?$/;
 
