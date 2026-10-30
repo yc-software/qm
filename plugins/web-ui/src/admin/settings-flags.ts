@@ -1,8 +1,7 @@
-import { mountTemplate } from "./shared.ts";
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
-let config: any;
+import { page, draw as redraw } from "./settings.ts";
 const state = {
   rows: [] as any[],
   scope: "",
@@ -12,20 +11,14 @@ const state = {
   saving: false,
   message: "",
   choices: [] as any[],
-  selector: null as Node | null,
 };
-let redraw = () => {};
-export function configureFlags(options: any) {
-  config = options;
-}
 function feature() {
   return state.rows.find((row) => row.featureName === state.feature);
 }
-function selector() {
-  const choices = state.choices.filter((row) => !feature()?.personalOnly || row.scopeId.startsWith("personal:"));
-  for (const id of state.selected) if (!choices.some((row) => row.scopeId === id)) state.selected.delete(id);
-  state.selector = config.buildSelector(choices, state.selected, redraw);
-  redraw();
+function choices() {
+  const rows = state.choices.filter((row) => !feature()?.personalOnly || row.scopeId.startsWith("personal:"));
+  for (const id of state.selected) if (!rows.some((row) => row.scopeId === id)) state.selected.delete(id);
+  return rows;
 }
 export async function loadFlags(data: any, scope: string) {
   if (state.scope !== scope) {
@@ -37,10 +30,10 @@ export async function loadFlags(data: any, scope: string) {
   state.rows = data.featureFlags || [];
   redraw();
   if (!state.available) return;
-  const choices = await config.loadChoices();
-  if (state.scope !== scope) return;
-  state.choices = choices || [];
-  selector();
+  const r = await page.api("GET", "/api/scopes");
+  if (state.scope !== scope || !r.ok) return;
+  state.choices = (r.data.scopes || []).map((row: any) => ({ scopeId: row.scopeId, label: row.label || row.scopeId }));
+  redraw();
 }
 async function update(scopeId: string, on: boolean, featureName: string) {
   const scope = state.scope;
@@ -49,14 +42,18 @@ async function update(scopeId: string, on: boolean, featureName: string) {
   redraw();
   let result;
   try {
-    result = await config.save(scope, { featureName, scopeId, on });
+    result = await page.api("PUT", "/api/scopes/" + encodeURIComponent(scope) + "/feature-flags", {
+      featureName,
+      scopeId,
+      on,
+    });
   } catch {
     if (scope === state.scope) state.message = "Could not save. Your selection is preserved; try again.";
     return false;
   }
   if (scope !== state.scope) return false;
   if (!result.ok) {
-    state.message = result.error || result.data?.message || "Save failed.";
+    state.message = result.data?.message || "Save failed.";
     return false;
   }
   let row = state.rows.find((row) => row.featureName === featureName);
@@ -90,10 +87,10 @@ async function add() {
     }
   } finally {
     state.saving = false;
-    selector();
+    redraw();
   }
 }
-function template() {
+export function flagsCard() {
   const enabled = state.rows.flatMap((row) =>
     (row.enabledScopes || []).map((scopeId: string) => ({ featureName: row.featureName, scopeId })),
   );
@@ -130,7 +127,7 @@ function template() {
             ?disabled=${state.saving}
             @change=${(e: Event) => {
               state.feature = (e.target as HTMLSelectElement).value;
-              selector();
+              redraw();
             }}
           >
             ${state.rows.map((row) => html`<option value=${row.featureName} .selected=${row.featureName === state.feature}>${row.label}</option>`)}
@@ -138,9 +135,19 @@ function template() {
         >
         <div>
           <div id="feature-flag-scope-label">People and scopes</div>
-          <div id="feature-flag-scopes" aria-labelledby="feature-flag-scope-label" ?inert=${state.saving}>
-            ${state.selector || "Loading people and scopes…"}
-          </div>
+          <select
+            multiple
+            size="8"
+            id="feature-flag-scopes"
+            aria-labelledby="feature-flag-scope-label"
+            ?disabled=${state.saving}
+            @change=${(e: Event) => {
+              state.selected = new Set([...(e.target as HTMLSelectElement).selectedOptions].map((o) => o.value));
+              redraw();
+            }}
+          >
+            ${choices().map((row) => html`<option value=${row.scopeId} .selected=${state.selected.has(row.scopeId)}>${row.label}</option>`)}
+          </select>
           <span class="hint">${feature()?.hint ?? ""}</span>
         </div>
       </div>
@@ -151,7 +158,4 @@ function template() {
       ><span class="status" id="st-feature-flags">${state.message}</span>
     </div>
   </section>`;
-}
-export function mountFlags() {
-  redraw = mountTemplate('template[data-settings-card="card-feature-flags"]', template);
 }

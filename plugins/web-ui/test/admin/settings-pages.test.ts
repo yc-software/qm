@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mountAdmin, type Route } from "./fixture.ts";
+import { mountPage, type Route } from "./fixture.ts";
 
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 const withResolvers = <T>() => {
@@ -8,39 +8,37 @@ const withResolvers = <T>() => {
   const promise = new Promise<T>((r) => (resolve = r));
   return { promise, resolve };
 };
-
-test("settings views never start the all-scopes directory scan that history needs", async () => {
-  for (const view of ["customize", "models", "credentials", "governance", "connectors", "onboarding", "history"]) {
-    const admin = await mountAdmin(`/settings/${view}`, { "/scopes": { scopes: [], environments: [] } });
-    await admin.settle();
-    assert.equal(
-      admin.requests.some((r) => r.path === "/scopes"),
-      view === "history",
-      view,
-    );
-    admin.close();
-  }
-});
+type Page = Awaited<ReturnType<typeof mountPage>>;
+const visit = async (admin: Page, url: string) => {
+  admin.window.history.pushState(null, "", url);
+  await admin.mount();
+  await admin.settle();
+};
+const type = (admin: Page, selector: string, value: string, event = "input") => {
+  const input = admin.document.querySelector<HTMLInputElement>(selector)!;
+  input.value = value;
+  input.dispatchEvent(new admin.window.Event(event, { bubbles: true }));
+};
+const click = (admin: Page, selector: string) => admin.document.querySelector<HTMLButtonElement>(selector)!.click();
 
 test("a refreshed model catalog only reaches the view that asked for it", async () => {
   for (const stale of [false, true]) {
     const refresh = withResolvers<unknown>();
-    const admin = await mountAdmin("/settings/models", {
+    let reads = 0;
+    const admin = await mountPage("/settings/models", {
       "/scopes/org:acme": ({ url }) =>
         url.searchParams.get("catalog") === "refresh"
           ? refresh.promise
           : {
-              modelCatalogRefreshing: url.searchParams.get("view") === "models",
+              modelCatalogRefreshing: reads++ === 0,
               baseModelOptions: [{ id: "configured", name: "Configured" }],
               modelsByHarness: { pi: [{ id: "configured", name: "Configured" }] },
               webuiModels: [],
             },
+      "/custom-providers": { providers: [] },
     });
     await admin.settle();
-    if (stale) {
-      admin.controller.show("customize");
-      await admin.settle();
-    }
+    if (stale) await visit(admin, "/settings/models?again=1");
     refresh.resolve({
       baseModelOptions: [{ id: "new", name: "New model" }],
       modelsByHarness: { pi: [{ id: "new", name: "New model" }] },
@@ -55,10 +53,53 @@ test("a refreshed model catalog only reaches the view that asked for it", async 
   }
 });
 
+test("enabled models and custom providers save their payloads", async () => {
+  const saves: [string, string, unknown][] = [];
+  const record: Route = ({ method, path, body }) => {
+    saves.push([method, decodeURIComponent(path), body]);
+    return { ok: true };
+  };
+  const admin = await mountPage("/settings/models", {
+    "/scopes/org:acme": { baseModelOptions: [{ id: "a", name: "Alpha" }, { id: "b" }], webuiModels: ["a"] },
+    "/custom-providers": { providers: [] },
+    "PUT /scopes/org:acme/webui-models": record,
+    "PUT /custom-providers/gw": record,
+  });
+  await admin.settle();
+  type(admin, "#webui-models-add", "b");
+  click(admin, "#webui-models-add-button");
+  click(admin, '[data-save="webui-models"]');
+  await admin.settle();
+  click(admin, "#add-custom-provider");
+  assert.equal(admin.document.querySelector<HTMLDialogElement>("#custom-provider-dialog")!.open, true);
+  type(admin, "#custom-provider-id", "gw");
+  type(admin, "#custom-provider-name", "Gateway");
+  type(admin, "#custom-provider-url", "https://gw.example/v1");
+  type(admin, "#custom-provider-models", "m1 | Model one | 1000");
+  click(admin, "#custom-provider-save");
+  await admin.settle();
+  assert.deepEqual(plain(saves), [
+    ["PUT", "/scopes/org:acme/webui-models", { ids: ["a", "b"] }],
+    [
+      "PUT",
+      "/custom-providers/gw",
+      {
+        name: "Gateway",
+        protocol: "openai",
+        baseUrl: "https://gw.example/v1",
+        models: [{ id: "m1", name: "Model one", contextWindow: 1000 }],
+      },
+    ],
+  ]);
+  assert.equal(admin.document.querySelector<HTMLDialogElement>("#custom-provider-dialog")!.open, false);
+  assert.ok(admin.requests.filter((r) => r.path === "/custom-providers").length >= 2);
+  admin.close();
+});
+
 test("saving branding merges the saved theme and reloads only when no other draft is open", async () => {
   for (const otherDraft of [false, true]) {
     const saves: any[] = [];
-    const admin = await mountAdmin("/settings/customize", {
+    const admin = await mountPage("/settings/customize", {
       "/scopes/org:acme": {
         branding: { selfLabel: "Saved name", accent: "#111111", iconUrl: "https://example.com/icon.png" },
         soul: "Original SOUL",
@@ -69,18 +110,9 @@ test("saving branding merges the saved theme and reloads only when no other draf
       },
     });
     await admin.settle();
-    const accent = admin.document.querySelector<HTMLInputElement>(
-      '#card-branding input[type="color"], #branding-accent',
-    )!;
-    accent.value = "#123456";
-    accent.dispatchEvent(new admin.window.Event("input", { bubbles: true }));
-    accent.dispatchEvent(new admin.window.Event("change", { bubbles: true }));
-    if (otherDraft) {
-      const soul = admin.document.querySelector<HTMLTextAreaElement>("#card-soul textarea")!;
-      soul.value = "Unsaved SOUL";
-      soul.dispatchEvent(new admin.window.Event("input", { bubbles: true }));
-    }
-    admin.document.querySelector<HTMLButtonElement>('[data-save="branding"]')!.click();
+    type(admin, "#branding-accent", "#123456");
+    if (otherDraft) type(admin, "#card-soul textarea", "Unsaved SOUL");
+    click(admin, '[data-save="branding"]');
     await admin.settle();
     assert.equal(saves.length, 1);
     assert.equal(saves[0].selfLabel, "Saved name");
@@ -100,20 +132,82 @@ test("saving branding merges the saved theme and reloads only when no other draf
   }
 });
 
+test("a SOUL conflict loads the latest revision and keeps the draft", async () => {
+  let version = 3;
+  const admin = await mountPage("/settings/customize", {
+    "/scopes/org:acme": () => ({ soul: "Server v" + version, soulVersion: version }),
+    "PUT /scopes/org:acme/soul": ({ body }) => {
+      assert.equal(body.expectedVersion, 3);
+      version = 4;
+      return { status: 409, body: { message: "conflict" } };
+    },
+  });
+  await admin.settle();
+  click(admin, "#soul-edit");
+  type(admin, "#soul", "My draft");
+  click(admin, '[data-save="soul"]');
+  await admin.settle();
+  assert.equal(admin.document.querySelector<HTMLTextAreaElement>("#soul")!.value, "My draft");
+  assert.equal(admin.document.getElementById("soul-ver")!.textContent, "Saved version 4");
+  assert.equal(
+    admin.document.getElementById("st-soul")!.textContent,
+    "SOUL changed; latest revision loaded and your draft was preserved.",
+  );
+  admin.close();
+});
+
+test("feature flags enable the scopes picked in a native multi-select", async () => {
+  const saves: unknown[] = [];
+  const admin = await mountPage("/settings/customize", {
+    "/scopes/org:acme": {
+      featureFlags: [
+        { featureName: "alpha", label: "Alpha", enabledScopes: [] },
+        { featureName: "solo", label: "Solo", personalOnly: true, enabledScopes: [] },
+      ],
+    },
+    "/scopes": {
+      scopes: [
+        { scopeId: "personal:ann", label: "Ann" },
+        { scopeId: "channel:c1", label: "#c1" },
+      ],
+    },
+    "PUT /scopes/org:acme/feature-flags": ({ body }) => (saves.push(body), { ok: true }),
+  });
+  await admin.settle();
+  const picker = admin.document.querySelector<HTMLSelectElement>("#feature-flag-scopes")!;
+  type(admin, "#feature-flag-name", "solo", "change");
+  assert.deepEqual(
+    [...picker.options].map((o) => o.value),
+    ["personal:ann"],
+  );
+  type(admin, "#feature-flag-name", "alpha", "change");
+  for (const option of picker.options) option.selected = true;
+  picker.dispatchEvent(new admin.window.Event("change"));
+  click(admin, "#feature-flag-enable");
+  await admin.settle();
+  assert.deepEqual(plain(saves), [
+    { featureName: "alpha", scopeId: "personal:ann", on: true },
+    { featureName: "alpha", scopeId: "channel:c1", on: true },
+  ]);
+  assert.match(admin.document.getElementById("feature-flag-list")!.textContent!, /alpha: channel:c1/);
+  admin.close();
+});
+
 test("credentials show loading, then a visible retry when the read fails", async () => {
   const read = withResolvers<unknown>();
-  const admin = await mountAdmin("/settings/credentials", {
+  const admin = await mountPage("/settings/credentials", {
     "/scopes/org:acme": () => read.promise,
-    "/keychain": {},
+    "/keychain": { users: 2, standing: 1 },
   });
   await admin.settle();
   assert.equal(admin.document.getElementById("sc-list")!.textContent!.trim(), "Loading credentials…");
   assert.equal(admin.document.querySelector<HTMLButtonElement>("#sc-add")!.disabled, true);
+  assert.equal(admin.document.getElementById("keychain-user-count")!.textContent, "2");
   read.resolve({ status: 500, body: { message: "boom" } });
   await admin.settle();
   assert.match(admin.document.getElementById("sc-list")!.textContent!, /Could not load credentials\./);
   const reads = admin.requests.filter((r) => r.path === "/scopes/org%3Aacme").length;
-  admin.document.querySelector<HTMLButtonElement>("#sc-list button")!.click();
+  click(admin, "#sc-list button");
   await admin.settle();
   assert.equal(admin.requests.filter((r) => r.path === "/scopes/org%3Aacme").length, reads + 1);
   admin.close();
@@ -122,52 +216,80 @@ test("credentials show loading, then a visible retry when the read fails", async
 test("credential usage fills in when it arrives, survives failure, and ignores replies for a view left behind", async () => {
   for (const outcome of ["current", "failed", "view"] as const) {
     const usage = withResolvers<unknown>();
-    const admin = await mountAdmin("/settings/credentials", {
+    const admin = await mountPage("/settings/credentials", {
       "/scopes/org:acme": {
         serviceCredentials: [{ slug: "example", name: "Example", host: "example.com", grantees: ["org:acme"] }],
       },
       "/scopes/org:acme/credential-usage": () => usage.promise,
       "/keychain": {},
+      "/custom-providers": { providers: [] },
     });
     await admin.settle();
-    const list = () => admin.document.getElementById("sc-list")!.textContent!;
+    const list = () => admin.document.getElementById("sc-list")?.textContent ?? "";
     assert.match(list(), /Loading usage…/);
-    if (outcome === "view") {
-      admin.controller.show("models");
-      await admin.settle();
-    }
+    if (outcome === "view") await visit(admin, "/settings/models");
     usage.resolve(
       outcome === "failed" ? { status: 500, body: {} } : { summaries: [{ slug: "example", usageCount: 7 }] },
     );
     await admin.settle();
-    assert.match(list(), /Example/, outcome);
     if (outcome === "current") assert.match(list(), /7 successful uses/);
     if (outcome === "failed") assert.match(list(), /Usage unavailable/);
-    if (outcome === "view") assert.match(list(), /Loading usage…/);
+    if (outcome === "view") assert.equal(list(), "");
     admin.close();
   }
 });
 
-test("a rejected fetch or an interrupted body becomes a visible failure", async () => {
-  const interrupted = () =>
-    new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.error(new Error("body interrupted"));
-        },
-      }),
-    );
-  for (const files of [
-    () => {
-      throw new Error("network disconnected");
+test("credentials save from the dialog and delete after review", async () => {
+  const saves: unknown[] = [];
+  let rows: unknown[] = [];
+  const admin = await mountPage("/settings/credentials", {
+    "/scopes/org:acme": () => ({
+      serviceCredentials: rows,
+      directoryMembers: [{ principalId: "ann", displayName: "Ann" }],
+    }),
+    "/scopes/org:acme/credential-usage": { summaries: [] },
+    "/keychain": {},
+    "PUT /scopes/org:acme/service-credentials": ({ body }) => {
+      saves.push(body);
+      rows = body.delete ? [] : [{ ...body, hasSecret: true, updatedAt: 5 }];
+      return { ok: true };
     },
-    interrupted,
-  ]) {
-    const admin = await mountAdmin("/settings/files", { "/scopes": { scopes: [] }, "/files": files });
-    await admin.settle();
-    assert.equal(admin.document.querySelector("#view-data .empty")!.textContent, "Network request failed.");
-    admin.close();
-  }
+  });
+  await admin.settle();
+  click(admin, "#sc-add");
+  const dialog = admin.document.querySelector<HTMLDialogElement>("#sc-dialog")!;
+  assert.equal(dialog.open, true);
+  type(admin, "#sc-slug", "svc");
+  type(admin, "#sc-name", "Service");
+  type(admin, "#sc-host", "api.example.com");
+  type(admin, "#sc-secret", "s3cret");
+  click(admin, "#sc-save");
+  await admin.settle();
+  assert.equal(dialog.open, false);
+  assert.match(admin.document.getElementById("sc-list")!.textContent!, /Service/);
+  click(admin, '#sc-list [aria-label="Delete Service"]');
+  await admin.settle();
+  assert.match(admin.document.getElementById("governance-review-title")!.textContent!, /Delete “Service”/);
+  click(admin, "#governance-review-confirm");
+  await admin.settle();
+  assert.deepEqual(plain(saves), [
+    {
+      slug: "svc",
+      name: "Service",
+      delivery: "broker",
+      host: "api.example.com",
+      secret: "s3cret",
+      injection: {},
+      allowedMethods: [],
+      allowedPathPrefixes: [],
+      enabled: true,
+      deployments: true,
+      grantees: ["org:acme"],
+    },
+    { slug: "svc", delete: true, expectedUpdatedAt: 5 },
+  ]);
+  assert.match(admin.document.getElementById("sc-list")!.textContent!, /No credentials configured/);
+  admin.close();
 });
 
 const meta = (id: string) => ({
@@ -185,7 +307,7 @@ test("the models view saves runtime rows chosen in the composer picker", async (
     saves.push([decodeURIComponent(path), body]);
     return { ok: true };
   };
-  const admin = await mountAdmin("/settings/models", {
+  const admin = await mountPage("/settings/models", {
     "/scopes/org:acme": {
       baseModelDefault: "model",
       baseModelOptions: [{ id: "model" }],

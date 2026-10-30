@@ -1,27 +1,22 @@
-import { mountTemplate } from "./shared.ts";
-import { saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
-import { SettingState, settingRegistry } from "./setting-state.ts";
-import { mountCredentials } from "./settings-credentials.ts";
-export {
-  configureCredentials,
-  credentialState,
-  credentialStatus,
-  credentialLoading,
-  loadCredentials,
-  keychainSummary,
-} from "./settings-credentials.ts";
-import { mountProviders } from "./settings-providers.ts";
-export { configureProviders, openProvider, loadProviders } from "./settings-providers.ts";
-import { mountFlags } from "./settings-flags.ts";
-import { mountDecisions } from "./settings-decisions.ts";
-export { configureFlags, loadFlags } from "./settings-flags.ts";
-export { configureDecisions, loadDecisions } from "./settings-decisions.ts";
-import { brandingCard } from "./settings-branding.ts";
-import { mountRuntimes } from "./settings-runtimes.ts";
-export { configureRuntimes } from "./settings-runtimes.ts";
-import { html } from "lit";
+import { html, render, nothing } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
+import { VIEW_TITLE, type AdminPage } from "./sections.ts";
+import { pageHeader } from "./shared.ts";
+import { saveButton, settingStatus, saveFooter, reviewChange } from "./setting-controls.ts";
+import { SettingState, putSetting } from "./setting-state.ts";
+import {
+  credentialsCard,
+  keychainCard,
+  loadCredentials,
+  addCredential,
+  credentialState,
+} from "./settings-credentials.ts";
+import { providersCard, useProviders, loadProviders } from "./settings-providers.ts";
+import { flagsCard, loadFlags } from "./settings-flags.ts";
+import { decisionsCard, loadDecisions } from "./settings-decisions.ts";
+import { brandingCard } from "./settings-branding.ts";
+import { runtimesCard } from "./settings-runtimes.ts";
 
 type Model = { id: string; name?: string };
 type Data = Record<string, any>;
@@ -65,6 +60,7 @@ export class SettingsState extends SettingState {
     this.saving = false;
     this.changed();
   }
+  save = () => saveSetting(this);
   add() {
     if (this.selected && !this.draft.ids.includes(this.selected)) this.draft.ids.push(this.selected);
     this.selected = "";
@@ -81,7 +77,15 @@ export const states = new Map(
     new SettingsState(key),
   ]),
 );
-export const { owns, collect, capture, commit, status, statusKey } = settingRegistry(states);
+export let page: AdminPage;
+let savedBranding: Data = {};
+const scopeUrl = (query = "") => "/api/scopes/" + encodeURIComponent(page.orgScope) + query;
+export function draw() {
+  if (page?.host.isConnected) render(template(), page.host);
+}
+for (const s of states.values()) s.render = draw;
+credentialState.render = draw;
+
 export function load(data: Data, scope: string, only?: string) {
   for (const [key, s] of states) {
     if (only && only !== key) continue;
@@ -95,59 +99,209 @@ export function load(data: Data, scope: string, only?: string) {
         markUrl: data.branding?.markUrl || "",
       };
       s.available = scope.startsWith("org:") && "branding" in data;
-      s.saving = false;
-      capture(key);
-      continue;
-    }
-    if (key === "memory-embedding-model") {
+    } else if (key === "memory-embedding-model") {
       s.draft = { modelId: data.memoryEmbeddingModel || "" };
       s.available = scope.startsWith("org:") && "memoryEmbeddingModel" in data;
-      s.saving = false;
-      capture(key);
-      continue;
-    }
-    if (key === "soul") {
+    } else if (key === "soul") {
       s.draft = { content: data.soul || "", expectedVersion: data.soulVersion || 0 };
       s.history = data.soulHistory || [];
       s.editing = false;
       s.available = true;
-      s.saving = false;
-      capture(key);
-      continue;
+    } else {
+      s.available =
+        scope.startsWith("org:") &&
+        !!data.baseModelOptions?.length &&
+        (!runtimeKeys.includes(key) || (!!data.baseModelDefault && runtimeReadKey(key) in data));
+      const runtime = data[runtimeReadKey(key)];
+      s.draft = runtimeKeys.includes(key)
+        ? {
+            ...(key !== "runtime" ? { inherit: !runtime } : {}),
+            harnessId: runtime?.harnessId || data.harnessDefault || "pi",
+            modelId: runtime?.modelId || data.baseModel || data.baseModelDefault || "",
+            effortLevel: runtime?.effortLevel || "auto",
+            fastMode: runtime?.fastMode === true,
+          }
+        : { ids: (data.webuiModels || []).filter(Boolean) };
+      s.selected = "";
     }
-    s.available =
-      scope.startsWith("org:") &&
-      !!data.baseModelOptions?.length &&
-      (!runtimeKeys.includes(key) || (!!data.baseModelDefault && runtimeReadKey(key) in data));
-    const runtime = data[runtimeReadKey(key)];
-    s.draft = runtimeKeys.includes(key)
-      ? {
-          ...(key !== "runtime" ? { inherit: !runtime } : {}),
-          harnessId: runtime?.harnessId || data.harnessDefault || "pi",
-          modelId: runtime?.modelId || data.baseModel || data.baseModelDefault || "",
-          effortLevel: runtime?.effortLevel || "auto",
-          fastMode: runtime?.fastMode === true,
-        }
-      : { ids: (data.webuiModels || []).filter(Boolean) };
     s.saving = false;
-    s.selected = "";
-    capture(key);
+    s.baseline = JSON.stringify(s.collect(false));
+    s.changed();
   }
 }
-export function updateCatalog(data: Data) {
-  for (const s of states.values()) {
-    s.context = { ...s.context, ...data };
-    s.render();
-  }
+function updateCatalog(data: Data) {
+  for (const s of states.values()) s.context = { ...s.context, ...data };
+  draw();
 }
+function refreshSoul(data: Data) {
+  const s = states.get("soul")!;
+  s.draft.expectedVersion = data.soulVersion || 0;
+  s.baseline = JSON.stringify({ content: data.soul || "", expectedVersion: s.draft.expectedVersion });
+  s.history = data.soulHistory || [];
+  s.changed();
+}
+
+async function freshSoul(current: () => boolean) {
+  const fresh = await page.api("GET", scopeUrl("?view=customize"));
+  return current() ? fresh : null;
+}
+
+async function saveSetting(s: SettingsState) {
+  let body: Data;
+  try {
+    body = s.collect();
+  } catch (err) {
+    return Object.assign(s, { message: err instanceof Error ? err.message : "Could not save.", tone: "err" }).render();
+  }
+  const view = page;
+  const branding = s.key === "branding" ? { ...savedBranding, ...body } : body;
+  const r = await putSetting(view, view.orgScope, s, s.key, branding);
+  if (!r) return;
+  if (!r.ok) {
+    if (s.key !== "soul" || r.status !== 409) return;
+    const fresh = await freshSoul(view.current);
+    if (fresh?.ok) refreshSoul(fresh.data);
+    return Object.assign(s, {
+      message: "SOUL changed; latest revision loaded and your draft was preserved.",
+      tone: "err",
+    }).render();
+  }
+  s.commit(body);
+  if (s.key === "branding") {
+    savedBranding = branding;
+    if (![...states.values()].some((x) => x.available && x.dirty)) location.reload();
+  }
+  if (s.key !== "soul") return;
+  const fresh = await freshSoul(view.current);
+  if (!fresh) return;
+  if (!fresh.ok)
+    return Object.assign(s, {
+      message: "Saved, but the latest version could not be refreshed.",
+      tone: "warn",
+    }).render();
+  refreshSoul(fresh.data);
+  if (!s.dirty) Object.assign(s, { message: "Saved", tone: "ok" }).render();
+}
+
+async function restoreSoul(revision: Data) {
+  const s = states.get("soul")!;
+  const view = page;
+  const draftBefore = JSON.stringify(s.collect(false));
+  const expectedVersion = s.draft.expectedVersion;
+  const confirmed = await reviewChange({
+    title: "Restore SOUL version " + revision.version + "?",
+    subtitle: "The saved instructions from this revision will replace the current SOUL.",
+    facts: [
+      ["Scope", "Organization · " + view.org],
+      ["Current", "Version " + expectedVersion],
+      ["Restore", "Version " + revision.version],
+    ],
+    warning: "This does not erase history. A new revision will be created, and future turns will use it immediately.",
+    confirmLabel: "Restore version " + revision.version,
+    danger: true,
+  });
+  if (!confirmed || !view.current()) return;
+  Object.assign(s, { saving: true, message: "Restoring…", tone: "saving" }).render();
+  const r = await view.api("PUT", scopeUrl("/soul"), { content: revision.content, expectedVersion });
+  s.saving = false;
+  if (!view.current()) return;
+  if (!r.ok) {
+    if (r.status === 409) {
+      const fresh = await freshSoul(view.current);
+      if (fresh?.ok) refreshSoul(fresh.data);
+    }
+    const message =
+      r.status === 409
+        ? "SOUL changed; latest revision loaded and your draft was preserved."
+        : r.data?.message || "Restore failed.";
+    return Object.assign(s, { message, tone: "err" }).render();
+  }
+  const fresh = await freshSoul(view.current);
+  if (!fresh) return;
+  if (!fresh.ok)
+    return Object.assign(s, {
+      message: "Restored, but the latest version could not be refreshed.",
+      tone: "warn",
+    }).render();
+  if (JSON.stringify(s.collect(false)) === draftBefore) load(fresh.data, view.orgScope, "soul");
+  else refreshSoul(fresh.data);
+  if (!s.dirty)
+    Object.assign(s, { message: "Version " + revision.version + " restored as a new revision", tone: "ok" }).render();
+}
+
+async function refreshCatalog(view: AdminPage, data: Data) {
+  const fresh = await view.api("GET", scopeUrl("?view=" + encodeURIComponent(view.view) + "&catalog=refresh"));
+  if (!fresh.ok || !view.current()) return;
+  const merge = (target: Model[], incoming: Model[] = []) => {
+    for (const model of incoming) {
+      const at = target.findIndex((candidate) => candidate.id === model.id);
+      if (at < 0) target.push(model);
+      else target[at] = model;
+    }
+  };
+  merge((data.baseModelOptions ||= []), fresh.data.baseModelOptions);
+  for (const [harness, models] of Object.entries(fresh.data.modelsByHarness || {}))
+    merge(((data.modelsByHarness ||= {})[harness] ||= []), models as Model[]);
+  updateCatalog(data);
+}
+
+let status = "";
+export async function mount(next: AdminPage) {
+  page = next;
+  status = "";
+  useProviders({ page: next, redraw: draw, refresh: refreshProviders });
+  if (next.view === "credentials") return void loadCredentials(next);
+  draw();
+  if (next.view === "models") void loadProviders();
+  const r = await next.api("GET", scopeUrl("?view=" + encodeURIComponent(next.view)));
+  if (!next.current()) return;
+  if (!r.ok) status = r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.";
+  if (r.ok && next.view === "models")
+    for (const key of [...runtimeKeys, "webui-models", "memory-embedding-model"]) load(r.data, next.orgScope, key);
+  if (r.ok && next.view === "customize") {
+    savedBranding = r.data.branding || {};
+    load(r.data, next.orgScope, "soul");
+    load(r.data, next.orgScope, "branding");
+    loadDecisions(r.data, next.orgScope);
+    void loadFlags(r.data, next.orgScope);
+  }
+  draw();
+  if (r.ok && r.data.modelCatalogRefreshing) void refreshCatalog(next, r.data);
+}
+
+async function refreshProviders() {
+  const view = page;
+  await loadProviders();
+  if (view.view !== "models") return;
+  const fresh = await view.api("GET", scopeUrl("?view=models"));
+  if (fresh.ok && view.current()) updateCatalog(fresh.data);
+}
+
+function template() {
+  const view = page.view;
+  const s = (key: string) => states.get(key)!;
+  const cards: Data = {
+    models: () => [runtimesCard(), providersCard(), modelsCard(s("webui-models"))],
+    credentials: () => [credentialsCard(), keychainCard()],
+    customize: () => [soulCard(s("soul")), brandingCard(s("branding")), flagsCard(), decisionsCard()],
+  };
+  return html`${pageHeader({
+      title: VIEW_TITLE[view],
+      actions: view === "credentials" ? addCredential() : nothing,
+    })}
+    <div id="view-governance">
+      <div class="governance-content">
+        ${status ? html`<p class="hint" role="status">${status}</p>` : nothing}${cards[view]()}
+      </div>
+    </div>`;
+}
+
 const value = (event: Event) => (event.target as HTMLInputElement).value;
 const label = (s: SettingsState, id: string) => {
   const m = s.catalog.find((x) => x.id === id);
   return m?.name && m.name !== id ? `${m.name} (${id})` : id;
 };
-function card(s: SettingsState) {
-  if (s.key === "soul") return soulCard(s);
-  if (s.key === "branding") return brandingCard(s);
+function modelsCard(s: SettingsState) {
   const ids: string[] = s.draft.ids || [];
   const available = s.catalog.filter((m) => !ids.includes(m.id));
   const canAdd = available.some((m) => m.id === s.selected);
@@ -210,34 +364,6 @@ function card(s: SettingsState) {
     ${saveFooter(s)}
   </section>`;
 }
-export function mountCards() {
-  mountFlags();
-  mountDecisions();
-  mountProviders();
-  mountCredentials();
-  mountRuntimes();
-  for (const [key, s] of states) {
-    const id = (
-      { soul: "card-soul", branding: "card-branding", "webui-models": "card-webui-models" } as Record<string, string>
-    )[key];
-    if (id) s.render = mountTemplate(`template[data-settings-card="${id}"]`, () => card(s));
-  }
-}
-
-let soulActions: { formatTime: (time: any) => string; restore: (revision: Data) => Promise<void> } = {
-  formatTime: String,
-  restore: async () => {},
-};
-export function configureSoul(actions: typeof soulActions) {
-  soulActions = actions;
-}
-export function refreshSoul(data: Data) {
-  const s = states.get("soul")!;
-  s.draft.expectedVersion = data.soulVersion || 0;
-  s.baseline = JSON.stringify({ content: data.soul || "", expectedVersion: s.draft.expectedVersion });
-  s.history = data.soulHistory || [];
-  s.changed();
-}
 function soulCard(s: SettingsState) {
   const saved = JSON.parse(s.baseline).content || "";
   const content = s.draft.content || "";
@@ -297,13 +423,13 @@ ${content === saved ? "No draft changes" : content || "Instructions will be clea
                     <p>
                       Version ${r.version}<small
                         >${r.updatedBy || "Author unavailable"} ·
-                        ${r.updatedAt ? soulActions.formatTime(r.updatedAt) : "Time unavailable"}</small
+                        ${r.updatedAt ? new Date(r.updatedAt).toLocaleString() : "Time unavailable"}</small
                       >
                     </p>
                     <button
                       type="button"
                       ?disabled=${r.version === s.draft.expectedVersion || s.saving}
-                      @click=${() => soulActions.restore({ ...r })}
+                      @click=${() => restoreSoul({ ...r })}
                     >
                       ${r.version === s.draft.expectedVersion ? "Current" : "Restore"}
                     </button>

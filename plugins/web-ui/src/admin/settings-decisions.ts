@@ -1,7 +1,6 @@
-import { mountTemplate } from "./shared.ts";
 import { html } from "lit";
 import { classMap } from "lit/directives/class-map.js";
-let config: any;
+import { page, draw as redraw } from "./settings.ts";
 const NEW_PROVIDER = { id: "", protocol: "chat-completions", baseUrl: "", credential: "", editing: false };
 const state = {
   scope: "",
@@ -12,10 +11,6 @@ const state = {
   message: "",
   providerStatus: false,
 };
-let redraw = () => {};
-export function configureDecisions(options: any) {
-  config = options;
-}
 export function loadDecisions(data: any, scope: string) {
   state.scope = scope;
   state.data = scope.startsWith("org:") ? data.decisions || null : null;
@@ -86,9 +81,9 @@ async function send(body: any, done: () => void) {
   state.message = "Saving…";
   redraw();
   try {
-    const result = await config.save(state.scope, body);
+    const result = await page.api("PUT", "/api/scopes/" + encodeURIComponent(state.scope) + "/decisions", body);
     if (result.ok) done();
-    state.message = result.ok ? "Saved." : result.error || result.data?.message || "Save failed.";
+    state.message = result.ok ? "Saved." : result.data?.message || "Save failed.";
   } catch (error) {
     state.message = `Could not save: ${error instanceof Error ? error.message : String(error)}`;
   } finally {
@@ -222,7 +217,7 @@ function ruleEditor() {
     </div>
   </div>`;
 }
-function template() {
+export function decisionsCard() {
   const data = state.data;
   const p = state.provider;
   return html`<section class=${classMap({ card: true, "sv-customize": true, hidden: !data })} id="card-decisions">
@@ -275,7 +270,4 @@ function template() {
         : ""
     }
   </section>`;
-}
-export function mountDecisions() {
-  redraw = mountTemplate('template[data-settings-card="card-decisions"]', template);
 }

@@ -17,8 +17,7 @@ import { icon } from "./icons";
 import { appState, can, signOut } from "./shell";
 import { isPlainLeftClick, UI_BASE } from "./deep-link";
 import { brandName } from "./ui";
-import { ADMIN_SECTIONS, ADMIN_VIEWS, VIEW_TITLE } from "./admin/sections";
-import type { AdminController } from "./admin/controller.js";
+import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
@@ -547,56 +546,43 @@ function accountRow(): TemplateResult {
 
 const SETTINGS_BASE = `${UI_BASE}/settings`;
 
-let section = "general";
 let adminHost: HTMLElement | null = null;
-let admin: AdminController | null = null;
-let adminLoad: Promise<AdminController> | null = null;
+let adminView = "";
 
-function sectionFromUrl(): string {
-  const rel = location.pathname.startsWith(SETTINGS_BASE) ? location.pathname.slice(SETTINGS_BASE.length) : "";
-  const params = new URLSearchParams(location.search);
-  const slackStep = ["setup", "install", "connected"].includes(params.get("slack") ?? "");
-  if (params.get("setup") === "slack" || slackStep) return "slack-settings";
-  const first = decodeURIComponent(rel.replace(/^\/+/, "").split("/")[0] ?? "");
-  const view = first === "skill-packs" ? "skills" : first;
-  return ADMIN_VIEWS.has(view) ? view : "general";
+const settingsSection = () => (can("admin") ? settingsRoute(SETTINGS_BASE).view : "general");
+
+function settingsGo(url: string, replace = false): void {
+  history[replace ? "replaceState" : "pushState"](null, "", url);
+  renderSettings();
 }
 
-function loadAdmin(): Promise<AdminController> {
-  adminLoad ??= import("./admin/entry").then(({ startAdmin }) => {
-    const host = document.createElement("div");
-    host.id = "app-view";
-    host.className = "admin-app";
-    adminHost = host;
-    drawSettings();
-    admin = startAdmin(host, {
-      org: appState.me?.org ?? "",
-      productName: brandName(),
-      apiBase: withBase("/api/admin"),
-      pageBase: SETTINGS_BASE,
-      onView: (view) => {
-        section = view;
-        drawSettings();
-      },
-    });
-    return admin;
-  });
-  return adminLoad;
+function followSettingsLink(e: MouseEvent): void {
+  const link = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null;
+  if (!link || link.target || !isPlainLeftClick(e) || link.origin !== location.origin) return;
+  if (!link.pathname.startsWith(SETTINGS_BASE)) return;
+  e.preventDefault();
+  settingsGo(link.pathname + link.search);
 }
 
-function showSection(view: string): void {
-  if (admin) return admin.show(view);
-  if (view !== "general" && can("admin")) {
-    history.pushState(null, "", `${SETTINGS_BASE}/${encodeURIComponent(view)}`);
-    void loadAdmin();
-    return;
-  }
-  section = "general";
-  history.pushState(null, "", SETTINGS_BASE);
-  drawSettings();
-}
+const mountAdmin = adminMounter({
+  base: SETTINGS_BASE,
+  apiBase: withBase("/api/admin"),
+  org: () => appState.me?.org ?? "",
+  go: settingsGo,
+  host: (view) => {
+    if (view !== adminView || !adminHost) {
+      adminView = view;
+      adminHost = Object.assign(document.createElement("div"), { id: "app-view", className: "admin-app" });
+      adminHost.dataset.subview = view;
+      adminHost.innerHTML = '<div class="admin-main"><div class="admin-inner"></div></div>';
+      drawSettings();
+    }
+    return adminHost.querySelector<HTMLElement>(".admin-inner")!;
+  },
+});
 
-function navItem(view: string): TemplateResult {
+function navItem(view: string, section: string): TemplateResult {
+  const href = view === "general" ? SETTINGS_BASE : `${SETTINGS_BASE}/${encodeURIComponent(view)}`;
   const active =
     view === section ||
     (view === "judgments" && section === "ackemoji") ||
@@ -604,26 +590,26 @@ function navItem(view: string): TemplateResult {
   return html`
     <a
       class="settings-nav-item ${active ? "active" : ""}"
-      href=${view === "general" ? SETTINGS_BASE : `${SETTINGS_BASE}/${encodeURIComponent(view)}`}
+      href=${href}
       aria-current=${active ? "page" : nothing}
       @click=${(e: MouseEvent) => {
         if (!isPlainLeftClick(e)) return;
         e.preventDefault();
-        showSection(view);
+        settingsGo(href);
       }}
       >${VIEW_TITLE[view] ?? view}</a
     >
   `;
 }
 
-function settingsNav(): TemplateResult {
+function settingsNav(section: string): TemplateResult {
   return html`
     <nav class="settings-nav" aria-label="Settings sections">
-      ${navItem("general")}
+      ${navItem("general", section)}
       ${ADMIN_SECTIONS.map(
         (group) => html`
           <div class="settings-nav-label">${group.label}</div>
-          ${group.views.map(navItem)}
+          ${group.views.map((view) => navItem(view, section))}
         `,
       )}
     </nav>
@@ -652,8 +638,8 @@ function generalPane(): TemplateResult {
 }
 
 function settingsPane(): TemplateResult {
+  const section = settingsSection();
   const general = section === "general";
-  if (adminHost) adminHost.hidden = general;
   return html`
     <h1 class="settings-page-title">Settings</h1>
     ${
@@ -665,8 +651,10 @@ function settingsPane(): TemplateResult {
         : nothing
     }
     <div class="settings-layout ${can("admin") ? "with-nav" : ""}">
-      ${can("admin") ? settingsNav() : nothing}
-      <div class="settings-content">${general || !adminHost ? generalPane() : nothing} ${adminHost ?? nothing}</div>
+      ${can("admin") ? settingsNav(section) : nothing}
+      <div class="settings-content" @click=${followSettingsLink}>
+        ${general ? generalPane() : (adminHost ?? nothing)}
+      </div>
     </div>
   `;
 }
@@ -682,11 +670,8 @@ function drawSettings(): void {
 }
 
 export function renderSettings(): void {
-  const wanted = sectionFromUrl();
-  if (wanted !== "general" && !can("admin")) history.replaceState(null, "", SETTINGS_BASE);
-  section = can("admin") ? wanted : "general";
+  if (!can("admin") && settingsRoute(SETTINGS_BASE).view !== "general") history.replaceState(null, "", SETTINGS_BASE);
   drawSettings();
-  if (admin) admin.route();
-  else if (section !== "general") void loadAdmin();
+  if (settingsSection() !== "general") void mountAdmin();
   void loadAiStatus();
 }

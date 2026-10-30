@@ -1,6 +1,9 @@
 import { html, nothing, render } from "lit";
 import { swallowAs } from "../../../chassis/src/errors.ts";
+import type { AdminPage } from "./sections.ts";
 type Data = Record<string, any>;
+type Context = Pick<AdminPage, "api" | "orgScope" | "host" | "href" | "current">;
+const connectorName = (id: string) => (id === "x" ? "X" : id.charAt(0).toUpperCase() + id.slice(1));
 const providerLabels: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
@@ -30,7 +33,7 @@ function providerSavedMessage(modelId: string, selected: { ok: boolean; data?: D
 }
 
 export class Onboarding {
-  context: Data;
+  context: Context;
   models: Record<string, Data[]> = {};
   providers: Data[] = [];
   templates: Data[] = [];
@@ -72,25 +75,14 @@ export class Onboarding {
   request = 0;
   lookupRequest = 0;
   registryRequest = 0;
-  painters: (() => void)[] = [];
-  constructor(context: Data = {}) {
+  constructor(context: Context) {
     this.context = context;
   }
-  mount() {
-    for (const placeholder of document.querySelectorAll<HTMLTemplateElement>("template[data-onboarding-ui]")) {
-      const kind = placeholder.dataset.onboardingUi!;
-      const fragment = document.createDocumentFragment();
-      const draw = () => render(this.template(kind), fragment);
-      draw();
-      placeholder.replaceWith(fragment.firstElementChild!);
-      this.painters.push(draw);
-    }
-  }
   draw() {
-    for (const paint of this.painters) paint();
+    if (this.context.host.isConnected) render(this.page(), this.context.host);
   }
   label(provider: string) {
-    return providerLabels[provider] || this.context.connectorName(provider);
+    return providerLabels[provider] || connectorName(provider);
   }
   resetLookup() {
     this.lookupRequest++;
@@ -150,22 +142,18 @@ export class Onboarding {
   }
   async load() {
     const token = ++this.request,
-      view = this.context.view();
+      context = this.context;
     const selection = { provider: this.provider, model: this.model, apiKey: this.apiKey };
     void this.loadRegistry().catch(swallowAs("admin: load model registry", undefined));
     const [models, slack, catalog, config] = await Promise.all([
       this.context.api("GET", "/api/model-providers?catalog=cached"),
       this.context.api("GET", "/api/slack-installation"),
       this.context.api("GET", "/api/connector-catalog"),
-      this.context.api("GET", "/api/scopes/" + encodeURIComponent(this.context.orgScope()) + "?view=onboarding"),
+      this.context.api("GET", "/api/scopes/" + encodeURIComponent(this.context.orgScope) + "?view=onboarding"),
     ]);
-    if (token !== this.request || view !== this.context.view()) return;
-    if (!models.ok || !slack.ok || !catalog.ok || !config.ok) {
-      this.providerMessage = "Setup status could not be loaded. Try again.";
-      this.providerTone = "err";
-      this.draw();
-      return;
-    }
+    if (token !== this.request || !context.current()) return;
+    if (!models.ok || !slack.ok || !catalog.ok || !config.ok)
+      return this.say("Setup status could not be loaded. Try again.", "err");
     this.providers = models.data.providers || [];
     this.models = {};
     this.mergeModels([
@@ -210,17 +198,15 @@ export class Onboarding {
       text: configured.length ? configured.length + " configured" : "Optional",
       tone: configured.length ? "ok" : "muted",
       summary: configured.length
-        ? configured.map((item: Data) => this.context.connectorName(item.provider)).join(", ") +
-          " available in the web UI."
+        ? configured.map((item: Data) => connectorName(item.provider)).join(", ") + " available in the web UI."
         : "Add Google, GitHub, Notion, or other OAuth clients to make those connectors available.",
     };
-    this.context.loaded();
     this.draw();
     if (models.data.modelCatalogRefreshing)
       void this.context
         .api("GET", "/api/model-providers")
         .then((fresh: Data) => {
-          if (!fresh.ok || token !== this.request || view !== this.context.view()) return;
+          if (!fresh.ok || token !== this.request || !context.current()) return;
           this.mergeModels(fresh.data.models || []);
           this.draw();
         })
@@ -248,34 +234,18 @@ export class Onboarding {
       if (!options.some((option) => option.id === model.id)) options.push(model);
     }
   }
-  async connect() {
-    if (this.providerBusy) return;
-    const provider = this.provider,
-      apiKey = this.apiKey.trim(),
-      modelId = this.model;
-    if (!apiKey) {
-      this.providerMessage = "Enter the provider API key.";
-      this.providerTone = "err";
-      this.draw();
-      return;
-    }
+  say(message: string, tone: string) {
+    this.providerMessage = message;
+    this.providerTone = tone;
+    this.draw();
+  }
+  async busy(work: () => Promise<[string, string]>) {
     this.providerBusy = true;
-    this.providerMessage = "Validating with " + this.context.connectorName(provider) + "…";
-    this.providerTone = "saving";
     this.draw();
     try {
-      const saved = await this.context.api("PUT", "/api/model-providers/" + encodeURIComponent(provider), { apiKey });
-      if (!saved.ok) throw new Error(saved.data?.message || "The provider rejected this key.");
-      const selected = modelId
-        ? await this.context.api("PUT", "/api/scopes/" + encodeURIComponent(this.context.orgScope()) + "/base-model", {
-            modelId,
-          })
-        : { ok: true };
-      this.apiKey = "";
-      await this.load();
-      await this.context.loadCustomProviders();
-      this.providerMessage = providerSavedMessage(modelId, selected);
-      this.providerTone = selected.ok ? "ok" : "err";
+      const [message, tone] = await work();
+      this.providerMessage = message;
+      this.providerTone = tone;
     } catch (error) {
       this.providerMessage = errorText(error);
       this.providerTone = "err";
@@ -284,33 +254,38 @@ export class Onboarding {
       this.draw();
     }
   }
+  async connect() {
+    if (this.providerBusy) return;
+    const provider = this.provider,
+      apiKey = this.apiKey.trim(),
+      modelId = this.model;
+    if (!apiKey) return this.say("Enter the provider API key.", "err");
+    this.providerMessage = "Validating with " + connectorName(provider) + "…";
+    this.providerTone = "saving";
+    await this.busy(async () => {
+      const saved = await this.context.api("PUT", "/api/model-providers/" + encodeURIComponent(provider), { apiKey });
+      if (!saved.ok) throw new Error(saved.data?.message || "The provider rejected this key.");
+      const selected = modelId
+        ? await this.context.api("PUT", "/api/scopes/" + encodeURIComponent(this.context.orgScope) + "/base-model", {
+            modelId,
+          })
+        : { ok: true };
+      this.apiKey = "";
+      await this.load();
+      return [providerSavedMessage(modelId, selected), selected.ok ? "ok" : "err"];
+    });
+  }
   async disableProvider() {
     if (this.providerBusy) return;
     const provider = this.provider;
-    if (
-      !confirm(
-        "Disable the " +
-          this.context.connectorName(provider) +
-          " model key? Models from this provider will stop working.",
-      )
-    )
+    if (!confirm("Disable the " + connectorName(provider) + " model key? Models from this provider will stop working."))
       return;
-    this.providerBusy = true;
-    this.draw();
-    try {
+    await this.busy(async () => {
       const response = await this.context.api("DELETE", "/api/model-providers/" + encodeURIComponent(provider));
       if (!response.ok) throw new Error(response.data?.message || "Could not disable this provider.");
       await this.load();
-      await this.context.loadCustomProviders();
-      this.providerMessage = "Provider disabled.";
-      this.providerTone = "ok";
-    } catch (error) {
-      this.providerMessage = errorText(error);
-      this.providerTone = "err";
-    } finally {
-      this.providerBusy = false;
-      this.draw();
-    }
+      return ["Provider disabled.", "ok"];
+    });
   }
   async lookupModel() {
     if (this.registryBusy) return;
@@ -460,102 +435,113 @@ export class Onboarding {
       </select>`;
     return html`<label>${fieldLabels[name]} ${input}</label>`;
   }
-  template(kind: string) {
-    if (kind === "steps")
-      return html`<div class="setup-grid">
-        ${["model", "slack", "oauth"].map(
-          (key, i) =>
-            html`<section class="setup-step">
-              <span class=${"badge " + this.steps[key].tone} id=${"onboarding-" + key + "-badge"}
-                >${this.steps[key].text}</span
-              >
-              <h2>${["1. Model provider", "2. Slack app", "3. OAuth apps"][i]}</h2>
-              <p id=${"onboarding-" + key + "-summary"}>${this.steps[key].summary}</p>
-              ${key === "slack" ? html`<div class="foot"><a class="header-button" id="onboarding-slack-create" href=${this.steps.slack.url} target="_blank" rel="noopener noreferrer">Create Slack app ↗</a><button type="button" data-onboarding-target="slack" @click=${() => this.context.navigate("slack")}>Enter Slack tokens</button></div>` : nothing}${key === "oauth" ? html`<div class="foot"><button type="button" data-onboarding-target="oauth" @click=${() => this.context.navigate("oauth")}>Configure OAuth apps</button></div>` : nothing}
-            </section>`,
-        )}
-      </div>`;
-    if (kind === "provider") {
-      const choices = this.providers.length
-        ? this.providers
-        : Object.keys(providerLabels).map((provider) => ({ provider, configured: false }));
-      const status = this.providers.find((p) => p.provider === this.provider);
-      return html`<section class="card">
-        <div class="head">
-          <h2>Base model</h2>
-          <p>
-            Choose a supported provider and model. Saving validates the key, stores it write-only, and makes the
-            selected model the organization default.
-          </p>
-        </div>
-        <div class="body setup-form">
-          <label
-            >Provider
-            <select
-              id="onboarding-model-provider"
-              .value=${this.provider}
-              ?disabled=${this.providerBusy}
-              @change=${(e: Event) => {
-                this.provider = (e.target as HTMLSelectElement).value;
-                this.model = this.firstModel();
-                this.keepBaseModel = false;
-                this.draw();
-              }}
+  page() {
+    return html`<div id="view-onboarding">
+      <div class="setup-head">
+        <p class="governance-eyebrow">Temporary setup guide</p>
+        <h1>Onboarding</h1>
+        <p class="lead">
+          Get this deployment ready for real conversations. Secrets are validated, encrypted in durable storage, and
+          never displayed again.
+        </p>
+      </div>
+      ${this.stepsCard()}${this.providerCard()}${this.registryTemplate()}
+    </div>`;
+  }
+  stepsCard() {
+    return html`<div class="setup-grid">
+      ${["model", "slack", "oauth"].map(
+        (key, i) =>
+          html`<section class="setup-step">
+            <span class=${"badge " + this.steps[key].tone} id=${"onboarding-" + key + "-badge"}
+              >${this.steps[key].text}</span
             >
-              ${choices.map((p) => html`<option value=${p.provider} .selected=${p.provider === this.provider}>${this.label(p.provider) + (p.configured ? " (key configured)" : "")}</option>`)}
-            </select></label
-          ><label
-            >Base model
-            <select
-              id="onboarding-model-id"
-              .value=${this.model}
-              ?disabled=${this.providerBusy}
-              @change=${(e: Event) => {
-                this.model = (e.target as HTMLSelectElement).value;
-                this.keepBaseModel = !this.model;
-                this.draw();
-              }}
-            >
-              ${(this.models[this.provider] || []).map((model) => html`<option value=${model.id} ?selected=${model.id === this.model}>${model.name}</option>`)}
-              ${this.keepsBaseModel() ? html`<option value="" ?selected=${!this.model}>Keep current base model (${this.baseModel})</option>` : nothing}
-            </select></label
-          ><label
-            >API key
-            <input
-              type="password"
-              id="onboarding-model-key"
-              autocomplete="off"
-              placeholder=${status?.configured ? "•••• set, enter a replacement" : "Write-only API key"}
-              .value=${this.apiKey}
-              ?disabled=${this.providerBusy}
-              @input=${(e: Event) => {
-                this.apiKey = (e.target as HTMLInputElement).value;
-                this.draw();
-              }}
-          /></label>
-        </div>
-        <div class="foot">
-          <button
-            class="primary"
-            id="onboarding-model-save"
+            <h2>${["1. Model provider", "2. Slack app", "3. OAuth apps"][i]}</h2>
+            <p id=${"onboarding-" + key + "-summary"}>${this.steps[key].summary}</p>
+            ${key === "slack" ? html`<div class="foot"><a class="header-button" id="onboarding-slack-create" href=${this.steps.slack.url} target="_blank" rel="noopener noreferrer">Create Slack app ↗</a><a class="header-button" href=${this.context.href("slack-settings")}>Enter Slack tokens</a></div>` : nothing}${key === "oauth" ? html`<div class="foot"><a class="header-button" href=${this.context.href("connectors")}>Configure OAuth apps</a></div>` : nothing}
+          </section>`,
+      )}
+    </div>`;
+  }
+  providerCard() {
+    const choices = this.providers.length
+      ? this.providers
+      : Object.keys(providerLabels).map((provider) => ({ provider, configured: false }));
+    const status = this.providers.find((p) => p.provider === this.provider);
+    return html`<section class="card">
+      <div class="head">
+        <h2>Base model</h2>
+        <p>
+          Choose a supported provider and model. Saving validates the key, stores it write-only, and makes the selected
+          model the organization default.
+        </p>
+      </div>
+      <div class="body setup-form">
+        <label
+          >Provider
+          <select
+            id="onboarding-model-provider"
+            .value=${this.provider}
             ?disabled=${this.providerBusy}
-            @click=${() => this.connect()}
+            @change=${(e: Event) => {
+              this.provider = (e.target as HTMLSelectElement).value;
+              this.model = this.firstModel();
+              this.keepBaseModel = false;
+              this.draw();
+            }}
           >
-            Validate and connect</button
-          ><button
-            class="danger"
-            id="onboarding-model-delete"
-            ?disabled=${this.providerBusy || !status || status.source === "absent"}
-            @click=${() => this.disableProvider()}
+            ${choices.map((p) => html`<option value=${p.provider} .selected=${p.provider === this.provider}>${this.label(p.provider) + (p.configured ? " (key configured)" : "")}</option>`)}
+          </select></label
+        ><label
+          >Base model
+          <select
+            id="onboarding-model-id"
+            .value=${this.model}
+            ?disabled=${this.providerBusy}
+            @change=${(e: Event) => {
+              this.model = (e.target as HTMLSelectElement).value;
+              this.keepBaseModel = !this.model;
+              this.draw();
+            }}
           >
-            Disable this provider</button
-          ><span class=${"status" + (this.providerTone ? " " + this.providerTone : "")} id="st-onboarding-model"
-            >${this.providerMessage}</span
-          >
-        </div>
-      </section>`;
-    }
-    return this.registryTemplate();
+            ${(this.models[this.provider] || []).map((model) => html`<option value=${model.id} ?selected=${model.id === this.model}>${model.name}</option>`)}
+            ${this.keepsBaseModel() ? html`<option value="" ?selected=${!this.model}>Keep current base model (${this.baseModel})</option>` : nothing}
+          </select></label
+        ><label
+          >API key
+          <input
+            type="password"
+            id="onboarding-model-key"
+            autocomplete="off"
+            placeholder=${status?.configured ? "•••• set, enter a replacement" : "Write-only API key"}
+            .value=${this.apiKey}
+            ?disabled=${this.providerBusy}
+            @input=${(e: Event) => {
+              this.apiKey = (e.target as HTMLInputElement).value;
+              this.draw();
+            }}
+        /></label>
+      </div>
+      <div class="foot">
+        <button
+          class="primary"
+          id="onboarding-model-save"
+          ?disabled=${this.providerBusy}
+          @click=${() => this.connect()}
+        >
+          Validate and connect</button
+        ><button
+          class="danger"
+          id="onboarding-model-delete"
+          ?disabled=${this.providerBusy || !status || status.source === "absent"}
+          @click=${() => this.disableProvider()}
+        >
+          Disable this provider</button
+        ><span class=${"status" + (this.providerTone ? " " + this.providerTone : "")} id="st-onboarding-model"
+          >${this.providerMessage}</span
+        >
+      </div>
+    </section>`;
   }
   registryTemplate() {
     const lookup = this.lookup,
@@ -763,9 +749,10 @@ export class Onboarding {
     </section>`;
   }
 }
-const controller = new Onboarding();
-export const mount = () => controller.mount();
-export const configure = (context: Data) => {
-  controller.context = context;
-};
-export const load = () => controller.load();
+let controller: Onboarding | null = null;
+export function mount(page: AdminPage) {
+  controller ??= new Onboarding(page);
+  controller.context = page;
+  controller.draw();
+  return controller.load();
+}

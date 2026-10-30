@@ -1,32 +1,20 @@
-import { choiceGroup, saveButton, settingStatus, saveFooter } from "./setting-controls.ts";
-import { html, render, type TemplateResult } from "lit";
+import { cardClass, choiceGroup, saveButton, settingStatus, saveFooter, reviewChange } from "./setting-controls.ts";
+import { html, nothing, render, type TemplateResult } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
-import { states, patternError, type GovernanceState } from "./governance-state.ts";
-export { owns, collect, capture, commit, status, statusKey, load, states } from "./governance-state.ts";
+import { states, load, patternError, type GovernanceState } from "./governance-state.ts";
+import { putSetting } from "./setting-state.ts";
+import { pageHeader } from "./shared.ts";
+import type { AdminPage } from "./sections.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
-  "card-security-posture": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-security-posture"
-    >
+  "security-posture": (s) =>
+    html`<section class=${govClass(s, true)} id="card-security-posture">
       <div class="head">
         <h2>Security posture</h2>
         <p>Choose how the agent screens external content and when it requires your approval.</p>
       </div>
       <div class="body">
-        <select
-          id="security-posture"
-          data-choice-state
-          hidden
-          .value=${s.value("security-posture")}
-          @change=${(event: Event) => changeField(s, "security-posture", event)}
-        >
-          <option value="dangerous">Dangerous — automatic tools; deployment-required screening still applies</option>
-          <option value="auto">Auto — use the deployment’s configured screener</option>
-          <option value="strict">Strict — approve tool actions</option>
-        </select>
         ${choiceGroup(
           {
             name: "security-posture-choice",
@@ -47,46 +35,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       </div>
       ${saveFooter(s, "Apply", s.disabled)}
     </section>`,
-  "card-approval-grant-modes": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-approval-grant-modes"
-    >
-      <div class="head">
-        <h2>Approval grant options</h2>
-        <p>
-          Which standing options an approval card offers besides "Allow once". Composes tighten-only with the org value;
-          disabling a mode also suspends existing grants of that mode until it is re-enabled. Predeclared command
-          approvals and strict-posture tool approvals both honor this.
-        </p>
-      </div>
-      <div class="body">
-        <label
-          ><input
-            type="checkbox"
-            id="approval-grant-session"
-            .checked=${s.value("approval-grant-session")}
-            @change=${(event: Event) => changeField(s, "approval-grant-session", event)}
-          />
-          Offer "Allow session" (grant lasts for the conversation)</label
-        >
-        <label
-          ><input
-            type="checkbox"
-            id="approval-grant-always"
-            .checked=${s.value("approval-grant-always")}
-            @change=${(event: Event) => changeField(s, "approval-grant-always", event)}
-          />
-          Offer "Allow always" (standing grant across turns)</label
-        >
-      </div>
-      ${saveFooter(s, "Apply", s.disabled)}
-    </section>`,
-  "card-command-policy": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-command-policy"
-    >
+  "command-policy": (s) =>
+    html`<section class=${govClass(s)} id="card-command-policy">
       <div class="head">
         <h2>Command policy</h2>
       </div>
@@ -114,7 +64,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           >
             Show ${s.rules.length - 3} more ${s.rules.length === 4 ? "rule" : "rules"}
           </button>
-          <button id="policy-test-open" type="button">Test a command…</button>
+          <button id="policy-test-open" type="button" @click=${openTester}>Test a command…</button>
         </div>
         <div class="policy-warnings" id="policy-warnings" aria-live="polite">
           ${s.warnings.map((warning) => html`<div>${warning}</div>`)}
@@ -122,11 +72,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
       </div>
       <div class="foot">${saveButton(s, "Save", s.disabled)}${settingStatus(s, "st-policy")}</div>
     </section>`,
-  "card-ambient-policy": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-ambient-policy"
-    >
+  "ambient-policy": (s) =>
+    html`<section class=${govClass(s)} id="card-ambient-policy">
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>
@@ -136,6 +83,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           most once per the given hours), <b>action</b> marks its posts as triggers to act on, <b>user</b> reads it like
           a person.
         </p>
+        ${viewLink("judgments", "View judgment log ›")}
       </div>
       <div class="body">
         <label for="ambient-enabled">Ambient behavior</label>
@@ -184,32 +132,16 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         </p>
         <button id="add-bot" type="button" @click=${() => addBot(s)} style="margin-top: 10px">+ Add bot</button>
       </div>
-      <div class="foot">
-        <button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button
-        >${saveButton(s, "Save", s.disabled)}${settingStatus(s)}
-      </div>
+      <div class="foot">${saveButton(s, "Save", s.disabled)}${settingStatus(s)}</div>
     </section>`,
-  "card-sharing-posture": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, "setting-row": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-sharing-posture"
-    >
+  "sharing-posture": (s) =>
+    html`<section class=${govClass(s, true)} id="card-sharing-posture">
       <div class="head">
         <h2>Sharing posture</h2>
         <p>The organization is a ceiling. Personal and room scopes can opt out, and Isolated always wins.</p>
       </div>
       <div class="body">
         <p id="sharing-posture-effective">${sharingLabel(s)}</p>
-        <select
-          id="sharing-posture"
-          data-choice-state
-          hidden
-          .value=${s.value("sharing-posture")}
-          @change=${(event: Event) => changeField(s, "sharing-posture", event)}
-        >
-          <option value="isolated">Isolated</option>
-          <option value="open">Open</option>
-        </select>
         ${choiceGroup(
           {
             name: "sharing-posture-choice",
@@ -232,6 +164,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         <button
           type="button"
           id="sharing-posture-inherit"
+          @click=${inheritSharing}
           ?hidden=${s.scope.startsWith("org:") || s.context.sharingPostureOverride == null}
         >
           Follow organization
@@ -239,13 +172,11 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
         ${settingStatus(s)}
       </div>
     </section>`,
-  "card-egress": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-egress"
-    >
+  egress: (s) =>
+    html`<section class=${govClass(s)} id="card-egress">
       <div class="head">
         <h2>Egress policy</h2>
+        ${viewLink("egress", "View logs ›")}
       </div>
       <div class="body">
         <div
@@ -314,32 +245,16 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           ${s.warnings.map((warning) => html`<div>${warning}</div>`)}
         </div>
       </div>
-      <div class="foot">
-        <button type="button" class="viewlink" data-viewlink="egress">View logs ›</button
-        >${saveButton(s, "Save policy", s.disabled)}${settingStatus(s)}
-      </div>
+      <div class="foot">${saveButton(s, "Save policy", s.disabled)}${settingStatus(s)}</div>
     </section>`,
-  "card-governance-org-ambient": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-governance-org-ambient"
-    >
+  "org-ambient": (s) =>
+    html`<section class=${govClass(s)} id="card-governance-org-ambient">
       <div class="head">
         <h2>Ambient reply policy</h2>
         <p>@-mentions are always answered. Each ambient decision is recorded in the judgments log.</p>
-        <button type="button" class="viewlink" data-viewlink="judgments">View judgment log ›</button>
+        ${viewLink("judgments", "View judgment log ›")}
       </div>
       <div class="body">
-        <select
-          id="governance-org-ambient"
-          data-choice-state
-          hidden
-          .value=${s.draft.on ? "on" : "off"}
-          @change=${(event: Event) => changeField(s, "governance-org-ambient", event)}
-        >
-          <option value="on">Agent judges all messages and replies when useful</option>
-          <option value="off">Agent does not read messages or reply unless @-mentioned</option>
-        </select>
         ${choiceGroup(
           {
             name: "ambient-reply-choice",
@@ -353,34 +268,16 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           ],
         )}
       </div>
-      <div class="foot">
-        <button
-          type="button"
-          class=${classMap({ primary: true, dirty: s.dirty })}
-          id="governance-org-ambient-save"
-          data-save="org-ambient"
-          ?disabled=${!s.dirty || s.saving}
-        >
-          Apply</button
-        >${settingStatus(s, "st-governance-org-ambient")}
-      </div>
+      ${saveFooter(s)}
     </section>`,
 };
 
-export function createCard(id: string): HTMLElement {
-  const template = cards[id];
-  if (!template) throw new Error(`Unknown governance card: ${id}`);
-  const fragment = document.createDocumentFragment();
-  const key = id === "card-governance-org-ambient" ? "org-ambient" : id.slice(5);
-  const state = states.get(key)!;
-  state.render = () => render(template(state), fragment);
-  state.render();
-  return fragment.firstElementChild as HTMLElement;
-}
-
-export function mountCards(): void {
-  document.querySelectorAll<HTMLTemplateElement>("template[data-governance-card]").forEach((placeholder) => {
-    placeholder.replaceWith(createCard(placeholder.dataset.governanceCard!));
+function govClass(s: GovernanceState, row = false) {
+  return cardClass(s, "sv-governance", {
+    "setting-row": row,
+    "egress-disabled": s.disabled,
+    "flat-first": shown()[0] === s.key,
+    "flat-last": shown().at(-1) === s.key,
   });
 }
 
@@ -392,12 +289,13 @@ function changeField(s: GovernanceState, id: string, event: Event) {
   s.change(id, value);
 }
 function sharingLabel(s: GovernanceState): string {
-  const title = (value: string) => value[0].toUpperCase() + value.slice(1);
   const inherited = s.scope.startsWith("org:") ? "Default" : "Following organization";
   return (
-    (s.context.sharingPostureOverride == null ? inherited : "Configured: " + title(s.context.sharingPostureOverride)) +
+    (s.context.sharingPostureOverride == null
+      ? inherited
+      : "Configured: " + titleCase(s.context.sharingPostureOverride)) +
     " · Effective: " +
-    title(s.context.sharingPosture || "isolated")
+    titleCase(s.context.sharingPosture || "isolated")
   );
 }
 let rowId = 0;
@@ -534,4 +432,288 @@ function egressExplanation(s: GovernanceState) {
     backend +
     ", which cannot enforce host restrictions on all outbound traffic. A configured egress proxy still applies policy to traffic sent through it."
   );
+}
+
+const titleCase = (value: string) => value[0]!.toUpperCase() + value.slice(1);
+const EFFECT_LABELS: Record<string, string> = { allow: "Allow", deny: "Deny", require_approval: "Require approval" };
+const ORDER = ["security-posture", "sharing-posture", "org-ambient", "ambient-policy", "command-policy", "egress"];
+const shown = () => ORDER.filter((key) => states.get(key)!.available);
+
+let page: AdminPage;
+let data: Record<string, any> | null = null;
+let loadedScope = "";
+let failure = "";
+let generation = 0;
+let policyPresent = false;
+let labels: Record<string, string> | null = null;
+const tester = { sample: "", result: "Enter a sample command to test the scope policy.", tone: "", busy: false };
+
+const scopePath = (scope: string) => "/api/scopes/" + encodeURIComponent(scope);
+const orgScope = () => page.scope.startsWith("org:");
+const stale = (scope: string, token: number) => page.scope !== scope || generation !== token || !page.host.isConnected;
+const viewLink = (view: string, label: string) =>
+  html`<a class="viewlink" href=${page.href(view, { scope: orgScope() || view === "judgments" ? null : page.scope })}
+    >${label}</a
+  >`;
+
+function scopeName(scope = page.scope) {
+  const [kind, ...rest] = scope.split(":");
+  const id = rest.join(":");
+  if (kind === "org") return "Organization · " + id;
+  if (labels?.[scope]) return labels[scope]!;
+  if (kind === "channel" || kind === "group") return id.startsWith("#") ? id : "#" + id;
+  if (kind === "personal") return id.split("@")[0]!.replace(/^[a-z]/, (c) => c.toUpperCase());
+  return id || scope;
+}
+
+function draw() {
+  if (!page?.host.isConnected) return;
+  render(view(), page.host);
+}
+
+function view() {
+  const ready = data && loadedScope === page.scope;
+  return html`<div id="view-governance">
+    ${pageHeader(
+      orgScope()
+        ? { title: "Governance" }
+        : { back: { label: "Governance", href: page.href("governance") }, title: scopeName() },
+    )}
+    ${
+      ready
+        ? html`${environmentNotice(data!)}
+            <div class="governance-content">${shown().map((key) => cards[key]!(states.get(key)!))}</div>
+            ${testerDialog()}`
+        : html`<p id="governance-loading" class="hint" role="status">${failure || "Loading settings…"}</p>`
+    }
+  </div>`;
+}
+
+function environmentNotice(d: Record<string, any>) {
+  const attachment = d.environmentAttachment;
+  if (!attachment) return nothing;
+  const name = attachment.environmentName || scopeName(attachment.environmentId);
+  return html`<aside class="environment-notice admin-notice" id="environment-notice" role="status">
+    <div>
+      <strong>Uses named environment ${name}</strong>
+      <p>
+        Computer files and working memory resolve to this environment. Governance and conversation history remain scoped
+        here.
+      </p>
+    </div>
+    <a class="header-button" href=${page.href("governance", { scope: attachment.environmentId })}>Open ${name}</a>
+  </aside>`;
+}
+
+function testerDialog() {
+  return html`<dialog
+    class="review-dialog policy-test-dialog"
+    id="policy-test-dialog"
+    aria-labelledby="policy-test-title"
+  >
+    <div class="review-dialog-head">
+      <h2 id="policy-test-title">Test a command</h2>
+    </div>
+    <div class="review-dialog-body">
+      <label for="policy-sample"
+        >Command<input
+          type="text"
+          id="policy-sample"
+          placeholder="git push --force origin main"
+          autocomplete="off"
+          spellcheck="false"
+          .value=${tester.sample}
+          @input=${(e: Event) => (tester.sample = (e.target as HTMLInputElement).value)}
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            void simulate();
+          }}
+      /></label>
+      <div class="policy-result" id="policy-result" data-tone=${tester.tone} aria-live="polite">${tester.result}</div>
+    </div>
+    <div class="review-dialog-foot">
+      <button
+        type="button"
+        id="policy-test-close"
+        @click=${() => page.host.querySelector<HTMLDialogElement>("#policy-test-dialog")!.close()}
+      >
+        Close</button
+      ><button id="policy-simulate" class="primary" type="button" ?disabled=${tester.busy} @click=${() => simulate()}>
+        Test command
+      </button>
+    </div>
+  </dialog>`;
+}
+
+function openTester() {
+  page.host.querySelector<HTMLDialogElement>("#policy-test-dialog")!.showModal();
+  page.host.querySelector<HTMLInputElement>("#policy-sample")!.focus();
+}
+
+function say(result: string, tone = "") {
+  tester.result = result;
+  tester.tone = tone;
+  draw();
+}
+
+async function simulate() {
+  const command = tester.sample;
+  if (!command.trim()) return say("Enter a sample command first.");
+  const state = states.get("command-policy")!;
+  let policy;
+  try {
+    policy = state.collect();
+  } catch (error) {
+    return say(error instanceof Error ? error.message : "Policy is invalid.", "danger");
+  }
+  tester.busy = true;
+  say("Evaluating with the server’s command scanner…");
+  const body: Record<string, unknown> = { command };
+  if (policyPresent || state.dirty) body.policy = policy;
+  const r = await page.api("PUT", scopePath(page.scope) + "/command-policy-simulate", body);
+  tester.busy = false;
+  if (!r.ok) return say(r.data?.message || "Simulation failed.", "danger");
+  const { decision, ruleSource, ruleIndex, matched, reason } = r.data;
+  const tone = ({ allow: "ok", deny: "danger" } as Record<string, string>)[decision] || "warn";
+  const effect = (EFFECT_LABELS[decision] || decision) + (reason ? " · " + reason : "");
+  const rule =
+    ({ organization: "Organization rule ", scope: "This scope’s rule " } as Record<string, string>)[ruleSource] ?? null;
+  say(
+    rule
+      ? rule + (ruleIndex + 1) + " matches" + (matched ? " “" + matched + "”" : "") + " → " + effect
+      : "No scope-policy rule matches → " + effect,
+    tone,
+  );
+}
+
+function review(key: string, body: Record<string, any>) {
+  if (!key.endsWith("-posture")) return Promise.resolve(true);
+  const before = JSON.parse(states.get(key)!.baseline).posture;
+  const facts: [string, string][] = [
+    ["Scope", scopeName()],
+    ["Current", titleCase(before)],
+    ["Proposed", titleCase(body.posture)],
+  ];
+  if (key === "security-posture") {
+    const dangerous = body.posture === "dangerous";
+    return reviewChange({
+      title: dangerous ? "Enable Dangerous autonomy?" : "Change security posture?",
+      subtitle: "Review the immutable change below before it is applied.",
+      facts,
+      warning: dangerous
+        ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
+        : "This changes the effective tools and approval behavior for future turns in this scope.",
+      confirmLabel: dangerous ? "Enable Dangerous" : "Apply posture",
+      danger: dangerous,
+    });
+  }
+  if (key === "sharing-posture") {
+    const open = body.posture === "open";
+    return reviewChange({
+      title: open ? "Enable Open sharing?" : "Return to Isolated sharing?",
+      subtitle: "This applies to future live human turns in the selected scope.",
+      facts,
+      warning: open
+        ? "Open can reveal a speaker's private information in shared replies. It does not carry credentials, history, writes, automation, or another person's resources. Organization, personal, and room policy must all allow it."
+        : "Cross-context resources will again require explicit shares or grants.",
+      confirmLabel: open ? "Enable Open" : "Use Isolated",
+      danger: open,
+    });
+  }
+  return Promise.resolve(true);
+}
+
+function guard(scope: string, token: number) {
+  return { api: page.api, current: () => !stale(scope, token) };
+}
+
+async function save(key: string) {
+  const state = states.get(key)!;
+  const scope = page.scope;
+  const token = generation;
+  let body;
+  try {
+    body = state.collect();
+  } catch (error) {
+    state.message = error instanceof Error ? error.message : "Could not save.";
+    state.tone = "err";
+    return draw();
+  }
+  if (!(await review(key, body)) || stale(scope, token)) return;
+  const r = await putSetting(guard(scope, token), scope, state, key, body);
+  if (!r?.ok) return;
+  state.commit(body);
+  if (key === "command-policy") policyPresent = true;
+  if (["security-posture", "sharing-posture", "ambient-policy"].includes(key)) await refresh(key, scope, token);
+}
+
+async function refresh(key: string, scope: string, token: number) {
+  const state = states.get(key)!;
+  const fresh = await page.api("GET", scopePath(scope) + "?view=governance");
+  if (stale(scope, token) || state.dirty) return;
+  if (!fresh.ok) {
+    state.message = "Saved, but the current setting could not be refreshed.";
+    state.tone = "warn";
+    return draw();
+  }
+  data = fresh.data;
+  load(fresh.data, scope, key);
+  state.message = "Saved";
+  state.tone = "ok";
+  draw();
+}
+
+async function inheritSharing() {
+  const scope = page.scope;
+  const token = generation;
+  const confirmed = await reviewChange({
+    title: "Follow organization sharing?",
+    subtitle: "Remove this scope's sharing override.",
+    facts: [["Scope", scopeName()]],
+    warning:
+      "The organization's sharing setting will apply. A personal or room Isolated override still takes precedence.",
+    confirmLabel: "Follow organization",
+  });
+  if (!confirmed || stale(scope, token)) return;
+  const r = await page.api("PUT", scopePath(scope) + "/sharing-posture", { inherit: true });
+  if (stale(scope, token)) return;
+  const state = states.get("sharing-posture")!;
+  if (r.ok) return refresh("sharing-posture", scope, token);
+  state.message = "Could not reset sharing.";
+  state.tone = "err";
+  draw();
+}
+
+export async function mount(next: AdminPage) {
+  page = next;
+  for (const [key, state] of states) {
+    state.render = draw;
+    state.save = () => save(key);
+  }
+  if (data && loadedScope === page.scope && [...states.values()].some((state) => state.dirty)) return draw();
+  const scope = page.scope;
+  const token = ++generation;
+  if (scope !== loadedScope) failure = "";
+  draw();
+  if (!orgScope() && !labels)
+    void page.api("GET", "/api/scopes").then((r) => {
+      if (!r.ok) return;
+      labels = Object.fromEntries((r.data.scopes || []).map((row: any) => [row.scopeId, row.label || ""]));
+      draw();
+    });
+  const r = await page.api("GET", scopePath(scope) + "?view=governance");
+  if (stale(scope, token)) return;
+  if (!r.ok) {
+    const message = r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.";
+    if (loadedScope !== scope)
+      failure = r.status === 403 ? message : "Could not load settings. Select Governance to retry.";
+    else Object.assign(states.get("command-policy")!, { message, tone: "err" });
+    return draw();
+  }
+  data = r.data;
+  loadedScope = scope;
+  policyPresent = r.data.commandPolicy != null;
+  load(r.data, scope);
+  draw();
 }

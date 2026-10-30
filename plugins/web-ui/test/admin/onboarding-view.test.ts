@@ -12,21 +12,16 @@ const bundle = buildSync({
   platform: "browser",
 }).outputFiles[0].text;
 function fixture() {
-  const dom = new JSDOM(
-    '<template data-onboarding-ui="steps"></template><template data-onboarding-ui="provider"></template><template data-onboarding-ui="registry"></template>',
-    { runScripts: "outside-only", url: "http://localhost/settings/onboarding" },
-  );
+  const dom = new JSDOM("", { runScripts: "outside-only", url: "http://localhost/settings/onboarding" });
   dom.window.eval(bundle + ";window.Onboarding = onboarding.Onboarding;");
   const controller = new (dom.window as any).Onboarding({
     api: async () => ({ ok: true, data: {} }),
-    orgScope: () => "org:default-org",
-    connectorName: (id: string) => id,
-    view: () => "onboarding",
-    loaded: () => {},
-    loadCustomProviders: async () => {},
-    navigate: () => {},
+    orgScope: "org:default-org",
+    host: dom.window.document.body,
+    href: (view: string) => "/settings/" + view,
+    current: () => true,
   });
-  controller.mount();
+  controller.draw();
   return { dom, controller };
 }
 
@@ -337,4 +332,23 @@ test("a pending onboarding load keeps an explicit keep-current-base-model choice
   await pending;
   assert.equal(controller.model, "");
   dom.window.close();
+});
+
+test("Settings mounts onboarding with links to Slack and connector setup", async () => {
+  const { mountPage } = await import("./fixture.ts");
+  const page = await mountPage("/settings/onboarding", {
+    "/model-registry": { templates: [], models: [] },
+    "/model-providers": { providers: UNCONFIGURED_PROVIDERS, models: ANTHROPIC_MODELS },
+    "/slack-installation": { configured: true, teamName: "Acme" },
+    "/connector-catalog": { catalog: [{ provider: "github", configured: true }] },
+    "/scopes/org:acme": { baseModel: "claude-opus-5" },
+  });
+  await page.settle();
+  const doc = page.document;
+  assert.equal(doc.querySelector("h1")!.textContent, "Onboarding");
+  assert.match(doc.getElementById("onboarding-oauth-summary")!.textContent!, /^Github available/);
+  const hrefs = [...doc.querySelectorAll<HTMLAnchorElement>(".setup-step a")].map((a) => a.getAttribute("href"));
+  assert.ok(hrefs.includes("/settings/slack-settings"));
+  assert.ok(hrefs.includes("/settings/connectors"));
+  page.close();
 });

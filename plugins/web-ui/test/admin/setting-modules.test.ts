@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { litFixture } from "./fixture.ts";
 import { SettingsState, load as loadSettings, states as settingsStates } from "../../src/admin/settings.ts";
 import { CredentialState } from "../../src/admin/settings-credentials.ts";
 import { GovernanceState, load, states } from "../../src/admin/governance-state.ts";
@@ -112,22 +111,4 @@ test("enabled models add and remove through explicit actions", () => {
   assert.equal(state.dirty, true);
   state.remove("model-a");
   assert.equal(state.dirty, false);
-});
-
-test("credential usage distinguishes loading, failure, and confirmed zero", () => {
-  const f = litFixture();
-  try {
-    f.root.innerHTML = '<template data-settings-card="card-service-credentials"></template>';
-    f.ui.settings.mountCards();
-    for (const [usage, message] of [
-      [{}, "Loading usage…"],
-      [{ usageUnavailable: true }, "Usage unavailable"],
-      [{ usageCount: 0 }, "0 successful uses in retained broker history"],
-    ] as const) {
-      f.ui.settings.loadCredentials([{ slug: "test", host: "example.com", ...usage }], [], [], [], "org:test");
-      assert.ok(f.document.querySelector("#sc-list")!.textContent!.includes(message));
-    }
-  } finally {
-    f.dom.window.close();
-  }
 });

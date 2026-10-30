@@ -1,104 +1,168 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { litFixture } from "./fixture.ts";
+import { mountPage, type Reply, type Route } from "./fixture.ts";
 import { GovernanceState } from "../../src/admin/governance-state.ts";
-function setup() {
-  const { dom } = litFixture({ markup: true });
-  dom.window.eval("window.governanceUI = ui; governanceUI.mountCards();");
-  return dom;
+
+const governance = {
+  securityPosture: "auto",
+  sharingPosture: "isolated",
+  orgAmbient: true,
+  commandPolicy: { mode: "denylist", rules: [{ pattern: "^rm", decision: "deny" }] },
+  egress: { allowedHosts: [], deniedHosts: [] },
+  egressEnforcement: { active: true, fidelity: "full", backend: "proxy" },
+};
+
+async function governancePage(routes: Record<string, Reply | Route> = {}, url = "/settings/governance") {
+  const page = await mountPage(url, {
+    "/scopes": { scopes: [{ scopeId: "channel:C1", label: "#ops" }] },
+    "GET /scopes/org:acme": governance,
+    ...routes,
+  });
+  await page.settle();
+  return page;
 }
-test("Lit mounts Governance without wrappers or duplicate ids", () => {
-  const dom = setup();
-  try {
-    for (const id of ["security-posture", "sharing-posture", "command-policy", "egress", "ambient-policy"]) {
-      const card = dom.window.document.getElementById(`card-${id}`)!;
-      assert.equal(card.tagName, "SECTION");
-      assert.equal(card.parentElement?.className, "governance-content");
-      assert.ok(card.querySelector(`[data-save="${id}"]`));
-    }
-    const ids = [...dom.window.document.querySelectorAll("[id]")].map((node) => node.id);
-    assert.equal(new Set(ids).size, ids.length);
-  } finally {
-    dom.window.close();
-  }
+
+const input = (page: { window: any }, el: HTMLInputElement, value: string) => {
+  el.value = value;
+  el.dispatchEvent(new page.window.Event("input", { bubbles: true }));
+};
+
+test("governance renders its policy cards in order for the org scope", async () => {
+  const page = await governancePage();
+  const ids = [...page.document.querySelectorAll("#view-governance section.card")].map((card) => card.id);
+  assert.deepEqual(ids, [
+    "card-security-posture",
+    "card-sharing-posture",
+    "card-governance-org-ambient",
+    "card-command-policy",
+    "card-egress",
+  ]);
+  assert.ok(page.document.getElementById("card-security-posture")!.classList.contains("flat-first"));
+  assert.ok(page.document.getElementById("card-egress")!.classList.contains("flat-last"));
+  assert.equal(
+    page.document.querySelector<HTMLAnchorElement>("#card-egress .viewlink")!.getAttribute("href"),
+    "/settings/egress",
+  );
+  const ids2 = [...page.document.querySelectorAll("[id]")].map((node) => node.id);
+  assert.equal(new Set(ids2).size, ids2.length);
+  page.close();
 });
-test("editing and reverting a posture drives radio, dirty state and save button", () => {
-  const dom = setup();
-  try {
-    dom.window.eval('governanceUI.load({securityPosture:"auto"},"org:test")');
-    const doc = dom.window.document;
-    const button = doc.querySelector<HTMLButtonElement>('[data-save="security-posture"]')!;
-    const input = doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!;
-    input.click();
-    assert.equal(button.disabled, false);
-    assert.equal(doc.getElementById("st-security-posture")!.textContent, "Unsaved changes");
-    assert.equal(dom.window.eval('governanceUI.collect("security-posture").posture'), "strict");
-    doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="auto"]')!.click();
-    assert.equal(button.disabled, true);
-    assert.equal(doc.getElementById("st-security-posture")!.textContent, "");
-  } finally {
-    dom.window.close();
-  }
+
+test("a posture change is reviewed, saved with the same payload and refreshed", async () => {
+  let reads = 0;
+  const page = await governancePage({
+    "GET /scopes/org:acme": () => (++reads > 1 ? { ...governance, securityPosture: "strict" } : governance),
+    "PUT /scopes/org:acme/security-posture": { ok: true },
+  });
+  const doc = page.document;
+  doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!.click();
+  assert.equal(doc.getElementById("st-security-posture")!.textContent, "Unsaved changes");
+  doc.querySelector<HTMLButtonElement>('[data-save="security-posture"]')!.click();
+  await page.settle();
+  const dialog = doc.getElementById("governance-review") as HTMLDialogElement;
+  assert.equal(dialog.open, true);
+  assert.match(dialog.textContent!, /Organization · acme/);
+  doc.getElementById("governance-review-confirm")!.click();
+  await page.settle();
+  const put = page.requests.find((r) => r.method === "PUT")!;
+  assert.equal(put.path, "/scopes/org%3Aacme/security-posture");
+  assert.deepEqual(put.body, { posture: "strict" });
+  assert.equal(reads, 2);
+  assert.equal(doc.getElementById("st-security-posture")!.textContent, "Saved");
+  assert.equal(doc.querySelector<HTMLButtonElement>('[data-save="security-posture"]')!.disabled, true);
+  page.close();
 });
-test("loading another scope resets posture radios after both choices were clicked", () => {
-  const dom = setup();
-  try {
-    dom.window.eval('governanceUI.load({securityPosture:"auto"},"org:first")');
-    const doc = dom.window.document;
-    const strict = doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!;
-    const auto = doc.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="auto"]')!;
-    strict.click();
-    auto.click();
-    dom.window.eval('governanceUI.load({securityPosture:"strict"},"org:second")');
-    assert.equal(strict.checked, true);
-    assert.equal(auto.checked, false);
-    assert.equal(dom.window.eval('governanceUI.collect("security-posture").posture'), "strict");
-    assert.equal(doc.querySelector<HTMLButtonElement>('[data-save="security-posture"]')!.disabled, true);
-  } finally {
-    dom.window.close();
-  }
+
+test("command policy rules escape input, validate, save and drive the simulator", async () => {
+  const page = await governancePage({
+    "PUT /scopes/org:acme/command-policy": { ok: true },
+    "PUT /scopes/org:acme/command-policy-simulate": {
+      decision: "deny",
+      ruleSource: "scope",
+      ruleIndex: 0,
+      matched: "rm -rf",
+    },
+  });
+  const doc = page.document;
+  doc.getElementById("add-rule")!.click();
+  const pattern = doc.querySelector<HTMLInputElement>(".policy-pattern")!;
+  input(page, pattern, "<img src=x onerror=alert(1)>");
+  assert.equal(doc.querySelectorAll("#rules img").length, 0);
+  input(page, pattern, "[");
+  assert.equal(pattern.getAttribute("aria-invalid"), "true");
+  doc.querySelector<HTMLButtonElement>('[data-save="command-policy"]')!.click();
+  await page.settle();
+  assert.match(doc.getElementById("st-policy")!.textContent!, /regular expression/);
+  input(page, pattern, "^git push");
+  doc.querySelector<HTMLButtonElement>('[data-save="command-policy"]')!.click();
+  await page.settle();
+  const save = page.requests.find((r) => r.path === "/scopes/org%3Aacme/command-policy")!;
+  assert.deepEqual(save.body, {
+    mode: "denylist",
+    rules: [
+      { pattern: "^git push", decision: "deny" },
+      { pattern: "^rm", decision: "deny" },
+    ],
+  });
+  doc.getElementById("policy-test-open")!.click();
+  input(page, doc.getElementById("policy-sample") as HTMLInputElement, "rm -rf /");
+  doc.getElementById("policy-simulate")!.click();
+  await page.settle();
+  const simulate = page.requests.find((r) => r.path.endsWith("command-policy-simulate"))!;
+  assert.equal(simulate.body.command, "rm -rf /");
+  assert.equal(simulate.body.policy.rules.length, 2);
+  assert.equal(doc.getElementById("policy-result")!.textContent, "This scope’s rule 1 matches “rm -rf” → Deny");
+  page.close();
 });
-test("keyed Lit rules preserve focus, escape values, validate and remove from state", () => {
-  const dom = setup();
-  try {
-    dom.window.eval('governanceUI.load({commandPolicy:{mode:"denylist",rules:[]}},"org:test")');
-    const doc = dom.window.document;
-    doc.getElementById("add-rule")!.click();
-    const input = doc.querySelector<HTMLInputElement>(".policy-pattern")!;
-    input.value = "<img src=x onerror=alert(1)>";
-    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-    assert.equal(doc.activeElement, input);
-    assert.equal(doc.querySelectorAll("#rules img, #rules script").length, 0);
-    assert.equal(dom.window.eval('governanceUI.collect("command-policy").rules[0].pattern'), input.value);
-    input.value = "[";
-    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
-    assert.equal(input.getAttribute("aria-invalid"), "true");
-    assert.throws(() => dom.window.eval('governanceUI.collect("command-policy")'), /regular expression/);
-    doc.querySelector<HTMLButtonElement>('[aria-label="Remove command policy rule"]')!.click();
-    assert.equal(doc.querySelectorAll(".policy-rule").length, 0);
-    assert.equal(doc.getElementById("rules-empty")!.classList.contains("hidden"), false);
-  } finally {
-    dom.window.close();
-  }
+
+test("a reply for a scope left behind is ignored", async () => {
+  let release: (value: Reply) => void = () => {};
+  const page = await governancePage({
+    "GET /scopes/channel:C1": () => new Promise<Reply>((resolve) => (release = resolve)),
+    "GET /scopes/channel:C2": { ...governance, securityPosture: "strict", orgAmbient: undefined },
+  });
+  page.window.history.pushState(null, "", "/settings/governance?scope=channel%3AC1");
+  void page.mount();
+  await page.settle();
+  page.window.history.pushState(null, "", "/settings/governance?scope=channel%3AC2");
+  await page.mount();
+  await page.settle();
+  release({ ...governance, securityPosture: "dangerous" });
+  await page.settle();
+  const strict = page.document.querySelector<HTMLInputElement>('[name="security-posture-choice"][value="strict"]')!;
+  assert.equal(strict.checked, true);
+  assert.equal(page.document.querySelector(".shell-title")!.textContent, "#C2");
+  page.close();
 });
-test("bot ledger changes derive rollup enablement and payload from state", () => {
-  const dom = setup();
-  try {
-    dom.window.eval('governanceUI.load({ambientPolicy:{bots:{Build:{mode:"rollup",rollupHours:12}}}},"channel:test")');
-    const doc = dom.window.document;
-    const hours = doc.querySelector<HTMLInputElement>('#ambient-bots input[type="number"]')!;
-    assert.equal(hours.disabled, false);
-    const select = doc.querySelector<HTMLSelectElement>("#ambient-bots select")!;
-    select.value = "ignore";
-    select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-    assert.equal(hours.disabled, true);
-    assert.equal(dom.window.eval('governanceUI.collect("ambient-policy").bots.Build.mode'), "ignore");
-    doc.querySelector<HTMLButtonElement>('[aria-label="Remove bot ledger entry"]')!.click();
-    assert.equal(doc.querySelectorAll("#ambient-bots tr").length, 0);
-  } finally {
-    dom.window.close();
-  }
+
+test("a scope follows the organization's sharing after review and links its environment", async () => {
+  const page = await governancePage(
+    {
+      "GET /scopes/channel:C1": {
+        ...governance,
+        sharingPostureOverride: "open",
+        environmentAttachment: { environmentId: "personal:env", environmentName: "Staging" },
+      },
+      "PUT /scopes/channel:C1/sharing-posture": { ok: true },
+    },
+    "/settings/governance?scope=channel%3AC1",
+  );
+  const doc = page.document;
+  assert.equal(doc.querySelector(".shell-title")!.textContent, "#ops");
+  assert.match(doc.getElementById("environment-notice")!.textContent!, /Uses named environment Staging/);
+  assert.equal(
+    doc.querySelector<HTMLAnchorElement>("#environment-notice a")!.getAttribute("href"),
+    "/settings/governance?scope=personal%3Aenv",
+  );
+  doc.getElementById("sharing-posture-inherit")!.click();
+  await page.settle();
+  doc.getElementById("governance-review-confirm")!.click();
+  await page.settle();
+  const put = page.requests.find((r) => r.method === "PUT")!;
+  assert.deepEqual(put.body, { inherit: true });
+  page.close();
 });
+
 test("saving an older submitted draft preserves edits made during the request", () => {
   const state = new GovernanceState("security-posture");
   state.load({ posture: "auto" });
@@ -111,6 +175,7 @@ test("saving an older submitted draft preserves edits made during the request", 
   assert.equal(state.dirty, true);
   assert.equal(state.message, "Unsaved changes");
 });
+
 test("policy validation detects duplicate bots and overlapping hosts", () => {
   const bots = new GovernanceState("ambient-policy");
   bots.load({ bots: { Build: { mode: "ignore" } } });

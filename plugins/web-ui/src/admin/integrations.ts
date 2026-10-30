@@ -1,35 +1,85 @@
-import { choiceGroup, settingStatus, saveFooter } from "./setting-controls.ts";
-import { html, render, nothing } from "lit";
+import { cardClass, choiceGroup, settingStatus, saveFooter, textField, toggleField } from "./setting-controls.ts";
+import { badge, pageHeader } from "./shared.ts";
+import { html, nothing, render } from "lit";
+import type { AdminPage } from "./sections.ts";
+import { putSetting } from "./setting-state.ts";
+import { reviewChange } from "./setting-controls.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { slackMark } from "../slack-mark.ts";
 import { repeat } from "lit/directives/repeat.js";
-import { states, connectors, installation, emoji, context, type SlackSetting } from "./integrations-state.ts";
-export {
-  configure,
-  owns,
-  collect,
-  capture,
-  commit,
-  status,
-  statusKey,
+import {
   states,
   connectors,
   installation,
+  emoji,
+  context,
+  connectorName,
+  loadScope,
+  type SlackSetting,
 } from "./integrations-state.ts";
-import { loadScope as loadSettings } from "./integrations-state.ts";
-export function loadScope(data: any, scope: string) {
-  loadSettings(data, scope);
+
+let page: AdminPage;
+let failure = "";
+const draw = () => page?.host.isConnected && render(template(), page.host);
+for (const owner of [...states.values(), connectors, installation]) owner.render = draw;
+for (const s of states.values()) s.save = () => save(s);
+
+export async function mount(next: AdminPage) {
+  page = next;
+  Object.assign(context, { api: next.api, orgScope: () => next.orgScope });
+  failure = "";
+  draw();
+  if (next.view === "connectors") return connectors.load();
+  void installation.load();
+  const r = await next.api("GET", "/api/scopes/" + encodeURIComponent(next.orgScope) + "?view=slack-settings");
+  if (!next.current()) return;
+  if (!r.ok) failure = r.status === 403 ? "You don't administer this scope." : r.data?.message || "Failed to load.";
+  else loadScope(r.data, next.orgScope);
   if (states.get("ack-emoji")!.available) void emoji.load();
+  draw();
 }
-export const loadConnectors = () => connectors.load();
-export const loadSlackInstallation = () => installation.load();
-const cards: Record<string, () => ReturnType<typeof html>> = {};
-cards["card-external-slack"] = () => {
+
+async function save(s: SlackSetting) {
+  const view = page;
+  const body = s.collect();
+  if (s.key === "external-slack-participants") {
+    const before = !!JSON.parse(s.baseline).on;
+    const name = (on: boolean) => (on ? "External audiences enabled" : "Internal only");
+    const confirmed = await reviewChange({
+      title: body.on ? "Allow external Slack audiences?" : "Return Slack to internal-only?",
+      subtitle: "This organization-wide audience boundary applies to future Slack turns.",
+      facts: [
+        ["Scope", "Organization · " + view.org],
+        ["Current", name(before)],
+        ["Proposed", name(!!body.on)],
+      ],
+      warning: body.on
+        ? "Agent replies and anything read in a mixed Slack room can be visible to guests or Slack Connect participants. External users still cannot drive the agent."
+        : "Mixed-audience Slack rooms will stop receiving agent replies after this change.",
+      confirmLabel: body.on ? "Allow external audiences" : "Require internal audiences",
+      danger: !!body.on,
+    });
+    if (!confirmed || !view.current()) return;
+  }
+  const r = await putSetting(view, view.orgScope, s, s.key, body);
+  if (r?.ok) s.commit(body);
+}
+
+function template() {
+  return page.view === "connectors"
+    ? html`${pageHeader({ title: "Connectors" })}
+        <div id="view-connectors">${connectorsCard()}${builtIns()}</div>`
+    : html`${pageHeader({ title: "Slack" })}
+        <div id="view-governance">
+          <div class="governance-content">
+            ${failure ? html`<p class="hint" role="status">${failure}</p>` : nothing}${installationCard()}${externalCard()}${pinCard()}${ackCard()}
+          </div>
+        </div>`;
+}
+
+function externalCard() {
   const s = states.get("external-slack-participants")!;
-  return html`<section
-    class=${classMap({ card: true, "sv-slack-settings": true, "setting-row": true, hidden: !s.available, dirty: s.dirty })}
-    id="card-external-slack"
-  >
+  return html`<section class=${cardClass(s, "sv-slack-settings", { "setting-row": true })} id="card-external-slack">
     <div class="head">
       <h2>External Slack audience</h2>
       <p>
@@ -65,11 +115,11 @@ cards["card-external-slack"] = () => {
     </div>
     ${saveFooter(s, "Apply", !s.available)}
   </section>`;
-};
-cards["card-channel-header-pin-default"] = () => {
+}
+function pinCard() {
   const s = states.get("channel-header-pin-default")!;
   return html`<section
-    class=${classMap({ card: true, "sv-slack-settings": true, "setting-row": true, hidden: !s.available, dirty: s.dirty })}
+    class=${cardClass(s, "sv-slack-settings", { "setting-row": true })}
     id="card-channel-header-pin-default"
   >
     <div class="head">
@@ -113,13 +163,10 @@ cards["card-channel-header-pin-default"] = () => {
     </div>
     ${saveFooter(s, "Apply", !s.available)}
   </section>`;
-};
-cards["card-ack-emoji"] = () => {
+}
+function ackCard() {
   const s = states.get("ack-emoji")!;
-  return html`<section
-    class=${classMap({ card: true, "sv-slack-settings": true, hidden: !s.available, dirty: s.dirty })}
-    id="card-ack-emoji"
-  >
+  return html`<section class=${cardClass(s, "sv-slack-settings")} id="card-ack-emoji">
     <div class="head">
       <h2>Acknowledgment emoji</h2>
       <p>
@@ -153,8 +200,8 @@ cards["card-ack-emoji"] = () => {
     </div>
     ${saveFooter(s, "Save", !s.available)}
   </section>`;
-};
-cards["card-connectors"] = () => {
+}
+function connectorsCard() {
   const s = connectors;
   return html`<section class="card" id="card-connectors">
     <div class="head">
@@ -175,7 +222,7 @@ cards["card-connectors"] = () => {
     >
       <div class="sc-form-head">
         <p class="hint" id="conn-form-title">
-          ${s.editing ? "Editing " + context.connectorName(s.editing) : "Add a connector"}
+          ${s.editing ? "Editing " + connectorName(s.editing) : "Add a connector"}
         </p>
         <span class=${"badge " + (s.editing ? "info" : "muted")} id="conn-form-mode"
           >${s.editing ? "Editing" : "New"}</span
@@ -194,47 +241,18 @@ cards["card-connectors"] = () => {
             (c) => c.provider,
             (c) =>
               html`<option value=${c.provider} .selected=${c.provider === s.draft.provider}>
-                ${context.connectorName(c.provider) + (c.configured ? " (configured)" : "")}
+                ${connectorName(c.provider) + (c.configured ? " (configured)" : "")}
               </option>`,
           )}
         </select></label
       >
       <div id="conn-guide" class="hint" style="margin: 0 0 12px">${connectorGuide()}</div>
-      <label style="display: block; margin-bottom: 8px"
-        >Client ID
-        <input
-          type="text"
-          id="conn-client-id"
-          .value=${s.draft.clientId}
-          @input=${(e: Event) => s.change("clientId", (e.target as HTMLInputElement).value)}
-          autocomplete="off"
-          placeholder="OAuth client ID"
-          style="width: 100%"
-      /></label>
-      <label style="display: block; margin-bottom: 8px"
-        >Client secret
-        <input
-          type="password"
-          id="conn-client-secret"
-          .value=${s.draft.clientSecret}
-          @input=${(e: Event) => s.change("clientSecret", (e.target as HTMLInputElement).value)}
-          autocomplete="off"
-          placeholder=${s.editing && s.list.find((c) => c.provider === s.editing)?.hasSecret ? "•••• set (re-enter to replace)" : "(write-only)"}
-          style="width: 100%"
-      /></label>
+      ${textField("Client ID", 8, "conn-client-id", s.draft.clientId, (v) => s.change("clientId", v), { placeholder: "OAuth client ID", auto: "off" })}
+      ${textField("Client secret", 8, "conn-client-secret", s.draft.clientSecret, (v) => s.change("clientSecret", v), { type: "password", auto: "off", placeholder: s.editing && s.list.find((c) => c.provider === s.editing)?.hasSecret ? "•••• set (re-enter to replace)" : "(write-only)" })}
       <p class="field-hint" id="conn-secret-hint">
         ${s.editing ? "Saving requires the client secret. Re-enter it to keep this connector working." : "Secret values are write-only and will not be displayed after saving."}
       </p>
-      <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; margin-bottom: 10px"
-        ><input
-          type="checkbox"
-          id="conn-enabled"
-          style="width: auto"
-          .checked=${s.draft.enabled}
-          @change=${(e: Event) => s.change("enabled", (e.target as HTMLInputElement).checked)}
-        />
-        Enabled</label
-      >
+      ${toggleField("Enabled", 8, s.draft.enabled, (on) => s.change("enabled", on), { id: "conn-enabled" })}
     </div>
     <div class="foot">
       <button type="button" id="add-oauth-app" class=${s.editor ? "hidden" : ""} @click=${() => openConnector()}>
@@ -250,8 +268,8 @@ cards["card-connectors"] = () => {
       >${settingStatus(s, "st-connectors")}
     </div>
   </section>`;
-};
-cards["card-slack-installation"] = () => {
+}
+function installationCard() {
   const s = installation,
     d = s.data;
   return html`<section class="card sv-slack-settings" id="card-slack-installation">
@@ -348,34 +366,8 @@ cards["card-slack-installation"] = () => {
           I have both tokens
         </button>
         <div class=${s.editor ? "" : "hidden"} id="slack-token-editor">
-          <label style="display: block; margin-bottom: 8px"
-            >Bot User OAuth Token
-            <input
-              type="password"
-              id="slack-bot-token"
-              .value=${s.botToken}
-              @input=${(e: Event) => {
-                s.botToken = (e.target as HTMLInputElement).value;
-                s.revision++;
-              }}
-              autocomplete="off"
-              placeholder="xoxb-…"
-              style="width: 100%"
-          /></label>
-          <label style="display: block; margin-bottom: 8px"
-            >App-Level Token
-            <input
-              type="password"
-              id="slack-app-token"
-              .value=${s.appToken}
-              @input=${(e: Event) => {
-                s.appToken = (e.target as HTMLInputElement).value;
-                s.revision++;
-              }}
-              autocomplete="off"
-              placeholder="xapp-…"
-              style="width: 100%"
-          /></label>
+          ${tokenField(s, "botToken", "Bot User OAuth Token", "slack-bot-token", "xoxb-…")}
+          ${tokenField(s, "appToken", "App-Level Token", "slack-app-token", "xapp-…")}
           <p class="field-hint">
             Use an app-level token with <code>connections:write</code>. Saving activates or reloads the Slack surface
             within a few seconds.
@@ -393,16 +385,26 @@ cards["card-slack-installation"] = () => {
       <span class=${"status " + s.tone} role="status" id="st-slack-installation">${s.message}</span>
     </div>
   </section>`;
-};
+}
+function tokenField(
+  s: typeof installation,
+  key: "botToken" | "appToken",
+  label: string,
+  id: string,
+  placeholder: string,
+) {
+  const set = (value: string) => {
+    s[key] = value;
+    s.revision++;
+  };
+  return textField(label, 12, id, s[key], set, { type: "password", auto: "off", placeholder });
+}
 function openConnector(connector?: Parameters<typeof connectors.edit>[0]) {
   connectors.edit(connector);
   document.getElementById("conn-client-id")?.focus();
   document
     .getElementById("card-connectors")
     ?.scrollIntoView({ behavior: "smooth", block: connector ? "nearest" : "start" });
-}
-function badge(text: string, tone: string) {
-  return html`<span class=${"badge " + tone}>${text}</span>`;
 }
 function connectorRows() {
   if (!connectors.displayed.length) return "No connectors configured. Add one below to make it linkable in the web UI.";
@@ -413,17 +415,17 @@ function connectorRows() {
       html`<div class=${classMap({ "credential-row": true, "is-editing": c.provider === connectors.editing })}>
         <div class="credential-main">
           <div class="credential-title">
-            <strong>${context.connectorName(c.provider)}</strong><span class="credential-slug">${c.provider}</span>
+            <strong>${connectorName(c.provider)}</strong><span class="credential-slug">${c.provider}</span>
           </div>
           <div class="hint">
-            ${c.inherited ? "Configured by deployment secrets" : "client " + (c.clientId || "None") + (c.updatedBy ? " · by " + c.updatedBy : "") + (c.updatedAt ? " · " + context.fmtTime(c.updatedAt) : "")}
+            ${c.inherited ? "Configured by deployment secrets" : "client " + (c.clientId || "None") + (c.updatedBy ? " · by " + c.updatedBy : "") + (c.updatedAt ? " · " + new Date(c.updatedAt).toLocaleString() : "")}
           </div>
           <div class="credential-badges">
             ${badge(c.enabled === false ? "Disabled" : "Enabled", c.enabled === false ? "warn" : "ok")}${badge(c.inherited || c.hasSecret ? "Secret set" : "Secret missing", c.inherited || c.hasSecret ? "ok" : "err")}
           </div>
         </div>
         <div class="credential-actions">
-          ${c.inherited ? html`<button type="button" @click=${() => openConnector(c)}>Override here</button>` : html`<button type="button" @click=${() => openConnector(c)}>Edit</button><button type="button" class="rowbtn danger" title="Delete connector" aria-label=${"Delete " + context.connectorName(c.provider)} @click=${() => connectors.remove(c.provider)}>Delete</button>`}
+          ${c.inherited ? html`<button type="button" @click=${() => openConnector(c)}>Override here</button>` : html`<button type="button" @click=${() => openConnector(c)}>Edit</button><button type="button" class="rowbtn danger" title="Delete connector" aria-label=${"Delete " + connectorName(c.provider)} @click=${() => connectors.remove(c.provider)}>Delete</button>`}
         </div>
       </div>`,
   );
@@ -452,7 +454,7 @@ function builtIns() {
               (c) =>
                 html`<div class="credential-row">
                   <div class="credential-main">
-                    <strong>${context.connectorName(c.provider)}</strong>
+                    <strong>${connectorName(c.provider)}</strong>
                     <div class="hint">${c.configured ? "Available to users" : "Requires an OAuth app"}</div>
                   </div>
                   ${badge(c.configured ? "Configured" : "Not configured", c.configured ? "ok" : "muted")}
@@ -465,7 +467,7 @@ function builtIns() {
 }
 function emojiChanged(s: SlackSetting, names: string[]) {
   s.change({ names });
-  (document.querySelector('[data-save="ack-emoji"]') as HTMLButtonElement | null)?.click();
+  if (s.available && !s.saving) void s.save();
 }
 function emojiChips(s: SlackSetting) {
   return repeat(
@@ -550,47 +552,12 @@ function emojiKey(event: KeyboardEvent, s: SlackSetting) {
     (document.querySelector("#ack-emoji-results button") as HTMLButtonElement | null)?.click();
   }
 }
-export function mountCards() {
-  for (const [id, template] of Object.entries(cards)) {
-    const placeholder = document.querySelector('[data-integrations-card="' + id + '"]');
-    if (!placeholder) continue;
-    const fragment = document.createDocumentFragment();
-    const draw = () => render(template(), fragment);
-    if (id === "card-connectors") connectors.render = draw;
-    else if (id === "card-slack-installation") installation.render = draw;
-    else {
-      const key = (
-        {
-          "card-external-slack": "external-slack-participants",
-          "card-channel-header-pin-default": "channel-header-pin-default",
-          "card-ack-emoji": "ack-emoji",
-        } as Record<string, string>
-      )[id];
-      states.get(key)!.render = draw;
-    }
+document.addEventListener("mousedown", (event) => {
+  if (emoji.open && !(event.target as Element).closest("#ack-emoji-picker, #ack-emoji-open")) {
+    emoji.open = false;
     draw();
-    placeholder.replaceWith(fragment);
   }
-  document.addEventListener("mousedown", (event) => {
-    if (emoji.open && !(event.target as Element).closest("#ack-emoji-picker, #ack-emoji-open")) {
-      emoji.open = false;
-      states.get("ack-emoji")!.render();
-    }
-  });
-}
-export function mountBuiltIns() {
-  const target = document.getElementById("card-built-in-connectors");
-  if (!target) return;
-  const fragment = document.createDocumentFragment(),
-    previous = connectors.render;
-  const draw = () => render(builtIns(), fragment);
-  draw();
-  target.replaceWith(fragment);
-  connectors.render = () => {
-    previous();
-    draw();
-  };
-}
+});
 
 function installationTitle(data: Record<string, any>) {
   if (data.configured) return data.teamName || data.teamId || "Slack workspace";

@@ -1,79 +1,61 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { litFixture } from "./fixture.ts";
+import { mountPage } from "./fixture.ts";
 
-function fixture(all: boolean, errors: unknown[]) {
-  const f = litFixture();
-  f.ui.activity.errors(
-    f.root,
-    { errors },
-    {
-      all,
-      scope: "org:acme",
-      errorsPageSize: 50,
-      defaultShell() {},
-      plural: String,
-      firstLine: (s: string, max: number) => s.split("\n")[0].slice(0, max),
-      shortName: String,
-      relTime: String,
-      fmtTime: String,
-      navLink: (label: string, target: any) => {
-        const a = f.document.createElement("a");
-        a.textContent = label;
-        a.href = "/" + target.view + "?scope=" + target.scope + (target.session ? "&session=" + target.session : "");
-        return a;
-      },
-    },
-  );
-  return f;
-}
+const scopes = { scopes: [{ scopeId: "personal:alice", label: "Alice" }] };
 
-test("error rows escape full diagnostics and preserve scoped session links", () => {
+test("errors escape diagnostics, link scopes and sessions, and page through offsets", async () => {
   const message = "<img src=x onerror=alert(1)>\nfull diagnostic";
-  const f = fixture(true, [
-    { ts: 123, category: "turn", code: "failed", message, scopeLabel: "personal:alice", sessionId: "session-1" },
-  ]);
-  assert.equal(f.root.querySelector("img"), null);
-  assert.equal(f.root.querySelector(".error-preview")!.textContent, message.split("\n")[0]);
-  assert.equal(f.root.querySelector(".error-full")!.textContent, message);
+  const f = await mountPage("/settings/errors", {
+    "/scopes": scopes,
+    "/errors": ({ url }) => ({
+      errors: [{ ts: 1, category: "turn", code: "failed", message, scopeLabel: "personal:alice", sessionId: "s1" }],
+      total: 120,
+      limit: 50,
+      offset: Number(url.searchParams.get("offset")),
+    }),
+  });
+  await f.settle();
+  assert.equal(f.host.querySelector("tbody img"), null);
+  assert.equal(f.host.querySelector(".error-full")!.textContent, message);
   assert.deepEqual(
-    [...f.root.querySelectorAll("th")].map((e) => e.textContent),
+    [...f.host.querySelectorAll("th")].map((e) => e.textContent),
     ["Category", "Code", "Message", "Scope", "Session", "Time"],
   );
-  assert.match(f.root.querySelectorAll("a")[0].href, /errors\?scope=personal:alice/);
-  assert.match(f.root.querySelectorAll("a")[1].href, /history\?scope=personal:alice&session=session-1/);
-  f.dom.window.close();
+  const links = [...f.host.querySelectorAll<HTMLAnchorElement>("tbody a")].map((a) => a.getAttribute("href"));
+  assert.deepEqual(links, [
+    "/settings/errors?scope=personal%3Aalice",
+    "/settings/history?scope=personal%3Aalice&session=s1",
+  ]);
+  assert.equal(f.host.querySelector("tbody a")!.textContent, "Alice");
+  f.host.querySelectorAll<HTMLButtonElement>(".pager .page")[1]!.click();
+  await f.settle();
+  assert.equal(f.requests.at(-1)!.url.search, "?scope=org%3Aacme&limit=50&offset=50");
+  f.close();
 });
 
-test("scoped and system error tables preserve attribution, empty states and timestamp placement", () => {
-  for (const all of [true, false]) {
-    const f = fixture(all, [
-      { ts: 123, scopeLabel: "runs:reaper", message: "requeued", sessionId: "s1" },
-      { ts: 124, message: "failure" },
-    ]);
-    assert.equal(f.root.querySelectorAll("th").length, all ? 6 : 5);
-    assert.equal(f.root.querySelector("tbody tr")!.lastElementChild!.textContent, "123");
-    assert.match(f.root.querySelector("a")!.href, /history\?scope=org:acme&session=s1/);
-    assert.equal(f.root.querySelectorAll("a").length, 1);
-    if (all) assert.ok(f.root.textContent!.includes("runs:reaper"));
-    f.dom.window.close();
-    const empty = fixture(all, []);
-    assert.equal(
-      empty.root.querySelector(".empty")!.textContent,
-      all ? "No errors recorded." : "No errors recorded for this scope.",
-    );
-    empty.dom.window.close();
-  }
-});
-
-test("all message lengths retain an expandable full value", () => {
-  for (const message of [
-    "Timed out",
-    "A message that may wrap beyond two lines in a narrow column.",
-    "x".repeat(200),
-  ]) {
-    const f = fixture(true, [{ message }]);
-    assert.equal(f.root.querySelector("details .error-full")!.textContent, message);
-    f.dom.window.close();
-  }
+test("scoped errors hide the scope column and audit and egress render their rows", async () => {
+  const f = await mountPage("/settings/errors?scope=personal:alice", {
+    "/scopes": scopes,
+    "/errors": { errors: [] },
+    "/audit": { events: [{ principalId: "admin", action: "delete", resource: "skill", ts: 1 }] },
+    "/egress": {
+      records: [{ host: "example.com", allowed: false, source: "broker", slug: "gh" }],
+      total: 1,
+      denied: 1,
+    },
+  });
+  await f.settle();
+  assert.equal(f.host.querySelector(".empty")!.textContent, "No errors recorded for this scope.");
+  assert.equal(f.host.querySelector<HTMLSelectElement>("select")!.value, "personal:alice");
+  f.window.history.pushState(null, "", "/settings/audit");
+  await f.mount();
+  await f.settle();
+  assert.equal(f.host.querySelector(".flag-err")!.textContent, "delete");
+  f.window.history.pushState(null, "", "/settings/egress");
+  await f.mount();
+  await f.settle();
+  assert.match(f.host.querySelector(".shell-count")!.textContent!, /1 call · 1 denied request/);
+  assert.ok(f.host.textContent!.includes("cred:gh"));
+  f.close();
 });

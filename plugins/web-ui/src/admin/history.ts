@@ -1,160 +1,173 @@
-import { html, nothing } from "lit";
-import { bareCard, card, denseList, renderer, node } from "./shared.ts";
+import { html, nothing, render } from "lit";
+import { relTime } from "../ui.ts";
+import { bareCard, denseList, pageHeader } from "./shared.ts";
+import type { AdminPage } from "./sections.ts";
+import * as transcript from "./transcript.ts";
 
-export function history(root: HTMLElement, d: any, s: Record<string, any>) {
-  const paint = renderer(root);
-  const sessions = (d.sessions || []).filter((row: any) => s.historyKindMatches(row, s.historyKind));
-  const orgWide = s.scopeKind(s.scope) === "org";
-  const cron = s.historyKind === "cron" ? s.cron : null;
-  const route = (extra: any) => ({
-    view: "history",
-    scope: s.scope,
-    session: null,
-    cursor: null,
-    historyKind: s.historyKind,
-    ...extra,
-  });
-  const pages =
-    s.cursor || d.nextCursor
-      ? html`<div class="pager">
-          <button type="button" class="page" ?disabled=${!s.cursor} @click=${() => s.go(route({ cron }))}>
-            ← Newest</button
-          ><button
-            type="button"
-            class="page"
-            ?disabled=${!d.nextCursor}
-            @click=${() => s.go(route({ cron, cursor: d.nextCursor }))}
-          >
-            Older →
-          </button>
-        </div>`
-      : nothing;
-  const mode = s.historyModeLabel(s.historyKind);
-  const tabs = ["conversation", "cron", "background"].map((kind) => ({
-    label: s.kindLabels[kind],
-    count: d.counts?.[kind],
-    active: s.historyKind === kind,
-    onClick: () => s.go(route({ historyKind: kind })),
-  }));
-  const scopes = s.scopeRows();
-  const scopeFilter = node(
-    html`<div class="shell-sort">
-      <span class="shell-sort-label">Scope:</span
-      ><select
-        aria-label="Filter by scope"
-        @change=${(e: Event) => s.go(route({ scope: (e.target as HTMLSelectElement).value }))}
-      >
-        <option value=${s.orgScope} ?selected=${orgWide}>All scopes</option>
-        ${scopes.map(
-          (row: any) =>
-            html`<option value=${row.scopeId} ?selected=${row.scopeId === s.scope}>
-              ${s.shortName(row.scopeId)}
-            </option>`,
-        )}
-      </select>
-    </div>`,
-  );
-  s.pageShell(
-    cron
-      ? {
-          back: { label: "← Cron runs", onClick: () => s.go(route({})) },
-          title: s.cronName(d.cron?.cron || sessions[0]?.origin?.cron, true),
-          context: orgWide ? "" : s.shortName(s.scope),
-        }
-      : { title: orgWide ? s.title : s.shortName(s.scope), tabs, actions: [scopeFilter] },
-  );
-  const environment = (s.environments || []).find((e: any) => e.id === s.scope);
-  const attached = environment?.attachedScopes || [];
-  let errors: any[] = [];
-  let errorCount = 0;
-  let errorsOpen = false;
-  const draw = () =>
-    paint(
-      html`${
-        orgWide && !cron && !s.cursor && s.environments?.length
-          ? card(
-              "Named environments",
-              "Named computers and working memory that scopes can share.",
-              denseList(
-                s.environments,
-                (e: any) => {
-                  const names = (e.attachedScopes || []).map((id: string) => s.shortName(id));
-                  return {
-                    name: e.name || s.shortName(e.id),
-                    preview: html`<span title=${names.join(", ")}
-                      >${names.length ? names.slice(0, 4).join(", ") + (names.length > 4 ? " +" + s.plural(names.length - 4, "more scope") : "") : "no scopes attached"}</span
-                    >`,
-                    href: s.stateToUrl(route({ scope: e.id })),
-                  };
-                },
-                (e) => s.selectScope(e.id),
-                "No named environments.",
-              ),
-            )
-          : nothing
-      }${environment && !cron ? card("Attached scopes", s.plural(attached.length, "scope") + " share this environment's computer and working memory.", html`<div class="history-empty-scopes">${attached.length ? attached.map((id: string) => html`<button type="button" class="history-empty-scope" title=${id} @click=${() => s.selectScope(id)}>${s.shortName(id)}</button>`) : html`<p class="empty">No scopes attached.</p>`}</div>`) : nothing}${bareCard(
-        denseList(
-          sessions,
-          (row: any) => {
-            const origin = row.origin?.kind === "cron" ? row.origin.cron : null;
-            const background = row.category === "background";
-            let name = row.firstMessage || row.lastMessage || "(no messages yet)";
-            let preview = "";
-            if (background && !cron) {
-              const kind = row.kind || row.type;
-              let typeLabel = s.titleCase(String(kind).replaceAll("_", " "));
-              if (kind === "dm") typeLabel = "DM";
-              if (["cron_monologue", "cron_wake", "cron"].includes(kind)) typeLabel = "Cron";
-              name = origin ? s.cronName(origin, true) : row.origin?.label || typeLabel;
-              preview = row.result || row.lastMessage || row.firstMessage || "";
-            } else if (background && row.result) {
-              name = row.result;
-              if (row.lastMessage && row.lastMessage !== row.result) preview = row.lastMessage;
-            } else if (row.lastMessage && row.lastMessage !== name) preview = row.lastMessage;
-            return {
-              name,
-              preview: html`<span
-                >${orgWide && row.scopeId ? html`<span class="dense-tag">${s.shortName(row.scopeId)}</span>` : nothing}${preview}</span
-              >`,
-              time: row.lastActivity ? s.relTime(row.lastActivity) : "—",
-              href: s.stateToUrl(route({ session: row.id })),
-            };
-          },
-          (row) => s.go(route({ session: row.id })),
-          "No " + mode.toLowerCase() + (orgWide ? " yet." : " in this scope."),
-        ),
-      )}${pages}${
-        !orgWide && !cron
-          ? html`<div>
-              ${
-                errorCount && errors.length
-                  ? html`<div class="statline">
-                        <a
-                          href="#"
-                          @click=${(e: Event) => {
-                            e.preventDefault();
-                            errorsOpen = !errorsOpen;
-                            draw();
-                          }}
-                          >${s.plural(errorCount, "error")} logged in this scope</a
-                        >
-                      </div>
-                      ${errorsOpen ? s.errorStripBox(errors, "Most recent errors", 20, (e: any) => (e.sessionId ? { href: s.stateToUrl(route({ session: e.sessionId })), go: () => s.go(route({ session: e.sessionId })) } : null)) : nothing}`
-                  : nothing
-              }
-            </div>`
-          : nothing
-      }`,
-    );
-  draw();
-  if (!orgWide && !cron) {
-    const query = "scope=" + encodeURIComponent(s.scope);
-    void Promise.all([s.adminErrorCount(query), s.adminErrors(query)])
-      .then(([count, rows]) => {
-        errorCount = count;
-        errors = rows;
-        draw();
-      })
-      .catch(() => {});
+type Row = Record<string, any>;
+
+const KIND_LABEL: Record<string, string> = {
+  conversation: "Conversations",
+  cron: "Cron runs",
+  background: "Background",
+};
+const PAGE_SIZE = 50;
+let scopes: Row[] | null = null;
+
+export const loadScopes = (page: AdminPage) =>
+  scopes ? null : page.api("GET", "/api/scopes").then((r) => (scopes = r.ok ? r.data?.scopes || [] : null));
+
+const scopeKind = (id: string) => String(id || "").split(":")[0] || "scope";
+
+export function shortName(id: string) {
+  if (!id) return "";
+  const kind = scopeKind(id);
+  if (kind === "org") return "org";
+  const label = scopes?.find((row) => row.scopeId === id)?.label;
+  if (label) return label;
+  const rest = id.slice(kind.length + 1);
+  if (kind === "channel" || kind === "group") return rest.startsWith("#") ? rest : "#" + rest;
+  if (kind === "personal") {
+    const local = rest.split("@")[0]!;
+    return /^[a-z]/.test(local) ? local[0]!.toUpperCase() + local.slice(1) : local || rest;
   }
+  return rest || id;
+}
+
+export function cronName(cron: Row | null | undefined) {
+  if (!cron) return "Cron";
+  return (
+    cron.title ||
+    cron.message ||
+    String(cron.action || "")
+      .split("\n")[0]!
+      .slice(0, 96) ||
+    "Cron " + cron.id
+  );
+}
+
+const matchesKind = (row: Row, kind: string) => {
+  if (kind === "conversation") return row.category !== "background";
+  if (kind === "cron") return row.origin?.kind === "cron";
+  return row.category === "background" && row.origin?.kind !== "cron";
+};
+
+function background(row: Row) {
+  if (row.origin?.kind === "cron") return cronName(row.origin.cron);
+  const kind = String(row.kind || row.type);
+  if (row.origin?.label) return row.origin.label;
+  if (kind === "dm") return "DM";
+  if (/^cron(_monologue|_wake)?$/.test(kind)) return "Cron";
+  return kind.replaceAll("_", " ").replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function rowOf(row: Row, orgWide: boolean, cron: string | null) {
+  let name = row.firstMessage || row.lastMessage || "(no messages yet)";
+  let preview = "";
+  if (row.category === "background" && !cron) {
+    name = background(row);
+    preview = row.result || row.lastMessage || row.firstMessage || "";
+  } else if (row.category === "background" && row.result) {
+    name = row.result;
+    if (row.lastMessage && row.lastMessage !== row.result) preview = row.lastMessage;
+  } else if (row.lastMessage && row.lastMessage !== name) preview = row.lastMessage;
+  const tag = orgWide && row.scopeId ? html`<span class="dense-tag">${shortName(row.scopeId)}</span>` : nothing;
+  return {
+    name,
+    preview: html`<span>${tag}${preview}</span>`,
+    time: row.lastActivity ? relTime(row.lastActivity) : "—",
+  };
+}
+
+export async function mount(page: AdminPage) {
+  if (page.session) return transcript.mount(page);
+  const kind = KIND_LABEL[page.params.get("kind") ?? ""] ? page.params.get("kind")! : "conversation";
+  const cron = kind === "cron" ? page.params.get("cron") : null;
+  const cursor = page.params.get("cursor");
+  const orgWide = scopeKind(page.scope) === "org";
+  const list = (extra: Row = {}) =>
+    page.href("history", {
+      scope: orgWide ? null : page.scope,
+      kind: kind === "conversation" ? null : kind,
+      cron,
+      ...extra,
+    });
+  const session = (id: string) => page.href("history", {}, "/s/" + encodeURIComponent(id));
+  let path = `/api/sessions?scope=${encodeURIComponent(page.scope)}&limit=${PAGE_SIZE}`;
+  path += `&category=${kind === "conversation" ? kind : "background"}`;
+  if (cursor) path += `&cursor=${encodeURIComponent(cursor)}`;
+  if (kind === "cron") path += "&origin=cron" + (cron ? `&cron=${encodeURIComponent(cron)}` : "");
+  if (kind === "background") path += "&origin=other_background";
+  const draw = (d: Row | null, body: unknown) => {
+    const sessions: Row[] = (d?.sessions || []).filter((row: Row) => matchesKind(row, kind));
+    const options = (scopes || []).filter((row) => scopeKind(row.scopeId) !== "org");
+    if (!orgWide && !options.some((row) => row.scopeId === page.scope)) options.unshift({ scopeId: page.scope });
+    const header = cron
+      ? pageHeader({
+          back: { label: "Cron runs", href: list({ cron: null }) },
+          title: cronName(d?.cron?.cron || sessions[0]?.origin?.cron),
+          context: orgWide ? "" : shortName(page.scope),
+        })
+      : pageHeader({
+          title: orgWide ? "Sessions" : shortName(page.scope),
+          tabs: Object.entries(KIND_LABEL).map(([key, label]) => ({
+            label,
+            count: d?.counts?.[key],
+            active: key === kind,
+            href: list({ kind: key === "conversation" ? null : key, cron: null }),
+          })),
+          actions: html`<div class="shell-sort">
+            <span class="shell-sort-label">Scope:</span
+            ><select
+              aria-label="Filter by scope"
+              @change=${(e: Event) => {
+                const next = (e.target as HTMLSelectElement).value;
+                page.go(list({ scope: scopeKind(next) === "org" ? null : next, cron: null }));
+              }}
+            >
+              <option value=${page.orgScope} ?selected=${orgWide}>All scopes</option>
+              ${options.map(
+                (row) =>
+                  html`<option value=${row.scopeId} ?selected=${row.scopeId === page.scope}>
+                    ${shortName(row.scopeId)}
+                  </option>`,
+              )}
+            </select>
+          </div>`,
+        });
+    const rows = d
+      ? html`${bareCard(
+          denseList(
+            sessions,
+            (row: Row) => ({ ...rowOf(row, orgWide, cron), href: session(row.id) }),
+            (row: Row) => page.go(session(row.id)),
+            "No " + KIND_LABEL[kind]!.toLowerCase() + (orgWide ? " yet." : " in this scope."),
+          ),
+        )}${
+          cursor || d.nextCursor
+            ? html`<div class="pager">
+                <button type="button" class="page" ?disabled=${!cursor} @click=${() => page.go(list())}>← Newest</button
+                ><button
+                  type="button"
+                  class="page"
+                  ?disabled=${!d.nextCursor}
+                  @click=${() => page.go(list({ cursor: d.nextCursor }))}
+                >
+                  Older →
+                </button>
+              </div>`
+            : nothing
+        }`
+      : nothing;
+    render(html`${header}${body ?? rows}`, page.host);
+  };
+  draw(null, html`<p class="empty">Loading…</p>`);
+  const [result] = await Promise.all([page.api("GET", path), loadScopes(page)]);
+  if (!page.current()) return;
+  if (!result.ok)
+    return draw(
+      null,
+      html`<p class="empty">${result.data?.message || `Failed to load sessions (${result.status}).`}</p>`,
+    );
+  draw(result.data, null);
 }

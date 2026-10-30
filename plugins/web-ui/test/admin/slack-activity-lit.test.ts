@@ -1,58 +1,58 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSync } from "esbuild";
-import { JSDOM } from "jsdom";
-const bundle = buildSync({
-  entryPoints: [new URL("../../src/admin/slack-activity.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "slackUI",
-}).outputFiles[0].text;
-function setup() {
-  const dom = new JSDOM('<div id="shellbar"></div><div id="view-data"></div>', {
-    runScripts: "outside-only",
-    url: "http://localhost/settings/judgments",
+import { mountPage } from "./fixture.ts";
+
+const mirror = { "/slack-mirror": { containers: [{ container: "C1", name: "general", kind: "channel" }] } };
+
+test("judgments filter by tab, escape reasons and load earlier pages", async () => {
+  const row = (id: number) => ({ id, container: "C1", decision: "act", reason: "<b>x</b>", createdAt: id });
+  const f = await mountPage("/settings/judgments", {
+    ...mirror,
+    "/ambient-judgments": ({ url }) =>
+      url.searchParams.get("before")
+        ? { judgments: [row(1)], hasMore: false }
+        : { judgments: [row(2)], hasMore: true, counts: { act: 3, ignore: 1 } },
   });
-  dom.window.HTMLElement.prototype.scrollIntoView = () => {};
-  dom.window.scrollTo = () => {};
-  dom.window.requestAnimationFrame = () => 0;
-  dom.window.eval(
-    bundle +
-      `;window.ui=slackUI;window.currentView='judgments';window.state={};window.calls=[];window.responses=[];window.shells=[];ui.configure({api:async(method,path)=>{calls.push(path);return responses.shift();},go:st=>{state=st;currentView=st.view},stateToUrl:st=>'/admin/'+st.view,pageShell:s=>{shells.push(s);document.getElementById('shellbar').innerHTML='<button class="back">Back</button><span class="shell-title">Title</span><span class="shell-context">Context</span><span class="shell-spacer"></span>';},navLink:()=>document.createElement('a'),relTime:x=>x,fmtTime:x=>x,slackContainerLabel:x=>x,slackContainerScope:()=>null,loadSlackContainers:async()=>({ok:true,data:{}}),containers:()=>[],view:()=>currentView});`,
+  await f.settle();
+  assert.equal(f.requests[1]!.url.search, "?decision=act%2Cignore");
+  assert.deepEqual(
+    [...f.host.querySelectorAll(".shell-tab")].map((t) => t.textContent),
+    ["Judged 4", "Woke 3", "Silent 1", "Fastlane 0"],
   );
-  return dom;
-}
-test("Judgment pagination updates from state and escapes untrusted reasons", async () => {
-  const dom = setup();
-  try {
-    dom.window.eval(
-      `currentView='judgments';state={};responses.push({ok:true,data:{judgments:[{id:1,container:'C1',decision:'ignore',reason:'<img src=x>',createdAt:'now'}],counts:{ignore:1},hasMore:true}},{ok:true,data:{judgments:[{id:2,container:'C1',decision:'act',createdAt:'before'}],hasMore:false}})`,
-    );
-    await dom.window.eval("ui.renderAmbientJudgments(state)");
-    assert.equal(dom.window.document.querySelectorAll("img").length, 0);
-    assert.match(dom.window.document.querySelector(".dense-preview")!.textContent!, /<img src=x>/);
-    await dom.window.eval('ui.activity.earlierLog("judgments","/api/ambient-judgments?decision=act%2Cignore")');
-    assert.equal(dom.window.document.querySelectorAll(".dense-row").length, 2);
-    assert.equal(dom.window.document.querySelector(".load-earlier"), null);
-  } finally {
-    dom.window.close();
-  }
+  assert.equal(f.host.querySelector(".shell-tab")!.getAttribute("href"), "/settings/judgments");
+  assert.equal(f.host.querySelector("b"), null);
+  assert.equal(f.host.querySelector(".dense-name")!.textContent, "#general");
+  f.host.querySelector<HTMLButtonElement>(".load-earlier")!.click();
+  await f.settle();
+  assert.equal(f.requests.at(-1)!.url.searchParams.get("beforeId"), "2");
+  assert.equal(f.host.querySelectorAll(".dense-row").length, 2);
+  assert.equal(f.host.querySelector(".load-earlier"), null);
+  f.close();
 });
-test("Ack detail renders its message, candidate slate and Slack link from fetched data", async () => {
-  const dom = setup();
-  try {
-    dom.window.eval(
-      `currentView='ackemoji';state={jid:'7'};responses.push({ok:true,data:{workspaceUrl:'https://acme.slack.com/',pick:{id:7,channel:'C1',ts:'12.34',outcome:'picked',picked:'eyes',message:'hello',candidates:'eyes wave',createdAt:'today'}}})`,
-    );
-    await dom.window.eval("ui.renderAckEmojiPicks(state)");
-    assert.equal(dom.window.document.querySelector("pre")!.textContent, "hello");
-    assert.equal(dom.window.document.querySelector(".pill.accent")!.textContent, ":eyes:");
-    assert.equal(
-      dom.window.document.querySelector<HTMLAnchorElement>(".judg-extlink")!.href,
-      "https://acme.slack.com/archives/C1/p1234",
-    );
-  } finally {
-    dom.window.close();
-  }
+
+test("ack detail renders its message, candidate slate and Slack link", async () => {
+  const f = await mountPage("/settings/ackemoji?jid=7", {
+    ...mirror,
+    "/ack-emoji-picks": {
+      pick: {
+        id: 7,
+        channel: "C1",
+        ts: "1.2",
+        outcome: "picked",
+        picked: "eyes",
+        candidates: "eyes tada",
+        message: "hi",
+      },
+      workspaceUrl: "https://acme.slack.com/",
+    },
+  });
+  await f.settle();
+  assert.equal(f.requests.at(-1)!.url.search, "?id=7");
+  assert.equal(f.host.querySelector(".judg-prompt")!.textContent, "hi");
+  assert.equal(f.host.querySelectorAll(".badges .pill").length, 3);
+  assert.equal(
+    f.host.querySelector<HTMLAnchorElement>(".judg-extlink")!.href,
+    "https://acme.slack.com/archives/C1/p12",
+  );
+  f.close();
 });

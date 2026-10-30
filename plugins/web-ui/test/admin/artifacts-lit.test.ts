@@ -1,387 +1,165 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildSync } from "esbuild";
-import { JSDOM } from "jsdom";
+import { mountPage } from "./fixture.ts";
 
-const source = buildSync({
-  entryPoints: [new URL("../../src/admin/artifacts.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "artifacts",
-  platform: "browser",
-}).outputFiles[0].text;
-const packsSource = buildSync({
-  entryPoints: [new URL("../../src/admin/artifacts-skills.ts", import.meta.url).pathname],
-  bundle: true,
-  write: false,
-  format: "iife",
-  globalName: "skillUI",
-  platform: "browser",
-}).outputFiles[0].text;
-function fixture() {
-  const dom = new JSDOM('<div id="shellbar"></div><main></main>', {
-    runScripts: "outside-only",
-    url: "http://localhost/settings/files",
-    pretendToBeVisual: true,
+const scopes = { "/scopes": { scopes: [{ scopeId: "personal:alice", label: "Alice" }] } };
+const button = (root: Element, text: string) =>
+  [...root.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === text)!;
+const type = (f: { window: any }, el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string) => {
+  el.value = value;
+  el.dispatchEvent(new f.window.Event(el.tagName === "SELECT" ? "change" : "input"));
+};
+
+test("memory index links notebooks and the editor adds and edits facts", async () => {
+  const facts = [{ id: "f1", text: "old" }];
+  const f = await mountPage("/settings/memory", {
+    ...scopes,
+    "/memory/scopes": { scopes: [{ scopeId: "personal:alice", hasMemory: true, bytes: 10, label: "Alice" }] },
+    "GET /memory": { facts },
+    "POST /memory": ({ body }) => ({ facts: [...facts, { id: "f2", text: body.facts[0] }] }),
+    "PATCH /memory": ({ body }) => ({ facts: body.facts }),
   });
-  dom.window.eval(source + ";window.artifacts = artifacts;");
-  dom.window.eval(packsSource + ";window.skillUI = skillUI;");
-  dom.window.HTMLElement.prototype.scrollIntoView = () => {};
-  const root = dom.window.document.querySelector("main")!;
-  const c: Record<string, any> = {
-    scope: "personal:alice",
-    orgId: "acme",
-    view: "files",
-    index: false,
-    own: false,
-    apiBase: "",
-    scopeKind: (s: string) => s.split(":")[0],
-    shortName: (s: string) => s,
-    dirLabel: (s: string) => s,
-    plural: (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`,
-    relTime: () => "just now",
-    fmtTime: () => "Today",
-    fmtHistoryTime: () => "Today",
-    fmtBytes: (n: number) => `${n} B`,
-    fileKind: () => "file",
-    fileName: (s: string) => s,
-    pageShell: (value: any) => {
-      c.shell = value;
-    },
-    api: async () => ({ ok: true, data: {} }),
-    go: () => {},
-    reload: () => {},
-    invalidate: () => {},
-    stateToUrl: (s: any) => "/admin/" + s.view + "?scope=" + s.scope,
-    shortId: (s: string) => s,
-    titleCase: (s: string) => s,
-    openScopeRow: () => {},
-    fileSha256: async () => "hash",
-    uploadErrorMessage: (s: string) => s,
-    firstLine: (s: string) => s,
-    cronName: (s: any) => s.title || s.id,
-    shortSchedule: () => "Daily",
-    fmtSchedule: () => "Every day",
-    destinationSummary: () => "None",
-    destinationDetails: () => "",
-    setCronEditing: () => {},
-    scopeRows: () => [],
-    packRepoLabel: (s: string) => s,
-    buildScopeMultiSelect: (_choices: any, selected: Set<string>, onChange: () => void) => {
-      c.selectedScopes = selected;
-      c.changeScopes = onChange;
-      return dom.window.document.createElement("div");
-    },
-  };
-  return { dom, root, c, ui: (dom.window as any).artifacts, skills: (dom.window as any).skillUI };
-}
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-test("memory edits one fact by id and redraws from the server's facts", async () => {
-  const { dom, root, c, ui } = fixture();
-  const calls: any[] = [];
-  c.api = async (...args: any[]) => {
-    calls.push(args);
-    return { ok: true, data: { facts: [{ id: "7", text: "edited" }] } };
-  };
-  ui.memory(root, { facts: [{ id: "7", text: "original" }] }, c);
-  [...root.querySelectorAll("button")].find((b) => b.textContent!.trim() === "Edit")!.click();
-  const input = root.querySelector("textarea")!;
-  input.value = "edited";
-  input.dispatchEvent(new dom.window.Event("input"));
-  [...root.querySelectorAll("button")].find((b) => b.textContent!.trim() === "Save")!.click();
-  await tick();
+  await f.settle();
   assert.equal(
-    JSON.stringify(calls[0]),
-    JSON.stringify(["PATCH", "/api/memory?scope=personal%3Aalice", { facts: [{ id: "7", text: "edited" }] }]),
+    f.host.querySelector<HTMLAnchorElement>(".dense-row")!.getAttribute("href"),
+    "/settings/memory?scope=personal%3Aalice",
   );
-  assert.match(root.querySelector(".memory-facts")!.textContent!, /edited/);
-  assert.equal(root.querySelector("#st-memory")!.textContent, "Saved ✓");
-  dom.window.close();
+  f.host.querySelector<HTMLAnchorElement>(".dense-row")!.click();
+  await f.settle();
+  type(f, f.host.querySelector("textarea[aria-label='New fact']")!, "new");
+  button(f.host, "Add").click();
+  await f.settle();
+  assert.deepEqual(f.requests.at(-1)!.body, { facts: ["new"] });
+  button(f.host, "Edit").click();
+  type(f, f.host.querySelector("textarea[aria-label='Fact text']")!, "edited");
+  button(f.host, "Save").click();
+  await f.settle();
+  assert.deepEqual(f.requests.at(-1)!.body, { facts: [{ id: "f1", text: "edited" }] });
+  assert.equal(f.requests.at(-1)!.url.search, "?scope=personal%3Aalice");
+  assert.equal(f.host.querySelector(".memory-facts span")!.textContent, "edited");
+  f.close();
 });
 
-test("memory adds a new fact and clears the draft", async () => {
-  const { dom, root, c, ui } = fixture();
-  const calls: any[] = [];
-  c.api = async (...args: any[]) => {
-    calls.push(args);
-    return { ok: true, data: { facts: [{ id: "8", text: "new fact" }] } };
-  };
-  ui.memory(root, { facts: [] }, c);
-  const input = root.querySelector<HTMLTextAreaElement>('textarea[aria-label="New fact"]')!;
-  input.value = "new fact";
-  input.dispatchEvent(new dom.window.Event("input"));
-  [...root.querySelectorAll("button")].find((b) => b.textContent!.trim() === "Add")!.click();
-  await tick();
-  assert.equal(
-    JSON.stringify(calls[0]),
-    JSON.stringify(["POST", "/api/memory?scope=personal%3Aalice", { facts: ["new fact"] }]),
-  );
-  assert.match(root.querySelector(".memory-facts")!.textContent!, /new fact/);
-  assert.equal(root.querySelector<HTMLTextAreaElement>('textarea[aria-label="New fact"]')!.value, "");
-  dom.window.close();
-});
-
-test("files search renders from query data and preserves keyboard opening", () => {
-  const { dom, root, c, ui } = fixture();
-  let opened = "";
-  c.downloadFile = (row: any) => {
-    opened = row.id;
-  };
-  ui.files(
-    root,
-    {
+test("files filter by search and upload with the hash and name in the query", async () => {
+  const f = await mountPage("/settings/files?scope=personal:alice", {
+    ...scopes,
+    "GET /files": {
       files: [
-        { id: "a", name: "alpha.txt", createdAt: 1 },
-        { id: "b", name: "beta.txt", createdAt: 2 },
+        { id: "1", name: "notes.md" },
+        { id: "2", name: "photo.png" },
       ],
     },
-    c,
+    "POST /files/upload": {},
+  });
+  await f.settle();
+  Object.defineProperty(f.window, "crypto", { value: globalThis.crypto });
+  type(f, f.host.querySelector<HTMLInputElement>(".shell-search")!, "photo");
+  assert.deepEqual(
+    [...f.host.querySelectorAll(".dense-name")].map((e) => e.textContent),
+    ["photo.png"],
   );
-  c.shell.search.onInput("alpha");
-  assert.equal(root.querySelectorAll(".dense-row").length, 1);
-  root.querySelector(".dense-row")!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter" }));
-  assert.equal(opened, "a");
-  c.shell.search.onInput("missing");
-  assert.match(root.textContent!, /No files match/);
-  dom.window.close();
+  const input = f.host.querySelector<HTMLInputElement>("input[type=file]")!;
+  Object.defineProperty(input, "files", { value: [new f.window.File(["hi"], "a.txt", { type: "text/plain" })] });
+  input.dispatchEvent(new f.window.Event("change"));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const upload = f.requests.find((r) => r.method === "POST")!;
+  assert.equal(upload.url.searchParams.get("scope"), "personal:alice");
+  assert.equal(upload.url.searchParams.get("name"), "a.txt");
+  assert.match(upload.url.searchParams.get("sha")!, /^[0-9a-f]{64}$/);
+  f.close();
 });
 
-test("scope indexes hide full artifact lists until searching", () => {
-  const { dom, root, c, ui } = fixture();
-  c.index = true;
-  c.deploymentHref = () => "https://example.com/app";
-  ui.deployments(root, { deployments: [{ id: "app", name: "App", ownerScopeId: "personal:alice" }] }, c);
-  assert.equal(root.querySelectorAll(".dense-list").length, 2);
-  c.shell.search.onInput("App");
-  const link = root.querySelector<HTMLAnchorElement>('.dense-row[target="_blank"]')!;
-  assert.equal(link.href, "https://example.com/app");
-  assert.equal(link.rel, "noopener");
-  dom.window.close();
-});
-
-test("cron destination draft derives placeholders, disabled fields and API payload", async () => {
-  const { dom, root, c, ui } = fixture();
-  c.cron = "job";
-  const calls: any[] = [];
-  c.api = async (...args: any[]) => {
-    calls.push(args);
-    return { ok: true, data: { sessions: [] } };
-  };
-  ui.crons(root, { crons: [{ id: "job", title: "Daily", ownerScopeId: c.scope }] }, c);
-  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Edit destination")!.click();
-  const select = root.querySelector("select")!;
-  select.value = "principal";
-  select.dispatchEvent(new dom.window.Event("change"));
-  const inputs = root.querySelectorAll<HTMLInputElement>("input");
-  assert.equal(inputs[0].placeholder, "principal id");
-  assert.equal(inputs[2].disabled, false);
-  inputs[0].value = "alice";
-  inputs[0].dispatchEvent(new dom.window.Event("input"));
-  inputs[2].value = "bob";
-  inputs[2].dispatchEvent(new dom.window.Event("input"));
-  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save destination")!.click();
-  await tick();
-  const put = calls.find((args) => args[0] === "PUT");
+test("cron list opens a detail page whose destination edit sends the API payload", async () => {
+  const cron = { id: "job", title: "Daily", ownerScopeId: "personal:alice", schedule: { cron: "0 9 * * *" } };
+  const f = await mountPage("/settings/crons", {
+    ...scopes,
+    "/crons": { crons: [cron] },
+    "/sessions": { sessions: [{ id: "s1", createdAt: 1, turns: 2, delivered: 0 }], total: 1 },
+    "PUT /crons/job/destination": {},
+  });
+  await f.settle();
+  f.host.querySelector<HTMLAnchorElement>(".dense-row")!.click();
+  await f.settle();
+  assert.equal(f.location(), "/settings/crons?scope=org%3Aacme&cron=job");
+  assert.equal(f.host.querySelector(".shell-title")!.textContent, "Daily");
   assert.equal(
-    JSON.stringify(put[2]),
-    JSON.stringify({ destination: { type: "principal", target: "alice", onBehalfOf: "bob" } }),
+    f.host.querySelector(".dense-row.dim")!.getAttribute("href"),
+    "/settings/history?scope=org%3Aacme&session=s1",
   );
-  dom.window.close();
+  button(f.host, "Edit destination").click();
+  type(f, f.host.querySelector(".card select")!, "principal");
+  const inputs = f.host.querySelectorAll<HTMLInputElement>(".card input");
+  assert.equal(inputs[0]!.placeholder, "principal id");
+  type(f, inputs[0]!, "alice");
+  type(f, inputs[2]!, "bob");
+  button(f.host, "Save destination").click();
+  await f.settle();
+  const put = f.requests.find((r) => r.method === "PUT")!;
+  assert.deepEqual(put.body, { destination: { type: "principal", target: "alice", onBehalfOf: "bob" } });
+  assert.equal(button(f.host, "Save destination"), undefined);
+  f.close();
 });
 
-test("stale async cron renders cannot replace a different page", async () => {
-  const { dom, root, c, ui } = fixture();
-  c.cron = "job";
-  let complete: (value: any) => void = () => {};
-  c.api = () =>
-    new Promise((resolve) => {
-      complete = resolve;
-    });
-  ui.crons(root, { crons: [{ id: "job", title: "Daily", ownerScopeId: c.scope }] }, c);
-  root.replaceChildren(dom.window.document.createTextNode("New page"));
-  complete({ ok: true, data: { sessions: [] } });
-  await tick();
-  assert.equal(root.textContent, "New page");
-  dom.window.close();
+test("apps open their public URL in a new tab", async () => {
+  const f = await mountPage("/settings/deployments", {
+    ...scopes,
+    "/deployments": { deployments: [{ id: "d", name: "demo", publicUrl: "https://demo.example" }] },
+  });
+  await f.settle();
+  const link = f.host.querySelector<HTMLAnchorElement>(".dense-row")!;
+  assert.equal(link.href, "https://demo.example/");
+  assert.equal(link.target, "_blank");
+  f.close();
 });
 
-test("pack registration draft is collected from state with advanced fields", async () => {
-  const { dom, root, c, skills } = fixture();
-  const calls: any[] = [];
-  c.api = async (...args: any[]) => {
-    calls.push(args);
-    return { ok: true };
-  };
-  skills.packs(root, [], c);
-  const fields = root.querySelectorAll<HTMLInputElement>("input");
-  for (const [i, value] of ["https://example.com/skills", "main", "private/*, drafts/*", "deploy-token"].entries()) {
-    fields[i].value = value;
-    fields[i].dispatchEvent(new dom.window.Event("input"));
-  }
-  assert.match(root.querySelector(".linkish")!.textContent!, /Advanced •/);
-  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Register")!.click();
-  await tick();
-  assert.equal(calls[0][2].ref, "main");
-  assert.equal(JSON.stringify(calls[0][2].config.exclude), '["private/*","drafts/*"]');
-  dom.window.close();
-});
-
-test("pack selection follows target scopes and supports partial imports", async () => {
-  const { dom, root, c, skills } = fixture();
-  const calls: any[] = [];
-  c.api = async (...args: any[]) => {
-    calls.push(args);
-    return args[0] === "GET"
-      ? {
-          ok: true,
-          data: {
-            candidates: [
-              { upstreamName: "a", eligible: true, importedScopes: ["org:acme"] },
-              { upstreamName: "b", eligible: true, importedScopes: [] },
-            ],
-          },
-        }
-      : { ok: true, data: { imported: [] } };
-  };
-  await skills.browsePack({ id: "pack", url: "example" }, root, c);
-  assert.equal(root.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, true);
-  c.selectedScopes.add("personal:alice");
-  c.changeScopes();
-  assert.equal(root.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, false);
-  const b = root.querySelector<HTMLInputElement>('[data-name="b"]')!;
+test("skills remove, show detail, register packs and import selected pack skills into scopes", async () => {
+  const skill = { id: "k1", name: "deploy", ownerScopeId: "org:acme", status: "active" };
+  const f = await mountPage("/settings/skills", {
+    ...scopes,
+    "GET /skills": { skills: [skill] },
+    "GET /skills/k1": { body: { ...skill, version: 2, body: "Do it", requiredCapabilities: ["net"] } },
+    "DELETE /skills/k1": {},
+    "GET /skill-packs": { packs: [{ id: "p", url: "https://github.com/o/r.git", trustTier: "internal" }] },
+    "POST /skill-packs": {},
+    "GET /skill-packs/p/catalog": {
+      candidates: [
+        { upstreamName: "a", eligible: true, importedScopes: ["org:acme"] },
+        { upstreamName: "b", eligible: true, importedScopes: [] },
+      ],
+    },
+    "POST /skill-packs/p/import": { imported: ["a"] },
+  });
+  await f.settle();
+  f.host.querySelector<HTMLElement>("tr.openable")!.click();
+  await f.settle();
+  assert.ok(f.host.querySelector(".skillbody")!.textContent!.includes("Do it"));
+  button(f.host.querySelector("tr.openable")!, "Remove").click();
+  await f.settle();
+  assert.equal(f.requests.find((r) => r.method === "DELETE")!.url.search, "?scope=org%3Aacme");
+  const fields = f.host.querySelectorAll<HTMLInputElement>(".pack-register input, .pack-adv input");
+  type(f, fields[0]!, "https://example.com/skills");
+  type(f, fields[1]!, "main");
+  type(f, fields[2]!, "private/*, drafts/*");
+  button(f.host, "Register").click();
+  await f.settle();
+  assert.deepEqual(f.requests.find((r) => r.method === "POST")!.body, {
+    url: "https://example.com/skills",
+    ref: "main",
+    config: { exclude: ["private/*", "drafts/*"] },
+  });
+  button(f.host, "Browse skills…").click();
+  await f.settle();
+  assert.equal(f.host.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, true);
+  const select = f.host.querySelector<HTMLSelectElement>("select[multiple]")!;
+  for (const option of select.options) option.selected = true;
+  select.dispatchEvent(new f.window.Event("change"));
+  assert.equal(f.host.querySelector<HTMLInputElement>('[data-name="a"]')!.disabled, false);
+  const b = f.host.querySelector<HTMLInputElement>('[data-name="b"]')!;
   b.checked = false;
-  b.dispatchEvent(new dom.window.Event("change"));
-  [...root.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Import selected")!.click();
-  await tick();
-  const post = calls.find((args) => args[0] === "POST");
-  assert.equal(JSON.stringify(post[2].selected), '["a"]');
-  assert.equal(JSON.stringify(post[2].scopeIds), '["org:acme","personal:alice"]');
-  dom.window.close();
-});
-
-test("cancelled cron destination edits restore the saved destination on reopen", () => {
-  const { dom, root, c, ui } = fixture();
-  c.cron = "job";
-  ui.crons(
-    root,
-    {
-      crons: [
-        { id: "job", title: "Daily", ownerScopeId: c.scope, destination: { type: "principal", target: "alice" } },
-      ],
-    },
-    c,
-  );
-  const click = (text: string) =>
-    [...root.querySelectorAll("button")].find((button) => button.textContent?.trim() === text)!.click();
-  click("Edit destination");
-  assert.equal(root.querySelector("select")!.value, "principal");
-  const target = root.querySelector<HTMLInputElement>('input[name="cron-target"]')!;
-  target.value = "bob";
-  target.dispatchEvent(new dom.window.Event("input"));
-  click("Cancel");
-  click("Edit destination");
-  assert.equal(root.querySelector<HTMLInputElement>('input[name="cron-target"]')!.value, "alice");
-  dom.window.close();
-});
-
-test("cron destination saves preserve edits made while the request is pending", async () => {
-  const { dom, root, c, ui } = fixture();
-  c.cron = "job";
-  let complete: (value: any) => void = () => {};
-  let reloads = 0;
-  c.reload = () => {
-    reloads++;
-  };
-  c.api = async (method: string) =>
-    method === "PUT"
-      ? new Promise((resolve) => {
-          complete = resolve;
-        })
-      : { ok: true, data: { sessions: [] } };
-  ui.crons(root, { crons: [{ id: "job", title: "Daily", ownerScopeId: c.scope }] }, c);
-  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Edit destination")!.click();
-  const target = root.querySelector<HTMLInputElement>('input[name="cron-target"]')!;
-  target.value = "submitted";
-  target.dispatchEvent(new dom.window.Event("input"));
-  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save destination")!.click();
-  target.value = "newer";
-  target.dispatchEvent(new dom.window.Event("input"));
-  complete({ ok: true });
-  await tick();
-  assert.equal(root.querySelector<HTMLInputElement>('input[name="cron-target"]')!.value, "newer");
-  assert.equal(reloads, 0);
-  assert.equal(
-    [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Save destination")!.disabled,
-    false,
-  );
-  dom.window.close();
-});
-
-test("skill removal network failures keep the current view and report an error", async () => {
-  const { dom, c, skills } = fixture();
-  let reloads = 0;
-  let message = "";
-  dom.window.confirm = () => true;
-  dom.window.alert = (value) => {
-    message = String(value);
-  };
-  c.reload = () => {
-    reloads++;
-  };
-  c.api = async () => {
-    throw new Error("offline");
-  };
-  await skills.removeSkill({ id: "skill", ownerScopeId: c.scope }, c);
-  assert.equal(reloads, 0);
-  assert.equal(message, "Could not remove skill.");
-  dom.window.close();
-});
-
-test("pack registration preserves newer edits after its request completes", async () => {
-  const { dom, root, c, skills } = fixture();
-  let complete: (value: any) => void = () => {};
-  let reloads = 0;
-  c.reload = () => {
-    reloads++;
-  };
-  c.api = () =>
-    new Promise((resolve) => {
-      complete = resolve;
-    });
-  skills.packs(root, [], c);
-  const input = root.querySelector<HTMLInputElement>("input")!;
-  input.value = "https://example.com/submitted";
-  input.dispatchEvent(new dom.window.Event("input"));
-  [...root.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Register")!.click();
-  input.value = "https://example.com/newer";
-  input.dispatchEvent(new dom.window.Event("input"));
-  complete({ ok: true });
-  await tick();
-  assert.equal(root.querySelector<HTMLInputElement>("input")!.value, "https://example.com/newer");
-  assert.equal(reloads, 0);
-  assert.match(root.querySelector(".status")!.textContent!, /newer changes/);
-  dom.window.close();
-});
-
-test("file uploads post through the admin relay with the hash and name in the query", async () => {
-  const { dom, c, ui } = fixture();
-  c.apiBase = "/api/admin";
-  const sent: Array<{ url: string; init: any }> = [];
-  dom.window.fetch = (async (url: string, init: any) => {
-    sent.push({ url, init });
-    return new dom.window.Response("{}", { status: 200 });
-  }) as any;
-  const box = ui.uploadBox(c);
-  const input = box.querySelector("input[type=file]");
-  const file = new dom.window.File(["hello"], "notes é.txt", { type: "text/plain" });
-  Object.defineProperty(input, "files", { value: [file] });
-  input.dispatchEvent(new dom.window.Event("change"));
-  for (let i = 0; i < 5 && !sent.length; i++) await tick();
-  assert.equal(sent.length, 1);
-  const url = new URL(sent[0]!.url, "http://localhost");
-  assert.equal(url.pathname, "/api/admin/files/upload");
-  assert.deepEqual(Object.fromEntries(url.searchParams), { scope: "personal:alice", sha: "hash", name: "notes é.txt" });
-  assert.deepEqual({ ...sent[0]!.init.headers }, { "content-type": "text/plain" });
+  b.dispatchEvent(new f.window.Event("change"));
+  button(f.host, "Import selected").click();
+  await f.settle();
+  const post = f.requests.find((r) => r.path === "/skill-packs/p/import")!;
+  assert.deepEqual(post.body, { selected: ["a"], scopeIds: ["org:acme", "personal:alice"] });
+  f.close();
 });

@@ -5,7 +5,6 @@ import { createModelPicker, type ModelCatalog } from "../model-picker.ts";
 import { runtimeModelOptions, type EffortLevel, type ModelOption } from "../model-options.ts";
 import { icon } from "../icons.ts";
 import { loadoutActions, type LoadoutEntry } from "../composer-loadout.ts";
-import { mountTemplate } from "./shared.ts";
 import { states, type SettingsState } from "./settings.ts";
 
 const rows: [key: string, label: string, inherit?: string][] = [
@@ -19,11 +18,6 @@ const keys = [...rows.map(([key]) => key), RECALL];
 type Embedding = { id: string; name: string; provider: string };
 const pickers = new Map<string, ReturnType<typeof picker>>();
 const modelOptions = new WeakMap<object, ModelOption[]>();
-let saveSetting: (key: string) => Promise<void> = async () => {};
-
-export function configureRuntimes(actions: { save: (key: string) => Promise<void> }) {
-  saveSetting = actions.save;
-}
 
 function optionsFor(context: Record<string, any>): ModelOption[] {
   let options = modelOptions.get(context);
@@ -134,7 +128,7 @@ function recallRow() {
     </p>`;
 }
 
-function card() {
+export function runtimesCard() {
   const shown = keys.map((key) => states.get(key)!).filter((s) => s.available);
   const dirty = shown.filter((s) => s.dirty);
   const labels = Object.fromEntries([...rows, [RECALL, "Recall runtime"]]);
@@ -155,15 +149,10 @@ function card() {
         id="runtimes-save"
         class=${classMap({ primary: true, dirty: !!dirty.length })}
         ?disabled=${!dirty.length || shown.some((s) => s.saving)}
-        @click=${() => Promise.all(dirty.map((s) => saveSetting(s.key)))}
+        @click=${() => Promise.all(dirty.map((s) => s.save()))}
       >
         Save</button
       ><span class=${classMap({ status: true, [status?.tone || "idle"]: true })}>${status?.message ?? ""}</span>
     </div>
   </section>`;
-}
-
-export function mountRuntimes() {
-  const draw = mountTemplate('template[data-settings-card="card-runtimes"]', card);
-  for (const key of keys) states.get(key)!.render = draw;
 }

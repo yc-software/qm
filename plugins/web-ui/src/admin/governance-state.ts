@@ -1,4 +1,4 @@
-import { SettingState, settingRegistry } from "./setting-state.ts";
+import { SettingState } from "./setting-state.ts";
 export type Rule = { id: number; pattern: string; decision: string; reason: string };
 export type Bot = { id: number; name: string; mode: string; hours: string };
 let nextId = 0;
@@ -6,7 +6,6 @@ const fieldNames: Record<string, Record<string, string>> = {
   "security-posture": { "security-posture": "posture" },
   "sharing-posture": { "sharing-posture": "posture" },
   "org-ambient": { "governance-org-ambient": "on" },
-  "approval-grant-modes": { "approval-grant-session": "session", "approval-grant-always": "always" },
   "ambient-policy": { "ambient-enabled": "ambientEnabled", "ambient-orders": "orders" },
   egress: { egress: "allowedHosts", "egress-deny": "deniedHosts" },
   "command-policy": {},
@@ -58,11 +57,7 @@ export class GovernanceState extends SettingState {
       this.denyEditor = !!this.draft.deniedHosts;
     }
     this.expanded = false;
-    this.baseline = JSON.stringify(this.collect(false));
-    this.message = "";
-    this.tone = "";
-    this.saving = false;
-    this.render();
+    this.loaded();
   }
   collect(validate = true): Record<string, any> {
     if (this.key === "command-policy") {
@@ -166,12 +161,10 @@ export function patternError(pattern: string): string {
   }
 }
 export const states = new Map(Object.keys(fieldNames).map((key) => [key, new GovernanceState(key)]));
-export const { owns, collect, capture, commit, status } = settingRegistry(states);
 export function load(data: Record<string, any>, scope: string, only?: string) {
   const resources: Record<string, [boolean, Record<string, any>]> = {
     "security-posture": ["securityPosture" in data, { posture: data.securityPosture || "auto" }],
     "sharing-posture": ["sharingPosture" in data, { posture: data.sharingPosture || "isolated" }],
-    "approval-grant-modes": ["approvalGrantModes" in data, data.approvalGrantModes || { session: true, always: true }],
     "command-policy": [true, data.commandPolicy || { mode: "denylist", rules: [] }],
     "org-ambient": [scope.startsWith("org:") && "orgAmbient" in data, { on: data.orgAmbient !== false }],
     "ambient-policy": [
@@ -187,11 +180,4 @@ export function load(data: Record<string, any>, scope: string, only?: string) {
     state.disabled = key === "egress" && !data.egressEnforcement?.active;
     state.load(body, data, scope);
   }
-}
-
-export function statusKey(id: string): string | undefined {
-  const key = id.replace(/^st-/, "");
-  if (key === "policy") return "command-policy";
-  if (key === "governance-org-ambient") return "org-ambient";
-  return owns(key) ? key : undefined;
 }

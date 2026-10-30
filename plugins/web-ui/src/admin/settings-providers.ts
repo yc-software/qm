@@ -1,8 +1,9 @@
-import { mountTemplate } from "./shared.ts";
-import { html, render } from "lit";
+import { html } from "lit";
+import type { AdminPage } from "./sections.ts";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
-let config: any;
+import { ifDefined } from "lit/directives/if-defined.js";
+let ctx: { page: AdminPage; redraw: () => void; refresh: () => Promise<void> };
 const labels: Record<string, string> = {
   openai: "OpenAI Chat Completions",
   "openai-responses": "OpenAI Responses",
@@ -19,11 +20,8 @@ export const provider = {
   revision: 0,
   session: 0,
 };
-let redraw = () => {};
-const mountedSummaries = new WeakSet<HTMLElement>();
-export function configureProviders(options: any) {
-  config = options;
-}
+export const useProviders = (next: typeof ctx) => void (ctx = next);
+const redraw = () => ctx.redraw();
 function changeProvider(key: string, value: unknown) {
   provider.draft[key] = value;
   provider.revision++;
@@ -63,7 +61,7 @@ function closeProvider() {
   provider.draft.key = "";
   redraw();
 }
-export function providerBody() {
+function providerBody() {
   const d = provider.draft;
   const models = d.models
     .split("\n")
@@ -90,15 +88,17 @@ export function providerBody() {
     ...(d.validate ? {} : { validate: false }),
   };
 }
+function fail(message: string, draw = true) {
+  provider.message = message;
+  provider.error = true;
+  if (draw) redraw();
+}
 async function saveProvider() {
   if (provider.saving) return;
   const body = providerBody();
   const id = provider.draft.id.trim();
   if (!id || !body.name || !body.baseUrl || !body.models.length) {
-    provider.message = "Provider id, name, base URL, and at least one model are required.";
-    provider.error = true;
-    redraw();
-    return;
+    return fail("Provider id, name, base URL, and at least one model are required.");
   }
   const revision = provider.revision;
   const session = provider.session;
@@ -107,23 +107,16 @@ async function saveProvider() {
   provider.error = false;
   redraw();
   try {
-    const saved = await config.api("PUT", "/api/custom-providers/" + encodeURIComponent(id), body);
+    const saved = await ctx.page.api("PUT", "/api/custom-providers/" + encodeURIComponent(id), body);
     if (session !== provider.session) return;
-    if (!saved.ok) {
-      provider.error = true;
-      provider.message = saved.data?.message || "Could not save this provider.";
-      return;
-    }
+    if (!saved.ok) return fail(saved.data?.message || "Could not save this provider.", false);
     if (provider.draft.key.trim() === body.apiKey) provider.draft.key = "";
-    await config.refresh();
+    await ctx.refresh();
     if (session !== provider.session) return;
     if (revision === provider.revision) closeProvider();
     else provider.message = "Provider saved. Your newer edits are not saved.";
   } catch {
-    if (session === provider.session) {
-      provider.error = true;
-      provider.message = "Could not save this provider. Your draft is preserved.";
-    }
+    if (session === provider.session) fail("Could not save this provider. Your draft is preserved.", false);
   } finally {
     if (session === provider.session) {
       provider.saving = false;
@@ -133,60 +126,83 @@ async function saveProvider() {
 }
 async function removeProvider(item: any) {
   if (!confirm("Remove " + item.name + "? Its models leave every model picker.")) return;
-  const removed = await config.api("DELETE", "/api/custom-providers/" + encodeURIComponent(item.id));
-  if (!removed.ok) {
-    provider.message = removed.data?.message || "Could not remove this provider.";
-    provider.error = true;
-    redraw();
-    return;
-  }
-  await config.refresh();
+  const removed = await ctx.page.api("DELETE", "/api/custom-providers/" + encodeURIComponent(item.id));
+  if (!removed.ok) return fail(removed.data?.message || "Could not remove this provider.");
+  await ctx.refresh();
 }
 export async function loadProviders() {
-  const res = await config.api("GET", "/api/custom-providers");
+  const res = await ctx.page.api("GET", "/api/custom-providers");
   if (!res.ok) return;
   provider.rows = (res.data?.providers || []).filter((p: any) => !p.disabled);
-  renderRows();
+  redraw();
 }
-function renderRows() {
-  for (const [id, compact] of [
-    ["model-custom-provider-rows", true],
-    ["custom-provider-rows", false],
-  ] as const) {
-    const root = document.getElementById(id);
-    if (!root) continue;
-    render(
-      html`${repeat(
-        provider.rows,
-        (p) => p.id,
-        (p) =>
-          html`<tr>
-            ${[p.name + " (" + p.id + ")", labels[p.protocol] || p.protocol, p.baseUrl, compact ? String(p.models.length) : p.models.map((m: any) => m.id).join(", "), keyLabel(p, compact)].map((text) => html`<td>${text}</td>`)}
-            <td>
-              <button type="button" @click=${() => openProvider(p)}>Edit</button
-              ><button class="danger" @click=${() => removeProvider(p)}>Remove</button>
-            </td>
-          </tr>`,
-      )}`,
-      root,
-    );
-  }
-  const table = document.getElementById("model-custom-provider-table");
-  if (table) table.hidden = !provider.rows.length;
-  const summary = document.getElementById("custom-provider-summary");
-  if (summary) {
-    if (!mountedSummaries.has(summary)) {
-      summary.replaceChildren();
-      mountedSummaries.add(summary);
-    }
-    summary.hidden = !!provider.rows.length;
-    render(html`No custom providers.`, summary);
-  }
-  const empty = document.getElementById("custom-provider-empty");
-  if (empty) empty.hidden = !!provider.rows.length;
+export function providerRows(compact: boolean) {
+  return repeat(
+    provider.rows,
+    (p) => p.id,
+    (p) =>
+      html`<tr>
+        ${[p.name + " (" + p.id + ")", labels[p.protocol] || p.protocol, p.baseUrl, compact ? String(p.models.length) : p.models.map((m: any) => m.id).join(", "), keyLabel(p, compact)].map((text) => html`<td>${text}</td>`)}
+        <td>
+          <button type="button" @click=${() => openProvider(p)}>Edit</button
+          ><button class="danger" @click=${() => removeProvider(p)}>Remove</button>
+        </td>
+      </tr>`,
+  );
+}
+export function providersCard() {
+  return html`<section class="card sv-models" id="card-custom-providers">
+      <div class="head">
+        <h2>Custom providers</h2>
+        <p>
+          OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages endpoints. Their models join the pickers
+          above and below.
+        </p>
+      </div>
+      <div class="body">
+        <div class="tablewrap" id="model-custom-provider-table" ?hidden=${!provider.rows.length}>
+          <table>
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>Protocol</th>
+                <th>Endpoint</th>
+                <th>Models</th>
+                <th>Key</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="model-custom-provider-rows">
+              ${providerRows(true)}
+            </tbody>
+          </table>
+        </div>
+        <div id="custom-provider-summary" class="hint" ?hidden=${!!provider.rows.length}>No custom providers.</div>
+      </div>
+      <div class="foot">
+        <button type="button" id="add-custom-provider" @click=${() => openProvider()}>+ Add provider</button>
+      </div>
+    </section>
+    ${providerDialog()}`;
 }
 
-function template() {
+function input(
+  key: string,
+  label: string,
+  o: { placeholder: string; disabled?: boolean; type?: string; cls?: string },
+) {
+  return html`<label class=${ifDefined(o.cls)}
+    >${label}<input
+      type=${ifDefined(o.type)}
+      id=${"custom-provider-" + key}
+      .value=${provider.draft[key] || ""}
+      @input=${(e: Event) => changeProvider(key, (e.target as HTMLInputElement).value)}
+      ?disabled=${!!o.disabled}
+      autocomplete="off"
+      placeholder=${o.placeholder}
+  /></label>`;
+}
+export function providerDialog() {
   return html`
     <dialog
       @click=${(e: MouseEvent) => {
@@ -215,23 +231,8 @@ function template() {
         </button>
       </div>
       <div class="custom-provider-form">
-        <label
-          >Provider id (slug)<input
-            id="custom-provider-id"
-            .value=${provider.draft.id || ""}
-            @input=${(e: Event) => changeProvider("id", (e.target as HTMLInputElement).value)}
-            ?disabled=${provider.editing}
-            autocomplete="off"
-            placeholder="litellm"
-        /></label>
-        <label
-          >Display name<input
-            id="custom-provider-name"
-            .value=${provider.draft.name || ""}
-            @input=${(e: Event) => changeProvider("name", (e.target as HTMLInputElement).value)}
-            autocomplete="off"
-            placeholder="LiteLLM"
-        /></label>
+        ${input("id", "Provider id (slug)", { placeholder: "litellm", disabled: provider.editing })}
+        ${input("name", "Display name", { placeholder: "LiteLLM" })}
         <label
           >Protocol<select
             id="custom-provider-protocol"
@@ -243,23 +244,8 @@ function template() {
             <option value="anthropic">Anthropic Messages</option>
           </select></label
         >
-        <label
-          >Base URL<input
-            id="custom-provider-url"
-            .value=${provider.draft.url || ""}
-            @input=${(e: Event) => changeProvider("url", (e.target as HTMLInputElement).value)}
-            autocomplete="off"
-            placeholder="https://gateway.internal/v1"
-        /></label>
-        <label class="custom-provider-key"
-          >API key<input
-            type="password"
-            id="custom-provider-key"
-            .value=${provider.draft.key || ""}
-            @input=${(e: Event) => changeProvider("key", (e.target as HTMLInputElement).value)}
-            autocomplete="off"
-            placeholder="Write-only; blank on edit keeps the stored key"
-        /></label>
+        ${input("url", "Base URL", { placeholder: "https://gateway.internal/v1" })}
+        ${input("key", "API key", { placeholder: "Write-only; blank on edit keeps the stored key", type: "password", cls: "custom-provider-key" })}
         <label class="custom-provider-models"
           >Models
           <span class="label-detail">one per line: id | name | context | max tokens | reasoning (true/false)</span
@@ -296,10 +282,6 @@ function template() {
     </dialog>
   `;
 }
-export function mountProviders() {
-  redraw = mountTemplate('template[data-settings-card="custom-provider-dialog"]', template);
-}
-
 function keyLabel(p: any, compact: boolean) {
   const text = p.hasKey ? "set (write-only)" : "none";
   return compact ? text.charAt(0).toUpperCase() + text.slice(1) : text;
