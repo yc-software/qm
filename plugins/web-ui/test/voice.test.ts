@@ -53,7 +53,8 @@ test("session creation keeps credentials and authoritative configuration on serv
     const body = JSON.parse(String(init?.body));
     assert.equal(body.session.model, "gpt-live-1");
     assert.equal(body.session.store, false);
-    assert.equal(body.session.delegation.responses.tools[0].name, "ask_qm");
+    assert.deepEqual(body.session.delegation, { type: "client", acknowledgement_delay_ms: 800 });
+    assert.equal(body.session.instructions.endsWith("</startup_context>"), false);
     assert.equal(body.transport.sdp, "v=0\r\no=offer");
     assert.equal(String(init?.body).includes("private-user"), false);
     return Response.json({
@@ -64,6 +65,22 @@ test("session creation keeps credentials and authoritative configuration on serv
   });
   const result = await createLiveVoice("v=0\r\no=offer", caller);
   assert.deepEqual(result, { session: { id: "live_123" }, transport: { type: "webrtc", sdp: "v=0\r\no=answer" } });
+});
+
+test("a startup briefing is appended to the live instructions", async (t) => {
+  const sessions: { instructions: string }[] = [];
+  stubFetch(t, async (_url, init) => {
+    sessions.push(JSON.parse(String(init?.body)).session);
+    return Response.json({ session: { id: "live_1" }, transport: { type: "webrtc", sdp: "v=0" } });
+  });
+  await createLiveVoice("v=0", caller);
+  await createLiveVoice("v=0", caller, "Open work: the quarterly report draft.");
+  await createLiveVoice("v=0", caller, "");
+  assert.equal(
+    sessions[1]!.instructions,
+    `${sessions[0]!.instructions}\n\n<startup_context>\nOpen work: the quarterly report draft.\n</startup_context>`,
+  );
+  assert.equal(sessions[2]!.instructions, sessions[0]!.instructions);
 });
 
 test("provider failures keep diagnostic evidence for error reporting", async (t) => {

@@ -72,7 +72,17 @@ test("voice route authenticates and gates accounts before spending", async () =>
 });
 
 test("voice rejects invalid and oversized offers", async () => {
-  for (const body of ["{", "null", "[]", "{}", JSON.stringify({ sdp: "bad" })]) {
+  const sdp = "v=0\r\no=offer";
+  for (const body of [
+    "{",
+    "null",
+    "[]",
+    "{}",
+    JSON.stringify({ sdp: "bad" }),
+    JSON.stringify({ sdp, briefing: 42 }),
+    JSON.stringify({ sdp, briefing: null }),
+    JSON.stringify({ sdp, briefing: "x".repeat(16_001) }),
+  ]) {
     assert.equal((await fetch(`${base}/api/voice/sessions`, { method: "POST", headers, body })).status, 400);
   }
   assert.equal(
@@ -80,7 +90,7 @@ test("voice rejects invalid and oversized offers", async () => {
       await fetch(`${base}/api/voice/sessions`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ sdp: "v=0" + "x".repeat(70_000) }),
+        body: JSON.stringify({ sdp: "v=0" + "x".repeat(300_000) }),
       })
     ).status,
     413,
@@ -89,19 +99,32 @@ test("voice rejects invalid and oversized offers", async () => {
 
 test("voice relays only a sanitized SDP result and never a provider key", async (t) => {
   const actualFetch = globalThis.fetch;
-  let providerCalls = 0;
+  const instructions: string[] = [];
   t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     if (String(input) !== "https://api.openai.com/v1/live/sessions") return actualFetch(input, init);
-    providerCalls++;
+    instructions.push(JSON.parse(String(init?.body)).session.instructions);
     return Response.json({
       session: { id: "live_route" },
       transport: { type: "webrtc", sdp: "v=0\r\no=answer" },
       api_key: "must-not-leak",
     });
   });
-  const response = await fetch(`${base}/api/voice/sessions`, { method: "POST", headers: identity(), body: offer });
+  const briefing = "Open work: ".padEnd(16_000, "x");
+  const response = await fetch(`${base}/api/voice/sessions`, {
+    method: "POST",
+    headers: identity(),
+    body: JSON.stringify({ sdp: "v=0\r\no=offer", briefing }),
+  });
   assert.equal(response.status, 201);
-  assert.equal(providerCalls, 1);
+  const blank = await fetch(`${base}/api/voice/sessions`, {
+    method: "POST",
+    headers: identity(),
+    body: JSON.stringify({ sdp: "v=0\r\no=offer", briefing: "  \n " }),
+  });
+  assert.equal(blank.status, 201);
+  assert.equal(instructions.length, 2);
+  assert.ok(instructions[0]!.endsWith(`<startup_context>\n${briefing}\n</startup_context>`));
+  assert.ok(!instructions[1]!.endsWith("</startup_context>"));
   assert.deepEqual(await response.json(), {
     session: { id: "live_route" },
     transport: { type: "webrtc", sdp: "v=0\r\no=answer" },

@@ -22,6 +22,8 @@ import {
 const TRANSCRIBE_TIMEOUT_MS = 600_000;
 const LIVE_SESSION_TIMEOUT_MS = 25_000;
 const MAX_RETRY_AFTER_S = 3600;
+const MAX_BRIEFING_CHARS = 16_000;
+const MAX_OFFER_BYTES = 131_072;
 const REJECTED_STATUSES = new Set([400, 401, 403, 404, 422]);
 
 const SPOOL_DIR = join(tmpdir(), "qm-dictation");
@@ -80,12 +82,16 @@ export async function handleVoiceRoute(
     return json(res, 403, { error: "unexpected_origin" });
   const mimeType = req.headers["content-type"]?.split(";")[0]?.trim() ?? "";
   let sdp = "";
+  let briefing: string | undefined;
   if (dictation) {
     if (!Object.hasOwn(dictationFormats, mimeType)) return json(res, 415, { error: "unsupported_audio" });
   } else {
-    let offer: { sdp?: unknown } | null;
+    let offer: { sdp?: unknown; briefing?: unknown } | null;
     try {
-      offer = JSON.parse((await readBodyBytes(req, 65_536)).toString("utf8")) as { sdp?: unknown } | null;
+      offer = JSON.parse((await readBodyBytes(req, MAX_OFFER_BYTES)).toString("utf8")) as {
+        sdp?: unknown;
+        briefing?: unknown;
+      } | null;
     } catch (error) {
       if (error instanceof PayloadTooLargeError) {
         res.setHeader("connection", "close");
@@ -95,7 +101,11 @@ export async function handleVoiceRoute(
     }
     if (typeof offer?.sdp !== "string" || !offer.sdp.startsWith("v=0") || offer.sdp.length > 60_000)
       return json(res, 400, { error: "invalid_offer" });
+    const startup = offer.briefing === undefined ? "" : offer.briefing;
+    if (typeof startup !== "string" || startup.length > MAX_BRIEFING_CHARS)
+      return json(res, 400, { error: "invalid_briefing" });
     sdp = offer.sdp;
+    briefing = startup.trim() || undefined;
   }
 
   const controller = new AbortController();
@@ -111,7 +121,7 @@ export async function handleVoiceRoute(
       apiKey: openaiKey()!,
       signal: AbortSignal.any([controller.signal, finished.signal, AbortSignal.timeout(timeoutMs)]),
     });
-    if (!dictation) return json(res, 201, await createLiveVoice(sdp, caller(LIVE_SESSION_TIMEOUT_MS)));
+    if (!dictation) return json(res, 201, await createLiveVoice(sdp, caller(LIVE_SESSION_TIMEOUT_MS), briefing));
     let audio: { file: string; size: number };
     try {
       audio = await spool(req, controller.signal);
