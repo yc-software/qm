@@ -45,12 +45,26 @@ test("sandbox resources and defaults backfill from key-value rows onto the exist
       });
       const { rows } = await admin.query(
         `SELECT to_regclass('sandbox_resources_kv') AS kv, (SELECT count(*)::int FROM durable_map_versions) AS versions,
-                (SELECT array_agg(DISTINCT tenant_id::text) FROM sandbox_resources) AS tenants`,
+                (SELECT array_agg(DISTINCT tenant_id::text) FROM sandbox_resources) AS tenants,
+                to_regclass('sandbox_routing') AS routing, to_regclass('sandbox_resource_rollout') AS rollout,
+                to_regclass('aws_sandbox_bodies') AS aws, to_regclass('superserve_config_epochs') AS epochs`,
       );
-      assert.deepEqual(rows[0], { kv: null, versions: 0, tenants: [tenant] });
+      assert.deepEqual(rows[0], {
+        kv: null,
+        versions: 0,
+        tenants: [tenant],
+        routing: null,
+        rollout: null,
+        aws: null,
+        epochs: null,
+      });
     },
     async (admin) => {
       await seedKeyValueTable(admin, "sandbox_resources", { "legacy-abc": legacy });
+      await seedKeyValueTable(admin, "sandbox_routing", { "personal:alice": { backend: "modal" } });
+      await seedKeyValueTable(admin, "sandbox_resource_rollout", { "explicit-defaults": { activatedAt: "x" } });
+      await seedKeyValueTable(admin, "aws_sandbox_bodies", { "personal:bob": { microvmId: "vm" } });
+      await seedKeyValueTable(admin, "superserve_config_epochs", { gen: { generation: 1 } });
       await seedKeyValueTable(admin, "sandbox_defaults", {
         "personal:alice": { sandboxId: "legacy-abc" },
         "personal:cleared": { sandboxId: null },
