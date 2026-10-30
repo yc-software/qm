@@ -14,6 +14,9 @@ import type { Cron } from "../src/types.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fakeLease(isLeader: () => boolean): LeaderLease {
   return {

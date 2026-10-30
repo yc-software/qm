@@ -10,10 +10,8 @@ import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempoten
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -27,14 +25,8 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await p.query(`DROP TABLE IF EXISTS crons, ${IDEM_TABLE}`);
-  createPostgresSessionStore(URL);
-  await migrateRegisteredPgSchemas(URL);
-  await p.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'cron-queue', 'Cron queue') ON CONFLICT DO NOTHING`, [
-    TEST_TENANT,
-  ]);
+  await p.query(`DROP TABLE IF EXISTS ${IDEM_TABLE}`);
   await p.end();
 });
 
