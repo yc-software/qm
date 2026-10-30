@@ -153,7 +153,7 @@ for (const [label, destination, method, error] of [
   });
 }
 
-test("a delete refused for a reason other than a missing message still acks but is logged", async () => {
+test("a refused delete is logged without a delivery acknowledgment", async () => {
   const errors: string[] = [];
   const original = console.error;
   console.error = (...args: unknown[]) => {
@@ -162,7 +162,7 @@ test("a delete refused for a reason other than a missing message still acks but 
   try {
     const h = harness({ errors: { "chat.delete": "cant_delete_message" } });
     await h.deliver({ destination: { delete: { messageTs: "100.500" } }, ageMs: RECOVERED_AGE_MS });
-    assert.deepEqual(h.acknowledgements, ["D1"]);
+    assert.deepEqual(h.acknowledgements, []);
     assert.equal(errors.length, 1);
     assert.match(errors[0]!, /cant_delete_message/);
   } finally {
