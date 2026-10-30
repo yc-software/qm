@@ -1589,7 +1589,10 @@ export function buildApp(
       (routed) => availableRuntimeError({ deps: runtimeDeps }, input.scopeLabel, routed.choice, input.runtimePurpose),
       async (reason) => {
         const failed = (detail: string, cause?: unknown) =>
-          new NonRetryableTurnError(`${reason} The fallback runtime can't run either: ${detail}`, { cause });
+          new NonRetryableTurnError(
+            `${reason}${reason.endsWith(".") ? "" : "."} The fallback runtime can't run either: ${detail}`,
+            { cause },
+          );
         let target: Awaited<ReturnType<typeof resolve>>;
         try {
           target = await resolveRuntimeChoiceDurable(

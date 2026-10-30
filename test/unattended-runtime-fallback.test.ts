@@ -72,3 +72,10 @@ test("a triggered turn whose model a person just chose is still refused, not swa
   assert.equal(res.status, "refused");
   assert.match(res.reason ?? "", /^pi\/claude-sonnet-5 can't run here/);
 });
+
+test("an unknown model whose fallback can't run either fails with both reasons as sentences", async () => {
+  await assert.rejects(
+    (await app("claude-opus-5")).app.turn(turn("claude-opus-5.5")),
+    /runtime pi\/claude-opus-5\.5 is not approved\. The fallback runtime can't run either: /,
+  );
+});
