@@ -11,6 +11,9 @@ import { buildApp } from "../src/wiring.ts";
 import { baseModelProviders, configuredModelForHarness, providerKeysPresent } from "../src/config.ts";
 import { defaultModelForHarness, modelProviderAvailabilityFor } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

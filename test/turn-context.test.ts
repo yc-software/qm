@@ -15,6 +15,9 @@ import type { Resolution, Session } from "../src/types.ts";
 import { renderRecall } from "../src/memory/cross-scope.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function fixture() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "turn-context-")));

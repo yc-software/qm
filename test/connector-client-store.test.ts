@@ -10,6 +10,9 @@ import {
   deriveConnectorKey,
 } from "../src/connectors/connector-client-store.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const orgScope = (o: string) => scopeId("org", o);
 const envWithSlack = {

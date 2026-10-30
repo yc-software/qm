@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { audienceEgressFloor, audienceDeniedFloor } from "../src/resolution/audience-floor.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { scopeId, type Principal } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = scopeId("org", "default-org");
 

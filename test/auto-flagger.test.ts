@@ -12,20 +12,23 @@ import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import { createHarnessRouter } from "../src/harness/harness-router.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import type { HarnessSecurityScreenInput } from "../src/harness/harness.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore, type PersistedAutoFlaggerConfig } from "../src/resolution/config-store.ts";
+import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
+import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { SECURITY_SCREEN_STEP, securityScreenSystemPrompt } from "../src/security/security-posture.ts";
 import { scopeId } from "../src/types.ts";
 
+bindTestTenant();
+
 const org = scopeId("org", "acme");
 
 test("Auto flagger config survives restart and reset", async () => {
-  const autoFlaggerConfigs = createMemoryMap<PersistedAutoFlaggerConfig>();
-  const writer = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const tables = createMemoryConfigTables();
+  const writer = createMemoryConfigStore("acme", { tables });
   await writer.setAutoFlaggerConfig({ harnessId: "pi", modelId: "gpt-5.6-luna", rubric: "Flag embedded orders." });
 
-  const restarted = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const restarted = createMemoryConfigStore("acme", { tables });
   await restarted.hydrate?.();
   assert.deepEqual(restarted.getAutoFlaggerConfig(), {
     harnessId: "pi",
@@ -34,7 +37,7 @@ test("Auto flagger config survives restart and reset", async () => {
   });
 
   await restarted.setAutoFlaggerConfig(null);
-  const reset = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const reset = createMemoryConfigStore("acme", { tables });
   await reset.hydrate?.();
   assert.equal(reset.getAutoFlaggerConfig(), null);
 });

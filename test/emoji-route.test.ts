@@ -16,6 +16,9 @@ import {
 } from "../src/connectors/browser-session-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "emoji-route-secret".repeat(3);
 const ACTOR = "U_E1";

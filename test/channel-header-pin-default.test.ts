@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const org = scopeId("org", "acme");
 const channel = "channel:C123" as ScopeId;

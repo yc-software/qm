@@ -4,8 +4,10 @@ import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { composeSoul, createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { PersistedEgressPolicy, PersistedSoul } from "../src/resolution/config-store.ts";
+import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor: Principal = { id: "U1", type: "internal" };
 
@@ -106,15 +108,14 @@ test("resolution carries the durable effective security posture", async () => {
 });
 
 test("resolution refreshes security config written by another instance", async () => {
-  const souls = createMemoryMap<PersistedSoul>();
-  const egressPolicies = createMemoryMap<PersistedEgressPolicy>();
-  const reader = createMemoryConfigStore("default-org", { souls, egressPolicies });
+  const tables = createMemoryConfigTables();
+  const reader = createMemoryConfigStore("default-org", { tables });
   const personal = scopeId("personal", "U1");
-  await souls.put(personal, { scopeId: personal, content: "FLEET_LIVE", version: 1 });
-  await egressPolicies.put(personal, {
-    scopeId: personal,
-    policy: { allowedHosts: [], deniedHosts: ["blocked.example"] },
-  });
+  await tables.appendSoul({ scopeId: personal, content: "FLEET_LIVE", version: 1, updatedAt: 1 }, 0, 0);
+  await tables.updateScopeSetting(personal, (row) => ({
+    ...row,
+    egress: { allowedHosts: [], deniedHosts: ["blocked.example"] },
+  }));
   const res = createResolutionService("default-org", reader, createAclStore());
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const resolved = await res.resolve(conv, actor);

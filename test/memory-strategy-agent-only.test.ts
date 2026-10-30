@@ -6,6 +6,9 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor: Principal = { id: "u1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "t1", audience: [actor] };

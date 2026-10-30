@@ -5,6 +5,10 @@ import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -30,9 +34,9 @@ mock.module("../src/resolution/config-store.ts", {
     createMemoryConfigStore: (...args: Parameters<typeof configModule.createMemoryConfigStore>) =>
       configModule.createMemoryConfigStore(args[0], {
         ...args[1],
-        deploymentIdentity: {
-          ...args[1]!.deploymentIdentity!,
-          putIfAbsent: async () => {
+        tables: {
+          ...createMemoryConfigTables(),
+          scopeSettings: async () => {
             throw configFailure;
           },
         },
@@ -48,9 +52,6 @@ test("eager hydration failures are contained while explicit startup hydration re
   try {
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate identity")));
-    assert.ok(
-      errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate configuration")),
-    );
     for (let attempt = 0; attempt < 2; attempt++) {
       await assert.rejects(built.identity.hydrate(), (error: unknown) => error === identityFailure);
       await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);

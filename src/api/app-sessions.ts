@@ -1327,10 +1327,8 @@ export function createSessionMethods(
         throw new SoulUpdateDeniedError();
       }
       const write = async (): Promise<number> => {
-        let snapshot: Awaited<ReturnType<typeof deps.config.captureSoulSnapshot>> | undefined;
         try {
           await deps.config.refreshScope(scopeIdValue);
-          snapshot = await deps.config.captureSoulSnapshot(scopeIdValue);
           const version =
             opts?.expectedVersion === undefined
               ? await deps.config.setSoul(scopeIdValue, content, actorId)
@@ -1345,7 +1343,6 @@ export function createSessionMethods(
           });
           return version;
         } catch (error) {
-          if (snapshot !== undefined) deps.config.restoreSoulCacheSnapshot(scopeIdValue, snapshot);
           if (opts?.expectedVersion !== undefined) await deps.config.refreshScope(scopeIdValue);
           throw error;
         }

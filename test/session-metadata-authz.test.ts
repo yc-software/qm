@@ -9,6 +9,9 @@ import { buildApp } from "./support/build-app.ts";
 import { projectGroupRef, projectScopeId } from "../src/projects/project-store.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-session-authz-"));

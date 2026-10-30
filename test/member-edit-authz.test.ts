@@ -9,12 +9,15 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createSkillStore } from "../src/skills/skill-store.ts";
-import { createMemoryConfigStore, type PersistedSoul, type ScopedConfigStore } from "../src/resolution/config-store.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { createMemoryConfigStore, type ScopedConfigStore } from "../src/resolution/config-store.ts";
+import { createMemoryConfigTables, type ConfigTables, type SoulRevision } from "../src/resolution/config-tables.ts";
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const OWNER = "owner";
@@ -83,34 +86,30 @@ function makeApp(): App {
   return createApp(makeDeps() as unknown as AppDeps);
 }
 
-function failingPutMap<T>(control: { fail: boolean }): DurableMap<T> {
-  const backing = createMemoryMap<T>();
+function failingSoulTables(control: { fail: boolean }): ConfigTables {
+  const backing = createMemoryConfigTables();
   return {
     ...backing,
-    async put(id, value) {
+    async appendSoul(revision, expected, base) {
       if (control.fail) throw new Error("forced durable put failure");
-      await backing.put(id, value);
-    },
-    async update(id, fn) {
-      if (control.fail) throw new Error("forced durable put failure");
-      return backing.update!(id, fn);
+      return backing.appendSoul(revision, expected, base);
     },
   };
 }
 
-function putThenFailReadsMap<T>(backing: DurableMap<T>): DurableMap<T> {
+function appendThenFailReadsTables(backing: ConfigTables): ConfigTables {
   let failReads = false;
   return {
     ...backing,
-    async get(id) {
+    async soulRevisions(perScope, ids) {
       if (failReads) throw new Error("forced durable read failure");
-      return backing.get(id);
+      return backing.soulRevisions(perScope, ids);
     },
-    async put() {
-      failReads = true;
-      throw new Error("forced durable put failure");
+    async scopeSetting(id) {
+      if (failReads) throw new Error("forced durable read failure");
+      return backing.scopeSetting(id);
     },
-    async update() {
+    async appendSoul() {
       failReads = true;
       throw new Error("forced durable put failure");
     },
@@ -244,24 +243,24 @@ test("SOUL: a private-channel or group member may edit; a public-channel member 
 });
 
 test("SOUL: shared-lock writers refresh fleet state before assigning the next version", async () => {
-  const souls = createMemoryMap<PersistedSoul>();
+  const tables = createMemoryConfigTables();
   const lock = createMemoryAdvisoryLock();
-  const leftConfig = createMemoryConfigStore(ORG, { souls });
-  const rightConfig = createMemoryConfigStore(ORG, { souls });
+  const leftConfig = createMemoryConfigStore(ORG, { tables });
+  const rightConfig = createMemoryConfigStore(ORG, { tables });
   const left = createApp(makeDeps({ config: leftConfig, advisoryLock: lock }) as unknown as AppDeps);
   const right = createApp(makeDeps({ config: rightConfig, advisoryLock: lock }) as unknown as AppDeps);
 
   assert.equal(await left.updateSoul(privScope, "left", PRIV_MEMBER, { allowSharedScope: true }), 1);
   assert.equal(rightConfig.soulVersion(privScope), 0, "the second core starts with a stale cache");
   assert.equal(await right.updateSoul(privScope, "right", PRIV_MEMBER, { allowSharedScope: true }), 2);
-  assert.equal((await souls.get(privScope))?.version, 2);
-  assert.equal((await souls.get(privScope))?.content, "right");
+  const [latest] = await tables.soulRevisions(1, [privScope]);
+  assert.equal(latest?.version, 2);
+  assert.equal(latest?.content, "right");
 });
 
-test("SOUL: a durable write failure rejects and restores the live cache", async () => {
+test("SOUL: a durable write failure rejects and keeps the live cache", async () => {
   const control = { fail: false };
-  const souls = failingPutMap<PersistedSoul>(control);
-  const config = createMemoryConfigStore(ORG, { souls });
+  const config = createMemoryConfigStore(ORG, { tables: failingSoulTables(control) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   assert.equal(await app.updateSoul(privScope, "durable", PRIV_MEMBER, { allowSharedScope: true }), 1);
   control.fail = true;
@@ -275,7 +274,7 @@ test("SOUL: a durable write failure rejects and restores the live cache", async 
 
 test("SOUL: the HTTP route reports durable storage failures as 500", async () => {
   const control = { fail: true };
-  const config = createMemoryConfigStore(ORG, { souls: failingPutMap<PersistedSoul>(control) });
+  const config = createMemoryConfigStore(ORG, { tables: failingSoulTables(control) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number; body?: { error?: string } } = {};
   const res = {
@@ -318,18 +317,17 @@ test("SOUL: the HTTP route reports a write to someone else's personal SOUL as a 
   assert.equal(out.body?.error, "soul_update_denied");
 });
 
-test("SOUL: failed persistence restores the pre-write cache even when compensating reads fail", async () => {
-  const backing = createMemoryMap<PersistedSoul>();
-  const prior: PersistedSoul = {
+test("SOUL: failed persistence keeps the pre-write cache even when follow-up reads fail", async () => {
+  const backing = createMemoryConfigTables();
+  const prior: SoulRevision = {
     scopeId: privScope,
     content: "durable prior",
     version: 7,
     updatedAt: 70,
     updatedBy: OWNER,
-    history: [{ scopeId: privScope, content: "durable prior", version: 7, updatedAt: 70, updatedBy: OWNER }],
   };
-  await backing.put(privScope, prior);
-  const config = createMemoryConfigStore(ORG, { souls: putThenFailReadsMap(backing) });
+  await backing.appendSoul(prior, 6, 6);
+  const config = createMemoryConfigStore(ORG, { tables: appendThenFailReadsTables(backing) });
   const app = createApp(makeDeps({ config }) as unknown as AppDeps);
   const out: { status?: number } = {};
   const res = {
@@ -350,7 +348,7 @@ test("SOUL: failed persistence restores the pre-write cache even when compensati
   assert.equal(out.status, 500);
   assert.equal(config.getSoul(privScope), prior.content);
   assert.equal(config.soulVersion(privScope), prior.version);
-  assert.deepEqual(config.soulHistory(privScope), prior.history);
+  assert.deepEqual(config.soulHistory(privScope), [prior]);
 });
 
 test("crons: owner and a private-channel member manage; a public-channel member and a non-member do not", async () => {
