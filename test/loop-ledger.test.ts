@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentDraftOf, createLoopItemLedger, loopItemId, type IngestEntryInput } from "../src/loops/item-ledger.ts";
 import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/loops/ledger-view.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const LOOP = "loop-1";
 

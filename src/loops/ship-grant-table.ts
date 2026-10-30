@@ -1,7 +1,7 @@
 import type { ShipGrant } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, num, present, text, type Row } from "./pg-values.ts";
 
@@ -15,7 +15,7 @@ export interface ShipGrantRows {
   close?(): Promise<void>;
 }
 
-export const LOOP_SHIP_GRANTS_MIGRATION = keyValueConversion({
+export const LOOP_SHIP_GRANTS_MIGRATION = typedTableMigration({
   table: "loop_ship_grants",
   columns: [
     "id TEXT NOT NULL",
@@ -94,7 +94,7 @@ function fromRow(r: Row): ShipGrant {
 }
 
 export function createPostgresShipGrantRows(connectionString: string): ShipGrantRows {
-  const { q, pool, close } = createPgPool(connectionString, [LOOP_SHIP_GRANTS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_SHIP_GRANTS_MIGRATION]);
   const get = async (id: string): Promise<ShipGrant | null> => {
     const rows = await q(`${SELECT} WHERE ${MINE} AND id = $1`, [id]);
     return rows[0] ? fromRow(rows[0]) : null;

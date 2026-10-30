@@ -1,11 +1,11 @@
 import type { Loop } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
-export type TenantLoop = Loop & { tenantId: string | undefined };
+export type TenantLoop = Loop & { tenantId: string };
 
 export interface LoopRows {
   insertIfAbsent(loop: Loop): Promise<{ loop: Loop; created: boolean }>;
@@ -21,7 +21,7 @@ export interface LoopRows {
   close?(): Promise<void>;
 }
 
-export const LOOPS_MIGRATION = keyValueConversion({
+export const LOOPS_MIGRATION = typedTableMigration({
   table: "loops",
   columns: [
     "id TEXT NOT NULL",
@@ -220,7 +220,7 @@ function fromRow(r: Row): Loop {
 const tenantRow = (r: Row): TenantLoop => ({ ...fromRow(r), tenantId: r.tenant_id as string });
 
 export function createPostgresLoopRows(connectionString: string): LoopRows {
-  const { q, pool, close } = createPgPool(connectionString, [LOOPS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOPS_MIGRATION]);
   const first = async (where: string, values: unknown[]): Promise<Loop | null> => {
     const rows = await q(`${SELECT} WHERE ${MINE} AND ${where} ORDER BY id LIMIT 1`, values);
     return rows[0] ? fromRow(rows[0]) : null;
@@ -288,12 +288,12 @@ export function createMemoryLoopRows(): LoopRows {
     update: async (id, apply) => rows.update(id, apply),
     delete: async (id) => rows.delete(id),
     inboxLoops: async () =>
-      rows.tenanted(
+      rows.acrossTenants(
         (loop) =>
           (loop.surface === "inbox" || loop.surface?.startsWith("inbox:") === true) && loop.state !== "archived",
       ),
     staleGoverned: async (now) =>
-      rows.tenanted(
+      rows.acrossTenants(
         (loop) =>
           loop.state === "enabled" &&
           loop.governor?.staleFireMs !== undefined &&

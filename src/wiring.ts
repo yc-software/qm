@@ -136,10 +136,6 @@ import {
 } from "./persistence/advisory-lock.ts";
 import type {
   CommandApprovalGrant,
-  Loop,
-  LoopItem,
-  LoopOutput,
-  ShipGrant,
   PendingApprovalRecord,
   ScopeId,
   Session,

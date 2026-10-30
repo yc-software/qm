@@ -1,11 +1,11 @@
 import type { IngressDelivery, LoopIngress } from "./ingress.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
-export type TenantIngress = LoopIngress & { tenantId: string | undefined };
+export type TenantIngress = LoopIngress & { tenantId: string };
 
 export interface IngressSourceRows {
   get(id: string): Promise<LoopIngress | null>;
@@ -25,7 +25,7 @@ export interface IngressDeliveryRows {
   close?(): Promise<void>;
 }
 
-export const LOOP_INGRESS_MIGRATION = keyValueConversion({
+export const LOOP_INGRESS_MIGRATION = typedTableMigration({
   table: "loop_ingress",
   columns: [
     "id TEXT NOT NULL",
@@ -70,7 +70,7 @@ export const LOOP_INGRESS_MIGRATION = keyValueConversion({
   ],
 });
 
-export const LOOP_INGRESS_DELIVERIES_MIGRATION = keyValueConversion({
+export const LOOP_INGRESS_DELIVERIES_MIGRATION = typedTableMigration({
   table: "loop_ingress_deliveries",
   columns: [
     "id TEXT NOT NULL",
@@ -216,7 +216,7 @@ function deliveryFromRow(r: Row): IngressDelivery {
 }
 
 export function createPostgresIngressSourceRows(connectionString: string): IngressSourceRows {
-  const { q, pool, close } = createPgPool(connectionString, [LOOP_INGRESS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_MIGRATION]);
   return {
     async get(id) {
       const rows = await q(`${SELECT_SOURCE} WHERE ${MINE} AND id = $1`, [id]);
@@ -255,7 +255,7 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
 }
 
 export function createPostgresIngressDeliveryRows(connectionString: string): IngressDeliveryRows {
-  const { q, query, pool, close } = createPgPool(connectionString, [LOOP_INGRESS_DELIVERIES_MIGRATION]);
+  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_INGRESS_DELIVERIES_MIGRATION]);
   return {
     async insertIfAbsent(delivery) {
       await q(
@@ -300,9 +300,9 @@ export function createMemoryIngressSourceRows(): IngressSourceRows {
       if (!rows.insertIfAbsent(source)) throw new Error(`loop ingress ${source.id} already exists`);
     },
     update: async (id, apply) => rows.update(id, apply),
-    enabled: async () => rows.tenanted((source) => source.enabled),
+    enabled: async () => rows.acrossTenants((source) => source.enabled),
     gmailWatching: async (email) =>
-      rows.tenanted((source) => source.enabled && source.kind === "gmail" && source.gmail?.email === email),
+      rows.acrossTenants((source) => source.enabled && source.kind === "gmail" && source.gmail?.email === email),
   };
 }
 
@@ -316,10 +316,7 @@ export function createMemoryIngressDeliveryRows(): IngressDeliveryRows {
         .sort((a, b) => a.receivedAt - b.receivedAt)
         .slice(0, limit),
     update: async (id, apply) => rows.update(id, apply),
-    async pruneCompleted(before) {
-      const doomed = rows.where((delivery) => delivery.completedAt !== undefined && delivery.completedAt < before);
-      for (const delivery of doomed) rows.delete(delivery.id);
-      return doomed.length;
-    },
+    pruneCompleted: async (before) =>
+      rows.purgeAcrossTenants((delivery) => delivery.completedAt !== undefined && delivery.completedAt < before),
   };
 }

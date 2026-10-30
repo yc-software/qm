@@ -1,7 +1,7 @@
 import type { LoopItem } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
@@ -25,7 +25,7 @@ export interface ItemRows {
   close?(): Promise<void>;
 }
 
-export const LOOP_ITEMS_MIGRATION = keyValueConversion({
+export const LOOP_ITEMS_MIGRATION = typedTableMigration({
   table: "loop_items",
   columns: [
     "id TEXT NOT NULL",
@@ -210,7 +210,7 @@ function fromRow(r: Row): LoopItem {
 }
 
 export function createPostgresItemRows(connectionString: string): ItemRows {
-  const { q, pool, close } = createPgPool(connectionString, [LOOP_ITEMS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_ITEMS_MIGRATION]);
   return {
     async get(id) {
       const rows = await q(`${SELECT} WHERE ${MINE} AND id = $1`, [id]);

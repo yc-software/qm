@@ -16,6 +16,9 @@ import type { SlackUserClient } from "../src/loops/sources/adapter.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { ensureDefaultInboxLoops } from "../src/loops/inbox-loop.ts";
 import { sleep } from "../src/util/async.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };

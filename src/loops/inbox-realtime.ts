@@ -16,7 +16,7 @@ const LOOP_CACHE_TTL_MS = 60_000;
 export function createInboxRealtime(deps: InboxRealtimeDeps): {
   onConversationEvent(event: ConversationEvent): Promise<void>;
 } {
-  let cachedInboxLoops: Array<{ id: string; owner: string; tenantId: string | undefined }> = [];
+  let cachedInboxLoops: Array<{ id: string; owner: string; tenantId: string }> = [];
   let cacheAt = 0;
 
   async function inboxLoops(): Promise<typeof cachedInboxLoops> {

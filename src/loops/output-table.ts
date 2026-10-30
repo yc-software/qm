@@ -1,7 +1,7 @@
 import type { LoopOutput } from "../types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
@@ -17,7 +17,7 @@ export interface OutputRows {
   close?(): Promise<void>;
 }
 
-export const LOOP_OUTPUTS_MIGRATION = keyValueConversion({
+export const LOOP_OUTPUTS_MIGRATION = typedTableMigration({
   table: "loop_outputs",
   columns: [
     "id TEXT NOT NULL",
@@ -159,7 +159,7 @@ function fromRow(r: Row): LoopOutput {
 }
 
 export function createPostgresOutputRows(connectionString: string): OutputRows {
-  const { q, pool, close } = createPgPool(connectionString, [LOOP_OUTPUTS_MIGRATION]);
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, LOOP_OUTPUTS_MIGRATION]);
   const where = async (filter: string, values: unknown[], order = "id"): Promise<LoopOutput[]> =>
     (await q(`${SELECT} WHERE ${MINE} AND ${filter} ORDER BY ${order}`, values)).map(fromRow);
   return {

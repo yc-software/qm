@@ -17,6 +17,9 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { securityScreenPayload } from "../src/security/security-posture.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fakeIdentity() {
   return {

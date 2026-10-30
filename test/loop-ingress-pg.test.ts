@@ -8,6 +8,9 @@ import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createLoopIngress } from "../src/loops/ingress.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test(
   "event import and model work reuse one PostgreSQL advisory session",

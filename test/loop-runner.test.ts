@@ -6,6 +6,9 @@ import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { buildShipGrant } from "../src/loops/ship-gate.ts";
 import { fireNeedsAttention, runLoopFire, type LoopRunnerEffects, type LoopStores } from "../src/loops/runner.ts";
 import { scopeId, type Loop } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const base = {
   owner: "U1",
