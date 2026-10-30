@@ -288,7 +288,7 @@ for (const storage of ["memory", "postgres"] as const) {
               action: "send",
               requestId: "reply",
               audience: [rootId],
-              notify: true,
+              wake: true,
               text: "http-worker-result",
             };
         const response = await fetch(`${base}/v1/swarm`, {
@@ -312,7 +312,7 @@ for (const storage of ["memory", "postgres"] as const) {
           assert.equal(view.backend, "sprites");
           for (const message of [
             { action: "send", requestId: "self", audience: [view.self.id], text: "http-self-note" },
-            { action: "send", requestId: "all", audience: "all", notify: false, text: "http-shared-note" },
+            { action: "send", requestId: "all", audience: "all", wake: false, text: "http-shared-note" },
           ]) {
             const sent = await fetch(`${base}/v1/swarm`, { method: "POST", headers, body: JSON.stringify(message) });
             assert.equal(sent.status, 202, await sent.text());
@@ -686,7 +686,7 @@ test("a worker with an open goal answers messages as a goal turn without the swa
   }
 });
 
-test("a worker's reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
+test("a worker's wake:false reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
   const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
@@ -723,7 +723,13 @@ test("a worker's reply waits in the root's mailbox and reaches the root's next h
             exp: Date.now() + 60_000,
           },
         },
-        { requestId: "ack", audience: [root.id], replyTo: worker.request.swarm!.messageId, text: "brief read" },
+        {
+          requestId: "ack",
+          audience: [root.id],
+          replyTo: worker.request.swarm!.messageId,
+          wake: false,
+          text: "brief read",
+        },
       );
     };
     built.runtime.start();
@@ -734,7 +740,7 @@ test("a worker's reply waits in the root's mailbox and reaches the root's next h
       !(await built.runs.list()).some(
         (run) => run.request.swarm && run.request.conversation.threadRef === root.threadRef,
       ),
-      "the reply does not start a root turn",
+      "the wake:false reply does not start a root turn",
     );
     const environments: string[] = [];
     exerciseTurn = async (turn) => {

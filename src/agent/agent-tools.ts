@@ -1468,8 +1468,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     label: "subagents",
     description:
       "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
-      "open: start one with `task`. followup_task: more work for an existing one; starts a turn if it is idle; active work is queued safely. " +
-      'send_message: inform a subagent, sibling or parent (target="parent") without starting a turn; interrupt:true stops its run. ' +
+      "open: start one with `task`. " +
+      'send_message: message a subagent, sibling or parent (target="parent"). It wakes the recipient by default: an idle one starts working on it now, a busy one gets it as its next turn. Wake when you need it to do something or answer (more work, a re-review, a question). Set wake:false for FYI it can act on later (status, a finding, an ack): that waits in its mailbox, and an idle recipient sees nothing until something else wakes it. interrupt:true stops its run. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
@@ -1484,11 +1484,10 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         Type.Literal("open"),
         Type.Literal("read"),
         Type.Literal("send_message"),
-        Type.Literal("followup_task"),
         Type.Literal("wait"),
       ]),
       requestId: Type.Optional(Type.String({ description: "open: stable key for retrying the same delegation." })),
-      task: Type.Optional(Type.String({ description: "open/followup_task: the task brief." })),
+      task: Type.Optional(Type.String({ description: "open: the task brief." })),
       name: Type.Optional(Type.String({ description: "open: short title (default: from task)." })),
       noComputer: Type.Optional(
         Type.Boolean({
@@ -1510,6 +1509,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }),
       ),
       text: Type.Optional(Type.String({ description: "send_message: the message." })),
+      wake: Type.Optional(
+        Type.Boolean({
+          description: "send_message: false leaves it in the mailbox without starting a turn (default true).",
+        }),
+      ),
       interrupt: Type.Optional(Type.Boolean({ description: "send_message: abort the target's run instead." })),
       limit: Type.Optional(Type.Integer({ description: "read: max entries (default 30)." })),
     }),
@@ -1517,7 +1521,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       const tc = ref.current;
       const syscalls = tc?.sessionSyscalls;
       const p = params as {
-        action: "open" | "read" | "send_message" | "followup_task" | "wait";
+        action: "open" | "read" | "send_message" | "wait";
         timeoutMs?: number;
         requestId?: string;
         thinkingLevel?: string;
@@ -1528,6 +1532,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         model?: string;
         target?: string;
         text?: string;
+        wake?: boolean;
         interrupt?: boolean;
         limit?: number;
       };
@@ -1539,6 +1544,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         ...(p.noComputer !== undefined ? { noComputer: p.noComputer } : {}),
         ...(p.target ? { target: p.target } : {}),
         ...(p.text ? { text: p.text } : {}),
+        ...(p.wake === false ? { wake: false } : {}),
         ...(p.interrupt ? { interrupt: true } : {}),
       });
       if (!syscalls) {
@@ -1587,23 +1593,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
           ),
         );
       }
-      if (p.action === "send_message" || p.action === "followup_task") {
-        const followup = p.action === "followup_task";
-        const body = followup ? p.task : p.text;
-        if (followup && p.interrupt) {
-          const message = "interrupt applies to send_message, not followup_task.";
-          return recordResult(
-            callId,
-            { tool: "subagents", action: p.action, error: message },
-            text(`[error] ${message}`),
-            true,
-          );
-        }
+      if (p.action === "send_message") {
         const result = await syscalls.write({
           requestId: callId,
-          followup,
+          wake: p.wake !== false,
           target: p.target ?? "",
-          ...(body ? { text: body } : {}),
+          ...(p.text ? { text: p.text } : {}),
           ...(p.interrupt ? { interrupt: true } : {}),
         });
         if (!result.ok) {
@@ -1614,13 +1609,18 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
         }
-        const verbs = {
-          steered: "steered into its running turn",
-          queued_turn: "queued as a new turn",
-          queued_message: "queued internally without starting a turn",
-          interrupted: "sent an interrupt request — it stays re-taskable",
-        } as const;
-        const verb = verbs[result.delivered];
+        const name = `"${result.title}"`;
+        let outcome = `Sent ${name} an interrupt request — it stays re-taskable.`;
+        if (result.delivered === "queued_turn")
+          outcome = result.busy
+            ? `Queued for ${name}: it is busy and starts on this as its next turn.`
+            : `Woke ${name}; it is working on this now.`;
+        else if (result.delivered !== "interrupted")
+          outcome = `Left in ${name}'s mailbox${result.notWoken ? ` without waking it: ${result.notWoken}` : ""}. ${
+            result.busy
+              ? "It is working and sees this after its current step."
+              : "It is idle and won't see this until something wakes it."
+          }`;
         return recordResult(
           callId,
           {
@@ -1630,7 +1630,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             title: result.title,
             delivered: result.delivered,
           },
-          text(`Message to "${result.title}" ${verb}.`),
+          text(outcome),
         );
       }
       const result = await syscalls.read({

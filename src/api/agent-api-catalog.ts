@@ -82,7 +82,7 @@ const FAMILIES: AgentApiFamily[] = [
         method: "POST",
         path: "/v1/swarm",
         summary:
-          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,notify?,goal?} sends to explicit peer ids or all, leaving each recipient's copy in its mailbox for its next turn unless notify:true or a goal wakes them (notify:false records only); {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
+          "{action:'spawn',requestId,text,count?,context?,contexts?,forumSandboxId?,settings?,backend?,goal?} spawns one or an initial pool; {action:'context',context} updates own JSON; {action:'send',requestId,text,audience,replyTo?,wake?,goal?} sends to explicit peer ids or all and wakes each recipient (wake:false leaves it in their mailboxes for their next turn); {action:'control',memberId,state:'active'|'paused'|'stopped'} controls a descendant worker. Retry the same requestId and payload for idempotency.",
       },
     ],
   },

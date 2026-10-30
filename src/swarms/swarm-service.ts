@@ -53,7 +53,7 @@ interface MessageInput {
   audience: string[] | "all";
   text: string;
   replyTo?: string;
-  notify?: boolean;
+  wake?: boolean;
   goal?: unknown;
 }
 
@@ -735,7 +735,7 @@ export function createSwarmService(deps: {
       boundedText(input.text, swarm.settings.textBytes, "text");
       input = { ...input, audience: canonicalAudience(input.audience, swarm.settings.agents) };
       const goal = swarmGoal(input.goal);
-      if (goal && input.notify === false) throw new Error("a goal needs notify");
+      if (goal && input.wake === false) throw new Error("a goal must wake its recipient; drop wake:false");
       const key = signature([auth.memberId, auth.actorId, caller.kind, input.requestId]);
       const fingerprint = signature(input);
       const previous = swarm.messageRequests[key];
@@ -768,18 +768,15 @@ export function createSwarmService(deps: {
         if (input.replyTo && !swarm.messages.some((message) => message.id === input.replyTo))
           throw new Error("reply target is not in this swarm");
         const broadcast = input.audience === "all";
-        const recipients =
-          input.notify === false
-            ? []
-            : audience.filter((peer) =>
-                peer === auth.memberId ? !!goal && !broadcast : !(goal && broadcast && peer === swarm.id),
-              );
+        const recipients = audience.filter((peer) =>
+          peer === auth.memberId ? !!goal && !broadcast : !(goal && broadcast && peer === swarm.id),
+        );
         if (goal && (!recipients.length || recipients.includes(swarm.id)))
           throw new Error("goals can only be assigned to workers");
-        const wakes = input.notify ?? (!!goal || caller.kind === "human");
+        const wakes = input.wake !== false;
         const woken = wakes ? recipients.length : 0;
         if (swarm.notificationCount + woken > (swarm.settings.notifications ?? Infinity))
-          throw new Error("swarm notification budget exhausted");
+          throw new Error("swarm notification budget exhausted; wake:false still leaves messages in mailboxes");
         swarm.notificationCount += woken;
         swarm.messages.push({
           id,

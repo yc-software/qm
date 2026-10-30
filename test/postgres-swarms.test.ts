@@ -300,7 +300,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
       requestId: "unicode",
       audience: [],
       text: "body\u0000\ud800",
-      notify: false,
+      wake: false,
     });
     assert.equal(
       (await fixture.service.read(fixture.caller, { after: binaryText.seq - 1 }))[0]!.text,

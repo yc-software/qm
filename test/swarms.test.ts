@@ -269,7 +269,7 @@ test("ready notifications progress while every provider slot remains fenced afte
     requestId: "follow-up",
     audience: [worker!.id],
     text: "Continue",
-    notify: true,
+    wake: true,
   });
   for (const fixture of fixtures.slice(0, -1))
     await fixture.service.spawn(fixture.caller, { requestId: "stalled", text: "Work" });
@@ -650,15 +650,15 @@ test("notification and message budgets include initial work and prevent recursio
     swarm.notificationCount = settings.notifications;
   });
   await assert.rejects(
-    service.send(caller, { requestId: "notify", audience: "all", text: "Work", notify: true }),
+    service.send(caller, { requestId: "notify", audience: "all", text: "Work", wake: true }),
     /notification budget/,
   );
-  await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", notify: false });
+  await service.send(caller, { requestId: "quiet", audience: "all", text: "No wake", wake: false });
   for (let index = 2; index < settings.messages; index++) {
-    await service.send(caller, { requestId: `quiet-${index}`, audience: "all", text: "Archive", notify: false });
+    await service.send(caller, { requestId: `quiet-${index}`, audience: "all", text: "Archive", wake: false });
   }
   await assert.rejects(
-    service.send(caller, { requestId: "excess", audience: [], text: "Archive", notify: false }),
+    service.send(caller, { requestId: "excess", audience: [], text: "Archive", wake: false }),
     /message budget/,
   );
   assert.equal((await service.read(caller, {})).length, 32);
@@ -676,7 +676,7 @@ test("without caps, message, notification and spawn counts are unlimited", async
   await service.spawn(caller, { requestId: "one", count: 2, text: "Work", settings: { agents: 64 } });
   await service.sweep();
   for (let index = 0; index < 130; index++)
-    await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work", notify: true });
+    await service.send(caller, { requestId: `notify-${index}`, audience: "all", text: "Work", wake: true });
   await service.sweep();
   assert.equal((await runs.list({ limit: 1_000 })).filter((run) => run.request.swarm).length, 262);
   for (let index = 0; index < 33; index++) await service.spawn(caller, { requestId: `spawn-${index}`, text: "Work" });
@@ -776,7 +776,7 @@ test("explicit forum supplements private worker disks and remains scope-authoriz
   }
 });
 
-test("correlated bounded waits observe replies without creating extra notifications", async () => {
+test("correlated bounded waits observe wake:false replies without waking anyone", async () => {
   const { service, caller, workerCaller } = await swarmFixture();
   const [worker] = await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
@@ -791,10 +791,10 @@ test("correlated bounded waits observe replies without creating extra notificati
     text: "Finished",
     audience: [caller.claims.sessionId!],
     replyTo: question.id,
-    notify: false,
+    wake: false,
   });
   assert.equal((await waiting)[0]!.id, answer.id);
-  assert.deepEqual(answer.notifications, {});
+  assert.deepEqual(answer.notifications, { [caller.claims.sessionId!]: { state: "mailbox" } });
   assert.deepEqual(await service.read(caller, { after: 100, waitMs: 20 }), []);
   for (const waitMs of [-1, 10_001, Number.NaN, Infinity])
     await assert.rejects(service.read(caller, { waitMs }), /bounds/);
@@ -811,7 +811,7 @@ test("active recipients receive durable queued unattended work rather than human
   const initial = (await runs.list()).find((run) => run.request.swarm)!;
   const claimed = await runs.claimById(initial.id, "worker", 60_000);
   assert.equal(claimed!.status, "running");
-  await service.send(caller, { requestId: "queue", text: "More work", audience: "all", notify: true });
+  await service.send(caller, { requestId: "queue", text: "More work", audience: "all", wake: true });
   await service.sweep();
   const pending = (await runs.inFlightForThread(initial.sessionId)).find((run) => run.id !== initial.id)!;
   assert.equal(pending.status, "pending");

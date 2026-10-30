@@ -66,7 +66,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   assert.equal((await userEntry(wake)).hidden, true);
   assert.equal(wake.request.origin.kind, "human");
 
-  assert.ok((await syscalls.write({ followup: true, target: child.id, text: "Check the tests too" })).ok);
+  assert.ok((await syscalls.write({ wake: true, target: child.id, text: "Check the tests too" })).ok);
   const second = await finished(() => built.runs.latestForThread(child.threadRef));
   assert.deepEqual(await userEntry(second), { hidden: false, display: "Check the tests too" });
 });

@@ -3420,44 +3420,49 @@ test("subagents open schema and dispatch preserve an explicit false fast mode", 
   assert.match(textOut(await call(session, { action: "open", task: "test", fastMode: false })), /child/);
 });
 
-test("subagents followup_task takes its instruction in task, like open", async () => {
-  const writes: Array<{ followup?: boolean; text?: string; interrupt?: boolean }> = [];
+test("subagents send_message wakes by default and says what happened", async () => {
+  const writes: Array<{ wake?: boolean; text?: string; interrupt?: boolean }> = [];
   const tc = fakeToolContext();
+  const replies: Array<Awaited<ReturnType<NonNullable<typeof tc.sessionSyscalls>["write"]>>> = [
+    { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: false },
+    { ok: true, sessionId: "child", title: "child", delivered: "queued_turn", busy: true },
+    { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: false },
+    { ok: true, sessionId: "child", title: "child", delivered: "queued_message", busy: true },
+    {
+      ok: true,
+      sessionId: "root",
+      title: "root",
+      delivered: "queued_message",
+      busy: false,
+      notWoken: "a message cannot start a turn in a top-level conversation",
+    },
+  ];
   tc.sessionSyscalls = {
     open: async () => ({ ok: false, message: "unused" }),
     write: async (input) => {
       writes.push(input);
-      return input.text || input.interrupt
-        ? { ok: true, sessionId: "child", title: "child", delivered: input.followup ? "queued_turn" : "queued_message" }
-        : {
-            ok: false,
-            message: input.followup ? "followup_task requires `task`." : "send_message requires `text`.",
-          };
+      return replies.shift()!;
     },
     read: async () => ({ ok: false, message: "unused" }),
   };
   const session = createAgentTools({ current: tc }).find((tool) => tool.name === "subagents")!;
-  assert.ok(!Check(session.parameters, { action: "write", target: "child", text: "hi" }));
-  assert.match(
-    textOut(await call(session, { action: "followup_task", target: "child", task: "next task" })),
-    /queued as a new turn/,
+  assert.ok(!Check(session.parameters, { action: "followup_task", target: "child", task: "next" }));
+  const send = async (extra: object) =>
+    textOut(await call(session, { action: "send_message", target: "child", text: "hi", ...extra }));
+  assert.equal(await send({}), 'Woke "child"; it is working on this now.');
+  assert.equal(await send({ wake: true }), 'Queued for "child": it is busy and starts on this as its next turn.');
+  assert.equal(
+    await send({ wake: false }),
+    `Left in "child"'s mailbox. It is idle and won't see this until something wakes it.`,
   );
-  assert.match(
-    textOut(await call(session, { action: "send_message", target: "child", text: "fyi" })),
-    /queued internally/,
+  assert.equal(
+    await send({ wake: false }),
+    `Left in "child"'s mailbox. It is working and sees this after its current step.`,
   );
-  assert.match(
-    textOut(await call(session, { action: "followup_task", target: "child", task: "stop?", interrupt: true })),
-    /interrupt applies to send_message/,
-  );
-  await call(session, { action: "followup_task", target: "child", text: "misplaced" });
+  assert.match(await send({}), /^Left in "root"'s mailbox without waking it: a message cannot start a turn/);
   assert.deepEqual(
-    writes.map(({ followup, text, interrupt }) => ({ followup, text, interrupt })),
-    [
-      { followup: true, text: "next task", interrupt: undefined },
-      { followup: false, text: "fyi", interrupt: undefined },
-      { followup: true, text: undefined, interrupt: undefined },
-    ],
+    writes.map(({ wake }) => wake),
+    [true, true, false, false, true],
   );
 });
 
@@ -3970,7 +3975,7 @@ test("thrown execution errors leave pending child messages for the next delivere
 });
 
 test("subagents and sessions are separate tools with one noun each", async () => {
-  const writes: Array<{ followup?: boolean; target: string; text?: string }> = [];
+  const writes: Array<{ wake?: boolean; target: string; text?: string }> = [];
   const starts: Array<{ fork: boolean; text?: string; title?: string }> = [];
   const tc = fakeToolContext();
   tc.sessionSyscalls = {
@@ -3992,7 +3997,7 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   const tools = createAgentTools({ current: tc }, { surfaceName: "web" });
   const subagents = tools.find((tool) => tool.name === "subagents")!;
   const sessions = tools.find((tool) => tool.name === "sessions")!;
-  for (const action of ["open", "followup_task", "wait"])
+  for (const action of ["open", "wait"])
     assert.ok(!Check(sessions.parameters, { action }), `sessions has no ${action}`);
   for (const action of ["list", "new", "fork"])
     assert.ok(!Check(subagents.parameters, { action }), `subagents has no ${action}`);
@@ -4003,8 +4008,8 @@ test("subagents and sessions are separate tools with one noun each", async () =>
   assert.match(textOut(await call(sessions, { action: "read" })), /requires `target`/);
   assert.deepEqual(starts, [{ fork: false, text: "hi", title: "t" }, { fork: true }]);
   assert.deepEqual(
-    writes.map(({ followup, target, text }) => ({ followup, target, text })),
-    [{ followup: undefined, target: "peer", text: "fyi" }],
+    writes.map(({ wake, target, text }) => ({ wake, target, text })),
+    [{ wake: undefined, target: "peer", text: "fyi" }],
   );
 });
 
