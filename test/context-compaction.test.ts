@@ -147,7 +147,7 @@ function buildOrchestrator(
     maxContextTokens,
     defaultTurnWallClockMs,
     runtime: createRuntimeService(
-      { config, harnessId: "pi", baseModelDefault: "claude-sonnet-5" },
+      { config, harnessId: "pi", baseModelDefault: () => "claude-sonnet-5" },
       { authorizesCapabilityScope: async () => true },
     ),
   });

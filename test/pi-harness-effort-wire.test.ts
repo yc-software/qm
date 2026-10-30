@@ -119,12 +119,12 @@ for (const [modelId, upper, allowed, off, minimal] of [
     const originalMap = structuredClone(getRequiredModel(modelId).thinkingLevelMap);
     const harness = createPiHarness({
       defaultModelId: modelId,
-      modelGateway: {
+      resolveModelGateway: async () => ({
         url: `http://127.0.0.1:${address.port}`,
         apiKey: "test-key",
         apiKeyHeader: "api-key",
         models: { [modelId]: modelRequestOverrides(modelId)?.model ?? modelId },
-      },
+      }),
     });
     t.after(() => harness.turns.close?.());
     // Repeat turns in the same conversation with different effort selections.

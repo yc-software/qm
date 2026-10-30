@@ -156,7 +156,7 @@ test("model utilities resolve provider credentials for every call", async () => 
 });
 
 test("prior-turn bootstrap reaches the model before the first prompt", async () => {
-  const harness = createPiHarness({ apiKey: "sk-test" });
+  const harness = createPiHarness({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   const bodies: string[] = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
