@@ -36,6 +36,7 @@ const SCRATCH = "scratch";
 
 interface Slot {
   opening: Promise<SandboxHandle> | null;
+  pending: boolean;
   ready: SandboxHandle | null;
   policy?: string;
   handles: SandboxHandle[];
@@ -88,17 +89,17 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     create: (slot: Slot) => Promise<SandboxHandle>,
     policy?: string,
   ): Promise<SandboxHandle> => {
-    const slot = pool.get(key) ?? { opening: null, ready: null, handles: [] };
+    const slot = pool.get(key) ?? { opening: null, pending: false, ready: null, handles: [] };
     pool.set(key, slot);
-    slot.ready = null;
-    slot.policy = policy;
+    slot.pending = true;
     const opening: Promise<SandboxHandle> = create(slot).then(
       (handle) => {
-        slot.ready = handle;
+        Object.assign(slot, { ready: handle, policy, pending: false });
         return handle;
       },
       (error: unknown) => {
-        if (slot.opening === opening) slot.opening = null;
+        slot.pending = false;
+        if (slot.opening === opening) slot.opening = slot.ready && Promise.resolve(slot.ready);
         throw error;
       },
     );
@@ -343,7 +344,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const { resource, crossScope, egress, credentialScopeId } = access;
     const key = `sandbox:${resource.id}`;
     const cached = pool.get(key);
-    if (cached?.opening && !cached.ready) {
+    if (cached?.pending) {
       await cached.opening;
       return provisionResource(resource.id, authorize);
     }
@@ -533,7 +534,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
   };
   const releasePool = async (): Promise<void> => {
-    const opening = () => [...pool.values()].flatMap((slot) => (slot.opening && !slot.ready ? [slot.opening] : []));
+    const opening = () => [...pool.values()].flatMap((slot) => (slot.pending && slot.opening ? [slot.opening] : []));
     for (let waiting = opening(); waiting.length; waiting = opening())
       await Promise.all(waiting.map((open) => open.catch(swallowAs("orchestrator: provision", undefined))));
     const slots = [...pool];

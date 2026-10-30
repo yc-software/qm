@@ -280,6 +280,21 @@ test("a failed release does not stop the others, and only scratch failures fail 
   );
 });
 
+test("a failed reopen under another egress policy keeps the working handle", async () => {
+  const f = fixture();
+  const first = await f.turn.provisionResource("job-box");
+  const access = await f.turn.accessResource("job-box");
+  f.failNext.push(new Error("provider refused"));
+  await assert.rejects(
+    f.turn.provisionResource({ ...access, egress: { allowedHosts: ["only.test"], deniedHosts: [] } }),
+    /provider refused/,
+  );
+  assert.equal(await f.turn.provisionResource("job-box"), first);
+  assert.equal(f.provisions.length, 2);
+  await f.turn.reclaimBox();
+  assert.equal(f.tornDown[0], first);
+});
+
 test("reopening a computer under a different egress policy releases it once", async () => {
   const f = fixture();
   const first = await f.turn.provisionResource("job-box");
