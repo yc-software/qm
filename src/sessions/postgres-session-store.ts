@@ -1253,7 +1253,9 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
 
     async sideChatsOf(sessionId) {
       const rows = await q(
-        "SELECT * FROM sessions WHERE forked_from_session_id = $1 AND side_chat IS NOT NULL ORDER BY created_at",
+        `SELECT s.* FROM sessions s WHERE s.forked_from_session_id = $1 AND s.side_chat IS NOT NULL
+         AND EXISTS (SELECT 1 FROM items i WHERE i.tenant_id = ${TENANT} AND i.session_id = s.id
+           AND i.seq > s.fork_boundary_seq AND i.kind = 'UserMessage') ORDER BY s.created_at`,
         [sessionId],
       );
       return rows.map(rowToSession);

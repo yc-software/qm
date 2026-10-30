@@ -136,6 +136,8 @@ test("side chats preserve their anchor, stay out of session pages, and expand in
     occurrence: 0,
     expanded: false,
   });
+  assert.deepEqual(await app.sideChats("U1", source.session.id), []);
+  await app.turn(dm("Explain that passage", fork.session.threadRef));
   assert.equal((await app.sideChats("U1", source.session.id))![0]!.id, fork.session.id);
   assert.equal(await app.sideChats("stranger", source.session.id), null);
   assert.equal(await app.expandSideChat("stranger", fork.session.id), null);
@@ -188,6 +190,7 @@ test("side-chat reads bind the query principal to the authenticated portal ident
     sideChat: { entrySeq: 0, quote: "shared queues", occurrence: 0 },
   });
   assert.ok(fork);
+  await app.turn(dm("Explain that passage", fork.session.threadRef));
   const sourceSecret = "side-chat-source-secret-for-http-tests";
   const identitySecret = "side-chat-identity-secret-for-http-tests";
   const server = createServer(app, {

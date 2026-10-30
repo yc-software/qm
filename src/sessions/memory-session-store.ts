@@ -168,7 +168,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
     },
 
     async sideChatsOf(sessionId) {
-      return [...sessions.values()].filter((s) => s.forkedFrom?.sessionId === sessionId && s.sideChat);
+      return [...sessions.values()].filter(
+        (s) =>
+          s.forkedFrom?.sessionId === sessionId &&
+          s.sideChat &&
+          (entries.get(s.id) ?? []).some((entry) => entry.type === "user" && entry.seq > (s.forkBoundarySeq ?? -1)),
+      );
     },
 
     async expandSideChat(sessionId) {
