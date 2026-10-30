@@ -1368,11 +1368,16 @@ async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
   });
 }
 
-function getSoul(ctx: ApiCtx): void {
+async function getSoul(ctx: ApiCtx): Promise<void> {
   const { res, app, url, capability } = ctx;
-  const scopeIdVal = capability?.scopeId ?? url.searchParams.get("scopeId");
-  if (!scopeIdVal) return sendJson(res, 400, { error: "bad_request", message: "scopeId required" });
-  return sendJson(res, 200, app.getSoul(scopeIdVal));
+  if (capability) return sendJson(res, 200, app.getSoul(capability.scopeId));
+  const scopeIdVal = url.searchParams.get("scopeId");
+  const principalId = url.searchParams.get("principalId");
+  if (!scopeIdVal || !principalId)
+    return sendJson(res, 400, { error: "bad_request", message: "scopeId and principalId required" });
+  if (!(await app.belongsToScope(principalId, scopeIdVal as ScopeId)))
+    return sendJson(res, 403, { error: "forbidden" });
+  return sendJson(res, 200, app.getSoul(scopeIdVal as ScopeId));
 }
 
 export async function postSoul(ctx: ApiCtx): Promise<void> {
@@ -1437,7 +1442,7 @@ export const surfaceRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "PUT", path: "/v1/runtime-config", auth: "either", handle: putRuntimeConfig },
   { method: "GET", path: "/v1/channel-header-pin", auth: "either", handle: getChannelHeaderPin },
   { method: "PUT", path: "/v1/channel-header-pin", auth: "either", handle: putChannelHeaderPin },
-  { method: "GET", path: "/v1/soul", auth: "either", handle: getSoul },
+  { method: "GET", path: "/v1/soul", actor: "query.principalId", auth: "either", handle: getSoul },
   { method: "POST", path: "/v1/soul", actor: "body.actorId", auth: "either", handle: postSoul },
   ...withActor("body.principalId", [
     { method: "POST", path: "/v1/sessions/:id/title", auth: "source", handle: regenerateSessionTitle },
