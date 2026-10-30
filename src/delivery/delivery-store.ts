@@ -45,7 +45,6 @@ export interface DeliveryStore {
   pending(type: string): Promise<Delivery[]>;
   claimPending(type: string, ttlMs: number, orderedTargetLimit?: number): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
-  reject(id: string): Promise<void>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
   ackByKey(idempotencyKey: string, at: number): Promise<void>;
@@ -86,7 +85,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       const existingId = byKey.get(input.idempotencyKey);
       if (existingId) {
         const existing = deliveries.get(existingId)!;
-        if (existing.deliveredAt === null && existing.expiredAt !== undefined && !existing.failedReason && existing.rejectedAt === undefined) {
+        if (existing.deliveredAt === null && existing.expiredAt !== undefined && !existing.failedReason) {
           existing.destination = input.destination;
           existing.text = input.text;
           if (input.attachments?.length) existing.attachments = input.attachments;
@@ -153,13 +152,6 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         .filter((d) => d.shadow && d.deliveredAt === null)
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, limit);
-    },
-    async reject(id) {
-      const delivery = deliveries.get(id);
-      if (delivery && delivery.deliveredAt === null) {
-        delivery.rejectedAt = delivery.expiredAt = Date.now();
-        logDeliveryExpiry(delivery, delivery.expiredAt, "recipient rejected delivery");
-      }
     },
     async ack(id, at, slackApiMs) {
       const d = deliveries.get(id);

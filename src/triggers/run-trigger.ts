@@ -303,6 +303,9 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         ...(spec.readOnly ? { readOnly: true } : {}),
         ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
         ...(spec.destination ? { triggerDestination: spec.destination } : {}),
+        ...(spec.destination?.type === "webhook" && deliverable && !spec.shadow
+          ? { deliveryTarget: spec.destination.target }
+          : {}),
         ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
         ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { ownerKeychainUnion: true } : {}),
         idempotencyKey: spec.fireKey,
@@ -332,7 +335,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
           destination: spec.destination,
           text: res.reply ?? "",
           ...(res.attachments?.length ? { attachments: res.attachments } : {}),
-          idempotencyKey: spec.fireKey,
+          idempotencyKey: nativeResult ? `run:${res.runId}` : spec.fireKey,
           provenance: deliveryProvenance(spec, threadRef, res),
           ...(spec.shadow ? { shadow: true } : {}),
         });

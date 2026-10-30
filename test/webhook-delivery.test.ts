@@ -46,7 +46,10 @@ async function setup() {
 
 test("a scheduled destination retains its binding and reaches the receiver with a verifiable signature", async () => {
   const { sessions, session, deliveries, delivery } = await setup();
-  const candidate = deliveryCandidatesFor("web", threadRef, undefined, ownerScope, destination.webhook).candidates[0]!;
+  const candidate = deliveryCandidatesFor(
+    { surface: "web", deliveryTarget: threadRef, deliveryWebhook: destination.webhook },
+    ownerScope,
+  ).candidates[0]!;
   assert.deepEqual(candidate.webhook, destination.webhook);
   assert.equal(candidate.type, "webhook");
   assert.deepEqual(await deliveries.pending("web"), []);
@@ -69,6 +72,20 @@ test("a scheduled destination retains its binding and reaches the receiver with 
   await worker.drain();
   assert.notEqual((await deliveries.get(delivery.id))?.deliveredAt, null);
   assert.match(JSON.stringify(await sessions.getEntries(session.id)), /Your scheduled update/);
+});
+
+test("scheduled turns and their child metadata retain the webhook binding for further delivery", () => {
+  const request = {
+    surface: "cron",
+    deliveryTarget: threadRef,
+    origin: { kind: "automation" as const, destination },
+  };
+  const delivery = deliveryCandidatesFor(request, ownerScope);
+  const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey)!;
+  assert.equal(candidate.type, "webhook");
+  assert.deepEqual(candidate.webhook, destination.webhook);
+  const withoutTarget = deliveryCandidatesFor({ ...request, deliveryTarget: undefined }, ownerScope);
+  assert.deepEqual(withoutTarget.candidates, []);
 });
 
 test("a restart retries the same identity after a lost acknowledgement and records context only once", async (t) => {
@@ -145,6 +162,137 @@ test("server and authentication failures remain queued", async (t) => {
   }
 });
 
+test("permanent payload rejection delivers a bounded notice and unblocks later updates", async () => {
+  for (const status of [400, 413, 422]) {
+    const { sessions, deliveries, delivery } = await setup();
+    delivery.attachments = Array.from({ length: 11 }, (_, i) => ({
+      blobId: `blob-${i}`,
+      name: `${i}.txt`,
+      mimetype: "text/plain",
+      sizeBytes: 1,
+    }));
+    delivery.provenance!.sourceRunId = "rejected-run";
+    delivery.provenance!.sourceRequestId = "original-request";
+    const next = await deliveries.enqueue({ destination, text: "Next update", idempotencyKey: "next" });
+    const received: (typeof delivery)[] = [];
+    await createWebhookDeliveryWorker(deliveries, sessions, receiver, async (_url, options) => {
+      const payload = JSON.parse(String(options?.body));
+      received.push(payload);
+      return new Response(null, { status: payload.attachments?.length ? status : 204 });
+    }).drain();
+    assert.equal(received.length, 3);
+    assert.equal(received[1]!.idempotencyKey, delivery.idempotencyKey);
+    assert.equal(received[1]!.attachments, undefined);
+    assert.equal(received[1]!.provenance?.sourceRunId, undefined);
+    assert.equal(received[1]!.provenance?.sourceRequestId, "original-request");
+    assert.match(received[1]!.text, /limits/);
+    assert.notEqual((await deliveries.get(next.id))?.deliveredAt, null);
+  }
+});
+
+test("a rejected failure notice stays terminal without blocking another update", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const { sessions, deliveries, delivery } = await setup();
+  const next = await deliveries.enqueue({ destination, text: "Next update", idempotencyKey: "next" });
+  await createWebhookDeliveryWorker(deliveries, sessions, receiver, async (_url, options) => {
+    const payload = JSON.parse(String(options?.body));
+    return new Response(null, { status: payload.idempotencyKey === delivery.idempotencyKey ? 400 : 204 });
+  }).drain();
+  assert.ok((await deliveries.get(delivery.id))?.failedReason);
+  assert.notEqual((await deliveries.get(next.id))?.deliveredAt, null);
+});
+
+test("a transient failure while sending the bounded notice retries the original delivery", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.method(console, "error", () => {});
+  const { sessions, deliveries, delivery } = await setup();
+  let failNotice = true;
+  const worker = createWebhookDeliveryWorker(deliveries, sessions, receiver, async (_url, options) => {
+    const payload = JSON.parse(String(options?.body));
+    if (payload.text === delivery.text) return new Response(null, { status: 413 });
+    return new Response(null, { status: failNotice ? 503 : 204 });
+  });
+  await worker.drain();
+  assert.equal((await deliveries.get(delivery.id))?.expiredAt, undefined);
+  failNotice = false;
+  t.mock.timers.tick(31_000);
+  await worker.drain();
+  assert.notEqual((await deliveries.get(delivery.id))?.deliveredAt, null);
+});
+
+test("a slow destination does not hold up subsequent deliveries to another destination", async () => {
+  const { sessions, deliveries, delivery } = await setup();
+  const otherDestination = { ...destination, target: "web:alice@example.test:other" };
+  await sessions.getOrCreateByThread(otherDestination.target, "dm", ownerScope, undefined, "web");
+  await deliveries.enqueue({ destination: otherDestination, text: "Fast first", idempotencyKey: "fast-first" });
+  await deliveries.enqueue({ destination: otherDestination, text: "Fast second", idempotencyKey: "fast-second" });
+  const slow = Promise.withResolvers<Response>();
+  const received: string[] = [];
+  const draining = createWebhookDeliveryWorker(deliveries, sessions, receiver, async (_url, options) => {
+    const key = JSON.parse(String(options?.body)).idempotencyKey;
+    received.push(key);
+    return key === delivery.idempotencyKey ? slow.promise : new Response(null, { status: 204 });
+  }).drain();
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(received.includes("fast-second"));
+  } finally {
+    slow.resolve(new Response(null, { status: 204 }));
+    await draining;
+  }
+});
+
+test("completion during a pending claim wakes the next delivery without waiting for another target", async () => {
+  const { sessions, deliveries, delivery } = await setup();
+  const otherDestination = { ...destination, target: "web:alice@example.test:other" };
+  await sessions.getOrCreateByThread(otherDestination.target, "dm", ownerScope, undefined, "web");
+  await deliveries.enqueue({ destination: otherDestination, text: "First", idempotencyKey: "fast-first" });
+  await deliveries.enqueue({ destination: otherDestination, text: "Second", idempotencyKey: "fast-second" });
+  const claimStarted = Promise.withResolvers<void>();
+  const claimGate = Promise.withResolvers<Awaited<ReturnType<typeof deliveries.claimPending>>>();
+  const slow = Promise.withResolvers<Response>();
+  const first = Promise.withResolvers<Response>();
+  let claims = 0;
+  const received: string[] = [];
+  const worker = createWebhookDeliveryWorker(
+    {
+      ...deliveries,
+      claimPending: async (...args) => {
+        if (++claims === 2) {
+          claimStarted.resolve();
+          return claimGate.promise;
+        }
+        return deliveries.claimPending(...args);
+      },
+    },
+    sessions,
+    receiver,
+    async (_url, options) => {
+      const key = JSON.parse(String(options?.body)).idempotencyKey;
+      received.push(key);
+      if (key === delivery.idempotencyKey) return slow.promise;
+      if (key === "fast-first") return first.promise;
+      return new Response(null, { status: 204 });
+    },
+  );
+  const draining = worker.drain();
+  try {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    void worker.drain();
+    await claimStarted.promise;
+    first.resolve(new Response(null, { status: 204 }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    claimGate.resolve([]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.ok(received.includes("fast-second"));
+  } finally {
+    claimGate.resolve([]);
+    first.resolve(new Response(null, { status: 204 }));
+    slow.resolve(new Response(null, { status: 204 }));
+    await draining;
+  }
+});
+
 test("both exact-message and agent crons retain the callback binding in their durable deliveries", async () => {
   for (const exact of [true, false]) {
     const { sessions, deliveries } = await setup();
@@ -209,7 +357,7 @@ test("a repeated enqueue never revives a rejected delivery", async () => {
     text: delivery.text,
     idempotencyKey: delivery.idempotencyKey,
   });
-  assert.ok(repeated.rejectedAt);
+  assert.ok(repeated.failedReason);
   assert.equal(repeated.deliveredAt, null);
   assert.deepEqual(await deliveries.claimPending("webhook", 30_000, 16), []);
 });
@@ -228,7 +376,7 @@ test("a response body cleanup failure does not hide a terminal receiver rejectio
     receiver,
     async () => new Response(body, { status: 410 }),
   ).drain();
-  assert.ok((await deliveries.get(delivery.id))?.rejectedAt);
+  assert.ok((await deliveries.get(delivery.id))?.failedReason);
 });
 
 test("same-timestamp enqueues cannot overtake an active delivery", async (t) => {

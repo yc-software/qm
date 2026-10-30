@@ -360,7 +360,10 @@ it("delivers scheduled approval, silent, reaction and failure outcomes by their 
   ];
   for (const surface of ["cron", "monitor"]) {
     for (const result of results) {
-      const d = deps(async () => ({ ...result, runId: "scheduled-run" }));
+      const d = deps(async (request) => {
+        assert.equal(request.deliveryTarget, "web:U1:bound");
+        return { ...result, runId: "scheduled-run" };
+      });
       await runTrigger(d, {
         owner: "U1",
         ownerScopeId: scopeId("personal", "U1"),
@@ -373,6 +376,28 @@ it("delivers scheduled approval, silent, reaction and failure outcomes by their 
       const pending = await d.deliveries.pending("webhook");
       assert.equal(pending.length, 1);
       assert.equal(pending[0]?.provenance?.sourceRunId, "scheduled-run");
+      assert.equal(pending[0]?.idempotencyKey, "run:scheduled-run");
     }
   }
+});
+
+it("keeps shadow webhook results out of terminal-run recovery", async () => {
+  let request: TurnRequest | undefined;
+  const d = deps(async (submitted) => {
+    request = submitted;
+    return { status: "ok", reply: "Update", runId: "scheduled-run" };
+  });
+  await runTrigger(d, {
+    owner: "U1",
+    ownerScopeId: scopeId("personal", "U1"),
+    input: "scheduled task",
+    fireKey: "cron:shadow",
+    surface: "cron",
+    shadow: true,
+    destination: { type: "webhook", target: "web:U1:bound", webhook: { binding: "binding" } },
+  });
+  assert.ok(request);
+  assert.equal(request.deliveryTarget, undefined);
+  assert.deepEqual(await d.deliveries.pending("webhook"), []);
+  assert.equal((await d.deliveries.listShadow()).length, 1);
 });

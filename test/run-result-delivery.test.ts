@@ -538,6 +538,30 @@ test("bound webhook results identify every terminal outcome for native receiver 
   }
 });
 
+test("recovery replays an authorized scheduled webhook result after its caller exits", async () => {
+  const { runs } = createMemoryRunStore();
+  const deliveries = createDeliveryStore();
+  const target = "web:alice:conversation";
+  const request: OrchestratorInput = {
+    ...turn("scheduled update", target),
+    surface: "cron",
+    origin: { kind: "automation", destination: { type: "webhook", target, webhook: { binding: "binding" } } },
+  };
+  const submitted = (await runs.enqueue({ sessionId: "scheduled", request })).run;
+  const claim = await runs.claim("worker", 5_000);
+  await runs.complete(submitted.id, claim!.leaseToken!, { status: "ok", reply: "Recovered update" });
+  assert.deepEqual(await deliveries.pending("webhook"), []);
+  const recovery = wireRunResultDeliveries(runs, deliveries);
+  assert.equal(await recovery.sweep(Date.now() + 61_000), 1);
+  const delivered = (await deliveries.pending("webhook"))[0]!;
+  assert.equal(delivered.idempotencyKey, `run:${submitted.id}`);
+  assert.equal(delivered.provenance?.sourceRunId, submitted.id);
+  assert.equal(delivered.provenance?.sourceRequestId, undefined);
+  assert.equal(await recovery.sweep(Date.now() + 61_000), 0);
+  const { deliveryTarget: _, ...withoutAuthorization } = request;
+  assert.equal(runResultDelivery(run({ request: withoutAuthorization })), null);
+});
+
 test("a scheduled approval continuation correlates with the receiver's action request", () => {
   const request = {
     ...turn("scheduled update"),

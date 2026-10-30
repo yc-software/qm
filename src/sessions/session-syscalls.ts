@@ -1168,13 +1168,7 @@ export async function deliverSubagentMail(deps: SubagentMailDeps, run: Run): Pro
     }
   }
   if (result?.attachments?.length && deps.deliveries) {
-    const delivery = deliveryCandidatesFor(
-      meta.surface,
-      meta.deliveryTarget,
-      meta.deliveryCandidates,
-      parent.scopeId,
-      meta.deliveryWebhook,
-    );
+    const delivery = deliveryCandidatesFor(meta, parent.scopeId);
     const candidate = delivery.candidates.find((item) => item.key === delivery.defaultKey);
     const destination =
       candidate ??

@@ -15,7 +15,6 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
     idempotencyKey: r.idempotency_key as string,
     createdAt: Number(r.created_at),
     deliveredAt: r.delivered_at === null ? null : Number(r.delivered_at),
-    ...(r.rejected_at != null ? { rejectedAt: Number(r.rejected_at) } : {}),
     ...(r.expired_at != null ? { expiredAt: Number(r.expired_at) } : {}),
     ...(r.failed_reason != null ? { failedReason: r.failed_reason as string } : {}),
     ...(r.shadow === true ? { shadow: true } : {}),
@@ -84,17 +83,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       ],
     },
     {
-      id: "delivery/webhook/0001",
+      id: "delivery/store/0008",
       statements: [
         `SET LOCAL lock_timeout = '3s'`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS rejected_at BIGINT`,
         `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS delivery_sequence BIGINT`,
         `CREATE SEQUENCE IF NOT EXISTS deliveries_delivery_sequence OWNED BY deliveries.delivery_sequence`,
         `ALTER TABLE deliveries ALTER COLUMN delivery_sequence SET DEFAULT nextval('deliveries_delivery_sequence')`,
       ],
     },
     {
-      id: "delivery/store/0008",
+      id: "delivery/store/0009",
       statements: [
         `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_deliveries_pending_target ON deliveries ((destination->>'type'), (destination->>'target'), delivery_sequence) WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow`,
       ],
@@ -141,7 +139,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                expired_at = NULL,
                claim_expires_at = NULL
            WHERE deliveries.delivered_at IS NULL AND deliveries.expired_at IS NOT NULL
-             AND deliveries.failed_reason IS NULL AND deliveries.rejected_at IS NULL
+             AND deliveries.failed_reason IS NULL
          RETURNING *`,
         [
           randomUUID(),
@@ -210,16 +208,6 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         [limit],
       );
       return rows.map(rowToDelivery);
-    },
-    async reject(id) {
-      const rows = await q(
-        `UPDATE deliveries SET expired_at = ${NOW_MS_SQL}, rejected_at = ${NOW_MS_SQL} WHERE id = $1 AND delivered_at IS NULL AND expired_at IS NULL RETURNING *`,
-        [id],
-      );
-      for (const row of rows) {
-        const delivery = rowToDelivery(row);
-        logDeliveryExpiry(delivery, delivery.expiredAt!, "recipient rejected delivery");
-      }
     },
     async ack(id, at, slackApiMs) {
       await query(

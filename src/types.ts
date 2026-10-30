@@ -256,7 +256,6 @@ export interface Delivery {
   deliveredAt: number | null;
   expiredAt?: number;
   failedReason?: string;
-  rejectedAt?: number;
   shadow?: boolean;
   recipientThreadRef?: string;
   deliverLatencyMs?: number;

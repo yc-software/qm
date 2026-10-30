@@ -1551,12 +1551,7 @@ test("nested delegated work retains the reminder destination without exposing su
   const grandchild = await freshSession(r.sessions, second.sessionId);
   const request = (await r.runs.inFlightForThread(grandchild.threadRef))[0]!.request;
   assert.equal(request.surfaceTools, undefined);
-  const destinations = deliveryCandidatesFor(
-    request.surface,
-    request.deliveryTarget,
-    request.deliveryCandidates,
-    scope,
-  );
+  const destinations = deliveryCandidatesFor(request, scope);
   const control = createControlService({
     isOpenScopeMember: async () => false,
     createCron: async (input: unknown) => ({ id: "reminder", ...(input as object) }),

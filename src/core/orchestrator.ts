@@ -1129,13 +1129,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         systemPrompt +=
           "\n\nMemories recalled for a message arrive under `## What you remember`. Use them freely, but a preference tagged with another scope heading or `(said in …)` applies only there.";
 
-      const delivery = deliveryCandidatesFor(
-        input.surface,
-        input.deliveryTarget,
-        input.deliveryCandidates,
-        scopeId,
-        input.deliveryWebhook,
-      );
+      const delivery = deliveryCandidatesFor(input, scopeId);
       if (input.slackSource)
         for (const candidate of delivery.candidates) {
           candidate.slackAccountId = input.slackSource.accountId;

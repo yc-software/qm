@@ -114,13 +114,13 @@ test("pg delivery store: rejection stays terminal and FIFO survives separate wor
   const second = await reader.enqueue({ destination, text: "second", idempotencyKey: "ordered-second" });
   assert.equal(second.createdAt, first.createdAt);
   assert.deepEqual(await reader.claimPending("webhook", 30_000, 16), []);
-  await writer.reject(first.id);
+  await writer.fail(first.id, "receiver rejected", Date.now());
   assert.deepEqual(
     (await reader.claimPending("webhook", 30_000, 16)).map((row) => row.id),
     [second.id],
   );
   await reader.enqueue({ destination, text: "first again", idempotencyKey: first.idempotencyKey });
-  assert.ok((await writer.get(first.id))?.rejectedAt);
+  assert.ok((await writer.get(first.id))?.failedReason);
   assert.equal((await writer.get(first.id))?.deliveredAt, null);
 });
 

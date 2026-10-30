@@ -280,12 +280,19 @@ export function replaceThreadSegment(target: string, threadTs: string): string {
 }
 
 export function deliveryCandidatesFor(
-  surface: string | undefined,
-  deliveryTarget: string | undefined,
-  surfaceCandidates: { target: string; label: string }[] | undefined,
+  request: Pick<
+    Partial<TurnRequest>,
+    "surface" | "deliveryTarget" | "deliveryCandidates" | "deliveryWebhook" | "origin"
+  >,
   sessionScopeId: ScopeId,
-  deliveryWebhook?: { binding: string },
 ): { candidates: CandidateDestination[]; defaultKey?: string } {
+  const { surface, deliveryTarget, deliveryCandidates: surfaceCandidates } = request;
+  const automationDestination = request.origin?.kind === "automation" ? request.origin.destination : undefined;
+  const deliveryWebhook =
+    request.deliveryWebhook ??
+    (automationDestination?.type === "webhook" && automationDestination.target === deliveryTarget
+      ? automationDestination.webhook
+      : undefined);
   if (!surface) return { candidates: [] };
   let raw: { target: string; label: string }[] = [];
   if (surfaceCandidates && surfaceCandidates.length > 0) raw = surfaceCandidates;

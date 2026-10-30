@@ -31,12 +31,14 @@ export type AdminUrlFor = (sessionId: string) => string | undefined;
 export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
   const origin = resolveTurnOrigin(run.request);
-  const approvalDestination =
-    run.request.approval && origin.kind === "automation" && origin.destination?.type === "webhook"
+  const automationDestination =
+    (run.request.approval || run.request.deliveryTarget) &&
+    origin.kind === "automation" &&
+    origin.destination?.type === "webhook"
       ? origin.destination
       : undefined;
-  const webhook = approvalDestination?.webhook ?? run.request.deliveryWebhook;
-  const target = approvalDestination?.target ?? run.request.deliveryTarget;
+  const webhook = automationDestination?.webhook ?? run.request.deliveryWebhook;
+  const target = automationDestination?.target ?? run.request.deliveryTarget;
   const surface = run.request.surface;
   if (!target || !surface) return null;
   const editRef = run.deliveryState?.editRef;
