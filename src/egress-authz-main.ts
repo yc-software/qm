@@ -210,8 +210,9 @@ export function createRelayAuditSink(
         body,
         signal: AbortSignal.timeout(10_000),
       });
-      if (!res.ok && res.status < 400) throw new Error(`core responded ${res.status}`);
-      if (!res.ok) console.warn(`[egress-authz] core refused ${batch.length} audit records with HTTP ${res.status}`);
+      const refused = res.status >= 400 && res.status < 500;
+      if (!res.ok && !refused) throw new Error(`core responded ${res.status}`);
+      if (refused) console.warn(`[egress-authz] core refused ${batch.length} audit records with HTTP ${res.status}`);
       const sent = new Set(batch);
       buffer.splice(0, buffer.length, ...buffer.filter((entry) => !sent.has(entry)));
       if (dropped > 0) {
