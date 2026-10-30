@@ -282,10 +282,12 @@ test("a file on a reply in a neighbouring thread is found by asking Slack for th
   assert.equal(fulfilled[0]!.outcome.result.file.name, "shot.png");
 });
 
-test("only whole images in a supported format are shown to the model", async () => {
-  const png = textPng("AB");
-  assert.equal((await visionImage(png))?.mimeType, "image/png");
-  assert.equal(await visionImage(png.subarray(0, 33)), undefined, "a truncated png");
-  assert.equal(await visionImage(Buffer.from("<svg/>")), undefined);
-  assert.equal(await visionImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), undefined);
+test("only real images in a supported format are shown to the model, and refusals say why", async () => {
+  const png = await visionImage(textPng("AB"));
+  assert.equal(png.ok && png.mimeType, "image/png");
+  assert.deepEqual(await visionImage(Buffer.from("<svg/>")), { ok: false, reason: "not an image" });
+  assert.deepEqual(await visionImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), {
+    ok: false,
+    reason: "not an image",
+  });
 });

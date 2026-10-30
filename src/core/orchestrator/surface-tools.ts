@@ -40,7 +40,6 @@ import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { adminSessionUrl } from "../../util/admin-links.ts";
 import { MAX_VISION_IMAGE_BYTES, visionImage } from "../attachments.ts";
-import { sniffImageDimensions } from "../image-downscale.ts";
 import { decodeTs } from "../../slack/reactions.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
@@ -504,17 +503,23 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       const bytes = await collectBlob(blob.stream);
       const meta = { sizeBytes: blob.sizeBytes, name: result.file.name };
       const image = await visionImage(bytes);
-      if (image) return { ok: true, ...meta, contentType: image.mimeType, image };
-      const declared = result.file.mimetype ?? "application/octet-stream";
-      const format = sniffImageDimensions(bytes)?.format;
-      if (format || declared.startsWith("image/"))
+      if (image.ok)
         return {
           ok: true,
           ...meta,
-          contentType: format ? `image/${format}` : declared,
-          message: format
-            ? `image can't be shown inline (over ${MAX_VISION_IMAGE_BYTES} bytes after downscaling, or an unsupported format)`
-            : `labelled ${declared} but the bytes aren't a readable image`,
+          contentType: image.mimeType,
+          image: { data: image.data, mimeType: image.mimeType },
+        };
+      const declared = result.file.mimetype ?? "application/octet-stream";
+      if (image.reason !== "not an image" || declared.startsWith("image/"))
+        return {
+          ok: true,
+          ...meta,
+          contentType: declared,
+          message:
+            image.reason === "too large"
+              ? `image can't be shown inline (over ${MAX_VISION_IMAGE_BYTES} bytes after downscaling)`
+              : `can't be shown inline: ${image.reason}`,
         };
       if (!headLooksLikeText(bytes.subarray(0, 8000))) return { ok: true, ...meta, contentType: declared };
       const decoded = bytes.toString("utf8");

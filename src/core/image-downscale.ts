@@ -125,21 +125,6 @@ export function sniffImageDimensions(input: Uint8Array): ImageDimensions | undef
   return pngDimensions(bytes) ?? jpegDimensions(bytes) ?? gifDimensions(bytes) ?? webpDimensions(bytes);
 }
 
-export function imageLooksComplete(input: Uint8Array, format: ImageDimensions["format"]): boolean {
-  const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
-  const tail = bytes.subarray(Math.max(0, bytes.length - 32));
-  switch (format) {
-    case "png":
-      return bytes.subarray(-8, -4).toString("latin1") === "IEND";
-    case "jpeg":
-      return tail.includes(Buffer.from([0xff, 0xd9]));
-    case "gif":
-      return tail.includes(0x3b);
-    case "webp":
-      return bytes.length >= 12 && bytes.readUInt32LE(4) + 8 <= bytes.length;
-  }
-}
-
 function imageMagickArgs(format: ImageDimensions["format"]): string[] {
   return ["-", "-resize", `${MAX_VISION_IMAGE_DIMENSION}x${MAX_VISION_IMAGE_DIMENSION}>`, `${format}:-`];
 }

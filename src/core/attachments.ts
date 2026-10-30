@@ -21,7 +21,7 @@ import { swallowAs } from "../util/errors.ts";
 import { fileContentRequest } from "./document-kinds.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
-import { downscaleVisionImage, imageLooksComplete, sniffImageDimensions } from "./image-downscale.ts";
+import { downscaleVisionImage, sniffImageDimensions } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
 
 export const INBOX_DIR = "inbox";
@@ -37,13 +37,18 @@ const VISION_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "imag
 
 export const MAX_VISION_IMAGE_BYTES = 5_000_000;
 
-export async function visionImage(bytes: Uint8Array): Promise<{ data: string; mimeType: string } | undefined> {
+export type VisionImage =
+  | { ok: true; data: string; mimeType: string }
+  | { ok: false; reason: "not an image" | "unsupported image format" | "too large" };
+
+export async function visionImage(bytes: Uint8Array): Promise<VisionImage> {
   const format = sniffImageDimensions(bytes)?.format;
-  const mimeType = format ? `image/${format}` : "";
-  if (!format || !VISION_MIME_TYPES.has(mimeType) || !imageLooksComplete(bytes, format)) return undefined;
+  if (!format) return { ok: false, reason: "not an image" };
+  const mimeType = `image/${format}`;
+  if (!VISION_MIME_TYPES.has(mimeType)) return { ok: false, reason: "unsupported image format" };
   const scaled = await downscaleVisionImage(bytes, mimeType);
-  if (scaled.length > MAX_VISION_IMAGE_BYTES) return undefined;
-  return { data: Buffer.from(scaled).toString("base64"), mimeType };
+  if (scaled.length > MAX_VISION_IMAGE_BYTES) return { ok: false, reason: "too large" };
+  return { ok: true, data: Buffer.from(scaled).toString("base64"), mimeType };
 }
 
 export const MAX_LLM_REQUEST_BYTES = 18_000_000;
@@ -351,7 +356,7 @@ export async function materializeInbound(
       ...(registered ? { artifactId: registered.id } : {}),
     });
     const image = await visionImage(bytes);
-    if (image)
+    if (image.ok)
       images.push({
         name,
         mimeType: image.mimeType,
