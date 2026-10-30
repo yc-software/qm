@@ -1,4 +1,4 @@
-import type { Scheduler } from "../../src/cron/scheduler.ts";
+import type { Scheduler } from "../../src/harness/scheduler.ts";
 
 export async function runNowSettled(scheduler: Scheduler, cronId: string): Promise<void> {
   const r = await scheduler.runNow(cronId);

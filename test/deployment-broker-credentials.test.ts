@@ -7,13 +7,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { loadConfig } from "../src/config.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import type { BrokerFetch } from "../src/api/credential-broker.ts";
-import { decisionsResource } from "../src/api/routes/decisions-resource.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { decisionsResource } from "../src/edge/http/routes/decisions-resource.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import {
   deploymentBrokerCredentialsFromEnv,
   nonDeploymentCredential,

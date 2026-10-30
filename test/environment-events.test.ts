@@ -5,7 +5,7 @@ import {
   membershipEvent,
   renderSandboxProviders,
   renderStandingObligations,
-} from "../src/core/orchestrator/prompt-blocks.ts";
+} from "../src/harness/orchestrator/prompt-blocks.ts";
 import type { SessionEntry } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";
 

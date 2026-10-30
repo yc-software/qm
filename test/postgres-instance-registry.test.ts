@@ -1,7 +1,7 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
+import { createPostgresInstanceRegistry } from "../src/harness/instance-registry.ts";
 import { settle } from "./support/settle.ts";
 
 const URL = process.env.DATABASE_URL;

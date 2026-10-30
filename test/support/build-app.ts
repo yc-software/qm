@@ -1,7 +1,7 @@
 import { after } from "node:test";
 import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
-import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
+import { buildApp as buildProductionApp, type BuiltApp } from "./compose.ts";
 import { createMockAgent } from "./mock-agent.ts";
 
 const built: BuiltApp[] = [];

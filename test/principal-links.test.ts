@@ -7,9 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createServer, createInsecureTestServer } from "../src/api/server.ts";
+import { createServer, createInsecureTestServer } from "../src/edge/http/server.ts";
 import { createPrincipalLinkService, PrincipalLinkError, type PrincipalLink } from "../src/identity/principal-links.ts";
 import {
   canonicalPerson,
@@ -397,7 +397,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
     server = createInsecureTestServer(built.app, {
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
-      scheduler: built.scheduler,
+      cronRuns: built.scheduler,
       identity: built.identity,
       sessionShares: built.sessionShares,
     });

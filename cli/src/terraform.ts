@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { awsWorkloadArchitecture, type QmConfig } from "./config.ts";
 import { CliError, ok } from "./log.ts";
 import { computedSecrets } from "./secrets.ts";
-import { isServiceName, serviceDef } from "./services.ts";
+import { hostsWebEdge, isCoreWorkload, isServiceName, PUBLIC_PORT, serviceDef } from "./services.ts";
 import { canonicalJson } from "./canonical-json.ts";
 
 const DERIVED_VARS = new Set([
@@ -15,6 +15,7 @@ const DERIVED_VARS = new Set([
   "cluster_name",
   "public_url",
   "core_public_hosts",
+  "public_port",
   "cloud_map_namespace",
   "secrets_prefix",
   "github_oidc_provider_arn",
@@ -94,17 +95,18 @@ function assertSafeAssumeRoleTransition(config: QmConfig, existing: string): voi
     if (typeof prior !== "object" || prior === null || Array.isArray(prior)) continue;
     const next = config.aws.services[name];
     if (!next) continue;
-    const managedArn = `arn:aws:iam::${config.aws.accountId}:role/${config.aws.cluster}-${name === "core" ? "core" : name}-task`;
+    const core = isCoreWorkload(name);
+    const managedArn = `arn:aws:iam::${config.aws.accountId}:role/${config.aws.cluster}-${core ? "core" : name}-task`;
     const priorRole = (prior as Record<string, unknown>)["task_role_arn"];
     const priorManaged = (prior as Record<string, unknown>)["manage_task_role"] === true;
     const currentRole = typeof priorRole === "string" ? priorRole : managedArn;
     const nextRole =
       next.taskRoleArn ??
-      (name === "core" || next.assumeRoleArns?.length
+      (core || next.assumeRoleArns?.length
         ? managedArn
         : `arn:aws:iam::${config.aws.accountId}:role/${config.aws.cluster}-task`);
     if (
-      name !== "core" &&
+      !core &&
       !priorManaged &&
       priorRole === managedArn &&
       !next.taskRoleArn &&
@@ -114,7 +116,7 @@ function assertSafeAssumeRoleTransition(config: QmConfig, existing: string): voi
         `aws.services.${name}.taskRoleArn cannot be removed because ${managedArn} is externally managed; keep the explicit ARN or import the role into Terraform first`,
       );
     }
-    if (name !== "core" && priorManaged && nextRole !== managedArn) {
+    if (!core && priorManaged && nextRole !== managedArn) {
       throw new CliError(
         `aws.services.${name}.taskRoleArn cannot replace the Terraform-managed role ${managedArn}; keep that role for this workload`,
       );
@@ -157,7 +159,8 @@ function derivedValues(
       "the vendored AWS scaffold predates aws.deployEnvironment; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
     );
   }
-  const corePublicHosts = config.services.includes("portal") ? awsCoreHostnames(config) : [];
+  const webEdge = hostsWebEdge(config.services);
+  const corePublicHosts = webEdge ? awsCoreHostnames(config) : [];
   if (corePublicHosts.length && !declared.includes("core_public_hosts")) {
     throw new CliError(
       "the vendored AWS scaffold predates split portal/core host routing; update infra/variables.tf and infra/main.tf from the current scaffold before configuring apiUrl or AWS_DEPLOY_APPS_DOMAIN",
@@ -166,7 +169,7 @@ function derivedValues(
   const services = Object.fromEntries(
     Object.entries(aws.services).map(([name, service]) => {
       const manageTaskRole =
-        name !== "core" &&
+        !isCoreWorkload(name) &&
         (managedRoles.has(name) || (!service!.taskRoleArn && Boolean(service!.assumeRoleArns?.length)));
       return [
         name,
@@ -209,6 +212,7 @@ function derivedValues(
     },
     json: {
       ...(declared.includes("core_public_hosts") ? { core_public_hosts: [...new Set(corePublicHosts)].sort() } : {}),
+      public_port: webEdge ? PUBLIC_PORT : 0,
       services,
       secret_names: secrets.map((secret) => secret.name),
     },
@@ -230,7 +234,7 @@ export function awsObjectStoreBucket(config: QmConfig): string {
 export function terraformVars(
   config: QmConfig,
   existing = "",
-  declared: string[] = [...Object.keys(OPERATOR_DEFAULTS), "github_environment"],
+  declared: string[] = [...Object.keys(OPERATOR_DEFAULTS), "github_environment", "public_port"],
 ): string {
   assertSafeAssumeRoleTransition(config, existing);
   const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
@@ -257,6 +261,7 @@ export function terraformVarsDrift(
   declared: string[] = [
     ...(hclAssignment(existing, "github_environment") === undefined ? [] : ["github_environment"]),
     ...(hclAssignment(existing, "core_public_hosts") === undefined ? [] : ["core_public_hosts"]),
+    "public_port",
   ],
 ): string[] {
   const { strings, json } = derivedValues(config, declared, managedTaskRoles(existing));
@@ -276,44 +281,14 @@ function declaredInDir(configDir: string): string[] | undefined {
 }
 
 export function assertTerraformScaffoldSupportsConfig(config: QmConfig, configDir: string): void {
-  const services = Object.values(config.aws?.services ?? {});
-  const hasPublicPaths = services.some((service) => service?.publicPaths?.length);
-  const hasAssumeRoles = services.some((service) => service?.assumeRoleArns !== undefined);
-  const hasDatabaseOverrides = config.aws?.dbInstanceClass !== undefined;
-  const hasEgressProxy = Boolean(config.aws?.services["egress-proxy"]);
-  if (!hasPublicPaths && !hasAssumeRoles && !hasDatabaseOverrides && !hasEgressProxy) return;
-  const tfvarsPath = join(configDir, "infra", "terraform.tfvars");
-  if (!existsSync(tfvarsPath)) return;
+  if (!config.aws || !existsSync(join(configDir, "infra", "terraform.tfvars"))) return;
   const variablesPath = join(configDir, "infra", "variables.tf");
   const mainPath = join(configDir, "infra", "main.tf");
   const variables = existsSync(variablesPath) ? readFileSync(variablesPath, "utf8") : "";
   const main = existsSync(mainPath) ? readFileSync(mainPath, "utf8") : "";
-  if (
-    hasDatabaseOverrides &&
-    (!/variable\s+"db_instance_class"/.test(variables) || !/instance_class\s*=\s*var\.db_instance_class/.test(main))
-  ) {
+  if (!/variable\s+"public_port"/.test(variables) || !/qm_scaffold_version\s*=\s*4\b/.test(main)) {
     throw new CliError(
-      "the vendored AWS scaffold predates aws.dbInstanceClass; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
-    );
-  }
-  if (hasPublicPaths && (!/public_paths\s*=\s*optional/.test(variables) || !/public_path_services\s*=/.test(main))) {
-    throw new CliError(
-      "the vendored AWS scaffold predates aws.services.*.publicPaths; update infra/variables.tf and infra/main.tf before exposing plugins",
-    );
-  }
-  if (hasEgressProxy && !/resource\s+"aws_lb"\s+"egress_proxy"/.test(main)) {
-    throw new CliError(
-      "the vendored AWS scaffold predates the egress-proxy service; update infra/main.tf and infra/outputs.tf from the current scaffold before enabling it",
-    );
-  }
-  if (
-    hasAssumeRoles &&
-    (!/assume_role_arns\s*=\s*optional/.test(variables) ||
-      !/manage_task_role\s*=\s*optional/.test(variables) ||
-      !/qm_scaffold_version\s*=\s*3\b/.test(main))
-  ) {
-    throw new CliError(
-      "the vendored AWS scaffold predates aws.services.*.assumeRoleArns; update infra/variables.tf and infra/main.tf from the current scaffold before configuring it",
+      "the vendored AWS scaffold predates the edge and harness services; update infra/variables.tf and infra/main.tf from the current scaffold, whose moved blocks keep the existing core service as the edge, before deploying",
     );
   }
 }

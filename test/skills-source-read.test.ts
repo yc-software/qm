@@ -113,9 +113,9 @@ test("published source follows scope shadowing and preserves sandbox-authored wo
 });
 
 test("a body read avoids sandbox work and a file request materializes that skill under the skills root", async () => {
-  const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
+  const { createTurnSandboxes } = await import("../src/harness/orchestrator/sandboxes.ts");
   const { SandboxAccessError } = await import("../src/sandbox/sandbox-resources.ts");
-  type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
+  type TurnSandboxContext = import("../src/harness/orchestrator/sandboxes.ts").TurnSandboxContext;
   type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
   const files = new Map<string, string>();
   let provisions = 0;

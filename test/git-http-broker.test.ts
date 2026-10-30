@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { Readable, PassThrough } from "node:stream";
 import { finished } from "node:stream/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { brokerGitHttp } from "../src/api/git-http-broker.ts";
+import { brokerGitHttp } from "../src/edge/http/git-http-broker.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
-import type { BaseCtx } from "../src/api/routes/route.ts";
-import type { ServerDeps } from "../src/api/deps.ts";
+import type { BaseCtx } from "../src/edge/http/routes/route.ts";
+import type { ServerDeps } from "../src/edge/http/deps.ts";
 
 function req(headers: Record<string, string>, body = ""): IncomingMessage {
   const r = Readable.from(body ? [body] : []) as IncomingMessage;

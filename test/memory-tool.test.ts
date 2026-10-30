@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createToolContext } from "../src/tools/primitives.ts";
-import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";

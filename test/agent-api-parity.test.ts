@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderAgentApis } from "../src/api/agent-api-catalog.ts";
+import { renderAgentApis } from "../src/edge/http/agent-api-catalog.ts";
 import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
-import { findRoute } from "../src/api/routes/route.ts";
-import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
+import { findRoute } from "../src/edge/http/routes/route.ts";
+import { apiRoutes, rawRoutes } from "../src/edge/http/routes/index.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 
 const base: CapabilityClaims = { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + 60_000 };

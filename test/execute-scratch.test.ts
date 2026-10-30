@@ -1,5 +1,5 @@
 import { SandboxProvisionCleanupError, cleanupFailedProvision } from "../src/sandbox/sandbox.ts";
-import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
+import { createTurnSandboxes, type TurnSandboxContext } from "../src/harness/orchestrator/sandboxes.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
-import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { createToolContext, type ToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";

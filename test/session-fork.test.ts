@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import assert from "node:assert/strict";

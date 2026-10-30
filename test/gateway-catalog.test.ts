@@ -1,4 +1,4 @@
-import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
+import { nativeDocumentFormat } from "../src/harness/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";

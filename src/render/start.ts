@@ -19,6 +19,7 @@ export async function awaitBucket(
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.env.RENDER_API_PORT) process.env.PORT = process.env.RENDER_API_PORT;
   const config = loadConfig();
   if (config.s3Endpoint) {
     const bucket = config.s3Bucket;
@@ -31,5 +32,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       client.destroy();
     }
   }
-  await import("../index.ts");
+  await import(process.argv[2] === "harness" ? "../harness/main.ts" : "../edge/main.ts");
 }

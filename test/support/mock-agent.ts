@@ -11,7 +11,7 @@ import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
-import { recordStoppedTurn } from "../../src/agent/turn-support.ts";
+import { recordStoppedTurn } from "../../src/harness/turn-support.ts";
 import {
   SECURITY_SCREEN_STEP,
   SECURITY_SCREEN_SYSTEM_PROMPT,

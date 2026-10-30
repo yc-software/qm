@@ -7,7 +7,7 @@ import { request as httpRequest, createServer as createHttpServer } from "node:h
 import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/edge/http/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import type { DeployEndpoint, DeployProvider } from "../src/deploy/deploy-provider.ts";

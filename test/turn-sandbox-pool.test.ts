@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
+import { createTurnSandboxes, type TurnSandboxContext } from "../src/harness/orchestrator/sandboxes.ts";
 import type { ProvisionOptions, Sandbox, SandboxHandle, TeardownOptions } from "../src/sandbox/sandbox.ts";
 
 const OWN = "personal:alice";

@@ -2,6 +2,19 @@ import js from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
+const ENV_MESSAGE =
+  "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.";
+const seamImports = (forbidden) => [
+  "error",
+  {
+    paths: ["node:process", "process"].map((name) => ({ name, importNames: ["env"], message: ENV_MESSAGE })),
+    patterns: forbidden.map((dir) => ({
+      group: [`**/${dir}/**`],
+      message: `${dir.startsWith("src/") ? dir : `src/${dir}`} is its own service; share code through the library outside src/edge and src/harness (docs/edge-harness-contract.md).`,
+    })),
+  },
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -66,7 +79,13 @@ export default tseslint.config(
   },
   {
     files: ["src/**/*.ts"],
-    ignores: ["src/config.ts", "src/index.ts", "src/runs/worker-main.ts", "src/egress-authz-main.ts"],
+    ignores: [
+      "src/config.ts",
+      "src/edge/main.ts",
+      "src/harness/main.ts",
+      "src/render/start.ts",
+      "src/egress-authz-main.ts",
+    ],
     rules: {
       "no-restricted-syntax": [
         "error",
@@ -94,31 +113,25 @@ export default tseslint.config(
             "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.",
         },
       ],
-      "no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            {
-              name: "node:process",
-              importNames: ["env"],
-              message:
-                "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.",
-            },
-            {
-              name: "process",
-              importNames: ["env"],
-              message:
-                "Read configuration through loadConfig() (src/config.ts) and pass it down — process.env is parsed exactly once at the boundary.",
-            },
-          ],
-        },
-      ],
+      "no-restricted-imports": seamImports(["edge", "harness"]),
     },
+  },
+  {
+    files: ["src/edge/**/*.ts"],
+    rules: { "no-restricted-imports": seamImports(["harness"]) },
+  },
+  {
+    files: ["src/harness/**/*.ts"],
+    rules: { "no-restricted-imports": seamImports(["edge"]) },
+  },
+  {
+    files: ["plugins/web-ui/src/**/*.{ts,tsx}", "plugins/web-ui/server/**/*.ts", "plugins/portal/src/**/*.ts"],
+    rules: { "no-restricted-imports": seamImports(["src/edge", "src/harness"]) },
   },
   {
     // Same raw-error rule for plugin server code and the src files the env-boundary
     // block above deliberately skips (local scripts/ and test/ CLIs keep full stacks).
-    files: ["plugins/**/*.ts", "src/config.ts", "src/index.ts", "src/runs/worker-main.ts", "src/egress-authz-main.ts"],
+    files: ["plugins/**/*.ts", "src/config.ts", "src/edge/main.ts", "src/harness/main.ts", "src/egress-authz-main.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",

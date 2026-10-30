@@ -15,7 +15,9 @@ docker buildx version
 
 Set `flyOrg`, `region`, globally unique `appPrefix`, `publicUrl`, and
 `sandbox.app`. The public origin is normally
-`https://<app-prefix>-portal.fly.dev`. Confirm the service and sandbox app names
+`https://<app-prefix>-core.fly.dev`: the `<app-prefix>-core` app runs the edge,
+which serves the public front door; `<app-prefix>-harness` runs agent turns and
+has no public address. Confirm the service and sandbox app names
 are available in the selected organization.
 
 Create the sandbox registry app before setup. Setup refuses to mint a token
