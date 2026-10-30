@@ -68,6 +68,27 @@ test("skill mutations reject names that could escape or collide when materialize
   );
 });
 
+test("visibleFor lists skills by name and description without their bodies or files", async () => {
+  const skills = createSkillStore({ backing: createMemoryMap<Skill>() });
+  const owner = scopeId("personal", "U1");
+  const sk = await skills.create({
+    scopeId: owner,
+    manifest: {
+      name: "bulky",
+      description: "ships a large asset",
+      requiredCapabilities: [],
+      body: "BODY",
+      files: [{ path: "big.txt", content: "x".repeat(1_000_000) }],
+    },
+    createdBy: "U1",
+  });
+  await skills.review(sk.id, "reviewer", []);
+  await skills.publish(sk.id);
+  const [row] = await skills.visibleFor([owner]);
+  assert.deepEqual(row?.skill?.manifest, { name: "bulky", description: "ships a large asset" });
+  assert.equal((await skills.get(sk.id))?.manifest.files?.[0]?.content.length, 1_000_000);
+});
+
 test("deployments persist with immutable versions across store instances", async () => {
   const map = createMemoryMap<Deployment>();
   const s1 = createDeployStore(map);

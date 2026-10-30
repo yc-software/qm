@@ -1,5 +1,5 @@
 import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
-import { safeSkillFilePath, type SkillFile, type SkillResolution } from "./skill-store.ts";
+import { safeSkillFilePath, type Skill, type SkillFile, type SkillResolution } from "./skill-store.ts";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import { swallow } from "../util/errors.ts";
 import { assertSafeSkillName } from "./skill-name.ts";
@@ -19,12 +19,12 @@ export function packRoot(root: string, resolution: SkillResolution): string | nu
   return resolution.skill?.pack ? `${root}/.packs/${safeSkillDirName(resolution.skill.pack.packId)}` : null;
 }
 
-export function rehomeSkillPaths(resolution: SkillResolution, text: string, root: string): string {
+export function rehomeSkillPaths(resolution: SkillResolution<Skill>, text: string, root: string): string {
   const name = safeSkillDirName(resolution.skill!.manifest.name);
   return text.split(`${SKILLS_DIR}/${name}/`).join(`${root}/${name}/`);
 }
 
-export function renderSkillBody(resolution: SkillResolution, root = SKILLS_DIR): string {
+export function renderSkillBody(resolution: SkillResolution<Skill>, root = SKILLS_DIR): string {
   const body = rehomeSkillPaths(resolution, resolution.skill!.manifest.body, root);
   const pack = packRoot(root, resolution);
   return pack
@@ -60,7 +60,7 @@ export async function materializeSkillTree(
   sandbox: Sandbox,
   handle: SandboxHandle,
   root: string,
-  resolution: SkillResolution,
+  resolution: SkillResolution<Skill>,
   bundles: SkillBundle[] = [],
 ): Promise<void> {
   if (!resolution.skill) return;

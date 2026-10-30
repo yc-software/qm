@@ -245,6 +245,7 @@ test("turn default changes invalidate cached provisioning while explicit calls d
     connectorEnv: { AGENT_API_TOKEN: "scope-token" },
     visibleSkills: [],
     visibleSkillsForTurn: async () => [],
+    listedSkillsForTurn: async () => [],
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const old = await turn.provision();
@@ -902,6 +903,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
       connectorEnv: {},
       visibleSkills: [],
       visibleSkillsForTurn: async () => [],
+      listedSkillsForTurn: async () => [],
       perf: { credsMs: 0 },
     } as unknown as TurnSandboxContext);
   const a = await start("sa");
@@ -921,8 +923,24 @@ test("same-name skills from distinct sources keep their materialized assets sepa
   const { resources, router, layers } = fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
+  const skillFrom = (source: string) => ({
+    id: source,
+    scopeId: source,
+    status: "published",
+    version: 1,
+    manifest: {
+      name: "helper",
+      body: "Run skills/helper/value.py",
+      files: [{ path: "value.py", content: source }],
+    },
+  });
+  const sources = ["org:example", "personal:alice"];
   const turn = createTurnSandboxes({
-    deps: { sandbox: router, sandboxResources: resources },
+    deps: {
+      sandbox: router,
+      sandboxResources: resources,
+      skills: { recordUse: async () => {}, get: async (id: string) => skillFrom(id) },
+    },
     input: { origin: { kind: "user" } },
     actor: { id: "alice", type: "internal" },
     session: { id: "s" },
@@ -933,20 +951,9 @@ test("same-name skills from distinct sources keep their materialized assets sepa
     turnSessionDir: "turn/s",
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
-    visibleSkillsForTurn: async (sources: readonly string[] = ["org:example", "personal:alice"]) =>
-      sources.map((source) => ({
-        skill: {
-          id: source,
-          scopeId: source,
-          version: 1,
-          manifest: {
-            name: "helper",
-            body: "Run skills/helper/value.py",
-            files: [{ path: "value.py", content: source }],
-          },
-        },
-        shadowed: [],
-      })),
+    visibleSkillsForTurn: async (listed: readonly string[] = sources) =>
+      listed.map((source) => ({ skill: skillFrom(source), shadowed: [] })),
+    listedSkillsForTurn: async () => sources.map((source) => ({ skill: skillFrom(source), shadowed: [] })),
   } as unknown as TurnSandboxContext);
   const a = await turn.useSkill("helper", "SKILL.md", undefined, "org:example");
   const b = await turn.useSkill("helper", "SKILL.md", undefined, "personal:alice");

@@ -13,7 +13,7 @@ import { turnOriginRequestFields } from "../turn-origin.ts";
 import { isOverheardEntry } from "../../sessions/session-store.ts";
 import type { DeliveryStore } from "../../delivery/delivery-store.ts";
 import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
-import type { SkillResolution } from "../../skills/skill-store.ts";
+import type { SkillListing, SkillResolution } from "../../skills/skill-store.ts";
 import { hostMatches } from "../../resolution/egress-policy.ts";
 import { swallow } from "../../util/errors.ts";
 import { hashId } from "../../util/crypto.ts";
@@ -77,10 +77,9 @@ export function filterConnectorSkills(
   });
 }
 
-export async function loadActiveBundles(store: SkillBundleStore, resolved: SkillResolution[]): Promise<SkillBundle[]> {
-  const packIds = [...new Set(resolved.map((r) => r.skill?.pack?.packId).filter((id): id is string => Boolean(id)))];
-  const bundles = await Promise.all(packIds.map((id) => store.get(id)));
-  return bundles.filter((b): b is SkillBundle => b !== null);
+export async function loadActiveBundles(store: SkillBundleStore, skill: SkillListing): Promise<SkillBundle[]> {
+  const bundle = skill.pack ? await store.get(skill.pack.packId) : null;
+  return bundle ? [bundle] : [];
 }
 
 export function egressClaimAllowingControlPlane(

@@ -276,7 +276,7 @@ export function createPostgresMap<T>(
       projection = `(${projection} || CASE WHEN json ? ${fieldParam} THEN
           jsonb_build_object(${fieldParam}::text, ${nested}) ELSE '{}'::jsonb END)`;
     }
-    let sql = `SELECT id, ${projection} - $1::text[] AS json FROM ${table}`;
+    let sql = `SELECT id, ${query.pickNested ? "json" : "json - $1::text[] AS json"} FROM ${table}`;
     if (query.where) {
       const field = query.where.field;
       if (!/^[a-z_][a-z0-9_]*$/i.test(field)) throw new Error(`invalid select field: ${field}`);
@@ -295,7 +295,13 @@ export function createPostgresMap<T>(
       params.push(query.limit);
       sql += ` LIMIT $${params.length}`;
     }
-    const rows = await pg.q(sql, params);
+    const rows = await pg.q(
+      query.pickNested
+        ? `SELECT id, ${projection} - $1::text[] AS json
+           FROM (SELECT id, json || '{}'::jsonb AS json FROM (${sql}) AS page OFFSET 0) AS detoasted ORDER BY id`
+        : sql,
+      params,
+    );
     return rows.map((row) => [row.id as string, row.json as Omit<T, K>]);
   }
   return {

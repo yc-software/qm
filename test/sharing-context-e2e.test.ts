@@ -425,6 +425,24 @@ test("sharing e2e: a newly blocked skill asset removes previously materialized c
   assert.ok((await b.auditLog.events()).some((e) => e.action === "sharing.skill_screen_blocked"));
 });
 
+test("sharing e2e: preparing a computer does not screen carried skills the turn never reads", async (t) => {
+  const b = await fixture(t);
+  await b.skill("personal:U1", "idle-helper", "IDLE");
+  assert.equal(await b.turn("!run echo ROOM", true), "ROOM");
+  const screens = (await b.auditLog.events()).filter(
+    (e) => e.action === "security_screen.classify" && JSON.parse(e.detail ?? "{}").surface === "shared_skill",
+  );
+  assert.deepEqual(screens, []);
+});
+
+test("sharing e2e: an enforced carried skill tree is laid again on read rather than kept across turns", async (t) => {
+  const b = await fixture(t);
+  await b.skill("personal:U1", "carried-helper", "CARRIED");
+  assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "CARRIED");
+  assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
+  assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "CARRIED");
+});
+
 test("sharing e2e: the execution capability excludes carried memories in both directions", async (t) => {
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
   let token: string | undefined;

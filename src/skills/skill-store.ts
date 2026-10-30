@@ -69,10 +69,16 @@ export interface GrantedSkillRef {
   ownerScopeId: ScopeId;
 }
 
-export interface SkillResolution {
-  screenedBundles?: SkillBundle[];
-  skill: Skill | null;
-  shadowed: Skill[];
+export type SkillListing = Omit<Skill, "manifest"> & { manifest: Pick<SkillManifest, "name" | "description"> };
+
+export interface SkillResolution<S extends SkillListing = SkillListing> {
+  screened?: { skill: Skill; bundles: SkillBundle[] };
+  skill: S | null;
+  shadowed: S[];
+}
+
+export function stillListed(skill: Skill, listing: SkillListing): boolean {
+  return skill.status === "published" && skill.scopeId === listing.scopeId;
 }
 
 export interface SkillStoreOptions {
@@ -94,7 +100,7 @@ export interface SkillStore {
   restore(skill: Skill): Promise<void>;
   delete(id: string): Promise<void>;
   recordUse(id: string, at?: number): Promise<void>;
-  resolve(name: string, orderedScopes: ScopeId[]): Promise<SkillResolution>;
+  resolve(name: string, orderedScopes: ScopeId[]): Promise<SkillResolution<Skill>>;
   visibleFor(orderedScopes: ScopeId[], granted?: readonly GrantedSkillRef[]): Promise<SkillResolution[]>;
   promote(id: string, targetScopeId: ScopeId): Promise<Skill>;
   move(id: string, toScopeId: ScopeId): Promise<Skill>;
@@ -169,9 +175,12 @@ export function visibleSkillRows<T extends SkillSummary>(
 
 export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
   const skills = opts.backing ?? createMemoryMap<Skill>();
-  const inScopes = async (scopes: readonly ScopeId[]): Promise<Skill[]> => {
+  const inScopes = async (scopes: readonly ScopeId[], manifest?: readonly (keyof SkillManifest)[]) => {
     const wanted = new Set<string>(scopes);
-    const rows = await skills.select({ where: { field: "scopeId", anyOfFold: [...wanted] } });
+    const rows = await skills.select({
+      where: { field: "scopeId", anyOfFold: [...wanted] },
+      ...(manifest ? { pickNested: { manifest } } : {}),
+    });
     return rows.filter((skill) => wanted.has(skill.scopeId));
   };
   const secret = opts.signingSecret ?? randomUUID();
@@ -292,7 +301,10 @@ export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
     },
 
     async visibleFor(orderedScopes, granted) {
-      const all = await inScopes([...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)]);
+      const all: SkillListing[] = await inScopes(
+        [...orderedScopes, ...(granted ?? []).map((ref) => ref.ownerScopeId)],
+        ["name", "description"],
+      );
       return visibleSkillRows(all, orderedScopes, granted);
     },
 

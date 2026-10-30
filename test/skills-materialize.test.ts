@@ -3,7 +3,7 @@ import { parseSeedSkill } from "../src/skills/seed.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CapabilityUnsupportedError, type Sandbox, type SandboxHandle } from "../src/sandbox/sandbox.ts";
-import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
+import type { Skill, SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 import {
   materializeSkillTree,
   rankedSkills,
@@ -16,14 +16,14 @@ import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };
 const root = ".agent-turn/t1/skills";
 
-function res(name: string, body: string, files: SkillFile[] = [], packId?: string): SkillResolution {
+function res(name: string, body: string, files: SkillFile[] = [], packId?: string): SkillResolution<Skill> {
   return {
     skill: {
       manifest: { name, body, files },
       ...(packId ? { pack: { packId, commit: "c", upstreamName: name } } : {}),
     },
     shadowed: [],
-  } as unknown as SkillResolution;
+  } as unknown as SkillResolution<Skill>;
 }
 
 function bundle(packId: string, files: SkillFile[]): SkillBundle {

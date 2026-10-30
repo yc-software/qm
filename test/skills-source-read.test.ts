@@ -116,7 +116,9 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
   const { SandboxAccessError } = await import("../src/sandbox/sandbox-resources.ts");
   type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
-  type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution;
+  type SkillResolution = import("../src/skills/skill-store.ts").SkillResolution<
+    import("../src/skills/skill-store.ts").Skill
+  >;
   const files = new Map<string, string>();
   let provisions = 0;
   const sandboxIds: Array<string | undefined> = [];
@@ -125,6 +127,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
       id: "s",
       version: 1,
       scopeId: "personal:U1",
+      status: "published",
       manifest: {
         name: "source-helper",
         body: "BODY",
@@ -141,7 +144,10 @@ test("a body read avoids sandbox work and a file request materializes that skill
   const handle = { id: "box", rootDir: "/workspace" };
   const turn = createTurnSandboxes({
     deps: {
-      skills: { recordUse: async () => {} },
+      skills: {
+        recordUse: async () => {},
+        get: async (id: string) => visible.find((r) => r.skill?.id === id)?.skill ?? null,
+      },
       sandboxResources: {
         access: async (_actor: string, id: string) => {
           if (id !== "resource-1" && id !== "box") throw new SandboxAccessError("sandbox not found");
@@ -172,6 +178,7 @@ test("a body read avoids sandbox work and a file request materializes that skill
     turnFilesDir: "turn/s/t",
     connectorEnv: {},
     visibleSkillsForTurn: async () => visible,
+    listedSkillsForTurn: async () => visible,
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const bodyOnly = structuredClone(unrelated);
@@ -202,9 +209,12 @@ test("a body read avoids sandbox work and a file request materializes that skill
   await turn.useSkill("source-helper", "SKILL.md", "box");
   assert.equal(files.get(`${root}/source-helper/references/example.txt`), "local edit");
   resolution.skill!.pack = { packId: "pack", commit: "c", upstreamName: "source-helper" };
-  resolution.screenedBundles = [
-    { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
-  ];
+  resolution.screened = {
+    skill: resolution.skill!,
+    bundles: [
+      { packId: "pack", commit: "c", hash: "pack-hash", files: [{ path: "lib.txt", content: "PACK_RESOURCE" }] },
+    ],
+  };
   const beforeResource = new Map(files);
   await turn.provisionResource("resource-1");
   assert.deepEqual(files, beforeResource);
@@ -213,10 +223,48 @@ test("a body read avoids sandbox work and a file request materializes that skill
   assert.equal(onResource.packDir, `/workspace/${root}/.packs/pack`);
   assert.deepEqual(sandboxIds, [undefined, "box", "resource-1"]);
   assert.equal(files.get(`${root}/.packs/pack/lib.txt`), "PACK_RESOURCE");
+  files.delete(`${root}/.packs/pack/lib.txt`);
+  await turn.useSkill("source-helper", "SKILL.md", "resource-1");
+  assert.equal(files.get(`${root}/.packs/pack/lib.txt`), "PACK_RESOURCE");
   assert.equal(
     [...files.keys()].some((path) => path.includes("/unrelated/")),
     false,
   );
+});
+
+test("a skill archived or moved after the turn listed it is not served", async () => {
+  const { createTurnSandboxes } = await import("../src/core/orchestrator/sandboxes.ts");
+  type TurnSandboxContext = import("../src/core/orchestrator/sandboxes.ts").TurnSandboxContext;
+  const listed = {
+    id: "s",
+    version: 1,
+    scopeId: "personal:U1",
+    status: "published",
+    manifest: { name: "gone-helper", description: "d" },
+  };
+  let current: Record<string, unknown> = {
+    ...listed,
+    status: "archived",
+    manifest: { name: "gone-helper", description: "d", body: "ARCHIVED_BODY" },
+  };
+  const turn = createTurnSandboxes({
+    deps: { skills: { recordUse: async () => {}, get: async () => current }, sandbox: {} },
+    input: { origin: { kind: "human" } },
+    actor: { id: "U1" },
+    session: { id: "s" },
+    resolution: { layers: [{ scopeId: "personal:U1", mountPath: "", mode: "rw" }] },
+    scopeId: "personal:U1",
+    memoryScopeId: "personal:U1",
+    turnSessionDir: "turn/s",
+    turnFilesDir: "turn/s/t",
+    connectorEnv: {},
+    visibleSkillsForTurn: async () => [{ skill: listed, shadowed: [] }],
+    listedSkillsForTurn: async () => [{ skill: listed, shadowed: [] }],
+    perf: { credsMs: 0 },
+  } as unknown as TurnSandboxContext);
+  assert.deepEqual(await turn.useSkill("gone-helper", "SKILL.md"), { content: null, sourceScopeId: null });
+  current = { ...current, status: "published", scopeId: "personal:U2" };
+  assert.deepEqual(await turn.useSkill("gone-helper", "SKILL.md"), { content: null, sourceScopeId: null });
 });
 
 test("pack assets run from the skills root and stay across turns", async (t) => {

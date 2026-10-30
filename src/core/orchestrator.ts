@@ -172,7 +172,7 @@ import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
-import type { SkillResolution } from "../skills/skill-store.ts";
+import { stillListed, type SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { codexSubscriptionModelId, isHarnessId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
 import type { ProviderKeys } from "../harness/pi-harness.ts";
@@ -1169,7 +1169,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               swallowAs("orchestrator: configured connector providers", []),
             )
           : [];
-      const carriedSkillScreens = new Map<string, Promise<boolean>>();
+      const carriedSkillScreens = new Map<string, Promise<SkillResolution["screened"]>>();
       const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
         const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
         const resolved = filterConnectorSkills(current.skills, configuredProviders);
@@ -1180,22 +1180,26 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             allowed.push(entry);
             continue;
           }
-          const snapshot = structuredClone(entry);
-          const screenSkill = async () => {
-            const bundles = structuredClone(
-              deps.skillBundles
-                ? await loadActiveBundles(deps.skillBundles, [snapshot]).catch(
-                    swallowAs("skill screening: load bundles", null),
-                  )
-                : [],
-            );
-            const payload = JSON.stringify({ manifest: snapshot.skill!.manifest, bundles });
-            const key = hashId([skill.scopeId, skill.id, payload], 64);
+          const screenSkill = () => {
+            const key = hashId([skill.scopeId, skill.id, String(skill.version)], 64);
             let screen = carriedSkillScreens.get(key);
             if (!screen) {
               screen = (async () => {
-                if (bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES)
-                  return false;
+                const loaded = deps.skills
+                  ? await deps.skills.get(skill.id).catch(swallowAs("skill screening: load skill", null))
+                  : null;
+                if (!loaded) carriedSkillScreens.delete(key);
+                const full = loaded && stillListed(loaded, skill) ? structuredClone(loaded) : null;
+                const bundles = structuredClone(
+                  full && deps.skillBundles
+                    ? await loadActiveBundles(deps.skillBundles, full).catch(
+                        swallowAs("skill screening: load bundles", null),
+                      )
+                    : [],
+                );
+                const payload = JSON.stringify({ manifest: full?.manifest, bundles });
+                if (!full || bundles === null || Buffer.byteLength(payload, "utf8") > MAX_AUTO_ATTACHMENT_SCREEN_BYTES)
+                  return undefined;
                 for (const chunk of securityScreenChunks("tool_result:shared_skill", payload)) {
                   const verdict = await classifySecurityData(chunk, actor.id, scopeId, recordScreenRequest, {
                     ...screenTrace,
@@ -1204,21 +1208,21 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     surface: "shared_skill",
                     origin: input.origin.kind,
                   });
-                  if (verdict?.decision !== "auto" || verdict.unscreened) return false;
+                  if (verdict?.decision !== "auto" || verdict.unscreened) return undefined;
                 }
-                return true;
+                return { skill: full, bundles };
               })();
               carriedSkillScreens.set(key, screen);
             }
-            return { passed: await screen, bundles };
+            return screen;
           };
           if (!enforceScreen) {
             allowed.push(entry);
             void screenSkill().catch(swallowAs("orchestrator: observed skill screen", undefined));
             continue;
           }
-          const { passed, bundles } = await screenSkill();
-          if (passed && bundles) allowed.push({ ...snapshot, screenedBundles: bundles });
+          const screened = await screenSkill();
+          if (screened) allowed.push({ ...entry, screened });
           else
             deps.auditLog.record({
               at: Date.now(),
@@ -1972,6 +1976,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         egressTokenForPolicy,
         openResourceAccess: !external && (liveAuthorTurn || openAutomationKeychain),
         visibleSkillsForTurn,
+        listedSkillsForTurn: async () => {
+          const listed = await context.listSkills();
+          return enforceScreen
+            ? listed.skills.filter((r) => !r.skill || !listed.sharingSources.includes(r.skill.scopeId))
+            : listed.skills;
+        },
       });
       const leaseStart = Date.now();
       const acquired = await acquireTurnLeaseOrRefuse({

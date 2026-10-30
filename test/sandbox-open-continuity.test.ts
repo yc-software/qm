@@ -98,6 +98,7 @@ function fixture(
       sandbox,
       sandboxResources: resources,
       processes: { listLive: async () => state.liveJobs },
+      skills: { recordUse: async () => {}, get: async () => roomSkill.skill },
       config,
       isCurrentSharedScopeMember: async () => state.member,
     },
@@ -125,6 +126,7 @@ function fixture(
     turnFilesDir: "turn/session/fire",
     visibleSkills: [roomSkill],
     visibleSkillsForTurn: async () => [roomSkill],
+    listedSkillsForTurn: async () => [roomSkill],
     perf: { credsMs: 0 },
   } as unknown as TurnSandboxContext);
   const tools = createToolContext({

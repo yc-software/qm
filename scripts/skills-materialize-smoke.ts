@@ -7,7 +7,7 @@ import { scopeId } from "../src/types.ts";
 import { loadConfig } from "../src/config.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
-import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
+import type { Skill, SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
@@ -16,8 +16,8 @@ if (!process.env.SPRITES_TOKEN) {
   process.exit(1);
 }
 
-function res(name: string, body: string, files: SkillFile[] = []): SkillResolution {
-  return { skill: { manifest: { name, body, files } }, shadowed: [] } as unknown as SkillResolution;
+function res(name: string, body: string, files: SkillFile[] = []): SkillResolution<Skill> {
+  return { skill: { manifest: { name, body, files } }, shadowed: [] } as unknown as SkillResolution<Skill>;
 }
 function bundle(packId: string, files: SkillFile[]): SkillBundle {
   return { packId, commit: "c", files, hash: computeBundleHash(files) };

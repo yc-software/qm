@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import type { SkillManifest } from "../skills/skill-store.ts";
+import { visibleSkillRows, type SkillManifest } from "../skills/skill-store.ts";
 import type { SkillPack, SkillPackStore } from "../skills/skill-pack-store.ts";
 import type { SkillPackFetcher } from "../skills/pack-fetcher.ts";
 import { planIngest, importPack, collectSharedBundle, type ImportResult } from "../skills/ingest.ts";
@@ -253,13 +253,14 @@ export function createSkillMethods(
       return deps.skills.archive(id);
     },
     async listVisibleSkills(principalId) {
+      const all = await deps.skills.list();
       const { ordered, granted } = await skillVisibilityContext(
         deps,
         h,
         principalId,
-        (await deps.skills.list()).map((s) => s.scopeId),
+        all.map((s) => s.scopeId),
       );
-      return deps.skills.visibleFor(ordered, granted);
+      return visibleSkillRows(all, ordered, granted);
     },
     canManageSkill(skill, principalId) {
       return canManageSkill(skill, principalId);

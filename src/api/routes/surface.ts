@@ -892,7 +892,7 @@ async function listSkills(ctx: ApiCtx): Promise<void> {
   if (!principalId) return sendJson(res, 400, { error: "bad_request", message: "principalId required" });
   const includeShadowed = url.searchParams.get("includeShadowed") === "1";
   const resolved = (await app.listVisibleSkills(principalId)).filter(
-    (r): r is SkillResolution & { skill: Skill } => r.skill !== null,
+    (r): r is SkillResolution<Skill> & { skill: Skill } => r.skill !== null,
   );
   const archivedChecks = await Promise.all(
     (await app.listSkills())

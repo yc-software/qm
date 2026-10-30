@@ -20,7 +20,7 @@ import {
   skillDir,
   SKILLS_ROOT,
 } from "../../skills/materialize.ts";
-import { safeSkillFilePath, type SkillResolution } from "../../skills/skill-store.ts";
+import { safeSkillFilePath, stillListed, type Skill, type SkillResolution } from "../../skills/skill-store.ts";
 import { isSafeSkillName } from "../../skills/skill-name.ts";
 import type { SkillResult } from "../../tools/primitives.ts";
 import { TURN_FILES_DIR } from "../attachments.ts";
@@ -49,6 +49,7 @@ export interface TurnSandboxContext {
   egressTokenForPolicy?: (policy: Resolution["egress"]) => Promise<string | undefined>;
   openResourceAccess?: boolean;
   visibleSkillsForTurn: (sources?: readonly string[]) => Promise<SkillResolution[]>;
+  listedSkillsForTurn: () => Promise<SkillResolution[]>;
 }
 
 export function createTurnSandboxes(ctx: TurnSandboxContext) {
@@ -69,6 +70,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     egressTokenForPolicy,
     openResourceAccess,
     visibleSkillsForTurn,
+    listedSkillsForTurn,
   } = ctx;
 
   const box: {
@@ -218,14 +220,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     box.handle = handle;
     return handle;
   };
-  const skillsRoot = (r: SkillResolution) =>
+  const skillsRoot = (r: SkillResolution<Skill>) =>
     `${SKILLS_ROOT}/${turnSessionDir.split("/").at(-1)}/${hashId([r.skill!.id, String(r.skill!.version)], 16)}`;
   const laidTrees = new Set<string>();
-  const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution): Promise<void> => {
+  const materializeSkillTree = async (handle: SandboxHandle, r: SkillResolution<Skill>): Promise<void> => {
     const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(r), r)}`;
-    if (laidTrees.has(treeKey)) return;
+    if (laidTrees.has(treeKey) && !r.screened) return;
     try {
-      const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
+      const bundles =
+        r.screened?.bundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, r.skill!) : []);
       await laySkillTree(deps.sandbox, handle, skillsRoot(r), r, bundles);
       laidTrees.add(treeKey);
     } catch (err) {
@@ -250,12 +253,15 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     } catch {
       return missing;
     }
-    const resolution = (await visibleSkillsForTurn(source ? [source] : undefined)).find(
+    const listed = (await visibleSkillsForTurn(source ? [source] : undefined)).find(
       (r) => r.skill?.manifest.name === name,
     );
-    if (!resolution?.skill) return missing;
-    const shipsFiles = (resolution.skill.manifest.files?.length ?? 0) > 0 || resolution.skill.pack !== undefined;
-    const asset = resolution.skill.manifest.files?.find((f) => {
+    if (!listed?.skill) return missing;
+    const skill = listed.screened?.skill ?? (await deps.skills?.get(listed.skill.id));
+    if (!skill || !stillListed(skill, listed.skill)) return missing;
+    const resolution: SkillResolution<Skill> = { ...listed, skill, shadowed: [] };
+    const shipsFiles = (skill.manifest.files?.length ?? 0) > 0 || skill.pack !== undefined;
+    const asset = skill.manifest.files?.find((f) => {
       try {
         return safeSkillFilePath(f.path) === file;
       } catch {
@@ -263,22 +269,21 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       }
     })?.content;
     if (file !== "SKILL.md" && asset === undefined) return missing;
-    if (deps.skills)
-      void deps.skills.recordUse(resolution.skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
+    if (deps.skills) void deps.skills.recordUse(skill.id).catch((e) => swallow("orchestrator: skill recordUse", e));
     const render = (root?: string) =>
       file === "SKILL.md"
         ? renderSkillBody(resolution, root)
         : rehomeSkillPaths(resolution, asset!, root ?? skillsRoot(resolution));
-    if (!shipsFiles) return { content: render(), sourceScopeId: resolution.skill.scopeId };
+    if (!shipsFiles) return { content: render(), sourceScopeId: skill.scopeId };
     const access = sandboxId !== undefined ? await accessResource(sandboxId) : undefined;
-    if (access?.crossScope) return { content: render(skillsRoot(resolution)), sourceScopeId: resolution.skill.scopeId };
+    if (access?.crossScope) return { content: render(skillsRoot(resolution)), sourceScopeId: skill.scopeId };
     const handle = access ? await provisionResource(access) : await provision();
     await materializeSkillTree(handle, resolution);
     const root = `${handle.rootDir}/${skillsRoot(resolution)}`;
     const pack = packRoot(root, resolution);
     return {
       content: render(root),
-      sourceScopeId: resolution.skill.scopeId,
+      sourceScopeId: skill.scopeId,
       dir: skillDir(root, resolution),
       ...(pack ? { packDir: pack } : {}),
     };
@@ -445,7 +450,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
   };
   const pruneSkills = async (handle: SandboxHandle): Promise<void> => {
-    const visible = (await visibleSkillsForTurn()).flatMap((r) => (r.skill ? [r.skill, ...r.shadowed] : []));
+    const visible = (await listedSkillsForTurn()).flatMap((r) => (r.skill ? [r.skill, ...r.shadowed] : []));
     const keep = new Set(visible.map((skill) => hashId([skill.id, String(skill.version)], 16)));
     const stale = new Set<string>();
     const listed = await deps.sandbox

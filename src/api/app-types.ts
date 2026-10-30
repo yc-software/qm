@@ -562,7 +562,7 @@ export interface App {
   listSkills(): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
-  listVisibleSkills(principalId: string): Promise<SkillResolution[]>;
+  listVisibleSkills(principalId: string): Promise<SkillResolution<Skill>[]>;
   canManageSkill(skill: Skill, principalId: string): Promise<boolean>;
   updateOwnedSkill(
     id: string,
