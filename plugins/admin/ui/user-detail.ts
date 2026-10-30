@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
 import { card, table, badge, renderer } from "./shared.ts";
 
+const OFFBOARD_COLS = ["16%", "30%", "22%", "32%"];
+
 export async function detail(root: HTMLElement, principal: string, s: Record<string, any>) {
   const paint = renderer(root);
   const back = { label: "← Users", onClick: () => window.history.back() };
@@ -143,6 +145,10 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
       draw();
     }
   }
+  function result(c: any) {
+    if (!c.result) return muted("planned");
+    return c.result === "done" ? badge("done", "ok") : stacked(badge("failed", "warn"), c.error);
+  }
   function offboarding() {
     const changes = offboard?.changes || [];
     const kept = offboard?.kept || [];
@@ -162,36 +168,38 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
         ${
           offboard
             ? table(
-                pending ? ["Change", "Item", "Scope"] : ["Change", "Item", "Scope", "Result"],
+                ["Change", "Item", "Scope", "Result"],
                 changes.map((c: any) => [
-                  { node: stacked(c.action.replaceAll("_", " "), c.kind.replaceAll("_", " ")) },
+                  { node: stacked(c.action.replaceAll("_", " "), c.kind) },
                   { node: stacked(c.label, c.id), cls: "mono" },
                   { node: muted(c.scopeId) },
-                  ...(pending
-                    ? []
-                    : [
-                        { node: c.result === "done" ? badge("done", "ok") : stacked(badge("failed", "warn"), c.error) },
-                      ]),
+                  { node: result(c) },
                 ]),
                 pending ? "Nothing to change." : "Nothing was changed.",
+                undefined,
+                { cols: OFFBOARD_COLS },
               )
             : nothing
         }
         ${
           kept.length
-            ? table(
-                ["Kept", "Item", "Scope", "Why"],
-                kept.map((k: any) => [
-                  { node: muted(k.kind.replaceAll("_", " ")) },
-                  { node: stacked(k.label, k.id), cls: "mono" },
-                  { node: muted(k.scopeId) },
-                  { node: muted(k.reason) },
-                ]),
-                "",
-              )
+            ? html`<div style="margin-top:16px">
+                ${table(
+                  ["Kept", "Item", "Scope", "Why"],
+                  kept.map((k: any) => [
+                    { node: muted(k.kind.replaceAll("_", " ")) },
+                    { node: stacked(k.label, k.id), cls: "mono" },
+                    { node: muted(k.scopeId) },
+                    { node: muted(k.reason) },
+                  ]),
+                  "",
+                  undefined,
+                  { cols: OFFBOARD_COLS },
+                )}
+              </div>`
             : nothing
         }
-        <div class="obactions">
+        <div class="obactions" style="margin-top:14px">
           ${
             pending && changes.length
               ? html`<button type="button" class="danger" ?disabled=${busy} @click=${confirmOffboard}>
