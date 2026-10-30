@@ -14,7 +14,9 @@ import { verifySignature } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
 import { scopeId, type EgressPolicy } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { bindTestTenant, OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -26,7 +28,12 @@ const close = (s: Server): Promise<void> => new Promise((r) => s.close(() => r()
 
 function recordingSink() {
   const records: Omit<EgressAuditRecord, "ts">[] = [];
-  return { records, sink: { record: (s: Omit<EgressAuditRecord, "ts">) => records.push(s) } };
+  const tenants: (string | undefined)[] = [];
+  const record = (s: Omit<EgressAuditRecord, "ts">, tenant?: string) => {
+    records.push(s);
+    tenants.push(tenant);
+  };
+  return { records, tenants, sink: { record } };
 }
 
 function egressToken(
@@ -88,14 +95,14 @@ function checkWithHeaders(
 }
 
 function boot(deps: Partial<EgressAuthzDeps> = {}) {
-  const { records, sink } = recordingSink();
+  const { records, tenants, sink } = recordingSink();
   const server = buildEgressAuthzServer({
     capabilitySecret: CAPABILITY_SECRET,
     audit: sink,
     lookup: async () => ["93.184.216.34"],
     ...deps,
   });
-  return { server, records };
+  return { server, records, tenants };
 }
 
 test("tokenFromRequest parses Proxy-Authorization Bearer/Basic; ignores Authorization", () => {
@@ -141,8 +148,8 @@ test("isBlockedDestinationIp catches non-canonical spellings of blocked addresse
   assert.equal(isBlockedDestinationIp("[::]"), true);
 });
 
-test("valid token, open policy => 200 + audited as ok with scope/principal", async () => {
-  const { server, records } = boot();
+test("valid token, open policy => 200 + audited as ok with scope/principal/tenant", async () => {
+  const { server, records, tenants } = boot();
   const port = await listen(server);
   try {
     assert.equal(await check(port, "example.com:443", await egressToken({ allowedHosts: [] })), 200);
@@ -151,6 +158,10 @@ test("valid token, open policy => 200 + audited as ok with scope/principal", asy
     assert.equal(records.at(-1)?.host, "example.com");
     assert.equal(records.at(-1)?.scopeLabel, scopeId("personal", "U_actor"));
     assert.equal(records.at(-1)?.principalId, "U_actor");
+    assert.equal(tenants.at(-1), TEST_TENANT);
+    const foreign = await withTenant(OTHER_TENANT, () => egressToken({ allowedHosts: [] }));
+    assert.equal(await check(port, "example.com:443", foreign), 200);
+    assert.equal(tenants.at(-1), OTHER_TENANT, "each decision is attributed to its token's tenant");
   } finally {
     await close(server);
   }
@@ -189,10 +200,11 @@ test("allowlist present => non-matching host is 403 not_allowlisted, matching ho
 });
 
 test("NO token asks for proxy credentials by default and is audited as unknown", async () => {
-  const { server, records } = boot();
+  const { server, records, tenants } = boot();
   const port = await listen(server);
   try {
     assert.equal(await check(port, "example.com:443"), 407);
+    assert.equal(tenants.at(-1), undefined);
     assert.equal(records.at(-1)?.verdict, "denied");
     assert.equal(records.at(-1)?.scopeLabel, "unknown");
     assert.equal(records.at(-1)?.principalId, "unknown");
@@ -364,22 +376,28 @@ test("relay sink: batches decisions into a signed POST to core's /v1/egress-audi
     return new Response(JSON.stringify({ accepted: 1, rejected: 0 }), { status: 200 });
   }) as typeof fetch;
   const sink = createRelayAuditSink("http://core.example:4000/", SOURCE_SECRET, fakeFetch);
-  sink.record({
-    source: "proxy",
-    host: "api.github.com",
-    allowed: true,
-    verdict: "ok",
-    scopeLabel: scopeId("personal", "U1"),
-    principalId: "U1",
-  });
-  sink.record({
-    source: "proxy",
-    host: "pastebin.com",
-    allowed: false,
-    verdict: "denied",
-    scopeLabel: scopeId("personal", "U1"),
-    principalId: "U1",
-  });
+  sink.record(
+    {
+      source: "proxy",
+      host: "api.github.com",
+      allowed: true,
+      verdict: "ok",
+      scopeLabel: scopeId("personal", "U1"),
+      principalId: "U1",
+    },
+    TEST_TENANT,
+  );
+  sink.record(
+    {
+      source: "proxy",
+      host: "pastebin.com",
+      allowed: false,
+      verdict: "denied",
+      scopeLabel: scopeId("personal", "U1"),
+      principalId: "U1",
+    },
+    TEST_TENANT,
+  );
   await sink.flush();
 
   assert.equal(calls.length, 1, "one batched POST");
@@ -396,12 +414,13 @@ test("relay sink: batches decisions into a signed POST to core's /v1/egress-audi
     {
       signature: calls[0]!.headers["x-signature"]!,
       timestamp: Number(calls[0]!.headers["x-timestamp"]),
-      body: `POST\n/v1/egress-audit\n${JSON.stringify(calls[0]!.body)}`,
+      body: canonicalPayload("POST", "/v1/egress-audit", JSON.stringify(calls[0]!.body), TEST_TENANT),
     },
     Date.now(),
     5 * 60_000,
   );
   assert.equal(v.ok, true, "the POST is source-signed over the canonical payload");
+  assert.equal(calls[0]!.headers["x-qm-tenant"], TEST_TENANT);
 
   await sink.flush();
   assert.equal(calls.length, 1, "an empty buffer does not POST");
@@ -414,7 +433,10 @@ test("relay sink: signs over the real request path when CORE_API_URL carries a p
     return new Response("{}", { status: 200 });
   }) as typeof fetch;
   const sink = createRelayAuditSink("http://alb.example/core", SOURCE_SECRET, fakeFetch);
-  sink.record({ source: "proxy", host: "a.com", allowed: true, verdict: "ok", scopeLabel: scopeId("personal", "U1") });
+  sink.record(
+    { source: "proxy", host: "a.com", allowed: true, verdict: "ok", scopeLabel: scopeId("personal", "U1") },
+    TEST_TENANT,
+  );
   await sink.flush();
   assert.equal(calls[0]!.url, "http://alb.example/core/v1/egress-audit");
   const v = verifySignature(
@@ -422,7 +444,7 @@ test("relay sink: signs over the real request path when CORE_API_URL carries a p
     {
       signature: calls[0]!.headers["x-signature"]!,
       timestamp: Number(calls[0]!.headers["x-timestamp"]),
-      body: `POST\n/core/v1/egress-audit\n${JSON.stringify(calls[0]!.body)}`,
+      body: canonicalPayload("POST", "/core/v1/egress-audit", JSON.stringify(calls[0]!.body), TEST_TENANT),
     },
     Date.now(),
     5 * 60_000,
@@ -439,14 +461,17 @@ test("relay sink: a batch is only dequeued once core acknowledges it", async () 
     return new Response("{}", { status: 200 });
   }) as typeof fetch;
   const sink = createRelayAuditSink("http://core.example:4000", SOURCE_SECRET, fakeFetch);
-  sink.record({
-    source: "proxy",
-    host: "a.com",
-    allowed: true,
-    verdict: "ok",
-    scopeLabel: scopeId("personal", "U1"),
-    principalId: "U1",
-  });
+  sink.record(
+    {
+      source: "proxy",
+      host: "a.com",
+      allowed: true,
+      verdict: "ok",
+      scopeLabel: scopeId("personal", "U1"),
+      principalId: "U1",
+    },
+    TEST_TENANT,
+  );
   await sink.flush();
   assert.equal(calls.length, 1);
   fail = false;
@@ -459,4 +484,58 @@ test("relay sink: a batch is only dequeued once core acknowledges it", async () 
   );
   await sink.flush();
   assert.equal(calls.length, 2, "acknowledged records are not re-sent");
+});
+
+test("relay sink: posts one signed batch per tenant and drops records with no tenant", async () => {
+  const calls: Array<{ body: any; headers: Record<string, string> }> = [];
+  const fakeFetch = (async (_url: any, init: any) => {
+    calls.push({ body: JSON.parse(init.body), headers: init.headers });
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  const sink = createRelayAuditSink("http://core.example:4000", SOURCE_SECRET, fakeFetch);
+  const rec = (host: string) => ({
+    source: "proxy" as const,
+    host,
+    allowed: true,
+    verdict: "ok" as const,
+    scopeLabel: scopeId("personal", "U1"),
+  });
+  sink.record(rec("a.com"), TEST_TENANT);
+  sink.record(rec("b.com"), OTHER_TENANT);
+  sink.record(rec("c.com"), TEST_TENANT);
+  sink.record(rec("untenanted.com"));
+  await sink.flush();
+  await sink.flush();
+  await sink.flush();
+  assert.equal(calls.length, 2);
+  const byTenant = Object.fromEntries(
+    calls.map((c) => [c.headers["x-qm-tenant"], c.body.records.map((r: any) => r.host)]),
+  );
+  assert.deepEqual(byTenant, { [TEST_TENANT]: ["a.com", "c.com"], [OTHER_TENANT]: ["b.com"] });
+  for (const c of calls) {
+    const canonical = canonicalPayload("POST", "/v1/egress-audit", JSON.stringify(c.body), c.headers["x-qm-tenant"]);
+    const v = verifySignature(
+      SOURCE_SECRET,
+      { signature: c.headers["x-signature"]!, timestamp: Number(c.headers["x-timestamp"]), body: canonical },
+      Date.now(),
+      5 * 60_000,
+    );
+    assert.equal(v.ok, true, "each batch is signed over its own tenant");
+  }
+});
+
+test("relay sink: a batch core refuses with 4xx is dropped rather than retried forever", async () => {
+  const calls: any[] = [];
+  const fakeFetch = (async (_url: any, init: any) => {
+    calls.push(JSON.parse(init.body));
+    return new Response("refused", { status: 403 });
+  }) as typeof fetch;
+  const sink = createRelayAuditSink("http://core.example:4000", SOURCE_SECRET, fakeFetch);
+  sink.record(
+    { source: "proxy", host: "a.com", allowed: true, verdict: "ok", scopeLabel: scopeId("personal", "U1") },
+    OTHER_TENANT,
+  );
+  await sink.flush();
+  await sink.flush();
+  assert.equal(calls.length, 1);
 });
