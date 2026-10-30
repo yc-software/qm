@@ -1,24 +1,12 @@
 import type { OrchestratorInput, SurfaceContextPuller } from "../../core/turn-input.ts";
-import type { GoalCreateInput } from "../../agent/goal.ts";
-import type { RunStop } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
-import type {
-  CommandApprovalGrant,
-  Conversation,
-  Principal,
-  PendingApprovalRecord,
-  SurfaceContextQuery,
-  SurfaceContextResult,
-  TurnRequest,
-  TurnResult,
-} from "../../types.ts";
-import type { TurnOrigin } from "../../core/turn-origin.ts";
+import type { CommandApprovalGrant, Conversation, Principal, PendingApprovalRecord, TurnResult } from "../../types.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
-import type { ModelAccount, OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
+import type { OrgBranding, ScopedConfigStore } from "../../resolution/config-store.ts";
 import type { UserModelCredentialStore } from "../../model/user-model-credential-store.ts";
 import type { IsCurrentSharedScopeMember, ManagedGroupDirectory } from "../../resolution/scope-membership.ts";
 import type { ProjectStore } from "../../projects/project-store.ts";
@@ -66,10 +54,9 @@ import type { FileArtifactStore } from "../../files/file-artifact-store.ts";
 import type { ToolOutputStore } from "../../sessions/tool-output.ts";
 import type { DeployService } from "../../deploy/deploy-service.ts";
 import type { AclStore } from "../../acl/acl-store.ts";
-import type { SwarmService, SwarmTurn } from "../../swarms/swarm-service.ts";
+import type { SwarmService } from "../../swarms/swarm-service.ts";
 import type { ChannelPolicyStore } from "../../surface-cache/channel-policy-store.ts";
 import type { SurfaceCache } from "../../surface-cache/types.ts";
-
 
 export interface OrchestratorDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
@@ -173,7 +160,6 @@ export interface OrchestratorDeps {
   channelPolicy?: ChannelPolicyStore;
   surfaceDebugFooter?: boolean;
 }
-
 
 interface SurfaceSearchStore {
   search(query: SurfaceSearchQuery): Promise<SurfaceSearchStoreHit[]>;

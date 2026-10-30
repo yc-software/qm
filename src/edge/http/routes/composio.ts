@@ -1,5 +1,4 @@
 import { hasSlackAccount } from "./slack-composio.ts";
-import type { ComposioReturn, SlackAccountLink } from "../../../connectors/account-links.ts";
 import { slackReply } from "./slack-reply.ts";
 import { nativeSlackConfigured, nativeSlackConnection } from "./slack-native.ts";
 import { isBackendCredential } from "../../../credentials/keychain.ts";
