@@ -47,7 +47,7 @@ export const SWARMS_MIGRATION = typedTableMigration({
     scope_id: "json->>'scopeId'",
     owner_id: "json->>'ownerId'",
     participants: "ARRAY(SELECT jsonb_array_elements_text(COALESCE(json->'participants', '[]')))",
-    created_at: "(json->>'createdAt')::numeric::bigint",
+    created_at: "COALESCE((json->>'createdAt')::numeric::bigint, 0)",
     expires_at: "(json->>'expiresAt')::numeric::bigint",
     template: "json->'template'",
     settings: "json->'settings'",
@@ -60,6 +60,8 @@ export const SWARMS_MIGRATION = typedTableMigration({
     notification_count: "COALESCE((json->>'notificationCount')::numeric::bigint, 0)",
     pending: "COALESCE((json->>'pending')::boolean, false)",
   },
+  where:
+    "json ? 'scopeId' AND json ? 'ownerId' AND json ? 'backend' AND jsonb_typeof(json->'template') = 'object' AND jsonb_typeof(json->'settings') = 'object'",
   indexes: ["CREATE INDEX swarms_pending_claim ON swarms(id) WHERE pending"],
 });
 
@@ -121,7 +123,7 @@ async function fenceRun(client: PoolClient, fence: SwarmRunFence): Promise<Run |
   const run = result.rows[0] ?? null;
   assertSwarmRun(fence, run);
   const session = await client.query(
-    "SELECT id FROM sessions WHERE id=$1 AND scope_id=$2 AND thread_ref=$3 FOR SHARE",
+    "SELECT id FROM sessions WHERE tenant_id = qm_tenant_id() AND id=$1 AND scope_id=$2 AND thread_ref=$3 FOR SHARE",
     [fence.sessionId, fence.scopeId, fence.threadRef],
   );
   if (!session.rowCount) throw new Error("capability session mismatch");

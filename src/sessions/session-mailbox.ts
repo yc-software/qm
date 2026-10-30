@@ -46,9 +46,10 @@ export const SESSION_MAILBOX_MIGRATION = typedTableMigration({
     text: "json->>'text'",
     source_entry_seq: "(json->>'sourceEntrySeq')::numeric::bigint",
     audience: "COALESCE(json->'audience', '[]')",
-    created_at: "(json->>'createdAt')::numeric::bigint",
+    created_at: "COALESCE((json->>'createdAt')::numeric::bigint, 0)",
     consumed: "COALESCE((json->>'consumed')::boolean, false)",
   },
+  where: "json ? 'recipientId' AND json ? 'senderId' AND json ? 'text' AND jsonb_typeof(json->'actor') = 'object'",
   indexes: [
     "CREATE INDEX session_mailbox_unread ON session_mailbox(tenant_id, recipient_id, created_at, id) WHERE NOT consumed",
   ],

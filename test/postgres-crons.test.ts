@@ -190,9 +190,22 @@ test(
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'crons') AS versions
            FROM crons`,
         );
-        assert.deepEqual(meta, [{ tenant, dropped: true, versions: 0 }]);
+        assert.deepEqual(meta, [
+          { tenant, dropped: true, versions: 0 },
+          { tenant, dropped: true, versions: 0 },
+        ]);
+        assert.equal((await withTenant(tenant, () => rows.get("legacy-2")))?.enabled, false);
+        assert.equal(await withTenant(tenant, () => rows.get("broken")), null);
       },
-      (admin) => seedKeyValueTable(admin, "crons", { "legacy-1": LEGACY_CRON }),
+      (admin) => {
+        const { enabled: _enabled, ...unflagged } = LEGACY_CRON;
+        const { schedule: _schedule, ...broken } = LEGACY_CRON;
+        return seedKeyValueTable(admin, "crons", {
+          "legacy-1": LEGACY_CRON,
+          "legacy-2": { ...unflagged, id: "legacy-2" },
+          broken: { ...broken, id: "broken" },
+        });
+      },
     );
   },
 );

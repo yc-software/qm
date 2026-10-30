@@ -98,8 +98,8 @@ export const WEBHOOKS_MIGRATION = typedTableMigration({
     created_by: "json->>'createdBy'",
     owner_consented_at: "(json->>'ownerConsentedAt')::numeric::bigint",
     destination: "NULLIF(json->'destination', 'null'::jsonb)",
-    enabled: "(json->>'enabled')::boolean",
-    created_at: "(json->>'createdAt')::numeric::bigint",
+    enabled: "COALESCE((json->>'enabled')::boolean, false)",
+    created_at: "COALESCE((json->>'createdAt')::numeric::bigint, 0)",
     last_fired_at: "(json->>'lastFiredAt')::numeric::bigint",
     action: "json->>'action'",
     verification: "json->'verification'",
@@ -107,6 +107,8 @@ export const WEBHOOKS_MIGRATION = typedTableMigration({
     last_delivery_id: "json->>'lastDeliveryId'",
     last_error: "json->>'lastError'",
   },
+  where:
+    "json ? 'owner' AND json ? 'createdBy' AND json ? 'ownerScopeId' AND json ? 'action' AND jsonb_typeof(json->'verification') = 'object'",
   indexes: ["CREATE INDEX webhooks_by_owner_scope ON webhooks(tenant_id, owner_scope_id)"],
 });
 
@@ -129,6 +131,7 @@ export const WEBHOOK_EVENTS_MIGRATION: PgMigrationDefinition = {
          FROM webhook_history old,
               jsonb_to_recordset(old.json->'events') AS e("deliveryId" text, "receivedAt" numeric, payload text)
         WHERE jsonb_typeof(old.json->'events') = 'array'
+          AND e."deliveryId" IS NOT NULL AND e."receivedAt" IS NOT NULL AND e.payload IS NOT NULL
        ON CONFLICT DO NOTHING`,
     `DROP TABLE webhook_history`,
     `DO $drop_version$ BEGIN

@@ -112,8 +112,8 @@ export const MONITORS_MIGRATION = typedTableMigration({
     created_by: "json->>'createdBy'",
     owner_consented_at: "(json->>'ownerConsentedAt')::numeric::bigint",
     destination: "NULLIF(json->'destination', 'null'::jsonb)",
-    enabled: "(json->>'enabled')::boolean",
-    created_at: "(json->>'createdAt')::numeric::bigint",
+    enabled: "COALESCE((json->>'enabled')::boolean, false)",
+    created_at: "COALESCE((json->>'createdAt')::numeric::bigint, 0)",
     last_fired_at: "(json->>'lastFiredAt')::numeric::bigint",
     process_id: "json->>'processId'",
     command: "json->>'command'",
@@ -126,6 +126,8 @@ export const MONITORS_MIGRATION = typedTableMigration({
     expires_at: "COALESCE((json->>'expiresAt')::numeric::bigint, (json->>'createdAt')::numeric::bigint)",
     last_error: "json->>'lastError'",
   },
+  where:
+    "json ? 'owner' AND json ? 'createdBy' AND json ? 'ownerScopeId' AND json ? 'processId' AND json ? 'command' AND json ? 'threadRef'",
   indexes: [
     "CREATE INDEX monitors_by_owner_scope ON monitors(tenant_id, owner_scope_id)",
     "CREATE INDEX monitors_by_thread_ref ON monitors(tenant_id, thread_ref) WHERE enabled",

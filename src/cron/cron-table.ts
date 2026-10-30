@@ -129,9 +129,9 @@ export const CRONS_MIGRATION = typedTableMigration({
     created_by: jsonText("createdBy"),
     owner_consented_at: jsonEpoch("ownerConsentedAt"),
     destination: jsonObject("destination"),
-    enabled: "(json->>'enabled')::boolean",
+    enabled: "COALESCE((json->>'enabled')::boolean, false)",
     archived: "(json->>'archived')::boolean",
-    created_at: jsonEpoch("createdAt"),
+    created_at: `COALESCE(${jsonEpoch("createdAt")}, 0)`,
     last_fired_at: jsonEpoch("lastFiredAt"),
     last_attempt_at: jsonEpoch("lastAttemptAt"),
     next_fire_at: jsonEpoch("nextFireAt"),
@@ -147,6 +147,8 @@ export const CRONS_MIGRATION = typedTableMigration({
     session_ref: jsonText("sessionRef"),
     last_fire_note: jsonObject("lastFireNote"),
   },
+  where:
+    "json ? 'owner' AND json ? 'createdBy' AND json ? 'ownerScopeId' AND jsonb_typeof(json->'schedule') = 'object'",
   indexes: [
     "CREATE INDEX crons_by_owner_scope ON crons(tenant_id, owner_scope_id)",
     "CREATE INDEX crons_by_session_ref ON crons(tenant_id, session_ref) WHERE session_ref IS NOT NULL",

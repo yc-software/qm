@@ -10,7 +10,7 @@ import {
 import { createMemoryCronRows } from "../src/cron/cron-table.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 import { createMemoryCronFireStore } from "../src/cron/fire-store.ts";
-import { scopeId, type Cron } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 
 bindTestTenant();
 
