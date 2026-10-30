@@ -15,7 +15,7 @@ import { validatePortalTrust, type QmConfig } from "../src/config.ts";
 
 const config: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "http://localhost:8080",
   target: "docker",
   services: ["core"],
@@ -250,7 +250,7 @@ if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SEC
   }
 });
 
-test("Fly doctor demands the plain name too for a dual-role (core + sandbox) secret", async () => {
+test("Fly doctor demands only the sandbox name when a dual-role secret's plain name is a tenant setting", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-dual-"));
   const bin = join(dir, "fake-fly.cjs");
   const prior = process.env.FLY_BIN;
@@ -277,7 +277,7 @@ if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SEC
         },
         dir,
       ),
-      /acme-core: missing ANTHROPIC_API_KEY/,
+      (error: Error) => /acme-core: missing PUBLIC_API_URL/.test(error.message) && !/ANTHROPIC/.test(error.message),
     );
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;

@@ -10,6 +10,7 @@ import { serviceEnvironment } from "../src/backends/aws.ts";
 import { dockerServiceEnv } from "../src/backends/docker.ts";
 import { computedSecrets, runtimeSecretNames, secretsForService } from "../src/secrets.ts";
 import { stageFlyEmailAllowlist } from "../src/backends/fly.ts";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
 import { isReservedContainerName, SERVICE_NAMES, serviceDef } from "../src/services.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -28,7 +29,7 @@ function configWith(body: string): QmConfig {
 
 function configText(over: { services?: string; env?: string } = {}): string {
   return `{
-    "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "docker",
+    "contract": 1, "deploymentId": "acme", "publicUrl": "https://agent.example.com", "target": "docker",
     "services": ${over.services ?? '["core", "web-ui", "admin", "portal", "auth"]'},
     "plugins": [], "skills": [],
     "env": ${over.env ?? '{ "auth": { "AUTH_EMAIL_TRANSPORT": "resend", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } }'}
@@ -68,7 +69,8 @@ test("fly derives the portal's whole OIDC block from the broker, over the privat
   assert.doesNotMatch(portal, /accounts\.google\.com|slack\.com/, "the template's external-IdP defaults are replaced");
 
   const core = derivedTomlFor(brokerConfig(), "core", repoRoot);
-  assert.match(core, /AUTH_ALLOWED_EMAIL_DOMAIN = "example\.com"/, "core refuses in-domain external invites");
+  assert.doesNotMatch(core, /AUTH_ALLOWED_EMAIL_DOMAIN/, "the sign-in domain is a tenant setting, not core env");
+  assert.equal(tenantSettingsEnv(brokerConfig(), new Map()).AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
 
   const auth = derivedTomlFor(brokerConfig(), "auth", repoRoot);
   assert.equal(auth, readFileSync(join(repoRoot, "cli", "templates", "fly", "auth.toml"), "utf8"));
@@ -84,13 +86,14 @@ test("the external-IdP stack keeps its own OIDC endpoints and gains no broker wi
   assert.doesNotMatch(portal, /AUTH_BROKER_UPSTREAM/);
 });
 
-test("a configured botName brands the docker service env for core and auth", () => {
+test("a configured botName brands the tenant settings and the docker auth env, never core env", () => {
   const config = configWith(
     configText().replace('"plugins": [],', '"botName": "straylight", "orgName": "Acme Corp", "plugins": [],'),
   );
   const core = dockerServiceEnv(config, "core");
-  assert.equal(core.ORG_BRAND_SELF_LABEL, "straylight");
-  assert.equal(core.ORG_BRAND_ORG_NAME, "Acme Corp");
+  assert.equal(core.ORG_BRAND_SELF_LABEL, undefined);
+  assert.equal(tenantSettingsEnv(config, new Map()).ORG_BRAND_SELF_LABEL, "straylight");
+  assert.equal(tenantSettingsEnv(config, new Map()).ORG_BRAND_ORG_NAME, "Acme Corp");
   assert.equal(dockerServiceEnv(config, "auth").AUTH_BRAND_NAME, "straylight");
   const bare = configWith(configText());
   assert.equal(dockerServiceEnv(bare, "core").ORG_BRAND_SELF_LABEL, undefined);
@@ -107,7 +110,7 @@ test("docker and AWS wire the broker with parity", () => {
   assert.equal(dockerServiceEnv(docker, "web-ui").AUTH_BROKER_UPSTREAM, undefined);
 
   const aws = configWith(`{
-    "contract": 1, "orgId": "acme", "publicUrl": "https://agent.example.com", "target": "aws",
+    "contract": 1, "deploymentId": "acme", "publicUrl": "https://agent.example.com", "target": "aws",
     "services": ["core", "web-ui", "admin", "portal", "auth"], "plugins": [], "skills": [],
     "env": { "core": { "AWS_DEPLOY_IMAGE": "acme-sandbox" }, "auth": { "AUTH_EMAIL_TRANSPORT": "smtp", "AUTH_ALLOWED_EMAIL_DOMAIN": "example.com" } },
     "aws": {
@@ -128,7 +131,8 @@ test("docker and AWS wire the broker with parity", () => {
   assert.equal(awsPortal.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
   assert.equal(awsPortal.OIDC_JWKS_URI, "http://127.0.0.1:8099/.well-known/jwks.json");
   assert.equal(awsPortal.OIDC_ALLOWED_EMAIL_DOMAIN, "example.com");
-  assert.equal(serviceEnvironment(aws, "core").AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
+  assert.equal(serviceEnvironment(aws, "core").AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
+  assert.equal(tenantSettingsEnv(aws, new Map()).AUTH_ALLOWED_EMAIL_DOMAIN, "example.com");
   assert.equal(
     awsPortal.PORTAL_XFF_TRUSTED_HOPS,
     "1",
@@ -185,7 +189,11 @@ test("without a configured domain the allowlist becomes a required secret on bot
   assert.ok(allowed.required);
   assert.deepEqual(runtimeSecretNames("auth", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
   assert.deepEqual(runtimeSecretNames("portal", allowed), ["AUTH_ALLOWED_EMAILS", "OIDC_ALLOWED_EMAILS"]);
-  assert.deepEqual(runtimeSecretNames("core", allowed), ["AUTH_ALLOWED_EMAILS"]);
+  assert.deepEqual(runtimeSecretNames("core", allowed), [], "core reads the allowlist from its tenant settings");
+  assert.equal(
+    tenantSettingsEnv(config, new Map([["AUTH_ALLOWED_EMAILS", "a@example.com"]])).AUTH_ALLOWED_EMAILS,
+    "a@example.com",
+  );
   const names = new Set(computedSecrets(config).map((secret) => secret.name));
   for (const name of ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"]) assert.ok(names.has(name), name);
   const resend = computedSecrets(config).find((secret) => secret.name === "RESEND_API_KEY")!;
@@ -244,7 +252,7 @@ test("a broker deployment with no allowlist at all is refused once secret values
   assert.doesNotThrow(() => validatePortalTrust(brokerConfig(), "config", new Map()));
 });
 
-test("fly up staging copies a changed .env email allowlist to auth, portal, and core", () => {
+test("fly up staging copies the --env-file email allowlist to the sign-in services, not core", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-allowlist-up-"));
   const fly = join(dir, "fly");
   const log = join(dir, "fly.log");
@@ -254,19 +262,21 @@ test("fly up staging copies a changed .env email allowlist to auth, portal, and 
 const fs=require("node:fs"); fs.appendFileSync(${JSON.stringify(log)}, process.argv.slice(2).join(" ")+" value="+fs.readFileSync(0,"utf8")+"\\n");`,
   );
   chmodSync(fly, 0o755);
-  writeFileSync(join(dir, ".env"), "AUTH_ALLOWED_EMAILS=new@example.com,other@example.com\n");
+  writeFileSync(join(dir, ".env"), "AUTH_ALLOWED_EMAILS=stale@example.com\n");
+  writeFileSync(join(dir, "prod.env"), "AUTH_ALLOWED_EMAILS=new@example.com,other@example.com\n");
   const config = configWith(configText({ env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": "smtp" } }` }));
   const prior = process.env.FLY_BIN;
   process.env.FLY_BIN = fly;
   try {
-    stageFlyEmailAllowlist(config, dir, new Set(["core", "auth", "portal"]));
+    stageFlyEmailAllowlist(config, join(dir, "prod.env"), new Set(["core", "auth", "portal"]));
   } finally {
     if (prior === undefined) delete process.env.FLY_BIN;
     else process.env.FLY_BIN = prior;
   }
   const calls = readFileSync(log, "utf8");
   const prefix = "acme";
-  assert.match(calls, new RegExp(`-a ${prefix}-core AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
+  assert.doesNotMatch(calls, /stale@example\.com/);
+  assert.doesNotMatch(calls, new RegExp(`-a ${prefix}-core `));
   assert.match(calls, new RegExp(`-a ${prefix}-portal AUTH_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
   assert.match(calls, new RegExp(`-a ${prefix}-portal OIDC_ALLOWED_EMAILS=- value=new@example.com,other@example.com`));
 });

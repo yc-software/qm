@@ -20,7 +20,7 @@ import {
   ordered,
   type BrandEnv,
   brandEnvOf,
-  orgEnv,
+  serviceUrlEnv,
   runnableServices,
   hostedServiceEnv,
   serviceHost,
@@ -30,14 +30,7 @@ import {
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
-import {
-  appPrefixOf,
-  CONFIG_FILENAME,
-  sandboxCoreEnv,
-  securityScreenEnv,
-  updateConfigImageOverrides,
-  type QmConfig,
-} from "../config.ts";
+import { appPrefixOf, CONFIG_FILENAME, sandboxCoreEnv, updateConfigImageOverrides, type QmConfig } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import {
   computedSecrets,
@@ -48,12 +41,14 @@ import {
 } from "../secrets.ts";
 import { manifestRef } from "../manifest.ts";
 import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport } from "../deployment-layer.ts";
+import { FLY_APP_NOT_FOUND, fly, secretNames, stageSecret } from "./fly-cli.ts";
+import { ensureFlyPostgres } from "./fly-postgres.ts";
+import { isTenantSetting, withoutTenantSettings } from "../tenant-setting-names.ts";
 
 const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => {
   const brand = brandEnvOf(config);
   return {
     appPrefix,
-    orgId: config.orgId,
     deployAppPrefix,
     publicUrl: config.publicUrl,
     hasPortal: config.services.includes("portal"),
@@ -72,7 +67,6 @@ const FLY_REMOTE_ERROR = "QM_LAYER_ERROR=";
 const FLY_REQUEST_TIMEOUT_MS = 120_000;
 const FLY_EXEC_TIMEOUT_SEC = 120;
 const FLY_EXEC_ARG_BYTES = 64 * 1024;
-const FLY_APP_NOT_FOUND = /could not find app|app not found/i;
 const FLY_MACHINES_API = "https://api.machines.dev/v1";
 
 function classifyFlyReachability(app: string, detail: string): never {
@@ -178,6 +172,7 @@ import { doctorCommon, localDoctorSecrets, requireFlyAuth } from "./doctor.ts";
 
 export interface FlyUpOpts {
   dryRun?: boolean;
+  envFile?: string;
   buildOnly?: boolean;
   buildFrom?: boolean;
   buildFromPath?: string;
@@ -190,11 +185,12 @@ export interface FlyUpOpts {
 
 interface FlyCtx {
   config: QmConfig;
+  envFile: string;
   generatedRoot: string;
   commandCwd: string;
   sourceRoot?: string;
   appPrefix: string;
-  orgId: string;
+  deploymentId: string;
   region: string;
   flyOrg: string;
   serviceCtx: ServiceCtx;
@@ -275,29 +271,12 @@ function createTimingRecorder(stack: string): {
   };
 }
 
-function fly(args: string[], opts: { allow?: RegExp } = {}): string {
-  try {
-    return capture(flyBin(), args, opts);
-  } catch (e) {
-    throw new CliError(errMessage(e));
-  }
-}
-
-function stageSecret(app: string, name: string, value: string): void {
-  const result = spawnSync(flyBin(), ["secrets", "set", "--stage", "-a", app, `${name}=-`], {
-    input: value,
-    encoding: "utf8",
-    stdio: ["pipe", "inherit", "inherit"],
-  });
-  if (result.status !== 0) throw new CliError(`failed to stage ${name} on ${app}`);
-}
-
 export function stageFlyEmailAllowlist(
   config: QmConfig,
-  configDir: string,
+  envFile: string,
   selectedWorkloads: ReadonlySet<string>,
 ): void {
-  const values = readEnvFile(join(configDir, ".env"));
+  const values = readEnvFile(envFile);
   const value = deploymentSecretValue("AUTH_ALLOWED_EMAILS", values.get("AUTH_ALLOWED_EMAILS"));
   if (value === undefined) return;
   if (isInvalidSecret("AUTH_ALLOWED_EMAILS", value)) {
@@ -315,19 +294,13 @@ export function stageFlyEmailAllowlist(
   if (staged.length) step(`AUTH_ALLOWED_EMAILS: staged from .env on ${staged.join(", ")}`);
 }
 
-function flySensitive(args: string[], failure: string): string {
-  const result = spawnSync(flyBin(), args, { encoding: "utf8" });
-  if (result.status !== 0) throw new CliError(failure);
-  return result.stdout;
-}
-
 const tomlStr = (v: string): string => JSON.stringify(v);
 const FLY_DEPLOYMENT_ID_ENV = "QM_DEPLOYMENT_ID";
-const flyDeploymentId = (flyOrg: string, orgId: string, appPrefix: string): string =>
-  `qm-v2:${flyOrg}:${orgId}:${appPrefix}`;
-const flyOwnershipMarker = (flyOrg: string, orgId: string, appPrefix: string): string =>
+const flyDeploymentId = (flyOrg: string, deploymentId: string, appPrefix: string): string =>
+  `qm-v2:${flyOrg}:${deploymentId}:${appPrefix}`;
+const flyOwnershipMarker = (flyOrg: string, deploymentId: string, appPrefix: string): string =>
   `QM_OWNER_${createHash("sha256")
-    .update(flyDeploymentId(flyOrg, orgId, appPrefix))
+    .update(flyDeploymentId(flyOrg, deploymentId, appPrefix))
     .digest("hex")
     .slice(0, 16)
     .toUpperCase()}`;
@@ -337,26 +310,18 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
   const base = readFileSync(join(flyTemplateRoot(), `${service}.toml`), "utf8");
   const sandboxEnv = service === "core" ? sandboxCoreEnv(ctx.config).env : {};
   const virtualEnv = service === "core" ? virtualServiceEnv(ctx.config.services, ctx.config.env) : {};
-  const modelEnv: Record<string, string> =
-    service === "core"
-      ? {
-          ...(ctx.config.model ? { PI_MODEL: ctx.config.model } : {}),
-          ...(ctx.config.modelProvider ? { MODEL_PROVIDER: ctx.config.modelProvider } : {}),
-        }
-      : {};
   const configuredEnv = hostedServiceEnv(ctx.config.services, ctx.config.env, service);
   if (service === "core") delete configuredEnv.FLY_ORG;
   const deploymentEnv: Record<string, string> = service === "core" && ctx.flyOrg ? { FLY_ORG: ctx.flyOrg } : {};
-  const overrides: Record<string, string> = {
+  const merged: Record<string, string> = {
     ...spec.managed(ctx.serviceCtx),
     ...sandboxEnv,
     ...virtualEnv,
-    ...modelEnv,
     ...configuredEnv,
-    ...(service === "core" ? securityScreenEnv(ctx.config) : {}),
     ...deploymentEnv,
-    [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(ctx.flyOrg, ctx.orgId, ctx.appPrefix),
+    [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(ctx.flyOrg, ctx.deploymentId, ctx.appPrefix),
   };
+  const overrides = service === "core" ? withoutTenantSettings(merged) : merged;
   const provided = new Set(Object.keys(overrides));
   const vm = ctx.config.vms?.[service];
   const lines = base.split("\n");
@@ -402,6 +367,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
         const key = kv[2] ?? "";
         envIndent = indent;
         seen.add(key);
+        if (service === "core" && isTenantSetting(key)) continue;
         const ov = overrides[key];
         if (ov !== undefined) {
           out.push(`${indent}${key} = ${tomlStr(ov)}`);
@@ -427,11 +393,12 @@ export function derivedTomlFor(config: QmConfig, service: ServiceName, repoRoot:
   const deployAppPrefix = config.deployAppPrefix ?? `${appPrefix}-d`;
   const ctx: FlyCtx = {
     config,
+    envFile: join(repoRoot, ".env"),
     generatedRoot: join(repoRoot, "deploy", "stacks", ".generated"),
     commandCwd: repoRoot,
     sourceRoot: repoRoot,
     appPrefix,
-    orgId: config.orgId,
+    deploymentId: config.deploymentId,
     region: config.region ?? "",
     flyOrg: config.flyOrg ?? "",
     serviceCtx: flyServiceCtx(config, appPrefix, deployAppPrefix),
@@ -448,14 +415,6 @@ function writeDerived(ctx: FlyCtx, service: ServiceName): string {
   const path = serviceCfgPath(ctx, service);
   writeFileSync(path, deriveToml(ctx, service));
   return path;
-}
-
-function secretNames(app: string): Set<string> | undefined {
-  const out = fly(["secrets", "list", "-a", app], { allow: FLY_APP_NOT_FOUND });
-  if (FLY_APP_NOT_FOUND.test(out)) return undefined;
-  return new Set(
-    [...out.matchAll(/^\s*\*?\s*([A-Z0-9_]+)\s/gm)].map((m) => m[1]).filter((s): s is string => s !== undefined),
-  );
 }
 
 function flyProviderSecrets(config: QmConfig, workload: string): string[] {
@@ -569,9 +528,9 @@ function appHasMachines(app: string): boolean {
   }
 }
 
-function ensureApp(app: string, flyOrg: string, orgId: string, appPrefix: string): void {
+function ensureApp(app: string, flyOrg: string, deploymentId: string, appPrefix: string): void {
   const out = fly(["apps", "create", app, "--org", flyOrg], { allow: /already been taken/i });
-  const marker = flyOwnershipMarker(flyOrg, orgId, appPrefix);
+  const marker = flyOwnershipMarker(flyOrg, deploymentId, appPrefix);
   if (/already been taken/i.test(out)) {
     if (!flyOrgApps(flyOrg).has(app)) {
       throw new CliError(`app ${app} exists outside configured Fly organization ${flyOrg}; choose another appPrefix`);
@@ -587,79 +546,6 @@ function ensureApp(app: string, flyOrg: string, orgId: string, appPrefix: string
   }
   fly(["secrets", "set", "--stage", "-a", app, `${marker}=1`]);
   note(`app ${app}: created`);
-}
-
-function ensurePostgres(ctx: FlyCtx): void {
-  const app = `${ctx.appPrefix}-core`;
-  const hasDatabaseUrl = secretNames(app)?.has("DATABASE_URL");
-  if (hasDatabaseUrl) {
-    note(`postgres: DATABASE_URL already set on ${app}`);
-    return;
-  }
-  const pgName = `${ctx.appPrefix}-pg`;
-  const list = fly(["mpg", "list", "--org", ctx.flyOrg]);
-  let id = mpgClusterId(list, pgName);
-  if (!id) {
-    note(`postgres: creating cluster ${pgName} (basic plan)…`);
-    const created = fly([
-      "mpg",
-      "create",
-      "--org",
-      ctx.flyOrg,
-      "--region",
-      ctx.region,
-      "--name",
-      pgName,
-      "--plan",
-      "basic",
-    ]);
-    id = created.match(/ID:\s*(\S+)/)?.[1];
-    if (!id) throw new CliError(`could not parse cluster id from mpg create output:\n${created}`);
-  }
-  const status = flySensitive(["mpg", "status", id, "--json"], "failed to read Managed Postgres connection details");
-  stageSecret(app, "DATABASE_URL", mpgDirectUrl(status, id));
-  note(`postgres: direct connection staged on ${app}`);
-}
-
-export function mpgClusterId(listOutput: string, name: string): string | undefined {
-  return listOutput
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/))
-    .find((fields) => fields.includes(name))?.[0];
-}
-
-export function mpgDirectUrl(statusOutput: string, clusterId: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(statusOutput);
-  } catch {
-    throw new CliError("fly mpg status returned invalid JSON");
-  }
-  const credentials =
-    parsed && typeof parsed === "object"
-      ? (parsed as { credentials?: { direct_uri?: unknown; pgbouncer_uri?: unknown } }).credentials
-      : undefined;
-  const value = credentials?.direct_uri ?? credentials?.pgbouncer_uri;
-  if (typeof value !== "string" || !value) {
-    throw new CliError("fly mpg status did not return a database connection URI");
-  }
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new CliError("fly mpg status returned an invalid database connection URI");
-  }
-  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
-    throw new CliError("fly mpg status returned an invalid database connection scheme");
-  }
-  const pooledHost = `pgbouncer.${clusterId}.flympg.net`;
-  const directHost = `direct.${clusterId}.flympg.net`;
-  if (url.hostname === pooledHost) {
-    url.hostname = directHost;
-  } else if (url.hostname !== directHost) {
-    throw new CliError("fly mpg status returned an unrecognized database hostname");
-  }
-  return url.toString();
 }
 
 function ensureFlycast(app: string): void {
@@ -832,7 +718,11 @@ function flyTemplateRoot(): string {
   return fileURLToPath(new URL("../../../templates/fly", import.meta.url));
 }
 
-function buildCtx(config: QmConfig, configDir: string, opts: Pick<FlyUpOpts, "buildFrom" | "buildFromPath">): FlyCtx {
+function buildCtx(
+  config: QmConfig,
+  configDir: string,
+  opts: Pick<FlyUpOpts, "buildFrom" | "buildFromPath" | "envFile">,
+): FlyCtx {
   const sourceRoot = opts.buildFrom ? sourceRootFor(configDir, opts.buildFromPath) : undefined;
   if (opts.buildFrom && !sourceRoot) {
     throw new CliError(`--build-from requires a QM checkout containing src/ and deploy/<service>/Dockerfile`);
@@ -844,11 +734,12 @@ function buildCtx(config: QmConfig, configDir: string, opts: Pick<FlyUpOpts, "bu
   const deployAppPrefix = config.deployAppPrefix ?? `${appPrefix}-d`;
   return {
     config,
+    envFile: opts.envFile ?? join(configDir, ".env"),
     generatedRoot: join(configDir, ".generated", "fly"),
     commandCwd: configDir,
     ...(sourceRoot ? { sourceRoot } : {}),
     appPrefix,
-    orgId: config.orgId,
+    deploymentId: config.deploymentId,
     region: config.region,
     flyOrg: config.flyOrg,
     serviceCtx: flyServiceCtx(config, appPrefix, deployAppPrefix),
@@ -864,7 +755,17 @@ async function deployService(
   const app = `${ctx.appPrefix}-${service}`;
   const spec = serviceDef(service).fly!;
   note(`\n=== deploying ${app} ===`);
-  if (service === "core") timing.time(service, "Postgres ensure", () => ensurePostgres(ctx));
+  if (service === "core") {
+    const ownerUrl = deploymentSecretValue("DATABASE_OWNER_URL", readEnvFile(ctx.envFile).get("DATABASE_OWNER_URL"));
+    timing.time(service, "Postgres ensure", () =>
+      ensureFlyPostgres({
+        appPrefix: ctx.appPrefix,
+        flyOrg: ctx.flyOrg,
+        region: ctx.region,
+        ...(ownerUrl ? { ownerUrl } : {}),
+      }),
+    );
+  }
   if (spec.flycast) timing.time(service, "Flycast ensure", () => ensureFlycast(app));
   if (spec.publicIngress) timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
   const cfgPath = serviceCfgPath(ctx, service);
@@ -946,7 +847,7 @@ function pluginCfgPath(ctx: FlyCtx, name: string): string {
 function pluginTomlContent(
   appPrefix: string,
   flyOrg: string,
-  orgId: string,
+  deploymentId: string,
   publicUrl: string,
   hasPortal: boolean,
   region: string,
@@ -955,10 +856,10 @@ function pluginTomlContent(
 ): string {
   const env: Record<string, string> = {
     ...(plugin.coreAccess === false ? {} : { CORE_API_URL: `http://${appPrefix}-core.internal:8080` }),
-    ...orgEnv(plugin.name, orgId, publicUrl, hasPortal, brand),
+    ...serviceUrlEnv(plugin.name, publicUrl, hasPortal, brand),
     PORT: "8080",
     ...plugin.env,
-    [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, orgId, appPrefix),
+    [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, deploymentId, appPrefix),
   };
   const lines = [`app = ${tomlStr(`${appPrefix}-${plugin.name}`)}`, `primary_region = ${tomlStr(region)}`, "", "[env]"];
   for (const [k, v] of Object.entries(env)) lines.push(`  ${k} = ${tomlStr(v)}`);
@@ -979,7 +880,7 @@ export function derivedPluginTomlFor(config: QmConfig, plugin: ResolvedPlugin): 
   return pluginTomlContent(
     appPrefixOf(config),
     config.flyOrg ?? "",
-    config.orgId,
+    config.deploymentId,
     config.publicUrl,
     config.services.includes("portal"),
     config.region ?? "",
@@ -996,7 +897,7 @@ function writePluginDerived(ctx: FlyCtx, plugin: ResolvedPlugin): string {
     pluginTomlContent(
       ctx.appPrefix,
       ctx.flyOrg,
-      ctx.orgId,
+      ctx.deploymentId,
       ctx.config.publicUrl,
       ctx.config.services.includes("portal"),
       ctx.region,
@@ -1129,7 +1030,11 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     throw new CliError("--build-only cannot be combined with --image-from or --image-repo-prefix");
   }
   const buildFrom = opts.buildFrom || opts.buildOnly;
-  const ctx = buildCtx(config, configDir, { buildFrom, buildFromPath: opts.buildFromPath });
+  const ctx = buildCtx(config, configDir, {
+    buildFrom,
+    buildFromPath: opts.buildFromPath,
+    ...(opts.envFile ? { envFile: opts.envFile } : {}),
+  });
   const allPlugins = discoverPlugins(configDir, config).plugins;
   let onlyServices: ServiceName[] | undefined;
   let plugins = allPlugins;
@@ -1178,10 +1083,12 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
 
     if (!opts.dryRun) {
       for (const s of services)
-        timing.time(s, "app ensure", () => ensureApp(`${ctx.appPrefix}-${s}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix));
+        timing.time(s, "app ensure", () =>
+          ensureApp(`${ctx.appPrefix}-${s}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix),
+        );
       for (const p of plugins)
         timing.time(p.name, "app ensure", () =>
-          ensureApp(pluginApp(ctx, p.name), ctx.flyOrg, ctx.orgId, ctx.appPrefix),
+          ensureApp(pluginApp(ctx, p.name), ctx.flyOrg, ctx.deploymentId, ctx.appPrefix),
         );
       if (!opts.buildOnly && services.includes("core")) {
         timing.time("core", "object storage ensure", () => ensureObjectStorage(ctx));
@@ -1212,7 +1119,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     }
 
     if (!opts.dryRun) {
-      stageFlyEmailAllowlist(config, configDir, new Set([...services, ...plugins.map((plugin) => plugin.name)]));
+      stageFlyEmailAllowlist(config, ctx.envFile, new Set([...services, ...plugins.map((plugin) => plugin.name)]));
     }
 
     const gateSecrets = (app: string, header: string, path: string, required: string[], timingKey: string): boolean => {
@@ -1288,14 +1195,14 @@ function listRunningApps(
   appPrefix: string,
   deployAppPrefix: string,
   flyOrg: string,
-  orgId: string,
+  deploymentId: string,
   configured: Set<string>,
 ): FlyAppDiscovery {
   const names = flyOrgApps(flyOrg);
   const apps: string[] = [];
   const unverified: FlyAppDiscovery["unverified"] = [];
-  const expectedId = flyDeploymentId(flyOrg, orgId, appPrefix);
-  const marker = flyOwnershipMarker(flyOrg, orgId, appPrefix);
+  const expectedId = flyDeploymentId(flyOrg, deploymentId, appPrefix);
+  const marker = flyOwnershipMarker(flyOrg, deploymentId, appPrefix);
   const inspect = (name: string): { owned: boolean; reason?: string } => {
     let markerFailure = "";
     try {
@@ -1357,7 +1264,7 @@ function discoverFlyApps(config: QmConfig, configDir: string): FlyAppDiscovery {
   let runtime: FlyAppDiscovery = { apps: [], unverified: [] };
   if (which(flyBin())) {
     try {
-      runtime = listRunningApps(appPrefix, deployAppPrefix, config.flyOrg ?? "", config.orgId, configured);
+      runtime = listRunningApps(appPrefix, deployAppPrefix, config.flyOrg ?? "", config.deploymentId, configured);
     } catch (e) {
       runtime.unverified.push({ app: `${appPrefix}-*`, reason: errMessage(e) });
     }
@@ -1436,9 +1343,28 @@ export function flyLogs(
   );
 }
 
+function livePublishedApps(config: QmConfig): string[] {
+  const deployAppPrefix = config.deployAppPrefix ?? `${appPrefixOf(config)}-d`;
+  const shared = config.env.core?.FLY_DEPLOY_SHARED_APP_NAME?.trim();
+  const candidates = [...flyOrgApps(config.flyOrg ?? "")].filter(
+    (app) => app === shared || app.startsWith(`${deployAppPrefix}-`),
+  );
+  return candidates.filter((app) => {
+    const parsed = JSON.parse(fly(["status", "-a", app, "--json"]) || "{}") as { Machines?: { state?: string }[] };
+    return (parsed.Machines ?? []).some((machine) => machine.state === "started");
+  });
+}
+
 export function flyDown(config: QmConfig, configDir: string): void {
   const { apps, unverified } = discoverFlyApps(config, configDir);
   header(`qm down — ${appPrefixOf(config)} (target: fly)`);
+  if (which(flyBin())) {
+    const published = livePublishedApps(config);
+    if (published.length)
+      throw new CliError(
+        `Published apps still use this deployment (${published.join(", ")}). Stop them before qm down`,
+      );
+  }
   note("stopping the deployment by scaling every app to 0 machines (reversible: re-run `qm up`).");
   if (!which(flyBin())) {
     note(`flyctl not found — run:`);
@@ -1571,7 +1497,7 @@ export async function flyCheckLive(
   const plugins = new Map(discovered.plugins.map((plugin) => [plugin.name, plugin]));
   const workloads = [...services, ...plugins.keys()];
   const orgApps = flyOrgApps(ctx.flyOrg);
-  const expectedId = flyDeploymentId(ctx.flyOrg, ctx.orgId, ctx.appPrefix);
+  const expectedId = flyDeploymentId(ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
   const failures: string[] = [];
   let coreMachineId = "";
   for (const workload of workloads) {
@@ -1661,7 +1587,7 @@ export async function flyCheckLive(
         : pluginTomlContent(
             ctx.appPrefix,
             ctx.flyOrg,
-            ctx.orgId,
+            ctx.deploymentId,
             config.publicUrl,
             config.services.includes("portal"),
             ctx.region,
@@ -1769,8 +1695,8 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
   const ctx = buildCtx(config, configDir, {});
   requireFlyAuth();
   for (const workload of runnableServices(config.services))
-    ensureApp(`${prefix}-${workload}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
-  for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
+    ensureApp(`${prefix}-${workload}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
+  for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.deploymentId, ctx.appPrefix);
   unsetDisabledSecurityScreenToken(config, prefix);
   unsetDisabledFlyPublisherToken(config, prefix);
   unsetCorelessPluginCoreSecrets(plugins, prefix);

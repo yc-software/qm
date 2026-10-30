@@ -4,7 +4,7 @@
 // deploy/stacks/acme is the same stack wired to an external identity provider.
 {
   "contract": 1,
-  "orgId": "acme",
+  "deploymentId": "acme",
   "publicUrl": "https://agent.example.com",
   "target": "fly",
   "appPrefix": "qm",

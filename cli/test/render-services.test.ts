@@ -8,6 +8,7 @@ import { renderScaffold } from "../src/provider-scaffold.ts";
 import { renderConfigErrors } from "../src/backends/render.ts";
 import { discoverPlugins } from "../src/plugins.ts";
 import { renderServiceEnv, renderWorkloads } from "../src/render-services.ts";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
 import { computedSecrets, FIRST_PARTY_SECRET_SPECS, managedByFor } from "../src/secrets.ts";
 
 interface ScaffoldConfig {
@@ -29,7 +30,7 @@ function deployment(t: TestContext, change?: (raw: ScaffoldConfig) => void) {
 }
 
 const connections = {
-  databaseUrl: "postgres://qm:password@postgres/qm",
+  databaseOwnerUrl: "postgres://qm:password@postgres/qm",
   coreUrl: "http://core-assigned:8080",
   webUiUrl: "http://web-ui:8080",
   projectId: "prj-acme",
@@ -158,7 +159,10 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
   assert.equal(core.RENDER_ENVIRONMENT_ID, connections.environmentId);
   assert.equal(core.PUBLIC_API_URL, config.apiUrl);
   assert.equal(core.PUBLIC_WEB_URL, config.publicUrl);
-  assert.equal(core.DATABASE_URL, connections.databaseUrl);
+  assert.equal(core.DATABASE_OWNER_URL, connections.databaseOwnerUrl);
+  assert.match(core.DATABASE_URL!, /^postgres:\/\/qm_app:[A-Za-z0-9_-]{43}@postgres\/qm$/);
+  assert.match(core.DATABASE_READER_URL!, /^postgres:\/\/qm_reader:[A-Za-z0-9_-]{43}@postgres\/qm$/);
+  assert.notEqual(new URL(core.DATABASE_URL!).password, new URL(core.DATABASE_READER_URL!).password);
   assert.equal(core.CORE_SIGNING_SECRET, "qm-signing-key");
   assert.equal(core.WORKERS, undefined);
   assert.equal(core.WORKSPACE_STORE, "postgres");
@@ -206,8 +210,8 @@ test("removing hosted auth, admin, and Slack resets their managed settings", (t)
   config.services = config.services.filter((service) => !["auth", "admin", "slack"].includes(service));
   config.env.portal = { OIDC_ISSUER: "https://idp.example.test" };
   const core = renderServiceEnv(config, "core", new Map(), connections);
-  for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET", "AUTH_ALLOWED_EMAIL_DOMAIN"])
-    assert.equal(core[key], "");
+  for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET"]) assert.equal(core[key], "");
+  assert.equal(core.AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
   const portal = renderServiceEnv(config, "portal", new Map(), connections);
   assert.equal(portal.AUTH_EMBEDDED, "0");
   assert.equal(portal.AUTH_BROKER_UPSTREAM, "");
@@ -216,14 +220,13 @@ test("removing hosted auth, admin, and Slack resets their managed settings", (t)
   assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, "");
 });
 
-test("removing an embedded auth domain clears the core and broker allowlists", (t) => {
+test("removing an embedded auth domain clears the broker allowlists; core never carries it", (t) => {
   const { config } = deployment(t);
   config.env.auth = { AUTH_ALLOWED_EMAIL_DOMAIN: "example.test" };
-  assert.equal(renderServiceEnv(config, "core", new Map(), connections).AUTH_ALLOWED_EMAIL_DOMAIN, "example.test");
+  assert.equal(renderServiceEnv(config, "core", new Map(), connections).AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
+  assert.equal(tenantSettingsEnv(config, new Map()).AUTH_ALLOWED_EMAIL_DOMAIN, "example.test");
   delete config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN;
-  const core = renderServiceEnv(config, "core", new Map(), connections);
   const portal = renderServiceEnv(config, "portal", new Map(), connections);
-  assert.equal(core.AUTH_ALLOWED_EMAIL_DOMAIN, "");
   assert.equal(portal.AUTH_ALLOWED_EMAIL_DOMAIN, "");
   assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, "");
 });

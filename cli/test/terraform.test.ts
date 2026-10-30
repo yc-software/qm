@@ -16,7 +16,7 @@ const DEPLOY_IMAGE = "acme-qm-sandbox";
 
 const config: QmConfig = {
   contract: 1,
-  orgId: "acme",
+  deploymentId: "acme",
   publicUrl: "https://agent.acme.example",
   target: "aws",
   services: ["core"],
@@ -44,7 +44,7 @@ const mainTf = readFileSync(new URL("../templates/aws/main.tf", import.meta.url)
 
 test("declaredVariables reads the scaffolded variables.tf", () => {
   for (const name of [
-    "org_id",
+    "deployment_id",
     "account_id",
     "certificate_arn",
     "core_public_hosts",

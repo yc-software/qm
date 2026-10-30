@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILENAME, loadConfigAt } from "../src/config.ts";
 import { dockerUp } from "../src/backends/docker.ts";
+import { derivedLoginPassword } from "../src/database-logins.ts";
+import { tenantSettingsEnv } from "../src/tenant-settings.ts";
+import { readEnvFile } from "../src/util.ts";
 
 const SECRETS = {
   ANTHROPIC_API_KEY: "anthropic-supersecret",
@@ -62,7 +65,7 @@ process.exit(0);
 test("docker up delivers secrets via a 0600 env-file, never on the docker argv", { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-"));
   const priorPath = process.env.PATH;
-  const priorDb = process.env.DATABASE_URL;
+  const priorDb = process.env.DATABASE_OWNER_URL;
   const priorSecrets = new Map(Object.keys(SECRETS).map((name) => [name, process.env[name]]));
   const log = console.log,
     warn = console.warn;
@@ -73,7 +76,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       join(dir, CONFIG_FILENAME),
       JSON.stringify({
         contract: 1,
-        orgId: "sekrit",
+        deploymentId: "sekrit",
         publicUrl: "http://localhost:8080",
         target: "docker",
         services: ["core", "slack"],
@@ -129,7 +132,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     );
     const fake = fakeDocker(dir);
     process.env.PATH = `${dir}:${priorPath}`;
-    process.env.DATABASE_URL = "postgres://external/db";
+    process.env.DATABASE_OWNER_URL = "postgres://owner:owner-pw@external/db";
     for (const name of Object.keys(SECRETS)) delete process.env[name];
     process.env.ANTHROPIC_API_KEY = ambientAnthropic;
     console.log = (...parts: unknown[]): void => void lines.push(parts.join(" "));
@@ -141,10 +144,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     for (const value of Object.values(SECRETS)) {
       assert.ok(!argv.includes(value), `secret value must not reach the docker argv: ${value}`);
     }
-    assert.ok(
-      !argv.includes("postgres://external/db"),
-      "a BYO DATABASE_URL (it embeds a password) must not reach the docker argv",
-    );
+    assert.ok(!argv.includes("postgres://"), "database URLs (they embed passwords) must not reach the docker argv");
     assert.ok(!argv.includes("config-placeholder"), "non-secret config env cannot shadow or expose secret values");
     assert.ok(argv.includes("--env-file"), "secrets travel via --env-file");
     assert.ok(argv.includes("FLY_RESIDENT_ENV_TZ=UTC"), "sandbox.env literals are not secrets");
@@ -157,10 +157,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     assert.ok(signerArgs, "coreless plugin starts");
     assert.ok(!signerArgs.includes("CORE_API_URL=http://core:8080"), "coreless plugin gets no core endpoint");
     assert.ok(!signerArgs.includes("--env-file"), "coreless plugin gets no source-auth secret");
-    assert.ok(argv.includes("SECURITY_SCREEN_CLASSIFIER=proxy"));
-    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_PROVIDER=example-screen"));
-    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify"));
-    assert.ok(argv.includes("SECURITY_SCREEN=enforce"));
+    assert.ok(!argv.includes("SECURITY_SCREEN"), "the security screen is a tenant setting, never core env");
 
     assert.ok(
       argv.includes("WEB_UI_PUBLIC_URL=http://folded.example.com/web-ui"),
@@ -181,17 +178,22 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       !envFiles.includes("config-placeholder"),
       "secret-store values win over colliding config env on services and plugins",
     );
-    assert.ok(envFiles.includes("DATABASE_URL=postgres://external/db"), "DATABASE_URL routes through the env-file");
+    assert.ok(envFiles.includes("DATABASE_OWNER_URL=postgres://owner:owner-pw@external/db"));
+    assert.match(envFiles, /\nDATABASE_URL=postgres:\/\/qm_app:[A-Za-z0-9_-]{43}@external\/db\n/);
+    assert.match(envFiles, /\nDATABASE_READER_URL=postgres:\/\/qm_reader:[A-Za-z0-9_-]{43}@external\/db\n/);
+    assert.ok(!envFiles.includes("EXAMPLE_SCREEN_TOKEN"), "tenant-owned secrets stay out of core env");
     assert.ok(
       envFiles.includes(`FLY_RESIDENT_ENV_SB_TOKEN=${SECRETS.SB_TOKEN}`),
       "secretEnv values route through the file",
     );
     assert.ok(envFiles.includes(`PLUG_TOKEN=${SECRETS.PLUG_TOKEN}`), "plugin secrets route through the file");
-    assert.match(
-      envFiles,
-      new RegExp(`^ANTHROPIC_API_KEY=${ambientAnthropic}$`, "m"),
-      "a blank scaffold entry falls back to the ambient secret",
+    assert.doesNotMatch(envFiles, /^ANTHROPIC_API_KEY=/m, "model keys are tenant settings, never core env");
+    assert.equal(
+      tenantSettingsEnv(config, readEnvFile(join(dir, ".env"))).ANTHROPIC_API_KEY,
+      ambientAnthropic,
+      "a blank scaffold entry falls back to the ambient secret when seeding tenant settings",
     );
+
     assert.doesNotMatch(envFiles, /^EMPTY_TOKEN=/m, "a blank optional secret with no ambient value remains unset");
     assert.ok(
       envFiles.includes(`PUBLIC_API_URL=${SECRETS.PUBLIC_API_URL}`),
@@ -216,7 +218,12 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       new RegExp(`^APPS_SESSION_ALIAS=${SECRETS.PORTAL_IDENTITY_SECRET}$`, "m"),
       "a secretEnv alias delivers the stored value under its declared env name",
     );
-    assert.match(envFiles, new RegExp(`^SECURITY_SCREEN_PROXY_TOKEN=${SECRETS.EXAMPLE_SCREEN_TOKEN}$`, "m"));
+    assert.doesNotMatch(envFiles, /^SECURITY_SCREEN_PROXY_TOKEN=/m);
+    assert.equal(
+      tenantSettingsEnv(config, readEnvFile(join(dir, ".env"))).SECURITY_SCREEN_PROXY_TOKEN,
+      SECRETS.EXAMPLE_SCREEN_TOKEN,
+      "a secretEnv alias onto a tenant setting is seeded under its declared env name",
+    );
     assert.ok(!envFiles.includes("FLY_RESIDENT_ENV_TZ"), "literal sandbox env is not in the secret file");
     for (const mode of envFiles.match(/^mode=.*$/gm) ?? []) assert.equal(mode, "mode=600");
 
@@ -230,8 +237,8 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     console.log = log;
     console.warn = warn;
     process.env.PATH = priorPath;
-    if (priorDb === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = priorDb;
+    if (priorDb === undefined) delete process.env.DATABASE_OWNER_URL;
+    else process.env.DATABASE_OWNER_URL = priorDb;
     for (const [name, value] of priorSecrets) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
@@ -241,13 +248,13 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
 });
 
 test(
-  "managed Postgres: the generated password and DATABASE_URL never reach the docker argv; state.json is 0600",
+  "managed Postgres: core gets the qm_owner, qm_app and qm_reader logins, never the superuser; state.json is 0600",
   { timeout: 60_000 },
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-pg-"));
     const xdg = mkdtempSync(join(tmpdir(), "qm-docker-secrets-xdg-"));
     const priorPath = process.env.PATH;
-    const priorDb = process.env.DATABASE_URL;
+    const priorDb = process.env.DATABASE_OWNER_URL;
     const priorXdg = process.env.XDG_CONFIG_HOME;
     const log = console.log,
       warn = console.warn;
@@ -256,7 +263,7 @@ test(
         join(dir, CONFIG_FILENAME),
         JSON.stringify({
           contract: 1,
-          orgId: "sekritpg",
+          deploymentId: "sekritpg",
           publicUrl: "http://localhost:8080",
           target: "docker",
           services: ["core"],
@@ -269,7 +276,7 @@ test(
       const fake = fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
       process.env.XDG_CONFIG_HOME = xdg;
-      delete process.env.DATABASE_URL;
+      delete process.env.DATABASE_OWNER_URL;
       console.log = (): void => {};
       console.warn = console.log;
       const { config } = loadConfigAt(join(dir, CONFIG_FILENAME));
@@ -287,16 +294,24 @@ test(
 
       const envFiles = readFileSync(fake.envCopy, "utf8");
       assert.ok(envFiles.includes(`POSTGRES_PASSWORD=${password}`), "pg gets its password via the env-file");
+      const owner = derivedLoginPassword(password, "qm_owner");
+      assert.ok(envFiles.includes(`DATABASE_OWNER_URL=postgres://qm_owner:${owner}@pg:5432/qm`));
       assert.ok(
-        envFiles.includes(`DATABASE_URL=postgres://postgres:${password}@pg:5432/qm`),
-        "the core gets DATABASE_URL via the env-file",
+        envFiles.includes(`DATABASE_URL=postgres://qm_app:${derivedLoginPassword(owner, "qm_app")}@pg:5432/qm`),
       );
+      assert.ok(!envFiles.includes(`postgres://postgres:`), "core never receives the superuser login");
+      assert.match(argv, /\["exec","-i","qm-sekritpg-pg","psql","-U","postgres","-d","qm"/);
+      assert.ok(
+        argv.includes('"--name","qm-sekritpg-pg","--label","qm.org=sekritpg"'),
+        "container names and labels are pinned",
+      );
+      assert.ok(!argv.includes(owner), "the owner password reaches psql on stdin only");
     } finally {
       console.log = log;
       console.warn = warn;
       process.env.PATH = priorPath;
-      if (priorDb === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = priorDb;
+      if (priorDb === undefined) delete process.env.DATABASE_OWNER_URL;
+      else process.env.DATABASE_OWNER_URL = priorDb;
       if (priorXdg === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = priorXdg;
       rmSync(dir, { recursive: true, force: true });
@@ -311,7 +326,7 @@ test(
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-gate-"));
     const priorPath = process.env.PATH;
-    const priorDb = process.env.DATABASE_URL;
+    const priorDb = process.env.DATABASE_OWNER_URL;
     const priorBot = process.env.SLACK_BOT_TOKEN;
     const log = console.log,
       warn = console.warn;
@@ -320,7 +335,7 @@ test(
         join(dir, CONFIG_FILENAME),
         JSON.stringify({
           contract: 1,
-          orgId: "sekritgate",
+          deploymentId: "sekritgate",
           publicUrl: "http://localhost:8080",
           target: "docker",
           services: ["core", "slack"],
@@ -332,7 +347,7 @@ test(
       );
       const fake = fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
-      process.env.DATABASE_URL = "postgres://external/db";
+      process.env.DATABASE_OWNER_URL = "postgres://owner:owner-pw@external/db";
       delete process.env.SLACK_BOT_TOKEN;
       console.log = (): void => {};
       console.warn = console.log;
@@ -346,8 +361,8 @@ test(
       console.log = log;
       console.warn = warn;
       process.env.PATH = priorPath;
-      if (priorDb === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = priorDb;
+      if (priorDb === undefined) delete process.env.DATABASE_OWNER_URL;
+      else process.env.DATABASE_OWNER_URL = priorDb;
       if (priorBot !== undefined) process.env.SLACK_BOT_TOKEN = priorBot;
       rmSync(dir, { recursive: true, force: true });
     }
@@ -360,7 +375,7 @@ test(
   async () => {
     const dir = mkdtempSync(join(tmpdir(), "qm-docker-secrets-nl-"));
     const priorPath = process.env.PATH;
-    const priorDb = process.env.DATABASE_URL;
+    const priorDb = process.env.DATABASE_OWNER_URL;
     const priorSecret = process.env.CORE_SIGNING_SECRET;
     const log = console.log,
       warn = console.warn;
@@ -369,7 +384,7 @@ test(
         join(dir, CONFIG_FILENAME),
         JSON.stringify({
           contract: 1,
-          orgId: "sekritnl",
+          deploymentId: "sekritnl",
           publicUrl: "http://localhost:8080",
           target: "docker",
           services: ["core"],
@@ -381,7 +396,7 @@ test(
       );
       fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
-      process.env.DATABASE_URL = "postgres://external/db";
+      process.env.DATABASE_OWNER_URL = "postgres://owner:owner-pw@external/db";
       process.env.CORE_SIGNING_SECRET = "-----BEGIN KEY-----\nabc\n-----END KEY-----";
       console.log = (): void => {};
       console.warn = console.log;
@@ -391,8 +406,8 @@ test(
       console.log = log;
       console.warn = warn;
       process.env.PATH = priorPath;
-      if (priorDb === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = priorDb;
+      if (priorDb === undefined) delete process.env.DATABASE_OWNER_URL;
+      else process.env.DATABASE_OWNER_URL = priorDb;
       if (priorSecret === undefined) delete process.env.CORE_SIGNING_SECRET;
       else process.env.CORE_SIGNING_SECRET = priorSecret;
       rmSync(dir, { recursive: true, force: true });

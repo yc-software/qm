@@ -10,7 +10,7 @@ import { cliVersion } from "../src/manifest.ts";
 import { validateSandboxLayer } from "../src/sandbox-layer.ts";
 import { parseToolDescriptor } from "../src/tool-descriptor.ts";
 import { SERVICE_NAMES, VIRTUAL_SERVICE_NAMES } from "../src/services.ts";
-import { renderEnvExample } from "../src/secrets.ts";
+import { renderEnvExample } from "../src/env-example.ts";
 import { runChecks } from "../src/commands/check.ts";
 import { renderTerraformVars } from "../src/terraform.ts";
 import { requiredSlackScopes, slackManifestBotScopes } from "../src/backends/doctor.ts";
@@ -55,7 +55,7 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
       assert.ok(configRaw.includes(`"${service}"`), `the config's services comment should describe ${service}`);
     }
     const { config } = loadConfigInDir(dir);
-    assert.equal(config.orgId, "acme");
+    assert.equal(config.deploymentId, "acme");
     assert.equal(config.target, "docker");
     assert.equal(config.publicUrl, "http://localhost:8082");
     assert.equal(config.env.core?.HARNESS, "pi");

@@ -281,7 +281,7 @@ function printBuild(prepared: PreparedBuild): void {
 
 export function runSandboxBuild(opts: SandboxBuildOpts): void {
   const prepared = prepare(opts);
-  const tag = opts.tag ?? `${opts.config.orgId}-sandbox:local`;
+  const tag = opts.tag ?? `${opts.config.deploymentId}-sandbox:local`;
   const args = [
     "buildx",
     "build",

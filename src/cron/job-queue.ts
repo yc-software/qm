@@ -1,5 +1,5 @@
 import { PgBoss } from "pg-boss";
-import { createPgPool, type PgPool } from "../persistence/pg-pool.ts";
+import { createPgPool, ownerDatabaseUrl, type PgPool } from "../persistence/pg-pool.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 
 export interface CronFireJob {
@@ -54,7 +54,7 @@ export function createPgBossCronQueue(
   return {
     async start(handlers) {
       if (started) return;
-      pg ??= createPgPool(databaseUrl, []);
+      pg ??= createPgPool(ownerDatabaseUrl(databaseUrl), []);
       try {
         if (!initialized) {
           await boss.start();

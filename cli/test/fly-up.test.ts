@@ -4,7 +4,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QmConfig } from "../src/config.ts";
-import { flyUp, mpgClusterId, mpgDirectUrl } from "../src/backends/fly.ts";
+import { flyUp } from "../src/backends/fly.ts";
+import { mpgClusterId, mpgDirectUrl } from "../src/backends/fly-postgres.ts";
 
 test("mpgClusterId matches a whole field regardless of column position or spacing", () => {
   const header = "ID              NAME          REGION  STATUS";
@@ -98,6 +99,9 @@ else if (a[0] === "status") console.log(JSON.stringify({ Machines: [{ config: { 
 else if (a[0] === "image" && a[1] === "show") console.log(JSON.stringify([{ Registry: "registry.fly.io", Repository: "acme-core", Tag: "deployment-123", Digest: "sha256:${"b".repeat(64)}" }]));
 else if (a[0] === "mpg" && a[1] === "list") console.log("pg-1 acme-pg");
 else if (a[0] === "mpg" && a[1] === "status") console.log(JSON.stringify({ credentials: { direct_uri: "postgresql://u:p@direct.pg-1.flympg.net/db" } }));
+else if (a[0] === "mpg" && a[1] === "users" && a[2] === "list") console.log(JSON.stringify([{ name: "qm_reader", role: "reader" }]));
+else if (a[0] === "mpg" && a[1] === "users" && a[2] === "rotate-password") console.log(JSON.stringify({ username: a[a.indexOf("--username") + 1], password: "rotated-" + a[a.indexOf("--username") + 1] }));
+else if (a[0] === "secrets" && a[1] === "set") fs.appendFileSync(${JSON.stringify(log)}, "  value " + fs.readFileSync(0, "utf8") + "\\n");
 else console.log("ok");
 `,
   );
@@ -106,7 +110,7 @@ else console.log("ok");
   process.env.FLY_BIN = fly;
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.fly.dev",
     target: "fly",
     appPrefix: "acme",
@@ -127,6 +131,11 @@ else console.log("ok");
     await flyUp(config, dir, { buildFrom: true, configPath });
     const calls = readFileSync(log, "utf8");
     assert.match(calls, /storage create --name acme-data --app acme-core --org personal --yes/);
+    assert.match(calls, /mpg users create pg-1 --username qm_app --role writer/);
+    assert.doesNotMatch(calls, /mpg users create pg-1 --username qm_reader/, "an existing login is reused");
+    assert.match(calls, /DATABASE_OWNER_URL=-\n {2}value postgresql:\/\/u:p@direct\.pg-1\.flympg\.net\/db/);
+    assert.match(calls, /DATABASE_URL=-\n {2}value postgresql:\/\/qm_app:rotated-qm_app@direct\.pg-1\.flympg\.net\/db/);
+    assert.match(calls, /DATABASE_READER_URL=-\n {2}value postgresql:\/\/qm_reader:rotated-qm_reader@direct/);
     assert.match(calls, /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN/);
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
     assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
@@ -146,7 +155,7 @@ test('--only "slack" explains the virtual service runs in-process on the core', 
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-up-"));
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme2",
+    deploymentId: "acme2",
     publicUrl: "https://acme2-portal.fly.dev",
     target: "fly",
     region: "sjc",
@@ -191,7 +200,7 @@ else console.log("ok");
   process.env.FLY_BIN = fly;
   const config: QmConfig = {
     contract: 1,
-    orgId: "acme",
+    deploymentId: "acme",
     publicUrl: "https://acme.fly.dev",
     target: "fly",
     appPrefix: "acme",

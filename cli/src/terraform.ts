@@ -9,7 +9,7 @@ import { isServiceName, serviceDef } from "./services.ts";
 import { canonicalJson } from "./canonical-json.ts";
 
 const DERIVED_VARS = new Set([
-  "org_id",
+  "deployment_id",
   "account_id",
   "region",
   "cluster_name",
@@ -189,7 +189,7 @@ function derivedValues(
   const secrets = computedSecrets(config);
   return {
     strings: {
-      org_id: config.orgId,
+      deployment_id: config.deploymentId,
       account_id: aws.accountId,
       region: aws.region,
       cluster_name: aws.cluster,
@@ -200,7 +200,7 @@ function derivedValues(
       ...(declared.includes("github_environment") ? { github_environment: aws.deployEnvironment ?? "" } : {}),
       object_store_bucket: awsObjectStoreBucket(config),
       transfer_lifecycle_prefix: `${config.env.core?.S3_PREFIX ?? ""}transfer/`,
-      deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.orgId,
+      deploy_microvm_image: config.env.core?.AWS_DEPLOY_IMAGE?.trim() || config.deploymentId,
       deploy_microvm_execution_role_arn:
         config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
       ...(declared.includes("db_instance_class") && aws.dbInstanceClass
@@ -219,12 +219,12 @@ export function awsObjectStoreBucket(config: QmConfig): string {
   const aws = config.aws;
   if (!aws) throw new CliError("object-store naming requires target aws and an aws block");
   if (aws.objectStoreBucket) return aws.objectStoreBucket;
-  const org = config.orgId.slice(0, 30).replace(/-+$/, "");
+  const prefix = config.deploymentId.slice(0, 30).replace(/-+$/, "");
   const suffix = createHash("sha256")
     .update(`${aws.accountId}:${aws.region}:${aws.cluster}`)
     .digest("hex")
     .slice(0, 12);
-  return `qm-${org}-${suffix}`;
+  return `qm-${prefix}-${suffix}`;
 }
 
 export function terraformVars(
