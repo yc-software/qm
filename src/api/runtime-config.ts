@@ -248,7 +248,7 @@ export async function webuiModelEnabled(
   return modelId === orgModel || modelId === purposeModel;
 }
 
-export const RUNTIME_UNAVAILABLE = "runtime is no longer available or enabled on this deployment";
+const RUNTIME_UNAVAILABLE = "runtime is no longer available or enabled on this deployment";
 
 async function runtimeAvailability(
   ctx: { deps: RuntimeDeps },

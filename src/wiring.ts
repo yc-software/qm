@@ -48,6 +48,7 @@ import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from 
 import { createRuntimeService } from "./harness/runtime-control.ts";
 import {
   createSessionSyscalls,
+  type SessionSyscallsFactory,
   deliverSubagentMail,
   sessionTreeRoot,
   sessionTreeRunCount,
@@ -490,6 +491,7 @@ export interface BuiltApp {
   runs: RunStore;
   signals: RunSignalStore;
   sessionStateBus: SessionStateBus;
+  sessionSyscalls: SessionSyscallsFactory;
   ledgerEventBus: LedgerEventBus;
   surfaceCache: SurfaceCache;
   runtime: Runtime;
@@ -3086,6 +3088,7 @@ export function buildApp(
     runs,
     signals: runSignals,
     sessionStateBus,
+    sessionSyscalls,
     ledgerEventBus,
     surfaceCache,
     runtime,
