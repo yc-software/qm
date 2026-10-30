@@ -52,7 +52,7 @@ export function membershipEvent(
 }
 
 function rosterOf(entry: SessionEntry): RosterSnapshot | undefined {
-  const snapshot = (entry.payload as { environmentSnapshot?: Partial<RosterSnapshot> } | null)?.environmentSnapshot;
+  const snapshot = (entry.payload as { rosterSnapshot?: Partial<RosterSnapshot> } | null)?.rosterSnapshot;
   return Array.isArray(snapshot?.roster) && typeof snapshot.sessionId === "string"
     ? (snapshot as RosterSnapshot)
     : undefined;

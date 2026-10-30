@@ -19,7 +19,7 @@ function entry(seq: number, members: ReturnType<typeof member>[], history: Sessi
     type: "user",
     createdAt: seq,
     scopeLabel: "channel:C1",
-    payload: { text: "hello", environment: event.text, environmentSnapshot: event.record },
+    payload: { text: "hello", environment: event.text, rosterSnapshot: event.record },
   };
 }
 

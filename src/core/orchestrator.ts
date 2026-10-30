@@ -3261,7 +3261,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               const payload = isObj(entry.payload) ? { ...entry.payload } : {};
               if (!recordedRecall && !payload.steered && !payload.overheard) {
                 recordedRecall = true;
-                if (snapshot.record) payload.environmentSnapshot = snapshot.record;
+                if (snapshot.record) payload.rosterSnapshot = snapshot.record;
                 if (environment) payload.environment = environment;
                 if (recall.text) payload.memoryRecall = recall.record;
               }
