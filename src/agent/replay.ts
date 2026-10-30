@@ -259,7 +259,7 @@ function recordedWireArguments(argumentsJson: string, p: Record<string, unknown>
   try {
     return JSON.parse(argumentsJson) as ToolCall["arguments"];
   } catch (e) {
-    swallow("replay: unparseable recorded tool arguments", e);
+    swallow(`replay: unparseable recorded arguments for ${String(p.tool)} call ${String(p.callId)}`, e);
     return recordedToolArguments(p);
   }
 }

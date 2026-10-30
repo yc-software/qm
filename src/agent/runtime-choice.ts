@@ -39,19 +39,6 @@ function storedChoice(stored: RuntimeChoice): RuntimeChoice {
   };
 }
 
-function purposeChoice(purposeRuntime: RuntimeChoice, requested: Partial<RuntimeChoice> | undefined): RuntimeChoice {
-  const explicit = Object.fromEntries(Object.entries(requested ?? {}).filter(([, value]) => value !== undefined));
-  const choice: RuntimeChoice = { ...purposeRuntime, ...explicit };
-  if (!modelSupported(choice.modelId)) throw new NonRetryableTurnError(`runtime ${choice.modelId} is not approved`);
-  const unavailable = modelUnavailableReason(choice.modelId);
-  if (unavailable) throw new NonRetryableTurnError(`${choice.modelId}: ${unavailable}`);
-  if (choice.effortLevel !== undefined && !thinkingLevelsFor(choice.modelId).includes(choice.effortLevel))
-    throw new NonRetryableTurnError(`${choice.effortLevel} reasoning is not supported by ${choice.modelId}`);
-  if (choice.fastMode && !fastModeModelIds().includes(choice.modelId))
-    throw new NonRetryableTurnError(`fast mode is not supported by ${choice.modelId}`);
-  return choice;
-}
-
 export async function resolveRuntimeChoice(
   config: ScopedConfigStore,
   orgScopeId: ScopeId,
@@ -72,7 +59,18 @@ export async function resolveRuntimeChoice(
     const candidates = [requested?.modelId, purposeRuntime?.modelId, scopedStored?.modelId, orgStored?.modelId];
     if (candidates.some((modelId) => modelId && !resolveModel(modelId))) await hydrateModelCatalog();
   }
-  if (purposeRuntime) return purposeChoice(purposeRuntime, requested);
+  if (purposeRuntime) {
+    const explicit = Object.fromEntries(Object.entries(requested ?? {}).filter(([, value]) => value !== undefined));
+    const choice: RuntimeChoice = { ...purposeRuntime, ...explicit };
+    if (!modelSupported(choice.modelId)) throw new NonRetryableTurnError(`runtime ${choice.modelId} is not approved`);
+    const unavailable = modelUnavailableReason(choice.modelId);
+    if (unavailable) throw new NonRetryableTurnError(`${choice.modelId}: ${unavailable}`);
+    if (choice.effortLevel !== undefined && !thinkingLevelsFor(choice.modelId).includes(choice.effortLevel))
+      throw new NonRetryableTurnError(`${choice.effortLevel} reasoning is not supported by ${choice.modelId}`);
+    if (choice.fastMode && !fastModeModelIds().includes(choice.modelId))
+      throw new NonRetryableTurnError(`fast mode is not supported by ${choice.modelId}`);
+    return choice;
+  }
   if (purpose === "cron")
     requested = { effortLevel: NON_INTERACTIVE_THINKING_LEVEL, fastMode: NON_INTERACTIVE_FAST_MODE, ...requested };
   const configuredOrg: RuntimeChoice = orgStored ? storedChoice(orgStored) : { modelId: orgLegacy ?? fallback.modelId };

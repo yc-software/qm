@@ -75,7 +75,7 @@ export async function documentBlocks(
         ({ csv: "text/csv", tsv: "text/tsv", iif: "text/x-iif" } as Record<string, string>)[ext] ?? "text/plain";
     }
     if (format === "responses") {
-      blocks.push({ type: "input_text", text: untrustedFileHeader(document) });
+      blocks.push(textBlock(model, untrustedFileHeader(document)));
       blocks.push({
         type: "input_file",
         filename: fileName(document),
@@ -104,13 +104,13 @@ export async function documentBlocks(
         });
       }
     } else if (format === "chat") {
-      blocks.push({ type: "text", text: untrustedFileHeader(document) });
+      blocks.push(textBlock(model, untrustedFileHeader(document)));
       blocks.push({
         type: "file",
         file: { filename: fileName(document), file_data: `data:${mimeType};base64,${document.dataBase64}` },
       });
     } else if (format === "google") {
-      blocks.push({ text: untrustedFileHeader(document) });
+      blocks.push(textBlock(model, untrustedFileHeader(document)));
       blocks.push({ inlineData: { mimeType: "application/pdf", data: document.dataBase64 } });
     } else {
       blocks.push(textBlock(model, fitText(await documentFallbackText(document, signal))));
