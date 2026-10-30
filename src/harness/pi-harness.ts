@@ -2420,9 +2420,16 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
         const models = await resolveModels();
         const model = requiredModel(titleModelId());
         if (!keyForModel(models, model)) return undefined;
-        const out = await oneShot("pi-title", model, models.keys, TITLE_GENERATION_PROMPT, titleUserPrompt(transcript), {
-          modelGateway: models.gateway,
-        });
+        const out = await oneShot(
+          "pi-title",
+          model,
+          models.keys,
+          TITLE_GENERATION_PROMPT,
+          titleUserPrompt(transcript),
+          {
+            modelGateway: models.gateway,
+          },
+        );
         return sanitizeTitle(out);
       },
 

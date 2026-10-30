@@ -28,12 +28,7 @@ import type { RuntimeChoice } from "../harness/harness.ts";
 export type RuntimeDeps = Partial<
   Pick<
     AppDeps,
-    | "config"
-    | "harnessId"
-    | "modelCredentials"
-    | "modelCredentialFetch"
-    | "refreshModels"
-    | "userModelCredentials"
+    "config" | "harnessId" | "modelCredentials" | "modelCredentialFetch" | "refreshModels" | "userModelCredentials"
   >
 > & { baseModelDefault?: () => string | undefined };
 
