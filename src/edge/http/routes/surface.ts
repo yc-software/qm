@@ -3,7 +3,12 @@ import type { CapabilityClaims } from "../../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
 import type { MemoryEdit, MemoryService } from "../../../memory/memory-service.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
-import { runtimeFallback, runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../../../api/runtime-config.ts";
+import {
+  runtimeFallback,
+  runtimeConfigBody,
+  userRuntimeConfigBody,
+  webuiModelEnabled,
+} from "../../../api/runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../../memory/cross-scope.ts";
 import { sessionSharingRoutes } from "./session-sharing.ts";
 import type { Grant, PendingApproval, ScopeId, Session } from "../../../types.ts";
@@ -18,7 +23,11 @@ import {
   thinkingLevelsForHarness,
   fastModeModelIds,
 } from "../../../model/pi-models.ts";
-import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../../../model/model-catalog.ts";
+import {
+  builtInModelCatalog,
+  selectableCatalogForHarness,
+  selectableModelCatalog,
+} from "../../../model/model-catalog.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../../../api/app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";

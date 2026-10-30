@@ -2,7 +2,12 @@ import { parseScopeId } from "../../../../types.ts";
 import { ByteSourceTooLargeError } from "../../../../files/durable-byte-store.ts";
 import { fileArtifactId } from "../../../../files/file-artifact-store.ts";
 import { MAX_ATTACHMENT_BYTES, mimeFromName, safeAttachmentName } from "../../../../core/attachments.ts";
-import { contentDispositionAttachment, contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../../../../api/http.ts";
+import {
+  contentDispositionAttachment,
+  contentTypeWithUtf8Charset,
+  pipeToResponse,
+  sendJson,
+} from "../../../../api/http.ts";
 import { audit, authorizeAdmin, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { discoverScopes, FILES_PAGE_SIZE } from "./common.ts";

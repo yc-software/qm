@@ -7,7 +7,6 @@ import type { LoopFireService } from "./loop-fire.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
 
-
 export interface LoopServiceDeps {
   lock?: AdvisoryLock;
   store: LoopStore;
