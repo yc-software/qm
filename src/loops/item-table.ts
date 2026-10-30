@@ -5,10 +5,10 @@ import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
-export type ItemSummary = Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload"> &
+type ItemSummary = Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload"> &
   Partial<Pick<LoopItem, "sourcePayload">>;
 
-export type ItemLifecycle = Pick<LoopItem, "id" | "status" | "createdAt" | "updatedAt" | "actedAt">;
+type ItemLifecycle = Pick<LoopItem, "id" | "status" | "createdAt" | "updatedAt" | "actedAt">;
 
 export interface ItemRows {
   get(id: string): Promise<LoopItem | null>;
@@ -25,7 +25,7 @@ export interface ItemRows {
   close?(): Promise<void>;
 }
 
-export const LOOP_ITEMS_MIGRATION = typedTableMigration({
+const LOOP_ITEMS_MIGRATION = typedTableMigration({
   table: "loop_items",
   columns: [
     "id TEXT NOT NULL",

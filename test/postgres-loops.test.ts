@@ -382,12 +382,15 @@ test("ingress sources and deliveries queue per tenant and background claims span
           [tenant, "s1"],
           [tenant, "s2"],
           [otherTenant, "s9"],
-        ].sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0)),
+        ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
       );
       assert.deepEqual(
         new Set((await owner.sources.gmailWatching("a@example.com")).map((s) => `${s.tenantId}/${s.id}`)),
         new Set([`${tenant}/s2`, `${otherTenant}/s9`]),
       );
+      assert.equal(await owner.sources.tenantOf("s9"), otherTenant);
+      assert.equal(await owner.sources.tenantOf("s1"), tenant);
+      assert.equal(await owner.sources.tenantOf("missing"), null);
       assert.equal(await owner.deliveries.pruneCompleted(60), 2);
       const inbox = await owner.loopStore.inboxLoops();
       assert.deepEqual(

@@ -55,5 +55,15 @@ export function createMemoryRows<T extends { id: string }>(): MemoryRows<T> {
           .filter(match)
           .map((value) => ({ ...structuredClone(value), tenantId })),
       ),
+    purgeAcrossTenants(match) {
+      let purged = 0;
+      for (const rows of tenants.values())
+        for (const [id, value] of rows)
+          if (match(value)) {
+            rows.delete(id);
+            purged++;
+          }
+      return purged;
+    },
   };
 }

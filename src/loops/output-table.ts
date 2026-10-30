@@ -17,7 +17,7 @@ export interface OutputRows {
   close?(): Promise<void>;
 }
 
-export const LOOP_OUTPUTS_MIGRATION = typedTableMigration({
+const LOOP_OUTPUTS_MIGRATION = typedTableMigration({
   table: "loop_outputs",
   columns: [
     "id TEXT NOT NULL",

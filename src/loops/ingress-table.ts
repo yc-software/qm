@@ -5,7 +5,7 @@ import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
-export type TenantIngress = LoopIngress & { tenantId: string };
+type TenantIngress = LoopIngress & { tenantId: string };
 
 export interface IngressSourceRows {
   get(id: string): Promise<LoopIngress | null>;
@@ -13,6 +13,7 @@ export interface IngressSourceRows {
   insert(source: LoopIngress): Promise<void>;
   update(id: string, apply: (source: LoopIngress) => LoopIngress): Promise<LoopIngress | null>;
   enabled(): Promise<TenantIngress[]>;
+  tenantOf(id: string): Promise<string | null>;
   gmailWatching(email: string): Promise<TenantIngress[]>;
   close?(): Promise<void>;
 }
@@ -25,7 +26,7 @@ export interface IngressDeliveryRows {
   close?(): Promise<void>;
 }
 
-export const LOOP_INGRESS_MIGRATION = typedTableMigration({
+const LOOP_INGRESS_MIGRATION = typedTableMigration({
   table: "loop_ingress",
   columns: [
     "id TEXT NOT NULL",
@@ -65,12 +66,13 @@ export const LOOP_INGRESS_MIGRATION = typedTableMigration({
   where: "json->>'loopId' IS NOT NULL AND json->>'owner' IS NOT NULL AND json->>'kind' IS NOT NULL",
   indexes: [
     "CREATE INDEX loop_ingress_by_loop ON loop_ingress(tenant_id, loop_id, kind)",
+    "CREATE INDEX loop_ingress_by_id ON loop_ingress(id)",
     "CREATE INDEX loop_ingress_enabled ON loop_ingress(kind) WHERE enabled",
     "CREATE INDEX loop_ingress_gmail ON loop_ingress((gmail->>'email')) WHERE enabled AND kind = 'gmail'",
   ],
 });
 
-export const LOOP_INGRESS_DELIVERIES_MIGRATION = typedTableMigration({
+const LOOP_INGRESS_DELIVERIES_MIGRATION = typedTableMigration({
   table: "loop_ingress_deliveries",
   columns: [
     "id TEXT NOT NULL",
@@ -243,6 +245,13 @@ export function createPostgresIngressSourceRows(connectionString: string): Ingre
     async enabled() {
       return (await q(`${SELECT_SOURCE} WHERE enabled ORDER BY tenant_id, id`)).map(tenantSource);
     },
+    async tenantOf(id) {
+      const rows = await q(
+        `SELECT tenant_id::text AS tenant_id FROM loop_ingress WHERE id = $1 ORDER BY tenant_id LIMIT 1`,
+        [id],
+      );
+      return (rows[0]?.tenant_id as string | undefined) ?? null;
+    },
     async gmailWatching(email) {
       const rows = await q(
         `${SELECT_SOURCE} WHERE enabled AND kind = 'gmail' AND gmail->>'email' = $1 ORDER BY tenant_id, id`,
@@ -301,6 +310,7 @@ export function createMemoryIngressSourceRows(): IngressSourceRows {
     },
     update: async (id, apply) => rows.update(id, apply),
     enabled: async () => rows.acrossTenants((source) => source.enabled),
+    tenantOf: async (id) => rows.acrossTenants((source) => source.id === id)[0]?.tenantId ?? null,
     gmailWatching: async (email) =>
       rows.acrossTenants((source) => source.enabled && source.kind === "gmail" && source.gmail?.email === email),
   };

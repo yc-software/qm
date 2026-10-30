@@ -41,16 +41,7 @@ import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
-import {
-  createPostgresIngressDeliveryRows,
-  createPostgresIngressSourceRows,
-  createMemoryIngressDeliveryRows,
-  createMemoryIngressSourceRows,
-} from "./loops/ingress-table.ts";
-import { createPostgresLoopRows } from "./loops/loop-table.ts";
-import { createPostgresItemRows } from "./loops/item-table.ts";
-import { createPostgresOutputRows } from "./loops/output-table.ts";
-import { createPostgresShipGrantRows } from "./loops/ship-grant-table.ts";
+import { createLoopTables } from "./loops/tables.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService } from "./suggestions/activities.ts";
@@ -1966,7 +1957,8 @@ export function buildApp(
   const monitors = createMonitorStore(
     config.databaseUrl ? createPostgresMonitorRows(config.databaseUrl) : createMemoryMonitorRows(),
   );
-  const loopStore = createLoopStore(config.databaseUrl ? createPostgresLoopRows(config.databaseUrl) : undefined);
+  const loopTables = createLoopTables(config.databaseUrl);
+  const loopStore = createLoopStore(loopTables.loops);
   const loopOwnerCache = new Map<string, string>();
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
@@ -1978,24 +1970,17 @@ export function buildApp(
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(() => {});
   };
-  const loopItems = createLoopItemLedger(
-    config.databaseUrl ? createPostgresItemRows(config.databaseUrl) : undefined,
-    publishLoopEvent,
-    {
-      lock: advisoryLock,
-      accepts: async (id) => {
-        const loop = await loopStore.get(id);
-        return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
-      },
+  const loopItems = createLoopItemLedger(loopTables.items, publishLoopEvent, {
+    lock: advisoryLock,
+    accepts: async (id) => {
+      const loop = await loopStore.get(id);
+      return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
     },
+  });
+  const loopOutputs = createLoopOutputStore(loopTables.outputs, (output) =>
+    publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
   );
-  const loopOutputs = createLoopOutputStore(
-    config.databaseUrl ? createPostgresOutputRows(config.databaseUrl) : undefined,
-    (output) => publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
-  );
-  const loopGrants = createShipGrantStore(
-    config.databaseUrl ? createPostgresShipGrantRows(config.databaseUrl) : undefined,
-  );
+  const loopGrants = createShipGrantStore(loopTables.grants);
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
   const cronsBase = createCronStore(
@@ -2667,10 +2652,8 @@ export function buildApp(
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: config.databaseUrl ? createPostgresIngressSourceRows(config.databaseUrl) : createMemoryIngressSourceRows(),
-    deliveries: config.databaseUrl
-      ? createPostgresIngressDeliveryRows(config.databaseUrl)
-      : createMemoryIngressDeliveryRows(),
+    sources: loopTables.sources,
+    deliveries: loopTables.deliveries,
     loops: loopStore,
     items: loopItems,
     outputs: loopOutputs,

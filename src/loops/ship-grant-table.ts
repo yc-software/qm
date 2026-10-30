@@ -15,7 +15,7 @@ export interface ShipGrantRows {
   close?(): Promise<void>;
 }
 
-export const LOOP_SHIP_GRANTS_MIGRATION = typedTableMigration({
+const LOOP_SHIP_GRANTS_MIGRATION = typedTableMigration({
   table: "loop_ship_grants",
   columns: [
     "id TEXT NOT NULL",

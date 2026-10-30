@@ -21,7 +21,7 @@ export interface LoopRows {
   close?(): Promise<void>;
 }
 
-export const LOOPS_MIGRATION = typedTableMigration({
+const LOOPS_MIGRATION = typedTableMigration({
   table: "loops",
   columns: [
     "id TEXT NOT NULL",
