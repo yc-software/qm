@@ -46,7 +46,6 @@ export interface DeliveryStore {
   claimPending(type: string, ttlMs: number): Promise<Delivery[]>;
   listShadow(opts?: { limit?: number }): Promise<Delivery[]>;
   ack(id: string, at: number, slackApiMs?: number): Promise<void>;
-  /** Retire an undelivered row for good: the destination refused it permanently. Re-enqueuing the same key returns it unchanged. */
   fail(id: string, reason: string, at: number): Promise<Delivery | null>;
   ackByKey(idempotencyKey: string, at: number): Promise<void>;
   setEditRefByKey(idempotencyKey: string, editRef: string): Promise<void>;

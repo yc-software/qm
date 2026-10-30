@@ -46,8 +46,6 @@ const PERMANENT_POST_ERRORS = new Set([
   "message_not_found",
 ]);
 
-// The recipient itself can never accept the post (e.g. a DM to a bot user), so retrying
-// or re-enqueuing the same key is pointless: fail the row once instead.
 const TERMINAL_POST_ERRORS = new Set(["cannot_dm_bot"]);
 
 const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
