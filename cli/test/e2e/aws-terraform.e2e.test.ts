@@ -209,15 +209,15 @@ run "tls" {
     error_message = "the proxy is not attached to its TCP target group alone"
   }
   assert {
-    condition = aws_ecs_service.service["egress-proxy"].deployment_configuration[0].strategy == "ROLLING" && aws_ecs_service.service["core"].deployment_configuration[0].strategy == "BLUE_GREEN"
+    condition = aws_ecs_service.service["egress-proxy"].deployment_configuration[0].strategy == "ROLLING" && aws_ecs_service.service["edge"].deployment_configuration[0].strategy == "BLUE_GREEN"
     error_message = "unexpected rollout strategies"
   }
   assert {
-    condition = length(aws_ecs_service.service["egress-proxy"].service_connect_configuration[0].service[0].timeout) == 0 && aws_ecs_service.service["core"].service_connect_configuration[0].service[0].timeout[0].per_request_timeout_seconds == 0
+    condition = length(aws_ecs_service.service["egress-proxy"].service_connect_configuration[0].service[0].timeout) == 0 && aws_ecs_service.service["edge"].service_connect_configuration[0].service[0].timeout[0].per_request_timeout_seconds == 0
     error_message = "ECS rejects a per-request timeout on the proxy's TCP Service Connect port"
   }
   assert {
-    condition = !can(jsondecode(aws_ecs_task_definition.bootstrap["egress-proxy"].container_definitions)[0].portMappings[0].appProtocol) && jsondecode(aws_ecs_task_definition.bootstrap["core"].container_definitions)[0].portMappings[0].appProtocol == "http"
+    condition = !can(jsondecode(aws_ecs_task_definition.bootstrap["egress-proxy"].container_definitions)[0].portMappings[0].appProtocol) && jsondecode(aws_ecs_task_definition.bootstrap["edge"].container_definitions)[0].portMappings[0].appProtocol == "http"
     error_message = "the proxy's bootstrap port mapping must be plain TCP"
   }
 }
