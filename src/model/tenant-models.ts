@@ -1,6 +1,6 @@
 import type { Keychain } from "../credentials/keychain.ts";
 import { keychainHarnessAuthEnv } from "../credentials/harness-auth-env.ts";
-import { boundTenant, currentTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import type { TenantSettings, TenantSettingsStore } from "../tenants/settings.ts";
 import { errMessage } from "../util/errors.ts";
 import { keychainCompanyChatGPTAuth, type CompanyChatGPTAuth } from "./company-chatgpt-auth.ts";
@@ -17,9 +17,21 @@ import {
 import type { ProviderKeys } from "../harness/pi-harness.ts";
 import type { ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 
-export function configuredModelFor(settings: TenantSettings, harness: string): string | undefined {
+const NO_DIRECT_KEYS: ModelProviderAvailability = { anthropic: false, openai: false, openrouter: false };
+
+export function configuredModelFor(
+  settings: TenantSettings,
+  harness: string,
+  direct: ModelProviderAvailability = NO_DIRECT_KEYS,
+): string | undefined {
   if (harness === "claude") return settings.claudeModel;
-  if (harness === "pi" && !settings.piModel && !settings.modelProvider && settings.codexAuthCredential)
+  if (
+    harness === "pi" &&
+    !settings.piModel &&
+    !settings.modelProvider &&
+    !direct.anthropic &&
+    settings.codexAuthCredential
+  )
     return DEFAULT_CODEX_MODEL_ID;
   return settings.piModel;
 }
@@ -33,15 +45,16 @@ export function defaultModelFor(
   settings: TenantSettings,
   harness: string,
   gateway?: ModelGatewayTransportConfig,
+  direct: ModelProviderAvailability = NO_DIRECT_KEYS,
 ): string {
-  const configured = configuredModelFor(settings, harness);
+  const configured = configuredModelFor(settings, harness, direct);
   if (settings.modelProvider) return defaultModelForHarness(harness, configured, onlyProvider(settings.modelProvider));
   const providers: ModelProviderAvailability | undefined =
     harness === "pi" && gateway
       ? {
-          anthropic: false,
-          openai: false,
-          openrouter: false,
+          anthropic: direct.anthropic,
+          openai: direct.openai,
+          openrouter: direct.openrouter,
           ...(settings.codexAuthCredential ? { codexOAuth: true } : {}),
           modelIds: new Set(Object.keys(gateway.models)),
         }
@@ -51,8 +64,8 @@ export function defaultModelFor(
 
 export interface TenantModels {
   gateway(): Promise<ModelGatewayTransportConfig | undefined>;
-  gatewaySnapshot(): ModelGatewayTransportConfig | undefined;
   defaultModel(harness: string): string;
+  noteDirectKeys(tenant: string, direct: ModelProviderAvailability): void;
   subscriptionKeys(): Promise<ProviderKeys>;
   claudeAuthEnv(): Promise<NodeJS.ProcessEnv>;
 }
@@ -65,6 +78,7 @@ export function createTenantModels(deps: {
 }): TenantModels {
   const gateways = new Map<string, { fingerprint: string; transport: ModelGatewayTransportConfig }>();
   const chatgpt = new Map<string, { credentialId: string; auth: CompanyChatGPTAuth }>();
+  const directKeys = new Map<string, ModelProviderAvailability>();
 
   function gatewayFor(tenant: string, settings: TenantSettings): ModelGatewayTransportConfig | undefined {
     if (!settings.modelGateway) {
@@ -74,7 +88,9 @@ export function createTenantModels(deps: {
     const fingerprint = JSON.stringify(settings.modelGateway);
     const known = gateways.get(tenant);
     if (known?.fingerprint === fingerprint) return known.transport;
-    const transport = createGatewayCatalog(settings.modelGateway, deps.fetch).transport;
+    const transport = createGatewayCatalog(settings.modelGateway, deps.fetch, Date.now, (models, aliases) => {
+      if (gateways.get(tenant)?.transport === transport) setGatewayModels(models, aliases);
+    }).transport;
     gateways.set(tenant, { fingerprint, transport });
     return transport;
   }
@@ -93,13 +109,13 @@ export function createTenantModels(deps: {
     async gateway() {
       return gatewayFor(currentTenant(), await deps.settings.get());
     },
-    gatewaySnapshot() {
-      const tenant = boundTenant();
-      return tenant ? gateways.get(tenant)?.transport : undefined;
-    },
     defaultModel(harness) {
       const settings = deps.settings.peek();
-      return defaultModelFor(settings, harness, gatewayFor(currentTenant(), settings));
+      const tenant = currentTenant();
+      return defaultModelFor(settings, harness, gatewayFor(tenant, settings), directKeys.get(tenant));
+    },
+    noteDirectKeys(tenant, direct) {
+      directKeys.set(tenant, { anthropic: direct.anthropic, openai: direct.openai, openrouter: direct.openrouter });
     },
     async subscriptionKeys() {
       const auth = companyAuth(currentTenant(), (await deps.settings.get()).codexAuthCredential);

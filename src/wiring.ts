@@ -74,7 +74,7 @@ import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { enabledSandboxBackends, type Config } from "./config.ts";
-import { configuredModelFor, createTenantModels, harnessCarriedModelAuthFor } from "./model/tenant-models.ts";
+import { createTenantModels, harnessCarriedModelAuthFor } from "./model/tenant-models.ts";
 import { currentTenant } from "./tenants/context.ts";
 import type { ServerDeps } from "./api/deps.ts";
 import {
@@ -456,6 +456,7 @@ export function stopWithBackstop(
 
 export interface BuiltApp {
   tenantSettings: TenantSettingsStore;
+  baseModelDefault: () => string;
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -613,7 +614,15 @@ export function buildApp(
     createTenantSettingsStore({
       ...(pgArtifactMap ? { db: pgArtifactMap.pool, keyMaterial: connectorSecretKey } : {}),
       harness: config.harness,
-      onLoad: (tenant, settings) => setProviderBaseUrls(tenant, settings.providerBaseUrls),
+      onLoad: (tenant, settings) => {
+        setProviderBaseUrls(tenant, settings.providerBaseUrls);
+        void directModelCredentials
+          .availability()
+          .then(
+            (direct) => tenantModels.noteDirectKeys(tenant, direct),
+            reportFailureAs("model keys: load", undefined),
+          );
+      },
     });
   const tenantSettingsRefresh = createUntrackedSweeper(() => tenantSettings.refreshAll(), 60_000, {
     label: "tenant settings refresh",
@@ -634,6 +643,7 @@ export function buildApp(
       const [settings, gateway] = await Promise.all([tenantSettings.get(), tenantModels.gateway()]);
       await gateway?.refresh?.();
       const direct = await directModelCredentials.availability();
+      tenantModels.noteDirectKeys(currentTenant(), direct);
       return {
         ...direct,
         ...(settings.codexAuthCredential ? { codexOAuth: true } : {}),
@@ -647,7 +657,7 @@ export function buildApp(
   const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
-    directorySyncProtected: () => tenantSettings.peek().emailAuthPrincipals,
+    directorySyncProtected: async () => (await tenantSettings.get()).emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
@@ -1414,7 +1424,7 @@ export function buildApp(
       overrides.harnesses?.pi ??
         createPiHarness({
           ...piHarnessConfigOptions(config),
-          defaultModelId: () => configuredModelFor(tenantSettings.peek(), "pi"),
+          defaultModelId: () => defaultForHarness("pi"),
           detectModelId: () => tenantSettings.peek().piDetectModel,
           titleModelId: () => tenantSettings.peek().piTitleModel,
           judgeModelId: () => tenantSettings.peek().piJudgeModel,
@@ -3001,6 +3011,7 @@ export function buildApp(
   return {
     app,
     tenantSettings,
+    baseModelDefault: () => fallback.modelId,
     checkReadiness: async (signal) => {
       await pgArtifactMap?.pool.q("SELECT 1", [], { signal });
     },
@@ -3122,11 +3133,11 @@ export function serverDeps(
     ...(built.backgroundOwnership
       ? {
           backgroundOwnership: built.backgroundOwnership,
-          deploymentControlSecret: config.deploymentControlSecret,
           deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
         }
       : {}),
     allowUnauthenticatedCore: config.allowUnauthenticatedCore,
+    ...(config.deploymentControlSecret ? { deploymentControlSecret: config.deploymentControlSecret } : {}),
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -3137,7 +3148,7 @@ export function serverDeps(
     ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
     config: built.config,
     ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
-    baseModelDefault: () => configuredModelFor(built.tenantSettings.peek(), config.harness),
+    baseModelDefault: built.baseModelDefault,
     modelCredentials: built.modelCredentials,
     userModelCredentials: built.userModelCredentials,
     modelRegistry: built.modelRegistry,
