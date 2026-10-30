@@ -539,7 +539,6 @@ test("reclaim waits for in-flight scratch creation before destroying its handle"
   ready.resolve(scratchHandle);
   await Promise.all([provision, reclaim]);
   assert.deepEqual(destroyed, [scratchHandle.id]);
-  assert.equal(boxes.scratchBox.handle, null);
 });
 
 test("scratch destruction failures keep their cause and retain the handle for retry", async () => {
@@ -565,7 +564,7 @@ test("scratch destruction failures keep their cause and retain the handle for re
     return true;
   });
   assert.equal(attempts, 3);
-  assert.equal(boxes.scratchBox.handle, scratchHandle);
+  assert.equal(await boxes.provisionScratch(), scratchHandle);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.release_failed").length, 1);
   assert.equal(events.filter((event) => event.action === "sandbox.scratch.released").length, 0);
   assert.equal(
@@ -575,7 +574,9 @@ test("scratch destruction failures keep their cause and retain the handle for re
   assert.equal(errors.length, 1);
   fail = false;
   await boxes.reclaimBox();
-  assert.equal(boxes.scratchBox.handle, null);
+  assert.equal(attempts, 4);
+  await boxes.reclaimBox();
+  assert.equal(attempts, 4);
 });
 
 test("failed scratch provisioning is audited with its error and can retry", async () => {
@@ -628,14 +629,12 @@ for (const recovers of [true, false]) {
       return true;
     });
     await assert.rejects(boxes.provisionScratch(), /cleanup is still pending/);
-    assert.equal(boxes.scratchBox.handle, null);
-    assert.equal(boxes.scratchBox.pending?.id, partial.id);
     if (recovers) await boxes.reclaimBox();
     else await assert.rejects(boxes.reclaimBox(), /Disposable sandbox destruction failed/);
     const failure = events.find((event) => event.action === "sandbox.scratch.provision_failed")!;
     assert.equal(JSON.parse(failure.detail!).sandboxId, partial.id);
     assert.equal(JSON.parse(failure.detail!).backend, "local");
     assert.equal(events.at(-1)?.action, `sandbox.scratch.${recovers ? "released" : "release_failed"}`);
-    assert.equal(boxes.scratchBox.pending === null, recovers);
+    await assert.rejects(boxes.provisionScratch(), recovers ? /initialization failed/ : /cleanup is still pending/);
   });
 }
