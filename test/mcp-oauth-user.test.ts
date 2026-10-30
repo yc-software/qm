@@ -179,3 +179,22 @@ test("stored oauth-user tools survive a restart but stay hidden from callers who
     ["orders_sign_in"],
   );
 });
+
+test("token refresh only matches a provider's exact hosts, never subdomains of an admin-set host", async (t) => {
+  t.after(() => setPublicOAuthClients([]));
+  setPublicOAuthClients(mcpPublicOAuthClients([oauthServer({ credentialHost: "example.com" })]));
+  const resolve = withPublicOAuthClients(async () => {
+    throw new Error("secret resolver must not be used");
+  });
+  const urls: string[] = [];
+  const fetchImpl = async (url: string) => {
+    urls.push(url);
+    return { ok: true, status: 200, json: async () => ({ access_token: "fresh", expires_in: 60 }) };
+  };
+  const refresh = makeRefresh({ resolveClient: resolve, fetchImpl });
+  for (const host of [HOST, "api.slack.com"])
+    await assert.rejects(refresh(host, { accessToken: "a", refreshToken: "r" }), /unknown provider/);
+  assert.deepEqual(urls, []);
+  assert.equal((await refresh("example.com", { accessToken: "a", refreshToken: "r" })).accessToken, "fresh");
+  assert.deepEqual(urls, ["https://id.example.com/token"]);
+});

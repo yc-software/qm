@@ -782,17 +782,25 @@ export function createKeychain(deps: {
     credId(principalId, host.toLowerCase(), oauthSlot(accountType));
   const inflightRefreshes = new Map<string, Promise<string | null>>();
 
-  async function putConnectorToken(
+  const sameVersion = (a: KeychainCredential, b: KeychainCredential) =>
+    a.updatedAt === b.updatedAt && a.fingerprint === b.fingerprint;
+
+  function updateCred(id: string, fn: (current: KeychainCredential) => KeychainCredential) {
+    if (!deps.creds.update) throw new Error("credential store does not support atomic updates");
+    return deps.creds.update(id, fn);
+  }
+
+  function connectorRec(
+    id: string,
     host: string,
     principalId: string,
     token: OAuthToken,
-    accountType?: string,
-  ): Promise<KeychainCredential> {
+    accountType: string | undefined,
+    prior: KeychainCredential | null,
+  ): KeychainCredential {
     const t = now();
-    const id = oauthId(host, principalId, accountType);
-    const prior = await deps.creds.get(id);
     const at = token.accountType ?? accountType;
-    const rec: KeychainCredential = {
+    return {
       id,
       ownerId: principalId,
       orgId: token.orgId ?? configOrgId(),
@@ -816,6 +824,16 @@ export function createKeychain(deps: {
       createdAt: prior?.createdAt ?? t,
       updatedAt: t,
     };
+  }
+
+  async function putConnectorToken(
+    host: string,
+    principalId: string,
+    token: OAuthToken,
+    accountType?: string,
+  ): Promise<KeychainCredential> {
+    const id = oauthId(host, principalId, accountType);
+    const rec = connectorRec(id, host, principalId, token, accountType, await deps.creds.get(id));
     await deps.creds.put(id, rec);
     return rec;
   }
@@ -847,76 +865,71 @@ export function createKeychain(deps: {
     return msg.length > 500 ? `${msg.slice(0, 497)}...` : msg;
   }
 
-  async function markConnectorRefreshFailure(rec: KeychainCredential, message: string): Promise<void> {
-    const t = now();
-    const current = await deps.creds.get(rec.id);
-    if (!current || current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint) return;
-    await deps.creds.merge(rec.id, {
-      refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message },
-      updatedAt: t,
+  const refreshDue = (rec: KeychainCredential) =>
+    rec.expiresAt !== undefined && now() >= rec.expiresAt - oauthRefreshMargin;
+  const accessTokenOf = (rec: KeychainCredential) => tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
+  const unexpiredAccessToken = (rec: KeychainCredential) =>
+    oauthExpired(rec, now(), oauthSkew) ? null : accessTokenOf(rec);
+
+  async function refreshAndStore(id: string, host: string, refresh: OAuthRefresh): Promise<string | null> {
+    return lock.withLock(`keychain-connector-refresh:${id}`, async () => {
+      const rec = await deps.creds.get(id);
+      if (!rec) return null;
+      if (!refreshDue(rec)) return accessTokenOf(rec);
+      const stored = tryDecrypt(rec, recToOAuthToken);
+      if (!stored?.refreshToken) return unexpiredAccessToken(rec);
+      try {
+        const fresh = await refresh(host, stored, {
+          ...(stored.accountType ? { accountType: stored.accountType } : {}),
+          ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
+        });
+        if (!fresh.accessToken) throw new Error("refresh returned an empty access token");
+        const merged: OAuthToken = {
+          ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
+          ...(stored.accountType ? { accountType: stored.accountType } : {}),
+          ...(stored.orgId ? { orgId: stored.orgId } : {}),
+          ...(stored.idToken ? { idToken: stored.idToken } : {}),
+          ...(stored.accountId ? { accountId: stored.accountId } : {}),
+          ...fresh,
+        };
+        const written = await updateCred(id, (current) =>
+          sameVersion(current, rec)
+            ? connectorRec(id, host, rec.ownerId, merged, rec.refresh?.accountType, current)
+            : current,
+        );
+        return written ? accessTokenOf(written) : null;
+      } catch (e) {
+        const message = storedRefreshError(e);
+        console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
+        const t = now();
+        try {
+          await updateCred(id, (current) =>
+            sameVersion(current, rec)
+              ? { ...current, refresh: { ...current.refresh, refreshFailedAt: t, refreshError: message }, updatedAt: t }
+              : current,
+          );
+        } catch (writeErr) {
+          console.error(
+            `[keychain] connector token refresh failure metadata write failed for ${host}: ${errMessage(writeErr)}`,
+          );
+        }
+        return unexpiredAccessToken(rec);
+      }
     });
   }
 
-  async function refreshAndStore(
-    host: string,
-    principalId: string,
-    accountType: string | undefined,
-    rec: KeychainCredential,
-  ): Promise<string | null> {
-    if (!deps.refreshConnector) return null;
-    const stored = tryDecrypt(rec, recToOAuthToken);
-    if (!stored) return null;
-    try {
-      const fresh = await deps.refreshConnector(host, stored, {
-        ...(stored.accountType ? { accountType: stored.accountType } : {}),
-        ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
-      });
-      if (!fresh.accessToken) throw new Error("refresh returned an empty access token");
-      const merged: OAuthToken = {
-        ...(stored.clientRef ? { clientRef: stored.clientRef } : {}),
-        ...(stored.accountType ? { accountType: stored.accountType } : {}),
-        ...(stored.orgId ? { orgId: stored.orgId } : {}),
-        ...(stored.idToken ? { idToken: stored.idToken } : {}),
-        ...(stored.accountId ? { accountId: stored.accountId } : {}),
-        ...fresh,
-      };
-      // Compare-and-set: if another flight already rotated this credential,
-      // keep its result rather than clobbering a newer refresh token.
-      const current = await deps.creds.get(rec.id);
-      if (current && (current.updatedAt !== rec.updatedAt || current.fingerprint !== rec.fingerprint)) {
-        const latest = tryDecrypt(current, recToOAuthToken);
-        return latest?.accessToken ?? null;
-      }
-      await putConnectorToken(host, principalId, merged, accountType);
-      return merged.accessToken;
-    } catch (e) {
-      const message = storedRefreshError(e);
-      console.error(`[keychain] connector token refresh failed for ${host}: ${message}`);
-      try {
-        await markConnectorRefreshFailure(rec, message);
-      } catch (writeErr) {
-        console.error(
-          `[keychain] connector token refresh failure metadata write failed for ${host}: ${errMessage(writeErr)}`,
-        );
-      }
-      return null;
-    }
-  }
-
   async function connectorTokenForRecord(rec: KeychainCredential): Promise<string | null> {
-    const t = now();
-    const refreshable = rec.refresh?.refreshTokenEnc && deps.refreshConnector && rec.host ? rec.host : null;
-    if (refreshable && rec.expiresAt !== undefined && t >= rec.expiresAt - oauthRefreshMargin) {
+    const refresh = deps.refreshConnector;
+    if (refresh && rec.refresh?.refreshTokenEnc && rec.host && refreshDue(rec)) {
       let pending = inflightRefreshes.get(rec.id);
       if (!pending) {
-        pending = refreshAndStore(refreshable, rec.ownerId, rec.refresh?.accountType, rec);
+        pending = refreshAndStore(rec.id, rec.host, refresh);
         inflightRefreshes.set(rec.id, pending);
         void pending.finally(() => inflightRefreshes.delete(rec.id));
       }
       return pending;
     }
-    if (oauthExpired(rec, t, oauthSkew) && !refreshable) return null;
-    return tryDecrypt(rec, (r) => decryptSecret(r.secretEnc, deps.key));
+    return unexpiredAccessToken(rec);
   }
 
   async function saveCredential(input: SaveCredentialInput): Promise<KeychainCredentialMeta> {
@@ -1140,8 +1153,7 @@ export function createKeychain(deps: {
       const fingerprint = credentialFilesFingerprint;
       if (fingerprint(normalized) === fingerprint(materialized.files)) return;
 
-      if (!deps.creds.update) throw new Error("credential store does not support atomic file refresh");
-      const updated = await deps.creds.update(materialized.credentialId, (current) => {
+      const updated = await updateCred(materialized.credentialId, (current) => {
         if (current.kind !== "file" || !samePerson(current.ownerId, materialized.ownerId))
           throw new KeychainError(409, "Credential changed during execution");
         const currentFiles = decryptToFiles(current).files;

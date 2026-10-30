@@ -16,7 +16,7 @@ import {
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createMemoryAdvisoryLock, createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
@@ -357,6 +357,40 @@ test("pg keychain: listByOwner is a per-owner projected read with no secret mate
     );
   } finally {
     await factory.pool.close();
+  }
+});
+
+test("pg keychain: separate processes refresh a rotating connector token once", { skip }, async () => {
+  const factories = [createPostgresMapFactory(URL!), createPostgresMapFactory(URL!)];
+  const provider = { valid: "rt-0", calls: 0 };
+  const keychains = factories.map((factory) =>
+    createKeychain({
+      lock: createPostgresAdvisoryLock(factory.pool, { pollMs: 10 }),
+      creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
+      grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
+      asks: factory.map<KeychainAsk>("map_keychain_asks"),
+      key: deriveConnectorKey("postgres-keychain-test-key"),
+      refreshConnector: async (_host, token) => {
+        provider.calls++;
+        await new Promise((r) => setTimeout(r, 50));
+        if (token.refreshToken !== provider.valid) throw new Error("invalid_grant");
+        provider.valid = `rt-${provider.calls}`;
+        return { accessToken: `at-${provider.calls}`, refreshToken: provider.valid, expiresAt: Date.now() + 3_600_000 };
+      },
+    }),
+  );
+  try {
+    const host = "gmail.googleapis.com";
+    await keychains[0]!.setConnectorToken(host, "U-refresh", {
+      accessToken: "at-0",
+      refreshToken: "rt-0",
+      expiresAt: Date.now() - 1,
+    });
+    const tokens = await Promise.all(keychains.map((k) => k.connectorAccessToken(host, "U-refresh")));
+    assert.deepEqual(tokens, ["at-1", "at-1"]);
+    assert.equal(provider.calls, 1);
+  } finally {
+    await Promise.all(factories.map((factory) => factory.pool.close()));
   }
 });
 
