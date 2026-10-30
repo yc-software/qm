@@ -274,24 +274,16 @@ export interface AttributedTurn {
 
 export type SessionOrigin = "conversation" | "cron" | "webhook" | "monitor" | "loop" | "swarm";
 
-export const stableOriginPattern = (origin: string): string => `^agent:main:${origin}:[^:]+$`;
-export const legacyOriginPattern = (origin: string): string => `^${origin}:[^:]+(:.+)?$`;
-export const ORIGIN_ALTERNATION = "(cron|webhook|monitor|loop|swarm)";
-const STABLE_CRON_ID_PATTERN = "^agent:main:cron:([^:]+)$";
-const LEGACY_CRON_ID_PATTERN = "^cron:([^:]+)(:.+)?$";
-export const threadRefCronIdExpr = (threadRef: string): string =>
-  `COALESCE(substring(${threadRef} FROM '${STABLE_CRON_ID_PATTERN}'), substring(${threadRef} FROM '${LEGACY_CRON_ID_PATTERN}'))`;
-
-const STABLE_ORIGIN_RE = new RegExp(stableOriginPattern(ORIGIN_ALTERNATION));
-const LEGACY_ORIGIN_RE = new RegExp(legacyOriginPattern(ORIGIN_ALTERNATION));
-const STABLE_CRON_ID_RE = new RegExp(STABLE_CRON_ID_PATTERN);
-const LEGACY_CRON_ID_RE = new RegExp(LEGACY_CRON_ID_PATTERN);
+const STABLE_ORIGIN_RE = /^agent:main:(cron|webhook|monitor|loop|swarm):[^:]+$/;
+const BARE_ORIGIN_RE = /^(cron|webhook|monitor|loop|swarm):[^:]+(:.+)?$/;
+const STABLE_CRON_ID_RE = /^agent:main:cron:([^:]+)$/;
+const BARE_CRON_ID_RE = /^cron:([^:]+)(:.+)?$/;
 
 export function sessionOrigin(threadRef: string | null | undefined): SessionOrigin {
   const stable = STABLE_ORIGIN_RE.exec(threadRef ?? "");
   if (stable) return stable[1] as SessionOrigin;
-  const legacy = LEGACY_ORIGIN_RE.exec(threadRef ?? "");
-  if (legacy) return legacy[1] as SessionOrigin;
+  const bare = BARE_ORIGIN_RE.exec(threadRef ?? "");
+  if (bare) return bare[1] as SessionOrigin;
   return "conversation";
 }
 
@@ -300,7 +292,7 @@ export function sessionCategory(origin: SessionOrigin): SessionCategory {
 }
 
 export function cronIdOf(threadRef: string | null | undefined): string | null {
-  const m = STABLE_CRON_ID_RE.exec(threadRef ?? "") ?? LEGACY_CRON_ID_RE.exec(threadRef ?? "");
+  const m = STABLE_CRON_ID_RE.exec(threadRef ?? "") ?? BARE_CRON_ID_RE.exec(threadRef ?? "");
   return m ? m[1]! : null;
 }
 

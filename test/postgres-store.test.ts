@@ -2,7 +2,6 @@ import "./run-availability.ts";
 import { test, before } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 import { PARALLEL_EXCEPTION_QUERY } from "../src/deployment/postdeploy-smoke.ts";
 import { createPostgresSessionStore, rowToSession } from "../src/sessions/postgres-session-store.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
@@ -21,10 +20,8 @@ before(async () => {
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(
-    "DROP TABLE IF EXISTS session_spend_days, session_spend_dirty, sessions, items, participants, session_leases, session_llm_requests, session_pins, runs, tool_calls CASCADE",
-  );
+  await p.query("DROP SCHEMA public CASCADE");
+  await p.query("CREATE SCHEMA public");
   await p.end();
 });
 
@@ -449,7 +446,7 @@ test(
   },
 );
 
-test("pg spend indexes preserve legacy and unusual requests through migration and later writes", { skip }, async () => {
+test("pg spend rollup handles unusual usage rows and later writes", { skip }, async () => {
   const at = Date.UTC(2022, 0, 1);
   const store = createPostgresSessionStore(URL!, { now: () => at });
   const session = await store.getOrCreateByThread("spend-index", "dm", scopeId("personal", "USPENDINDEX"));
@@ -468,10 +465,6 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
   };
   const range = { from: at, to: at + 1 };
   try {
-    await raw.query("DROP INDEX session_llm_requests_spend, session_llm_requests_spend_wide");
-    await raw.query(
-      "DELETE FROM qm_schema_migrations WHERE id IN ('sessions/store/0020-spend-usage-json', 'sessions/store/0020-spend-usage-json-size', 'sessions/store/0020-spend-usage-json-size-plpgsql', 'sessions/store/0021-spend-covering-index')",
-    );
     await insert("spend-index-normal", "normal", JSON.stringify(usage));
     await insert("spend-index-wide", wideModel, JSON.stringify(wideUsage));
     await insert("spend-index-null", "null", null);
@@ -489,12 +482,6 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
     await insert("spend-index-fraction", "fraction", JSON.stringify({ ...usage, input: 0.5 }), at - 1);
     await insert("spend-index-overflow", "overflow", JSON.stringify({ ...usage, input: 1e308 }), at - 1);
     await insert("spend-index-deep-history", "deep-history", deeplyNestedUsage, at - 2);
-    await migrateRegisteredPgSchemas(URL!);
-    const indexes = await raw.query(
-      "SELECT indexrelid::regclass::text AS name, indisvalid, indisready FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass)",
-    );
-    assert.equal(indexes.rows.length, 2);
-    assert.ok(indexes.rows.every((r) => r.indisvalid && r.indisready));
     const read = async () => (await store.spendRollup(range)).filter((r) => r.scopeId === session.scopeId);
     const before = await read();
     assert.equal(before.length, 3);
@@ -543,55 +530,6 @@ test("pg spend indexes preserve legacy and unusual requests through migration an
     await raw.query("DELETE FROM session_llm_requests WHERE session_id IN ($1, 'missing-spend-session')", [session.id]);
     await store.deleteSession(session.id);
     await raw.end();
-  }
-});
-
-test("pg spend usage guard upgrades the original migration without rewriting indexes or ledger", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const admin = new pg.Pool({ connectionString: URL });
-  const schema = `spend_upgrade_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new globalThis.URL(URL!);
-  url.searchParams.set("options", `-c search_path=${schema}`);
-  const raw = new pg.Pool({ connectionString: url.toString() });
-  const store = createPostgresSessionStore(url.toString());
-  const migrations = registeredPgMigrations(url.toString());
-  const original = migrations.find((migration) => migration.id === "sessions/store/0020-spend-usage-json")!;
-  try {
-    assert.equal(original.checksum, "febf07cde8b9ffe09a497d44a0e524a5c994f7708a0fab6d245315e4ab1e717a");
-    await applyPgMigrations(
-      raw,
-      migrations.filter((migration) => migration.id !== "sessions/store/0020-spend-usage-json-size"),
-    );
-    const ledger = (await raw.query("SELECT * FROM qm_schema_migrations ORDER BY id")).rows;
-    const indexes = (
-      await raw.query(
-        "SELECT indexrelid FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass) ORDER BY indexrelid",
-      )
-    ).rows;
-    await store.countSessions();
-    assert.deepEqual(
-      (
-        await raw.query(
-          "SELECT * FROM qm_schema_migrations WHERE id <> 'sessions/store/0020-spend-usage-json-size' ORDER BY id",
-        )
-      ).rows,
-      ledger,
-    );
-    assert.deepEqual(
-      (
-        await raw.query(
-          "SELECT indexrelid FROM pg_index WHERE indexrelid IN ('session_llm_requests_spend'::regclass, 'session_llm_requests_spend_wide'::regclass) ORDER BY indexrelid",
-        )
-      ).rows,
-      indexes,
-    );
-    const deep = "[".repeat(20_000) + "0" + "]".repeat(20_000);
-    assert.equal((await raw.query("SELECT spend_usage_json($1) AS usage", [deep])).rows[0].usage, null);
-  } finally {
-    await raw.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.end();
   }
 });
 
@@ -1087,106 +1025,67 @@ test("pg scopeActivity: one row per scope with conversation, cron and other back
   );
 });
 
-test(
-  "pg session origin columns: written at insert, and the store migration fills rows that predate them",
-  { skip },
-  async () => {
-    const s = createPostgresSessionStore(URL!);
-    const team = scopeId("channel", "origin-columns");
-    const shapes: Record<string, { origin: string; cronId: string | null }> = {
-      "agent:main:cron:oc1": { origin: "cron", cronId: "oc1" },
-      "cron:oc2:slot": { origin: "cron", cronId: "oc2" },
-      "agent:main:webhook:ocw": { origin: "webhook", cronId: null },
-      "monitor:ocm:extra": { origin: "monitor", cronId: null },
-      "loop:ocl:fire:aaa": { origin: "loop", cronId: null },
-      "swarm:ocs:member": { origin: "swarm", cronId: null },
-      "ch:C1:oc-thread": { origin: "conversation", cronId: null },
-    };
-    const ids: string[] = [];
-    for (const threadRef of Object.keys(shapes)) ids.push((await s.getOrCreateByThread(threadRef, "channel", team)).id);
+test("pg session origin columns are written at insert", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const team = scopeId("channel", "origin-columns");
+  const shapes: Record<string, { origin: string; cronId: string | null }> = {
+    "agent:main:cron:oc1": { origin: "cron", cronId: "oc1" },
+    "cron:oc2:slot": { origin: "cron", cronId: "oc2" },
+    "agent:main:webhook:ocw": { origin: "webhook", cronId: null },
+    "monitor:ocm:extra": { origin: "monitor", cronId: null },
+    "loop:ocl:fire:aaa": { origin: "loop", cronId: null },
+    "swarm:ocs:member": { origin: "swarm", cronId: null },
+    "ch:C1:oc-thread": { origin: "conversation", cronId: null },
+  };
+  const ids: string[] = [];
+  for (const threadRef of Object.keys(shapes)) ids.push((await s.getOrCreateByThread(threadRef, "channel", team)).id);
 
-    const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: URL });
-    const q = async (text: string, params?: unknown[]) =>
-      (await raw.query(text, params)).rows as Record<string, unknown>[];
-    const columns = async () =>
-      Object.fromEntries(
-        (await q("SELECT thread_ref, origin, origin_id FROM sessions WHERE id = ANY($1)", [ids])).map((r) => [
-          r.thread_ref,
-          { origin: r.origin, cronId: r.origin_id },
-        ]),
-      );
-    const classify = async () => ({
-      summaries: (await s.scopeSessionSummaries(team, false, { limit: 500 }))
-        .map((r) => [r.threadRef, r.origin])
-        .sort(),
-      background: (await s.scopeSessionSummaries(team, false, { limit: 10, category: "background" }))
-        .map((r) => r.threadRef)
-        .sort(),
-      conversation: (await s.scopeSessionSummaries(team, false, { limit: 10, category: "conversation" })).map(
-        (r) => r.threadRef,
-      ),
-      cron: (await s.scopeSessionSummaries(team, false, { limit: 10, origin: "cron" })).map((r) => r.threadRef).sort(),
-      other: (await s.scopeSessionSummaries(team, false, { limit: 10, origin: "other_background" }))
-        .map((r) => r.threadRef)
-        .sort(),
-      oc2: (await s.scopeSessionSummaries(team, false, { limit: 10, cronId: "oc2" })).map((r) => r.threadRef),
-    });
-    try {
-      assert.deepEqual(await columns(), shapes, "insert derives origin and origin_id from the thread ref");
-      const stored = await classify();
-      assert.deepEqual(stored.other, [
-        "agent:main:webhook:ocw",
-        "loop:ocl:fire:aaa",
-        "monitor:ocm:extra",
-        "swarm:ocs:member",
-      ]);
-      assert.deepEqual(stored.conversation, ["ch:C1:oc-thread"]);
-      assert.deepEqual(stored.cron, ["agent:main:cron:oc1", "cron:oc2:slot"]);
-      assert.deepEqual(stored.oc2, ["cron:oc2:slot"]);
+  const pg = (await import("pg")).default;
+  const raw = new pg.Pool({ connectionString: URL });
+  const q = async (text: string, params?: unknown[]) =>
+    (await raw.query(text, params)).rows as Record<string, unknown>[];
+  const columns = async () =>
+    Object.fromEntries(
+      (await q("SELECT thread_ref, origin, origin_id FROM sessions WHERE id = ANY($1)", [ids])).map((r) => [
+        r.thread_ref,
+        { origin: r.origin, cronId: r.origin_id },
+      ]),
+    );
+  const classify = async () => ({
+    conversation: (await s.scopeSessionSummaries(team, false, { limit: 10, category: "conversation" })).map(
+      (r) => r.threadRef,
+    ),
+    cron: (await s.scopeSessionSummaries(team, false, { limit: 10, origin: "cron" })).map((r) => r.threadRef).sort(),
+    other: (await s.scopeSessionSummaries(team, false, { limit: 10, origin: "other_background" }))
+      .map((r) => r.threadRef)
+      .sort(),
+    oc2: (await s.scopeSessionSummaries(team, false, { limit: 10, cronId: "oc2" })).map((r) => r.threadRef),
+  });
+  try {
+    assert.deepEqual(await columns(), shapes, "insert derives origin and origin_id from the thread ref");
+    const stored = await classify();
+    assert.deepEqual(stored.other, [
+      "agent:main:webhook:ocw",
+      "loop:ocl:fire:aaa",
+      "monitor:ocm:extra",
+      "swarm:ocs:member",
+    ]);
+    assert.deepEqual(stored.conversation, ["ch:C1:oc-thread"]);
+    assert.deepEqual(stored.cron, ["agent:main:cron:oc1", "cron:oc2:slot"]);
+    assert.deepEqual(stored.oc2, ["cron:oc2:slot"]);
 
-      await q("UPDATE sessions SET origin = NULL, origin_id = NULL WHERE id = ANY($1)", [ids]);
-      await q("UPDATE sessions SET origin = 'conversation' WHERE id = ANY($1) AND thread_ref ~ '^(loop|swarm):'", [
-        ids,
-      ]);
-      await q("DELETE FROM session_spend_dirty WHERE session_id = ANY($1)", [ids]);
-      const unrelated = randomUUID();
-      await q("INSERT INTO session_spend_dirty(session_id) VALUES ($1)", [unrelated]);
-      await q("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0034-session-origin-backfill'");
-      await applyPgMigrations(raw, registeredPgMigrations(URL!));
-      assert.deepEqual(await columns(), shapes, "the migration derives the same values the insert path wrote");
-      assert.deepEqual(await classify(), stored, "migrated rows classify identically");
-      assert.deepEqual(
-        (
-          await q(
-            "SELECT s.thread_ref FROM session_spend_dirty d JOIN sessions s ON s.id = d.session_id WHERE d.session_id = ANY($1)",
-            [ids],
-          )
-        )
-          .map((r) => r.thread_ref)
-          .sort(),
-        ["loop:ocl:fire:aaa", "swarm:ocs:member"],
-        "filling in the columns leaves no spend to recompute, but reclassified loops and swarms recompute theirs",
-      );
-      await q("DELETE FROM session_spend_dirty WHERE session_id = ANY($1)", [ids]);
-      assert.deepEqual(
-        await q("DELETE FROM session_spend_dirty WHERE session_id = $1 RETURNING session_id", [unrelated]),
-        [{ session_id: unrelated }],
-        "another transaction's pending spend survives the backfill",
-      );
-      await q("UPDATE sessions SET origin = 'cron' WHERE id = ANY($1) AND thread_ref = 'ch:C1:oc-thread'", [ids]);
-      assert.deepEqual(
-        (await s.scopeSessionSummaries(team, false, { limit: 10, origin: "cron" }))
-          .filter((r) => r.threadRef === "ch:C1:oc-thread")
-          .map((r) => r.origin),
-        ["cron"],
-        "a listed session reports the stored origin its filter matched",
-      );
-    } finally {
-      await raw.end();
-    }
-  },
-);
+    await q("UPDATE sessions SET origin = 'cron' WHERE id = ANY($1) AND thread_ref = 'ch:C1:oc-thread'", [ids]);
+    assert.deepEqual(
+      (await s.scopeSessionSummaries(team, false, { limit: 10, origin: "cron" }))
+        .filter((r) => r.threadRef === "ch:C1:oc-thread")
+        .map((r) => r.origin),
+      ["cron"],
+      "a listed session reports the stored origin its filter matched",
+    );
+  } finally {
+    await raw.end();
+  }
+});
 
 test("pg scopeSessionSummaries: keyset cursor pages stitch into the full listing", { skip }, async () => {
   let clock = Date.now() + 1_000_000;
@@ -2403,64 +2302,6 @@ test("pg run store indexes newest active run by session", { skip }, async () => 
   }
 });
 
-test("pg run store upgrades a database that already recorded migration 0001", { skip }, async () => {
-  const baseline = createPostgresRunStore(URL!);
-  await baseline.runs.activeSessionIds();
-  await baseline.close();
-
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  try {
-    await raw.query("DROP INDEX IF EXISTS idx_runs_status_created_seq");
-    await raw.query("ALTER TABLE runs DROP COLUMN IF EXISTS seq");
-    await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'runs/store/0002'");
-
-    const upgraded = createPostgresRunStore(URL!);
-    try {
-      await upgraded.runs.activeSessionIds();
-      const column = await raw.query(
-        "SELECT 1 FROM information_schema.columns WHERE table_name = 'runs' AND column_name = 'seq'",
-      );
-      const index = await raw.query("SELECT 1 FROM pg_indexes WHERE indexname = 'idx_runs_status_created_seq'");
-      assert.equal(column.rowCount, 1);
-      assert.equal(index.rowCount, 1);
-    } finally {
-      await upgraded.close();
-    }
-  } finally {
-    await raw.end();
-  }
-});
-
-test(
-  "pg run store: schema init demotes pre-existing duplicate running rows before creating the index",
-  { skip },
-  async () => {
-    const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: URL });
-    try {
-      await raw.query("DROP INDEX IF EXISTS idx_runs_one_running_per_session");
-      const req = JSON.stringify(turn("dup"));
-      await raw.query(
-        `INSERT INTO runs(id, session_id, status, request, created_at, started_at)
-       VALUES ('dup-keep', 'sDup', 'running', $1, 1, 1), ('dup-demote', 'sDup', 'running', $1, 2, 2)`,
-        [req],
-      );
-      await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'runs/store/0001'");
-
-      const { runs, close } = createPostgresRunStore(URL!);
-      try {
-        assert.equal((await runs.get("dup-keep"))?.status, "running", "earliest running row survives");
-        assert.equal((await runs.get("dup-demote"))?.status, "pending", "later duplicate is requeued");
-      } finally {
-        await close();
-      }
-    } finally {
-      await raw.end();
-    }
-  },
-);
-
 test(
   "pg sessionsByThreadRefs, distinctScopes, countSessions, distinctParticipants: bulk projections match a full scan",
   { skip },
@@ -3128,63 +2969,41 @@ test("pg LLM capture retention drops old prompt envelopes and keeps request rows
   }
 });
 
-test(
-  "pg session pages sort by the person's last message, which appends keep and the migration backfills",
-  { skip },
-  async () => {
-    const s = createPostgresSessionStore(URL!);
-    const me = `paging-${randomUUID()}`;
-    const personal = scopeId("personal", me);
-    const ids: string[] = [];
-    for (let i = 0; i < 3; i++) {
-      const session = await s.getOrCreateByThread(`web:${me}:${i}`, "dm", personal, undefined, "web");
-      await s.addParticipant(session.id, me, `Chat ${i}`);
-      ids.push(session.id);
-    }
-    const say = async (sessionId: string, type: "user" | "assistant") => {
-      const { lease } = await s.acquireLease(sessionId);
-      assert.ok(lease);
-      await s.append(lease, { type, payload: { text: type }, scopeLabel: personal });
-      await s.releaseLease(lease);
-    };
-    await say(ids[0]!, "user");
-    await say(ids[2]!, "assistant");
-    const order = async () => {
-      const first = await s.listParticipantPage(me, { limit: 2 });
-      const rest = first.next ? await s.listParticipantPage(me, { limit: 2, before: first.next }) : null;
-      assert.equal(rest?.next, null);
-      return [...first.sessions, ...(rest?.sessions ?? [])].map((row) => row.id);
-    };
-    assert.deepEqual(await order(), [ids[0], ids[2], ids[1]], "a reply doesn't move a chat; the person's message does");
+test("pg session pages sort by the person's last message, which appends keep", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const me = `paging-${randomUUID()}`;
+  const personal = scopeId("personal", me);
+  const ids: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const session = await s.getOrCreateByThread(`web:${me}:${i}`, "dm", personal, undefined, "web");
+    await s.addParticipant(session.id, me, `Chat ${i}`);
+    ids.push(session.id);
+  }
+  const say = async (sessionId: string, type: "user" | "assistant") => {
+    const { lease } = await s.acquireLease(sessionId);
+    assert.ok(lease);
+    await s.append(lease, { type, payload: { text: type }, scopeLabel: personal });
+    await s.releaseLease(lease);
+  };
+  await say(ids[0]!, "user");
+  await say(ids[2]!, "assistant");
+  const order = async () => {
+    const first = await s.listParticipantPage(me, { limit: 2 });
+    const rest = first.next ? await s.listParticipantPage(me, { limit: 2, before: first.next }) : null;
+    assert.equal(rest?.next, null);
+    return [...first.sessions, ...(rest?.sessions ?? [])].map((row) => row.id);
+  };
+  assert.deepEqual(await order(), [ids[0], ids[2], ids[1]], "a reply doesn't move a chat; the person's message does");
 
-    const pg = (await import("pg")).default;
-    const raw = new pg.Pool({ connectionString: URL });
-    try {
-      const stored = await raw.query("SELECT id, last_user_activity FROM sessions WHERE id = ANY($1) ORDER BY id", [
-        ids,
-      ]);
-      await raw.query("UPDATE sessions SET last_user_activity = NULL WHERE id = ANY($1)", [ids]);
-      await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'sessions/store/0044-last-user-activity-backfill'");
-      await applyPgMigrations(raw, registeredPgMigrations(URL!));
-      assert.deepEqual(
-        (await raw.query("SELECT id, last_user_activity FROM sessions WHERE id = ANY($1) ORDER BY id", [ids])).rows,
-        stored.rows,
-        "the backfill derives what appends wrote",
-      );
-    } finally {
-      await raw.end();
-    }
-
-    const child = await s.getOrCreateByThread(`subagent:${me}:1`, "dm", personal, undefined, "web");
-    await s.setParentSession(child.id, ids[0]!);
-    const grandchild = await s.getOrCreateByThread(`subagent:${me}:2`, "dm", personal, undefined, "web");
-    await s.setParentSession(grandchild.id, child.id);
-    assert.deepEqual(
-      (await s.descendantsOf([ids[0]!])).map((d) => [d.id, d.rootId]).sort(),
-      [
-        [child.id, ids[0]],
-        [grandchild.id, ids[0]],
-      ].sort(),
-    );
-  },
-);
+  const child = await s.getOrCreateByThread(`subagent:${me}:1`, "dm", personal, undefined, "web");
+  await s.setParentSession(child.id, ids[0]!);
+  const grandchild = await s.getOrCreateByThread(`subagent:${me}:2`, "dm", personal, undefined, "web");
+  await s.setParentSession(grandchild.id, child.id);
+  assert.deepEqual(
+    (await s.descendantsOf([ids[0]!])).map((d) => [d.id, d.rootId]).sort(),
+    [
+      [child.id, ids[0]],
+      [grandchild.id, ids[0]],
+    ].sort(),
+  );
+});
