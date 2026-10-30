@@ -11,8 +11,9 @@ import { buildApp } from "./support/build-app.ts";
 import type { ContextSummary } from "../src/api/app.ts";
 import { testConfig } from "./support/test-config.ts";
 
-function start() {
+async function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webctx-")) }));
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   const server = createInsecureTestServer(built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -33,7 +34,7 @@ const webTurn = (base: string, actor: string, conversation: unknown, text = "hi"
   });
 
 test("GET /v1/contexts: personal always; public channels and current private memberships", async () => {
-  const s = start();
+  const s = await start();
   try {
     const before = await contexts(s.base, "alice");
     assert.equal(before.length, 1);
@@ -65,7 +66,7 @@ test("GET /v1/contexts: personal always; public channels and current private mem
 });
 
 test("web turns into a shared scope are membership-checked; sessions then count toward the context", async () => {
-  const s = start();
+  const s = await start();
   try {
     await s.built.app.upsertDirectory([
       { principalId: "alice", displayName: "Alice", type: "internal" },
@@ -116,7 +117,7 @@ test("web turns into a shared scope are membership-checked; sessions then count 
 });
 
 test("a web turn carrying fastMode on a non-fast model is accepted; dispatch masks the flag", async () => {
-  const s = start();
+  const s = await start();
   try {
     const res = await fetch(`${s.base}/v1/turns`, {
       method: "POST",
@@ -137,7 +138,7 @@ test("a web turn carrying fastMode on a non-fast model is accepted; dispatch mas
 });
 
 test("prior participation never authorizes a shared scope after directory membership is absent", async () => {
-  const s = start();
+  const s = await start();
   try {
     const slack = await fetch(`${s.base}/v1/turns`, {
       method: "POST",
@@ -171,7 +172,7 @@ test("prior participation never authorizes a shared scope after directory member
 });
 
 test("a web turn can't pair an authorized scope claim with a thread living elsewhere", async () => {
-  const s = start();
+  const s = await start();
   try {
     await s.built.app.upsertChannels(
       [{ channelId: "C2", name: "sekrit", isPrivate: true }],
@@ -213,7 +214,7 @@ test("a web turn can't pair an authorized scope claim with a thread living elsew
 });
 
 test("directory push stores the workspace URL; /v1/directory/meta serves it", async () => {
-  const s = start();
+  const s = await start();
   try {
     const before = await fetch(`${s.base}/v1/directory/meta`);
     assert.equal(before.status, 200);

@@ -15,6 +15,7 @@ import { testConfig } from "./support/test-config.ts";
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
+await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 const core = createServer(built.app, { signingSecret: SECRET, scheduler: built.scheduler });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;

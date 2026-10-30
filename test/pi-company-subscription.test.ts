@@ -3,6 +3,8 @@ import { test, type TestContext } from "node:test";
 import { loadConfig } from "../src/config.ts";
 import { createPiHarness, piHarnessConfigOptions } from "../src/harness/pi-harness.ts";
 import { codexSubscriptionModelId } from "../src/model/pi-models.ts";
+import { defaultModelFor } from "../src/model/tenant-models.ts";
+import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
 
 const subscriptionToken = `e30.${Buffer.from(
   JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "company-account" } }),
@@ -61,9 +63,10 @@ test("without a company subscription a plain OpenAI id stays metered", async (t)
 
 test("a subscription-only deployment's default utility model is served by the ChatGPT subscription", async (t) => {
   const urls = recordFetch(t);
-  const config = { ...loadConfig({}), harness: "pi" as const, codexAuthCredential: "cred-1" };
+  const settings = parseTenantSettings({ CODEX_AUTH_CREDENTIAL: "cred-1" }, "pi");
   const harness = createPiHarness({
-    ...piHarnessConfigOptions(config),
+    ...piHarnessConfigOptions({ ...loadConfig({}), harness: "pi" }),
+    defaultModelId: () => defaultModelFor(settings, "pi"),
     captureRequests: false,
     resolveProviderKeys: async () => ({ "openai-codex": subscriptionToken }),
     companyModelId: codexSubscriptionModelId,
