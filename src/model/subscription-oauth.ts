@@ -12,10 +12,6 @@ const CLAUDE_TOKEN = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_REDIRECT = "https://platform.claude.com/oauth/code/callback";
 const CLAUDE_SCOPE = "org:create_api_key user:profile user:inference";
 
-function chatgptAccountId(tokens: { idToken?: string; accessToken: string }): string | undefined {
-  return chatgptAccountIdFromToken(tokens.idToken) ?? chatgptAccountIdFromToken(tokens.accessToken);
-}
-
 export interface ChatGPTDevicePrompt {
   deviceAuthId: string;
   userCode: string;
@@ -24,50 +20,55 @@ export interface ChatGPTDevicePrompt {
   expiresAt: number;
 }
 
-export async function refreshChatGPTTokens(refreshToken: string): Promise<UserOAuthTokens> {
-  const res = await fetch(`${CHATGPT_ISSUER}/oauth/token`, {
+interface TokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  id_token?: string;
+  expires_in?: number;
+}
+
+async function postToken(
+  url: string,
+  action: string,
+  body: Record<string, string | undefined>,
+): Promise<TokenResponse> {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: CHATGPT_CLIENT_ID,
-      scope: CHATGPT_SCOPE,
-    }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!res.ok) throw await oauthFailure("chatgpt refresh", res);
-  const raw = (await res.json()) as {
-    access_token?: string;
-    refresh_token?: string;
-    id_token?: string;
-    expires_in?: number;
-  };
-  if (!raw.access_token) throw new Error("chatgpt refresh missing access_token");
+  if (!res.ok) throw await oauthFailure(action, res);
+  const raw = (await res.json()) as Partial<TokenResponse>;
+  if (!raw.access_token) throw new Error(`${action} response missing access_token`);
+  return { ...raw, access_token: raw.access_token };
+}
+
+export async function refreshChatGPTTokens(refreshToken: string): Promise<UserOAuthTokens> {
+  const raw = await postToken(`${CHATGPT_ISSUER}/oauth/token`, "chatgpt refresh", {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: CHATGPT_CLIENT_ID,
+    scope: CHATGPT_SCOPE,
+  });
   return {
     accessToken: raw.access_token,
     refreshToken: raw.refresh_token ?? refreshToken,
     idToken: raw.id_token,
-    accountId: chatgptAccountId({ idToken: raw.id_token, accessToken: raw.access_token }),
+    accountId: chatgptAccountIdFromToken(raw.id_token) ?? chatgptAccountIdFromToken(raw.access_token),
     expiresAt: tokenExpiry(raw),
   };
 }
 
-export interface ClaudeAuthStart {
-  authorizeUrl: string;
-  verifier: string;
-}
-
-export function startClaudeLogin(): ClaudeAuthStart {
+export function startClaudeLogin(): { authorizeUrl: string; verifier: string } {
   const verifier = generateCodeVerifier();
-  const challenge = codeChallengeS256(verifier);
   const url = new URL(CLAUDE_AUTHORIZE);
   url.searchParams.set("code", "true");
   url.searchParams.set("client_id", CLAUDE_CLIENT_ID);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("redirect_uri", CLAUDE_REDIRECT);
   url.searchParams.set("scope", CLAUDE_SCOPE);
-  url.searchParams.set("code_challenge", challenge);
+  url.searchParams.set("code_challenge", codeChallengeS256(verifier));
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", verifier);
   return { authorizeUrl: url.toString(), verifier };
@@ -75,39 +76,23 @@ export function startClaudeLogin(): ClaudeAuthStart {
 
 export async function completeClaudeLogin(pastedCode: string, verifier: string): Promise<UserOAuthTokens> {
   const [code, state] = pastedCode.trim().split("#");
-  const res = await fetch(CLAUDE_TOKEN, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      grant_type: "authorization_code",
-      client_id: CLAUDE_CLIENT_ID,
-      code,
-      state: state ?? verifier,
-      code_verifier: verifier,
-      redirect_uri: CLAUDE_REDIRECT,
-    }),
-    signal: AbortSignal.timeout(15_000),
+  const raw = await postToken(CLAUDE_TOKEN, "claude token exchange", {
+    grant_type: "authorization_code",
+    client_id: CLAUDE_CLIENT_ID,
+    code,
+    state: state ?? verifier,
+    code_verifier: verifier,
+    redirect_uri: CLAUDE_REDIRECT,
   });
-  if (!res.ok) throw await oauthFailure("claude token exchange", res);
-  const raw = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
-  if (!raw.access_token) throw new Error("claude token response missing access_token");
-  return {
-    accessToken: raw.access_token,
-    refreshToken: raw.refresh_token,
-    expiresAt: tokenExpiry(raw),
-  };
+  return { accessToken: raw.access_token, refreshToken: raw.refresh_token, expiresAt: tokenExpiry(raw) };
 }
 
 export async function refreshClaudeTokens(refreshToken: string): Promise<UserOAuthTokens> {
-  const res = await fetch(CLAUDE_TOKEN, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: CLAUDE_CLIENT_ID }),
-    signal: AbortSignal.timeout(15_000),
+  const raw = await postToken(CLAUDE_TOKEN, "claude refresh", {
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: CLAUDE_CLIENT_ID,
   });
-  if (!res.ok) throw await oauthFailure("claude refresh", res);
-  const raw = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
-  if (!raw.access_token) throw new Error("claude refresh missing access_token");
   return {
     accessToken: raw.access_token,
     refreshToken: raw.refresh_token ?? refreshToken,
