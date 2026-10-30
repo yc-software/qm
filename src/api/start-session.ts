@@ -35,7 +35,7 @@ export async function startSession(
       ...(out.session.channelName ? { channelName: out.session.channelName } : {}),
     },
     text: input.text,
-    ...(input.origin ? { origin: sessionTurnOrigin(input.origin) } : {}),
+    ...(input.origin ? { origin: sessionTurnOrigin(input.origin, input.text) } : {}),
     ...(input.sessionSenderId ? { sessionSenderId: input.sessionSenderId } : {}),
     ...(input.delegatingRunId ? { delegatingRunId: input.delegatingRunId } : {}),
     spawned: true,

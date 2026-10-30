@@ -252,6 +252,9 @@ function buildScenario() {
         await turn.emit({ type: "assistant", payload: { text: reply }, scopeLabel: turn.scopeLabel });
         return { reply, modelCalls: 1 };
       },
+      async screenSecurity() {
+        return { decision: "auto" as const };
+      },
     },
   );
   const sessions = createMemorySessionStore();

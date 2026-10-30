@@ -54,8 +54,8 @@ The `background` tool controls existing jobs with `poll`, `send_input`, `stop`, 
 scope default changes. Watches retain their durable monitor registration and wake this
 conversation with output or exit. Provider loss or expiry can still interrupt a process.
 
-Execution and process handlers retain existing command-policy and credential authorization
-checks. Strict approvals use the called tool identity (`execute`,
+Execution and process handlers retain existing command-policy, credential authorization,
+and output-screening checks. Strict approvals use the called tool identity (`execute`,
 a process action such as `background:poll`, or a lifecycle action such as `sandbox:retire`); a sandbox grant cannot
 authorize commands. Transcript entries identify the called tool. Removed sandbox command
 and process actions and `background start` are not aliases. No database migration or

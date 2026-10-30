@@ -20,6 +20,7 @@ import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../f
 import { swallowAs } from "../util/errors.ts";
 import { fileContentRequest } from "./document-kinds.ts";
 import { hashId } from "../util/crypto.ts";
+import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
 
@@ -47,6 +48,30 @@ export interface InboundImage {
 
 function baseMime(m: string): string {
   return (m.split(";")[0] ?? "").trim().toLowerCase();
+}
+
+function isTextMime(mimetype: string): boolean {
+  return (
+    mimetype.startsWith("text/") ||
+    mimetype === "application/json" ||
+    mimetype === "application/xml" ||
+    mimetype === "application/yaml" ||
+    mimetype === "image/svg+xml" ||
+    mimetype.endsWith("+json") ||
+    mimetype.endsWith("+xml")
+  );
+}
+
+function decodeText(bytes: Uint8Array, name: string, mimetype: string): string | null {
+  const tolerant = () =>
+    isTextMime(mimetype) || isTextMime(mimeFromName(name)) ? Buffer.from(bytes).toString("utf8") : null;
+  try {
+    const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (!content.includes("\0")) return content;
+    return tolerant();
+  } catch {
+    return tolerant();
+  }
 }
 
 export function isVisionAttachment(attachment: Pick<IncomingAttachment, "name" | "mimetype">): boolean {
@@ -202,6 +227,7 @@ export function inboundIssuesNote(issues: readonly string[]): string {
 export function inboundIssueList(opts: {
   tooMany?: readonly string[];
   unavailable?: readonly string[];
+  blocked?: readonly string[];
   surfaceNotes?: readonly string[];
 }): string[] {
   const issues: string[] = [];
@@ -212,6 +238,9 @@ export function inboundIssueList(opts: {
   }
   if (opts.unavailable?.length) {
     issues.push(`${opts.unavailable.join(", ")} — no longer available (the upload may have expired)`);
+  }
+  if (opts.blocked?.length) {
+    issues.push(`${opts.blocked.join(", ")} — withheld by the external-data security screen`);
   }
   for (const n of opts.surfaceNotes ?? []) if (n.trim()) issues.push(n.trim());
   return issues;
@@ -240,11 +269,18 @@ export async function materializeInbound(
   transfer: BlobTransferStore,
   register?: ArtifactRegistration,
   inboxDir = INBOX_DIR,
+  screenText?: (input: {
+    content: string;
+    name: string;
+    mimetype: string;
+  }) => Promise<SecurityScreenVerdict | undefined>,
 ): Promise<{
   metas: AttachmentMeta[];
   images: InboundImage[];
   tooMany: string[];
   unavailable: string[];
+  blocked: string[];
+  unscreened: string[];
   unstaged?: Set<string>;
 }> {
   let target: Promise<SandboxHandle | null> | undefined;
@@ -258,6 +294,8 @@ export async function materializeInbound(
   const images: InboundImage[] = [];
   const tooMany: string[] = [];
   const unavailable: string[] = [];
+  const blocked: string[] = [];
+  const unscreened: string[] = [];
   const usedNames = new Set<string>();
   for (const a of attachments) {
     if (metas.length >= MAX_INBOUND_FILES) {
@@ -273,6 +311,15 @@ export async function materializeInbound(
     const name = uniqueName(safeAttachmentName(a.name), usedNames);
     usedNames.add(name);
     const mimetype = baseMime(a.mimetype || mimeFromName(name));
+    const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
+    if (screenText && textContent !== null) {
+      const verdict = await screenText({ content: textContent, name, mimetype });
+      if (verdict?.decision === "strict") {
+        blocked.push(name);
+        continue;
+      }
+      if (!verdict || verdict.unscreened) unscreened.push(name);
+    }
     const box = await computer();
     if (box) await sandbox.writeFileBytes(box, `${inboxDir}/${name}`, bytes);
     const registered = register
@@ -304,7 +351,7 @@ export async function materializeInbound(
       });
     }
   }
-  return { metas, images, tooMany, unavailable, ...(unstaged.size ? { unstaged } : {}) };
+  return { metas, images, tooMany, unavailable, blocked, unscreened, ...(unstaged.size ? { unstaged } : {}) };
 }
 
 const DELIVERY_NOTE_PREFIX = "[files delivered to the conversation: ";

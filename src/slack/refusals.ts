@@ -1,6 +1,14 @@
 import type { TurnResult } from "../types.ts";
 import { standaloneFailureText, userFacingFailureClause } from "../core/failure-copy.ts";
 
+export function refusalDelivery(
+  result: { refusalKind?: TurnResult["refusalKind"] },
+  unprompted: boolean,
+): "thread" | "requester" | "silent" {
+  if (unprompted) return "silent";
+  return result.refusalKind === "security_quarantine" ? "thread" : "requester";
+}
+
 export async function postThenAckRunDelivery(opts: {
   post: () => Promise<unknown>;
   ack: () => void;

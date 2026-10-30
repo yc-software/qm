@@ -177,7 +177,7 @@ test("skills index order ignores skill use, so the system prompt stays byte-stab
 });
 
 test("Open sharing keeps private skill metadata out of the persisted channel shortlist", async () => {
-  const built = buildApp(testConfig());
+  const built = buildApp(testConfig({ securityScreen: "off" }));
   await built.config.setSharingPosture("org:default-org", "open");
   await publishPersonalSkill(built.skills);
   const result = await built.app.turn({

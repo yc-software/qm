@@ -97,7 +97,7 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
       audience: [{ externalId: "internal:owner" }],
     },
     text: "x",
-    origin: { kind: "automation", useOwnerKeychain: true },
+    origin: { kind: "automation", screenData: "external event", useOwnerKeychain: true },
     async: true,
   });
   const r = await fetch(`${base}/v1/turns`, {
@@ -108,7 +108,7 @@ test("POST /v1/turns strips nested owner-keychain union from typed automation or
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
   const run = await built.runs.get(runId);
-  assert.deepEqual(run?.request.origin, { kind: "automation" });
+  assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("POST /v1/turns does not let a typed origin override legacy automation provenance", async () => {
@@ -118,6 +118,7 @@ test("POST /v1/turns does not let a typed origin override legacy automation prov
     conversation: { kind: "dm", threadRef: "t-origin-conflict" },
     text: "x",
     triggered: true,
+    securityScreenData: "external event",
     origin: { kind: "human" },
     async: true,
   });
@@ -129,7 +130,7 @@ test("POST /v1/turns does not let a typed origin override legacy automation prov
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
   const run = await built.runs.get(runId);
-  assert.deepEqual(run?.request.origin, { kind: "automation" });
+  assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("POST /v1/turns does not let legacy liveness override typed automation provenance", async () => {
@@ -139,6 +140,28 @@ test("POST /v1/turns does not let legacy liveness override typed automation prov
     conversation: { kind: "dm", threadRef: "t-reverse-origin-conflict" },
     text: "x",
     liveActor: true,
+    origin: { kind: "automation", screenData: "external event" },
+    async: true,
+  });
+  const r = await fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    body,
+  });
+  assert.equal(r.status, 202);
+  const { runId } = (await r.json()) as { runId: string };
+  const run = await built.runs.get(runId);
+  assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "external event" });
+});
+
+test("POST /v1/turns preserves legacy screen data omitted from a matching typed automation origin", async () => {
+  const body = JSON.stringify({
+    surface: "webhook",
+    actor: { externalId: "internal:owner" },
+    conversation: { kind: "dm", threadRef: "t-origin-screen-data" },
+    text: "x",
+    triggered: true,
+    securityScreenData: "hostile external event",
     origin: { kind: "automation" },
     async: true,
   });
@@ -150,7 +173,27 @@ test("POST /v1/turns does not let legacy liveness override typed automation prov
   assert.equal(r.status, 202);
   const { runId } = (await r.json()) as { runId: string };
   const run = await built.runs.get(runId);
-  assert.deepEqual(run?.request.origin, { kind: "automation" });
+  assert.deepEqual(run?.request.origin, { kind: "automation", screenData: "hostile external event" });
+});
+
+test("POST /v1/turns rejects conflicting typed and legacy automation screen data", async () => {
+  const body = JSON.stringify({
+    surface: "webhook",
+    actor: { externalId: "internal:owner" },
+    conversation: { kind: "dm", threadRef: "t-origin-screen-conflict" },
+    text: "x",
+    triggered: true,
+    securityScreenData: "hostile external event",
+    origin: { kind: "automation", screenData: "benign replacement" },
+    async: true,
+  });
+  const r = await fetch(`${base}/v1/turns`, {
+    method: "POST",
+    headers: { ...signedHeaders(SECRET, "POST", "/v1/turns", body), "content-type": "application/json" },
+    body,
+  });
+  assert.equal(r.status, 400);
+  assert.match(JSON.stringify(await r.json()), /conflicting.*screen data/);
 });
 
 test("POST /v1/turns strips spawned: an external body can't opt out of mid-turn steer folding", async () => {

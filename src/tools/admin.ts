@@ -171,6 +171,7 @@ export const adminOperations = {
     ...scope,
     value: Type.Object({ action: Type.Literal("retire"), sandboxId: string }, { additionalProperties: false }),
   }),
+  security_flags: operation("Read security screening flags.", "GET", "/security/flags", { limit }),
   slack_installation: operation("Read Slack installation metadata (never tokens).", "GET", "/slack-installation"),
   slack_start: operation("Start Slack setup or installation.", "POST", "/slack-installation/start", {
     value: Type.Object(

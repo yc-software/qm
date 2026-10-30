@@ -24,6 +24,9 @@ export interface AuditLog {
   }): Promise<readonly AuditEvent[]>;
 }
 
+export const SECURITY_FLAGGED = "security_posture.flagged";
+export const SECURITY_TOOL_RESULT_QUARANTINE = "security_posture.tool_result_quarantine";
+
 const MAX = 50000;
 
 export function createAuditLog(): AuditLog {

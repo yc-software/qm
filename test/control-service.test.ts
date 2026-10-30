@@ -644,18 +644,19 @@ test("app.turn forwards ownerKeychainUnion onto the persisted run request (else 
     ...base,
     conversation: { ...base.conversation, threadRef: "t-typed-origin" },
     triggered: undefined,
-    origin: { kind: "automation" },
+    origin: { kind: "automation", screenData: "external event" },
   });
   const runT = await built.runs.get((typed as { runId?: string }).runId!);
-  assert.deepEqual(runT?.request.origin, { kind: "automation" });
+  assert.deepEqual(runT?.request.origin, { kind: "automation", screenData: "external event" });
 
   const conflicted = await built.app.turn({
     ...base,
     conversation: { ...base.conversation, threadRef: "t-conflicting-origin" },
     origin: { kind: "human" },
+    securityScreenData: "external event",
   });
   const runC = await built.runs.get((conflicted as { runId?: string }).runId!);
-  assert.deepEqual(runC?.request.origin, { kind: "automation" });
+  assert.deepEqual(runC?.request.origin, { kind: "automation", screenData: "external event" });
 });
 
 test("cron list / get / patch / delete / run round-trip with owner authz", async () => {

@@ -40,6 +40,7 @@ import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
 import type { ModelGateway } from "../../model/model-gateway.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
+import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
@@ -80,6 +81,7 @@ export interface OrchestratorInput extends Omit<
   | "triggerTs"
   | "entryTs"
   | "triggered"
+  | "securityScreenData"
   | "triggerDestination"
   | "ownerKeychainUnion"
   | "unprompted"
@@ -140,6 +142,8 @@ export interface OrchestratorDeps {
   execTimeoutCeilingMs?: number;
   approvalSummaryTimeoutMs?: number;
   turnLeaseWaitMs?: number;
+  securityScreenTimeoutMs?: number;
+  securityScreener?: SecurityScreener;
   backgroundJobTtlMs?: number;
   sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
@@ -236,6 +240,13 @@ interface SurfaceSearchStoreHit {
 
 export interface Orchestrator {
   handleTurn(input: OrchestratorInput): Promise<TurnResult>;
+  screenSecuritySteer(input: {
+    payload: string;
+    actor: Principal;
+    conversation: Conversation;
+    sessionId?: string;
+    verifiedSwarm?: boolean;
+  }): Promise<"allow" | "block" | "unscreened">;
   regenerateTitle(
     sessionId: string,
     principalId: string,

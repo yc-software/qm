@@ -13,6 +13,11 @@ import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
 import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/harness/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
 import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
+import {
+  SECURITY_SCREEN_STEP,
+  SECURITY_SCREEN_SYSTEM_PROMPT,
+  type ToolResultScreen,
+} from "../../src/security/security-posture.ts";
 
 const READ_ONLY_BLOCKED_PREFIXES = [
   "!preamble",
@@ -24,6 +29,7 @@ const READ_ONLY_BLOCKED_PREFIXES = [
   "!paused-approval ",
   "!collect-approval ",
   "!collect-exec ",
+  "!screened-run ",
   "!double-exec ",
   "!read ",
   "!skill ",
@@ -95,6 +101,7 @@ export function createMockHarness(): Harness {
   const boomAlwaysSessions = new Set<string>();
   const resumePostSessions = new Map<string, string>();
   const shutdownResumeSessions = new Set<string>();
+  const flakyScreens = new Set<string>();
   return defineHarness(
     {
       id: "mock",
@@ -427,6 +434,41 @@ export function createMockHarness(): Harness {
             usedTool = true;
             reply = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
           }
+        } else if (command0.startsWith("!screened-run ")) {
+          const command = cmd.slice(cmd.indexOf("!screened-run ") + "!screened-run ".length);
+          await turn.emit({ type: "tool_call", payload: { tool: "execute", command }, scopeLabel: turn.scopeLabel });
+          const result = await turn.tools.execute(command);
+          const output = result.stdout.trim() || result.stderr.trim() || `(exit ${result.code})`;
+          const screen = turn.screenToolResult
+            ? await turn
+                .screenToolResult({
+                  tool: "execute",
+                  result: output,
+                  unscreenable: false,
+                  provenance: "external",
+                })
+                .catch((): ToolResultScreen => ({ outcome: "unscreened" }))
+            : ({ outcome: "allow" } as ToolResultScreen);
+          if (screen.outcome === "quarantine") {
+            const stub = "[tool output quarantined by the security screen]";
+            await turn.emit({
+              type: "tool_result",
+              payload: {
+                tool: "execute",
+                quarantined: true,
+                quarantineReason: "screen_verdict",
+                result: stub,
+                isError: true,
+              },
+              scopeLabel: turn.scopeLabel,
+            });
+            reply = stub;
+          } else {
+            await turn.emit({ type: "tool_result", payload: result, scopeLabel: turn.scopeLabel });
+            reply = output;
+          }
+          turn.onProgress?.({ toolCalls: 1 });
+          usedTool = true;
         } else if (command0.startsWith("!reach ")) {
           const rest = command0.slice("!reach ".length);
           const sp = rest.indexOf(" ");
@@ -981,6 +1023,37 @@ export function createMockHarness(): Harness {
             JSON.stringify({ act: true, reason: (m[1] ?? "").trim() || "standing order matched" }),
           );
         return Promise.resolve(JSON.stringify({ act: false }));
+      },
+
+      async screenSecurity({ payload, signal, recordModelCall, recordLlmRequest }) {
+        const systemPrompt = SECURITY_SCREEN_SYSTEM_PROMPT;
+        const model = "mock-security";
+        recordModelCall({
+          model,
+          inputTokens: countTokens(systemPrompt) + countTokens(payload),
+          entryCount: 1,
+        });
+        await recordLlmRequest?.({
+          turnSeq: null,
+          step: SECURITY_SCREEN_STEP,
+          model,
+          promptEnvelope: { system: systemPrompt, messages: [{ role: "user", content: payload }] },
+          truncated: false,
+        });
+        if (/!security-screen-hang/i.test(payload)) {
+          return new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true }));
+        }
+        if (/!security-screen-unavailable/i.test(payload)) return Promise.resolve(undefined);
+        if (/!security-screen-flaky-once/i.test(payload) && !flakyScreens.has(payload)) {
+          flakyScreens.add(payload);
+          return Promise.resolve(undefined);
+        }
+        const strict = /ignore (?:all|prior|previous) instructions|reveal (?:the )?secrets?|!security-risk/i.test(
+          payload,
+        );
+        return Promise.resolve(
+          strict ? { decision: "strict", reason: "instruction in untrusted data" } : { decision: "auto" },
+        );
       },
 
       generateTitle(transcript: string): Promise<string | undefined> {

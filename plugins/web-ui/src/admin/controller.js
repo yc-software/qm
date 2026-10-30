@@ -1759,7 +1759,7 @@ export function startAdmin(host, env) {
           ["Proposed", titleCase(body.posture)],
         ],
         warning: dangerous
-          ? "Dangerous allows private-network access and disables tool approval gates. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
+          ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
           : "This changes the effective tools and approval behavior for future turns in this scope.",
         confirmLabel: dangerous ? "Enable Dangerous" : "Apply posture",
         danger: dangerous,

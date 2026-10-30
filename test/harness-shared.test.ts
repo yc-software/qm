@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { harnessToolContext, oneShotModelUtilities, oneShotRunner } from "../src/harness/harness-shared.ts";
+import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../src/security/security-posture.ts";
 import type { HarnessLlmRequestRecord, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 
 function capturingRunPrompt(reply = "one-shot reply"): {
@@ -17,9 +18,11 @@ function capturingRunPrompt(reply = "one-shot reply"): {
   };
 }
 
-test("harness adapters forward the tool approval gate into their tool bridge", () => {
+test("harness adapters forward tool-result screening into their tool bridge", () => {
+  const screenToolResult: NonNullable<HarnessTurnInput["screenToolResult"]> = async () => ({ outcome: "allow" });
   const toolApprovalGate: NonNullable<HarnessTurnInput["toolApprovalGate"]> = () => true;
-  const ref = harnessToolContext({ toolApprovalGate, history: [] } as unknown as HarnessTurnInput);
+  const ref = harnessToolContext({ screenToolResult, toolApprovalGate, history: [] } as unknown as HarnessTurnInput);
+  assert.equal(ref.screenToolResult, screenToolResult);
   assert.equal(ref.toolApprovalGate, toolApprovalGate);
   assert.equal(ref.pausedOnApproval, false);
   assert.equal(ref.silentRequested, false);
@@ -102,6 +105,46 @@ test("routing judge cancellation reaches the model turn", async () => {
   assert.equal(turns[0]!.cancel, controller.signal);
   controller.abort();
   assert.equal(turns[0]!.cancel?.aborted, true);
+});
+
+test("security screening passes the abort signal and instrumentation through the one-shot runner", async () => {
+  const { turns, runPrompt } = capturingRunPrompt('{"decision":"auto"}');
+  const utilities = oneShotModelUtilities(oneShotRunner(runPrompt));
+  const controller = new AbortController();
+  const recordModelCall = () => {};
+  const verdict = await utilities.screenSecurity!({
+    payload: "suspicious payload",
+    signal: controller.signal,
+    recordModelCall,
+  });
+  assert.deepEqual(verdict, { decision: "auto" });
+  const turn = turns[0]!;
+  assert.equal(turn.systemPrompt, SECURITY_SCREEN_SYSTEM_PROMPT);
+  assert.equal(turn.input, "suspicious payload");
+  assert.equal(turn.cancel, controller.signal);
+  assert.equal(turn.recordModelCall, recordModelCall);
+});
+
+test("shared harness security screens use auxiliary coordinates", async () => {
+  const recorded: HarnessLlmRequestRecord[] = [];
+  const runPrompt = async (turn: HarnessTurnInput): Promise<HarnessTurnResult> => {
+    await turn.recordLlmRequest?.({ turnSeq: 7, step: 0, model: "claude-oneshot", truncated: false });
+    return { reply: '{"decision":"auto"}' };
+  };
+  const utilities = oneShotModelUtilities(oneShotRunner(runPrompt));
+  const verdict = await utilities.screenSecurity!({
+    payload: "suspicious payload",
+    signal: new AbortController().signal,
+    recordModelCall: () => {},
+    recordLlmRequest: (rec) => {
+      recorded.push(rec);
+    },
+  });
+  assert.deepEqual(verdict, { decision: "auto" });
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]!.turnSeq, null);
+  assert.equal(recorded[0]!.step, SECURITY_SCREEN_STEP);
+  assert.equal(recorded[0]!.model, "claude-oneshot");
 });
 
 test("harness adapters hand the session goal and its saver to the tool context, ignoring legacy snapshots", async () => {

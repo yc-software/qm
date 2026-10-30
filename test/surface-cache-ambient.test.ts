@@ -50,8 +50,31 @@ test("ingest → ambient judge engages → spawns a smart-model worker that post
     assert.equal(pending[0].destination.target, container, "a plain post lands top-level in the container");
     const worker = await built.sessions.getByThread(`slack:${container}:ambient:100.1`);
     assert.ok(worker);
-    const requests = await built.sessions.listLlmRequests(worker!.id);
-    assert.match(JSON.stringify(requests.map((rec) => rec.promptEnvelope)), /did the Q3 launch slip/);
+    const classifier = (await built.sessions.listLlmRequests(worker!.id)).find((rec) => rec.model === "mock-security");
+    assert.match(JSON.stringify(classifier?.promptEnvelope), /did the Q3 launch slip/);
+    assert.match(JSON.stringify(classifier?.promptEnvelope), /ambient reply/);
+  } finally {
+    await built.runtime.stop();
+  }
+});
+
+test("a prompt-injected ambient judge reason is screened even when the shown messages are benign", async () => {
+  const built = freshApp();
+  built.runtime.start();
+  try {
+    await built.app.setChannelPolicy("C-reason-risk", "!engage !security-risk", "U-admin");
+    await built.app.ingestSurfaceEvents([
+      {
+        container: "C-reason-risk",
+        ts: "100.2",
+        authorId: "U1",
+        text: "ordinary project update",
+        createdAt: 1,
+      },
+    ]);
+    await sleep(250);
+    assert.equal((await built.deliveries.pending("slack")).length, 0);
+    assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.flagged"));
   } finally {
     await built.runtime.stop();
   }

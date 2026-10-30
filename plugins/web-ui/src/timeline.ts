@@ -31,6 +31,7 @@ export interface ToolPayload {
   timedOut?: boolean;
   isError?: boolean;
   result?: string;
+  quarantined?: boolean;
   action?: string;
   process_id?: string;
   sandbox_id?: string | null;
@@ -116,7 +117,8 @@ export function toolRowKind(row: ToolRowModel, status: WorkBlock["status"]): Too
     (result.isError === true && !completedNonzeroExecution) ||
     !!result.error ||
     result.denied === true ||
-    result.timedOut === true;
+    result.timedOut === true ||
+    result.quarantined === true;
   return failed ? "failed" : "ok";
 }
 

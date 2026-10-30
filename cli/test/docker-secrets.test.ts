@@ -19,6 +19,7 @@ const SECRETS = {
   SLACK_APP_TOKEN: "xapp-supersecret",
   PUBLIC_API_URL: "https://core.example.test",
   EXTRA_API_KEY: "config-declared-extra-supersecret",
+  EXAMPLE_SCREEN_TOKEN: "security-screen-supersecret",
 };
 
 function fakeDocker(dir: string): { argvLog: string; envCopy: string } {
@@ -90,10 +91,17 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
           env: { TZ: "UTC" },
           secretEnv: ["SB_TOKEN", "SLACK_BOT_TOKEN"],
         },
+        securityScreen: {
+          mode: "enforce",
+          classifier: "proxy",
+          provider: "example-screen",
+          endpoint: "https://screen.example.test/classify",
+        },
         secretEnv: {
           core: {
             EXTRA_API_KEY: "EXTRA_API_KEY",
             APPS_SESSION_ALIAS: "PORTAL_IDENTITY_SECRET",
+            SECURITY_SCREEN_PROXY_TOKEN: "EXAMPLE_SCREEN_TOKEN",
           },
         },
         env: {
@@ -149,6 +157,10 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
     assert.ok(signerArgs, "coreless plugin starts");
     assert.ok(!signerArgs.includes("CORE_API_URL=http://core:8080"), "coreless plugin gets no core endpoint");
     assert.ok(!signerArgs.includes("--env-file"), "coreless plugin gets no source-auth secret");
+    assert.ok(argv.includes("SECURITY_SCREEN_CLASSIFIER=proxy"));
+    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_PROVIDER=example-screen"));
+    assert.ok(argv.includes("SECURITY_SCREEN_PROXY_ENDPOINT=https://screen.example.test/classify"));
+    assert.ok(argv.includes("SECURITY_SCREEN=enforce"));
 
     assert.ok(
       argv.includes("WEB_UI_PUBLIC_URL=http://folded.example.com/web-ui"),
@@ -204,6 +216,7 @@ test("docker up delivers secrets via a 0600 env-file, never on the docker argv",
       new RegExp(`^APPS_SESSION_ALIAS=${SECRETS.PORTAL_IDENTITY_SECRET}$`, "m"),
       "a secretEnv alias delivers the stored value under its declared env name",
     );
+    assert.match(envFiles, new RegExp(`^SECURITY_SCREEN_PROXY_TOKEN=${SECRETS.EXAMPLE_SCREEN_TOKEN}$`, "m"));
     assert.ok(!envFiles.includes("FLY_RESIDENT_ENV_TZ"), "literal sandbox env is not in the secret file");
     for (const mode of envFiles.match(/^mode=.*$/gm) ?? []) assert.equal(mode, "mode=600");
 

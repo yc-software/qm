@@ -51,7 +51,7 @@ function renderEvent(
   deliveryId: string,
   parsed: unknown,
   rawBody: string,
-): { input: string; payload: string } {
+): { input: string; securityScreenData: string } {
   const pretty = isObj(parsed) || Array.isArray(parsed) ? JSON.stringify(parsed, null, 2) : rawBody;
   const kept = capForEscaping(pretty, MAX_EVENT_CHARS, "head");
   const capped = kept.length < pretty.length ? `${kept}\n…[truncated]` : kept;
@@ -64,7 +64,7 @@ function renderEvent(
       action: wh.action,
       payload: capped,
     }),
-    payload: capped,
+    securityScreenData: capped,
   };
 }
 
@@ -110,13 +110,14 @@ export function createWebhookReceiver(deps: WebhookReceiverDeps): WebhookReceive
       await deps.webhooks.recordEvent(wh.id, {
         deliveryId,
         receivedAt: Date.now(),
-        payload: event.payload,
+        payload: event.securityScreenData,
       });
 
       void runTrigger(triggerDeps, {
         owner: wh.owner,
         ownerScopeId: wh.ownerScopeId,
         input: event.input,
+        securityScreenData: event.securityScreenData,
         fireKey,
         surface: "webhook",
         ...(destination ? { destination } : {}),

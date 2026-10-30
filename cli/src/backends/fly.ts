@@ -34,6 +34,7 @@ import {
   appPrefixOf,
   CONFIG_FILENAME,
   sandboxCoreEnv,
+  securityScreenEnv,
   updateConfigImageOverrides,
   type QmConfig,
 } from "../config.ts";
@@ -351,6 +352,7 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
     ...virtualEnv,
     ...modelEnv,
     ...configuredEnv,
+    ...(service === "core" ? securityScreenEnv(ctx.config) : {}),
     ...deploymentEnv,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(ctx.flyOrg, ctx.orgId, ctx.appPrefix),
   };
@@ -1081,6 +1083,14 @@ function runFlyDeploy(args: string[], cwd: string): Promise<void> {
   });
 }
 
+function unsetDisabledSecurityScreenToken(config: QmConfig, appPrefix: string): void {
+  if (config.securityScreen?.classifier === "proxy") return;
+  const app = `${appPrefix}-core`;
+  if (!secretNames(app)?.has("SECURITY_SCREEN_PROXY_TOKEN")) return;
+  fly(["secrets", "unset", "--stage", "-a", app, "SECURITY_SCREEN_PROXY_TOKEN"]);
+  note(`removed the disabled security screen token from ${app}`);
+}
+
 function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): void {
   if (config.env.core?.DEPLOY_PROVIDER === "fly") return;
   const app = `${appPrefix}-core`;
@@ -1246,6 +1256,7 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
       die("\naborting `up`: set the missing secrets above first (use --stage, the deploy applies them)");
     }
     if (services.includes("core")) {
+      unsetDisabledSecurityScreenToken(config, ctx.appPrefix);
       unsetDisabledFlyPublisherToken(config, ctx.appPrefix);
     }
     unsetCorelessPluginCoreSecrets(plugins, ctx.appPrefix);
@@ -1755,6 +1766,7 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
   for (const workload of runnableServices(config.services))
     ensureApp(`${prefix}-${workload}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
   for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
+  unsetDisabledSecurityScreenToken(config, prefix);
   unsetDisabledFlyPublisherToken(config, prefix);
   unsetCorelessPluginCoreSecrets(plugins, prefix);
   const stagedApps = new Set<string>();

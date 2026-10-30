@@ -3,7 +3,14 @@ export type { TurnOrigin } from "../types.ts";
 
 type LegacyTurnOrigin = Pick<
   TurnRequest,
-  "triggerTs" | "entryTs" | "triggered" | "triggerDestination" | "ownerKeychainUnion" | "unprompted" | "liveActor"
+  | "triggerTs"
+  | "entryTs"
+  | "triggered"
+  | "securityScreenData"
+  | "triggerDestination"
+  | "ownerKeychainUnion"
+  | "unprompted"
+  | "liveActor"
 >;
 
 export function resolveTurnOrigin(input: Partial<LegacyTurnOrigin> & { origin?: TurnOrigin }): TurnOrigin {
@@ -15,8 +22,14 @@ export function resolveTurnOrigin(input: Partial<LegacyTurnOrigin> & { origin?: 
   const rank: Record<TurnOrigin["kind"], number> = { direct: 0, human: 1, ambient: 2, automation: 3 };
   if (rank[typed.kind] !== rank[legacy.kind]) return rank[typed.kind] > rank[legacy.kind] ? typed : legacy;
   if (typed.kind === "automation" && legacy.kind === "automation") {
+    let screenData = typed.screenData;
+    if (screenData === undefined) screenData = legacy.screenData;
+    else if (legacy.screenData !== undefined && screenData !== legacy.screenData) {
+      screenData = `Typed automation data:\n${screenData}\n\nLegacy automation data:\n${legacy.screenData}`;
+    }
     return {
       kind: "automation",
+      ...(screenData !== undefined ? { screenData } : {}),
       ...((typed.destination ?? legacy.destination) ? { destination: typed.destination ?? legacy.destination! } : {}),
       ...(typed.useOwnerKeychain || legacy.useOwnerKeychain ? { useOwnerKeychain: true } : {}),
     };
@@ -42,6 +55,7 @@ export function normalizeTurnOrigin(input: LegacyTurnOrigin): TurnOrigin {
   if (input.triggered === true) {
     return {
       kind: "automation",
+      ...(input.securityScreenData !== undefined ? { screenData: input.securityScreenData } : {}),
       ...(input.triggerDestination ? { destination: input.triggerDestination } : {}),
       ...(input.ownerKeychainUnion === true ? { useOwnerKeychain: true } : {}),
     };
@@ -80,6 +94,7 @@ export function turnOriginRequestFields(origin: TurnOrigin): Partial<LegacyTurnO
     case "automation":
       return {
         triggered: true,
+        ...(origin.screenData !== undefined ? { securityScreenData: origin.screenData } : {}),
         ...(origin.destination ? { triggerDestination: origin.destination } : {}),
         ...(origin.useOwnerKeychain ? { ownerKeychainUnion: true } : {}),
       };
@@ -96,8 +111,8 @@ export function isSessionTurn(input: Pick<TurnRequest, "sessionSenderId" | "dele
   return !!input.sessionSenderId || !!input.delegatingRunId;
 }
 
-export function sessionTurnOrigin(origin: TurnOrigin | undefined): TurnOrigin {
-  if (!origin || origin.kind === "automation") return { ...origin, kind: "automation" };
+export function sessionTurnOrigin(origin: TurnOrigin | undefined, text: string): TurnOrigin {
+  if (!origin || origin.kind === "automation") return { ...origin, kind: "automation", screenData: text };
   if (origin.kind === "human") return { kind: "human" };
   if (origin.kind === "ambient") return { kind: "ambient", ...(origin.live ? { live: true } : {}) };
   return origin;

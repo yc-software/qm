@@ -82,6 +82,7 @@ test("a running goal turn shows a mailbox message once and hands it over when it
   const { inbox, settle } = createSwarmGoalInbox({
     swarms: f.service,
     input,
+    screen: async (text) => text,
     saveGoal: async () => {},
   });
   const goal = createGoalRecord({ objective: "Survey the lane", now: 0 });

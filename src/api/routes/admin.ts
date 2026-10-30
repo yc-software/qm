@@ -53,6 +53,7 @@ import {
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
+import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
 import { listUnattendedGrants } from "./admin/unattended-grants.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
@@ -280,6 +281,13 @@ const routes: Route<ApiCtx>[] = [
         unattended: { grant: "admin.audit.read", summary: "read security audit events" },
       },
       handle: listAdminAudit,
+    },
+    {
+      method: "GET",
+      path: "/v1/admin/security/flags",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: listSecurityFlags,
     },
     {
       method: "GET",

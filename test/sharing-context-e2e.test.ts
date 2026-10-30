@@ -410,6 +410,21 @@ test("sharing e2e: switching the speaker removes the previous speaker's skill be
   await assert.equal(await b.turn("!skill-run speaker-helper python3 {dir}/scripts/value.py", true), "SPEAKER_ONE");
 });
 
+test("sharing e2e: a newly blocked skill asset removes previously materialized content", async (t) => {
+  const b = await fixture(t);
+  const s = await b.skill("personal:U1", "screened-helper", "OLD_SAFE_ASSET");
+  await assert.equal(await b.turn("!skill-run screened-helper python3 {dir}/scripts/value.py", true), "OLD_SAFE_ASSET");
+  await b.skills.update(s.id, {
+    ...s.manifest,
+    files: [{ path: "scripts/value.py", content: "# !security-risk\nprint('UNSCREENED_NEW_ASSET')\n" }],
+  });
+  await b.skills.review(s.id, "U1", []);
+  await b.skills.publish(s.id);
+  assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
+  assert.match(await b.turn("!skill screened-helper", true), /no skill file/);
+  assert.ok((await b.auditLog.events()).some((e) => e.action === "sharing.skill_screen_blocked"));
+});
+
 test("sharing e2e: the execution capability excludes carried memories in both directions", async (t) => {
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "test-ingress-secret" });
   let token: string | undefined;
@@ -446,6 +461,16 @@ test("sharing e2e: local notebooks retain late facts while unclassified carried 
   assert.match(p, /### #engineering[\s\S]*ROOM_FACT_END/);
   assert.match(await b.turn("!sysprompt"), /PERSONAL_FACT_119/);
   assert.doesNotMatch(await b.turn("!memorysearch PERSONAL_FACT_119", true), /PERSONAL_FACT_119/);
+});
+
+test("sharing e2e: screening off preserves carried skills without model calls", async (t) => {
+  const b = await fixture(t, { securityScreen: "off" });
+  await b.skill("personal:U1", "unscreened-helper", "SHARED_SKILL_OK");
+  await assert.equal(
+    await b.turn("!skill-run unscreened-helper python3 {dir}/scripts/value.py", true),
+    "SHARED_SKILL_OK",
+  );
+  assert.equal(b.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("Open speaker keychain uses a disposable computer, follows the speaker, and never grants the room", async (t) => {

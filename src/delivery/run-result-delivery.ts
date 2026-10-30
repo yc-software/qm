@@ -65,7 +65,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
   if (
     surface === "slack" &&
     run.result?.status === "refused" &&
-    run.result.refusalKind === "model_budget" &&
+    (run.result.refusalKind === "security_quarantine" || run.result.refusalKind === "model_budget") &&
     run.request.addressed
   ) {
     return { destination, text: standaloneFailureText(run.result)!, provenance, idempotencyKey };

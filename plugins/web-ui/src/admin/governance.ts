@@ -13,7 +13,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
     >
       <div class="head">
         <h2>Security posture</h2>
-        <p>Choose when the agent requires your approval and whether it can reach private networks.</p>
+        <p>Choose how the agent screens external content and when it requires your approval.</p>
       </div>
       <div class="body">
         <select
@@ -23,8 +23,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           .value=${s.value("security-posture")}
           @change=${(event: Event) => changeField(s, "security-posture", event)}
         >
-          <option value="dangerous">Dangerous — automatic tools; private networks allowed</option>
-          <option value="auto">Auto — automatic tools; private networks blocked</option>
+          <option value="dangerous">Dangerous — automatic tools; deployment-required screening still applies</option>
+          <option value="auto">Auto — use the deployment’s configured screener</option>
           <option value="strict">Strict — approve tool actions</option>
         </select>
         ${choiceGroup(
@@ -35,8 +35,12 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
             onChange: (event: Event) => changeField(s, "security-posture", event),
           },
           [
-            ["auto", "Auto", "Default. Blocks private-network access."],
-            ["dangerous", "Dangerous", "Allows private-network access."],
+            [
+              "auto",
+              "Auto",
+              "Default. Blocks private-network access. Screens external content when the deployment configures a screener; model screening is off by default.",
+            ],
+            ["dangerous", "Dangerous", "No posture-based screening; deployment-required screening still applies."],
             ["strict", "Strict", "Every tool action requires human approval."],
           ],
         )}

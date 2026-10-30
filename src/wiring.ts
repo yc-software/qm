@@ -324,6 +324,7 @@ import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./ha
 import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
 import type { Harness } from "./harness/harness.ts";
+import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
 import {
@@ -571,6 +572,7 @@ const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 export function buildApp(
   config: Config,
   overrides: {
+    securityScreener?: SecurityScreener;
     decisionBackend?: DecisionBackend;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
@@ -770,7 +772,12 @@ export function buildApp(
     config.databaseUrl && (config.budgetUsdPerWindow !== undefined || config.orgBudgetUsdPerWindow !== undefined)
       ? createPostgresBudgetTracker(config.databaseUrl, budgetOpts)
       : createBudgetTracker(budgetOpts);
-  const resolution = createResolutionService(config.orgId, configStore, acl);
+  const resolution = createResolutionService(
+    config.orgId,
+    configStore,
+    acl,
+    config.securityScreen === "off" && overrides.securityScreener ? "enforce" : config.securityScreen,
+  );
 
   const requireDbUrl = (kind: string): string => {
     if (!config.databaseUrl) throw new Error(`${kind}=postgres requires DATABASE_URL`);
@@ -1565,6 +1572,10 @@ export function buildApp(
     return routed.choice;
   });
 
+  if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
+    delete harness.models.screenSecurity;
+  }
+
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
   const runStore =
@@ -2005,6 +2016,13 @@ export function buildApp(
     ],
   });
   pgArtifactMap?.pool.registerMigration({
+    id: "durable-map/auto_flagger_configs/0002-drop",
+    statements: [
+      "DROP TABLE IF EXISTS auto_flagger_configs",
+      "DELETE FROM durable_map_versions WHERE tbl = 'auto_flagger_configs'",
+    ],
+  });
+  pgArtifactMap?.pool.registerMigration({
     id: "durable-map/pinned_skills/0002-drop",
     statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
   });
@@ -2016,13 +2034,6 @@ export function buildApp(
     ],
   });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);
-  pgArtifactMap?.pool.registerMigration({
-    id: "durable-map/auto_flagger_configs/0002-drop",
-    statements: [
-      "DROP TABLE IF EXISTS auto_flagger_configs",
-      "DELETE FROM durable_map_versions WHERE tbl = 'auto_flagger_configs'",
-    ],
-  });
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/suggested_activity_profiles/0001-nightly-on-use",
     statements: [
@@ -2045,6 +2056,13 @@ export function buildApp(
     ],
   });
   const approvals = createApprovalStore(artifactMap<PendingApprovalRecord>("approvals", ["sessionId"]), deliveries);
+  let securityScreener = overrides.securityScreener;
+  if (!securityScreener && config.securityScreen !== "off" && config.securityScreenProxy) {
+    securityScreener = createSecurityScreenProxy({
+      ...config.securityScreenProxy,
+      timeoutMs: config.securityScreenTimeoutMs,
+    });
+  }
   const layerEnv = config.layerEnv ?? {};
   const layerBrokerCache = new Map<string, AwsRoleBroker>();
   const layerBrokerFor = (tool: BrokeredLayerTool): AwsRoleBroker | undefined => {
@@ -2171,6 +2189,8 @@ export function buildApp(
     execTimeoutCeilingMs: config.execTimeoutMaxMs,
     approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
     turnLeaseWaitMs: config.turnLeaseWaitMs,
+    securityScreenTimeoutMs: config.securityScreenTimeoutMs,
+    ...(securityScreener ? { securityScreener } : {}),
     backgroundJobTtlMs: config.backgroundJobTtlMs,
     backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
     sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,

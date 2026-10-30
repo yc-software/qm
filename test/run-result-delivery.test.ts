@@ -11,6 +11,7 @@ import {
 import type { Run } from "../src/runs/run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
+import { SECURITY_QUARANTINE_REFUSAL_TEXT } from "../plugins/chassis/src/security-quarantine.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
@@ -133,6 +134,39 @@ test("runResultDelivery recovers an addressed model-budget refusal with its expl
   assert.equal(runResultDelivery(spine)?.text, reason);
   spine.request = { ...spine.request, addressed: false, origin: { kind: "ambient" } };
   assert.equal(runResultDelivery(spine), null);
+});
+
+test("runResultDelivery recovers a security quarantine without exposing its internal reason", () => {
+  const d = runResultDelivery(
+    run({
+      request: { ...turn("hi", "C9:171.001"), addressed: true },
+      result: {
+        status: "refused",
+        refusalKind: "security_quarantine",
+        reason: "internal screening details",
+      },
+    }),
+  );
+  assert.equal(d?.text, SECURITY_QUARANTINE_REFUSAL_TEXT);
+  assert.doesNotMatch(d?.text ?? "", /internal screening details/);
+});
+
+test("runResultDelivery keeps an unprompted quarantine silent — a replay has no live handler to suppress it", () => {
+  const spine = run({ result: { status: "refused", refusalKind: "security_quarantine" } });
+  spine.request = { ...spine.request, surfaceTools: true, origin: { kind: "ambient" } };
+  assert.equal(runResultDelivery(spine), null);
+});
+
+test("runResultDelivery recovers security quarantine for an addressed surface-spine turn", () => {
+  const spine = run({ result: { status: "refused", refusalKind: "security_quarantine" } });
+  spine.request = { ...spine.request, surfaceTools: true, addressed: true };
+  assert.equal(runResultDelivery(spine)?.text, SECURITY_QUARANTINE_REFUSAL_TEXT);
+});
+
+test("runResultDelivery keeps proactive ambient quarantine silent", () => {
+  const ambient = run({ result: { status: "refused", refusalKind: "security_quarantine" } });
+  ambient.request = { ...ambient.request, origin: { kind: "automation" }, surfaceTools: true };
+  assert.equal(runResultDelivery(ambient), null);
 });
 
 test("runResultDelivery carries the surface's edit checkpoint into the destination", () => {
@@ -439,7 +473,7 @@ for (const surface of ["slack", "web"] as const) {
   for (const result of [
     { status: "ok", reply: "INTERNAL_CHILD_REPORT" },
     { status: "failed", reason: "internal child failure" },
-    { status: "refused", refusalKind: "model_budget", reason: "internal budget" },
+    { status: "refused", refusalKind: "security_quarantine", reason: "internal screening" },
     { status: "pending_approval", pendingApprovals: [{ requestId: "a", command: "cmd", reason: "approval" }] },
   ] satisfies TurnResult[]) {
     test(`${surface}: child ${result.status} never becomes an automatic public delivery`, () => {

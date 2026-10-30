@@ -104,6 +104,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
             if (entry.type === "tool_result") results.push(entry.payload as Turn["results"][number]);
             return turn.emit(entry);
           },
+          screenToolResult: turn.screenToolResult,
           pendingApprovals: [],
         };
         const options = harnessToolOptions({}, turn);

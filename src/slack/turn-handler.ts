@@ -48,6 +48,7 @@ import {
   processInboundFiles,
   safeChunks,
   SLACK_POST_SPLIT_LIMIT,
+  refusalDelivery,
   refusalNote,
   renderConversationView,
   resolveMentions,
@@ -719,8 +720,27 @@ export function createTurnHandler(deps: {
       await finishTaskAck();
     } else {
       await settleAck();
-      if (inc.unprompted === true) {
+      const delivery = refusalDelivery(result, inc.unprompted === true);
+      if (delivery === "thread") {
+        if (queuedRunId) {
+          const runId = queuedRunId;
+          const text = refusalNote(result, inc.kind);
+          await postThenAckRunDelivery({
+            post: async () => {
+              await postReply(text, undefined, `run:${runId}`);
+              await finishTaskAck();
+            },
+            ack: () => ackRunDelivery(runId),
+            release: () => inFlightRuns.delete(runId),
+          });
+        } else {
+          await postReply(refusalNote(result, inc.kind));
+        }
+        return;
+      }
+      if (delivery === "silent") {
         await finishTaskAck();
+        if (queuedRunId && result.refusalKind === "security_quarantine") inFlightRuns.delete(queuedRunId);
         console.error(
           `[slack-plugin] unprompted turn ${result.status} (staying quiet) ch=${inc.channel} ts=${inc.ts}: ${result.reason ?? "refused"}`,
         );

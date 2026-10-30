@@ -46,6 +46,37 @@ test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image,
   assert.doesNotMatch(webUi, /FLY_RESIDENT_ENV_TZ/);
 });
 
+test("the fly target routes security screen proxy configuration only to core", () => {
+  const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
+  const screened: QmConfig = {
+    ...config,
+    securityScreen: {
+      mode: "observe",
+      classifier: "proxy",
+      provider: "example-screen",
+      endpoint: "https://screen.example.test/classify",
+    },
+  };
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(generatedEnv(derivedTomlFor(screened, "core", repoRoot))).filter(([name]) =>
+        name.startsWith("SECURITY_SCREEN_"),
+      ),
+    ),
+    {
+      SECURITY_SCREEN_CLASSIFIER: "proxy",
+      SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
+      SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
+    },
+  );
+  assert.deepEqual(
+    Object.keys(generatedEnv(derivedTomlFor(screened, "web-ui", repoRoot))).filter((name) =>
+      name.startsWith("SECURITY_SCREEN_"),
+    ),
+    [],
+  );
+});
+
 test("the fly target derives a plugin fly.toml wiring it to the core over 6PN", () => {
   const config: QmConfig = {
     contract: 1,

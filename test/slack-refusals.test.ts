@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { refusalNote, postThenAckRunDelivery } from "../src/slack/lib.ts";
+import { refusalNote, refusalDelivery, postThenAckRunDelivery } from "../src/slack/lib.ts";
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 
 const ADMIN_URL = "https://portal.example.com/admin/?view=history&session=s-1";
@@ -53,6 +53,30 @@ test("refusalNote: a failed turn hides the internal reason but keeps the admin l
   assert.doesNotMatch(note, /TypeError|sandbox\.ts/);
   assert.match(note, /something went wrong on my end/);
   assert.match(note, /Full error: https:/);
+});
+
+test("refusalNote: a security quarantine is human-safe and hides the internal reason", () => {
+  const note = refusalNote(
+    {
+      refusalKind: "security_quarantine",
+      reason: "Auto quarantined suspicious or unscreenable external input before the agent ran.",
+      adminUrl: ADMIN_URL,
+    },
+    "channel",
+  );
+
+  assert.equal(
+    note,
+    "I couldn't act because my security screen flagged part of this message or its conversation context. Please retry without the flagged context, or ask an admin to review the quarantine.",
+  );
+  assert.doesNotMatch(note, /Auto quarantined|unscreenable|Full error/);
+});
+
+test("refusalDelivery: quarantine posts in-thread only when addressed; every unprompted refusal stays silent", () => {
+  assert.equal(refusalDelivery({ refusalKind: "security_quarantine" }, false), "thread");
+  assert.equal(refusalDelivery({ refusalKind: "security_quarantine" }, true), "silent");
+  assert.equal(refusalDelivery({}, true), "silent");
+  assert.equal(refusalDelivery({}, false), "requester");
 });
 
 test("postThenAckRunDelivery: acknowledges only after the Slack post succeeds", async () => {

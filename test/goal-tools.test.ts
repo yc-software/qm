@@ -15,13 +15,14 @@ import {
 } from "../src/harness/goal.ts";
 import type { ScopeId } from "../src/types.ts";
 
-function toolbox() {
+function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {
   const ref: ToolContextRef = {
     current: null,
     scopeLabel: { kind: "org", id: "test" } as unknown as ScopeId,
     emit: async () => undefined,
     goalMeter: createGrindMeter(),
     governGoal: async () => ({ verdict: "complete", reasons: "proven" }),
+    ...(screenToolResult ? { screenToolResult } : {}),
   };
   let row: GoalRecord | null = null;
   ref.saveGoal = async (goal) => {
@@ -214,6 +215,31 @@ test("update with no active goal errors cleanly", async () => {
   const { update } = toolbox();
   const res = await update.execute("u1", { status: "complete", note: "x" });
   assert.match(textOf(res as never), /No active goal/);
+});
+
+test("goal tool results are core-authored, so the security classifier never sees or quarantines them", async () => {
+  const screened: string[] = [];
+  const { create, get, update, by } = toolbox(async ({ tool }) => {
+    screened.push(tool);
+    return { outcome: "quarantine" };
+  });
+  const created = await create.execute("c1", { objective: "ship the fix" });
+  const read = await get.execute("g1", {});
+  const closed = await update.execute("u1", { status: "complete", note: "shipped" });
+  for (const res of [created, read, closed]) {
+    assert.doesNotMatch(textOf(res as never), /quarantined by the security screen/);
+  }
+  assert.match(textOf(created as never), /registered and now enforced/);
+  assert.match(textOf(read as never), /"objective": "ship the fix"/);
+  assert.deepEqual(screened, [], "no goal tool is handed to the classifier");
+
+  const other = await by("finish_silently").execute("f1", {});
+  assert.match(
+    textOf(other as never),
+    /quarantined by the security screen/,
+    "the same screener still quarantines a non-exempt tool, so the exemption is what spared the goal tools",
+  );
+  assert.deepEqual(screened, ["finish_silently"]);
 });
 
 test("get frames free text as data and escapes tag characters in it", async () => {

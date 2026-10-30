@@ -117,7 +117,14 @@ can only tighten:
 - **Strict** — every harness tool call pauses for human approval, except the two
   no-effect turn enders.
 - **Auto** (default) — blocks private-network access.
-- **Dangerous** — no tool approval gates.
+- **Dangerous** — no tool approval gates, and content screening only observes.
+
+Content screening is a deployment setting, `securityScreen.mode`: `off` (default),
+`observe`, or `enforce`, with `securityScreen.classifier` choosing the built-in
+`model` or an external `proxy`. When on, it classifies external content under every
+posture. `observe` only records verdicts in the audit log. `enforce` quarantines
+flagged content pending release approval, except under Dangerous, which caps
+screening at `observe`.
 
 The predeclared command policy — approval rules and hard denials for things like
 recursive deletes or destructive SQL — applies in every posture, Dangerous included.

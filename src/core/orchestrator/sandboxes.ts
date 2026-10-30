@@ -225,7 +225,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const treeKey = `${handle.resourceId ?? handle.id}:${skillDir(skillsRoot(r), r)}`;
     if (laidTrees.has(treeKey)) return;
     try {
-      const bundles = deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : [];
+      const bundles = r.screenedBundles ?? (deps.skillBundles ? await loadActiveBundles(deps.skillBundles, [r]) : []);
       await laySkillTree(deps.sandbox, handle, skillsRoot(r), r, bundles);
       laidTrees.add(treeKey);
     } catch (err) {

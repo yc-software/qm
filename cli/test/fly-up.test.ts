@@ -86,6 +86,7 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "FLY_API_TOKEN",
       "PORTAL_IDENTITY_SECRET",
       "PUBLIC_API_URL",
+      "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",
     ]
       .map((name) => `${name} digest`)
@@ -126,7 +127,7 @@ else console.log("ok");
     await flyUp(config, dir, { buildFrom: true, configPath });
     const calls = readFileSync(log, "utf8");
     assert.match(calls, /storage create --name acme-data --app acme-core --org personal --yes/);
-    assert.match(calls, /secrets unset --stage -a acme-core FLY_DEPLOY_API_TOKEN/);
+    assert.match(calls, /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN/);
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
     assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
     assert.equal(

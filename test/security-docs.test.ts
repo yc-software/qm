@@ -20,7 +20,7 @@ test("the public threat model covers the documented material limitations", () =>
     "Browser actions sit outside some core gates",
     "Sandbox credentials are plaintext while in use",
     "Credential purposes are not enforced authorization",
-    "External content is not screened for prompt injection",
+    "Security screening is incomplete and heuristic",
     "Audience-floor filtering has known gaps",
     "Egress enforcement is conditional",
     "Admins can read sensitive content",
