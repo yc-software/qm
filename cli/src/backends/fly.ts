@@ -833,7 +833,7 @@ function sourceRootFor(configDir: string, explicit?: string): string | undefined
   if (explicit) {
     const root = resolve(explicit);
     return existsSync(join(root, "package.json")) &&
-      existsSync(join(root, "src", "edge", "main.ts")) &&
+      existsSync(join(root, "src")) &&
       existsSync(join(root, "deploy", "core", "Dockerfile"))
       ? root
       : undefined;
@@ -850,7 +850,7 @@ function sourceRootFor(configDir: string, explicit?: string): string | undefined
   return candidates.find(
     (root) =>
       existsSync(join(root, "package.json")) &&
-      existsSync(join(root, "src", "edge", "main.ts")) &&
+      existsSync(join(root, "src")) &&
       existsSync(join(root, "deploy", "core", "Dockerfile")),
   );
 }
@@ -1512,7 +1512,7 @@ export async function flyDoctor(config: QmConfig, configDir: string, envFile?: s
     .map((plugin) => plugin.name);
   const failures: string[] = [];
   for (const workload of [...runnableServices(config.services), ...pluginNames]) {
-    const app = `${prefix}-${workload}`;
+    const app = flyApp(prefix, workload);
     const existing = secretNames(app);
     if (!existing) {
       step(`${app}: not created yet — secret checks run after the first \`qm up\``);
@@ -1785,10 +1785,12 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
   const ctx = buildCtx(config, configDir, {});
   requireFlyAuth();
   for (const workload of runnableServices(config.services))
-    ensureApp(`${prefix}-${workload}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
+    ensureApp(flyApp(prefix, workload), ctx.flyOrg, ctx.orgId, ctx.appPrefix);
   for (const plugin of pluginNames) ensureApp(`${prefix}-${plugin}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix);
-  unsetDisabledSecurityScreenToken(config, prefix);
-  unsetDisabledFlyPublisherToken(config, prefix);
+  for (const workload of runnableServices(config.services).filter(isCoreWorkload)) {
+    unsetDisabledSecurityScreenToken(config, flyApp(prefix, workload));
+    unsetDisabledFlyPublisherToken(config, flyApp(prefix, workload));
+  }
   unsetCorelessPluginCoreSecrets(plugins, prefix);
   const stagedApps = new Set<string>();
   for (const secret of operatorSecrets) {

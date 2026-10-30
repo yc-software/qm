@@ -9,7 +9,7 @@ import { CONFIG_FILENAME, loadConfigInDir } from "../src/config.ts";
 import { cliVersion } from "../src/manifest.ts";
 import { validateSandboxLayer } from "../src/sandbox-layer.ts";
 import { parseToolDescriptor } from "../src/tool-descriptor.ts";
-import { SERVICE_NAMES, VIRTUAL_SERVICE_NAMES } from "../src/services.ts";
+import { DECLARED_SERVICE_NAMES } from "../src/services.ts";
 import { computedSecrets, renderEnvExample } from "../src/secrets.ts";
 import { readEnvFile } from "../src/util.ts";
 import { runChecks } from "../src/commands/check.ts";
@@ -52,13 +52,14 @@ test("init scaffolds a loadable config, generated local secrets, and a valid san
 
     const configRaw = readFileSync(join(dir, CONFIG_FILENAME), "utf8");
     assert.match(configRaw, /^\s*\/\//m, "the scaffolded config carries field comments");
-    for (const service of [...SERVICE_NAMES, ...VIRTUAL_SERVICE_NAMES]) {
+    for (const service of DECLARED_SERVICE_NAMES) {
       assert.ok(configRaw.includes(`"${service}"`), `the config's services comment should describe ${service}`);
     }
     const { config } = loadConfigInDir(dir);
     assert.equal(config.orgId, "acme");
     assert.equal(config.target, "docker");
-    assert.equal(config.publicUrl, "http://localhost:8082");
+    assert.equal(config.publicUrl, "http://localhost:8081");
+    assert.deepEqual(config.services, ["core", "web-ui", "portal", "auth"]);
     assert.equal(config.sandbox, undefined);
 
     const env = readFileSync(join(dir, ".env.example"), "utf8");
@@ -150,7 +151,7 @@ test("init --target fly scaffolds the full hosted topology and both Slack apps",
     const { config } = loadConfigInDir(dir);
     assert.equal(config.target, "fly");
     assert.deepEqual(config.services, ["core", "slack", "web-ui", "admin", "portal", "auth"]);
-    assert.equal(config.publicUrl, "https://acme-portal.fly.dev");
+    assert.equal(config.publicUrl, "https://acme-core.fly.dev");
     assert.equal(config.flyOrg, "personal");
     assert.ok(config.region, "region is scaffolded");
     assert.equal(config.appPrefix, "acme");

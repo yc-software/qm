@@ -441,9 +441,9 @@ test("a secretEnv alias colliding with another secret's delivery on the same wor
   try {
     assert.throws(
       () => check(collide),
-      /core would receive env CORE_SIGNING_SECRET from both CORE_SIGNING_SECRET and SOME_OTHER_NAME/,
+      /edge would receive env CORE_SIGNING_SECRET from both CORE_SIGNING_SECRET and SOME_OTHER_NAME[\s\S]*harness would receive env CORE_SIGNING_SECRET/,
     );
-    assert.throws(() => check(folded), /core would receive env SHARED_NAME from both STORE_A and STORE_B/);
+    assert.throws(() => check(folded), /edge would receive env SHARED_NAME from both STORE_A and STORE_B/);
     check(benign);
   } finally {
     rmSync(collide.dir, { recursive: true, force: true });
