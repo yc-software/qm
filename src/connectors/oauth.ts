@@ -282,7 +282,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
         "Add the redirect URI shown below to 'Authorized redirect URIs' on YOUR client.",
         "Enable the Gmail, Calendar, Drive, Sheets, Docs, Slides, and Tasks APIs for the project.",
         "Choose admin-consent (domain-wide) vs per-user consent on the OAuth consent screen.",
-        "Paste the Client ID + Client secret below; we validate by dry-running the consent URL.",
+        "Paste the Client ID + Client secret below.",
       ],
       scopesRationale:
         "gmail.modify/calendar/drive/spreadsheets/tasks back the Google Workspace skills; openid+email identify the account.",
