@@ -216,7 +216,12 @@ import {
 } from "./orchestrator/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
-import { createSecurityClassifier, screenChunks, type SecurityScreenContext } from "./orchestrator/security-screen.ts";
+import {
+  cleanVerdict,
+  createSecurityClassifier,
+  screenChunks,
+  type SecurityScreenContext,
+} from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
@@ -1188,7 +1193,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ),
                   { stopUnclean: true },
                 );
-                return verdict.decision === "auto" && !verdict.unscreened;
+                return cleanVerdict(verdict);
               })();
               carriedSkillScreens.set(key, screen);
             }
@@ -3288,7 +3293,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     ),
                     { stopUnclean: true },
                   );
-                  allowed = verdict.decision === "auto" && !verdict.unscreened;
+                  allowed = cleanVerdict(verdict);
                 }
                 text = `${text}\n\n${allowed ? refreshedInbox : "Updated inbox context was withheld by the security screen."}`;
               }
@@ -3424,7 +3429,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           screenChunk,
                           { batch: 4 },
                         );
-                    if (verdict?.decision === "auto" && !verdict.unscreened) return { outcome: "allow" };
+                    if (cleanVerdict(verdict)) return { outcome: "allow" };
                     if (verdict?.decision === "strict") {
                       const releaseKey = `security-screen-release:${toolLabel}`;
                       if (authorizeCommand(releaseKey)) {

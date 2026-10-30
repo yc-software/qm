@@ -178,7 +178,7 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
   };
 }
 
-const cleanVerdict = (verdict: SecurityScreenVerdict | undefined): boolean =>
+export const cleanVerdict = (verdict: SecurityScreenVerdict | undefined): boolean =>
   verdict?.decision === "auto" && !verdict.unscreened;
 
 export async function screenChunks(
