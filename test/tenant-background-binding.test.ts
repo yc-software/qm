@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { configurePgPooling, createPgPool } from "../src/persistence/pg-pool.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { createScheduler } from "../src/cron/scheduler.ts";
@@ -253,4 +253,22 @@ test("engaged sessions and session admission locks are keyed by tenant", async (
   assert.equal(await withTenant(TEST_TENANT, () => lock.tryWithLock!(admission(), async () => "free")), null);
   held.resolve();
   await holding;
+});
+
+test("cross-tenant claims run on the owner login when one is configured", { skip }, async () => {
+  const owner = new globalThis.URL(URL!);
+  owner.searchParams.set("application_name", "qm-owner-claims");
+  configurePgPooling({ databaseUrl: URL!, ownerUrl: owner.toString() });
+  const db = createPgPool(URL!);
+  try {
+    const [row] = await claimAcrossTenants(
+      db,
+      "SELECT current_setting('application_name') AS login, $1::text AS tenant_id",
+      [TEST_TENANT],
+    );
+    assert.equal(row!.login, "qm-owner-claims");
+  } finally {
+    configurePgPooling({});
+    await db.close();
+  }
 });

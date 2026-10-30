@@ -9,8 +9,7 @@ export async function claimAcrossTenants<T = Rows[number]>(
   text: string,
   params: unknown[] = [],
 ): Promise<Array<TenantRow<T>>> {
-  const pool = await db.ownerPool();
-  const { rows } = await withoutTenant(() => pool.query(text, params));
+  const { rows } = await (await db.ownerPool()).query(text, params);
   for (const row of rows as Rows) {
     if (typeof row.tenant_id !== "string") throw new Error("A cross-tenant claim must return each row's tenant_id");
   }
