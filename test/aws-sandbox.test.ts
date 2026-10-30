@@ -131,6 +131,30 @@ test("a body nearing the 8h cap is rotated: snapshot, terminate, relaunch, rehyd
   assert.equal(await sb.readFile(h2, "keep.txt"), "v1", "state carried across the rotation");
 });
 
+test("a rotation whose terminate fails reports the stranded body instead of forgetting it", async () => {
+  const fake = installFakeMicrovm();
+  const errors: Array<{ code: string; message: string }> = [];
+  const sb = makeSandbox(fake, {
+    rotateAfterSeconds: 0,
+    snapshotIntervalMs: 0,
+    onError: (e: { code: string; message: string }) => errors.push(e),
+  });
+  const layers = rw(scopeId("personal", "U4b"));
+  const h1 = await sb.provision(layers);
+  await sb.teardown(h1);
+  await sleep(3);
+  const terminate = fake.api.terminate;
+  fake.api.terminate = async () => {
+    throw new Error("AccessDenied: not authorized to terminate");
+  };
+
+  const h2 = await sb.provision(layers);
+  fake.api.terminate = terminate;
+  assert.notEqual(h2.id, h1.id);
+  const stranded = errors.find((e) => e.code === "rotate_terminate_failed");
+  assert.match(stranded?.message ?? "", /AccessDenied: not authorized to terminate/);
+});
+
 test("reapDeepIdle terminates a parked body but keeps its durable S3 state", async () => {
   const fake = installFakeMicrovm();
   const sb = makeSandbox(fake, { snapshotIntervalMs: 0 });

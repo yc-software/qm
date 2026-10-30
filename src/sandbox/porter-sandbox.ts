@@ -385,14 +385,15 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
         machine = `check failed: ${errMessage(e)}`;
       }
       let guestResponsive = false;
+      let probeError: string | undefined;
       if (name) {
         try {
           guestResponsive = (await execRaw(name, "true", GUEST_PROBE_TIMEOUT_SEC)).code === 0;
         } catch (e) {
-          void e;
+          probeError = errMessage(e);
         }
       }
-      return { machine, guestResponsive };
+      return { machine, guestResponsive, ...(probeError ? { probeError } : {}) };
     },
 
     async restartComputer(scopeId: string): Promise<void> {

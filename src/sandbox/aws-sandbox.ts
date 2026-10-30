@@ -266,11 +266,19 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         }
         if (alive && stale) {
           endpointById.set(stored.microvmId, stored.endpoint);
-          await ensureRunning(stored.microvmId).catch(() => {});
-          await snapshotHome(scope, stored.microvmId).catch((e) =>
-            reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope),
-          );
-          await api.terminate(stored.microvmId).catch(() => {});
+          await ensureRunning(stored.microvmId)
+            .then(() => snapshotHome(scope, stored.microvmId))
+            .catch((e: unknown) => reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope));
+          await api
+            .terminate(stored.microvmId)
+            .catch((e: unknown) =>
+              reportError(
+                "sandbox_teardown",
+                "rotate_terminate_failed",
+                `${stored.microvmId} left running: ${errMessage(e)}`,
+                scope,
+              ),
+            );
         }
       }
       const body = await launchBody(scope);
@@ -534,10 +542,14 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
               await store.merge(scope, { lastSnapshotMs: Date.now(), lastActivityMs: Date.now(), homeDirty: false });
             } catch (e) {
               reportError("sandbox_snapshot", "teardown_snapshot_failed", errMessage(e), scope);
-              await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
+              await store
+                .merge(scope, { lastActivityMs: Date.now() })
+                .catch(swallowAs("aws-sandbox: record teardown activity", undefined));
             }
           } else {
-            await store.merge(scope, { lastActivityMs: Date.now() }).catch(() => {});
+            await store
+              .merge(scope, { lastActivityMs: Date.now() })
+              .catch(swallowAs("aws-sandbox: record teardown activity", undefined));
           }
           await api.suspend(handle.id).catch(swallowAs("aws-sandbox: suspend on teardown", undefined));
         });
@@ -557,7 +569,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
           if (activeByMicrovm.has(rec.microvmId)) return;
           const desc = await api.tryGetMicrovm(rec.microvmId);
           if (!desc || desc.state === "TERMINATED" || desc.state === "TERMINATING") {
-            await store.delete(scope).catch(() => {});
+            await store.delete(scope).catch(swallowAs("aws-sandbox: forget terminated microVM", undefined));
             return;
           }
           try {
