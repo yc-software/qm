@@ -134,7 +134,6 @@ export interface HarnessTurnInput {
   orgScopeId: ScopeId;
   providerKeys?: ProviderKeys;
   runtimePinned?: boolean;
-  /** Nobody is present to pick another model (cron, webhook, loop), so an unusable one falls back. */
   unattended?: boolean;
   onRuntime?(runtime: TurnRuntime): void;
   claudeOauthToken?: string;

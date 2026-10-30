@@ -32,14 +32,24 @@ test("an unattended turn on a model this deployment can't serve runs on the fall
   const res = await built.app.turn(turn("claude-sonnet-5"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(res.runtime?.modelId, "gpt-6.1-terra");
-  assert.deepEqual(res.runtime?.change, { rule: "model fallback" });
+  assert.equal(
+    res.runtime?.change && "rule" in res.runtime.change ? res.runtime.change.rule : undefined,
+    "model fallback",
+  );
+  assert.match(
+    res.runtime?.change && "reason" in res.runtime.change ? (res.runtime.change.reason ?? "") : "",
+    /^pi\/claude-sonnet-5 can't run here/,
+  );
 });
 
 test("an unattended turn on an unknown model id runs on the fallback runtime", async () => {
   const res = await (await app()).app.turn(turn("claude-opus-5.5"));
   assert.equal(res.status, "ok", res.reason);
   assert.equal(res.runtime?.modelId, "gpt-6.1-terra");
-  assert.deepEqual(res.runtime?.change, { rule: "model fallback" });
+  assert.equal(
+    res.runtime?.change && "rule" in res.runtime.change ? res.runtime.change.rule : undefined,
+    "model fallback",
+  );
 });
 
 test("an unattended turn on a usable model keeps it", async () => {

@@ -703,7 +703,6 @@ export interface TurnRequest {
   entryTs?: string;
   gatewayContext?: GatewayContext;
   triggered?: boolean;
-  /** Nobody chose this turn's model just now (cron, webhook or monitor fire): an unusable one falls back instead of refusing. */
   unattended?: boolean;
   unattendedGrants?: string[];
   securityScreenData?: string;
@@ -801,7 +800,7 @@ export interface TurnRuntime {
   harnessId: string;
   modelId: string;
   label?: string;
-  change?: { rule: string } | { agent: "task" | "scope" };
+  change?: { rule: string; reason?: string } | { agent: "task" | "scope" };
 }
 
 export interface TurnResult {

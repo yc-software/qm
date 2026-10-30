@@ -1584,26 +1584,33 @@ export function buildApp(
       if (routed.routedBy) routedBy(routed.routedBy);
       return routed.choice;
     }
-    const { choice, fellBack } = await fallBackWhenUnavailable(
+    const { choice, fellBackBecause } = await fallBackWhenUnavailable(
       route,
       (routed) => availableRuntimeError({ deps: runtimeDeps }, input.scopeLabel, routed.choice, input.runtimePurpose),
       async (reason) => {
-        const target = await resolveRuntimeChoiceDurable(
-          configStore,
-          runtimeOrgScope,
-          input.scopeLabel,
-          fallback,
-          {},
-          hydrateModelCatalog,
-          "fallback",
-        );
+        const failed = (detail: string, cause?: unknown) =>
+          new NonRetryableTurnError(`${reason} The fallback runtime can't run either: ${detail}`, { cause });
+        let target: Awaited<ReturnType<typeof resolve>>;
+        try {
+          target = await resolveRuntimeChoiceDurable(
+            configStore,
+            runtimeOrgScope,
+            input.scopeLabel,
+            fallback,
+            {},
+            hydrateModelCatalog,
+            "fallback",
+          );
+        } catch (error) {
+          throw failed(errMessage(error), error);
+        }
         const unusable = await availableRuntimeError({ deps: runtimeDeps }, input.scopeLabel, target, "fallback");
-        if (unusable) throw new NonRetryableTurnError(`${reason} The fallback runtime can't run either: ${unusable}`);
+        if (unusable) throw failed(unusable);
         return { choice: target };
       },
     );
-    const by = fellBack ? MODEL_FALLBACK_ROUTE : choice.routedBy;
-    if (by) routedBy(by);
+    if (fellBackBecause) routedBy(MODEL_FALLBACK_ROUTE, fellBackBecause);
+    else if (choice.routedBy) routedBy(choice.routedBy);
     return choice.choice;
   });
 

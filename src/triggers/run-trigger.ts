@@ -312,7 +312,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       errorCode = res.errorCode;
       const change = res.runtime?.change;
       if (change && "rule" in change)
-        routeNote = `routed by ${change.rule} to ${res.runtime!.harnessId}/${res.runtime!.modelId}`;
+        routeNote = `routed by ${change.rule} to ${res.runtime!.harnessId}/${res.runtime!.modelId}${change.reason ? `: ${change.reason}` : ""}`;
       reply = res.reply;
       sessionId = res.sessionId;
       if (res.status === "silent") return;
