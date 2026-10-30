@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { retryAfterMs, retryOperation, withTimeout } from "../util/async.ts";
@@ -111,6 +111,17 @@ export function processKeepaliveScript(processId: string): string {
   return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
 }
 
+export interface SpritesInitialization {
+  pending: boolean;
+}
+
+export const SPRITES_INITIALIZATION: TableSpec<SpritesInitialization> = {
+  table: "sprites_initialization",
+  key: "name",
+  required: ["pending"],
+  columns: { pending: "boolean" },
+};
+
 export interface SpritesSandboxOptions extends BlobStagingOptions {
   token?: string;
   baseUrl?: string;
@@ -121,7 +132,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   memoryMb?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
-  initializationStore: DurableMap<{ pending: boolean }>;
+  initializationStore: Pick<KeyedRows<SpritesInitialization>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];

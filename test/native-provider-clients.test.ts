@@ -23,7 +23,7 @@ import {
   E2bSandboxGoneError,
 } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 const modalCalls: unknown[][] = [];
@@ -510,7 +510,7 @@ test("E2B does not dispatch twice when execution occurs before its start acknowl
   });
   const sandbox = createE2bSandbox(createLocalWorkspaceStore(root), {
     snapshots: createMemorySnapshotStore(),
-    store: createMemoryMap(),
+    store: memoryRows(),
     ...singleProcessDeps(),
     client: createSdkE2bClient({ apiKey: "test" }),
   });
@@ -563,7 +563,7 @@ test("Modal executes a one-megabyte payload through the sandbox and SDK without 
   const session = await client.create({});
   const sandbox = createModalSandbox(createLocalWorkspaceStore(join(root, "workspace")), {
     snapshots: createMemorySnapshotStore(),
-    store: createMemoryMap(),
+    store: memoryRows(),
     ...singleProcessDeps(),
     client: {
       create: async () => session,

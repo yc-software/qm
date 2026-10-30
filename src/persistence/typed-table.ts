@@ -17,6 +17,7 @@ export interface TableSpec<T = Record<string, unknown>, K extends string = never
   global?: boolean;
   required?: readonly Extract<keyof T, string>[];
   preserve?: readonly Extract<keyof T, string>[];
+  indexes?: readonly string[];
   columns: Columns<T, K>;
 }
 
@@ -43,10 +44,7 @@ function fromJson(field: string, type: ColumnType): string {
   }
 }
 
-export function tableConversion<T, K extends string>(
-  spec: TableSpec<T, K>,
-  opts: { indexes?: readonly string[]; constraints?: readonly string[] } = {},
-): PgMigrationDefinition {
+export function tableConversion<T, K extends string>(spec: TableSpec<T, K>): PgMigrationDefinition {
   const key = keyOf(spec as TableSpec<never, string>);
   const required = new Set<string>(spec.required ?? []);
   const fields = Object.entries(spec.columns) as Array<[string, ColumnType]>;
@@ -63,8 +61,42 @@ export function tableConversion<T, K extends string>(
       [key, "id"],
       ...fields.map(([field, type]) => [columnName(field), fromJson(field, type)]),
     ]),
-    ...opts,
+    ...(spec.indexes ? { indexes: spec.indexes } : {}),
   });
+}
+
+export function globalConversion<T, K extends string>(
+  spec: TableSpec<T, K>,
+  backfill: Readonly<Record<string, string>> = {},
+): PgMigrationDefinition {
+  const { table } = spec;
+  const key = keyOf(spec as TableSpec<never, string>);
+  const required = new Set<string>(spec.required ?? []);
+  const fields = Object.entries(spec.columns) as Array<[string, ColumnType]>;
+  const columns = fields.map(([field]) => columnName(field));
+  return {
+    id: `tenancy/${table}/0001-typed`,
+    statements: [
+      `SET LOCAL lock_timeout = '5s'`,
+      `CREATE TABLE IF NOT EXISTS ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+      `ALTER TABLE ${table} RENAME TO ${table}_kv`,
+      `ALTER INDEX ${table}_pkey RENAME TO ${table}_kv_pkey`,
+      `CREATE TABLE ${table}(${[
+        `${key} TEXT PRIMARY KEY`,
+        ...fields.map(
+          ([field, type]) => `${columnName(field)} ${type.toUpperCase()}${required.has(field) ? " NOT NULL" : ""}`,
+        ),
+      ].join(", ")})`,
+      `INSERT INTO ${table}(${[key, ...columns].join(", ")})
+         SELECT ${["id", ...fields.map(([field, type]) => backfill[field] ?? fromJson(field, type))].join(", ")} FROM ${table}_kv`,
+      `DROP TABLE ${table}_kv`,
+      `DO $drop_version$ BEGIN
+         IF to_regclass('durable_map_versions') IS NOT NULL THEN
+           DELETE FROM durable_map_versions WHERE tbl = '${table}';
+         END IF;
+       END $drop_version$`,
+    ],
+  };
 }
 
 function toParam(value: unknown, type: ColumnType): unknown {
@@ -115,6 +147,7 @@ export function typedTable<T extends object, K extends string = never>(
     );
   return {
     db,
+    close: () => db.close(),
     row,
     select,
     scoped,
@@ -124,8 +157,11 @@ export function typedTable<T extends object, K extends string = never>(
         String(r[key]),
         row(r),
       ]),
-    where: async (field: Extract<keyof T, string>, value: unknown) =>
-      (await db.q(`${select} WHERE ${scoped(`${columnName(field)} = $1`)} ORDER BY ${key}`, [value])).map(row),
+    where: async (field: Extract<keyof T, string>, value: unknown): Promise<Array<[string, T]>> =>
+      (await db.q(`${select} WHERE ${scoped(`${columnName(field)} = $1`)} ORDER BY ${key}`, [value])).map((r) => [
+        String(r[key]),
+        row(r),
+      ]),
     async put(id: string, record: T): Promise<void> {
       await put(id, record);
     },
@@ -164,6 +200,9 @@ export function typedTable<T extends object, K extends string = never>(
     async delete(id: string): Promise<void> {
       await db.q(`DELETE FROM ${spec.table} WHERE ${scoped(`${key} = $1`)}`, [id]);
     },
+    async deleteWhere(id: string, field: Extract<keyof T, string>, value: unknown): Promise<void> {
+      await db.q(`DELETE FROM ${spec.table} WHERE ${scoped(`${key} = $1 AND ${columnName(field)} = $2`)}`, [id, value]);
+    },
     take: async (id: string) =>
       one(
         await db.q(`DELETE FROM ${spec.table} WHERE ${scoped(`${key} = $1`)} RETURNING ${[key, ...cols].join(", ")}`, [
@@ -177,16 +216,22 @@ export type TypedTable<T extends object> = ReturnType<typeof typedTable<T, strin
 
 export type KeyedRows<T extends object> = Pick<
   TypedTable<T>,
-  "get" | "entries" | "put" | "putIfAbsent" | "merge" | "update" | "delete" | "take"
+  "get" | "entries" | "where" | "put" | "putIfAbsent" | "merge" | "update" | "delete" | "deleteWhere" | "take"
 >;
 
-export function memoryRows<T extends object>(): KeyedRows<T> {
-  const rows = tenantMap<T>();
+export function memoryRows<T extends object>(global = false): KeyedRows<T> {
+  const shared = new Map<string, T>();
+  const rows = global ? () => shared : tenantMap<T>();
   const copy = (value: T | undefined): T | null => (value === undefined ? null : structuredClone(value));
   return {
     get: async (id) => copy(rows().get(id)),
     entries: async () =>
       [...rows().entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, value]) => [id, structuredClone(value)]),
+    where: async (field, value) =>
+      [...rows().entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .filter(([, row]) => row[field] === value)
+        .map(([id, row]) => [id, structuredClone(row)]),
     async put(id, record) {
       rows().set(id, structuredClone(record));
     },
@@ -212,10 +257,21 @@ export function memoryRows<T extends object>(): KeyedRows<T> {
     async delete(id) {
       rows().delete(id);
     },
+    async deleteWhere(id, field, value) {
+      if (rows().get(id)?.[field] === value) rows().delete(id);
+    },
     async take(id) {
       const current = copy(rows().get(id));
       rows().delete(id);
       return current;
     },
   };
+}
+
+export function keyedRows<T extends object, K extends string = never>(
+  databaseUrl: string | undefined,
+  spec: TableSpec<T, K>,
+): KeyedRows<T> {
+  if (!databaseUrl) return memoryRows<T>(spec.global);
+  return typedTable(databaseUrl, spec, spec.global ? globalConversion(spec) : tableConversion(spec));
 }

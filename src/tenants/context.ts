@@ -31,7 +31,7 @@ export function currentTenant(): string {
 export function tenantMap<V>(): () => Map<string, V> {
   const tenants = new Map<string, Map<string, V>>();
   return () => {
-    const tenant = bound.getStore() ?? "";
+    const tenant = currentTenant();
     let rows = tenants.get(tenant);
     if (!rows) tenants.set(tenant, (rows = new Map()));
     return rows;

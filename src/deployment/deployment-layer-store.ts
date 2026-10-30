@@ -263,7 +263,7 @@ function validateBundle(
 
 export type DeploymentLayerRows = Pick<KeyedRows<StoredDeploymentLayer>, "get" | "putIfAbsent" | "update">;
 
-const LAYERS: TableSpec<StoredDeploymentLayer> = {
+export const DEPLOYMENT_LAYER: TableSpec<StoredDeploymentLayer> = {
   table: "deployment_layer",
   required: ["contentHash", "version", "updatedAt", "updatedBy", "bundle", "resolved"],
   columns: {
@@ -278,7 +278,7 @@ const LAYERS: TableSpec<StoredDeploymentLayer> = {
 };
 
 export function createPostgresDeploymentLayerRows(databaseUrl: string): DeploymentLayerRows {
-  const { get, putIfAbsent, update } = typedTable(databaseUrl, LAYERS, tableConversion(LAYERS));
+  const { get, putIfAbsent, update } = typedTable(databaseUrl, DEPLOYMENT_LAYER, tableConversion(DEPLOYMENT_LAYER));
   return { get, putIfAbsent, update };
 }
 

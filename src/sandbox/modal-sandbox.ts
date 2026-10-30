@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import { orgId as configOrgId } from "../config.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -76,6 +76,27 @@ export interface StoredModalSandbox {
   orgId?: string;
 }
 
+export const MODAL_SANDBOX_BODIES: TableSpec<StoredModalSandbox> = {
+  table: "modal_sandbox_bodies",
+  key: "scopeId",
+  required: ["sandboxId", "createdAtMs"],
+  columns: {
+    sandboxId: "text",
+    hydrationPending: "boolean",
+    nativeSnapshotId: "text",
+    nativeSnapshotExpiresAtMs: "bigint",
+    expiresAtMs: "bigint",
+    recoveryError: "text",
+    snapshotGeneration: "bigint",
+    createdAtMs: "bigint",
+    lastSnapshotMs: "bigint",
+    lastSnapshotAttemptMs: "bigint",
+    lastActivityMs: "bigint",
+    homeDirty: "boolean",
+    orgId: "text",
+  },
+};
+
 export interface ModalSandboxOptions extends BlobStagingOptions {
   client: ModalClient;
   advisoryLock: AdvisoryLock;
@@ -94,7 +115,7 @@ export interface ModalSandboxOptions extends BlobStagingOptions {
   lifetimeMarginMs?: number;
   checkpointRenewMarginMs?: number;
   orphanGraceMs?: number;
-  store: DurableMap<StoredModalSandbox>;
+  store: Pick<KeyedRows<StoredModalSandbox>, "get" | "entries" | "put" | "merge" | "update" | "delete">;
   snapshots?: HomeSnapshotStore;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -166,7 +187,6 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   async function snapshotHome(scope: string, session: ModalSession): Promise<void> {
     if (isJobComputerScope(scope)) return;
     await assertHydrated(session);
-    if (!store.update) throw new Error("native Modal checkpoints require an atomic durable store");
     const requested = await store.update(scope, (current) => {
       if (current.sandboxId !== session.sandboxId) throw new Error("Modal checkpoint source has been replaced");
       return {

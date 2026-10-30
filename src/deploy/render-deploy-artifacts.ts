@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mintDeployGitAccess } from "./access-token.ts";
 import type { Deployment, DeploymentVersion, DeployStore } from "./deploy-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 
 const PRINCIPAL_PREFIX = "render-deploy:";
 
@@ -16,6 +16,13 @@ export interface StoredRenderDeployCredential {
   principalId: string;
 }
 
+export const RENDER_DEPLOY_CREDENTIALS: TableSpec<StoredRenderDeployCredential> = {
+  table: "render_deploy_credentials",
+  key: "deploymentId",
+  required: ["principalId"],
+  columns: { principalId: "text" },
+};
+
 export interface RenderDeployArtifacts {
   prepare(deployment: Deployment, version: DeploymentVersion): Promise<RenderDeployArtifactAccess>;
   revoke(deploymentId: string): Promise<void>;
@@ -25,7 +32,7 @@ export interface RenderDeployArtifacts {
 export function createRenderDeployArtifacts(opts: {
   baseUrl: string;
   signingSecret: string;
-  store: DurableMap<StoredRenderDeployCredential>;
+  store: Pick<KeyedRows<StoredRenderDeployCredential>, "get" | "put" | "delete">;
   deployStore: Pick<DeployStore, "versionOf">;
 }): RenderDeployArtifacts {
   return {

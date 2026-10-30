@@ -10,7 +10,7 @@ import { createAwsSandbox } from "../src/sandbox/aws-sandbox.ts";
 import { effectiveEgressEnforcement } from "../src/sandbox/sandbox.ts";
 import { installFakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 async function withWorkspace<T>(fn: (dir: string) => Promise<T> | T): Promise<T> {
@@ -25,7 +25,7 @@ async function withWorkspace<T>(fn: (dir: string) => Promise<T> | T): Promise<T>
 function awsSandbox(extraTools: string[]) {
   const fake = installFakeMicrovm();
   return createAwsSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "aws-profile-"))), {
-    store: createMemoryMap(),
+    store: memoryRows(),
     ...singleProcessDeps(),
     region: "us-west-2",
     imageIdentifier: "img",
@@ -41,7 +41,7 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
   await withWorkspace(async (dir) => {
     const workspace = createLocalWorkspaceStore(dir);
     const sprites = createSpritesSandbox(workspace, {
-      initializationStore: createMemoryMap(),
+      initializationStore: memoryRows(),
       advisoryLock: createMemoryAdvisoryLock(),
       token: "test-token",
     });
@@ -80,7 +80,7 @@ test("a layer that advertises a tool removes it from notInstalled (no install/no
 test("egress enforcement is effective only when core can mint a reachable proxy token", async () => {
   await withWorkspace((dir) => {
     const sprites = createSpritesSandbox(createLocalWorkspaceStore(dir), {
-      initializationStore: createMemoryMap(),
+      initializationStore: memoryRows(),
       advisoryLock: createMemoryAdvisoryLock(),
       token: "test-token",
       egressProxyUrl: "https://egress-proxy.example.com",

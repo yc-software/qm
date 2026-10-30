@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -79,10 +79,25 @@ export interface StoredConfigEpoch {
   generation: number;
 }
 
+export const SUPERSERVE_SANDBOX_BODIES: TableSpec<StoredSuperserveSandbox> = {
+  table: "superserve_sandbox_bodies",
+  key: "scopeId",
+  required: ["sandboxId", "createdAtMs"],
+  columns: { sandboxId: "text", createdAtMs: "bigint" },
+};
+
+export const SUPERSERVE_CONFIG_EPOCHS: TableSpec<StoredConfigEpoch> = {
+  table: "superserve_config_epochs",
+  key: "generationKey",
+  global: true,
+  required: ["generation"],
+  columns: { generation: "bigint" },
+};
+
 const CONFIG_EPOCH_LOCK = "superserve-config-epoch";
 
 export function createConfigEpochResolver(
-  store: DurableMap<StoredConfigEpoch>,
+  store: Pick<KeyedRows<StoredConfigEpoch>, "get" | "entries" | "put">,
   generationKey: string,
   lock: AdvisoryLock,
 ): () => Promise<number> {
@@ -119,7 +134,7 @@ export interface SuperserveSandboxOptions extends BlobStagingOptions {
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
   layerToolFiles?: () => readonly LayerInstallFile[];
-  store: DurableMap<StoredSuperserveSandbox>;
+  store: Pick<KeyedRows<StoredSuperserveSandbox>, "get" | "put" | "delete" | "deleteWhere">;
   advisoryLock: AdvisoryLock;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
@@ -245,12 +260,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   }
 
   async function forget(scope: string, sandboxId: string): Promise<void> {
-    if (store.deleteIf) {
-      await store.deleteIf(scope, (record) => record.sandboxId === sandboxId);
-      return;
-    }
-    const stored = await store.get(scope);
-    if (stored?.sandboxId === sandboxId) await store.delete(scope);
+    await store.deleteWhere(scope, "sandboxId", sandboxId);
   }
 
   async function reconnect(

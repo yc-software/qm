@@ -1,4 +1,5 @@
 import { test, after, beforeEach } from "node:test";
+import { memoryRows, type KeyedRows } from "../src/persistence/typed-table.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
@@ -6,7 +7,6 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/deploy/porter-deploy-provider.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
@@ -25,7 +25,7 @@ const SERVER = [
 ].join(" ");
 
 let fake: FakePorter;
-let store: DurableMap<StoredPorterDeployBody>;
+let store: KeyedRows<StoredPorterDeployBody>;
 let provider: DeployProvider;
 let appPort: number;
 let reported: { category: string; code: string; message: string; scopeLabel: string }[] = [];
@@ -80,7 +80,7 @@ function make(
 ): void {
   fake?.cleanup();
   fake = installFakePorter(extra.terminateLag ? { terminateLag: extra.terminateLag } : {});
-  store = createMemoryMap<StoredPorterDeployBody>();
+  store = memoryRows<StoredPorterDeployBody>();
   provider = createPorterDeployProvider({
     ...singleProcessDeps(),
     appsDomain: "apps.test",

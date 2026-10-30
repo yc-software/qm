@@ -32,7 +32,7 @@ import {
   turnFileId,
 } from "../src/core/attachments.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 test("turn file ids are stable within one attempt and fenced across retries", () => {
@@ -504,7 +504,7 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-rm-")));
   const sandbox = createSpritesSandbox(ws, {
-    initializationStore: createMemoryMap(),
+    initializationStore: memoryRows(),
     advisoryLock: createMemoryAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,
@@ -529,7 +529,7 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   after(() => ff.cleanup());
   const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "fs-bin-")));
   const sandbox = createSpritesSandbox(ws, {
-    initializationStore: createMemoryMap(),
+    initializationStore: memoryRows(),
     advisoryLock: createMemoryAdvisoryLock(),
     token: "test-token",
     baseUrl: ff.baseUrl,

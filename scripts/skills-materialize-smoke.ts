@@ -1,4 +1,5 @@
 import { mkdtempSync } from "node:fs";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
@@ -8,7 +9,6 @@ import { loadConfig } from "../src/config.ts";
 import { materializeSkillTree } from "../src/skills/materialize.ts";
 import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-store.ts";
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 
 if (!process.env.SPRITES_TOKEN) {
@@ -30,7 +30,7 @@ const scope = scopeId("personal", "qm-skills-smoke");
 const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "skills-smoke-")));
 const sb = createSpritesSandbox(ws, {
   ...loadConfig().spritesSandbox,
-  initializationStore: createMemoryMap(),
+  initializationStore: memoryRows(true),
   advisoryLock: createMemoryAdvisoryLock(),
 });
 

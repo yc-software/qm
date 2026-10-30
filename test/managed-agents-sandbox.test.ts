@@ -18,7 +18,7 @@ import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import type { HomeSnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { memoryRows, type KeyedRows } from "../src/persistence/typed-table.ts";
 import { scopeId } from "../src/types.ts";
 import { prepareExecutionFiles } from "../src/credentials/execute-files.ts";
 import { installFakeManagedAgents, type FakeManagedAgents } from "./support/fake-managed-agents.ts";
@@ -34,7 +34,7 @@ const scopeName = (): string => sandboxScopeName("qmt", scope);
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createManagedAgentsSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "managed-agents-ws-"))), {
     snapshots: createMemorySnapshotStore(),
-    store: createMemoryMap(),
+    store: memoryRows(),
     client: fake.client,
     namePrefix: "qmt",
     ...extra,
@@ -74,7 +74,7 @@ test("the session is named after the scope so an operator can find it", async ()
 });
 
 test("teardown captures a provider checkpoint before pausing", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.run(h, "echo hi > kept.txt");
@@ -92,7 +92,7 @@ test("teardown captures a provider checkpoint before pausing", async () => {
 });
 
 test("restart rolls a paused session back to its checkpoint without resuming the old microVM", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   const restored: string[] = [];
   sandbox = make({
     store,
@@ -124,7 +124,7 @@ test("restart rolls a paused session back to its checkpoint without resuming the
 });
 
 test("restart drops a warm guest's port-forward before rolling back", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h, { keepWarm: true });
@@ -142,7 +142,7 @@ test("restart without a checkpoint does not call rollback", async () => {
 });
 
 test("a failed rollback keeps the stored sandbox and the same session", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
@@ -157,7 +157,7 @@ test("a failed rollback keeps the stored sandbox and the same session", async ()
 });
 
 test("a checkpoint failure is recorded and the session still pauses", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   fake.failNextCheckpoint(scopeName());
@@ -178,7 +178,7 @@ test("checkpoint capture is throttled across a pause and resume", async () => {
 });
 
 test("a newer checkpoint replaces the previous one", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   sandbox = make({ store, snapshotIntervalMs: -1 });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h);
@@ -194,7 +194,7 @@ test("a newer checkpoint replaces the previous one", async () => {
 });
 
 test("a failed checkpoint delete is remembered and retried without another capture", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   const fast = make({ store, snapshotIntervalMs: -1 });
   const h = await fast.provision(layers);
   await fast.teardown(h);
@@ -256,7 +256,7 @@ test("keepWarm teardown leaves the session running for background work", async (
 });
 
 test("a lost session is re-adopted by name when the durable record is gone", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
   await sandbox.provision(layers);
   const before = fake.current(scopeName());
@@ -310,7 +310,7 @@ test("files round trip through the data plane", async () => {
 });
 
 test("destroy removes the session and its durable record", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
   const h = await sandbox.provision(layers);
   await sandbox.teardown(h, { destroy: true });
@@ -342,7 +342,7 @@ test("computerStatus on an unprovisioned scope reports nothing provisioned", asy
 });
 
 test("scratch sandboxes are reference counted and never persisted", async () => {
-  const store: DurableMap<StoredManagedAgentsSandbox> = createMemoryMap<StoredManagedAgentsSandbox>();
+  const store: KeyedRows<StoredManagedAgentsSandbox> = memoryRows<StoredManagedAgentsSandbox>();
   sandbox = make({ store });
   const a = await sandbox.provision(layers, { scratch: { key: "k1" } });
   const b = await sandbox.provision(layers, { scratch: { key: "k1" } });

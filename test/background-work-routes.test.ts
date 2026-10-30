@@ -7,7 +7,7 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -16,7 +16,7 @@ const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/background-work";
 
 async function fixture(secret: string | undefined = controlSecret) {
-  const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
+  const store = createBackgroundOwnershipStore(memoryRows<BackgroundOwnership>(true));
   await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
   let active = false;
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));

@@ -4,7 +4,7 @@ import { orgId as configOrgId } from "../config.ts";
 import type { WorkspaceLayer } from "../types.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
@@ -63,6 +63,24 @@ export interface StoredMicrovm {
   orgId?: string;
 }
 
+export const AWS_SANDBOX_BODIES: TableSpec<StoredMicrovm> = {
+  table: "aws_sandbox_bodies",
+  key: "scopeId",
+  required: ["microvmId", "endpoint", "createdAtMs"],
+  indexes: ["CREATE INDEX aws_sandbox_bodies_microvm ON aws_sandbox_bodies(tenant_id, microvm_id)"],
+  columns: {
+    microvmId: "text",
+    endpoint: "text",
+    imageVersion: "text",
+    createdAtMs: "bigint",
+    lastSnapshotMs: "bigint",
+    lastActivityMs: "bigint",
+    homeDirty: "boolean",
+    provisioning: "boolean",
+    orgId: "text",
+  },
+};
+
 export interface AwsSandboxOptions extends BlobStagingOptions {
   region: string;
   profile?: string;
@@ -83,7 +101,7 @@ export interface AwsSandboxOptions extends BlobStagingOptions {
   cpus?: number;
   memoryMb?: number;
   diskGb?: number;
-  store: DurableMap<StoredMicrovm>;
+  store: Pick<KeyedRows<StoredMicrovm>, "get" | "entries" | "where" | "put" | "merge" | "delete">;
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];
@@ -582,8 +600,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
   async function scopeOf(microvmId: string): Promise<string | undefined> {
     const cached = scopeByMicrovm.get(microvmId);
     if (cached) return cached;
-    for (const [scope, rec] of await store.entries()) if (rec.microvmId === microvmId) return scope;
-    return undefined;
+    return (await store.where("microvmId", microvmId))[0]?.[0];
   }
 
   return sandbox;

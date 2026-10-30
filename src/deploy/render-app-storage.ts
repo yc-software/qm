@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { renderJobCommand } from "../../cli/src/render-job-command.ts";
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import { sleep } from "../util/async.ts";
 import { uuidSchema } from "../util/ids.ts";
 import { shq } from "../util/shell.ts";
@@ -13,6 +13,13 @@ export interface StoredRenderAppStorage {
   secretKeyEnc: string;
   enabled: boolean;
 }
+
+export const RENDER_APP_STORAGE: TableSpec<StoredRenderAppStorage, "deploymentId"> = {
+  table: "render_app_storage",
+  fieldKey: "deploymentId",
+  required: ["accessKey", "secretKeyEnc", "enabled"],
+  columns: { accessKey: "text", secretKeyEnc: "text", enabled: "boolean" },
+};
 
 interface Job {
   id: string;
@@ -56,7 +63,7 @@ export function createRenderAppStorage(opts: {
   bucket: string;
   prefix?: string;
   region?: string;
-  store: DurableMap<StoredRenderAppStorage>;
+  store: Pick<KeyedRows<StoredRenderAppStorage>, "get" | "put" | "putIfAbsent">;
   keyMaterial: string | Buffer;
   api?: RenderApi;
   pollIntervalMs?: number;

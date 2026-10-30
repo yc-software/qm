@@ -3,10 +3,13 @@ import test from "node:test";
 import { withTenant } from "../src/tenants/context.ts";
 import { createSandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
 import type { SandboxResource } from "../src/sandbox/sandbox-resources.ts";
-import {
-  createPostgresDeploymentLayerRows,
-  type StoredDeploymentLayer,
-} from "../src/deployment/deployment-layer-store.ts";
+import { DEPLOYMENT_LAYER, type StoredDeploymentLayer } from "../src/deployment/deployment-layer-store.ts";
+import { tableConversion, typedTable, type TableSpec } from "../src/persistence/typed-table.ts";
+
+const table =
+  <T extends object>(spec: TableSpec<T>) =>
+  (url: string) =>
+    typedTable(url, spec, tableConversion(spec));
 import { seedKeyValueTable, skipWithoutPg as skip, withTypedTableDb } from "./support/typed-table.ts";
 
 const resource = (id: string, extra: Partial<SandboxResource> = {}): SandboxResource => ({
@@ -101,7 +104,7 @@ test("the deployment layer row backfills and stays per tenant", { skip }, async 
     pendingAudits: [{ contentHash: "abc", version: 3, updatedAt: 1, updatedBy: "admin" }],
   } as unknown as StoredDeploymentLayer;
   await withTypedTableDb(
-    createPostgresDeploymentLayerRows,
+    table(DEPLOYMENT_LAYER),
     async ({ store, tenant, otherTenant }) => {
       await withTenant(tenant, async () => assert.deepEqual(await store.get("current"), layer));
       await withTenant(otherTenant, async () => {
