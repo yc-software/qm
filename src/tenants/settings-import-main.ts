@@ -7,11 +7,11 @@ import { instanceTenant } from "./instance.ts";
 import { importTenantSettings, tenantImportKeys } from "./settings-import.ts";
 
 const config = loadConfig();
-const tenant = await instanceTenant(config);
-if (!tenant) throw new Error("Importing tenant settings needs SESSION_STORE=postgres and DATABASE_URL");
 const built = buildApp(config);
 try {
   await migrateRegisteredPgSchemas(config.databaseUrl);
+  const tenant = await instanceTenant(config);
+  if (!tenant) throw new Error("Importing tenant settings needs SESSION_STORE=postgres and DATABASE_URL");
   const values = Object.fromEntries(
     tenantImportKeys().flatMap((key) => (process.env[key] === undefined ? [] : [[key, process.env[key]!]])),
   );

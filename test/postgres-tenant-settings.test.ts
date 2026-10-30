@@ -48,7 +48,9 @@ async function withSettingsDb(
 test("tenant settings are stored per tenant, sealed at rest, and never read across tenants", { skip }, async () => {
   await withSettingsDb(async ({ app, admin, a, b }) => {
     const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, harness: "pi", cacheMs: 0 });
-    await withTenant(a, () => store.update({ SPRITES_TOKEN: "sprites-a", SANDBOX_BACKEND: "sprites", PI_MODEL: "m-a" }));
+    await withTenant(a, () =>
+      store.update({ SPRITES_TOKEN: "sprites-a", SANDBOX_BACKEND: "sprites", PI_MODEL: "m-a" }),
+    );
     await withTenant(b, () => store.update({ E2B_API_KEY: "e2b-b", SANDBOX_BACKEND: "e2b" }));
     const seenByA = await withTenant(a, () => store.get());
     const seenByB = await withTenant(b, () => store.get());
@@ -84,7 +86,10 @@ test("a sealed secret copied into another tenant's row does not open there", { s
         WHERE tenant_id = $2`,
       [a, b],
     );
-    await assert.rejects(withTenant(b, () => store.get()), /Unsupported state or unable to authenticate data/);
+    await assert.rejects(
+      withTenant(b, () => store.get()),
+      /Unsupported state or unable to authenticate data/,
+    );
     assert.equal((await withTenant(a, () => store.get())).values.SPRITES_TOKEN, "sprites-a");
   });
 });
