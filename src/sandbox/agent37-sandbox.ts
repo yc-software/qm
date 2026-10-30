@@ -103,7 +103,7 @@ interface InstanceExecResponse {
 }
 
 export interface Agent37SandboxOptions {
-  apiKey?: string;
+  apiKey: () => Promise<string>;
   baseUrl?: string;
   namePrefix?: string;
   template?: string;
@@ -124,7 +124,6 @@ export interface Agent37SandboxOptions {
 }
 
 export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37SandboxOptions): Sandbox {
-  if (!opts.apiKey && !opts.fetchImpl) throw new Error("SANDBOX_BACKEND=agent37 requires AGENT37_API_KEY");
   const fetchImpl = opts.fetchImpl ?? fetch;
   const baseUrl = (opts.baseUrl ?? DEFAULT_AGENT37_BASE_URL).replace(/\/+$/, "");
   const prefix = opts.namePrefix ?? "qm";
@@ -144,7 +143,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
   const scratchKeyByName = new Map<string, string>();
   const activeScratch = new Map<string, number>();
 
-  function send(
+  async function send(
     method: string,
     path: string,
     body?: unknown,
@@ -154,7 +153,7 @@ export function createAgent37Sandbox(workspace: WorkspaceStore, opts: Agent37San
     return fetchImpl(`${baseUrl}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${opts.apiKey ?? ""}`,
+        authorization: `Bearer ${await opts.apiKey()}`,
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),

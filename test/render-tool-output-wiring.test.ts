@@ -34,7 +34,6 @@ test("parked tool output uses the configured S3 endpoint and bucket path", async
     return Reflect.apply(send, this, [command]);
   });
   const config = testConfig({
-    sandboxBackend: "local",
     databaseUrl: "postgres://unused/unused",
     sessionStore: "postgres",
     snapshotStore: "s3",

@@ -20,6 +20,7 @@ import {
   type StoredRenderScratch,
 } from "./sandbox/render-sandbox.ts";
 import { createSdkRenderClient } from "./sandbox/render-client.ts";
+import { RENDER_SANDBOX_TTL_SEC } from "./sandbox/render-limits.ts";
 import { createKeychainApprovals, type KeychainApprovals } from "./credentials/keychain-approval.ts";
 import { flushErrorReporting, tracePhase } from "../plugins/chassis/src/error-reporting.ts";
 import { createProductAnalytics } from "./util/product-analytics.ts";
@@ -73,7 +74,7 @@ import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import { enabledSandboxBackends, type Config } from "./config.ts";
+import type { Config } from "./config.ts";
 import { createTenantModels, harnessCarriedModelAuthFor } from "./model/tenant-models.ts";
 import { currentTenant } from "./tenants/context.ts";
 import type { ServerDeps } from "./api/deps.ts";
@@ -243,13 +244,10 @@ import { createModalSandbox, type StoredModalSandbox } from "./sandbox/modal-san
 import { createSdkModalClient } from "./sandbox/modal-client.ts";
 import { createPorterSandbox } from "./sandbox/porter-sandbox.ts";
 import { createSandboxRouter, type SandboxBackendName } from "./sandbox/sandbox-routing.ts";
-import {
-  upgradeLegacySandboxes,
-  legacySandboxBackendForScope,
-  type LegacyRoute,
-} from "./sandbox/sandbox-resource-upgrade.ts";
-import { effectiveEgressEnforcement, type Sandbox } from "./sandbox/sandbox.ts";
+import { upgradeLegacySandboxes, type LegacyRoute } from "./sandbox/sandbox-resource-upgrade.ts";
+import type { Sandbox } from "./sandbox/sandbox.ts";
 import { createTenantSettingsStore, type TenantSettingsStore } from "./tenants/settings.ts";
+import { tenantSandboxClients, tenantSandboxRouting } from "./sandbox/tenant-credentials.ts";
 import {
   credentialRequestHeaders,
   createKeychain,
@@ -855,10 +853,12 @@ export function buildApp(
       ...config.localSandbox,
       onError: sandboxOnError,
     });
+  const tenantClients = tenantSandboxClients(() => tenantSettings.get());
   const buildSprites = (): Sandbox => {
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
     return createSpritesSandbox(workspace, {
       ...sprites,
+      token: tenantClients.sprites,
       initializationStore: artifactMap<{ pending: boolean }>("sprites_initialization"),
       advisoryLock,
       ...(snapshotS3Bucket
@@ -880,6 +880,7 @@ export function buildApp(
     const { snapshotS3Bucket, snapshotIntervalSec, ...smol } = config.smolmachinesSandbox;
     return createSmolmachinesSandbox(workspace, {
       ...smol,
+      token: tenantClients.smolmachines,
       ...(snapshotIntervalSec !== undefined ? { snapshotIntervalMs: snapshotIntervalSec * 1000 } : {}),
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
@@ -902,13 +903,11 @@ export function buildApp(
   const renderBodies = artifactMap<StoredRenderSandbox>("render_sandbox_bodies");
   const renderScratch = artifactMap<StoredRenderScratch>("render_scratch_bodies");
   const renderCleanup = artifactMap<StoredRenderCleanup>("render_sandbox_cleanup");
-  const e2bClient = (use: "computers" | "apps"): E2bClient => {
+  const e2bClient = (use: "computers" | "apps", apiKey: string): E2bClient => {
     const e2b = config.e2bSandbox;
-    if (!e2b.apiKey)
-      throw new Error(`${use === "apps" ? "DEPLOY_PROVIDER" : "SANDBOX_BACKEND"}=e2b requires E2B_API_KEY`);
     const ttlSec = use === "apps" ? E2B_DEPLOY_IDLE_TIMEOUT_SEC : e2b.sandboxTtlSec;
     return createSdkE2bClient({
-      apiKey: e2b.apiKey,
+      apiKey,
       ...(e2b.templateId ? { templateId: e2b.templateId } : {}),
       ...(ttlSec ? { sandboxTtlMs: ttlSec * 1000 } : {}),
       ...(e2b.maxLifetimeSec ? { maxLifetimeMs: e2b.maxLifetimeSec * 1000 } : {}),
@@ -920,7 +919,7 @@ export function buildApp(
     const e2b = config.e2bSandbox;
     return createE2bSandbox(workspace, {
       advisoryLock,
-      client: e2bClient("computers"),
+      client: tenantClients.e2b((apiKey) => e2bClient("computers", apiKey)),
       ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
       ...(e2b.defaultTimeoutSec ? { defaultTimeoutSec: e2b.defaultTimeoutSec } : {}),
       keepWarmSec: Math.ceil(config.backgroundJobTtlMaxMs / 1000),
@@ -946,16 +945,17 @@ export function buildApp(
   const managedAgentsBodies = artifactMap<StoredManagedAgentsSandbox>("do_managed_agents_sandbox_bodies");
   const buildManagedAgents = (): Sandbox => {
     const managedAgents = config.managedAgentsSandbox;
-    if (!managedAgents.apiToken) throw new Error("SANDBOX_BACKEND=do-managed-agents requires DO_AGENTS_API_TOKEN");
     return createManagedAgentsSandbox(workspace, {
-      client: createSdkManagedAgentsClient({
-        apiToken: managedAgents.apiToken,
-        ...(managedAgents.apiBaseUrl ? { apiBaseUrl: managedAgents.apiBaseUrl } : {}),
-        ...(managedAgents.template ? { template: managedAgents.template } : {}),
-        ...(managedAgents.sizeSlug ? { sizeSlug: managedAgents.sizeSlug } : {}),
-        ...(managedAgents.idleTimeoutSec ? { idleTimeoutSec: managedAgents.idleTimeoutSec } : {}),
-        ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
-      }),
+      client: tenantClients.managedAgents((apiToken) =>
+        createSdkManagedAgentsClient({
+          apiToken,
+          ...(managedAgents.apiBaseUrl ? { apiBaseUrl: managedAgents.apiBaseUrl } : {}),
+          ...(managedAgents.template ? { template: managedAgents.template } : {}),
+          ...(managedAgents.sizeSlug ? { sizeSlug: managedAgents.sizeSlug } : {}),
+          ...(managedAgents.idleTimeoutSec ? { idleTimeoutSec: managedAgents.idleTimeoutSec } : {}),
+          ...(managedAgents.egressProxyUrl ? { egressProxyUrl: managedAgents.egressProxyUrl } : {}),
+        }),
+      ),
       ...(managedAgents.namePrefix ? { namePrefix: managedAgents.namePrefix } : {}),
       ...(managedAgents.defaultTimeoutSec ? { defaultTimeoutSec: managedAgents.defaultTimeoutSec } : {}),
       ...(managedAgents.snapshotIntervalSec !== undefined
@@ -980,24 +980,26 @@ export function buildApp(
   };
   const buildModal = (): Sandbox => {
     const modal = config.modalSandbox;
-    if (!modal.tokenId || !modal.tokenSecret)
-      throw new Error("SANDBOX_BACKEND=modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET");
     return createModalSandbox(workspace, {
       advisoryLock,
-      client: createSdkModalClient({
-        tokenId: modal.tokenId,
-        tokenSecret: modal.tokenSecret,
-        appName: modal.appName ?? "qm",
-        ...(modal.image ? { image: modal.image } : {}),
-        ...(modal.environment ? { environment: modal.environment } : {}),
-        ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
-        ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
-        ...(modal.regions?.length ? { regions: modal.regions } : {}),
-        ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
-        ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
-        ...(modal.snapshotRetentionSec !== undefined ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 } : {}),
-        ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
-      }),
+      client: tenantClients.modal(modal.sandboxTimeoutSec, (tokenId, tokenSecret) =>
+        createSdkModalClient({
+          tokenId,
+          tokenSecret,
+          appName: modal.appName ?? "qm",
+          ...(modal.image ? { image: modal.image } : {}),
+          ...(modal.environment ? { environment: modal.environment } : {}),
+          ...(modal.cpus !== undefined ? { cpus: modal.cpus } : {}),
+          ...(modal.memoryMb !== undefined ? { memoryMb: modal.memoryMb } : {}),
+          ...(modal.regions?.length ? { regions: modal.regions } : {}),
+          ...(modal.sandboxTimeoutSec ? { sandboxTimeoutMs: modal.sandboxTimeoutSec * 1000 } : {}),
+          ...(modal.reapIdleSec ? { idleTimeoutMs: 2 * modal.reapIdleSec * 1000 } : {}),
+          ...(modal.snapshotRetentionSec !== undefined
+            ? { snapshotRetentionMs: modal.snapshotRetentionSec * 1000 }
+            : {}),
+          ...(modal.egressProxyUrl ? { egressProxyUrl: modal.egressProxyUrl } : {}),
+        }),
+      ),
       ...(modal.namePrefix ? { namePrefix: modal.namePrefix } : {}),
       ...(modal.defaultTimeoutSec ? { defaultTimeoutSec: modal.defaultTimeoutSec } : {}),
       ...(modal.nativeSnapshotIntervalSec !== undefined
@@ -1024,6 +1026,7 @@ export function buildApp(
   const buildAgent37 = (): Sandbox =>
     createAgent37Sandbox(workspace, {
       ...config.agent37Sandbox,
+      apiKey: tenantClients.agent37,
       advisoryLock,
       blobTransfer,
       extraTools: deploymentLayer.advertisedTools,
@@ -1037,7 +1040,6 @@ export function buildApp(
   const superserveEpochs = artifactMap<StoredConfigEpoch>("superserve_config_epochs");
   const buildSuperserve = (): Sandbox => {
     const ss = config.superserveSandbox;
-    if (!ss.apiKey) throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_API_KEY");
     if (!ss.template)
       throw new Error("SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE (a ready qm-agent-<release> template)");
     const keepWarmSec = Math.ceil(config.backgroundJobTtlMaxMs / 1000);
@@ -1059,11 +1061,13 @@ export function buildApp(
       .slice(0, 32);
     return createSuperserveSandbox(workspace, {
       configEpoch: ss.configGeneration ?? createConfigEpochResolver(superserveEpochs, generationKey, advisoryLock),
-      client: createSdkSuperserveClient({
-        apiKey: ss.apiKey,
-        ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
-        ...(ss.template ? { template: ss.template } : {}),
-      }),
+      client: tenantClients.superserve((apiKey) =>
+        createSdkSuperserveClient({
+          apiKey,
+          ...(ss.baseUrl ? { baseUrl: ss.baseUrl } : {}),
+          ...(ss.template ? { template: ss.template } : {}),
+        }),
+      ),
       ...(ss.namePrefix ? { namePrefix: ss.namePrefix } : {}),
       template: ss.template,
       ...(ss.homeDir ? { homeDir: ss.homeDir } : {}),
@@ -1115,14 +1119,8 @@ export function buildApp(
     });
   const buildRender = (): Sandbox => {
     const render = config.renderSandbox;
-    if (!render.apiKey || !render.workspaceId) {
-      throw new Error("SANDBOX_BACKEND=render requires RENDER_API_KEY and RENDER_WORKSPACE_ID");
-    }
     return createRenderSandbox(workspace, {
-      client: createSdkRenderClient({
-        apiKey: render.apiKey,
-        workspaceId: render.workspaceId,
-      }),
+      client: tenantClients.render((apiKey, workspaceId) => createSdkRenderClient({ apiKey, workspaceId })),
       ...(render.defaultTimeoutSec !== undefined ? { defaultTimeoutSec: render.defaultTimeoutSec } : {}),
       store: renderBodies,
       scratchStore: renderScratch,
@@ -1138,26 +1136,28 @@ export function buildApp(
       onError: sandboxOnError,
     });
   };
-  const buildBackend: Record<Config["sandboxBackend"], () => Sandbox> = {
-    local: buildLocal,
+  const renderFits = (config.renderSandbox.defaultTimeoutSec ?? 600) + 60 < RENDER_SANDBOX_TTL_SEC;
+  const buildBackend: Partial<Record<SandboxBackendName, () => Sandbox>> = {
+    ...(config.localSandbox.image ? { local: buildLocal } : {}),
     sprites: buildSprites,
     smolmachines: buildSmolmachines,
     e2b: buildE2b,
     modal: buildModal,
-    aws: buildAws,
-    porter: buildPorter,
+    ...(config.awsSandbox.s3Bucket ? { aws: buildAws } : {}),
+    ...(config.porterSandbox.token ? { porter: buildPorter } : {}),
     agent37: buildAgent37,
-    render: buildRender,
-    superserve: buildSuperserve,
+    ...(config.workspaceStore === "postgres" && renderFits ? { render: buildRender } : {}),
+    ...(config.superserveSandbox.template ? { superserve: buildSuperserve } : {}),
     "do-managed-agents": buildManagedAgents,
   };
-  const enabledBackends = new Set(enabledSandboxBackends(config));
-  const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = {
-    [config.sandboxBackend]: buildBackend[config.sandboxBackend](),
-  };
-  for (const name of Object.keys(buildBackend) as Array<Config["sandboxBackend"]>) {
-    if (name !== config.sandboxBackend && enabledBackends.has(name)) sandboxBackends[name] = buildBackend[name]();
-  }
+  const sandboxBackends: Partial<Record<SandboxBackendName, Sandbox>> = Object.fromEntries(
+    Object.entries(buildBackend).map(([name, build]) => [name, build()]),
+  );
+  const tenantRouting = tenantSandboxRouting(
+    () => tenantSettings.get(),
+    sandboxBackends,
+    config.legacySandboxScopeDefaults,
+  );
   const sandboxRecords = artifactMap<SandboxResource>("sandbox_resources");
   const sandboxDefaults = artifactMap<SandboxDefault>("sandbox_defaults");
   const sandboxResources = createSandboxResources({
@@ -1165,14 +1165,12 @@ export function buildApp(
     defaults: sandboxDefaults,
     upgrade: () =>
       upgradeLegacySandboxes({
-        availableBackends: Object.keys(sandboxBackends) as SandboxBackendName[],
+        backends: tenantRouting.legacy,
         records: sandboxRecords,
         defaults: sandboxDefaults,
         marker: artifactMap<{ activatedAt: string }>("sandbox_resource_rollout"),
         routes: () => artifactMap<LegacyRoute>("sandbox_routing").entries(),
         lock: advisoryLock,
-        legacyBackend: (scope) =>
-          legacySandboxBackendForScope(scope, config.sandboxBackend, config.legacySandboxScopeDefaults),
         specFor: (backend) => sandboxBackends[backend]?.profile.spec,
         legacyScopes: async () => [
           ...(await sessions.distinctScopes()).map((scope) => scope.scopeId),
@@ -1198,7 +1196,8 @@ export function buildApp(
         },
       }),
     backends: sandboxBackends,
-    defaultBackend: config.sandboxBackend,
+    defaultBackend: tenantRouting.defaultBackend,
+    usableBackends: tenantRouting.usable,
     lock: advisoryLock,
     beforeRetire: async (record) => {
       if ((await processes?.liveByScope(record.ownerScopeId))?.some((process) => process.sandboxId === record.id))
@@ -1225,7 +1224,7 @@ export function buildApp(
   const sandbox: Sandbox = createSandboxRouter({
     resources: sandboxResources,
     backends: sandboxBackends,
-    defaultBackend: config.sandboxBackend,
+    defaultBackend: tenantRouting.defaultBackend,
     onError: sandboxOnError,
   });
   const resolveClient: OAuthClientResolver = withPublicOAuthClients(
@@ -1762,8 +1761,9 @@ export function buildApp(
       }),
     e2b: () => {
       const e2b = config.e2bSandbox;
+      if (!e2b.deployApiKey) throw new Error("DEPLOY_PROVIDER=e2b requires E2B_API_KEY");
       return createE2bDeployProvider({
-        client: e2bClient("apps"),
+        client: e2bClient("apps", e2b.deployApiKey),
         ...(e2b.namePrefix ? { namePrefix: e2b.namePrefix } : {}),
         advisoryLock,
         store: artifactMap<StoredE2bDeployBody>("e2b_deploy_bodies"),
@@ -3219,12 +3219,6 @@ export function serverDeps(
     ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
     memory: built.memory,
     blobTransfer: built.blobTransfer,
-    sandboxBackend: built.sandbox.profile.backend,
-    egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
-    egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {
-      signingSecret: config.signingSecret,
-      apiBaseUrl: config.apiBaseUrl,
-    }),
     egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
     sandbox: built.sandbox,
     advisoryLock: built.advisoryLock,

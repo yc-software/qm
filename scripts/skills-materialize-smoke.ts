@@ -30,6 +30,7 @@ const scope = scopeId("personal", "qm-skills-smoke");
 const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "skills-smoke-")));
 const sb = createSpritesSandbox(ws, {
   ...loadConfig().spritesSandbox,
+  token: async () => process.env.SPRITES_TOKEN ?? "",
   initializationStore: createMemoryMap(),
   advisoryLock: createMemoryAdvisoryLock(),
 });

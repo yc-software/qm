@@ -39,7 +39,7 @@ function requestScope(req: TurnRequest): string | null {
 }
 async function selectComputer(built: ReturnType<typeof buildAppRaw>, actorId: string, scope: ScopeId) {
   const asSpeaker = built.sandboxResources.forTurn({ actorId, scopeId: scope, isCurrent: async () => true });
-  const computer = await asSpeaker.create(actorId, scope, built.sandboxResources.defaultBackend());
+  const computer = await asSpeaker.create(actorId, scope, await built.sandboxResources.defaultBackend());
   await asSpeaker.setDefault(actorId, scope, computer.id);
   return computer;
 }

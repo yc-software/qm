@@ -128,8 +128,11 @@ export function modalEgressAllowlist(
   );
 }
 
+export const modalSandboxLifetimeMs = (sandboxTimeoutMs?: number): number =>
+  wholeSeconds(Math.min(sandboxTimeoutMs ?? MAX_LIFETIME_MS, MAX_LIFETIME_MS));
+
 export function createSdkModalClient(opts: SdkModalClientOptions): ModalClient {
-  const sandboxTimeoutMs = wholeSeconds(Math.min(opts.sandboxTimeoutMs ?? MAX_LIFETIME_MS, MAX_LIFETIME_MS));
+  const sandboxTimeoutMs = modalSandboxLifetimeMs(opts.sandboxTimeoutMs);
   const idleTimeoutMs = wholeSeconds(Math.min(opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS, sandboxTimeoutMs));
   const maxCommandMs = opts.maxCommandMs ?? DEFAULT_MAX_COMMAND_MS;
   const snapshotRetentionMs = opts.snapshotRetentionMs ?? 30 * 24 * 3600_000;

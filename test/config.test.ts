@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { boolEnv, enabledSandboxBackends, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
+import { boolEnv, loadConfig, numEnv, CONFIG_DEFAULTS } from "../src/config.ts";
 
 const productionEnv = {
   NODE_ENV: "production",
@@ -10,7 +10,6 @@ const productionEnv = {
   CAPABILITY_SECRET: "capabilities",
   PORTAL_IDENTITY_SECRET: "portal",
   CONNECTOR_SECRET_KEY: "connector-secret-0123456789abcdef",
-  SANDBOX_BACKEND: "local",
   DATABASE_URL: "postgres://qm@localhost/qm",
   SESSION_STORE: "postgres",
 } as const;
@@ -79,19 +78,6 @@ test("the security screen timeout defaults to 15 seconds and accepts only positi
   }
 });
 
-test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg: unknown) => void warnings.push(String(msg));
-  try {
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret", MODAL_EGRESS_PROXY_URL: "https://egress.test" });
-  } finally {
-    console.warn = original;
-  }
-  assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
-});
-
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
   assert.throws(() => loadConfig({ SESSION_STORE: "sqlite" }), /SESSION_STORE=sqlite is no longer supported/);
   assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
@@ -140,7 +126,6 @@ test("a set-but-unparseable env value refuses to boot instead of silently taking
   assert.throws(() => loadConfig({ WORKERS: "not-a-number" }), /WORKERS="not-a-number" is not a number/);
   assert.throws(() => loadConfig({ BUDGET_USD_PER_WINDOW: "10$" }), /BUDGET_USD_PER_WINDOW="10\$" is not a number/);
   assert.throws(() => loadConfig({ REACH_EXEC: "2" }), /REACH_EXEC="2" is not a recognized boolean/);
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "docker" }), /SANDBOX_BACKEND="docker" is not recognized/);
   assert.equal(loadConfig({ WORKERS: "  " }).workers, CONFIG_DEFAULTS.workers);
   assert.equal(loadConfig({ REACH_EXEC: "" }).reachExecEnabled, false);
 });
@@ -154,46 +139,14 @@ test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
   );
 });
 
-test("sandbox backend is parsed once before production backend guards", () => {
-  assert.equal(loadConfig({ SANDBOX_BACKEND: " aws " }).sandboxBackend, "aws");
+test("legacy per-scope sandbox defaults are parsed with the shared backend parser", () => {
+  assert.deepEqual(loadConfig({ SANDBOX_SCOPE_BACKENDS: '{"channel":" superserve "}' }).legacySandboxScopeDefaults, {
+    channel: "superserve",
+  });
   assert.throws(
-    () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "bogus" }),
-    /SANDBOX_BACKEND="bogus" is not recognized/,
+    () => loadConfig({ SANDBOX_SCOPE_BACKENDS: '{"channel":"bogus"}' }),
+    /SANDBOX_SCOPE_BACKENDS.channel="bogus" is not recognized/,
   );
-});
-
-for (const primary of ["render", "local"] as const) {
-  test(`production requires durable Render recovery when the primary backend is ${primary}`, () => {
-    const env = {
-      ...productionEnv,
-      SANDBOX_BACKEND: primary,
-      WORKSPACE_STORE: "postgres",
-      RENDER_API_KEY: "test-key",
-      RENDER_WORKSPACE_ID: "tea-test",
-    };
-    for (const database of [undefined, "", "  "])
-      assert.throws(() => loadConfig({ ...env, DATABASE_URL: database }), /required core secrets: DATABASE_URL/);
-    const config = loadConfig({ ...env, DATABASE_URL: "postgres://qm@localhost/qm" });
-    assert.ok(enabledSandboxBackends(config).includes("render"));
-    assert.equal(config.databaseUrl, "postgres://qm@localhost/qm");
-    assert.ok(enabledSandboxBackends(loadConfig({ ...env, NODE_ENV: "development" })).includes("render"));
-  });
-
-  test(`Render timeout limits apply when the primary backend is ${primary}`, () => {
-    const env = {
-      SANDBOX_BACKEND: primary,
-      WORKSPACE_STORE: "postgres",
-      RENDER_API_KEY: "test-key",
-      RENDER_WORKSPACE_ID: "tea-test",
-    };
-    for (const timeout of ["86340", "86400"])
-      assert.throws(() => loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: timeout }), /SANDBOX_TIMEOUT_SEC must stay/);
-    assert.equal(loadConfig({ ...env, SANDBOX_TIMEOUT_SEC: "86339" }).renderSandbox.defaultTimeoutSec, 86339);
-  });
-}
-
-test("Render guards do not limit an unconfigured sandbox backend", () => {
-  assert.equal(loadConfig({ ...productionEnv, SANDBOX_TIMEOUT_SEC: "86400" }).sandboxBackend, "local");
 });
 
 test("production refuses to boot on in-memory sessions, runs, approvals, audit, locks and leases", () => {
@@ -330,110 +283,29 @@ test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () =
   }
 });
 
-test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary variable is tolerated", () => {
-  assert.equal(loadConfig({}).sandboxBackend, "local");
-  assert.throws(
-    () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }),
-    /SANDBOX_BACKEND must be set explicitly in production/,
-  );
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "sprites" }), /SPRITES_TOKEN/);
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "agent37" }), /AGENT37_API_KEY/);
-  assert.equal(loadConfig({ SANDBOX_BACKEND: "agent37", AGENT37_API_KEY: "sk_live_k" }).sandboxBackend, "agent37");
-  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "superserve" }), /SUPERSERVE_API_KEY/);
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: "superserve", SUPERSERVE_API_KEY: "ss_live_k" }),
-    /SUPERSERVE_TEMPLATE/,
-  );
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: " superserve ", SUPERSERVE_API_KEY: "ss_live_k" }),
-    /SUPERSERVE_TEMPLATE/,
-  );
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: " superserve ", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" }),
-    /SUPERSERVE_API_KEY/,
-  );
+test("the sandbox backend and provider keys are not read from the environment", () => {
+  const env = {
+    SANDBOX_BACKEND: "sprites",
+    SANDBOX_SECONDARY_BACKEND: "smolmachines",
+    SPRITES_TOKEN: "sprites-env-token",
+    MODAL_TOKEN_ID: "modal-env-id",
+    MODAL_TOKEN_SECRET: "modal-env-secret",
+    SUPERSERVE_API_KEY: "ss_live_k",
+    E2B_API_KEY: "e2b-env-key",
+  };
+  const config = loadConfig(env);
+  assert.ok(!("sandboxBackend" in config));
+  assert.ok(!("sandboxSecondaryBackend" in config));
+  for (const value of ["sprites-env-token", "modal-env-id", "modal-env-secret", "ss_live_k", "e2b-env-key"])
+    assert.ok(!JSON.stringify(config).includes(value), value);
+  assert.doesNotThrow(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }));
+  assert.equal(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" }).e2bSandbox.deployApiKey, "e2b-env-key");
   assert.equal(
-    loadConfig({
-      SANDBOX_BACKEND: "superserve",
-      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-      SUPERSERVE_API_KEY: "ss_live_k",
-      SUPERSERVE_CONFIG_GENERATION: "7",
-    }).superserveSandbox.configGeneration,
-    7,
-    "a deployment that tracks its own rollouts stamps the generation its sandboxes carry",
-  );
-  assert.throws(
-    () =>
-      loadConfig({
-        SANDBOX_BACKEND: "superserve",
-        SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-        SUPERSERVE_API_KEY: "ss_live_k",
-        SUPERSERVE_CONFIG_GENERATION: "later",
-      }),
-    /SUPERSERVE_CONFIG_GENERATION/,
-  );
-  assert.equal(
-    loadConfig({
-      SANDBOX_BACKEND: "superserve",
-      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-      SUPERSERVE_API_KEY: "ss_live_k",
-    }).sandboxBackend,
-    "superserve",
-  );
-  assert.doesNotThrow(
-    () =>
-      loadConfig({
-        SANDBOX_BACKEND: "superserve",
-        SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-        SUPERSERVE_API_KEY: "ss_live_k",
-      }),
-    "a single-process dev instance needs no durable store",
-  );
-  assert.ok(
-    !enabledSandboxBackends(loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k" })).includes(
-      "superserve",
-    ),
-    "a stray key without a template must not enable the secondary backend",
-  );
-  assert.doesNotThrow(
-    () =>
-      loadConfig({
-        SANDBOX_BACKEND: "local",
-        SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}',
-        SUPERSERVE_API_KEY: "ss_live_k",
-      }),
-    "upgrade-only provider settings do not require live credentials or templates",
-  );
-  assert.doesNotThrow(() =>
-    loadConfig({
-      SANDBOX_BACKEND: "local",
-      SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}',
-      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-      SUPERSERVE_API_KEY: "ss_live_k",
-    }),
-  );
-  assert.ok(
-    enabledSandboxBackends(
-      loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" }),
-    ).includes("superserve"),
-  );
-  assert.ok(
-    !enabledSandboxBackends(
-      loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k", SUPERSERVE_TEMPLATE: "   " }),
-    ).includes("superserve"),
-    "a blank template must not enable the secondary backend",
-  );
-  assert.equal(
-    loadConfig({
-      SANDBOX_BACKEND: "superserve",
-      SUPERSERVE_TEMPLATE: " qm-agent-1.0.0 ",
-      SUPERSERVE_API_KEY: "ss_live_k",
-    }).superserveSandbox?.template,
+    loadConfig({ SUPERSERVE_TEMPLATE: " qm-agent-1.0.0 ", SUPERSERVE_CONFIG_GENERATION: "7" }).superserveSandbox
+      .template,
     "qm-agent-1.0.0",
   );
-  const config = loadConfig({ SANDBOX_SECONDARY_BACKEND: "smolmachines" });
-  assert.equal(config.sandboxBackend, "local");
-  assert.ok(!("sandboxSecondaryBackend" in config));
+  assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: "later" }), /SUPERSERVE_CONFIG_GENERATION/);
 });
 
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
@@ -544,13 +416,9 @@ test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain",
   );
 });
 
-test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
-  assert.throws(
-    () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
-    /PORTER_DEPLOY_PROJECT_ID/,
-  );
+test("a Porter token locates the API and shares the deploy provider's token", () => {
+  assert.throws(() => loadConfig({ PORTER_DEPLOY_API_TOKEN: "tok" }), /PORTER_DEPLOY_PROJECT_ID/);
   const inCluster = loadConfig({
-    SANDBOX_BACKEND: "porter",
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",
@@ -851,10 +719,4 @@ test("Render app publishing needs a complete source, project, and environment", 
     /requires RENDER_DEPLOY_REPO, RENDER_DEPLOY_BRANCH, and GIT_SHA/,
   );
   assert.throws(() => loadConfig({ ...env, RENDER_ENVIRONMENT_ID: "" }), /requires RENDER_ENVIRONMENT_ID/);
-});
-
-test("The Render sandbox backend needs the Postgres workspace store", () => {
-  const env = { SANDBOX_BACKEND: "render", RENDER_API_KEY: "rnd_key", RENDER_WORKSPACE_ID: "tea-test" };
-  assert.throws(() => loadConfig(env), /SANDBOX_BACKEND=render requires WORKSPACE_STORE=postgres/);
-  assert.equal(loadConfig({ ...env, WORKSPACE_STORE: "postgres" }).sandboxBackend, "render");
 });

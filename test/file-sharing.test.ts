@@ -506,7 +506,7 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
   const sandbox = createSpritesSandbox(ws, {
     initializationStore: createMemoryMap(),
     advisoryLock: createMemoryAdvisoryLock(),
-    token: "test-token",
+    token: async () => "test-token",
     baseUrl: ff.baseUrl,
   });
   const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);
@@ -531,7 +531,7 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
   const sandbox = createSpritesSandbox(ws, {
     initializationStore: createMemoryMap(),
     advisoryLock: createMemoryAdvisoryLock(),
-    token: "test-token",
+    token: async () => "test-token",
     baseUrl: ff.baseUrl,
   });
   const handle = await sandbox.provision([{ scopeId: "personal:U1", mountPath: "", mode: "rw" }]);

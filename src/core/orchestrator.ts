@@ -1908,8 +1908,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         : deps.sandboxResources;
       turnContextBlocks["Sandboxes"] = turnSandboxResources
         ? renderSandboxProviders(
-            turnSandboxResources.profiles().map((profile) => profile.name),
-            turnSandboxResources.defaultBackend(),
+            (await turnSandboxResources.profiles()).map((profile) => profile.name),
+            await turnSandboxResources
+              .defaultBackend()
+              .catch(swallowAs("orchestrator: default sandbox backend", undefined)),
           )
         : renderSandboxProviders([scopeProfile.backend], scopeProfile.backend, false);
 
