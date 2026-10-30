@@ -20,7 +20,8 @@ function binaryLeaf(container: Record<string, unknown>, key: string): string | u
       typeof container.mimeType === "string"
       ? value
       : undefined;
-  return ["image_url", "url", "file_data"].includes(key) && value.startsWith("data:") ? value : undefined;
+  if (!["image_url", "url", "file_data"].includes(key) || !value.startsWith("data:")) return undefined;
+  return value.slice(0, value.indexOf(",")).endsWith(";base64") ? value : undefined;
 }
 
 function blockBinary(block: unknown): string | undefined {
