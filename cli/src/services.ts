@@ -292,6 +292,10 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
 
 export const serviceDef = (name: ServiceName): ServiceDef => CATALOG[name];
 
+export const runnableImages = (names: readonly DeclaredServiceName[]): ImageName[] => [
+  ...new Set(runnableServices(names).map((name) => serviceDef(name).docker.image)),
+];
+
 export function ordered(names: ServiceName[]): ServiceDef[] {
   return names.map(serviceDef).sort((a, b) => a.order - b.order);
 }
