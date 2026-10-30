@@ -1,5 +1,7 @@
 import type { Webhook } from "../types.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { TENANCY_BASE, tenantPolicies } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
@@ -70,7 +72,7 @@ function rowToWebhook(r: Record<string, unknown>): Webhook {
   return webhook;
 }
 
-export const WEBHOOKS_MIGRATION = keyValueConversion({
+export const WEBHOOKS_MIGRATION = typedTableMigration({
   table: "webhooks",
   columns: [
     "id TEXT NOT NULL",
@@ -109,7 +111,7 @@ export const WEBHOOKS_MIGRATION = keyValueConversion({
 });
 
 export const WEBHOOK_EVENTS_MIGRATION: PgMigrationDefinition = {
-  id: "typed/webhook_events/0001",
+  id: "tenancy/webhook_events/0001-typed",
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `CREATE TABLE IF NOT EXISTS webhook_history(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
@@ -134,19 +136,22 @@ export const WEBHOOK_EVENTS_MIGRATION: PgMigrationDefinition = {
        END IF;
      END $drop_version$`,
     `CREATE INDEX webhook_events_recent ON webhook_events(tenant_id, webhook_id, received_at DESC, delivery_id)`,
-    `ALTER TABLE webhook_events ENABLE ROW LEVEL SECURITY`,
-    `CREATE POLICY tenant_isolation ON webhook_events
-       USING (tenant_id = qm_tenant_id()) WITH CHECK (tenant_id = qm_tenant_id())`,
+    ...tenantPolicies("webhook_events"),
   ],
 };
 
 const eventOrder = (a: WebhookEvent, b: WebhookEvent): number =>
   b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId);
 
-export function createPostgresWebhookRows(connectionString: string): WebhookRows {
-  const { q, pool } = createPgPool(connectionString, [WEBHOOKS_MIGRATION, WEBHOOK_EVENTS_MIGRATION]);
+export function createPostgresWebhookRows(connectionString: string): WebhookRows & { close(): Promise<void> } {
+  const { q, pool, close } = createPgPool(connectionString, [
+    TENANCY_BASE,
+    WEBHOOKS_MIGRATION,
+    WEBHOOK_EVENTS_MIGRATION,
+  ]);
   const many = async (sql: string, params: unknown[] = []) => (await q(sql, params)).map(rowToWebhook);
   return {
+    close,
     async insertIfAbsent(webhook) {
       const rows = await q(
         `INSERT INTO webhooks(${COLUMNS}) VALUES (${VALUES})
@@ -206,19 +211,22 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
 }
 
 export function createMemoryWebhookRows(): WebhookRows {
-  const rows = new Map<string, Webhook>();
-  const events = new Map<string, WebhookEvent[]>();
+  const tenants = new Map<string, { webhooks: Map<string, Webhook>; events: Map<string, WebhookEvent[]> }>();
+  const mine = () => {
+    const tenant = currentTenant();
+    if (!tenants.has(tenant)) tenants.set(tenant, { webhooks: new Map(), events: new Map() });
+    return tenants.get(tenant)!;
+  };
   const all = (): Webhook[] =>
-    [...rows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, w]) => structuredClone(w));
+    [...mine().webhooks.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, w]) => structuredClone(w));
   return {
     async insertIfAbsent(webhook) {
-      const existing = rows.get(webhook.id);
-      if (existing) return structuredClone(existing);
-      rows.set(webhook.id, structuredClone(webhook));
-      return structuredClone(webhook);
+      const { webhooks } = mine();
+      if (!webhooks.has(webhook.id)) webhooks.set(webhook.id, structuredClone(webhook));
+      return structuredClone(webhooks.get(webhook.id)!);
     },
     async get(id) {
-      const webhook = rows.get(id);
+      const webhook = mine().webhooks.get(id);
       return webhook ? structuredClone(webhook) : null;
     },
     async list() {
@@ -228,19 +236,21 @@ export function createMemoryWebhookRows(): WebhookRows {
       return all().filter((w) => w.ownerScopeId === scopeId);
     },
     async update(id, apply) {
-      const current = rows.get(id);
+      const { webhooks } = mine();
+      const current = webhooks.get(id);
       if (!current) return null;
       const next = { ...apply(structuredClone(current)), id };
-      rows.set(id, structuredClone(next));
+      webhooks.set(id, structuredClone(next));
       return next;
     },
     async recordEvent(webhookId, event) {
+      const { events } = mine();
       const list = events.get(webhookId) ?? [];
       if (list.some((e) => e.deliveryId === event.deliveryId)) return;
       events.set(webhookId, [...list, { ...event }].sort(eventOrder).slice(0, WEBHOOK_EVENTS_KEPT));
     },
     async listEvents(webhookId) {
-      return structuredClone(events.get(webhookId) ?? []);
+      return structuredClone(mine().events.get(webhookId) ?? []);
     },
   };
 }

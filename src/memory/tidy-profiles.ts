@@ -1,10 +1,12 @@
 import type { ManagedCronClaim, ManagedCronProfiles } from "../cron/managed.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 
 export type MemoryTidyProfile = ManagedCronClaim;
 
-export const MEMORY_TIDY_PROFILES_MIGRATION = keyValueConversion({
+export const MEMORY_TIDY_PROFILES_MIGRATION = typedTableMigration({
   table: "memory_tidy_profiles",
   columns: ["scope_id TEXT NOT NULL", "cron_id TEXT", "arming BOOLEAN NOT NULL DEFAULT false"],
   primaryKey: ["scope_id"],
@@ -22,9 +24,12 @@ const toProfile = (r: Record<string, unknown>): MemoryTidyProfile => ({
 
 const SELECT = "SELECT cron_id, arming FROM memory_tidy_profiles WHERE tenant_id = qm_tenant_id() AND scope_id = $1";
 
-export function createPostgresMemoryTidyProfiles(connectionString: string): ManagedCronProfiles<MemoryTidyProfile> {
-  const { q, pool } = createPgPool(connectionString, [MEMORY_TIDY_PROFILES_MIGRATION]);
+export function createPostgresMemoryTidyProfiles(
+  connectionString: string,
+): ManagedCronProfiles<MemoryTidyProfile> & { close(): Promise<void> } {
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, MEMORY_TIDY_PROFILES_MIGRATION]);
   return {
+    close,
     async get(scopeId) {
       const rows = await q(SELECT, [scopeId]);
       return rows[0] ? toProfile(rows[0]) : null;
@@ -55,21 +60,28 @@ export function createPostgresMemoryTidyProfiles(connectionString: string): Mana
 }
 
 export function createMemoryTidyProfiles(): ManagedCronProfiles<MemoryTidyProfile> {
-  const profiles = new Map<string, MemoryTidyProfile>();
+  const tenants = new Map<string, Map<string, MemoryTidyProfile>>();
+  const mine = (): Map<string, MemoryTidyProfile> => {
+    const tenant = currentTenant();
+    if (!tenants.has(tenant)) tenants.set(tenant, new Map());
+    return tenants.get(tenant)!;
+  };
   return {
-    async get(scopeId) {
-      const profile = profiles.get(scopeId);
-      return profile ? { ...profile } : null;
+    async get(key) {
+      const profile = mine().get(key);
+      return profile ? structuredClone(profile) : null;
     },
-    async insertIfAbsent(scopeId, initial) {
-      if (!profiles.has(scopeId)) profiles.set(scopeId, { ...initial });
-      return { ...profiles.get(scopeId)! };
+    async insertIfAbsent(key, initial) {
+      const profiles = mine();
+      if (!profiles.has(key)) profiles.set(key, structuredClone(initial));
+      return structuredClone(profiles.get(key)!);
     },
-    async update(scopeId, apply) {
-      const current = profiles.get(scopeId);
+    async update(key, apply) {
+      const profiles = mine();
+      const current = profiles.get(key);
       if (!current) return null;
-      const next = apply({ ...current });
-      profiles.set(scopeId, { ...next });
+      const next = apply(structuredClone(current));
+      profiles.set(key, structuredClone(next));
       return next;
     },
   };

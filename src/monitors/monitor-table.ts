@@ -1,10 +1,11 @@
 import type { Monitor } from "../types.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
-export type TenantMonitor = Monitor & { tenantId: string | undefined };
+export type TenantMonitor = Monitor & { tenantId: string };
 
 export interface MonitorRows {
   insert(monitor: Monitor): Promise<void>;
@@ -80,7 +81,7 @@ function rowToMonitor(r: Record<string, unknown>): Monitor {
   return monitor;
 }
 
-export const MONITORS_MIGRATION = keyValueConversion({
+export const MONITORS_MIGRATION = typedTableMigration({
   table: "monitors",
   columns: [
     "id TEXT NOT NULL",
@@ -133,10 +134,11 @@ export const MONITORS_MIGRATION = keyValueConversion({
   ],
 });
 
-export function createPostgresMonitorRows(connectionString: string): MonitorRows {
-  const { q, query, pool } = createPgPool(connectionString, [MONITORS_MIGRATION]);
+export function createPostgresMonitorRows(connectionString: string): MonitorRows & { close(): Promise<void> } {
+  const { q, query, pool, close } = createPgPool(connectionString, [TENANCY_BASE, MONITORS_MIGRATION]);
   const many = async (sql: string, params: unknown[] = []) => (await q(sql, params)).map(rowToMonitor);
   return {
+    close,
     async insert(monitor) {
       await q(`INSERT INTO monitors(${COLUMNS}) VALUES (${VALUES})`, monitorParams(monitor));
     },
@@ -178,16 +180,21 @@ export function createPostgresMonitorRows(connectionString: string): MonitorRows
 }
 
 export function createMemoryMonitorRows(): MonitorRows {
-  const rows = new Map<string, { monitor: Monitor; tenantId: string | undefined }>();
+  const tenants = new Map<string, Map<string, Monitor>>();
+  const mine = (): Map<string, Monitor> => {
+    const tenant = currentTenant();
+    if (!tenants.has(tenant)) tenants.set(tenant, new Map());
+    return tenants.get(tenant)!;
+  };
   const all = (): Monitor[] =>
-    [...rows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, row]) => structuredClone(row.monitor));
+    [...mine().entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, monitor]) => structuredClone(monitor));
   return {
     async insert(monitor) {
-      rows.set(monitor.id, { monitor: structuredClone(monitor), tenantId: boundTenant() });
+      mine().set(monitor.id, structuredClone(monitor));
     },
     async get(id) {
-      const row = rows.get(id);
-      return row ? structuredClone(row.monitor) : null;
+      const monitor = mine().get(id);
+      return monitor ? structuredClone(monitor) : null;
     },
     async ownedBy(scopeId) {
       return all().filter((m) => m.ownerScopeId === scopeId);
@@ -197,27 +204,31 @@ export function createMemoryMonitorRows(): MonitorRows {
       return all().filter((m) => m.enabled && refs.has(m.threadRef));
     },
     async update(id, apply) {
-      const row = rows.get(id);
-      if (!row) return null;
-      const next = { ...apply(structuredClone(row.monitor)), id };
-      row.monitor = structuredClone(next);
+      const monitors = mine();
+      const current = monitors.get(id);
+      if (!current) return null;
+      const next = { ...apply(structuredClone(current)), id };
+      monitors.set(id, structuredClone(next));
       return next;
     },
     async delete(id) {
-      rows.delete(id);
+      mine().delete(id);
     },
     async enabled() {
-      return [...rows.values()]
-        .filter((row) => row.monitor.enabled)
-        .map((row) => ({ ...structuredClone(row.monitor), tenantId: row.tenantId }))
+      return [...tenants.entries()]
+        .flatMap(([tenantId, monitors]) =>
+          [...monitors.values()].filter((m) => m.enabled).map((m) => ({ ...structuredClone(m), tenantId })),
+        )
         .sort((a, b) => a.createdAt - b.createdAt);
     },
     async deleteDisabledBefore(cutoff) {
       let deleted = 0;
-      for (const [id, { monitor: m }] of rows) {
-        if (m.enabled || Math.max(m.expiresAt, m.lastFiredAt ?? 0, m.createdAt) > cutoff) continue;
-        rows.delete(id);
-        deleted++;
+      for (const monitors of tenants.values()) {
+        for (const [id, m] of monitors) {
+          if (m.enabled || Math.max(m.expiresAt, m.lastFiredAt ?? 0, m.createdAt) > cutoff) continue;
+          monitors.delete(id);
+          deleted++;
+        }
       }
       return deleted;
     },

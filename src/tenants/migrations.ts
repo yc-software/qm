@@ -2,6 +2,23 @@ import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
 export const TENANT = "qm_tenant_id()";
 
+const role = (name: string) =>
+  `DO $role$ BEGIN CREATE ROLE ${name} NOLOGIN; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $role$`;
+
+export const TENANCY_BASE: PgMigrationDefinition = {
+  id: "0000-tenancy/base",
+  statements: [role("qm_app"), role("qm_reader")],
+};
+
+export function tenantPolicies(table: string): string[] {
+  return [
+    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
+    `CREATE POLICY tenant_app ON ${table} FOR ALL TO qm_app
+       USING (tenant_id = qm_tenant_id()) WITH CHECK (tenant_id = qm_tenant_id())`,
+    `CREATE POLICY tenant_reader ON ${table} FOR SELECT TO qm_reader USING (tenant_id = qm_tenant_id())`,
+  ];
+}
+
 export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   {
     id: "sessions/store/0047-tenants",

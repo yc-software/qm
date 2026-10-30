@@ -1,10 +1,11 @@
 import type { Cron } from "../types.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
-export type TenantCron = Cron & { tenantId: string | undefined };
+export type TenantCron = Cron & { tenantId: string };
 
 export interface CronRows {
   insertIfAbsent(cron: Cron): Promise<Cron>;
@@ -94,7 +95,7 @@ const jsonText = (field: string) => `json->>'${field}'`;
 const jsonEpoch = (field: string) => `(json->>'${field}')::numeric::bigint`;
 const jsonObject = (field: string) => `NULLIF(json->'${field}', 'null'::jsonb)`;
 
-export const CRONS_MIGRATION = keyValueConversion({
+export const CRONS_MIGRATION = typedTableMigration({
   table: "crons",
   columns: [
     "id TEXT NOT NULL",
@@ -154,10 +155,11 @@ export const CRONS_MIGRATION = keyValueConversion({
   ],
 });
 
-export function createPostgresCronRows(connectionString: string): CronRows {
-  const { q, pool } = createPgPool(connectionString, [CRONS_MIGRATION]);
+export function createPostgresCronRows(connectionString: string): CronRows & { close(): Promise<void> } {
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, CRONS_MIGRATION]);
   const many = async (sql: string, params: unknown[] = []) => (await q(sql, params)).map(rowToCron);
   return {
+    close,
     async insertIfAbsent(cron) {
       const rows = await q(
         `INSERT INTO crons(${COLUMNS}) VALUES (${VALUES})
@@ -216,22 +218,29 @@ export function createPostgresCronRows(connectionString: string): CronRows {
 }
 
 export function createMemoryCronRows(): CronRows {
-  const rows = new Map<string, { cron: Cron; tenantId: string | undefined }>();
-  const sorted = () => [...rows.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, row]) => row);
-  const all = (): Cron[] => sorted().map((row) => structuredClone(row.cron));
-  const tenanted = (): TenantCron[] =>
-    sorted().map((row) => ({ ...structuredClone(row.cron), tenantId: row.tenantId }));
-  const scheduled = (cron: Cron): boolean => cron.enabled && cron.archived !== true;
+  const tenants = new Map<string, Map<string, Cron>>();
+  const mine = (): Map<string, Cron> => {
+    const tenant = currentTenant();
+    if (!tenants.has(tenant)) tenants.set(tenant, new Map());
+    return tenants.get(tenant)!;
+  };
+  const all = (): Cron[] =>
+    [...mine().entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, cron]) => structuredClone(cron));
+  const scheduled = (): TenantCron[] =>
+    [...tenants.entries()].flatMap(([tenantId, crons]) =>
+      [...crons.values()]
+        .filter((cron) => cron.enabled && cron.archived !== true)
+        .map((cron) => ({ ...structuredClone(cron), tenantId })),
+    );
   return {
     async insertIfAbsent(cron) {
-      const existing = rows.get(cron.id);
-      if (existing) return structuredClone(existing.cron);
-      rows.set(cron.id, { cron: structuredClone(cron), tenantId: boundTenant() });
-      return structuredClone(cron);
+      const crons = mine();
+      if (!crons.has(cron.id)) crons.set(cron.id, structuredClone(cron));
+      return structuredClone(crons.get(cron.id)!);
     },
     async get(id) {
-      const row = rows.get(id);
-      return row ? structuredClone(row.cron) : null;
+      const cron = mine().get(id);
+      return cron ? structuredClone(cron) : null;
     },
     async list() {
       return all();
@@ -248,22 +257,22 @@ export function createMemoryCronRows(): CronRows {
       );
     },
     async update(id, apply) {
-      const row = rows.get(id);
-      if (!row) return null;
-      const next = { ...apply(structuredClone(row.cron)), id };
-      row.cron = structuredClone(next);
+      const crons = mine();
+      const current = crons.get(id);
+      if (!current) return null;
+      const next = { ...apply(structuredClone(current)), id };
+      crons.set(id, structuredClone(next));
       return next;
     },
     async delete(id) {
-      rows.delete(id);
+      mine().delete(id);
     },
     async scheduled() {
-      return tenanted().filter(scheduled);
+      return scheduled();
     },
     async dueCandidates(now) {
-      return tenanted().filter(
+      return scheduled().filter(
         (cron) =>
-          scheduled(cron) &&
           (cron.nextFireAt === undefined || cron.nextFireAt <= now) &&
           (cron.deferUntil === undefined || cron.deferUntil <= now),
       );

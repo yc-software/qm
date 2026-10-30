@@ -1,6 +1,8 @@
 import type { SuggestedActivity } from "../../plugins/chassis/src/suggested-activities.ts";
 import type { ManagedCronClaim, ManagedCronProfiles } from "../cron/managed.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
@@ -19,7 +21,7 @@ export interface SuggestedActivityProfile extends ManagedCronClaim {
   dismissed?: DismissedActivity[];
 }
 
-export const SUGGESTED_ACTIVITY_PROFILES_MIGRATION = keyValueConversion({
+export const SUGGESTED_ACTIVITY_PROFILES_MIGRATION = typedTableMigration({
   table: "suggested_activity_profiles",
   columns: [
     "principal_id TEXT NOT NULL",
@@ -77,9 +79,10 @@ const profileParams = (principalId: string, p: SuggestedActivityProfile): unknow
 
 export function createPostgresSuggestedActivityProfiles(
   connectionString: string,
-): ManagedCronProfiles<SuggestedActivityProfile> {
-  const { q, pool } = createPgPool(connectionString, [SUGGESTED_ACTIVITY_PROFILES_MIGRATION]);
+): ManagedCronProfiles<SuggestedActivityProfile> & { close(): Promise<void> } {
+  const { q, pool, close } = createPgPool(connectionString, [TENANCY_BASE, SUGGESTED_ACTIVITY_PROFILES_MIGRATION]);
   return {
+    close,
     async get(principalId) {
       const rows = await q(SELECT, [principalId]);
       return rows[0] ? toProfile(rows[0]) : null;
@@ -111,21 +114,28 @@ export function createPostgresSuggestedActivityProfiles(
 }
 
 export function createMemorySuggestedActivityProfiles(): ManagedCronProfiles<SuggestedActivityProfile> {
-  const profiles = new Map<string, SuggestedActivityProfile>();
+  const tenants = new Map<string, Map<string, SuggestedActivityProfile>>();
+  const mine = (): Map<string, SuggestedActivityProfile> => {
+    const tenant = currentTenant();
+    if (!tenants.has(tenant)) tenants.set(tenant, new Map());
+    return tenants.get(tenant)!;
+  };
   return {
-    async get(principalId) {
-      const profile = profiles.get(principalId);
+    async get(key) {
+      const profile = mine().get(key);
       return profile ? structuredClone(profile) : null;
     },
-    async insertIfAbsent(principalId, initial) {
-      if (!profiles.has(principalId)) profiles.set(principalId, structuredClone(initial));
-      return structuredClone(profiles.get(principalId)!);
+    async insertIfAbsent(key, initial) {
+      const profiles = mine();
+      if (!profiles.has(key)) profiles.set(key, structuredClone(initial));
+      return structuredClone(profiles.get(key)!);
     },
-    async update(principalId, apply) {
-      const current = profiles.get(principalId);
+    async update(key, apply) {
+      const profiles = mine();
+      const current = profiles.get(key);
       if (!current) return null;
       const next = apply(structuredClone(current));
-      profiles.set(principalId, structuredClone(next));
+      profiles.set(key, structuredClone(next));
       return next;
     },
   };
