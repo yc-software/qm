@@ -42,7 +42,7 @@ function passesFilters(filters: Webhook["filters"], parsed: unknown): boolean {
   if (!filters || filters.length === 0) return true;
   return filters.every((f) => {
     const v = getPath(parsed, f.path);
-    return v != null && f.in.includes(String(v));
+    return (typeof v === "string" || typeof v === "number" || typeof v === "boolean") && f.in.includes(String(v));
   });
 }
 
