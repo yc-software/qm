@@ -8,6 +8,7 @@ import {
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
 import { pipeToResponse, sendJson } from "../http.ts";
+import { withRowTenant } from "../tenant-ingress.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
@@ -111,6 +112,11 @@ async function createShare(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { share: { token: share.token, audience, createdAt: share.createdAt } });
 }
 
+function readPublicShare(ctx: ApiCtx): Promise<void> {
+  const row = { table: "session_shares", columns: ["id"], id: ctx.params.token! };
+  return withRowTenant(ctx.res, ctx.deps.rowTenants, row, () => readShare(ctx));
+}
+
 async function readShare(ctx: ApiCtx): Promise<void> {
   const { deps, app, res, params, url } = ctx;
   res.setHeader("Cache-Control", "no-store");
@@ -149,11 +155,20 @@ async function readShare(ctx: ApiCtx): Promise<void> {
 
 export const sessionSharingRoutes: ReadonlyArray<Route> = [
   { method: "POST", path: "/v1/sessions/:id/share", actor: "body.principalId", auth: "source", handle: createShare },
-  ...(["shared-sessions", "public-shares"] as const).flatMap((prefix): Route[] => {
-    const actor = prefix === "shared-sessions" ? ("query.viewer" as const) : undefined;
-    return [
-      { method: "GET", path: `/v1/${prefix}/:token`, actor, auth: "source", handle: readShare },
-      { method: "GET", path: `/v1/${prefix}/:token/files/:fileId`, actor, auth: "source", handle: readShare },
-    ];
-  }),
+  { method: "GET", path: "/v1/shared-sessions/:token", actor: "query.viewer", auth: "source", handle: readShare },
+  {
+    method: "GET",
+    path: "/v1/shared-sessions/:token/files/:fileId",
+    actor: "query.viewer",
+    auth: "source",
+    handle: readShare,
+  },
+  { method: "GET", path: "/v1/public-shares/:token", auth: "source", unbound: true, handle: readPublicShare },
+  {
+    method: "GET",
+    path: "/v1/public-shares/:token/files/:fileId",
+    auth: "source",
+    unbound: true,
+    handle: readPublicShare,
+  },
 ];

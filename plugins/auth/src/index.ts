@@ -1,13 +1,14 @@
 import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { coreRememberedSessions } from "./sessions.ts";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { json } from "../../chassis/src/http.ts";
 import { portFromEnv } from "../../chassis/src/env.ts";
 import { bootProblems, readConfig } from "./config.ts";
 import { coreClaimStore } from "../../chassis/src/claims.ts";
-import { signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
+import { hostTenant, signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
+import { withTenant } from "../../chassis/src/tenant.ts";
 import { createBrandingCache } from "../../chassis/src/branding.ts";
 import { mailerFor } from "./email.ts";
 import { loadSigningKey } from "./keys.ts";
@@ -54,8 +55,14 @@ export async function startServer(
       return branding.current().selfLabel || CFG.brandName;
     },
   });
+  const forTenant = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    if (req.method === "GET" && req.url === "/healthz") return handle(req, res);
+    const tenant = await hostTenant(CFG.coreApiUrl, CFG.coreSigningSecret, (req.headers.host ?? "").split(":")[0]!);
+    if (!tenant) return json(res, 404, { error: "not_found", message: "no tenant serves this host" });
+    return withTenant(tenant, () => handle(req, res));
+  };
   const server = createServer((req, res) => {
-    void handle(req, res).catch((err: unknown) => {
+    void forTenant(req, res).catch((err: unknown) => {
       reportBackendError(err);
       console.error("[auth] 500 %s %s: %s", req.method ?? "?", (req.url ?? "?").split("?")[0], String(err));
       if (!res.headersSent) json(res, 500, { error: "internal_error" });

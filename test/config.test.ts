@@ -94,12 +94,10 @@ test("deploy provider defaults to docker and rejects unknown values", () => {
   assert.throws(() => loadConfig({ DEPLOY_PROVIDER: "flly" }), /DEPLOY_PROVIDER="flly" is not recognized/);
 });
 
-test("production and unauthenticated-core escape hatch are parsed once", () => {
+test("production is parsed once", () => {
   assert.throws(() => loadConfig({ NODE_ENV: "production" }), /missing or insecure required core secrets/);
   assert.equal(loadConfig(productionEnv).production, true);
   assert.equal(loadConfig({}).production, false);
-  assert.equal(loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "yes" }).allowUnauthenticatedCore, true);
-  assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
 test("harness security posture defaults to auto and validates named modes", () => {

@@ -112,7 +112,9 @@ import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./pe
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
-import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
+import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
+import { ownerRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
+import type { TenantResolver } from "./tenants/resolver.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -476,6 +478,8 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
+  tenants?: TenantResolver;
+  rowTenants?: RowTenants;
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
@@ -580,8 +584,10 @@ export function buildApp(
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
     harnesses?: Partial<Record<HarnessId, Harness>>;
+    tenants?: TenantResolver;
   } = {},
 ): BuiltApp {
+  const rowTenants = config.databaseUrl ? ownerRowTenants(createPgPool(config.databaseUrl)) : undefined;
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let backgroundActive = () => false;
   const admittedWork = createAdmittedWork({
@@ -2676,6 +2682,7 @@ export function buildApp(
     ...(config.gmailPubSub && keychain
       ? { gmailConfig: config.gmailPubSub, gmailClient: createGmailPushClient(keychain, config.gmailPubSub) }
       : {}),
+    ...(rowTenants ? { rowTenants } : {}),
   });
   const loops: LoopServiceDeps = {
     lock: advisoryLock,
@@ -3110,6 +3117,8 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
+    ...(overrides.tenants ? { tenants: overrides.tenants } : {}),
+    ...(rowTenants ? { rowTenants } : {}),
     modelGatewayTransport: gatewayTransport,
     budget,
     resolveBrowserCompanyKeys,
@@ -3213,7 +3222,6 @@ export function serverDeps(
           deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
         }
       : {}),
-    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
     ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
     ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
     ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
@@ -3248,6 +3256,8 @@ export function serverDeps(
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
     secretDrops: built.secretDrops,
+    ...(built.tenants ? { tenants: built.tenants } : {}),
+    ...(built.rowTenants ? { rowTenants: built.rowTenants } : {}),
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),

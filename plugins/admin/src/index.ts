@@ -10,6 +10,7 @@ import { signedRequestHeaders, withSourceAuthNonce } from "../../chassis/src/cor
 import { json, readBody, cookie, gzipAccepted } from "../../chassis/src/http.ts";
 import { createBrandingCache, injectBranding, type OrgBranding } from "../../chassis/src/branding.ts";
 import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { withTenant } from "../../chassis/src/tenant.ts";
 import { errMessage } from "../../chassis/src/errors.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import {
@@ -347,13 +348,14 @@ const READS = [
 export async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
-  await portalTokenStore
-    .run(token, () => handle(req, res))
-    .catch((err: unknown) => {
-      reportBackendError(err);
-      console.error("[admin] unhandled request error:", String(err));
-      json(res, 500, { error: "internal_error", message: "internal server error" });
-    });
+  const tenant =
+    token && PORTAL_IDENTITY_SECRET ? verifyPortalIdentity(token, PORTAL_IDENTITY_SECRET, Date.now())?.t : null;
+  const route = () => portalTokenStore.run(token, () => handle(req, res));
+  await (tenant ? withTenant(tenant, route) : route()).catch((err: unknown) => {
+    reportBackendError(err);
+    console.error("[admin] unhandled request error:", String(err));
+    json(res, 500, { error: "internal_error", message: "internal server error" });
+  });
 }
 
 const server = createServer((req, res) => {

@@ -1,4 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { withTenant } from "../tenants/context.ts";
+import type { RowTenants } from "../tenants/row-tenant.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Loop, LoopItem } from "../types.ts";
@@ -108,7 +110,10 @@ export interface LoopIngressDeps {
   gmailConfig?: GmailPushConfig;
   gmailClient?: ReturnType<typeof createGmailPushClient>;
   verifyGoogle?: typeof verifyGmailPush;
+  rowTenants?: RowTenants;
 }
+
+export const GMAIL_PUSH_ID = "gmail";
 
 export interface IngressSetup {
   kind: LoopIngress["kind"];
@@ -341,7 +346,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     ): Promise<{ status: number; body: string }> {
       if (Buffer.byteLength(request.rawBody) > 64_000)
         return { status: 413, body: "Event payload must be under 64 KB" };
-      if (id === "gmail") {
+      if (id === GMAIL_PUSH_ID) {
         const authorization = request.headers.authorization;
         if (
           !deps.gmailConfig ||
@@ -361,15 +366,18 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         } catch {
           return { status: 400, body: "Invalid Gmail notification" };
         }
-        const sources = (await deps.sources.all()).filter(
-          (source) =>
-            source.enabled &&
-            source.kind === "gmail" &&
-            source.gmail?.email === String(notification.emailAddress).toLowerCase(),
-        );
-        for (const source of sources)
-          if (await deps.enabledFor(source.owner))
-            await enqueue(source, String(notification.historyId), { historyId: String(notification.historyId) });
+        const email = String(notification.emailAddress).toLowerCase();
+        const historyId = String(notification.historyId);
+        const accept = async (): Promise<void> => {
+          const sources = (await deps.sources.all()).filter(
+            (source) => source.enabled && source.kind === "gmail" && source.gmail?.email === email,
+          );
+          for (const source of sources)
+            if (await deps.enabledFor(source.owner)) await enqueue(source, historyId, { historyId });
+        };
+        if (!deps.rowTenants) return { status: 503, body: "Tenant lookup unavailable" };
+        for (const tenant of await deps.rowTenants("loop_ingress", ["gmail_email"], email))
+          await withTenant(tenant, accept);
         return { status: 202, body: "Accepted" };
       }
       const source = await deps.sources.get(id);

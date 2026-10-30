@@ -11,13 +11,17 @@ import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { singleTenantResolver } from "./tenants/resolver.ts";
 import { instanceTenant } from "./tenants/instance.ts";
 import { enterTenant } from "./tenants/context.ts";
 
 const config = loadConfig();
 
-const built = buildApp(config);
+const built = buildApp(
+  config,
+  config.databaseUrl ? { tenants: singleTenantResolver(createPgPool(config.databaseUrl)) } : {},
+);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);

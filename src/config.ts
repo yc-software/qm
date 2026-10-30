@@ -60,7 +60,6 @@ export interface Config {
   swarmsEnabled?: boolean;
   swarmDefaults?: SwarmSettings;
   production: boolean;
-  allowUnauthenticatedCore: boolean;
   port: number;
   dataDir: string;
   orgId: string;
@@ -1570,7 +1569,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ? { suggestedActivitiesContext: env.SUGGESTED_ACTIVITIES_CONTEXT.slice(0, 8000) }
       : {}),
     production: env.NODE_ENV === "production",
-    allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
     dataDir,
     orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
