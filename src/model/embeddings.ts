@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { EmbeddingModel } from "./model-overlay.ts";
-import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
+import { modelGatewayHeaders, modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { providerTurnError } from "../harness/provider-error.ts";
 import { httpFailure } from "../util/errors.ts";
 
@@ -43,7 +43,10 @@ export function createMemoryEmbedder(
         method: "POST",
         redirect: "error",
         signal,
-        headers: { "content-type": "application/json", ...(routed?.headers ?? { authorization: `Bearer ${key}` }) },
+        headers: {
+          "content-type": "application/json",
+          ...(routed && gateway ? modelGatewayHeaders(gateway, "embedding") : { authorization: `Bearer ${key}` }),
+        },
         body: JSON.stringify({ model: target, input: texts, encoding_format: "float" }),
       });
       if (!response.ok) {

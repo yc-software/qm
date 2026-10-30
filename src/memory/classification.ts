@@ -2,6 +2,7 @@ import type { HarnessModelUtilities } from "../harness/harness.ts";
 import type { MemoryService } from "./memory-service.ts";
 import type { MemoryCaptureMetadata } from "./facts.ts";
 import { swallow } from "../util/errors.ts";
+import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 
 type Sensitivity = NonNullable<MemoryCaptureMetadata["sensitivity"]>;
 const levels: Sensitivity[] = ["ordinary", "unknown", "sensitive", "restricted"];
@@ -20,12 +21,21 @@ export function parseSensitivity(value: string | undefined): Sensitivity {
   return levels.includes(value as Sensitivity) ? (value as Sensitivity) : "unknown";
 }
 
-async function classify(harness: HarnessModelUtilities, texts: string[]): Promise<Sensitivity> {
+async function classify(
+  harness: HarnessModelUtilities,
+  texts: string[],
+  scopeId: string,
+  author: string | undefined,
+): Promise<Sensitivity> {
+  const context = currentModelRequestContext();
   try {
     return parseSensitivity(
-      await harness.oneShot?.(
-        `${SENSITIVITY_PROMPT}\nOutput ONLY one label for the entire list.`,
-        JSON.stringify(texts),
+      await withModelRequestContext(context.actorId ? context : { actorId: author, scopeId }, () =>
+        harness.oneShot?.(
+          `${SENSITIVITY_PROMPT}\nOutput ONLY one label for the entire list.`,
+          JSON.stringify(texts),
+          "memory_classification",
+        ),
       ),
     );
   } catch (e) {
@@ -44,7 +54,7 @@ export function classifiedMemory(base: MemoryService, harness: HarnessModelUtili
     async capture(scope, facts, at, author, context) {
       let sensitivity = context?.sensitivity;
       if (context?.mode !== "automatic" || sensitivity === undefined)
-        sensitivity = stricter(sensitivity, await classify(harness, facts));
+        sensitivity = stricter(sensitivity, await classify(harness, facts, scope, author));
       return base.capture(scope, facts, at, author, {
         ...context,
         mode: context?.mode ?? "explicit",
@@ -59,6 +69,8 @@ export function classifiedMemory(base: MemoryService, harness: HarnessModelUtili
               await classify(
                 harness,
                 edits.map((edit) => edit.text),
+                scope,
+                author,
               ),
             );
             return base.edit!(scope, edits, author, { ...context, sensitivity });

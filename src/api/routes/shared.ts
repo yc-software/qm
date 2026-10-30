@@ -7,6 +7,7 @@ import { isTerminal, type Run } from "../../runs/run-store.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
 import { headerValue, sendJson } from "../http.ts";
+import { currentModelRequestContext } from "../../model/request-context.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -30,7 +31,7 @@ export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" |
 
 export async function authorizeAdmin(
   ctx: Pick<ApiCtx, "req" | "res" | "deps" | "capability" | "actor">,
-  _scope: string,
+  scope: string,
 ): Promise<Principal | null> {
   const { res, deps } = ctx;
   if (!deps.admin) {
@@ -43,7 +44,10 @@ export async function authorizeAdmin(
     sendJson(res, 403, { error: "forbidden", message: "this principal is no longer active" });
     return null;
   }
-  if (actor && adminStatusFromGrants(grants, actor.id).isAdmin) return actor;
+  if (actor && adminStatusFromGrants(grants, actor.id).isAdmin) {
+    Object.assign(currentModelRequestContext(), { actorId: actor.id, scopeId: scope });
+    return actor;
+  }
   sendJson(res, 403, { error: "forbidden", message: "admin grant required for this scope" });
   return null;
 }

@@ -1,4 +1,4 @@
-import type { ActorAssertion, TurnRequest } from "../types.ts";
+import { scopeId, type ActorAssertion, type TurnRequest } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import type { OrchestratorInput } from "../core/orchestrator.ts";
 import { samePerson } from "../directory/person.ts";
@@ -17,6 +17,7 @@ import { buildWakeEnvelope } from "../core/wake-envelope.ts";
 import { isTerminal } from "../runs/run-store.ts";
 import { unscreenedNotice } from "../security/security-posture.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
+import { withModelRequestContext } from "../model/request-context.ts";
 
 import type { App, AppDeps } from "./app-types.ts";
 
@@ -153,7 +154,11 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
       const botTs = new Set(rawDelta.filter((m) => m.bot).map((m) => m.ts));
       decision = await judgeAmbientBatch(
         {
-          judge: deps.ambientJudge,
+          judge: (system, prompt) =>
+            withModelRequestContext(
+              { scopeId: scopeId(judgeBatch.kind === "group" ? "group" : "channel", container) },
+              () => deps.ambientJudge!(system, prompt),
+            ),
           spawnWorker: (b: AmbientBatch, d: AmbientDecision) =>
             spawnAmbientWorker(
               { ...b, messages: b.messages.map((m) => (botTs.has(m.ts) && !m.bot ? { ...m, bot: true } : m)) },

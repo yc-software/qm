@@ -31,6 +31,7 @@ import type {
   Destination,
   EntryType,
   ScopeId,
+  Session,
   SessionEntry,
   SessionType,
   TurnResult,
@@ -55,7 +56,8 @@ import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
-import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.ts";
+import { acquireLeaseWithin, isOverheardEntry, sessionOrigin } from "../sessions/session-store.ts";
+import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
@@ -300,6 +302,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
   const securitySteersInFlight = new Set<string>();
   const { compactContextIfNeeded, compactRecent, scheduleBackgroundCompaction, documentTokenBudget } =
     createCompaction(deps);
+  const originOf = async (session: Session | null) => {
+    if (!session) return undefined;
+    if (!session.parentSessionId && session.origin) return session.origin;
+    return deps.sessions.inheritedOrigin(session).catch(swallowAs("orchestrator: session origin", undefined));
+  };
 
   async function approvalSummary(
     scopeId: ScopeId,
@@ -424,6 +431,15 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const { screening } = resolution.securityPolicy;
       if (screening === "off") return "allow";
       const scopeLabel = deps.resolution.scopeFor(conversation, actor);
+      const session = sessionId
+        ? await deps.sessions.get(sessionId).catch(swallowAs("orchestrator: steer session", null))
+        : null;
+      Object.assign(currentModelRequestContext(), {
+        sessionId,
+        actorId: actor.id,
+        scopeId: scopeLabel,
+        origin: sessionId ? await originOf(session) : sessionOrigin(conversation.threadRef),
+      });
       const bounded = securityScreenPayload({
         surface: "external",
         text: "",
@@ -494,6 +510,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     async regenerateTitle(sessionId, principalId, participantIds) {
       const session = await deps.sessions.get(sessionId);
       if (!session) return null;
+      Object.assign(currentModelRequestContext(), {
+        sessionId,
+        actorId: principalId,
+        scopeId: session.scopeId,
+        origin: await originOf(session),
+      });
       let entries = (await transcripts.forViewer(sessionId, principalId)).entries;
       if (participantIds?.length) {
         const views = await Promise.all(
@@ -712,6 +734,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const resolution = await deps.resolution.resolve(conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
+      Object.assign(currentModelRequestContext(), { actorId: actor.id, scopeId });
       const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
         actorId: actor.id,
         scopeId,
@@ -1299,6 +1322,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
       );
       screenSession.id = session.id;
+      const origin = await originOf(session);
+      Object.assign(currentModelRequestContext(), { sessionId: session.id, origin });
       const recordSessionLlmRequest = async (rec: HarnessLlmRequestRecord, signal?: AbortSignal): Promise<void> => {
         try {
           await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);
@@ -1705,6 +1730,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(!liveTurn && input.unattendedGrants ? { grants: input.unattendedGrants } : {}),
           ...(input.runId ? { runId: input.runId } : {}),
           sessionId: session.id,
+          origin,
           runAttempt: input.attempt,
           runLeaseToken: input.runLeaseToken,
           threadRef: conversation.threadRef,
@@ -1723,6 +1749,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               aud: BROWSER_MODEL_AUD,
               browserModel: browserSelection.model ?? "unavailable",
               browserAccount: browserSelection.account,
+              sessionId: session.id,
+              origin,
               exp: Date.now() + CAPABILITY_TTL_MS,
             },
             deps.capabilitySecret ?? deps.signingSecret,
@@ -4137,5 +4165,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       }
     },
   };
-  return orchestrator;
+  return {
+    screenSecuritySteer: (input) => withModelRequestContext({}, () => orchestrator.screenSecuritySteer(input)),
+    regenerateTitle: (...args) => withModelRequestContext({}, () => orchestrator.regenerateTitle(...args)),
+    handleTurn: (input) => withModelRequestContext({}, () => orchestrator.handleTurn(input)),
+  };
 }

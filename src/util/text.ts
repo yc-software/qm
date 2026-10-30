@@ -36,6 +36,10 @@ export function outermostJsonObject(text: string): string | undefined {
   return start === -1 || end < start ? undefined : text.slice(start, end + 1);
 }
 
+export function attestable(value: unknown): value is string {
+  return typeof value === "string" && /^[\x21-\x7e]{1,256}$/.test(value);
+}
+
 export function promptText(value: string): string {
   return value.replaceAll("```", "ʼʼʼ");
 }

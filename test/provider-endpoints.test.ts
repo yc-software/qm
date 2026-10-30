@@ -1,6 +1,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  MODEL_REQUEST_CONTEXT_HEADERS,
   parseProviderBaseUrl,
   providerBaseUrl,
   providerBaseUrlsFromEnv,
@@ -118,6 +119,21 @@ test("loadConfig accepts a complete model gateway and rejects partial or malform
       }),
     /invalid MODEL_GATEWAY_MODELS/,
   );
+});
+
+test("the gateway key header cannot share a name with a request context header", () => {
+  for (const header of [...Object.keys(MODEL_REQUEST_CONTEXT_HEADERS), "X-QM-Purpose"])
+    assert.throws(
+      () =>
+        loadConfig({
+          ...BASE_ENV,
+          MODEL_GATEWAY_URL: "http://gateway.internal",
+          MODEL_GATEWAY_API_KEY: "secret",
+          MODEL_GATEWAY_API_KEY_HEADER: header,
+        }),
+      /request context header/,
+      header,
+    );
 });
 
 test("gateway-mapped built-in models send session-affinity headers", () => {
