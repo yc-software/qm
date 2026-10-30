@@ -15,7 +15,6 @@ const call: ToolActivity = {
 for (const [name, payload, ok] of [
   ["successful", { ok: true, isError: false }, true],
   ["legacy sent", { result: "[sent]", isError: false }, true],
-  ["unscreened success", { result: "untrusted wrapper: [sent]", isError: false, unscreened: true }, true],
   ["failed", { ok: false }, false],
   ["error flag", { isError: true }, false],
   ["error detail", { error: "delivery failed" }, false],

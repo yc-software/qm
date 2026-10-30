@@ -3,7 +3,7 @@ import { html, render, type TemplateResult } from "lit";
 import { classMap } from "lit/directives/class-map.js";
 import { repeat } from "lit/directives/repeat.js";
 import { states, patternError, type GovernanceState } from "./governance-state.ts";
-export { owns, collect, capture, commit, status, statusKey, load, updateCatalog, states } from "./governance-state.ts";
+export { owns, collect, capture, commit, status, statusKey, load, states } from "./governance-state.ts";
 
 const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
   "card-security-posture": (s) =>
@@ -13,7 +13,7 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
     >
       <div class="head">
         <h2>Security posture</h2>
-        <p>Choose how the agent screens external content and when it requires your approval.</p>
+        <p>Choose when the agent requires your approval and whether it can reach private networks.</p>
       </div>
       <div class="body">
         <select
@@ -23,8 +23,8 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
           .value=${s.value("security-posture")}
           @change=${(event: Event) => changeField(s, "security-posture", event)}
         >
-          <option value="dangerous">Dangerous — automatic tools; deployment-required screening still applies</option>
-          <option value="auto">Auto — use the deployment’s configured screener</option>
+          <option value="dangerous">Dangerous — automatic tools; private networks allowed</option>
+          <option value="auto">Auto — automatic tools; private networks blocked</option>
           <option value="strict">Strict — approve tool actions</option>
         </select>
         ${choiceGroup(
@@ -35,102 +35,13 @@ const cards: Record<string, (s: GovernanceState) => TemplateResult> = {
             onChange: (event: Event) => changeField(s, "security-posture", event),
           },
           [
-            [
-              "auto",
-              "Auto",
-              "Default. Blocks private-network access. Screens external content when the deployment configures a screener; model screening is off by default.",
-            ],
-            ["dangerous", "Dangerous", "No posture-based screening; deployment-required screening still applies."],
+            ["auto", "Auto", "Default. Blocks private-network access."],
+            ["dangerous", "Dangerous", "Allows private-network access."],
             ["strict", "Strict", "Every tool action requires human approval."],
           ],
         )}
       </div>
       ${saveFooter(s, "Apply", s.disabled)}
-    </section>`,
-  "card-auto-flagger": (s) =>
-    html`<section
-      class=${classMap({ card: true, "sv-governance": true, hidden: !s.available, dirty: s.dirty, "egress-disabled": s.disabled })}
-      id="card-auto-flagger"
-    >
-      <div class="head">
-        <h2>Auto flagger</h2>
-        <p>
-          Model and prompt used when the deployment explicitly enables model screening. These settings do not enable
-          screening. The security boundary and required verdict format remain fixed.
-        </p>
-      </div>
-      <div class="body">
-        <div class="screening-details">
-          <div class="governance-field-grid">
-            <div>
-              <label for="auto-flagger-harness">Harness</label>
-              <select
-                id="auto-flagger-harness"
-                .value=${s.value("auto-flagger-harness")}
-                @change=${(event: Event) => changeField(s, "auto-flagger-harness", event)}
-              >
-                ${harnessOptions(s).map((id) => html`<option value=${id} ?selected=${id === s.draft.harnessId}>${({ pi: "Pi", claude: "Claude Code" } as Record<string, string>)[id] || id}</option>`)}
-              </select>
-            </div>
-            <div>
-              <label for="auto-flagger-model">Model</label>
-              <select
-                id="auto-flagger-model"
-                .value=${s.value("auto-flagger-model")}
-                @change=${(event: Event) => changeField(s, "auto-flagger-model", event)}
-              >
-                ${s.models.map((entry) => html`<option value=${entry.id} ?selected=${entry.id === s.draft.modelId}>${entry.name} (${entry.id})</option>`)}
-              </select>
-            </div>
-          </div>
-          <div class="governance-prompt">
-            <label for="auto-flagger-rubric">Quarantine prompt (classification rubric)</label>
-            <textarea
-              id="auto-flagger-rubric"
-              rows="6"
-              maxlength="20000"
-              .value=${s.value("auto-flagger-rubric")}
-              @input=${(event: Event) => changeField(s, "auto-flagger-rubric", event)}
-            ></textarea>
-          </div>
-          <div class="screening-test-options">
-            <h3>Test Auto flagger</h3>
-            <p class="screening-test-help">
-              Try the model and prompt above on recent screenings without applying changes.
-            </p>
-            <div class="screening-test-fields">
-              <label for="auto-flagger-window">Recent screenings to test</label>
-              <div class="screening-count">
-                <input
-                  id="auto-flagger-window"
-                  type="number"
-                  inputmode="numeric"
-                  min="1"
-                  max="500"
-                  step="1"
-                  value="100"
-                  aria-describedby="auto-flagger-window-range"
-                />
-                <span id="auto-flagger-window-range">1–500</span>
-              </div>
-              <label
-                class="screening-compare"
-                title="Also replay the configuration in effect today, so the flag rates are comparable"
-              >
-                <input type="checkbox" id="auto-flagger-compare" />Compare with the currently applied configuration
-              </label>
-              <button id="auto-flagger-test" type="button">Run test</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="foot">
-        <button id="auto-flagger-reset" type="button">Restore default</button>
-        ${saveButton(s, "Apply", s.disabled)} ${settingStatus(s)}
-      </div>
-      <div class="foot" id="auto-flagger-test-result" hidden>
-        <span class="status" id="st-auto-flagger-test"></span>
-      </div>
     </section>`,
   "card-approval-grant-modes": (s) =>
     html`<section
@@ -475,9 +386,6 @@ function changeField(s: GovernanceState, id: string, event: Event) {
   if (id === "governance-org-ambient") value = value === "on";
   if (id === "ambient-enabled") value = value === "default" ? null : value === "on";
   s.change(id, value);
-}
-function harnessOptions(s: GovernanceState): string[] {
-  return [...new Set<string>([...(s.context.harnessOptions || []), s.draft.harnessId].filter(Boolean))];
 }
 function sharingLabel(s: GovernanceState): string {
   const title = (value: string) => value[0].toUpperCase() + value.slice(1);

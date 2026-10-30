@@ -411,26 +411,6 @@ test("a refused run still shows its authored, user-facing reason", async () => {
   assert.equal(final.errorMessage, "you're not a member of that context");
 });
 
-test("a stored quarantine refusal renders the canned copy on the web, never the internal verdict", async () => {
-  setClock(() => 1_000_000);
-  instantSleep();
-  stubRuns([
-    {
-      status: "done",
-      result: { status: "refused", refusalKind: "security_quarantine", reason: "internal screening details" },
-      partial: "",
-    },
-  ]);
-
-  const stream = createAssistantMessageEventStream();
-  await pollRun(stream, blankAssistant(), "run-quarantine-copy", freshAcc(1_000_000));
-  const final = await drain(stream);
-
-  assert.equal(final.stopReason, "error");
-  assert.doesNotMatch(final.errorMessage ?? "", /internal screening details/);
-  assert.match(final.errorMessage ?? "", /security screen flagged/);
-});
-
 test("live run polling includes only consumed visible steering in activity order", async () => {
   instantSleep();
   stubRuns([

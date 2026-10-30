@@ -153,8 +153,6 @@ export function adminRoutes(d: AdminRouteDeps) {
     if (method === "POST" && rest === "files/upload") return upload(c);
     if (first === "scopes" && rest.length > "scopes/".length) {
       if (method === "GET") return relay(c, "GET", corePath);
-      if (method === "POST" && rest.endsWith("/auto-flagger/test"))
-        return relay(c, "POST", corePath, await d.readBody(c.req));
       if (method === "PUT" && rest.lastIndexOf("/") > "scopes/".length) {
         const body = await d.readBody(c.req);
         if (!rest.endsWith("/branding")) return relay(c, "PUT", corePath, body);

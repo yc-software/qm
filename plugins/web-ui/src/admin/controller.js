@@ -64,7 +64,6 @@ export function startAdmin(host, env) {
     content.insertBefore(anchor, $("card-service-credentials"));
     [
       $("card-security-posture"),
-      $("card-auto-flagger"),
       $("card-sharing-posture"),
       governanceAmbient,
       $("card-external-slack"),
@@ -508,8 +507,6 @@ export function startAdmin(host, env) {
       p.set("from", spendWindow.from);
       p.set("to", spendWindow.to);
     } else if (spendWindow && st.range) p.set("range", spendWindow.preset);
-    if (st.view === "slack" && st.container) p.set("container", st.container);
-    if (st.view === "slack" && st.container && st.ts) p.set("ts", st.ts);
     if (st.view === "judgments" && st.container) p.set("container", st.container);
     if (st.view === "judgments" && st.decision) p.set("decision", st.decision);
     if (st.view === "judgments" && st.jid) p.set("jid", st.jid);
@@ -595,7 +592,6 @@ export function startAdmin(host, env) {
     historyCursor = st.cursor || null;
     historyKind = st.historyKind || "conversation";
     root.classList.toggle("history-view", view === "history");
-    root.classList.toggle("slack-view", view === "slack");
     root.classList.toggle("judgments-view", view === "judgments");
     root.classList.toggle("errors-view", view === "errors");
     root.classList.toggle("deployments-view", view === "deployments");
@@ -612,7 +608,6 @@ export function startAdmin(host, env) {
       "audit",
       "egress",
       "history",
-      "slack",
       "judgments",
       "errors",
       "governance",
@@ -646,7 +641,6 @@ export function startAdmin(host, env) {
     }
     if (view === "connectors") return void loadConnectors();
     if (view === "user") return void showUserDetail(st.principal);
-    if (view === "slack") return void renderSlackMirror(st);
     if (view === "judgments") return void renderAmbientJudgments(st);
     if (view === "ackemoji") return void renderAckEmojiPicks(st);
     if (view === "history" && st.session && st.turn != null) return void showContextPage(st.session, st.turn);
@@ -841,7 +835,7 @@ export function startAdmin(host, env) {
   function pageShell(opts = {}) {
     const bar = $("shellbar");
     bar.textContent = "";
-    const logView = ["history", "slack", "judgments", "errors", "audit", "egress", "memory"].includes(view);
+    const logView = ["history", "judgments", "errors", "audit", "egress", "memory"].includes(view);
     bar.classList.toggle("logs-shell", logView);
     const counts = document.createElement("div");
     counts.className = "log-counts";
@@ -1021,10 +1015,6 @@ export function startAdmin(host, env) {
     if (view === "history" && urlToState().session) return;
     if (view === "onboarding") {
       loadOnboarding();
-      return;
-    }
-    if (view === "slack") {
-      if (!urlToState().container) renderSlackMirror(urlToState());
       return;
     }
     if (view === "crons" && cronDestinationEditId) return;
@@ -1228,7 +1218,6 @@ export function startAdmin(host, env) {
       syncGovernanceSectionNav();
       loadedCommandPolicyPresent = r.data.commandPolicy != null;
       governanceUI.load(r.data, scope);
-      if (scopeChanged) $("auto-flagger-test-result").hidden = true;
     }
     if (requestedView === "customize") governanceUI.settings.load(r.data, scope, "soul");
     if (requestedView === "slack-settings") governanceUI.integrations.loadScope(r.data, scope);
@@ -1299,7 +1288,6 @@ export function startAdmin(host, env) {
           for (const [harness, models] of Object.entries(fresh.data.modelsByHarness || {})) {
             append((modelsByHarness[harness] ||= []), models);
           }
-          if (requestedView === "governance") governanceUI.updateCatalog(fresh.data);
           refreshModelChoices.forEach((refresh) => refresh());
           initCustomDropdowns($("view-governance"));
         })
@@ -1682,7 +1670,6 @@ export function startAdmin(host, env) {
   const SAVE = Object.fromEntries([...governanceUI.states.keys()].map((key) => [key, () => governanceUI.collect(key)]));
   const SAVE_ST = {
     "security-posture": "st-security-posture",
-    "auto-flagger": "st-auto-flagger",
     "sharing-posture": "st-sharing-posture",
     "approval-grant-modes": "st-approval-grant-modes",
     "command-policy": "st-policy",
@@ -1702,7 +1689,6 @@ export function startAdmin(host, env) {
     branding: "st-branding",
   };
   const SAVE_RELOADS = new Set([
-    "auto-flagger",
     "soul",
     "external-slack-participants",
     "runtime",
@@ -1714,25 +1700,6 @@ export function startAdmin(host, env) {
     "branding",
   ]);
   const sectionSnapshots = new Map();
-  function autoFlaggerTestSummary(data) {
-    if (!data.sampled) return data.message || "No past screenings to replay yet.";
-    const pct = (value) => (value == null ? "n/a" : (value * 100).toFixed(1) + "%");
-    const parts = ["Flagged " + data.flagged + " of " + data.scored + " scored (" + pct(data.flagRate) + ")"];
-    if (data.baseline) {
-      parts.push(
-        "current rubric flags " +
-          pct(data.baseline.flagRate) +
-          " · " +
-          plural(data.baseline.changed, "verdict") +
-          " changed",
-      );
-    }
-    if (data.unscreened) parts.push(plural(data.unscreened, "sample") + " came back unscreened");
-    if (data.errors) parts.push(plural(data.errors, "sample") + " errored");
-    if (data.partial) parts.push("stopped at the time limit — partial result");
-    parts.push("sampled " + data.sampled + " · " + Math.round(data.durationMs / 100) / 10 + "s");
-    return parts.join(" · ");
-  }
   function sectionButton(key) {
     return document.querySelector('[data-save="' + key + '"]');
   }
@@ -1792,7 +1759,7 @@ export function startAdmin(host, env) {
           ["Proposed", titleCase(body.posture)],
         ],
         warning: dangerous
-          ? "Dangerous disables posture-based content screening and tool approval gates. Deployment-required screening still applies. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
+          ? "Dangerous allows private-network access and disables tool approval gates. Predeclared command approvals, hard denials, identity, authorization, credential scope, revocation, and audit remain enforced."
           : "This changes the effective tools and approval behavior for future turns in this scope.",
         confirmLabel: dangerous ? "Enable Dangerous" : "Apply posture",
         danger: dangerous,
@@ -1875,45 +1842,6 @@ export function startAdmin(host, env) {
     } else governanceUI.status(key, message, "ok");
   }
   let governanceSaveSeq = 0;
-  $("auto-flagger-test").onclick = async () => {
-    const requestedScope = scope;
-    const button = $("auto-flagger-test");
-    $("auto-flagger-test-result").hidden = false;
-    const windowField = $("auto-flagger-window");
-    const requested = Number(windowField.value);
-    if (!Number.isInteger(requested) || requested < 1 || requested > 500) {
-      return setStatus("st-auto-flagger-test", "Window must be a whole number between 1 and 500.", "err", true);
-    }
-    setStatus("st-auto-flagger-test", "Replaying the last " + requested + " screenings through this rubric…", "", true);
-    button.disabled = true;
-    try {
-      const r = await api("POST", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger/test", {
-        window: requested,
-        compare: $("auto-flagger-compare").checked,
-        harnessId: $("auto-flagger-harness").value,
-        modelId: $("auto-flagger-model").value,
-        rubric: $("auto-flagger-rubric").value,
-      });
-      if (requestedScope !== scope) return;
-      if (!r.ok) {
-        return setStatus("st-auto-flagger-test", r.data?.message || "Test run failed.", "err", true);
-      }
-      setStatus("st-auto-flagger-test", autoFlaggerTestSummary(r.data), r.data.errors ? "warn" : "ok", true);
-    } finally {
-      button.disabled = false;
-    }
-  };
-  $("auto-flagger-reset").onclick = async () => {
-    const requestedScope = scope;
-    const requestedGeneration = governanceReq;
-    const draftBefore = JSON.stringify(governanceUI.collect("auto-flagger"));
-    const r = await api("PUT", "/api/scopes/" + encodeURIComponent(requestedScope) + "/auto-flagger", {
-      reset: true,
-    });
-    if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
-    if (!r.ok) return setStatus("st-auto-flagger", r.data?.message || "Reset failed.", "err");
-    await refreshPolicySetting("auto-flagger", requestedScope, requestedGeneration, draftBefore, "Default restored");
-  };
 
   async function saveSetting(key, btn) {
     const requestedScope = scope;
@@ -1972,7 +1900,7 @@ export function startAdmin(host, env) {
           return;
         }
         if (key === "command-policy") loadedCommandPolicyPresent = true;
-        if (["security-posture", "sharing-posture", "ambient-policy", "auto-flagger"].includes(key)) {
+        if (["security-posture", "sharing-posture", "ambient-policy"].includes(key)) {
           const fresh = await api("GET", "/api/scopes/" + encodeURIComponent(requestedScope) + "?view=governance");
           if (requestedScope !== scope || requestedGeneration !== governanceReq) return;
           if (fresh.ok && !governanceUI.states.get(key).dirty) {
@@ -3326,12 +3254,6 @@ export function startAdmin(host, env) {
         drow.appendChild(sb);
       }
       drow.appendChild(badge(deliverySurfaceLabel(delivery), "info"));
-      const mirror = slackMirrorRef(delivery);
-      if (mirror) {
-        const ml = navLink("View in Slack mirror ↗", { view: "slack", container: mirror.container, ts: mirror.ts });
-        ml.title = "Jump to this message in the mirrored Slack channel " + mirror.container;
-        drow.appendChild(ml);
-      }
       const dwhen = document.createElement("span");
       dwhen.className = "when";
       dwhen.textContent = `${delivery.shadow ? "shadow" : "delivered"} · ${fmtTime(delivery.createdAt)}`;
@@ -3408,13 +3330,9 @@ export function startAdmin(host, env) {
   }
 
   let slackContainers = null;
-  let slackContainersTruncated = false;
   async function loadSlackContainers() {
     const r = await api("GET", "/api/slack-mirror");
-    if (r.ok) {
-      slackContainers = r.data.containers || [];
-      slackContainersTruncated = !!r.data.hasMore;
-    }
+    if (r.ok) slackContainers = r.data.containers || [];
     return r;
   }
 
@@ -3435,152 +3353,20 @@ export function startAdmin(host, env) {
     return null;
   }
 
-  function slackUnescape(s) {
-    return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-  }
-  function slackMentionSpan(text) {
-    const s = document.createElement("span");
-    s.className = "sm-mention";
-    s.textContent = text;
-    return s;
-  }
-
-  function slackEntityNode(inner, mentions) {
-    const u = slackUnescape(inner);
-    if (u[0] === "@") {
-      const [id, label] = u.slice(1).split("|");
-      return slackMentionSpan("@" + (label || (mentions && mentions[id]) || id));
-    }
-    if (u[0] === "#") {
-      const [id, label] = u.slice(1).split("|");
-      return slackMentionSpan("#" + (label || id));
-    }
-    if (u[0] === "!") {
-      const [cmd, label] = u.slice(1).split("|");
-      return slackMentionSpan("@" + (label || cmd.split("^")[0]));
-    }
-    const bar = u.indexOf("|");
-    const url = bar === -1 ? u : u.slice(0, bar);
-    const label = bar === -1 ? url : u.slice(bar + 1);
-
-    if (!/^(https?:|mailto:|tel:)/i.test(url)) return document.createTextNode(label);
-    const a = document.createElement("a");
-    a.href = url;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = label;
-    return a;
-  }
-
-  function slackAppendMrkdwn(raw, parent) {
-    const text = slackUnescape(raw);
-    const re = /\*([^*\n]+)\*|(?<!\w)_([^_\n]+)_(?!\w)|~([^~\n]+)~|(https?:\/\/[^\s<>]+)/g;
-    let last = 0,
-      m;
-    while ((m = re.exec(text))) {
-      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
-      let el;
-      if (m[1] != null) {
-        el = document.createElement("strong");
-        el.textContent = m[1];
-      } else if (m[2] != null) {
-        el = document.createElement("em");
-        el.textContent = m[2];
-      } else if (m[3] != null) {
-        el = document.createElement("s");
-        el.textContent = m[3];
-      } else {
-        let url = m[4].replace(/[.,;!?]+$/, "");
-        while (url.endsWith(")") && (url.match(/\)/g) || []).length > (url.match(/\(/g) || []).length)
-          url = url.slice(0, -1);
-        el = slackEntityNode(url);
-        parent.appendChild(el);
-        parent.appendChild(document.createTextNode(m[4].slice(url.length)));
-        last = re.lastIndex;
-        continue;
-      }
-      parent.appendChild(el);
-      last = re.lastIndex;
-    }
-    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
-  }
-
-  function slackParseInline(text, parent, mentions) {
-    const re = /`([^`\n]+)`|<([^>\n]+)>|:([a-z0-9_+'-]+):/g;
-    let last = 0,
-      m;
-    while ((m = re.exec(text))) {
-      if (m.index > last) slackAppendMrkdwn(text.slice(last, m.index), parent);
-      if (m[1] != null) {
-        const c = document.createElement("code");
-        c.className = "sm-code";
-        c.textContent = slackUnescape(m[1]);
-        parent.appendChild(c);
-      } else if (m[2] != null) parent.appendChild(slackEntityNode(m[2], mentions));
-      else {
-        const emoji = governanceUI.charForName(m[3]);
-        if (emoji) parent.appendChild(document.createTextNode(emoji));
-        else slackAppendMrkdwn(m[0], parent);
-      }
-      last = re.lastIndex;
-    }
-    if (last < text.length) slackAppendMrkdwn(text.slice(last), parent);
-  }
-
-  function slackParseText(raw, mentions) {
-    const frag = document.createDocumentFragment();
-    if (!raw) return frag;
-    raw.split("```").forEach((part, i) => {
-      if (i % 2 === 1) {
-        const pre = document.createElement("pre"),
-          code = document.createElement("code");
-        code.textContent = slackUnescape(part.replace(/^\n/, "").replace(/\n$/, ""));
-        pre.appendChild(code);
-        frag.appendChild(pre);
-      } else {
-        let quote = null;
-        part.split("\n").forEach((line, lineIndex) => {
-          const quoted = /^(?:>|&gt;) ?/.test(line);
-          if (quoted) {
-            if (!quote) {
-              quote = document.createElement("blockquote");
-              frag.appendChild(quote);
-            } else quote.appendChild(document.createTextNode("\n"));
-            slackParseInline(line.replace(/^(?:>|&gt;) ?/, ""), quote, mentions);
-          } else {
-            if (lineIndex && !quote) frag.appendChild(document.createTextNode("\n"));
-            quote = null;
-            slackParseInline(line, frag, mentions);
-          }
-        });
-      }
-    });
-    return frag;
-  }
   governanceUI.slackActivity.configure({
     api,
     go,
-    urlToState,
     stateToUrl,
     pageShell,
     navLink,
     relTime,
     fmtTime,
-    brandSelfLabel,
-    slackParseText,
     slackContainerLabel,
     slackContainerScope,
     loadSlackContainers,
     containers: () => slackContainers,
-    truncated: () => slackContainersTruncated,
     view: () => view,
-    loaded: () => {
-      viewLoadedAt.slack = Date.now();
-    },
   });
-  async function renderSlackMirror(st) {
-    return governanceUI.slackActivity.renderSlackMirror(st);
-  }
   function deliverySurfaceLabel(event) {
     const type = event?.destination?.type;
     if (type === "principal") return "Slack DM";
@@ -3592,12 +3378,6 @@ export function startAdmin(host, env) {
   function deliveryLabel(event) {
     if (event.shadow) return "Shadow delivery";
     return `${deliverySurfaceLabel(event)} delivery`;
-  }
-
-  function slackMirrorRef(event) {
-    const d = event?.destination || {};
-    if (d.type !== "slack" || !d.editRef || typeof d.target !== "string" || !d.target) return null;
-    return { container: d.target.split(":")[0], ts: d.editRef };
   }
 
   async function renderAmbientJudgments(st) {
@@ -3644,7 +3424,6 @@ export function startAdmin(host, env) {
       wakeOriginLabel,
       deliveryLabel,
       deliverySurfaceLabel,
-      slackMirrorRef,
       shortId,
       metaChip,
       deliveryFileBadges,

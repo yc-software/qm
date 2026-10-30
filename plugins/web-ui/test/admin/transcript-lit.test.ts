@@ -114,7 +114,7 @@ test("standalone delivery retains destination labels and never renders text as H
   const dom = setup();
   try {
     dom.window.eval(
-      'services.deliveryLabel=()=>"Web delivery";services.deliverySurfaceLabel=()=>"Web";services.wakeOriginLabel=()=>"Manual";services.slackMirrorRef=()=>null;data={entries:[],deliveryEvents:[{type:"outbound_delivery",destination:{type:"web",target:"channel"},text:"<img src=x>",createdAt:1}]}',
+      'services.deliveryLabel=()=>"Web delivery";services.deliverySurfaceLabel=()=>"Web";services.wakeOriginLabel=()=>"Manual";data={entries:[],deliveryEvents:[{type:"outbound_delivery",destination:{type:"web",target:"channel"},text:"<img src=x>",createdAt:1}]}',
     );
     await dom.window.eval('ui.show("session",60,false,services)');
     const doc = dom.window.document;

@@ -354,15 +354,14 @@ test("different sandbox actions and process targets do not collapse into one orp
   assert.equal(items.length, actions.length);
 });
 
-test("unscreened execution retains its warning and neutral exit status without parsing command text", () => {
+test("sandbox execution keeps a neutral exit status without parsing command text", () => {
   const result = {
     tool: "sandbox",
     action: "exec",
     code: 7,
     timedOut: false,
     isError: false,
-    unscreened: true,
-    result: "[NOT security-screened]\nQA_EXPECTED_FAILURE\n[exit 7]",
+    result: "QA_EXPECTED_FAILURE\n[exit 7]",
   };
   assert.equal(toolRowKind(row({ tool: "sandbox", action: "exec", sandbox_id: "box-a" }, result), "complete"), "ok");
   assert.equal(toolExecutionOutput(result), result.result);
@@ -372,12 +371,9 @@ test("unscreened execution retains its warning and neutral exit status without p
   );
   assert.equal(toolRowKind(row({ tool: "execute" }, { code: 0, timedOut: true }), "complete"), "failed");
   assert.equal(toolExecutionOutput({ code: 0, result: "done\n[exit 0]" }), "done\n[exit 0]");
-  assert.equal(toolExecutionOutput({ isError: true, result: "[tool output quarantined]" }), null);
+  assert.equal(toolExecutionOutput({ isError: true, result: "[tool failed]" }), null);
   assert.equal(
-    toolRowKind(
-      row({ tool: "sandbox", action: "exec" }, { isError: true, result: "[tool output quarantined]" }),
-      "complete",
-    ),
+    toolRowKind(row({ tool: "sandbox", action: "exec" }, { isError: true, result: "[tool failed]" }), "complete"),
     "failed",
   );
 });

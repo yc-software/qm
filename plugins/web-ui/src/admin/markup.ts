@@ -97,7 +97,6 @@ export const ADMIN_MARKUP = `
           <p>How agents reason, act, and respond without supervision.</p>
         </div>
         <template data-governance-card="card-security-posture"></template>
-        <template data-governance-card="card-auto-flagger"></template>
         <template data-governance-card="card-approval-grant-modes"></template>
         <template data-governance-card="card-command-policy"></template>
         <template data-settings-card="card-soul"></template>

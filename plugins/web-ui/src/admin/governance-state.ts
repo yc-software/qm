@@ -6,11 +6,6 @@ const fieldNames: Record<string, Record<string, string>> = {
   "security-posture": { "security-posture": "posture" },
   "sharing-posture": { "sharing-posture": "posture" },
   "org-ambient": { "governance-org-ambient": "on" },
-  "auto-flagger": {
-    "auto-flagger-harness": "harnessId",
-    "auto-flagger-model": "modelId",
-    "auto-flagger-rubric": "rubric",
-  },
   "approval-grant-modes": { "approval-grant-session": "session", "approval-grant-always": "always" },
   "ambient-policy": { "ambient-enabled": "ambientEnabled", "ambient-orders": "orders" },
   egress: { egress: "allowedHosts", "egress-deny": "deniedHosts" },
@@ -38,23 +33,7 @@ export class GovernanceState extends SettingState {
   }
   change(id: string, value: unknown) {
     this.draft[fieldNames[this.key][id]] = value;
-    if (id === "auto-flagger-harness") {
-      const options = this.models;
-      if (!options.some((entry: any) => entry.id === this.draft.modelId)) this.draft.modelId = options[0]?.id || "";
-    }
     this.changed();
-  }
-  get models(): Array<{ id: string; name: string }> {
-    const options = [...(this.context.modelsByHarness?.[this.draft.harnessId] || [])];
-    const configured = this.context.autoFlagger || this.context.autoFlaggerDefault;
-    if (
-      configured &&
-      configured.harnessId === this.draft.harnessId &&
-      !options.some((entry) => entry.id === configured.modelId)
-    ) {
-      options.push({ id: configured.modelId, name: configured.modelId + " (configured; unavailable)" });
-    }
-    return options;
   }
   load(body: Record<string, any>, context = this.context, scope = this.scope) {
     this.context = context;
@@ -192,10 +171,6 @@ export function load(data: Record<string, any>, scope: string, only?: string) {
   const resources: Record<string, [boolean, Record<string, any>]> = {
     "security-posture": ["securityPosture" in data, { posture: data.securityPosture || "auto" }],
     "sharing-posture": ["sharingPosture" in data, { posture: data.sharingPosture || "isolated" }],
-    "auto-flagger": [
-      scope.startsWith("org:") && "autoFlagger" in data,
-      data.autoFlagger || data.autoFlaggerDefault || {},
-    ],
     "approval-grant-modes": ["approvalGrantModes" in data, data.approvalGrantModes || { session: true, always: true }],
     "command-policy": [true, data.commandPolicy || { mode: "denylist", rules: [] }],
     "org-ambient": [scope.startsWith("org:") && "orgAmbient" in data, { on: data.orgAmbient !== false }],
@@ -219,14 +194,4 @@ export function statusKey(id: string): string | undefined {
   if (key === "policy") return "command-policy";
   if (key === "governance-org-ambient") return "org-ambient";
   return owns(key) ? key : undefined;
-}
-
-export function updateCatalog(data: Record<string, any>) {
-  const state = states.get("auto-flagger")!;
-  state.context = {
-    ...state.context,
-    modelsByHarness: data.modelsByHarness || state.context.modelsByHarness,
-    harnessOptions: data.harnessOptions || state.context.harnessOptions,
-  };
-  state.render();
 }

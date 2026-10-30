@@ -10,14 +10,7 @@ function setup() {
 test("Lit mounts Governance without wrappers or duplicate ids", () => {
   const dom = setup();
   try {
-    for (const id of [
-      "security-posture",
-      "auto-flagger",
-      "sharing-posture",
-      "command-policy",
-      "egress",
-      "ambient-policy",
-    ]) {
+    for (const id of ["security-posture", "sharing-posture", "command-policy", "egress", "ambient-policy"]) {
       const card = dom.window.document.getElementById(`card-${id}`)!;
       assert.equal(card.tagName, "SECTION");
       assert.equal(card.parentElement?.className, "governance-content");

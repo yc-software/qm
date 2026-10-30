@@ -3,7 +3,7 @@ export const ADMIN_SECTIONS = [
     label: "Organization",
     views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users", "spend"],
   },
-  { label: "Logs", views: ["history", "slack", "judgments", "errors", "audit", "egress"] },
+  { label: "Logs", views: ["history", "judgments", "errors", "audit", "egress"] },
   { label: "Artifacts", views: ["files", "skills", "memory", "deployments", "crons"] },
 ];
 
@@ -38,7 +38,6 @@ export const VIEW_TITLE: Record<string, string> = {
   crons: "Crons",
   deployments: "Apps",
   retention: "Retention",
-  slack: "Slack messages",
   "slack-settings": "Slack",
   judgments: "Judgments",
   ackemoji: "Ack emoji",

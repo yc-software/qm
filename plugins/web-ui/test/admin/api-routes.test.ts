@@ -214,7 +214,7 @@ test("anything outside the allow-lists is a 404 that never reaches core", async 
   }
 });
 
-test("scope reads, scope writes and the auto flagger test relay to the per-scope endpoints", async () => {
+test("scope reads and scope writes relay to the per-scope endpoints", async () => {
   const scope = encodeURIComponent("org:acme");
   const read = await call("GET", `/api/admin/scopes/${scope}?view=governance`);
   assert.equal(pathOf(read.hops[0]!), `GET /v1/admin/scopes/${scope}?view=governance`);
@@ -224,13 +224,8 @@ test("scope reads, scope writes and the auto flagger test relay to the per-scope
   const write = await call("PUT", `/api/admin/scopes/${scope}/security-posture`, { posture: "strict" });
   assert.equal(pathOf(write.hops[0]!), `PUT /v1/admin/scopes/${scope}/security-posture`);
   assert.deepEqual(JSON.parse(write.hops[0]!.body), { posture: "strict" });
-  const flagger = await call("POST", `/api/admin/scopes/${scope}/auto-flagger/test`, { window: 25 });
-  assert.equal(pathOf(flagger.hops[0]!), `POST /v1/admin/scopes/${scope}/auto-flagger/test`);
-  assert.deepEqual(JSON.parse(flagger.hops[0]!.body), { window: 25 });
   assert.ok(
-    [read, exported, write, flagger].every(
-      ({ hops }) => hops[0]!.signed && hops[0]!.actor === "admin@example.com@acme",
-    ),
+    [read, exported, write].every(({ hops }) => hops[0]!.signed && hops[0]!.actor === "admin@example.com@acme"),
   );
 });
 

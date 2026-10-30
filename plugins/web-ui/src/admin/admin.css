@@ -1463,169 +1463,8 @@
   color: var(--muted);
   font-size: 12px;
 }
-#app-view .sm-stream {
-  max-width: var(--readw);
-  display: flex;
-  flex-direction: column;
-}
-#app-view .sm-rawfeed {
-  max-width: var(--readw);
-  margin: 0 0 8px;
-  font-size: 12px;
-}
-#app-view .sm-rawfeed a {
-  color: var(--muted);
-  text-decoration: none;
-}
-#app-view .sm-rawfeed a:hover {
-  color: var(--accent, #4a7dff);
-  text-decoration: underline;
-}
-#app-view .sm-msg {
-  display: flex;
-  gap: 8px;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-#app-view .sm-msg.sm-cont {
-  padding-top: 1px;
-  padding-bottom: 1px;
-}
-#app-view .sm-msg.sm-self {
-  background: color-mix(in srgb, var(--accent, #4a7dff) 6%, transparent);
-}
-#app-view .sm-msg.sm-reply {
-  margin-left: 26px;
-  border-left: 2px solid var(--border);
-}
-#app-view .sm-msg.sm-target {
-  background: color-mix(in srgb, #f2c744 22%, transparent);
-}
-#app-view .sm-msg.sm-openable {
-  cursor: pointer;
-}
-#app-view .sm-msg:hover {
-  background: color-mix(in srgb, var(--muted) 8%, transparent);
-}
-#app-view .sm-gutter {
-  flex: 0 0 36px;
-  width: 36px;
-  display: flex;
-  justify-content: center;
-}
-#app-view .sm-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  font-weight: 600;
-  font-size: 15px;
-}
-#app-view .sm-guttertime {
-  color: var(--muted);
-  font-size: 10.5px;
-  line-height: 20px;
-  opacity: 0;
-  white-space: nowrap;
-}
-#app-view .sm-msg.sm-cont:hover .sm-guttertime {
-  opacity: 1;
-}
-#app-view .sm-body {
-  min-width: 0;
-  flex: 1;
-}
-#app-view .sm-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-#app-view .sm-author {
-  font-weight: 600;
-  font-size: 13.5px;
-}
-#app-view .sm-when {
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-#app-view .sm-tag {
-  color: var(--muted);
-  font-size: 11.5px;
-}
-#app-view .sm-tag-agent {
-  color: var(--accent, #4a7dff);
-  font-weight: 600;
-}
-#app-view .sm-flag {
-  color: var(--muted);
-  font-size: 11.5px;
-  font-style: italic;
-  margin-left: 6px;
-}
-#app-view .sm-text {
-  font-size: 13.5px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.46;
-}
-#app-view .sm-text a {
-  color: var(--accent, #4a7dff);
-}
-#app-view .sm-mention {
-  color: var(--accent, #4a7dff);
-  background: color-mix(in srgb, var(--accent, #4a7dff) 12%, transparent);
-  border-radius: 3px;
-  padding: 0 2px;
-}
-#app-view .sm-code {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 12.5px;
-  background: color-mix(in srgb, var(--muted) 14%, transparent);
-  border-radius: 3px;
-  padding: 0 3px;
-}
-#app-view .sm-text pre {
-  background: color-mix(in srgb, var(--muted) 12%, transparent);
-  border-radius: 6px;
-  padding: 8px 10px;
-  margin: 4px 0;
-  overflow-x: auto;
-}
-#app-view .sm-text pre code {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 12.5px;
-}
-#app-view .sm-msg.sm-deleted .sm-text {
-  color: var(--muted);
-  text-decoration: line-through;
-}
-#app-view .sm-day {
-  margin: 14px 0 4px;
-  padding-bottom: 2px;
-  border-bottom: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
-}
 #app-view .judg-detail {
   max-width: 1120px;
-}
-#app-view .judg-split {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  align-items: start;
-  margin: 4px 0 20px;
-}
-@media (max-width: 900px) {
-  #app-view .judg-split {
-    grid-template-columns: 1fr;
-  }
 }
 #app-view .judg-pane-title {
   display: flex;
@@ -1643,17 +1482,6 @@
 }
 #app-view .judg-extlink:hover {
   color: var(--accent, #6941c6);
-}
-#app-view .judg-mirror {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  padding: 8px 4px;
-  max-height: 520px;
-  overflow-y: auto;
-}
-#app-view .judg-mirror .sm-stream {
-  max-width: none;
 }
 #app-view .judg-prompt {
   border: 1px solid var(--border);
@@ -4056,26 +3884,6 @@
     column-gap: 8px;
   }
 }
-#app-view #view-governance .governance-field-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 12px;
-  max-width: 720px;
-}
-#app-view .governance-field-grid .dd,
-#app-view .governance-field-grid select {
-  width: 100%;
-}
-#app-view .governance-prompt {
-  margin-top: 12px;
-  border-top: 1px solid var(--border);
-}
-#app-view #auto-flagger-rubric {
-  width: 100%;
-  min-height: 140px;
-  max-height: 360px;
-  resize: vertical;
-}
 #app-view .governance-secondary-actions {
   display: flex;
   flex-wrap: wrap;
@@ -4100,10 +3908,6 @@
 @media (max-width: 600px) {
   #app-view .choice-stack {
     grid-template-columns: 1fr;
-  }
-  #app-view #view-governance .governance-field-grid {
-    grid-template-columns: 1fr;
-    gap: 8px;
   }
 }
 
@@ -4227,56 +4031,6 @@
 #app-view #view-governance :is(.card, .parity-subsection) > .foot[hidden] {
   display: none;
 }
-#app-view .screening-test-options {
-  border-top: 1px solid var(--border);
-}
-#app-view .screening-test-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 0 12px;
-}
-#app-view .screening-test-fields input[type="number"] {
-  width: 100%;
-}
-#app-view #view-governance .screening-compare {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin: 0;
-}
-#app-view #view-governance .screening-compare input {
-  flex: 0 0 18px;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  accent-color: var(--cta);
-  cursor: pointer;
-}
-#app-view #view-governance #auto-flagger-window {
-  width: 76px;
-  min-width: 76px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  appearance: textfield;
-  -moz-appearance: textfield;
-}
-#app-view #auto-flagger-window::-webkit-inner-spin-button,
-#app-view #auto-flagger-window::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-#app-view #auto-flagger-window-range {
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-#app-view #auto-flagger-test {
-  grid-column: 1 / -1;
-  justify-self: end;
-}
 #app-view #view-governance :is(.card, .parity-subsection) > .foot [data-save],
 #app-view #view-governance :is(.card, .parity-subsection) > .foot #governance-org-ambient-save,
 #app-view #view-governance :is(.card, .parity-subsection) > .foot #sc-save {
@@ -4358,30 +4112,6 @@
 #app-view .posture-help dd {
   margin: 4px 0 12px;
   color: var(--muted);
-}
-#app-view .screening-count {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-#app-view .screening-count input {
-  min-width: 64px;
-}
-#app-view #view-governance .governance-prompt {
-  padding-top: 12px;
-  margin-top: 12px;
-}
-#app-view #view-governance .screening-test-options {
-  padding-top: 12px;
-  margin-top: 12px;
-}
-#app-view #view-governance .screening-test-options h3 {
-  margin: 0 0 4px;
-  font-size: 13px;
-  font-weight: 500;
-}
-#app-view #view-governance .screening-test-help {
-  margin: 0 0 12px;
 }
 #app-view #view-governance .posture-help dl {
   margin-top: 12px;
@@ -5724,7 +5454,7 @@
 
 :where(#app-view[data-admin-kit="true"])
   :is(.admin-main, dialog)
-  label:not(:where(.posture-choice, .setting-toggle, .screening-compare, .switch)) {
+  label:not(:where(.posture-choice, .setting-toggle, .switch)) {
   font-size: var(--control-font);
   font-weight: 400;
   line-height: 1.4;
@@ -6041,12 +5771,12 @@
   }
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .admin-inner {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .admin-inner {
   max-width: 960px;
   margin-inline: auto;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
   flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 24px;
@@ -6054,15 +5784,13 @@
   white-space: normal;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-title {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-title {
   font-size: var(--font-20);
   font-weight: 500;
   line-height: 1.4;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  #shellbar
-  .back {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar .back {
   flex-basis: 100%;
   justify-content: flex-start;
   min-height: 24px;
@@ -6076,14 +5804,11 @@
   text-decoration: none;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  #shellbar
-  .back:hover {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar .back:hover {
   color: var(--text);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  :is(.seg, .shell-tab) {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) :is(.seg, .shell-tab) {
   min-height: 32px;
   padding: 6px 12px;
   border: 1px solid transparent;
@@ -6094,22 +5819,19 @@
   font-weight: 400;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
   :is(.seg.active, .shell-tab.active) {
   color: var(--text);
   background: var(--subtle);
   border-color: color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  :is(.seg, .shell-tab):hover {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) :is(.seg, .shell-tab):hover {
   color: var(--text);
   background: var(--subtle);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  #view-data
-  > .card {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #view-data > .card {
   margin: 0 0 12px;
   padding: 0;
   border: 0;
@@ -6118,7 +5840,7 @@
   box-shadow: none;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
   #view-data
   > .card
   > :is(.body, .head) {
@@ -6127,18 +5849,15 @@
   border: 0;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  #view-data
-  > .card
-  > .head {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #view-data > .card > .head {
   margin-bottom: 8px;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-list {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-list {
   border-top: 1px solid var(--border);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
   display: grid;
   grid-template-columns: minmax(120px, 180px) minmax(0, 1fr) 112px;
   gap: 12px;
@@ -6149,7 +5868,7 @@
   border-bottom: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-name {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-name {
   grid-column: 1;
   grid-row: 1;
   max-width: none;
@@ -6158,66 +5877,63 @@
   line-height: 1.5;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview {
   grid-column: 2;
   grid-row: 1;
   font-size: 13px;
   line-height: 1.5;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-  .dense-preview:empty {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview:empty {
   display: none;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
   grid-column: 3;
   grid-row: 1;
   align-self: center;
   line-height: 1.6;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-tag {
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-tag {
   padding: 0;
   background: transparent;
   font-size: 12px;
   font-weight: 400;
 }
 
-#app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
+#app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
   :is(.dense-row, .back, .seg, .shell-tab):focus-visible {
   outline: 2px solid var(--cta);
   outline-offset: 3px;
 }
 @media (max-width: 640px) {
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) #shellbar {
     gap: 10px;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-sort {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-sort {
     flex-basis: 100%;
     flex-wrap: wrap;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-    .shell-spacer {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .shell-spacer {
     display: none;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-row {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 2px 8px;
     padding: 5px 0;
     min-height: 44px;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view)
-    .dense-preview {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-preview {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
-  #app-view:is(.history-view, .slack-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
+  #app-view:is(.history-view, .judgments-view, .errors-view, .deployments-view, .crons-view) .dense-time {
     grid-column: 2;
     grid-row: 1;
     margin-left: 0;
@@ -6226,187 +5942,6 @@
 
 #app-view.history-view #view-data > .card:not(:last-child) {
   margin-bottom: 32px;
-}
-
-#app-view.slack-view .shell-search {
-  flex: 0 1 320px;
-  min-width: 0;
-}
-#app-view.slack-view .shell-search input {
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-}
-#app-view.slack-view .dense-row {
-  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr) 112px;
-}
-#app-view.slack-view #shellbar:has(.sm-channel-heading) {
-  position: sticky;
-  top: var(--header-total-h);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 280px);
-  gap: 12px 24px;
-  max-width: 840px;
-  margin: 0 auto 20px;
-  padding: 12px 0 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-}
-#app-view.slack-view .sm-toolbar {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-}
-#app-view.slack-view #shellbar .sm-toolbar .back {
-  flex: none;
-  margin-right: auto;
-}
-#app-view.slack-view .sm-toolbar a {
-  padding: 0;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-  text-decoration: none;
-}
-#app-view.slack-view .sm-toolbar a:hover {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-#app-view.slack-view .sm-channel-heading {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-#app-view.slack-view .sm-channel-heading .shell-title {
-  overflow-wrap: anywhere;
-}
-#app-view.slack-view .sm-channel-heading .shell-context {
-  font-size: 11px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-#app-view.slack-view .sm-stream {
-  width: 100%;
-  max-width: 840px;
-  margin-inline: auto;
-}
-#app-view.judgments-view .sm-stream {
-  max-width: none;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-msg {
-  margin: 16px 0 0;
-  padding: 8px 10px;
-  gap: 12px;
-  border: 0;
-  border-radius: 6px;
-  scroll-margin-block: 190px 32px;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-msg.sm-cont {
-  margin-top: 0;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-msg.sm-reply {
-  margin-left: 0;
-  border-left: 0;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-gutter {
-  flex-basis: 28px;
-  width: 28px;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-avatar {
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--subtle);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-author {
-  font-size: 13px;
-  font-weight: 500;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-text {
-  font-size: 13px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-head {
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  margin-bottom: 6px;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-when {
-  margin-left: auto;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-tag {
-  font-size: 11px;
-  font-weight: 400;
-  color: var(--muted);
-}
-#app-view:is(.slack-view, .judgments-view) .sm-text a {
-  color: var(--text);
-  text-decoration: underline;
-  text-decoration-color: var(--border);
-  text-underline-offset: 3px;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-text a:hover {
-  text-decoration-color: currentColor;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-text blockquote {
-  margin: 6px 0;
-  padding: 2px 0 2px 12px;
-  border-left: 2px solid var(--border);
-  color: var(--muted);
-}
-#app-view:is(.slack-view, .judgments-view) .sm-day {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin: 16px 0 0;
-  padding: 0;
-  border: 0;
-  font-size: 11px;
-  font-weight: 400;
-}
-#app-view:is(.slack-view, .judgments-view) .sm-day::before,
-#app-view:is(.slack-view, .judgments-view) .sm-day::after {
-  content: "";
-  height: 1px;
-  flex: 1;
-  background: var(--border);
-}
-@media (max-width: 900px) {
-  #app-view.slack-view #shellbar:has(.sm-channel-heading) {
-    position: static;
-  }
-}
-@media (max-width: 640px) {
-  #app-view.slack-view #shellbar:has(.sm-channel-heading) {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
-  #app-view.slack-view .sm-toolbar {
-    flex-wrap: wrap;
-    gap: 8px 12px;
-  }
-  #app-view.slack-view .shell-search {
-    flex-basis: 100%;
-  }
-  #app-view.slack-view .dense-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  #app-view:is(.slack-view, .judgments-view) .sm-msg {
-    gap: 8px;
-    padding-inline: 0;
-  }
 }
 
 #app-view.judgments-view #shellbar .judgment-filters {
@@ -6436,15 +5971,6 @@
 }
 #app-view.judgments-view .dense-preview :is(.badge, .dense-time) {
   flex-shrink: 0;
-}
-#app-view.judgments-view .judg-split {
-  gap: 24px;
-  margin: 0 0 24px;
-}
-#app-view.judgments-view :is(.judg-mirror, .judg-prompt) {
-  border-radius: 8px;
-  padding: 12px;
-  background: transparent;
 }
 #app-view.judgments-view .judg-pane-title {
   margin-bottom: 12px;

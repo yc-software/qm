@@ -455,7 +455,6 @@ export async function show(sessionId: string, limit: number | undefined, expand:
         delivery = outbound || event.type === "principal_delivery",
         provenance = event.provenance,
         label = event.origin?.label || s.wakeOriginLabel(provenance?.trigger || provenance?.surface),
-        mirror = s.slackMirrorRef(event),
         text = event.text || "";
       let deliveryState = "delivery";
       if (event.shadow) deliveryState = "shadow";
@@ -498,21 +497,9 @@ export async function show(sessionId: string, limit: number | undefined, expand:
           ${event.llmRequests?.length ? html`<button type="button" class=${"context-icon" + (open.has(unit) ? " active" : "")} aria-expanded=${String(open.has(unit))} aria-label=${(open.has(unit) ? "Hide" : "Show") + " context"} title=${(open.has(unit) ? "Hide" : "Show") + " context · " + event.llmRequests.length + " request" + (event.llmRequests.length === 1 ? "" : "s")} @click=${toggle}>${brain}</button>` : nothing}<span
             class="entry-label important"
             >${event.shadow || delivery ? s.deliveryLabel(event) : "Delivery event"}</span
-          >${event.shadow ? html`<span class="entry-label" title="Recorded for observability, never sent to the human (shadow-mode rollout)">not sent</span>` : nothing}${!event.shadow && event.expiredAt ? html`<span class="entry-label" title="Dropped undelivered — the destination failed permanently or the message aged out">never sent</span>` : nothing}${delivery ? badge(s.deliverySurfaceLabel(event), "info") : nothing}${outbound ? nothing : originLink}${cronLink(event.origin)}${
-            mirror
-              ? html`<a
-                  class="link"
-                  href=${s.stateToUrl({ view: "slack", container: mirror.container, ts: mirror.ts })}
-                  title=${"Jump to this message in the mirrored Slack channel " + mirror.container}
-                  @click=${(e: MouseEvent) => {
-                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-                    e.preventDefault();
-                    s.go({ view: "slack", container: mirror.container, ts: mirror.ts });
-                  }}
-                  >View in Slack mirror ↗</a
-                >`
-              : nothing
-          }<span class="when">${deliveryState + " · " + s.fmtTime(event.createdAt)}</span
+          >${event.shadow ? html`<span class="entry-label" title="Recorded for observability, never sent to the human (shadow-mode rollout)">not sent</span>` : nothing}${!event.shadow && event.expiredAt ? html`<span class="entry-label" title="Dropped undelivered — the destination failed permanently or the message aged out">never sent</span>` : nothing}${delivery ? badge(s.deliverySurfaceLabel(event), "info") : nothing}${outbound ? nothing : originLink}${cronLink(event.origin)}<span
+            class="when"
+            >${deliveryState + " · " + s.fmtTime(event.createdAt)}</span
           >${s.copyButton("Copy", () => text)}
         </div>
         ${panels.has(unit) ? panelVisibility(panels.get(unit)!, open.has(unit)) : nothing}
