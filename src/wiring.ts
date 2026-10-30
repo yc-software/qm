@@ -114,7 +114,6 @@ import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling, createPgPool } from "./persistence/pg-pool.ts";
 import { memoryRowTenants, ownerRowTenants, type RowTenants } from "./tenants/row-tenant.ts";
-import type { TenantResolver } from "./tenants/resolver.ts";
 import { createPostgresLeaderLease, createNoopLeaderLease, type LeaderLease } from "./persistence/leader-lease.ts";
 import {
   createMemoryAdvisoryLock,
@@ -478,7 +477,6 @@ export function stopWithBackstop(
 }
 
 export interface BuiltApp {
-  tenants?: TenantResolver;
   rowTenants: RowTenants;
   checkReadiness: (signal: AbortSignal) => Promise<void>;
   backgroundOwnership?: BackgroundOwnershipControl;
@@ -584,7 +582,6 @@ export function buildApp(
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
     harnesses?: Partial<Record<HarnessId, Harness>>;
-    tenants?: TenantResolver;
   } = {},
 ): BuiltApp {
   const rowTenants = config.databaseUrl ? ownerRowTenants(createPgPool(config.databaseUrl)) : memoryRowTenants;
@@ -840,7 +837,6 @@ export function buildApp(
     leaderLease,
     createSweeper,
   });
-  // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = withMemoryTidy(
     createConfiguredMemoryService({
@@ -1286,8 +1282,6 @@ export function buildApp(
     lock: advisoryLock,
     refreshConnector: (() => {
       const base = makeRefresh({ resolveClient });
-      // AI subscription logins ride the same connector-refresh machinery:
-      // the keychain calls this single-flight when a token is stale.
       return async (host: string, token: OAuthToken, ctx?: { accountType?: string; clientRef?: string }) => {
         if (token.refreshToken && host === "auth.openai.com") {
           const fresh = await refreshChatGPTTokens(token.refreshToken);
@@ -1314,9 +1308,6 @@ export function buildApp(
     ...(fresh.accountId ? { accountId: fresh.accountId } : {}),
     ...(fresh.expiresAt !== undefined ? { expiresAt: fresh.expiresAt } : {}),
   });
-  // Per-user AI accounts live in the keychain itself (unified custody):
-  // same encryption, ownership, admin visibility, and removal flows as
-  // every other personal credential.
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
   const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
   const serviceCreds = withDeploymentCredentials(
@@ -1428,8 +1419,6 @@ export function buildApp(
             try {
               return [p.id, await customProviders.resolveKey(p.id)] as const;
             } catch (e) {
-              // A corrupt/undecryptable custom key must degrade that one
-              // provider, never the whole turn (built-ins included).
               console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
               return [p.id, null] as const;
             }
@@ -3117,7 +3106,6 @@ export function buildApp(
     consentLinks,
     oauthFlows,
     secretDrops,
-    ...(overrides.tenants ? { tenants: overrides.tenants } : {}),
     rowTenants,
     modelGatewayTransport: gatewayTransport,
     budget,
@@ -3255,7 +3243,6 @@ export function serverDeps(
     consentLinks: built.consentLinks,
     oauthFlows: built.oauthFlows,
     secretDrops: built.secretDrops,
-    ...(built.tenants ? { tenants: built.tenants } : {}),
     rowTenants: built.rowTenants,
     ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
     ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),

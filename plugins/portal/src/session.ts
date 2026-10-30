@@ -1,4 +1,15 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { boundTenant } from "../../chassis/src/tenant.ts";
+
+export function requestTenant(): string {
+  const tenant = boundTenant();
+  if (!tenant) throw new Error("No tenant is bound to this portal request");
+  return tenant;
+}
+
+export function tenantKey(sub: string): string {
+  return `${requestTenant()}\n${sub}`;
+}
 
 export function deriveKey(secret: string, label: string): Buffer {
   return createHmac("sha256", secret).update(label).digest();

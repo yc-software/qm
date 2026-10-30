@@ -33,8 +33,7 @@ import {
   sendBuffered,
   serveFavicon,
 } from "../../chassis/src/http.ts";
-import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
-import { withTenant } from "../../chassis/src/tenant.ts";
+import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER, withIdentityTenant } from "../../chassis/src/portal-identity.ts";
 import { createBrandingCache, injectBranding } from "../../chassis/src/branding.ts";
 import { parseSuggestedActivities } from "../../chassis/src/suggested-activities.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
@@ -3566,11 +3565,9 @@ export const handler = async (req: IncomingMessage, res: ServerResponse) => {
   res.setHeader("x-frame-options", "DENY");
   const raw = req.headers[PORTAL_IDENTITY_HEADER];
   const token = Array.isArray(raw) ? raw[0] : raw;
-  const tenant =
-    token && PORTAL_IDENTITY_SECRET ? verifyPortalIdentity(token, PORTAL_IDENTITY_SECRET, Date.now())?.t : null;
   const route = () => portalTokenStore.run(token, () => routeRequest(req, res));
   try {
-    await (tenant ? withTenant(tenant, route) : route());
+    await withIdentityTenant(token, PORTAL_IDENTITY_SECRET, route);
   } catch (err) {
     if (err instanceof PayloadTooLargeError) {
       if (!res.headersSent) json(res, 413, { error: "payload_too_large", message: err.message });

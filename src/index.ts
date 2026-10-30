@@ -18,9 +18,7 @@ import { enterTenant } from "./tenants/context.ts";
 
 const config = loadConfig();
 
-const built = buildApp(config, {
-  tenants: singleTenantResolver(config.databaseUrl ? pgTenants(createPgPool(config.databaseUrl)) : memoryTenants),
-});
+const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
 const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);
@@ -46,6 +44,7 @@ const managedSlack = process.env.QM_SLACK_SERVICE_URL
 const server = createServer(built.app, {
   ...serverDeps(config, built, slackEnvironmentState, envSlackConfig?.botToken),
   managedSlack,
+  tenants: singleTenantResolver(config.databaseUrl ? pgTenants(createPgPool(config.databaseUrl)) : memoryTenants),
 });
 
 await built.config.hydrate?.();

@@ -29,6 +29,8 @@ import {
   randomToken,
   safeEqual,
   sanitizeReturnTo,
+  requestTenant,
+  tenantKey,
   type SessionClaims,
   type ImpersonationClaims,
   type TmpClaims,
@@ -57,6 +59,7 @@ import {
 } from "./proxy.ts";
 import { hostTenant, signedHeaders, withSourceAuthNonce } from "../../chassis/src/core-client.ts";
 import { boundTenant, withTenant } from "../../chassis/src/tenant.ts";
+import { refreshSurfaceConfig, surfaceConfig } from "./surface-config.ts";
 import { coreClaimStore, claimOnce, withinRateLimit, ClaimStoreUnavailableError } from "../../chassis/src/claims.ts";
 import { coreEmailAdmission } from "../../chassis/src/external-members.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
@@ -114,49 +117,6 @@ function playgroundIntEnv(name: string, fallback: number): number {
 }
 const PLAYGROUND_MINTS_PER_IP = playgroundIntEnv("PORTAL_PLAYGROUND_MINTS_PER_IP", 30);
 const PLAYGROUND_MINT_WINDOW_S = playgroundIntEnv("PORTAL_PLAYGROUND_MINT_WINDOW_S", 3600);
-const NEUTRAL_ACCENT = "#4f46e5";
-interface SurfaceConfig {
-  accent: string;
-  modelProviderConfigured?: boolean;
-  nextAt: number;
-  inflight: Promise<void> | null;
-}
-const surfaceConfigs = new Map<string, SurfaceConfig>();
-function surfaceConfig(): SurfaceConfig {
-  const tenant = boundTenant() ?? "";
-  const config = surfaceConfigs.get(tenant) ?? { accent: NEUTRAL_ACCENT, nextAt: 0, inflight: null };
-  surfaceConfigs.set(tenant, config);
-  return config;
-}
-function refreshSurfaceConfig(): Promise<void> {
-  const config = surfaceConfig();
-  if (Date.now() >= config.nextAt) {
-    config.nextAt = Date.now() + 5_000;
-    config.inflight = fetchSurfaceConfig(config).finally(() => {
-      config.inflight = null;
-    });
-  }
-  return config.inflight ?? Promise.resolve();
-}
-async function fetchSurfaceConfig(config: SurfaceConfig): Promise<void> {
-  try {
-    const path = withSourceAuthNonce("/v1/surface-config", CORE_SIGNING_SECRET);
-    const r = await fetch(`${CORE}${path}`, {
-      headers: signedHeaders(CORE_SIGNING_SECRET, "GET", path),
-      signal: AbortSignal.timeout(2_000),
-    });
-    if (r.ok) {
-      const body = (await r.json()) as { branding?: { accent?: unknown }; modelProviderConfigured?: unknown };
-      config.accent = typeof body.branding?.accent === "string" ? body.branding.accent : NEUTRAL_ACCENT;
-      config.modelProviderConfigured =
-        typeof body.modelProviderConfigured === "boolean" ? body.modelProviderConfigured : undefined;
-      config.nextAt = Date.now() + (config.modelProviderConfigured === false ? 5_000 : 30_000);
-    }
-  } catch {
-    void 0;
-  }
-}
-
 const UPSTREAMS: Record<string, string> = {
   "web-ui": (process.env.WEB_UI_UPSTREAM ?? "http://localhost:8096").replace(/\/$/, ""),
   admin: (process.env.ADMIN_UPSTREAM ?? "http://localhost:8090").replace(/\/$/, ""),
@@ -270,16 +230,6 @@ const ADMIN_PROBE_TIMEOUT_MS = 6_500;
 const ADMIN_PROBE_ATTEMPTS = 2;
 const ADMIN_PROBE_RETRY_DELAY_MS = 250;
 const adminCache = new LRUCache<string, boolean>({ max: 10_000, ttl: ADMIN_TTL_MS });
-
-function requestTenant(): string {
-  const tenant = boundTenant();
-  if (!tenant) throw new Error("No tenant is bound to this portal request");
-  return tenant;
-}
-
-function tenantKey(sub: string): string {
-  return `${requestTenant()}\n${sub}`;
-}
 
 function portalIdentityHeaders(sub: string): Record<string, string> {
   return PORTAL_IDENTITY_SECRET
@@ -478,14 +428,16 @@ function localDevSession(req: IncomingMessage, nowMs = Date.now(), ignoreLogout 
 }
 
 function currentSession(req: IncomingMessage): SessionClaims | null {
-  return (
-    openSession(
-      readCookie(req.headers.cookie, "portal_session"),
-      sessionKey,
-      Date.now(),
-      boundTenant(),
-      SESSION_MAX_TTL_S,
-    ) ?? localDevSession(req)
+  const cookie = readCookie(req.headers.cookie, "portal_session");
+  return openSession(cookie, sessionKey, Date.now(), boundTenant(), SESSION_MAX_TTL_S) ?? localDevSession(req);
+}
+
+function currentImpersonation(req: IncomingMessage): ImpersonationClaims | null {
+  return openImpersonation(
+    readCookie(req.headers.cookie, "portal_impersonate"),
+    impersonateKey,
+    Date.now(),
+    boundTenant(),
   );
 }
 
@@ -1191,12 +1143,7 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
 
   if (pathname === "/auth/impersonate/stop" && method === "POST") {
     if (!sameOriginRequest(req)) return json(res, 403, { error: "forbidden", message: "cross-origin request refused" });
-    const imp = openImpersonation(
-      readCookie(req.headers.cookie, "portal_impersonate"),
-      impersonateKey,
-      Date.now(),
-      boundTenant(),
-    );
+    const imp = currentImpersonation(req);
     setSession(res, [clearCookie("portal_impersonate", "/", SECURE_COOKIES)]);
     if (session && imp && imp.actor === session.sub) await coreImpersonate("stop", session.sub, imp.target);
     if (wantsHtml(req)) {
@@ -1401,12 +1348,7 @@ async function handleTenant(req: IncomingMessage, res: ServerResponse, method: s
   let principal = session.sub;
   let impersonator: string | undefined;
   if (key === "web-ui" && !crossOrigin) {
-    const imp = openImpersonation(
-      readCookie(req.headers.cookie, "portal_impersonate"),
-      impersonateKey,
-      Date.now(),
-      boundTenant(),
-    );
+    const imp = currentImpersonation(req);
     if (imp && imp.actor === session.sub && (await isAdmin(session.sub))) {
       principal = imp.target;
       impersonator = session.sub;
