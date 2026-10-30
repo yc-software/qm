@@ -15,8 +15,40 @@ import type { TaskAckRows, TaskAckState } from "./task-ack.ts";
 import type { SlackAccountLink, SlackAccountRows } from "../api/routes/composio.ts";
 import { currentTenant } from "../tenants/context.ts";
 
+const KEY_VALUE_TABLES = [
+  "slack_installation",
+  "slack_accounts",
+  "slack_staged_envelopes",
+  "slack_session_status",
+  "slack_task_acknowledgements",
+];
+
 const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
   TENANCY_BASE,
+  {
+    id: "tenancy/slack_0000/tenant",
+    statements: [
+      `DO $slack_tenant$
+       DECLARE
+         populated boolean := false;
+         tenant_count bigint;
+         kv text;
+       BEGIN
+         FOREACH kv IN ARRAY ARRAY['${KEY_VALUE_TABLES.join("', '")}'] LOOP
+           IF NOT populated AND to_regclass(kv) IS NOT NULL THEN
+             EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I)', kv) INTO populated;
+           END IF;
+         END LOOP;
+         SELECT count(*) INTO tenant_count FROM tenants;
+         IF populated AND tenant_count > 1 THEN
+           RAISE 'Slack rows need a tenant but this database has % tenants', tenant_count;
+         END IF;
+         IF populated AND tenant_count = 0 THEN
+           INSERT INTO tenants(id, slug, name) VALUES (gen_random_uuid(), 'main', 'Main');
+         END IF;
+       END $slack_tenant$`,
+    ],
+  },
   {
     id: "tenancy/slack_installation/0001-typed",
     statements: [

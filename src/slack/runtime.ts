@@ -33,21 +33,27 @@ export function createSlackRuntime(opts: {
   const environment = slackPluginConfigFromEnv(env);
   const extraAccounts = slackAccountConfigsFromEnv(env);
   const witness = environment ?? extraAccounts[0];
-  let environmentTenant: Promise<string | null> | undefined;
-  const tenantOfEnvironment = (): Promise<string | null> => {
-    if (!witness) return Promise.resolve(null);
-    environmentTenant ??= new WebClient(witness.botToken, {
-      ...NO_RETRY,
-      ...(witness.apiUrl ? { slackApiUrl: normalizeSlackApiUrl(witness.apiUrl) } : {}),
-    }).auth
-      .test()
-      .then((auth) => (auth.team_id ? resolver.forSlackTeam(auth.team_id) : null))
-      .catch((error: unknown) => {
-        environmentTenant = undefined;
-        throw error;
-      });
-    return environmentTenant;
+  const teams = new Map<string, Promise<string | undefined>>();
+  const teamOf = (token: string): Promise<string | undefined> => {
+    let team = teams.get(token);
+    if (!team) {
+      team = new WebClient(token, {
+        ...NO_RETRY,
+        ...(env.SLACK_API_URL ? { slackApiUrl: normalizeSlackApiUrl(env.SLACK_API_URL) } : {}),
+      }).auth
+        .test()
+        .then((auth) => auth.team_id || undefined);
+      teams.set(token, team);
+      void team.catch(() => teams.delete(token));
+    }
+    return team;
   };
+  const tenantOfEnvironment = async (): Promise<string | null> => {
+    const team = witness ? await teamOf(witness.botToken) : undefined;
+    return team ? resolver.forSlackTeam(team) : null;
+  };
+  const workspaceToken = async (token: string | undefined, teamId: string | undefined) =>
+    token && teamId && (await teamOf(token).catch(() => undefined)) === teamId ? token : undefined;
   return createSlackTenants({
     core: opts.core,
     claims: {
@@ -63,7 +69,13 @@ export function createSlackRuntime(opts: {
     async load() {
       const owned = (await tenantOfEnvironment().catch(() => null)) === currentTenant();
       const stored = await installation.get();
-      const own = stored && (!stored.installId || opts.managed) ? slackInstallationConfig(env, stored) : null;
+      const own =
+        stored && (!stored.installId || opts.managed)
+          ? slackInstallationConfig(env, stored, {
+              userToken: await workspaceToken(env.SLACK_USER_TOKEN, stored.teamId),
+              copilotBotToken: await workspaceToken(env.SLACK_COPILOT_BOT_TOKEN, stored.teamId),
+            })
+          : null;
       const fromEnvironment = !stored && owned && !(await installation.status()).managed ? environment : null;
       const main = own ?? fromEnvironment;
       const accounts = [...(main ? [main] : []), ...(owned ? extraAccounts : [])];

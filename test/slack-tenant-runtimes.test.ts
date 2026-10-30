@@ -267,3 +267,50 @@ test("a Socket Mode envelope from a workspace outside the tenant is acknowledged
   assert.deepEqual(processed, [A]);
   assert.equal(acks, 2);
 });
+
+test("a failed rebuild keeps the previous installation running and retries with backoff", async () => {
+  const { core } = fakeCore([]);
+  let version = "v1";
+  let failing = false;
+  let at = 0;
+  const started: string[] = [];
+  const stopped: string[] = [];
+  const tenants = createSlackTenants({
+    core,
+    claims: {
+      installedTenants: async () => [A],
+      dueEnvelopes: async () => [],
+      statusAccounts: async () => [],
+      ackTenants: async () => [],
+    },
+    load: async () => ({ version, accounts: [{ botToken: version } as SlackPluginConfig] }),
+    start: async (config) => {
+      if (failing && config.botToken !== "v1") throw new Error("auth.test timed out");
+      started.push(config.botToken);
+      return {
+        coreSingleton: true,
+        stop: async () => void stopped.push(config.botToken),
+      } as unknown as SlackAccountRuntime;
+    },
+    intervalMs: 60_000,
+    sweepMs: 60_000,
+    retryMs: 1_000,
+    now: () => at,
+  });
+  tenants.start();
+  await tenants.reconcile();
+  version = "v2";
+  failing = true;
+  await tenants.reconcile();
+  assert.deepEqual(started, ["v1", "v1"], "the previous installation is started again after the new one fails");
+  assert.equal((await withTenant(A, () => tenants.accounts())).length, 1);
+  at = 500;
+  await tenants.reconcile();
+  assert.deepEqual(started, ["v1", "v1"], "no retry inside the backoff window");
+  failing = false;
+  at = 1_500;
+  await tenants.reconcile();
+  assert.deepEqual(started, ["v1", "v1", "v2"]);
+  assert.deepEqual(stopped, ["v1", "v1"]);
+  await tenants.stop();
+});

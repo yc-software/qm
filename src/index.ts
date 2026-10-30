@@ -43,6 +43,8 @@ const slackRuntime =
         managed: Boolean(process.env.QM_SLACK_SERVICE_URL),
       })
     : undefined;
+if (!slackRuntime && slackEnvironmentState !== "absent")
+  console.warn("[qm] Slack is configured but needs a Postgres database (DATABASE_URL); Slack will not start");
 const managedSlack =
   process.env.QM_SLACK_SERVICE_URL && resolver && slackRuntime && built.slackInstallation
     ? createManagedSlack({

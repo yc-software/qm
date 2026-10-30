@@ -55,33 +55,21 @@ export function parseAckEmoji(raw: string | undefined): string[] {
   return out;
 }
 
-const INSTALLATION_TUNABLES = [
-  "DEV_INSTANCE_NO_SLACK",
-  "SLACK_HISTORY_LIMIT",
-  "SLACK_API_URL",
-  "SLACK_ACK_CAP_MS",
-  "WEB_UI_PUBLIC_URL",
-  "QM_SLACK_SERVICE_URL",
-  "SLACK_IDENTITY_EMAIL",
-  "SLACK_LOG_LEVEL",
-  "SLACK_USER_SNAPSHOT_TTL_MS",
-  "SLACK_CHANNEL_MEMBERS_TTL_MS",
-  "SLACK_MAX_PRIVATE_CHANNELS",
-  "SLACK_RECENT_MESSAGES",
-  "SLACK_USER_CACHE_TTL_MS",
-  "DEV_INTROSPECTION",
-  "DEV_HEALTH_PORT",
-] as const;
+const WORKSPACE_TOKENS = new Set(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN", "SLACK_COPILOT_BOT_TOKEN"]);
 
 export function slackInstallationConfig(
   env: Record<string, string | undefined>,
   installation: { botToken: string; appToken?: string; installId?: string },
+  workspaceTokens: { userToken?: string; copilotBotToken?: string } = {},
 ): SlackPluginConfig | null {
   return slackPluginConfigFromEnv(
     {
-      ...Object.fromEntries(INSTALLATION_TUNABLES.map((name) => [name, env[name]])),
+      ...Object.fromEntries(Object.entries(env).filter(([name]) => !WORKSPACE_TOKENS.has(name))),
       SLACK_BOT_TOKEN: installation.botToken,
       SLACK_APP_TOKEN: installation.appToken,
+      SLACK_EVENTS_MODE: installation.appToken ? "socket" : env.SLACK_EVENTS_MODE,
+      SLACK_USER_TOKEN: workspaceTokens.userToken,
+      SLACK_COPILOT_BOT_TOKEN: workspaceTokens.copilotBotToken,
     },
     installation.installId,
   );

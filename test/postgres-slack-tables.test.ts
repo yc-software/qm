@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
 import {
   claimStagedEnvelopes,
   installedSlackTenants,
@@ -198,7 +197,7 @@ test("concurrent claimers never receive the same staged envelope", { skip }, asy
 });
 
 test(
-  "the conversion stamps existing Slack rows with the single tenant and drops the key-value tables",
+  "the conversion creates the single tenant when none exists, stamps existing Slack rows with it and drops the key-value tables",
   { skip },
   async () => {
     const kv = {
@@ -260,17 +259,6 @@ test(
           for (const [id, json] of Object.entries(rows))
             await admin.query(`INSERT INTO ${table}(id, json) VALUES ($1, $2)`, [id, JSON.stringify(json)]);
         }
-        const url = new URL(process.env.DATABASE_URL!);
-        url.searchParams.set(
-          "options",
-          `-c search_path=${(await admin.query("SELECT current_schema() AS s")).rows[0].s}`,
-        );
-        createPgPool(url.toString(), [
-          {
-            id: "seed/0001-tenant",
-            statements: [`INSERT INTO tenants(id, slug, name) VALUES (gen_random_uuid(), 'main', 'Main')`],
-          },
-        ]);
       },
     );
   },

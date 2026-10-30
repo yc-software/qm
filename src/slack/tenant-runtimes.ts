@@ -27,9 +27,12 @@ export interface SlackTenantClaims {
   ackTenants(): Promise<Array<{ tenant_id: string }>>;
 }
 
-type Entry =
-  | { version: string; accounts: SlackAccountRuntime[] }
-  | { version: string; failedAt: number; cleanup?: () => Promise<void> };
+interface Entry {
+  version: string;
+  configs: SlackPluginConfig[];
+  accounts: SlackAccountRuntime[];
+  failure?: { version: string; failures: number; retryAt: number; cleanup?: () => Promise<void> };
+}
 
 const report = reportFailureAs("slack tenant runtimes", undefined);
 
@@ -41,15 +44,18 @@ export function createSlackTenants(deps: {
   intervalMs?: number;
   sweepMs?: number;
   retryMs?: number;
+  maxRetryMs?: number;
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
   const intervalMs = deps.intervalMs ?? 10_000;
   const sweepMs = deps.sweepMs ?? 60_000;
-  const retryMs = deps.retryMs ?? 5 * 60_000;
+  const retryMs = deps.retryMs ?? 5_000;
+  const maxRetryMs = deps.maxRetryMs ?? 5 * 60_000;
   const entries = new Map<string, Entry>();
   const building = new Map<string, Promise<SlackAccountRuntime[] | undefined>>();
   let running = false;
+  let stopping: Promise<void> | undefined;
   let timer: NodeJS.Timeout | undefined;
   let ticking: Promise<void> | undefined;
   let lastSweep = Number.NEGATIVE_INFINITY;
@@ -58,8 +64,8 @@ export function createSlackTenants(deps: {
   let drainAgain = false;
 
   const accountsOf = (tenant: string): SlackAccountRuntime[] | undefined => {
-    const entry = entries.get(tenant);
-    return entry && "accounts" in entry ? entry.accounts : undefined;
+    const accounts = entries.get(tenant)?.accounts;
+    return accounts?.length ? accounts : undefined;
   };
   const main = (tenant: string): SlackAccountRuntime | undefined => {
     const accounts = accountsOf(tenant) ?? [];
@@ -78,8 +84,18 @@ export function createSlackTenants(deps: {
   const discard = async (tenant: string): Promise<void> => {
     const entry = entries.get(tenant);
     entries.delete(tenant);
-    if (entry && "accounts" in entry) await stopAccounts(entry.accounts);
-    else await entry?.cleanup?.();
+    await entry?.failure?.cleanup?.();
+    if (entry) await stopAccounts(entry.accounts);
+  };
+  const startAll = async (configs: readonly SlackPluginConfig[]): Promise<SlackAccountRuntime[]> => {
+    const started: SlackAccountRuntime[] = [];
+    try {
+      for (const config of configs) started.push(await deps.start(config));
+    } catch (error) {
+      await stopAccounts(started);
+      throw error;
+    }
+    return started;
   };
 
   function drainDeliveries(): void {
@@ -106,32 +122,38 @@ export function createSlackTenants(deps: {
   async function build(tenant: string): Promise<SlackAccountRuntime[] | undefined> {
     const desired = await deps.load();
     const current = entries.get(tenant);
-    if (current && desired?.version === current.version) {
-      if ("accounts" in current) return current.accounts;
-      if (now() - current.failedAt < retryMs) return undefined;
-    }
-    if (current) await discard(tenant);
+    if (current?.accounts.length && desired?.version === current.version) return current.accounts;
+    if (desired && current?.failure?.version === desired.version && now() < current.failure.retryAt)
+      return accountsOf(tenant);
+    await discard(tenant);
     if (!desired || !running) return undefined;
-    const started: SlackAccountRuntime[] = [];
     try {
-      for (const config of desired.accounts) started.push(await deps.start(config));
+      const accounts = await startAll(desired.accounts);
+      if (!running) {
+        await stopAccounts(accounts);
+        return undefined;
+      }
+      entries.set(tenant, { version: desired.version, configs: desired.accounts, accounts });
+      drainDeliveries();
+      return accounts;
     } catch (error) {
-      await stopAccounts(started);
-      entries.set(tenant, {
-        version: desired.version,
-        failedAt: now(),
-        ...(error instanceof SlackPluginStartCleanupError ? { cleanup: error.cleanup } : {}),
-      });
       report(error);
-      return undefined;
+      const failures = current?.failure?.version === desired.version ? current.failure.failures + 1 : 1;
+      const restore = current?.accounts.length && running ? current : undefined;
+      const previous = restore ? await startAll(restore.configs).catch((e: unknown) => void report(e)) : undefined;
+      entries.set(tenant, {
+        version: previous && restore ? restore.version : desired.version,
+        configs: previous && restore ? restore.configs : desired.accounts,
+        accounts: previous ?? [],
+        failure: {
+          version: desired.version,
+          failures,
+          retryAt: now() + Math.min(retryMs * 2 ** (failures - 1), maxRetryMs),
+          ...(error instanceof SlackPluginStartCleanupError ? { cleanup: error.cleanup } : {}),
+        },
+      });
+      return accountsOf(tenant);
     }
-    if (!running) {
-      await stopAccounts(started);
-      return undefined;
-    }
-    entries.set(tenant, { version: desired.version, accounts: started });
-    drainDeliveries();
-    return started;
   }
 
   function ensure(tenant: string): Promise<SlackAccountRuntime[] | undefined> {
@@ -151,13 +173,16 @@ export function createSlackTenants(deps: {
         .filter((account) => account.staging)
         .map((account) => ({ tenantId, account: account.stagingAccount })),
     );
+    const due = Map.groupBy(await deps.claims.dueEnvelopes(staged), (row) => row.tenantId);
     await inTenants(
-      await deps.claims.dueEnvelopes(staged),
-      (row) => row.tenantId,
-      async (row) =>
-        accountsOf(row.tenantId)
-          ?.find((account) => account.stagingAccount === row.account)
-          ?.replay(row),
+      [...due.keys()],
+      (tenant) => tenant,
+      async (tenant) => {
+        for (const row of due.get(tenant) ?? [])
+          await accountsOf(tenant)
+            ?.find((account) => account.stagingAccount === row.account)
+            ?.replay(row);
+      },
     );
     await inTenants(
       await deps.claims.statusAccounts(),
@@ -197,7 +222,8 @@ export function createSlackTenants(deps: {
 
   function tickOnce(): Promise<void> {
     if (!running) return Promise.resolve();
-    ticking ??= tick()
+    ticking ??= (stopping ?? Promise.resolve())
+      .then(tick)
       .catch(report)
       .finally(() => {
         ticking = undefined;
@@ -231,13 +257,18 @@ export function createSlackTenants(deps: {
     async refresh(): Promise<void> {
       if (running) await ensure(currentTenant());
     },
-    async stop(): Promise<void> {
+    stop(): Promise<void> {
       running = false;
       if (timer) clearInterval(timer);
       timer = undefined;
-      await ticking;
-      await Promise.allSettled(building.values());
-      for (const tenant of entries.keys()) await withTenant(tenant, () => discard(tenant));
+      stopping ??= (async () => {
+        await ticking;
+        await Promise.allSettled(building.values());
+        for (const tenant of entries.keys()) await withTenant(tenant, () => discard(tenant));
+      })().finally(() => {
+        stopping = undefined;
+      });
+      return stopping;
     },
   };
 }
