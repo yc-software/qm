@@ -144,7 +144,7 @@ export function createPorterSandbox(workspace: WorkspaceStore, opts: PorterSandb
       .catch((e) => {
         if (errMessage(e).includes("egress restriction is not available")) {
           throw new Error(
-            `porter sandbox ${name}: PORTER_SANDBOX_EGRESS_PROXY_URL is set but this cluster has egress restriction turned off, so Porter refuses to create the body at all — enable it on the cluster's sandbox-api system application or unset the proxy URL (docs/porter.md) (${errMessage(e)})`,
+            `porter sandbox ${name}: EGRESS_PROXY_URL is set but this cluster has egress restriction turned off, so Porter refuses to create the body at all — enable it on the cluster's sandbox-api system application or add porter to EGRESS_PROXY_EXEMPT_BACKENDS (docs/porter.md) (${errMessage(e)})`,
             { cause: e },
           );
         }

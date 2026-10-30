@@ -153,7 +153,7 @@ export const managedAgentsSessionState = (wire: string | undefined): ManagedAgen
 
 export function managedAgentsEgressAllow(egressProxyUrl: string): string[] {
   const host = new URL(egressProxyUrl).hostname.replace(/^\[|\]$/g, "");
-  if (!host) throw new Error(`DO_AGENTS_EGRESS_PROXY_URL ${egressProxyUrl} has no host to put on the egress allowlist`);
+  if (!host) throw new Error(`EGRESS_PROXY_URL ${egressProxyUrl} has no host to put on the egress allowlist`);
   return [host];
 }
 

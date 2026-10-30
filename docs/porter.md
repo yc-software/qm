@@ -350,7 +350,7 @@ domain like `onporter.run`).
 
 ## Forcing sandbox egress through the proxy
 
-`PORTER_SANDBOX_EGRESS_PROXY_URL` makes core pass `egress.allowed_destinations: [<proxy
+`EGRESS_PROXY_URL` makes core pass `egress.allowed_destinations: [<proxy
 host>]` when it creates a sandbox, and inject `HTTPS_PROXY`/`HTTP_PROXY` pointing at the
 proxy with a capability token as the password. Two cluster-side facts decide whether that
 works at all, and both fail in ways that do not name the real cause:
@@ -377,7 +377,7 @@ available on this cluster` — so the agent ends up with no computer rather than
   range, which is where both the pod and service CIDRs live. A sandbox therefore cannot
   reach an in-cluster Service, so a `*.svc.cluster.local` proxy URL times out with no
   error worth reading. Give the proxy an internet-reachable address (a `LoadBalancer`
-  Service in front of it is enough) and point `PORTER_SANDBOX_EGRESS_PROXY_URL` there.
+  Service in front of it is enough) and point `EGRESS_PROXY_URL` there, or list `porter` in `EGRESS_PROXY_EXEMPT_BACKENDS`.
   This is also why `deploy/helm/`'s `egress-proxy` service cannot serve Porter sandboxes
   as-is: it is a ClusterIP worker.
 
@@ -393,7 +393,7 @@ grep for that line rather than assuming the container's own metadata block is in
 | `PORTER_DEPLOY_URL`                                | Porter API host, when it isn't `https://dashboard.porter.run`                                                  |
 | `PORTER_SANDBOX_IMAGE`                             | Image agent computers boot from                                                                                |
 | `PORTER_DEPLOY_RUNNER_IMAGE`                       | Image published apps boot from (defaults to the sandbox image)                                                 |
-| `PORTER_SANDBOX_EGRESS_PROXY_URL`                  | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see the constraints below) |
+| `EGRESS_PROXY_URL`                                 | Forces sandbox traffic through the egress proxy; unset means no egress enforcement (see the constraints below) |
 | `PORTER_SANDBOX_NAME_PREFIX`                       | Prefix for sandbox and app names on the cluster                                                                |
 | `PORTER_DEPLOY_VISIBILITY`                         | `internal` (default) serves apps in-cluster only; `private`/`public` put them on sandbox ingress               |
 | `PORTER_DEPLOY_TTL_SEC` / `PORTER_SANDBOX_TTL_SEC` | Reap bodies after this long                                                                                    |

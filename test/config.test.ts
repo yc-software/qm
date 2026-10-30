@@ -30,7 +30,7 @@ const productionEnv = {
 test("Sprites proxy transition URLs are optional and parsed independently of the primary", () => {
   assert.equal(loadConfig({}).spritesSandbox.egressProxyAdditionalUrls, undefined);
   const config = loadConfig({
-    SPRITES_EGRESS_PROXY_URL: "https://primary.example.com",
+    EGRESS_PROXY_URL: "https://primary.example.com",
     SPRITES_EGRESS_PROXY_ADDITIONAL_URLS: " https://old.example.com, ,https://next.example.com ",
   });
   assert.equal(config.spritesSandbox.egressProxyUrl, "https://primary.example.com");
@@ -186,17 +186,45 @@ test("sharing posture defaults to isolated and accepts only isolated or open", (
   );
 });
 
-test("Modal without an egress proxy warns that sandboxes run fail-open", () => {
+test("EGRESS_PROXY_URL forces every proxy-capable provider through the proxy unless exempted", () => {
+  const proxied = loadConfig({ EGRESS_PROXY_URL: "https://egress.test" });
+  for (const provider of [
+    proxied.spritesSandbox,
+    proxied.e2bSandbox,
+    proxied.managedAgentsSandbox,
+    proxied.modalSandbox,
+    proxied.smolmachinesSandbox,
+    proxied.porterSandbox,
+    proxied.agent37Sandbox,
+  ])
+    assert.equal(provider.egressProxyUrl, "https://egress.test");
+  const exempted = loadConfig({
+    EGRESS_PROXY_URL: "https://egress.test",
+    EGRESS_PROXY_EXEMPT_BACKENDS: "e2b, do-managed-agents",
+  });
+  assert.equal(exempted.e2bSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.managedAgentsSandbox.egressProxyUrl, undefined);
+  assert.equal(exempted.smolmachinesSandbox.egressProxyUrl, "https://egress.test");
+  assert.equal(loadConfig({}).e2bSandbox.egressProxyUrl, undefined);
+});
+
+test("a default sandbox backend left outside the egress proxy warns that it runs fail-open", () => {
   const warnings: string[] = [];
   const original = console.warn;
   console.warn = (msg: unknown) => void warnings.push(String(msg));
   try {
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret", MODAL_EGRESS_PROXY_URL: "https://egress.test" });
+    loadConfig({ SANDBOX_BACKEND: "e2b", E2B_API_KEY: "e2b_test" });
+    loadConfig({ SANDBOX_BACKEND: "e2b", E2B_API_KEY: "e2b_test", EGRESS_PROXY_URL: "https://egress.test" });
+    loadConfig({
+      SANDBOX_BACKEND: "e2b",
+      E2B_API_KEY: "e2b_test",
+      EGRESS_PROXY_URL: "https://egress.test",
+      EGRESS_PROXY_EXEMPT_BACKENDS: "e2b",
+    });
   } finally {
     console.warn = original;
   }
-  assert.equal(warnings.filter((w) => w.includes("MODAL_EGRESS_PROXY_URL")).length, 1);
+  assert.equal(warnings.filter((w) => w.includes("SANDBOX_BACKEND=e2b has no egress proxy")).length, 2);
 });
 
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
@@ -889,7 +917,7 @@ test("Smolmachines lifecycle, egress, and snapshot knobs are parsed into Config"
   const config = loadConfig({
     SMOLMACHINES_TOKEN: "smk_test",
     SMOLMACHINES_AUTOSTOP_SEC: "900",
-    SMOLMACHINES_EGRESS_PROXY_URL: "https://proxy.example.com",
+    EGRESS_PROXY_URL: "https://proxy.example.com",
     SMOLMACHINES_SNAPSHOT_S3_BUCKET: "qm-home-snapshots",
     SMOLMACHINES_SNAPSHOT_INTERVAL_SEC: "300",
   });
