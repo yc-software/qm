@@ -17,6 +17,10 @@ import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
+import { currentTenant, withTenant } from "../src/tenants/context.ts";
+
+const TENANT_A = "00000000-0000-4000-8000-00000000000a";
+const TENANT_B = "00000000-0000-4000-8000-00000000000b";
 
 function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["personal:alice"]) {
   const records = createMemoryMap<SandboxResource>();
@@ -1048,5 +1052,36 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
   await assert.rejects(
     cannotRetire.create("alice", "personal:alice", "local", "background job", undefined, true),
     /need a computer that local can retire/,
+  );
+});
+
+test("sandbox inventory runs the legacy upgrade once per tenant and offers only that tenant's usable providers", async () => {
+  const { options, backend } = fixture();
+  const upgradedFor: string[] = [];
+  const usable: Record<string, Array<"local" | "sprites">> = {
+    [TENANT_A]: ["local", "sprites"],
+    [TENANT_B]: ["local"],
+  };
+  const resources = createSandboxResources({
+    ...options,
+    backends: { local: backend, sprites: backend },
+    upgrade: async () => void upgradedFor.push(currentTenant()),
+    usableBackends: async () => usable[currentTenant()]!,
+    defaultBackend: async () => usable[currentTenant()]!.at(-1)!,
+  });
+  for (const tenant of [TENANT_A, TENANT_B, TENANT_A, TENANT_B]) await withTenant(tenant, () => resources.initialize());
+  assert.deepEqual(upgradedFor, [TENANT_A, TENANT_B]);
+  assert.deepEqual(
+    (await withTenant(TENANT_B, () => resources.profiles())).map((profile) => profile.name),
+    ["local"],
+  );
+  assert.equal(await withTenant(TENANT_A, () => resources.defaultBackend()), "sprites");
+  await assert.rejects(
+    withTenant(TENANT_B, () => resources.create("alice", "personal:alice", "sprites")),
+    /sandbox backend unavailable: sprites/,
+  );
+  assert.equal(
+    (await withTenant(TENANT_A, () => resources.create("alice", "personal:alice", "sprites"))).backend,
+    "sprites",
   );
 });
