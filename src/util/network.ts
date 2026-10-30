@@ -105,9 +105,8 @@ async function guardedRequest(
   const { agents, refused, timeoutMs } = guard;
   const agent = url.protocol === "https:" || url.protocol === "http:" ? agents[url.protocol] : undefined;
   if (!agent) throw new TypeError(`unsupported URL protocol ${url.protocol}`);
-  const literal = url.hostname.replace(/^\[(.*)\]$/, "$1");
-  if (isIP(literal) && refused(literal))
-    throw new PrivateNetworkAddressError(`${url.hostname} is a private network address`);
+  const literal = normalizedIp(url.hostname);
+  if (literal && refused(literal)) throw new PrivateNetworkAddressError(`${url.hostname} is a private network address`);
   const prepared = new Request(url, { method: init.method ?? "GET", headers: init.headers, body: init.body ?? null });
   const method = prepared.method;
   const headers = prepared.headers;

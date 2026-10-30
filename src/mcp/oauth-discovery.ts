@@ -6,9 +6,7 @@ export function httpsUrl(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   try {
     const u = new URL(v.trim());
-    return u.protocol === "https:" || ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)
-      ? u.toString()
-      : undefined;
+    return u.protocol === "https:" ? u.toString() : undefined;
   } catch {
     return undefined;
   }

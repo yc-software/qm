@@ -5,7 +5,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -178,49 +177,47 @@ test("MCP admin accepts per-user OAuth servers, discovers endpoints only from pu
     auditLog: built.auditLog,
     mcpServers: store,
   });
-  const issuer = createServer((req, res) => {
-    const base = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
-    const metadata: Record<string, object> = {
-      "/.well-known/oauth-authorization-server/id": {
-        authorization_endpoint: `${base}/id/authorize`,
-        token_endpoint: `${base}/id/token`,
-      },
-      "/.well-known/oauth-protected-resource/mcp": {
-        resource: `${base}/mcp`,
-        authorization_servers: [`${base}/id`],
-        scopes_supported: ["mcp:write"],
-      },
-    };
-    const meta = metadata[req.url ?? ""];
-    if (!meta) return void res.writeHead(404).end();
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(meta));
-  });
   server.listen(0, "127.0.0.1");
-  issuer.listen(0, "127.0.0.1");
-  await Promise.all([once(server, "listening"), once(issuer, "listening")]);
+  await once(server, "listening");
   t.after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => issuer.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   });
-  const issuerUrl = `http://127.0.0.1:${(issuer.address() as AddressInfo).port}`;
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/mcp-servers`;
   const put = (id: string, body: object) =>
     fetch(`${base}/${id}`, {
       method: "PUT",
       headers: ADMIN,
-      body: JSON.stringify({ url: `${issuerUrl}/mcp`, auth: "oauth-user", ...body }),
+      body: JSON.stringify({ url: "https://127.0.0.1/mcp", auth: "oauth-user", ...body }),
     });
 
-  assert.deepEqual(await discoverOAuth(new URL(`${issuerUrl}/mcp`), loopbackFetch), {
-    authorize: `${issuerUrl}/id/authorize`,
-    token: `${issuerUrl}/id/token`,
+  const issuer = "https://mcp.example.com";
+  const metadata: Record<string, object> = {
+    [`${issuer}/.well-known/oauth-authorization-server/id`]: {
+      authorization_endpoint: `${issuer}/id/authorize`,
+      token_endpoint: `${issuer}/id/token`,
+    },
+    [`${issuer}/.well-known/oauth-protected-resource/mcp`]: {
+      resource: `${issuer}/mcp`,
+      authorization_servers: [`${issuer}/id`],
+      scopes_supported: ["mcp:write"],
+    },
+  };
+  const metadataFetch = async (input: string | URL) => {
+    const meta = metadata[String(input)];
+    return meta ? Response.json(meta) : new Response(null, { status: 404 });
+  };
+  assert.deepEqual(await discoverOAuth(new URL(`${issuer}/mcp`), metadataFetch), {
+    authorize: `${issuer}/id/authorize`,
+    token: `${issuer}/id/token`,
     scopes: ["mcp:write"],
     errors: [],
   });
-  assert.match((await discoverOAuth(new URL(`${issuerUrl}/elsewhere`), loopbackFetch)).errors.join("; "), /HTTP 404/);
+  assert.match((await discoverOAuth(new URL(`${issuer}/elsewhere`), metadataFetch)).errors.join("; "), /HTTP 404/);
 
+  const plainHttp = await put("orders", { clientId: "c", url: "http://127.0.0.1/mcp" });
+  assert.equal(plainHttp.status, 400);
+  assert.equal(((await plainHttp.json()) as { message: string }).message, "per-user credentials require HTTPS");
   const privateIssuer = await put("orders", { clientId: "c" });
   assert.equal(privateIssuer.status, 400);
   assert.match(

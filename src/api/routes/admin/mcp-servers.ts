@@ -159,15 +159,8 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   ) {
     return sendJson(ctx.res, 400, { error: "bad_request", message: "per-user credentials require a credentialHost" });
   }
-  if (
-    credentialScope === "per-user" &&
-    parsed.protocol !== "https:" &&
-    !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
-  ) {
-    return sendJson(ctx.res, 400, {
-      error: "bad_request",
-      message: "per-user credentials require HTTPS (except loopback)",
-    });
+  if (credentialScope === "per-user" && parsed.protocol !== "https:") {
+    return sendJson(ctx.res, 400, { error: "bad_request", message: "per-user credentials require HTTPS" });
   }
   let discovered: DiscoveredOAuth | undefined;
   if (oauthUser && (!oauthAuthorizeUrl || !oauthTokenUrl)) {
