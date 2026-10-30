@@ -7,7 +7,7 @@ import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisio
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
-import { availableRuntimeError, subagentRuntimeError } from "./api/runtime-config.ts";
+import { availableRuntimeError, subagentRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
@@ -2099,6 +2099,17 @@ export function buildApp(
       conversation: { ...request.conversation, audience, publishMembers: audience },
     };
   };
+  const runtimeDeps: RuntimeDeps = {
+    config: configStore,
+    harnessId: fallbackHarness,
+    get baseModelDefault() {
+      return fallback.modelId;
+    },
+    providerKeys: providerKeysPresent(config),
+    modelCredentials,
+    modelCredentialFetch: overrides.modelCredentialFetch,
+    refreshModels,
+  };
   const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
@@ -2133,21 +2144,7 @@ export function buildApp(
         "subagent",
       );
       if (!input.model && !input.harness && !input.thinkingLevel && input.fastMode === undefined) return;
-      const error = await subagentRuntimeError(
-        {
-          deps: {
-            config: configStore,
-            harnessId: fallbackHarness,
-            baseModelDefault: fallback.modelId,
-            providerKeys: providerKeysPresent(config),
-            modelCredentials,
-            modelCredentialFetch: overrides.modelCredentialFetch,
-            refreshModels,
-          },
-        },
-        scope,
-        choice,
-      );
+      const error = await subagentRuntimeError({ deps: runtimeDeps }, scope, choice);
       if (error) throw new Error(error);
     },
   });
@@ -2757,36 +2754,8 @@ export function buildApp(
   cronChanged.notify = (id) => scheduler.notifyChanged(id);
   orchestratorDeps.control = createControlService(app, scheduler, admin);
   orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
-    availableRuntimeError(
-      {
-        deps: {
-          config: configStore,
-          harnessId: fallbackHarness,
-          baseModelDefault: fallback.modelId,
-          providerKeys: providerKeysPresent(config),
-          modelCredentials,
-          modelCredentialFetch: overrides.modelCredentialFetch,
-          refreshModels,
-        },
-      },
-      scope,
-      choice,
-      purpose,
-    );
-  orchestratorDeps.runtime = createRuntimeService(
-    {
-      config: configStore,
-      harnessId: fallbackHarness,
-      get baseModelDefault() {
-        return fallback.modelId;
-      },
-      providerKeys: providerKeysPresent(config),
-      modelCredentials,
-      modelCredentialFetch: overrides.modelCredentialFetch,
-      refreshModels,
-    },
-    app,
-  );
+    availableRuntimeError({ deps: runtimeDeps }, scope, choice, purpose);
+  orchestratorDeps.runtime = createRuntimeService(runtimeDeps, app);
   const finishCredentials = (handle: SandboxHandle, processId: string) =>
     finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
   const monitorPoller: MonitorPoller | null =
