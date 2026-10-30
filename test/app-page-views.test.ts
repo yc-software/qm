@@ -48,7 +48,7 @@ function get(port: number, path: string, headers: Record<string, string>): Promi
   });
 }
 
-async function harness(log: AppPageViewLog) {
+async function agent(log: AppPageViewLog) {
   const upstream = createHttpServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
     res.end("UPSTREAM OK");
@@ -107,7 +107,7 @@ const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 test("page loads of a published app are recorded with viewer, auth mode and request basics", async () => {
   const views: AppPageView[] = [];
-  const h = await harness({ record: async (view) => void views.push(view) });
+  const h = await agent({ record: async (view) => void views.push(view) });
   try {
     const owner = await get(h.port, "/reports?token=secret", {
       Accept: "text/html",
@@ -167,7 +167,7 @@ test("page loads of a published app are recorded with viewer, auth mode and requ
 
 test("the owner's framed shell counts once, not again for the inner app frame", async () => {
   const views: AppPageView[] = [];
-  const h = await harness({ record: async (view) => void views.push(view) });
+  const h = await agent({ record: async (view) => void views.push(view) });
   try {
     const shell = await get(h.port, "/", {
       Accept: "text/html",
@@ -194,7 +194,7 @@ test("a failing page-view log never blocks the page and is reported", async () =
   const errors: string[] = [];
   const original = console.error;
   console.error = (...args: unknown[]) => void errors.push(args.map(String).join(" "));
-  const h = await harness({ record: async () => Promise.reject(new Error("db down")) });
+  const h = await agent({ record: async () => Promise.reject(new Error("db down")) });
   try {
     const page = await get(h.port, "/", { Accept: "text/html", Cookie: session("alice@example.com") });
     assert.equal(page.status, 200);

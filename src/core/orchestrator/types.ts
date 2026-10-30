@@ -1,8 +1,8 @@
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
-import type { GoalCreateInput } from "../../harness/goal.ts";
+import type { GoalCreateInput } from "../../agent/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
-import type { RuntimeService } from "../../harness/runtime-types.ts";
+import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
@@ -44,7 +44,7 @@ import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
-import type { Harness } from "../../harness/harness.ts";
+import type { Agent } from "../../agent/agent.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
@@ -145,7 +145,7 @@ export interface OrchestratorDeps {
   backgroundJobTtlMs?: number;
   sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
-  harness: Harness;
+  agent: Agent;
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
@@ -182,7 +182,7 @@ export interface OrchestratorDeps {
   runtime?: RuntimeService;
   validateScheduledRuntime?: (
     scope: import("../../types.ts").ScopeId,
-    choice: import("../../harness/harness.ts").RuntimeChoice,
+    choice: import("../../agent/agent.ts").RuntimeChoice,
     purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
   ) => Promise<string | null>;
   connectorTokens?: ConnectorTokenStore;

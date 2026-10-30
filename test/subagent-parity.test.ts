@@ -1,6 +1,6 @@
-import { createRuntimeService } from "../src/harness/runtime-control.ts";
-import type { RuntimeChoice } from "../src/harness/harness.ts";
-import type { RuntimeControl } from "../src/harness/runtime-types.ts";
+import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import type { RuntimeChoice } from "../src/agent/agent.ts";
+import type { RuntimeControl } from "../src/agent/runtime-types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
@@ -20,9 +20,9 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { defineHarness } from "../src/harness/harness.ts";
-import { harnessToolOptions } from "../src/harness/harness-shared.ts";
-import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
+import type { Agent } from "../src/agent/agent.ts";
+import { turnToolOptions } from "../src/agent/turn-support.ts";
+import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -86,7 +86,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     },
   });
   const turns = new Map<string, Turn>();
-  const harness = defineHarness({
+  const agent: Agent = {
     async runTurn(turn) {
       const results: Turn["results"] = [];
       const ref = {
@@ -99,7 +99,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
         screenToolResult: turn.screenToolResult,
         pendingApprovals: [],
       };
-      const options = harnessToolOptions({}, turn);
+      const options = turnToolOptions({}, turn);
       const tools = createAgentTools(ref, options);
       const record: Turn = {
         ref,
@@ -125,7 +125,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
       }
       return { reply: "done", modelCalls: 1 };
     },
-  });
+  };
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "subagent-parity-")));
@@ -148,7 +148,7 @@ async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean)
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
-    harness,
+    agent,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
       ...singleProcessDeps(),

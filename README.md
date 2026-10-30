@@ -102,8 +102,8 @@ uses Bolt; the web UI builds with Vite and renders with Lit.
 
 The core itself is generic. Everything specific to one company — org config, custom tools
 and skills, sandbox image, infrastructure — lives in a **deployment directory** that the
-[`qm` CLI](./cli/README.md) validates and deploys. Every substrate (harness, session
-store, sandbox, memory) sits behind an interface. Memory can also be routed by scope to
+[`qm` CLI](./cli/README.md) validates and deploys. Every substrate (session store,
+sandbox, memory) sits behind an interface. Memory can also be routed by scope to
 [external providers](./docs/memory-providers.md) while retaining the built-in notebook.
 
 ## Security and secrets
@@ -113,7 +113,7 @@ agent acts as the person it's working for, with their credentials and permission
 everything it does is audited. An org picks one security posture, which narrower scopes
 can only tighten:
 
-- **Strict** — every harness tool call pauses for human approval, except the two
+- **Strict** — every agent tool call pauses for human approval, except the two
   no-effect turn enders.
 - **Auto** (default) — blocks private-network access.
 - **Dangerous** — no tool approval gates, and content screening only observes.

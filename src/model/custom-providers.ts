@@ -5,8 +5,8 @@
  * protocol we already run — OpenAI Chat Completions, OpenAI Responses,
  * or Anthropic Messages — by giving a base URL, an API key, and the model
  * ids to expose. Registered models resolve like built-ins (the pi
- * harness reaches them through the same request path), surface in the
- * catalog, and are gated to harnesses that route through pi-ai.
+ * agent reaches them through the same request path), surface in the
+ * catalog, and are gated to agents that route through pi-ai.
  *
  * Secrets never live here: this module holds the runtime registry
  * (everything except the key). Keys stay in the encrypted store and are
@@ -178,7 +178,7 @@ export function customModelCatalog(): Array<{ id: string; name: string; provider
 
 /**
  * The models.json fragment pi-coding-agent understands. Materialized to a
- * temp file whenever the pi harness builds a model runtime, so the
+ * temp file whenever the agent builds a model runtime, so the
  * runtime's own provider registry knows each custom provider natively —
  * a runtime API key alone is not enough (availability checks only cover
  * providers the ModelsStore knows).

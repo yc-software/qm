@@ -27,7 +27,7 @@ const PUBLISHER = "pub@example.com";
 const CO_MANAGER = "co@example.com";
 const tokenOf = (host: string) => `publisher-token-for-${host}`;
 
-async function harness(t: { after: (fn: () => Promise<void>) => void }) {
+async function agent(t: { after: (fn: () => Promise<void>) => void }) {
   const audits: AuditEvent[] = [];
   const auditLog = {
     record: (e: AuditEvent) => void audits.push(e),
@@ -120,7 +120,7 @@ async function harness(t: { after: (fn: () => Promise<void>) => void }) {
 const get = (host: string, path = "/v1/me") => ({ connector: host, url: `https://${host}${path}` });
 
 test("only the live publisher can lend, per app and per connected-app host", async (t) => {
-  const h = await harness(t);
+  const h = await agent(t);
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "nothing is lent by default");
   assert.equal((await h.lend(CO_MANAGER, ["slack.com"])).status, 403, "a co-manager cannot lend the publisher's");
   assert.equal((await h.lend(PUBLISHER, ["slack.com"], false)).status, 403, "an unattended turn cannot lend");
@@ -173,7 +173,7 @@ test("only the live publisher can lend, per app and per connected-app host", asy
 });
 
 test("public apps cannot borrow connectors", async (t) => {
-  const h = await harness(t);
+  const h = await agent(t);
   await h.app.setDeploymentPublic(h.d.id, true, { createdBy: PUBLISHER });
   assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /public app cannot borrow/);
   await h.app.setDeploymentPublic(h.d.id, false, { createdBy: PUBLISHER });
@@ -182,7 +182,7 @@ test("public apps cannot borrow connectors", async (t) => {
 });
 
 test("a new running version from anyone but the publisher withdraws the loan", async (t) => {
-  const h = await harness(t);
+  const h = await agent(t);
   await h.lend(PUBLISHER, ["slack.com"]);
   await h.app.redeploy(h.d.id, { entrypoint: "x", files: [], actor: PUBLISHER });
   assert.equal((await h.broker(get("slack.com"))).status, 200, "the publisher's own publish keeps it");

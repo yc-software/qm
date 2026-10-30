@@ -74,7 +74,7 @@ test("custom models resolve in their own namespace, so they never shadow a built
   assert.equal(String(resolveModel("claude-opus-5")?.provider), "anthropic");
 });
 
-test("custom models are gated to the pi harness", () => {
+test("custom models are gated to the agent", () => {
   setCustomProviders([GATEWAY]);
   assert.equal(modelSupported("custom/acme-gateway/acme-large"), true);
 });

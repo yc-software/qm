@@ -25,8 +25,8 @@ import {
   GovernorUndecided,
   supersedeGoal,
   type GoalInbox,
-} from "../src/harness/goal.ts";
-import { createGrindMeter, grindState, meterGrindCall } from "../src/harness/grind.ts";
+} from "../src/agent/goal.ts";
+import { createGrindMeter, grindState, meterGrindCall } from "../src/agent/grind.ts";
 
 test("createGoalRecord validates and normalizes", () => {
   const goal = createGoalRecord({ objective: "  get the tests green  " });

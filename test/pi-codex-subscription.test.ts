@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { zstdDecompressSync } from "node:zlib";
-import { buildModelRuntime } from "../src/harness/pi-harness.ts";
+import { buildModelRuntime } from "../src/agent/agent-run.ts";
 import { CODEX_SUBSCRIPTION_PROVIDER, getRequiredModel } from "../src/model/pi-models.ts";
 
 const subscriptionToken = `e30.${Buffer.from(

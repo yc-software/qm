@@ -45,7 +45,7 @@ import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService, type SuggestedActivityProfile } from "./suggestions/activities.ts";
 import { createMemoryTidyService, withMemoryTidy, type MemoryTidyProfile } from "./memory/tidy.ts";
-import { createRuntimeService } from "./harness/runtime-control.ts";
+import { createRuntimeService } from "./agent/runtime-control.ts";
 import {
   createSessionSyscalls,
   type SessionSyscallsFactory,
@@ -68,7 +68,7 @@ import {
   type SandboxResources,
 } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
-import type { probeModel } from "./harness/pi-harness.ts";
+import type { probeModel } from "./agent/agent-run.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
@@ -319,11 +319,11 @@ import {
   keychainCompanyChatGPTAuth,
   type CompanyChatGPTAuth,
 } from "./model/company-chatgpt-auth.ts";
-import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
-import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
-import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "./harness/runtime-choice.ts";
+import { keychainEnvCredential } from "./credentials/keychain-env-credential.ts";
+import { createAgent, agentConfigOptions, type ProviderKeys } from "./agent/agent-run.ts";
+import { withResolvedRuntime, resolveRuntimeChoiceDurable } from "./agent/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
-import type { Harness } from "./harness/harness.ts";
+import type { Agent } from "./agent/agent.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
 import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
@@ -577,7 +577,7 @@ export function buildApp(
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
-    harness?: Harness;
+    agent?: Agent;
   } = {},
 ): BuiltApp {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
@@ -1453,7 +1453,7 @@ export function buildApp(
   };
   const companyClaudeAuthEnv =
     config.claudeAuthCredential && keychain
-      ? keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, [
+      ? keychainEnvCredential(keychain, config.claudeAuthCredential, [
           "CLAUDE_CODE_OAUTH_TOKEN",
           "ANTHROPIC_AUTH_TOKEN",
         ])
@@ -1468,7 +1468,7 @@ export function buildApp(
       );
     return token ? { anthropic: token } : {};
   };
-  const resolvePiProviderKeys = async (): Promise<ProviderKeys> => {
+  const resolveCompanyProviderKeys = async (): Promise<ProviderKeys> => {
     const [claude, metered, chatgpt] = await Promise.all([
       resolveCompanyClaudeKeys(),
       resolveModelProviderKeys(),
@@ -1477,7 +1477,7 @@ export function buildApp(
     return { ...claude, ...metered, ...chatgpt };
   };
   const resolveBrowserCompanyKeys = async (includeSubscription = true): Promise<ProviderKeys> =>
-    includeSubscription ? resolvePiProviderKeys() : resolveModelProviderKeys();
+    includeSubscription ? resolveCompanyProviderKeys() : resolveModelProviderKeys();
   const companyModelId = (id: string): string => {
     if (resolveModel(id)?.provider !== "openai" || isOverlayModel(id) || modelRequestOverrides(id)) return id;
     const subscription = codexSubscriptionModelId(id);
@@ -1494,14 +1494,14 @@ export function buildApp(
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
-  const pi =
-    overrides.harness ??
-    createPiHarness({
-      ...piHarnessConfigOptions(config),
+  const baseAgent =
+    overrides.agent ??
+    createAgent({
+      ...agentConfigOptions(config),
       modelGateway: gatewayTransport,
       resolveBaseModelId: () => orgBaseModelId() ?? deploymentDefaultModel(),
       resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-      resolveProviderKeys: resolvePiProviderKeys,
+      resolveProviderKeys: resolveCompanyProviderKeys,
       ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
       signals: runSignals,
     });
@@ -1539,7 +1539,7 @@ export function buildApp(
     if (!(await modelCredentials.availability()).openrouter) return undefined;
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
-  const harness = withResolvedRuntime(pi, async (input, routedBy) => {
+  const agent = withResolvedRuntime(baseAgent, async (input, routedBy) => {
     const resolve = (requested: typeof input.runtime) =>
       resolveRuntimeChoiceDurable(
         configStore,
@@ -1571,7 +1571,7 @@ export function buildApp(
   });
 
   if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
-    delete harness.models.screenSecurity;
+    delete agent.screenSecurity;
   }
 
   const leaseTtlMs = config.leaseTtlMs;
@@ -1857,7 +1857,7 @@ export function buildApp(
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
-    harness: harness.models,
+    agent,
     memory: baseMemory,
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
@@ -2193,7 +2193,7 @@ export function buildApp(
     auditLog,
     rateLimiter,
     budget,
-    harness,
+    agent,
     memory,
     deploy: deployService,
     acl,
@@ -2349,9 +2349,9 @@ export function buildApp(
     ? createPostgresAckEmojiPickStore(config.databaseUrl)
     : createMemoryAckEmojiPickStore();
   const providerKeys = directProviderAvailability;
-  const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
+  const screenSecurity: SecurityScreenProbe | undefined = agent.screenSecurity
     ? ({ payload, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
-        harness.models.screenSecurity!({
+        agent.screenSecurity!({
           payload,
           modelId,
           systemPrompt,
@@ -2430,8 +2430,8 @@ export function buildApp(
     reaperPoke: pokeReaper,
     surfaceCache,
     channelPolicy,
-    ...(harness.models.judge
-      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
+    ...(agent.judge
+      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => agent.judge!(s, pr, signal) }
       : {}),
     ...(screenSecurity ? { screenSecurity } : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
@@ -2482,7 +2482,7 @@ export function buildApp(
     ackPicks: ackEmojiPicks,
     ackModelId: () => auxiliaryModelForProvider("anthropic"),
     ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
+    ...(agent.pickAckEmoji ? { pickAckEmoji: (t, c) => agent.pickAckEmoji!(t, c) } : {}),
   });
   runs.onTerminal((run) => {
     void runs
@@ -3069,7 +3069,7 @@ export function buildApp(
           runStreamEvents.close?.(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
-      await harness.turns.close?.();
+      await agent.close?.();
       await semanticMemory.close();
       await flyTunnel?.stop();
       await errors.flush();

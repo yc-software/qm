@@ -22,11 +22,11 @@ import {
   loadDocumentInputs,
 } from "./document-inputs.ts";
 import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment, isTextDocument } from "./document-kinds.ts";
-import { recoveredRuntime } from "../harness/runtime-recovery.ts";
+import { recoveredRuntime } from "../agent/runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
-import { assignedGoal, type GoalRecord, openGoal } from "../harness/goal.ts";
-import { connectorToolsNote, deferredMcpTools } from "../harness/deferred-tools.ts";
+import { assignedGoal, type GoalRecord, openGoal } from "../agent/goal.ts";
+import { connectorToolsNote, deferredMcpTools } from "../agent/deferred-tools.ts";
 import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
 import type {
   CommandApprovalGrant,
@@ -95,13 +95,13 @@ import {
   type CapabilityClaims,
 } from "../auth/capability-token.ts";
 import type {
-  HarnessDetectResult,
-  HarnessLlmRequestRecord,
-  HarnessTurnInput,
-  HarnessTurnResult,
+  DetectResult,
+  TurnLlmRequestRecord,
+  AgentTurnInput,
+  AgentTurnResult,
   RuntimeChoice,
-} from "../harness/harness.ts";
-import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
+} from "../agent/agent.ts";
+import { forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
   quarantineReleaseKey,
   securityScreenChunks,
@@ -121,7 +121,7 @@ import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
-import { artifactImageLoader } from "../harness/replay-images.ts";
+import { artifactImageLoader } from "../agent/replay-images.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -156,7 +156,7 @@ import {
   renderOverheard,
   selectOverheardToImport,
   type OverheardEntryPayload,
-} from "../harness/replay.ts";
+} from "../agent/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { headSlice, jsonbSafeStringify } from "../util/text.ts";
@@ -178,7 +178,7 @@ import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
 import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
 import { codexSubscriptionModelId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
-import type { ProviderKeys } from "../harness/pi-harness.ts";
+import type { ProviderKeys } from "../agent/agent-run.ts";
 import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
 import { createSessionTitles } from "./session-title.ts";
 import {
@@ -267,8 +267,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       samePerson(grant.actorId, actorId),
     );
   const memoryPolicy = deps.memoryPolicy ?? DEFAULT_MEMORY_POLICY;
-  const memoryStrategy =
-    deps.memoryStrategy ?? createPerTurnStrategy({ harness: deps.harness.models, memory: deps.memory });
+  const memoryStrategy = deps.memoryStrategy ?? createPerTurnStrategy({ agent: deps.agent, memory: deps.memory });
   const blobTransfer = deps.blobTransfer;
 
   const pendingCaptures = new Map<ScopeId, Promise<void>>();
@@ -310,10 +309,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     reason: string,
     purpose?: string,
   ): Promise<string | undefined> {
-    if (!deps.harness.models.summarizeApproval) return undefined;
+    if (!deps.agent.summarizeApproval) return undefined;
     try {
       const summary = await Promise.race([
-        deps.harness.models.summarizeApproval(command, reason, purpose),
+        deps.agent.summarizeApproval(command, reason, purpose),
         sleep(deps.approvalSummaryTimeoutMs ?? DEFAULT_APPROVAL_SUMMARY_TIMEOUT_MS).then(() => undefined),
       ]);
       return summary?.trim() || undefined;
@@ -335,7 +334,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
   const titles = createSessionTitles({
     sessions: deps.sessions,
-    harness: deps.harness,
+    agent: deps.agent,
     ...(deps.sessionStateBus ? { sessionStateBus: deps.sessionStateBus } : {}),
     ...(deps.errors ? { errors: deps.errors } : {}),
   });
@@ -461,7 +460,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         return "block";
       };
-      if (!deps.securityScreener && !deps.harness.models.screenSecurity) return block("no-screener");
+      if (!deps.securityScreener && !deps.agent.screenSecurity) return block("no-screener");
       if (!(await deps.rateLimiter.check(actor.id)).allowed) return block("rate-limited");
       if (deps.budget && !(await deps.budget.check(actor.id)).allowed) return block("over-budget");
       if (securitySteersInFlight.has(conversation.threadRef)) return block("steer-in-flight");
@@ -742,7 +741,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           participantIds.map((principalId) => deps.sessions.visibleEntries(sessionId, principalId)),
         );
         participantHistorySeqs = commonEntrySeqs(views);
-        await deps.harness.turns.resetSession?.(sessionId);
+        await deps.agent.resetSession?.(sessionId);
       };
       const securityPolicy = resolution.securityPolicy;
       const enforceScreen = securityPolicy.screening === "enforce";
@@ -768,8 +767,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           approvalReplaysFlaggedRequest
         );
       const screenSession: { id?: string } = {};
-      const pendingScreenRequests: HarnessLlmRequestRecord[] = [];
-      const recordScreenRequest = async (rec: HarnessLlmRequestRecord, signal?: AbortSignal): Promise<void> => {
+      const pendingScreenRequests: TurnLlmRequestRecord[] = [];
+      const recordScreenRequest = async (rec: TurnLlmRequestRecord, signal?: AbortSignal): Promise<void> => {
         if (!screenSession.id) {
           pendingScreenRequests.push(rec);
           return;
@@ -877,9 +876,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const { hasUnscreenableAttachment, externalPromptData, screenPayload } = await buildInboundScreen();
         if (screenPayload || hasUnscreenableAttachment) {
           const canScreenText =
-            !!screenPayload &&
-            !screenPayload.truncated &&
-            (!!deps.securityScreener || !!deps.harness.models.screenSecurity);
+            !!screenPayload && !screenPayload.truncated && (!!deps.securityScreener || !!deps.agent.screenSecurity);
           const verdict = canScreenText
             ? await classifySecurityData(screenPayload!.content, actor.id, scopeId, recordScreenRequest, {
                 ...screenTrace,
@@ -891,7 +888,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           let unscreenableCause: "unscreenable-attachment" | "oversize-input" | "no-screener" | undefined;
           if (hasUnscreenableAttachment || !screenPayload) unscreenableCause = "unscreenable-attachment";
           else if (screenPayload.truncated) unscreenableCause = "oversize-input";
-          else if (!deps.securityScreener && !deps.harness.models.screenSecurity) unscreenableCause = "no-screener";
+          else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
           if (verdict?.decision === "strict") {
             const sources = externalPromptData.map((item) => item.source);
             flaggedScreenedInput = {
@@ -1294,7 +1291,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         desktopClientForTurn(input) ? [desktopComputerTool] : undefined,
       );
       screenSession.id = session.id;
-      const recordSessionLlmRequest = async (rec: HarnessLlmRequestRecord, signal?: AbortSignal): Promise<void> => {
+      const recordSessionLlmRequest = async (rec: TurnLlmRequestRecord, signal?: AbortSignal): Promise<void> => {
         try {
           await deps.sessions.recordLlmRequest(session.id, { ...rec, scopeLabel: scopeId }, signal);
         } catch (err) {
@@ -2182,7 +2179,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     scopeLabel: label,
                   }),
                 );
-              await deps.harness.turns.resetSession?.(session.id);
+              await deps.agent.resetSession?.(session.id);
             }
             const decisionEntry = await withManagedRosterVersion(() =>
               deps.sessions.append(lease, {
@@ -2372,14 +2369,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (
           ambientTurn &&
           !sessionTurn &&
-          deps.harness.models.shouldRespond &&
+          deps.agent.shouldRespond &&
           !(
             isRetry &&
             (recordedTurn ?? findTrailingPartialTurn((await transcripts.forRender(session.id)).entries, input.runId))
           )
         ) {
           const detectHistory = filterHistory((await turnWindow()).entries.slice(-DETECT_HISTORY_TAIL));
-          const decision = await deps.harness.models
+          const decision = await deps.agent
             .shouldRespond({
               session,
               message: input.text,
@@ -2396,7 +2393,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               },
               recordLlmRequest: recordSessionLlmRequest,
             })
-            .catch((e: unknown): HarnessDetectResult => {
+            .catch((e: unknown): DetectResult => {
               deps.errors?.record(
                 {
                   category: "turn",
@@ -2798,7 +2795,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 blobTransfer,
                 fileRegistration,
                 turnInboxDir,
-                securityPolicy.screening !== "off" && (deps.securityScreener || deps.harness.models.screenSecurity)
+                securityPolicy.screening !== "off" && (deps.securityScreener || deps.agent.screenSecurity)
                   ? ({ content }) =>
                       classifySecurityData(content, actor.id, scopeId, undefined, {
                         ...screenTrace,
@@ -2907,7 +2904,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (securityPolicy.screening !== "off") {
             for (const document of documentInputs.documents.slice()) {
               documentsUnscreened ||= !isTextDocument(document);
-              if (!(deps.securityScreener || deps.harness.models.screenSecurity)) {
+              if (!(deps.securityScreener || deps.agent.screenSecurity)) {
                 documentsUnscreened = true;
                 continue;
               }
@@ -3209,8 +3206,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
-        const runHarnessSegment = async (
-          harnessInput: string,
+        const runAgentSegment = async (
+          agentInput: string,
           extras: {
             priorTurns?: typeof input.priorTurns;
             overheard?: typeof importedOverheard;
@@ -3240,7 +3237,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
           const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
           let recordedRecall = false;
-          const emit: HarnessTurnInput["emit"] = async (entry) => {
+          const emit: AgentTurnInput["emit"] = async (entry) => {
             turnProgress++;
             const stored = (() => {
               if (
@@ -3332,7 +3329,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const mcpTools = await mcpToolsReady;
           const connectorNote = connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly));
           dispatchTrace ??= startDispatchTrace();
-          const turnRun = deps.harness.turns.runTurn({
+          const turnRun = deps.agent.runTurn({
             session,
             loadImage: artifactImageLoader(deps.files, mayReadArtifact),
             ...(turnTimezone ? { timezone: turnTimezone } : {}),
@@ -3456,7 +3453,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? {
                   runtimeControl: (
                     active: RuntimeChoice,
-                    request: import("../harness/runtime-types.ts").RuntimeRequest,
+                    request: import("../agent/runtime-types.ts").RuntimeRequest,
                     signal?: AbortSignal,
                   ) =>
                     deps.runtime!(
@@ -3478,7 +3475,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             cancel: turnAbort.signal,
             ...(silentResume ? { continueTurn: true, resumeUserSeq: partial!.userSeq } : {}),
             ...(input.shutdown ? { shutdown: input.shutdown } : {}),
-            input: continueTurn && !continuation && !silentResume ? "" : harnessInput,
+            input: continueTurn && !continuation && !silentResume ? "" : agentInput,
             ...(!partial && messageTs ? { triggerTs: messageTs } : {}),
             ...(!partial && entryTs ? { entryTs } : {}),
             ...(environment ? { environment } : {}),
@@ -3701,8 +3698,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return turnResult;
         };
         let runtimeHandoffs = restoredRuntime ? 1 : 0;
-        const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
-          let segment = await runHarnessSegment(...args);
+        const runAgentTurn = async (...args: Parameters<typeof runAgentSegment>) => {
+          let segment = await runAgentSegment(...args);
           while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
             if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
             if (effectiveTurnWallClockMs && Date.now() - turnStart >= effectiveTurnWallClockMs)
@@ -3710,7 +3707,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const recovery = "context" in segment.runtimeHandoff;
             if ("choice" in segment.runtimeHandoff) {
               await adoptRuntime(segment.runtimeHandoff.choice, segment.runtimeHandoff.lifetime);
-              await deps.harness.turns.resetSession?.(session.id);
+              await deps.agent.resetSession?.(session.id);
             }
             let resumedHistory = filterHistory(forModelContext((await historyWindow()).entries));
             if (recovery)
@@ -3728,7 +3725,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               );
             contextRecovered ||= recovery;
             turnAbort.signal.throwIfAborted();
-            segment = await runHarnessSegment(
+            segment = await runAgentSegment(
               runtimeSwitchNote("choice" in segment.runtimeHandoff ? segment.runtimeHandoff.choice : undefined) +
                 (recovery &&
                 !resumedHistory.some(
@@ -3750,7 +3747,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
           };
         };
-        let result = await runHarnessTurn(turnInput, {
+        let result = await runAgentTurn(turnInput, {
           ...(priorTurns?.length ? { priorTurns } : {}),
           ...(importedOverheard.length ? { overheard: importedOverheard } : {}),
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
@@ -3788,7 +3785,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           if (spine.surfaceOutboundCount === 0 && (!isPollFire || primaryReply)) {
             const nudgeHistory = filterHistory(forModelContext((await historyWindow()).entries));
-            result = await runHarnessTurn(
+            result = await runAgentTurn(
               "[system] You were addressed directly. Reply with the `slack` tool's `post` action, or decline explicitly with finish_silently — ending the turn without either is not allowed here.",
               inbound.images.length ? { images: inbound.images } : {},
               { history: nudgeHistory },
@@ -3902,7 +3899,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const request = replayableRequest(input);
           const prepared: Array<{ requestId: string; record: PendingApprovalRecord; approval: PendingApproval }> = [];
           const turnApprovals: Array<
-            NonNullable<HarnessTurnResult["pendingApprovals"]>[number] & {
+            NonNullable<AgentTurnResult["pendingApprovals"]>[number] & {
               summary?: string;
               summaryDetail?: string;
               screenedOutput?: PendingApprovalRecord["screenedOutput"];

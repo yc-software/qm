@@ -133,13 +133,13 @@ test("spend: people plus shared scopes reconcile to the org totals", async () =>
   }
 });
 
-test("spend: a mock-harness turn shows zero dollars with its tokens intact", async () => {
+test("spend: a mock-agent turn shows zero dollars with its tokens intact", async () => {
   const s = start();
   try {
     assert.equal((await s.built.app.turn(dm("codexlike", "hello there"))).status, "ok");
     const body = await getJson(s.base, "/v1/admin/spend");
     const row = body.people.find((p: any) => p.principalId === "codexlike");
-    assert.ok(row, "a scope whose harness books no dollars is still listed");
+    assert.ok(row, "a scope whose agent books no dollars is still listed");
     assert.equal(row.costUsd, 0);
     assert.ok(row.tokens > 0, "tokens are a separate column, so $0 turns stay visible");
     assert.ok(row.cacheHitRatio !== null && row.cacheHitRatio >= 0 && row.cacheHitRatio <= 1);

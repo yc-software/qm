@@ -46,7 +46,7 @@ and `CORE_SIGNING_SECRET` (same value as the core when source-auth is enabled).
 
 ## Suggested activities
 
-Suggested activity generation is **on by default** when the configured harness supports
+Suggested activity generation is **on by default** when the configured model supports
 it. Set `SUGGESTED_ACTIVITIES_ENABLED=false` on core to disable generation. Optionally
 set `WEB_UI_SUGGESTED_ACTIVITIES` on web to a JSON array for fixed fallback starters;
 unset it as well to hide suggestions entirely. No deployment-specific activity content
@@ -177,8 +177,8 @@ the CSS media queries, the composer, and the split canvas.
   (→ core `GET /v1/skills?principalId=`, resolved by `app.listVisibleSkills`). The skill _body_
   never reaches the browser; only name/description/scope do.
 - **Functional selectors** — the chosen model + effort + Fast mode ride along on each turn
-  (`POST /v1/turns` `model`/`thinkingLevel`/`fastMode`); the Pi harness applies them
-  server-side, bypassing Pi's stale thinking-level clamp for newer effort values and falling
+  (`POST /v1/turns` `model`/`thinkingLevel`/`fastMode`); the agent applies them
+  server-side, bypassing pi-ai's stale thinking-level clamp for newer effort values and falling
   back to its default on any unknown value. Attachments are forwarded as `IncomingAttachment`s
   and materialized into the agent's sandbox inbox (same path as Slack file shares).
 - **Unified history** — every session you participated in (DMs, channels, web), via

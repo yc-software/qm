@@ -24,7 +24,7 @@ import {
   resolveModel,
 } from "../model/pi-models.ts";
 import { selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
-import { resolveRuntimeChoiceDurable } from "../harness/runtime-choice.ts";
+import { resolveRuntimeChoiceDurable } from "../agent/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";

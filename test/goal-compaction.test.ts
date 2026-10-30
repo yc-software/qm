@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createCompaction } from "../src/core/orchestrator/compaction.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
-import { forModelContext } from "../src/harness/context-compaction.ts";
-import { createGoalRecord } from "../src/harness/goal.ts";
+import { forModelContext } from "../src/agent/context-compaction.ts";
+import { createGoalRecord } from "../src/agent/goal.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { ScopeId } from "../src/types.ts";
 
@@ -25,7 +25,7 @@ test("compaction leaves the session goal on its row and writes no goal entries",
   const compaction = createCompaction({
     sessions,
     maxContextTokens: 400,
-    harness: { models: { compactHistory: async () => "Earlier work." }, turns: {} },
+    agent: { compactHistory: async () => "Earlier work." },
     modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   try {
@@ -67,14 +67,11 @@ test("background compaction cannot revive an older goal over one closed while it
   const compaction = createCompaction({
     sessions,
     maxContextTokens: 400,
-    harness: {
-      models: {
-        compactHistory: async () => {
-          started.resolve();
-          return finish.promise;
-        },
+    agent: {
+      compactHistory: async () => {
+        started.resolve();
+        return finish.promise;
       },
-      turns: {},
     },
     modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);

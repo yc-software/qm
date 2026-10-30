@@ -149,7 +149,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
   assert.equal("unattendedGrants" in signal.request, false);
 });
 
-test("core route: a bare steer without a ts gets one minted so harnesses persist it", async () => {
+test("core route: a bare steer without a ts gets one minted so agents persist it", async () => {
   const { run } = await built.runs.enqueue({ sessionId: "t-mint", request: request("hi", "t-mint") });
   const r = await coreSignal(run.id, { kind: "steer", text: "keep going" });
   assert.equal(r.status, 200);

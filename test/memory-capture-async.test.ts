@@ -17,13 +17,13 @@ import type { MemoryStrategy } from "../src/memory/strategy.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { Harness } from "../src/harness/harness.ts";
+import type { Agent } from "../src/agent/agent.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -60,26 +60,23 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function gatedHarness() {
-  const base = createMockHarness();
+function gatedAgent() {
+  const base = createMockAgent();
   let started = 0;
   let finished = 0;
   const gates: Array<() => void> = [];
-  const harness: Harness = {
+  const agent: Agent = {
     ...base,
-    models: {
-      ...base.models,
-      async oneShot(system: string, prompt: string): Promise<string | undefined> {
-        started++;
-        await new Promise<void>((res) => gates.push(res));
-        const output = await base.models.oneShot!(system, prompt);
-        finished++;
-        return output;
-      },
+    async oneShot(system: string, prompt: string): Promise<string | undefined> {
+      started++;
+      await new Promise<void>((res) => gates.push(res));
+      const output = await base.oneShot!(system, prompt);
+      finished++;
+      return output;
     },
   };
   return {
-    harness,
+    agent,
     release: () => gates.shift()?.(),
     get started() {
       return started;
@@ -90,7 +87,7 @@ function gatedHarness() {
   };
 }
 
-function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrategy?: MemoryStrategy) {
+function buildOrchestrator(agent: Agent, memory?: MemoryService, memoryStrategy?: MemoryStrategy) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -114,7 +111,7 @@ function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrat
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness,
+    agent,
     memory: memory ?? createMemoryService(workspace),
     ...(memoryStrategy ? { memoryStrategy } : {}),
     deploy,
@@ -131,7 +128,7 @@ test("skipMemory turns neither recall nor capture", async () => {
     query: async () => [],
     read: async () => "",
   };
-  const orch = buildOrchestrator(createMockHarness(), memory, {
+  const orch = buildOrchestrator(createMockAgent(), memory, {
     onTurnEnd: async () => {
       captures++;
     },
@@ -149,8 +146,8 @@ test("approval replay preserves the memory opt-out", () => {
 });
 
 test("capture does NOT block the turn: the reply returns while extraction is still in flight", async () => {
-  const g = gatedHarness();
-  const orch = buildOrchestrator(g.harness);
+  const g = gatedAgent();
+  const orch = buildOrchestrator(g.agent);
 
   const res = await orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77"));
 
@@ -161,8 +158,8 @@ test("capture does NOT block the turn: the reply returns while extraction is sti
 });
 
 test("recall does NOT block on an in-flight capture; continuity is eventually-consistent", async () => {
-  const g = gatedHarness();
-  const orch = buildOrchestrator(g.harness);
+  const g = gatedAgent();
+  const orch = buildOrchestrator(g.agent);
 
   await orch.handleTurn(dm("dm:U1:tA", "remember my secret is ZULU77"));
   assert.equal(g.finished, 0, "capture is still in flight after the first turn returns");

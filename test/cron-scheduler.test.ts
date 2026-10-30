@@ -24,7 +24,7 @@ function fakeLease(isLeader: () => boolean): LeaderLease {
   };
 }
 
-function harness(
+function agent(
   reply: string | ((req: TurnRequest) => Promise<TurnResult>) = "CRON-OUTPUT-XYZ",
   directory?: DirectoryStore,
   maxFiresPerTick?: number,
@@ -56,7 +56,7 @@ function harness(
 }
 
 test("scheduler threads stored unattended grants into owner-mode turns", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "scan transcripts",
@@ -70,7 +70,7 @@ test("scheduler threads stored unattended grants into owner-mode turns", async (
 });
 
 test("a channel cron runs in the channel scope and delivers its real output to the channel", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, deliveries, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
@@ -90,7 +90,7 @@ test("a channel cron runs in the channel scope and delivers its real output to t
 });
 
 test("a group-DM cron runs in the group scope and delivers its real output to the group", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, deliveries, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
@@ -108,7 +108,7 @@ test("a group-DM cron runs in the group scope and delivers its real output to th
 });
 
 test("a group-DM relay message delivers verbatim, floored to the group", async () => {
-  const { crons, deliveries, scheduler } = harness();
+  const { crons, deliveries, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     message: "standup in 5 🚀",
@@ -122,7 +122,7 @@ test("a group-DM relay message delivers verbatim, floored to the group", async (
 });
 
 test("a group-DM cron composed at another scope delivers verbatim (person-keyed parity, §10)", async () => {
-  const { crons, deliveries, scheduler } = harness();
+  const { crons, deliveries, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "private digest",
@@ -148,7 +148,7 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
       { channelId: "C1", principalId: "U5" },
     ],
   );
-  const { crons, calls, scheduler } = harness("done", directory);
+  const { crons, calls, scheduler } = agent("done", directory);
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "remind Eve to confirm",
@@ -167,7 +167,7 @@ test("a channel cron fire gives the agent the people-here roster with real <@…
 test("a DM cron fire carries no mention roster (DMs already notify their owner)", async () => {
   const directory = createDirectoryStore();
   await directory.replace([{ principalId: "U1", displayName: "Ann", type: "internal", slackId: "U1" }]);
-  const { crons, calls, scheduler } = harness("done", directory);
+  const { crons, calls, scheduler } = agent("done", directory);
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "nudge me",
@@ -181,7 +181,7 @@ test("a DM cron fire carries no mention roster (DMs already notify their owner)"
 });
 
 test("a personal cron runs as a DM and delivers to the owner", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, deliveries, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "drink water",
@@ -196,7 +196,7 @@ test("a personal cron runs as a DM and delivers to the owner", async () => {
 });
 
 test("output composed at one scope delivers verbatim to a channel the owner may post to (person-keyed parity, §10)", async () => {
-  const { crons, deliveries, scheduler } = harness();
+  const { crons, deliveries, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "private digest",
@@ -210,7 +210,7 @@ test("output composed at one scope delivers verbatim to a channel the owner may 
 });
 
 test("a personal cron with a principal destination delivers its real output to the teammate", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, deliveries, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "let Alice know the deploy is done",
@@ -238,7 +238,7 @@ test("a personal cron with a principal destination delivers its real output to t
 });
 
 test("a recurring verbatim reminder to a teammate delivers to the teammate", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, deliveries, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
     message: "daily standup notes are due",
@@ -263,7 +263,7 @@ test("a recurring verbatim reminder to a teammate delivers to the teammate", asy
 });
 
 test("a teammate-DM cron created in a channel delivers its real output (§10 parity gate)", async () => {
-  const { crons, deliveries, scheduler } = harness();
+  const { crons, deliveries, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "summarize this channel and DM it to Alice",
@@ -282,7 +282,7 @@ test("a teammate-DM cron created in a channel delivers its real output (§10 par
 });
 
 test("a cron with a literal message delivers it verbatim, without running a turn", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, deliveries, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { firstFireAt: 1 },
     message: "standup moved to 4pm",
@@ -302,7 +302,7 @@ test("a cron with a literal message delivers it verbatim, without running a turn
 });
 
 test("a destination-less cron runs its action but delivers nothing", async () => {
-  const { crons, deliveries, calls, scheduler } = harness();
+  const { crons, deliveries, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "nightly cleanup",
@@ -316,7 +316,7 @@ test("a destination-less cron runs its action but delivers nothing", async () =>
 });
 
 test("a one-shot cron is auto-disabled after it fires", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { firstFireAt: 1 },
     action: "remind me once",
@@ -369,7 +369,7 @@ test("only the leader instance fires due crons on tick (non-leader skips)", asyn
 });
 
 test("a conversation-owned cron keeps running as the conversation, whoever created it", async () => {
-  const { crons, calls, scheduler, identity } = harness();
+  const { crons, calls, scheduler, identity } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
@@ -393,7 +393,7 @@ test("a person-owned cron is deleted once its owner has left the conversation", 
     [{ channelId: "C1", name: "eng", isPrivate: true }],
     [{ channelId: "C1", principalId: "U2" }],
   );
-  const { crons, calls, scheduler } = harness("done", directory);
+  const { crons, calls, scheduler } = agent("done", directory);
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "my digest",
@@ -407,7 +407,7 @@ test("a person-owned cron is deleted once its owner has left the conversation", 
 });
 
 test("an owner cron still disables when its owner leaves (unchanged)", async () => {
-  const { crons, calls, scheduler, identity } = harness();
+  const { crons, calls, scheduler, identity } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "my digest",
@@ -423,7 +423,7 @@ test("an owner cron still disables when its owner leaves (unchanged)", async () 
 });
 
 test("the default (no-op) lease ticks exactly as before — memory-mode behavior is unchanged", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   await crons.create({
     schedule: { everyMs: 1000, firstFireAt: 1 },
     action: "post the standup",
@@ -437,7 +437,7 @@ test("the default (no-op) lease ticks exactly as before — memory-mode behavior
 });
 
 test("a failing interval cron does not starve later due crons across ticks", async () => {
-  const { crons, calls, scheduler } = harness(async (req) => {
+  const { crons, calls, scheduler } = agent(async (req) => {
     if (req.text.includes("fail first")) throw new Error("cron failed");
     return { status: "ok", reply: "OUT" };
   });
@@ -466,7 +466,7 @@ test("a failing interval cron does not starve later due crons across ticks", asy
 });
 
 test("a capped batch of persistent failures rotates — later due crons still get their turn", async () => {
-  const { crons, calls, scheduler } = harness(
+  const { crons, calls, scheduler } = agent(
     async (req) => {
       if (req.text.includes("always fails")) throw new Error("cron failed");
       return { status: "ok", reply: "OUT" };
@@ -501,7 +501,7 @@ test("a capped batch of persistent failures rotates — later due crons still ge
 });
 
 test("capped rotation is driven by durable attempt order, not tick arrival times", async () => {
-  const { crons, calls, scheduler } = harness("OUT", undefined, 2);
+  const { crons, calls, scheduler } = agent("OUT", undefined, 2);
   const created: Cron[] = [];
   for (let i = 0; i < 4; i++) {
     created.push(
@@ -624,7 +624,7 @@ test("capped rotation survives a scheduler restart mid-cycle", async () => {
 });
 
 test("runNow fires even when the current schedule slot already did (manual re-run)", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000, firstFireAt: 1 },
     action: "post the standup",
@@ -639,7 +639,7 @@ test("runNow fires even when the current schedule slot already did (manual re-ru
 });
 
 test("runNow does not shift the schedule (lastFiredAt untouched, next tick still fires)", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000, firstFireAt: 1 },
     action: "post the standup",
@@ -655,7 +655,7 @@ test("runNow does not shift the schedule (lastFiredAt untouched, next tick still
 });
 
 test("a re-enabled one-shot cron can be re-run manually", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { firstFireAt: 1 },
     action: "remind me once",
@@ -672,7 +672,7 @@ test("a re-enabled one-shot cron can be re-run manually", async () => {
 });
 
 test("a cron turn carries its fire key as the run idempotency key (atomic DB-level dedupe)", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000, firstFireAt: 1 },
     action: "post the standup",
@@ -687,7 +687,7 @@ test("a cron turn carries its fire key as the run idempotency key (atomic DB-lev
 });
 
 test("a cron fires into fresh per-fire threads while keeping per-fire idempotency keys", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000, firstFireAt: 1 },
     action: "daily check-in",
@@ -803,7 +803,7 @@ test("an idempotency-skipped cron fire does not create fire log history", async 
 });
 
 test("cron fire log omits replies that echo the runtime wrapper", async () => {
-  const { crons, calls, scheduler } = harness(async (req) => ({ status: "ok", reply: `You said: ${req.text}` }));
+  const { crons, calls, scheduler } = agent(async (req) => ({ status: "ok", reply: `You said: ${req.text}` }));
   await crons.create({
     schedule: { everyMs: 1000, firstFireAt: 1 },
     action: "daily check-in",
@@ -823,7 +823,7 @@ test("cron fire log omits replies that echo the runtime wrapper", async () => {
 
 test("a calendar cron uses the scheduled instant for a missed tick idempotency key", async (t) => {
   t.mock.method(Date, "now", () => Date.parse("2026-06-18T15:58:00.000Z"));
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const scheduledAt = Date.parse("2026-06-18T16:00:00.000Z");
   const firedAt = Date.parse("2026-06-18T16:05:00.000Z");
   const cron = await crons.create({
@@ -1201,7 +1201,7 @@ test("a fire is journaled as running the moment it starts, then updated with the
   const gate = new Promise<TurnResult>((resolve) => {
     release = resolve;
   });
-  const { crons, scheduler } = harness(() => gate);
+  const { crons, scheduler } = agent(() => gate);
   const cron = await crons.create({
     schedule: { everyMs: 60_000 },
     action: "long job",
@@ -1228,7 +1228,7 @@ test("a doubled manual run cannot double-fire: the second is refused with the in
   const gate = new Promise<TurnResult>((resolve) => {
     release = resolve;
   });
-  const { crons, calls, scheduler } = harness(() => gate);
+  const { crons, calls, scheduler } = agent(() => gate);
   const cron = await crons.create({
     schedule: { everyMs: 60_000 },
     action: "grind",
@@ -1251,7 +1251,7 @@ test("a doubled manual run cannot double-fire: the second is refused with the in
 });
 
 test("a fire that throws is journaled as failed, not left running", async () => {
-  const { crons, scheduler } = harness(async () => {
+  const { crons, scheduler } = agent(async () => {
     throw new Error("substrate down");
   });
   const cron = await crons.create({
@@ -1271,7 +1271,7 @@ test("a fire that throws is journaled as failed, not left running", async () => 
 });
 
 test("a fire's input carries the last fire's timestamped shift-change note and asks this fire to leave one", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "check gmail",
@@ -1294,7 +1294,7 @@ test("a fire's input carries the last fire's timestamped shift-change note and a
 });
 
 test("a stale note keeps rendering with the timestamp of the fire that wrote it", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "check gmail",
@@ -1308,7 +1308,7 @@ test("a stale note keeps rendering with the timestamp of the fire that wrote it"
 });
 
 test("a fire with no prior note gets no note line, but is still asked to leave one", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "check gmail",
@@ -1323,7 +1323,7 @@ test("a fire with no prior note gets no note line, but is still asked to leave o
 });
 
 test("a one-shot cron's fire gets neither a note line nor the note instruction", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { firstFireAt: 1 },
     action: "remind Alex about standup",
@@ -1339,7 +1339,7 @@ test("a one-shot cron's fire gets neither a note line nor the note instruction",
 });
 
 test("a note that echoes the runtime-context markers or carries a corrupt timestamp is never rendered", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "check gmail",
@@ -1358,7 +1358,7 @@ test("a note that echoes the runtime-context markers or carries a corrupt timest
 });
 
 test("a note written by someone other than the fire renders attributed, and multi-line text flattens to one line", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "check gmail",
@@ -1661,7 +1661,7 @@ test("scheduler relinquishes queue claims before a long turn drains and preserve
 test("scheduler pause fences the next cron in an already admitted polling batch", async () => {
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
-  const { crons, calls, scheduler } = harness(async () => {
+  const { crons, calls, scheduler } = agent(async () => {
     entered.resolve();
     await finish.promise;
     return { status: "ok", reply: "done" };
@@ -1811,7 +1811,7 @@ test("manual cron preparation and detached fire retain admission across pause", 
 });
 
 test("scheduled and manual fires use the saved runtime; clearing it restores inherited behavior", async () => {
-  const { crons, calls, scheduler } = harness();
+  const { crons, calls, scheduler } = agent();
   const runtime = { modelId: "gpt-6-luna", effortLevel: "low", fastMode: false };
   const cron = await crons.create({
     schedule: { everyMs: 60_000 },
@@ -1843,7 +1843,7 @@ test("a failing cron posts one notice to its destination, then stays quiet until
     reason: "pi/claude-sonnet-5 can't run here (runtime is no longer available).",
   };
   let clock = 1_000_000;
-  const { crons, deliveries, scheduler } = harness(
+  const { crons, deliveries, scheduler } = agent(
     async () => result,
     undefined,
     undefined,
@@ -1883,7 +1883,7 @@ test("a failing cron posts one notice to its destination, then stays quiet until
 
 test("a cron whose model can't run fires on the default model and is told why", async () => {
   const unavailable = new Set(["claude-sonnet-5"]);
-  const { crons, calls, scheduler } = harness("standup posted", undefined, undefined, undefined, {
+  const { crons, calls, scheduler } = agent("standup posted", undefined, undefined, undefined, {
     runtimeError: async (_scope, runtime) =>
       unavailable.has(runtime.modelId)
         ? `pi/${runtime.modelId} can't run here (runtime is no longer available).`

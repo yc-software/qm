@@ -16,13 +16,13 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { defineHarness } from "../src/harness/harness.ts";
+import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import type { HarnessTurnResult } from "../src/harness/harness.ts";
+import type { AgentTurnResult } from "../src/agent/agent.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
@@ -54,8 +54,8 @@ function fakeSandbox(): Sandbox {
   };
 }
 
-function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
-  const harness = defineHarness({
+function buildScenario(turnResult?: Partial<AgentTurnResult>) {
+  const agent: Agent = {
     async runTurn(turn) {
       await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
       await turn.emit({ type: "assistant", payload: { text: "done" }, scopeLabel: turn.scopeLabel });
@@ -64,7 +64,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     async screenSecurity() {
       return { decision: "auto" as const };
     },
-  });
+  };
   const sessions = createMemorySessionStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -89,7 +89,7 @@ function buildScenario(turnResult?: Partial<HarnessTurnResult>) {
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
-    harness,
+    agent,
     memory: createMemoryService(workspace),
     deploy,
     acl,

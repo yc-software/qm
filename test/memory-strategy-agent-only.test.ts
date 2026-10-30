@@ -24,9 +24,9 @@ test("agent-only strategy: no automatic extraction, curation guidance in promptL
 });
 
 test("createMemoryStrategy('agent-only') returns the agent-only strategy", () => {
-  const harness = {} as never;
+  const agent = {} as never;
   const memory = {} as never;
-  const { strategy } = createMemoryStrategy("agent-only", { harness, memory });
+  const { strategy } = createMemoryStrategy("agent-only", { agent, memory });
   assert.equal(strategy.onTurnEnd, undefined);
   assert.deepEqual(strategy.promptLines?.(), AGENT_ONLY_PROMPT_LINES);
 });

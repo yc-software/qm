@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
-import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/harness/document-inputs.ts";
+import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/agent/document-inputs.ts";
 import { isDocumentAttachment } from "../src/core/document-kinds.ts";
 import {
   documentFallbackText,
@@ -12,7 +12,7 @@ import {
   loadDocumentInputs,
   type DocumentInput,
 } from "../src/core/document-inputs.ts";
-import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/harness/pi-harness.ts";
+import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/agent/agent-run.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";

@@ -14,7 +14,7 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -102,7 +102,7 @@ function gatedSandbox() {
 function buildOrchestrator(
   sandbox: Sandbox,
   errors?: ErrorLog,
-  harness = createMockHarness(),
+  agent = createMockAgent(),
   surfaceCache?: SurfaceCache,
 ) {
   const config = createMemoryConfigStore(ORG);
@@ -129,7 +129,7 @@ function buildOrchestrator(
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness,
+    agent,
     memory: createMemoryService(workspace),
     deploy,
     acl,
@@ -163,9 +163,9 @@ test("background: the run finishes as soon as the reply is ready; backup/teardow
 
 test("background: title persistence finishes before the run while teardown stays detached", async () => {
   const g = gatedSandbox();
-  const base = createMockHarness();
-  const harness = { ...base, models: { ...base.models, generateTitle: () => new Promise<string>(() => {}) } };
-  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, harness);
+  const base = createMockAgent();
+  const agent = { ...base, generateTitle: () => new Promise<string>(() => {}) };
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, agent);
   const result = await orch.handleTurn({
     ...dm("dm:U1:title-background", "!run echo hi"),
     displayText: "Simulate four-way title outage from the visible message",
@@ -207,7 +207,7 @@ test("spine-routed titles use visible text instead of the internal wake envelope
 
 test("background: a turn that never used its eagerly provisioned box returns before teardown and marks the home unchanged", async () => {
   const g = gatedSandbox();
-  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockAgent());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t4", "!run echo hi"), runId: "r4", background: true });
   assert.equal(first.status, "ok");
@@ -232,7 +232,7 @@ test("background: a turn that never used its eagerly provisioned box returns bef
 
 test("background: a turn paused on approval returns its card before the eagerly provisioned box is torn down", async () => {
   const g = gatedSandbox();
-  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockHarness());
+  const { orch, sessions } = buildOrchestrator(g.sandbox, undefined, createMockAgent());
 
   const first = await orch.handleTurn({ ...dm("dm:U1:t7", "!run echo hi"), runId: "r7", background: true });
   assert.equal(first.status, "ok");
@@ -271,7 +271,7 @@ test("background: the message edit catch-up still runs before the lease is relea
           }
         : async () => [],
   }) as unknown as SurfaceCache;
-  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockHarness(), surfaceCache);
+  const { orch } = buildOrchestrator(g.sandbox, undefined, createMockAgent(), surfaceCache);
   const result = await orch.handleTurn({
     ...dm("ch:C1:t1", "!run echo hi"),
     surface: "slack",
@@ -330,11 +330,11 @@ test("background: an error in the detached tail still reclaims the box (no machi
     list: () => Promise.resolve([]),
     count: () => Promise.resolve(0),
   };
-  const harness = createMockHarness();
-  harness.models.generateTitle = async () => {
+  const agent = createMockAgent();
+  agent.generateTitle = async () => {
     throw new Error("title gen blew up");
   };
-  const { orch } = buildOrchestrator(sandbox, throwingErrors, harness);
+  const { orch } = buildOrchestrator(sandbox, throwingErrors, agent);
 
   const result = await orch.handleTurn({ ...dm("dm:U1:t3", "!run echo hi"), runId: "r3", background: true });
   assert.equal(result.status, "ok");

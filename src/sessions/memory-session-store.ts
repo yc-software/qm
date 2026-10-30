@@ -1,7 +1,7 @@
 import { transcriptEntries } from "./transcript-source.ts";
 import { randomUUID } from "node:crypto";
 import type { Session, SessionEntry, ScopeId } from "../types.ts";
-import type { GoalRecord } from "../harness/goal.ts";
+import type { GoalRecord } from "../agent/goal.ts";
 import type {
   AttributedTurn,
   EntrySearchHit,

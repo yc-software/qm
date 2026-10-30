@@ -379,11 +379,11 @@ test("shutdown aborts the blocked step before the handback, and the next worker 
   assert.deepEqual(events, ["step1", "abort", "release", "resume@2", "step2"]);
 });
 
-test("shutdown mid-turn through the harness leaves no stop marker, and the resumed attempt finishes the work", async () => {
+test("shutdown mid-turn through the agent leaves no stop marker, and the resumed attempt finishes the work", async () => {
   const built = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "harness-resume-")), workers: 1, shutdownDrainMs: 30 }),
+    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "agent-resume-")), workers: 1, shutdownDrainMs: 30 }),
   );
-  const threadRef = "harness-shutdown-resume";
+  const threadRef = "agent-shutdown-resume";
   const queued = await built.app.turn({
     surface: "test",
     actor: { externalId: "U1" },

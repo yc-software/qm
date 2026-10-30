@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createToolContext, type ToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyReasoningMode, createPiHarness } from "../src/harness/pi-harness.ts";
+import { applyReasoningMode, createAgent } from "../src/agent/agent-run.ts";
 import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/model/pi-models.ts";
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 
 const adaptiveId = "claude-sonnet-4-6";
@@ -108,7 +108,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
   for (const modelId of [adaptiveId, "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
     for (const route of ["api-key", "personal-key", "oauth", "gateway"] as const) {
       await t.test(`${modelId}/${route}`, async () => {
-        const harness = createPiHarness({
+        const agent = createAgent({
           defaultModelId: modelId,
           ...(route === "gateway"
             ? {
@@ -121,7 +121,7 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
               }
             : { apiKey: "sk-offline-test-key" }),
         });
-        t.after(() => harness.turns.close?.());
+        t.after(() => agent.close?.());
         const mandatoryThinking = getRequiredModel(modelId).thinkingLevelMap?.off === null;
         for (const effortLevel of [
           "high",
@@ -133,12 +133,12 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
           ...(mandatoryThinking ? ["xhigh", "max", "ultracode", "medium"] : []),
         ]) {
           sendTool = true;
-          const result = await harness.turns.runTurn({
-            session: { id: `native-auto-${modelId}-${route}` } as HarnessTurnInput["session"],
+          const result = await agent.runTurn({
+            session: { id: `native-auto-${modelId}-${route}` } as AgentTurnInput["session"],
             input: "Reply OK",
             systemPrompt: "Reply OK",
             history: [],
-            tools: { attach: async () => ({ ok: true, files: [], staged: 0 }) } as unknown as HarnessTurnInput["tools"],
+            tools: { attach: async () => ({ ok: true, files: [], staged: 0 }) } as unknown as AgentTurnInput["tools"],
             scopeLabel: "personal:test",
             orgScopeId: "org:test",
             runtime: { effortLevel },
@@ -182,8 +182,8 @@ test("real Pi AgentSession and Anthropic serializer send Auto without a fixed ef
 
 test("runtime scope writes and turn dispatch reject unsupported modes without changing legacy selections", async () => {
   const { createMemoryConfigStore } = await import("../src/resolution/config-store.ts");
-  const { resolveRuntimeChoice } = await import("../src/harness/runtime-choice.ts");
-  const { createRuntimeService } = await import("../src/harness/runtime-control.ts");
+  const { resolveRuntimeChoice } = await import("../src/agent/runtime-choice.ts");
+  const { createRuntimeService } = await import("../src/agent/runtime-control.ts");
   const config = createMemoryConfigStore("default-org");
   const active = { modelId: "claude-sonnet-5", effortLevel: "auto" };
   await config.setRuntimeSelection("personal:test", active);

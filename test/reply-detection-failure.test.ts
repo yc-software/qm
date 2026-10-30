@@ -15,13 +15,13 @@ import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createErrorLog } from "../src/admin/error-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { Harness } from "../src/harness/harness.ts";
+import type { Agent } from "../src/agent/agent.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -29,22 +29,16 @@ import { singleProcessDeps } from "./support/single-process.ts";
 const actor: Principal = { id: "U1", type: "internal" };
 
 test("an ambient message whose reply detection fails stays silent and leaves the failure in the error and audit logs", async () => {
-  const base = createMockHarness();
+  const base = createMockAgent();
   let ran = false;
-  const harness: Harness = {
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async () => {
-        ran = true;
-        return { reply: "spurious" };
-      },
+    runTurn: async () => {
+      ran = true;
+      return { reply: "spurious" };
     },
-    models: {
-      ...base.models,
-      shouldRespond: async () => {
-        throw new Error("401 invalid x-api-key");
-      },
+    shouldRespond: async () => {
+      throw new Error("401 invalid x-api-key");
     },
   };
   const config = createMemoryConfigStore("default-org");
@@ -66,7 +60,7 @@ test("an ambient message whose reply detection fails stays silent and leaves the
     auditLog,
     errors,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness,
+    agent,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
       ...singleProcessDeps(),

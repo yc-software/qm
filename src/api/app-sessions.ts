@@ -12,7 +12,7 @@ import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { acquireLeaseWithin, entryWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
-import { cancelGoal, goalCancelledPayload, openGoal } from "../harness/goal.ts";
+import { cancelGoal, goalCancelledPayload, openGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
 import { SEARCH_HIT_LIMIT, entrySearchText, searchSnippet, searchTerms } from "../sessions/entry-search.ts";
 import { supportsProcessSessions } from "../sandbox/sandbox.ts";

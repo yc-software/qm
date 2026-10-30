@@ -936,7 +936,7 @@ test("the orchestrator sandbox path selects worker storage without changing auth
   await assert.rejects(turn.provisionResource(foreign.id), /requires permission to use its owning scope/);
 });
 
-test("durable worker rejects excessive swarm claims before calling the harness", async () => {
+test("durable worker rejects excessive swarm claims before calling the agent", async () => {
   const { service, caller, runs } = await swarmFixture();
   await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();

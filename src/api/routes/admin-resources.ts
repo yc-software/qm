@@ -18,7 +18,7 @@ import {
   selectableBaseModels,
   ALL_PROVIDERS_AVAILABLE,
 } from "../../model/pi-models.ts";
-import { resolveRuntimeChoiceDurable } from "../../harness/runtime-choice.ts";
+import { resolveRuntimeChoiceDurable } from "../../agent/runtime-choice.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
 import {
   credentialInjectionError,
@@ -146,7 +146,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     id: "security-posture",
     kind: "enum",
     target: "any",
-    label: "Harness security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
+    label: "Security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
     readKey: "securityPosture",
     enumValues: SECURITY_POSTURES,
     get: (deps, scope) => deps.config!.getSecurityPostureDurable(scope),

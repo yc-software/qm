@@ -1,18 +1,18 @@
 import { test } from "node:test";
-import { createGoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord } from "../src/agent/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
-import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
-import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { createMemoryRunSignalStore, waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import { createMemoryToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";
 import type { ClientToolDeclaration, EntryType, SessionEntry } from "../src/types.ts";
 import type { ComputerStatus } from "../src/sandbox/sandbox.ts";
 import type { McpToolDescriptor } from "../src/mcp/mcp-tool-service.ts";
-import { connectorToolsNote, deferredMcpTools } from "../src/harness/deferred-tools.ts";
+import { connectorToolsNote, deferredMcpTools } from "../src/agent/deferred-tools.ts";
 
 function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute"]>[1] }): ToolContext {
   return {
@@ -2475,12 +2475,12 @@ test("a blocking command approval terminates the agent loop and flags pausedOnAp
   };
   assert.equal(r.terminate, true, "the tool result must stop the loop — a paused turn, not a narrated block");
   assert.match(r.content[0]!.text ?? "", /needs human approval/);
-  assert.equal(ref.pausedOnApproval, true, "the harness flag rides to the orchestrator's blocksInput");
+  assert.equal(ref.pausedOnApproval, true, "the agent flag rides to the orchestrator's blocksInput");
   assert.equal(ref.pendingApprovals!.length, 1);
 });
 
 test("pauseStampAfterToolCall stamps terminate on sibling results once the turn paused (batch-wide stop)", async () => {
-  const { pauseStampAfterToolCall } = await import("../src/harness/agent-tools.ts");
+  const { pauseStampAfterToolCall } = await import("../src/agent/agent-tools.ts");
   const ref: { pausedOnApproval?: boolean } = {};
   const hook = pauseStampAfterToolCall(ref);
 

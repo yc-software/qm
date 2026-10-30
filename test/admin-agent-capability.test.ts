@@ -1,7 +1,7 @@
 import { createAdminCall } from "../src/tools/admin.ts";
 import { adminRoutes } from "../src/api/routes/admin.ts";
 import { UNATTENDED_ADMIN_GRANTS } from "../src/api/control-service.ts";
-import { createAgentTools } from "../src/harness/agent-tools.ts";
+import { createAgentTools } from "../src/agent/agent-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import "./support/auto-fake-sprites.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";

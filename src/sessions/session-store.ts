@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EntryType, ScopeId, Session, SessionEntry, SessionType, SpawnMeta } from "../types.ts";
 import { sleep } from "../util/async.ts";
-import type { GoalRecord } from "../harness/goal.ts";
+import type { GoalRecord } from "../agent/goal.ts";
 
 export const LLM_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 

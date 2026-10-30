@@ -6,7 +6,7 @@ import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";
 import { wireRunResultDeliveries } from "../src/delivery/run-result-delivery.ts";
 import { createTranscriptSource } from "../src/sessions/transcript-source.ts";
-import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { sleep } from "../src/util/async.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";

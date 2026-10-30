@@ -5,7 +5,7 @@ import { isGatewayModelId } from "./gateway-models.ts";
  * One place decides which base URL each model provider is reached at.
  * Config parses and validates the `*_BASE_URL` environment variables,
  * wiring injects them here, and everything that issues a request — the
- * Pi harness and admin API-key validation — resolves through this module.
+ * agent and admin API-key validation — resolves through this module.
  */
 
 export const PROVIDER_IDS = ["anthropic", "openai", "openrouter"] as const;

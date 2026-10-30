@@ -8,7 +8,7 @@ import {
   type SecurityScreenVerdict,
 } from "../../security/security-posture.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
-import type { HarnessLlmRequestRecord } from "../../harness/harness.ts";
+import type { TurnLlmRequestRecord } from "../../agent/agent.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import { headSlice } from "../../util/text.ts";
@@ -43,7 +43,7 @@ export type SecurityClassifier = (
   payload: string,
   actorId: string,
   scopeLabel: ScopeId,
-  recordLlmRequest: ((rec: HarnessLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>) | undefined,
+  recordLlmRequest: ((rec: TurnLlmRequestRecord, signal?: AbortSignal) => void | Promise<void>) | undefined,
   context: SecurityScreenContext,
 ) => Promise<SecurityScreenVerdict | undefined>;
 
@@ -64,7 +64,7 @@ function screenSources(payload: string): string[] {
 export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassifier {
   return async function classifySecurityData(payload, actorId, scopeLabel, recordLlmRequest, context) {
     const screener = deps.securityScreener;
-    const model = deps.harness.models.screenSecurity;
+    const model = deps.agent.screenSecurity;
     const observe = context.mode === "observe";
     if (!screener && !model) return observe ? { decision: "auto" } : undefined;
     const timeoutMs = deps.securityScreenTimeoutMs ?? DEFAULT_SECURITY_SCREEN_TIMEOUT_MS;

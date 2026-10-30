@@ -4,30 +4,30 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
-import * as piHarness from "../src/harness/pi-harness.ts";
-import * as mockHarness from "./support/mock-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import * as agentRun from "../src/agent/agent-run.ts";
+import * as mockAgent from "./support/mock-agent.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 
-const turns: HarnessTurnInput[] = [];
-let piOptions: Parameters<typeof piHarness.createPiHarness>[0];
-function observedPiHarness(opts: Parameters<typeof piHarness.createPiHarness>[0]) {
+const turns: AgentTurnInput[] = [];
+let piOptions: Parameters<typeof agentRun.createAgent>[0];
+function observedCreateAgent(opts: Parameters<typeof agentRun.createAgent>[0]) {
   piOptions = opts;
-  return observedHarness();
+  return observedAgent();
 }
-function observedHarness() {
-  const harness = mockHarness.createMockHarness();
-  const runTurn = harness.turns.runTurn;
-  harness.turns.runTurn = async (turn) => {
+function observedAgent() {
+  const agent = mockAgent.createMockAgent();
+  const runTurn = agent.runTurn;
+  agent.runTurn = async (turn) => {
     turns.push(turn);
     return runTurn(turn);
   };
-  return harness;
+  return agent;
 }
 
-mock.module("../src/harness/pi-harness.ts", {
-  namedExports: { ...piHarness, createPiHarness: observedPiHarness },
+mock.module("../src/agent/agent-run.ts", {
+  namedExports: { ...agentRun, createAgent: observedCreateAgent },
 });
 const { buildApp } = await import("../src/wiring.ts");
 
@@ -60,7 +60,7 @@ for (const provider of ["anthropic", "openai"] as const) {
   });
 }
 
-test("disconnecting a queued personal account fails without invoking any main harness or another connected provider", async () => {
+test("disconnecting a queued personal account fails without invoking any main agent or another connected provider", async () => {
   turns.length = 0;
   const built = buildApp(testConfig({ anthropicApiKey: "company-anthropic", openaiApiKey: "company-openai" }));
   await built.userModelCredentials.setApiKey("U1", "anthropic", "personal-anthropic");
@@ -296,11 +296,11 @@ test("a configured company subscription without a keychain cannot fall back to t
     urls.push(String(input));
     return new Response("unexpected provider request", { status: 400 });
   });
-  const harness = piHarness.createPiHarness({ ...piOptions, captureRequests: false });
+  const agent = agentRun.createAgent({ ...piOptions, captureRequests: false });
   try {
-    assert.equal(await harness.models.oneShot?.("system", "hello"), undefined);
+    assert.equal(await agent.oneShot?.("system", "hello"), undefined);
     assert.deepEqual(urls, []);
   } finally {
-    await harness.turns.close?.();
+    await agent.close?.();
   }
 });

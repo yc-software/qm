@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Context } from "@earendil-works/pi-ai";
-import { promptEnvelopeWithoutHistory } from "../src/harness/harness.ts";
-import { sanitizeLlmPayload } from "../src/harness/pi-harness.ts";
+import { promptEnvelopeWithoutHistory } from "../src/agent/agent.ts";
+import { sanitizeLlmPayload } from "../src/agent/agent-run.ts";
 import { promptEnvelopeBody } from "../src/sessions/session-store.ts";
 
 const cases: Array<{

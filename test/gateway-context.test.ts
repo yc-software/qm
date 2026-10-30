@@ -61,7 +61,7 @@ function freshApp() {
   return buildApp(config);
 }
 
-test("gateway context flows into the system prompt the harness sees", async () => {
+test("gateway context flows into the system prompt the agent sees", async () => {
   const { app } = freshApp();
   const res = await app.turn({
     surface: "slack",

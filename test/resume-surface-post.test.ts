@@ -14,13 +14,13 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { Harness } from "../src/harness/harness.ts";
+import type { Agent } from "../src/agent/agent.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -53,7 +53,7 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildOrchestrator(
-  harness: Harness,
+  agent: Agent,
   sessions: ReturnType<typeof createMemorySessionStore>,
   deliveries: DeliveryStore,
 ) {
@@ -80,7 +80,7 @@ function buildOrchestrator(
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness,
+    agent,
     memory: createMemoryService(workspace),
     deliveries,
     memoryStrategy: {},
@@ -92,15 +92,12 @@ function buildOrchestrator(
 test("a resumed turn whose dead attempt already posted does not post its closing text again", async () => {
   const sessions = createMemorySessionStore();
   const deliveries = createDeliveryStore();
-  const base = createMockHarness();
-  const harness: Harness = {
+  const base = createMockAgent();
+  const agent: Agent = {
     ...base,
-    turns: {
-      ...base.turns,
-      runTurn: async (turn) => {
-        await turn.emit({ type: "assistant", payload: { text: "Done, it printed ok." }, scopeLabel: turn.scopeLabel });
-        return { reply: "Done, it printed ok." };
-      },
+    runTurn: async (turn) => {
+      await turn.emit({ type: "assistant", payload: { text: "Done, it printed ok." }, scopeLabel: turn.scopeLabel });
+      return { reply: "Done, it printed ok." };
     },
   };
   const threadRef = "ch:C1:100.1";
@@ -114,7 +111,7 @@ test("a resumed turn whose dead attempt already posted does not post its closing
   ] as const)
     await sessions.append(lease, { type, payload, scopeLabel: "channel:C1" });
   await sessions.releaseLease(lease);
-  const orch = buildOrchestrator(harness, sessions, deliveries);
+  const orch = buildOrchestrator(agent, sessions, deliveries);
   const result = await orch.handleTurn({
     surface: "slack",
     actor,

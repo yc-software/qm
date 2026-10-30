@@ -2,11 +2,11 @@ import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as modalClient from "../src/sandbox/modal-client.ts";
-import * as mockHarness from "./support/mock-harness.ts";
+import * as mockAgent from "./support/mock-agent.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { createServer } from "../src/api/server.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
@@ -17,24 +17,24 @@ import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
 
 const screenedPayloads: string[] = [];
-let exerciseTurn: ((turn: HarnessTurnInput) => Promise<void | { stopped: true }>) | undefined;
+let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;
 
 const fake = installFakeModal();
 mock.module("../src/sandbox/modal-client.ts", {
   namedExports: { ...modalClient, createSdkModalClient: () => fake.client },
 });
-mock.module("./support/mock-harness.ts", {
+mock.module("./support/mock-agent.ts", {
   namedExports: {
-    ...mockHarness,
-    createMockHarness: () => {
-      const harness = mockHarness.createMockHarness();
-      const screen = harness.models.screenSecurity!;
-      harness.models.screenSecurity = async (input) => {
+    ...mockAgent,
+    createMockAgent: () => {
+      const agent = mockAgent.createMockAgent();
+      const screen = agent.screenSecurity!;
+      agent.screenSecurity = async (input) => {
         screenedPayloads.push(input.payload);
         return screen(input);
       };
-      const runTurn = harness.turns.runTurn;
-      harness.turns.runTurn = async (turn) => {
+      const runTurn = agent.runTurn;
+      agent.runTurn = async (turn) => {
         const outcome = await exerciseTurn?.(turn);
         if (outcome?.stopped || turn.cancel?.aborted) return { reply: "", stopped: true };
         return runTurn(
@@ -43,7 +43,7 @@ mock.module("./support/mock-harness.ts", {
             : turn,
         );
       };
-      return harness;
+      return agent;
     },
   },
 });
@@ -486,7 +486,7 @@ test("a resolved command approval informs the model without changing its request
     conversation: { kind: "dm", threadRef: "web:U1:approval-hint" },
     text: "!run printf approval-isolation",
   };
-  const turns: HarnessTurnInput[] = [];
+  const turns: AgentTurnInput[] = [];
   exerciseTurn = async (turn) => {
     turns.push(turn);
   };
@@ -624,7 +624,7 @@ test("a goal assigned at spawn becomes the worker's session goal and its turn ha
     });
     await built.app.swarms!.sweep();
     const worker = (await built.runs.list()).find((run) => run.request.swarm)!;
-    const seen: Array<Pick<HarnessTurnInput, "goal" | "turnWallClockMs">> = [];
+    const seen: Array<Pick<AgentTurnInput, "goal" | "turnWallClockMs">> = [];
     exerciseTurn = async (turn) => {
       if (turn.input.startsWith("Swarm ")) seen.push({ goal: turn.goal, turnWallClockMs: turn.turnWallClockMs });
     };
@@ -668,7 +668,6 @@ test("a worker with an open goal answers messages as a goal turn without the swa
     const first = (await built.runs.list()).find((run) => run.request.swarm)!;
     const seen: Array<{ deadline?: number; inbox: boolean }> = [];
     exerciseTurn = async (turn) => {
-      if (turn.goalContinuation) return { stopped: true };
       if (turn.input.startsWith("Swarm ")) seen.push({ deadline: turn.turnWallClockMs, inbox: !!turn.goalInbox });
     };
     built.runtime.start();

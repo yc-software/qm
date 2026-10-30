@@ -102,7 +102,7 @@ test("production and unauthenticated-core escape hatch are parsed once", () => {
   assert.throws(() => loadConfig({ ALLOW_UNAUTHENTICATED_CORE: "sometimes" }), /not a recognized boolean/);
 });
 
-test("harness security posture defaults to auto and validates named modes", () => {
+test("agent security posture defaults to auto and validates named modes", () => {
   assert.equal(loadConfig({}).securityPosture, "auto");
   assert.equal(loadConfig({}).securityScreen, "off");
   assert.equal(loadConfig({}).securityScreenClassifier, "model");
@@ -223,7 +223,7 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   });
   assert.equal(off.seedSkills, false);
   assert.equal(off.reachExecEnabled, false);
-  assert.equal(off.piCaptureRequests, false);
+  assert.equal(off.captureLlmRequests, false);
 
   const on = loadConfig({
     SEED_SKILLS: "yes",
@@ -233,7 +233,7 @@ test("every boolean knob accepts the shared vocabulary (off means off)", () => {
   assert.equal(on.reachExecEnabled, true);
 
   const unset = loadConfig({});
-  assert.equal(unset.piCaptureRequests, true, "capture defaults on");
+  assert.equal(unset.captureLlmRequests, true, "capture defaults on");
 });
 
 test("numEnv: empty and non-numeric values fall back instead of poisoning config with NaN", () => {

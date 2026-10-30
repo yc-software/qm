@@ -166,7 +166,7 @@ test("the persisted assistant entry carries authoritative turn timing for transc
   assert.ok(p.workStartedAt! >= before && p.workFinishedAt! >= p.workStartedAt!);
 });
 
-test("the deployment turn wall-clock reaches the harness and a per-turn cap replaces it", async (t) => {
+test("the deployment turn wall-clock reaches the agent and a per-turn cap replaces it", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
   const { app } = freshApp({ turnWallClockMs: 120_000 });
   assert.equal((await app.turn(dm("!wallclock"))).reply, "wallclock:120000");
@@ -2143,7 +2143,7 @@ test("an unprompted thread question gets a reply (turn detection chimes in)", as
   );
 });
 
-test("priorTurns are routed to the harness as structured roled turns (PR3)", async () => {
+test("priorTurns are routed to the agent as structured roled turns (PR3)", async () => {
   const { app } = freshApp();
   const res = await app.turn(
     channel("!priorturns", {
@@ -2161,7 +2161,7 @@ test("priorTurns are routed to the harness as structured roled turns (PR3)", asy
   assert.match(res.reply ?? "", /assistant: let me check the dashboard/);
 });
 
-test("overheard messages are imported ONCE into the durable log, author-labeled, and handed to the harness", async () => {
+test("overheard messages are imported ONCE into the durable log, author-labeled, and handed to the agent", async () => {
   const { app, sessions } = freshApp();
   const entryBatches: number[] = [];
   const appendMany = sessions.appendMany.bind(sessions);
@@ -3981,7 +3981,7 @@ test("a terminal turn failure is recorded durably and never replays to the model
   );
 });
 
-test("a failure before the harness records the user message back-fills it — no orphan error in the transcript", async () => {
+test("a failure before the agent records the user message back-fills it — no orphan error in the transcript", async () => {
   const { app } = freshApp();
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
@@ -4173,7 +4173,7 @@ test("denying a quarantine release upholds the block", async () => {
   assert.match(rerun.reply ?? "", /quarantined by the security screen/, "the payload stays out of context");
 });
 
-test("a turn carries its surface name to the harness, DM or not", async () => {
+test("a turn carries its surface name to the agent, DM or not", async () => {
   const built = freshApp();
   assert.equal((await built.app.turn(dm("!surfacename", { surface: "web" }))).reply, "surface:web");
   assert.equal((await built.app.turn(dm("!surfacename", { surface: "slack" }))).reply, "surface:slack");

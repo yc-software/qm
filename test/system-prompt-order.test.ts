@@ -1,4 +1,4 @@
-import type { Harness, HarnessTurnInput } from "../src/harness/harness.ts";
+import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
 import { createMemoryBlobTransferStore, type BlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { createSkillBundleStore, type SkillBundleStore } from "../src/skills/skill-bundle-store.ts";
@@ -19,7 +19,7 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -84,7 +84,7 @@ const skills = {
 function buildOrchestrator(
   extra: {
     blobTransfer?: BlobTransferStore;
-    harness?: Harness;
+    agent?: Agent;
     memoryPolicy?: import("../src/memory/policy.ts").MemoryPolicy;
     crons?: CronStore;
     sandbox?: Sandbox;
@@ -121,7 +121,7 @@ function buildOrchestrator(
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
-    harness: createMockHarness(),
+    agent: createMockAgent(),
     memory,
     deploy,
     acl,
@@ -894,9 +894,9 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
       writes.set(path, Buffer.from(bytes).toString());
     },
   };
-  const harness = createMockHarness();
-  const prepared: Array<Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>>> = [];
-  harness.turns.runTurn = async (turn) => {
+  const agent = createMockAgent();
+  const prepared: Array<Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>>> = [];
+  agent.runTurn = async (turn) => {
     for (const blob of [first, second]) {
       prepared.push(
         await turn.prepareSteer!("read this", {
@@ -910,7 +910,7 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
     }
     return { reply: "done" };
   };
-  const { orchestrator, config, files } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  const { orchestrator, config, files } = buildOrchestrator({ agent, sandbox, blobTransfer });
   await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
   const result = await orchestrator.handleTurn(dm("steer-files", "hello"));
   assert.equal(result.status, "ok", result.reason);
@@ -932,9 +932,9 @@ test("steered files materialize in separate inboxes and keep distinct durable ar
 });
 
 test("read-only turns report steered files as unavailable without provisioning a sandbox", async () => {
-  const harness = createMockHarness();
-  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
-  harness.turns.runTurn = async (turn) => {
+  const agent = createMockAgent();
+  let prepared: Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>> | undefined;
+  agent.runTurn = async (turn) => {
     prepared = await turn.prepareSteer!("", {
       surface: "web",
       actor: { externalId: actor.id },
@@ -944,7 +944,7 @@ test("read-only turns report steered files as unavailable without provisioning a
     });
     return { reply: "done" };
   };
-  const { orchestrator, config } = buildOrchestrator({ harness });
+  const { orchestrator, config } = buildOrchestrator({ agent });
   await config.setSecurityPosture(scopeId("org", ORG), "strict");
   const result = await orchestrator.handleTurn(dm("steer-strict", "hello", { readOnly: true }));
   assert.equal(result.status, "ok", result.reason);
@@ -966,9 +966,9 @@ test("steered documents use the inbound security screen before writing their con
       writes.push(path);
     },
   };
-  const harness = createMockHarness();
-  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
-  harness.turns.runTurn = async (turn) => {
+  const agent = createMockAgent();
+  let prepared: Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>> | undefined;
+  agent.runTurn = async (turn) => {
     prepared = await turn.prepareSteer!("read the attachment", {
       surface: "web",
       actor: { externalId: actor.id },
@@ -987,7 +987,7 @@ test("steered documents use the inbound security screen before writing their con
       threshold: 1,
     }),
   };
-  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
+  const { orchestrator } = buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
   const result = await orchestrator.handleTurn(dm("web:alice:inbox", "hello", { surface: "web" }));
   assert.equal(result.status, "ok", result.reason);
   assert.deepEqual(prepared?.attachments, []);
@@ -1012,9 +1012,9 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
       writeFile: async () => {},
       writeFileBytes: async () => {},
     };
-    const harness = createMockHarness();
-    let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
-    harness.turns.runTurn = async (turn) => {
+    const agent = createMockAgent();
+    let prepared: Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>> | undefined;
+    agent.runTurn = async (turn) => {
       assert.equal(turn.documents?.length, budget === "count" ? 10 : 1);
       const request: TurnRequest = {
         surface: "web",
@@ -1035,7 +1035,7 @@ for (const budget of ["count", "bytes", "reupload", "retry"] as const) {
         assert.notEqual(prepared.attachments?.[0]?.artifactId, turn.documents?.[0]?.artifactId);
       return { reply: "done" };
     };
-    const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
+    const { orchestrator, config } = buildOrchestrator({ agent, sandbox, blobTransfer });
     await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
     const result = await orchestrator.handleTurn({
       ...dm(`steer-budget-${budget}`, "hello"),
@@ -1063,10 +1063,10 @@ test("steered native office documents are screened after extraction", async () =
     writeFile: async () => {},
     writeFileBytes: async () => {},
   };
-  const harness = createMockHarness();
-  let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  const agent = createMockAgent();
+  let prepared: Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>> | undefined;
   let screened = false;
-  harness.turns.runTurn = async (turn) => {
+  agent.runTurn = async (turn) => {
     prepared = await turn.prepareSteer!("summarize", {
       surface: "web",
       actor: { externalId: actor.id },
@@ -1090,7 +1090,7 @@ test("steered native office documents are screened after extraction", async () =
       return { verdict: { decision: blocked ? "strict" : "auto" }, score: 0, threshold: 1 };
     },
   };
-  const { orchestrator } = buildOrchestrator({ harness, sandbox, blobTransfer, securityScreener });
+  const { orchestrator } = buildOrchestrator({ agent, sandbox, blobTransfer, securityScreener });
   const result = await orchestrator.handleTurn(dm("steer-office-screen", "hello"));
   assert.equal(result.status, "ok", result.reason);
   assert.equal(screened, true);
@@ -1098,7 +1098,7 @@ test("steered native office documents are screened after extraction", async () =
   assert.match(prepared?.text ?? "", /unsafe.docx.*withheld by the external-data security screen/);
 });
 
-test("documents uploaded during a turn survive a runtime handoff without aliasing the active harness", async () => {
+test("documents uploaded during a turn survive a runtime handoff without aliasing the active agent", async () => {
   const blobTransfer = createMemoryBlobTransferStore();
   const blob = await blobTransfer.put(Buffer.from("HANDOFF-DOCUMENT-492"));
   const sandbox: Sandbox = {
@@ -1108,9 +1108,9 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
     writeFile: async () => {},
     writeFileBytes: async () => {},
   };
-  const harness = createMockHarness();
+  const agent = createMockAgent();
   let segments = 0;
-  harness.turns.runTurn = async (turn) => {
+  agent.runTurn = async (turn) => {
     if (++segments === 1) {
       const activeDocuments = turn.documents!;
       const prepared = await turn.prepareSteer!("read this", {
@@ -1128,7 +1128,7 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
     assert.equal(Buffer.from(turn.documents![0]!.dataBase64, "base64").toString(), "HANDOFF-DOCUMENT-492");
     return { reply: "read after switching" };
   };
-  const { orchestrator, config } = buildOrchestrator({ harness, sandbox, blobTransfer });
+  const { orchestrator, config } = buildOrchestrator({ agent, sandbox, blobTransfer });
   await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
   const result = await orchestrator.handleTurn(dm("steer-handoff", "hello"));
   assert.equal(result.status, "ok", result.reason);
@@ -1137,21 +1137,18 @@ test("documents uploaded during a turn survive a runtime handoff without aliasin
 
 for (const surfaceTools of [false, true]) {
   test(`automatic memory is injected once, then only updates (${surfaceTools ? "spine" : "DM"})`, async () => {
-    const base = createMockHarness();
-    const seen: HarnessTurnInput[] = [];
-    const harness: Harness = {
+    const base = createMockAgent();
+    const seen: AgentTurnInput[] = [];
+    const agent: Agent = {
       ...base,
-      turns: {
-        ...base.turns,
-        runTurn: async (turn) => {
-          seen.push(turn);
-          await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
-          await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
-          return { reply: "ok" };
-        },
+      runTurn: async (turn) => {
+        seen.push(turn);
+        await turn.emit({ type: "user", payload: { text: turn.input }, scopeLabel: turn.scopeLabel });
+        await turn.emit({ type: "assistant", payload: { text: "ok" }, scopeLabel: turn.scopeLabel });
+        return { reply: "ok" };
       },
     };
-    const { orchestrator, memory, sessions } = buildOrchestrator({ harness });
+    const { orchestrator, memory, sessions } = buildOrchestrator({ agent });
     const personal = scopeId("personal", actor.id);
     await memory.capture(personal, ["ALPHA_MARKER", "BETA_MARKER"], Date.now());
     const input = slackDm("memory-once", "hello", { surfaceTools });
@@ -1177,14 +1174,14 @@ for (const surfaceTools of [false, true]) {
 test("scheduled-work changes update the next turn's system block without rewriting history", async () => {
   const crons = createCronStore();
   const sandbox = fakeSandbox();
-  const seen: HarnessTurnInput[] = [];
-  const harness = createMockHarness();
-  const runTurn = harness.turns.runTurn;
-  harness.turns.runTurn = async (turn) => {
+  const seen: AgentTurnInput[] = [];
+  const agent = createMockAgent();
+  const runTurn = agent.runTurn;
+  agent.runTurn = async (turn) => {
     seen.push(turn);
     return runTurn(turn);
   };
-  const { orchestrator, sessions } = buildOrchestrator({ crons, sandbox, harness });
+  const { orchestrator, sessions } = buildOrchestrator({ crons, sandbox, agent });
   const input = dm("dm:U1:snapshot-cache", "hello");
   const first = await orchestrator.handleTurn(input);
   assert.equal(first.status, "ok");
@@ -1218,10 +1215,10 @@ test("scheduled-work changes update the next turn's system block without rewriti
 
 for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as const) {
   test(`live inbox steering refreshes context with ${mode} screening`, async () => {
-    const harness = createMockHarness();
+    const agent = createMockAgent();
     const thread = mode === "ordinary" ? "web:alice:default" : "web:alice:inbox";
-    let prepared: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
-    harness.turns.runTurn = async (turn) => {
+    let prepared: Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>> | undefined;
+    agent.runTurn = async (turn) => {
       prepared = await turn.prepareSteer!("summarize again", {
         surface: "web",
         actor: { externalId: actor.id },
@@ -1243,7 +1240,7 @@ for (const mode of ["safe", "blocked", "unavailable", "ordinary", "observe"] as 
         return { verdict: { decision: "auto" }, score: 0, threshold: 1 };
       },
     };
-    const { orchestrator, config } = buildOrchestrator({ harness, securityScreener });
+    const { orchestrator, config } = buildOrchestrator({ agent, securityScreener });
     if (mode === "observe") await config.setSecurityPosture(scopeId("org", ORG), "dangerous");
     const result = await orchestrator.handleTurn(dm(thread, "hello", { surface: "web" }));
     assert.equal(result.status, "ok", result.reason);

@@ -190,7 +190,7 @@ test("startSignalPoll: doorbell dispatches a signal immediately, far before the 
   }
 });
 
-test("startSignalPoll: a steer's ts is dispatched to onSteer (so the harness can persist + dedupe it)", async () => {
+test("startSignalPoll: a steer's ts is dispatched to onSteer (so the agent can persist + dedupe it)", async () => {
   const store = createMemoryRunSignalStore();
   const seen: Array<{ text: string; ts?: string }> = [];
   const stop = startSignalPoll(

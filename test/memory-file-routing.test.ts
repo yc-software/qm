@@ -8,7 +8,7 @@ import type { WorkspaceStore } from "../src/workspace/workspace-store.ts";
 
 const personal = scopeId("personal", "U1");
 
-function harness(opts: { memoryStart?: string; recall?: boolean } = {}) {
+function agent(opts: { memoryStart?: string; recall?: boolean } = {}) {
   let durable = opts.memoryStart ?? "";
   const memory = {
     async read() {
@@ -68,7 +68,7 @@ function harness(opts: { memoryStart?: string; recall?: boolean } = {}) {
 }
 
 test("write() under memory/ is refused with a pointer at the `memory` tool — never a ghost write", async () => {
-  const { ctx, wsWrites, sandboxFiles, getDurable } = harness({ memoryStart: "# Memory\n- real fact\n" });
+  const { ctx, wsWrites, sandboxFiles, getDurable } = agent({ memoryStart: "# Memory\n- real fact\n" });
   for (const path of [MEMORY_FILE, "memory/log/2026-06-29.md"]) {
     await assert.rejects(
       () => ctx.write(path, "## Onboarding\n- Onboarding: dismissed v2 on 2026-06-29.\n"),
@@ -81,27 +81,27 @@ test("write() under memory/ is refused with a pointer at the `memory` tool — n
 });
 
 test("read(MEMORY_FILE) returns the MemoryService notebook, not the sandbox/workspace copy", async () => {
-  const { ctx } = harness({ memoryStart: "# Memory\n- Onboarding: completed v2 on 2026-06-24.\n" });
+  const { ctx } = agent({ memoryStart: "# Memory\n- Onboarding: completed v2 on 2026-06-24.\n" });
   const r = await ctx.read(MEMORY_FILE);
   assert.match(r.content ?? "", /Onboarding: completed v2/);
   assert.equal(r.sourceScopeId, personal);
 });
 
 test("read(MEMORY_FILE) never falls back to an unfiltered workspace copy", async () => {
-  const { ctx, sandboxFiles } = harness({ memoryStart: "" });
+  const { ctx, sandboxFiles } = agent({ memoryStart: "" });
   sandboxFiles.set(MEMORY_FILE, "pre-migration notebook");
   const r = await ctx.read(MEMORY_FILE);
   assert.equal(r.content, "");
 });
 
 test("read(MEMORY_FILE) cannot bypass disabled recall or fall back to a sandbox copy", async () => {
-  const { ctx, sandboxFiles } = harness({ memoryStart: "# Memory\n- private fact\n", recall: false });
+  const { ctx, sandboxFiles } = agent({ memoryStart: "# Memory\n- private fact\n", recall: false });
   sandboxFiles.set(MEMORY_FILE, "stale copy");
   await assert.rejects(() => ctx.read(MEMORY_FILE), /memory recall is not enabled/);
 });
 
 test("non-memory writes still go to the workspace file store", async () => {
-  const { ctx, wsWrites, getDurable } = harness();
+  const { ctx, wsWrites, getDurable } = agent();
   await ctx.write("notes/todo.txt", "buy milk");
   assert.equal(wsWrites.includes("notes/todo.txt"), true);
   assert.equal(getDurable(), "");

@@ -117,7 +117,7 @@ session with the same owner, and never all private sessions in the organization.
 
 `POST /v1/swarm` with `{"action":"context","context":{"role":"reviewer"}}`
 replaces the caller's own context. There is no update-other-peer operation. The
-character is supplied to the harness as untrusted metadata on subsequent turns.
+character is supplied to the agent as untrusted metadata on subsequent turns.
 Setting fields such as `id`, `scopeId`, or `depth` in context changes no authority.
 
 ### Messages and audience selection

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { ResumableToolCall } from "../src/core/turn-resume.ts";
-import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
+import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
@@ -19,9 +19,9 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { defineHarness, type HarnessTurnInput } from "../src/harness/harness.ts";
-import { bridgedTools, resumeInterruptedToolCall } from "../src/harness/harness-shared.ts";
-import type { ToolContextRef } from "../src/harness/agent-tools.ts";
+import type { Agent, AgentTurnInput } from "../src/agent/agent.ts";
+import { bridgedTools, resumeInterruptedToolCall } from "../src/agent/turn-support.ts";
+import type { ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -51,10 +51,10 @@ function turnFor(
   call: ResumableToolCall | undefined,
   sink: Array<{ type: string; payload: unknown }>,
   tools: ToolContext,
-): HarnessTurnInput {
+): AgentTurnInput {
   let seq = history.length + 10;
   return {
-    session: { id: "s1" } as HarnessTurnInput["session"],
+    session: { id: "s1" } as AgentTurnInput["session"],
     input: "(system note: resumed)",
     systemPrompt: "BASE",
     history,
@@ -111,7 +111,7 @@ test("resumeInterruptedToolCall re-runs the recorded input exactly once and reco
   assert.equal(result.isError, false);
   assert.match(result.result, /shared\/q2\.md/);
   assert.ok(resumed);
-  assert.equal(resumed.history.length, 2, "the harness continues from history that now carries the result");
+  assert.equal(resumed.history.length, 2, "the agent continues from history that now carries the result");
   assert.equal(resumed.history[1]!.type, "tool_result");
   assert.deepEqual(
     { ...resumed.message, timestamp: 0 },
@@ -224,7 +224,7 @@ function buildScenario() {
     resumeToolCall?: ResumableToolCall;
     historyTypes: string[];
   }> = [];
-  const harness = defineHarness({
+  const agent: Agent = {
     async runTurn(turn) {
       received.push({
         input: turn.input,
@@ -247,7 +247,7 @@ function buildScenario() {
     async screenSecurity() {
       return { decision: "auto" as const };
     },
-  });
+  };
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const acl = createAclStore();
@@ -265,7 +265,7 @@ function buildScenario() {
     modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
-    harness,
+    agent,
     memory: createMemoryService(workspace),
     deploy: createDeployService({
       ...singleProcessDeps(),
@@ -321,7 +321,7 @@ test("a retry whose dangling call was marked retry-safe re-runs it silently inst
   assert.equal(received.length, 1);
   const turn = received[0]!;
   assert.deepEqual(turn.resumeToolCall, { callId: "c-budget", tool: "history", input: { query: "budget" } });
-  assert.equal(turn.continueTurn, true, "the harness continues the recorded turn instead of re-sending the request");
+  assert.equal(turn.continueTurn, true, "the agent continues the recorded turn instead of re-sending the request");
 
   const entries = await sessions.getEntries(sessionId);
   const types = entries.map((e) => e.type);
@@ -343,7 +343,7 @@ for (const [label, payload] of [
     assert.equal(received.length, 1);
     const turn = received[0]!;
     assert.equal(turn.resumeToolCall, undefined);
-    assert.equal(turn.continueTurn, true, "the harness continues the recorded turn instead of re-sending the request");
+    assert.equal(turn.continueTurn, true, "the agent continues the recorded turn instead of re-sending the request");
     const entries = await sessions.getEntries(sessionId);
     assert.deepEqual(
       entries.map((e) => e.type),

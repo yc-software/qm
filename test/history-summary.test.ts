@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zstdDecompressSync } from "node:zlib";
-import { buildModelRuntime } from "../src/harness/pi-harness.ts";
+import { buildModelRuntime } from "../src/agent/agent-run.ts";
 import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
-import { summarizeHistory } from "../src/harness/history-summary.ts";
+import { summarizeHistory } from "../src/agent/history-summary.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
 import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
-import { zeroUsage } from "../src/harness/replay.ts";
+import { zeroUsage } from "../src/agent/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 

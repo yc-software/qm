@@ -7,7 +7,7 @@ import { createTranscriptSource } from "../src/sessions/transcript-source.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";
-import { forModelContext, forSearchView } from "../src/harness/context-compaction.ts";
+import { forModelContext, forSearchView } from "../src/agent/context-compaction.ts";
 import { scopeId } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";

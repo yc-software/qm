@@ -17,7 +17,7 @@ import {
   overBudgetFraction,
   planCompaction,
   recentEntryCountWithinBudget,
-} from "../../harness/context-compaction.ts";
+} from "../../agent/context-compaction.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { errMessage } from "../../util/errors.ts";
 import { createKeyedQueue } from "../../util/async.ts";
@@ -69,7 +69,7 @@ export interface CompactionContext {
 
 export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   const tokenBudgetFor = (scopeLabel?: string, model?: string): number =>
-    deps.maxContextTokens ?? deps.harness.models.contextTokenBudget?.(scopeLabel, model) ?? MAX_CONTEXT_TOKENS;
+    deps.maxContextTokens ?? deps.agent.contextTokenBudget?.(scopeLabel, model) ?? MAX_CONTEXT_TOKENS;
   const documentTokenBudget = (scopeId: string, model?: string): number =>
     Math.floor(tokenBudgetFor(scopeId, model) * DOCUMENT_TOKEN_FRACTION);
   const historyBudgetFor = (input: { scopeId: string; model?: string; reservedTokens?: number }): number => {
@@ -107,7 +107,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     recoverOnFailure = false,
   ): Promise<Summarized | null> {
     if (isManagedGroupScope(input.scopeId)) return null;
-    if (!deps.harness.models.compactHistory) return null;
+    if (!deps.agent.compactHistory) return null;
     const maxContextTokens = historyBudgetFor(input);
     const reuseBudgetTokens = Math.floor(maxContextTokens * keepRecentTokenFraction);
     const plan = planCompaction(input.visibleHistory, maxContextTokens, keepRecentTokenFraction, reuseBudgetTokens);
@@ -118,7 +118,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     input.cancel?.throwIfAborted();
     let text: string;
     try {
-      const raw = await deps.harness.models.compactHistory({
+      const raw = await deps.agent.compactHistory({
         session: input.session,
         history: plan.toSummarize,
         recordModelCall: (rec) => {
@@ -164,7 +164,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       },
       scopeLabel: summaryLabel,
     });
-    await deps.harness.turns.resetSession?.(input.session.id);
+    await deps.agent.resetSession?.(input.session.id);
     return summary;
   }
 
@@ -206,7 +206,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     const rebuilt = await applyCompaction(input);
     return (
       rebuilt ??
-      (!deps.harness.models.compactHistory || isManagedGroupScope(input.scopeId)
+      (!deps.agent.compactHistory || isManagedGroupScope(input.scopeId)
         ? boundRecent(input.visibleHistory, maxContextTokens)
         : compactRecent(input))
     );

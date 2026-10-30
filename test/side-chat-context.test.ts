@@ -8,9 +8,9 @@ import { join } from "node:path";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { sideChatContext } from "../src/core/side-chat-context.ts";
 import { buildApp } from "./support/build-app.ts";
-import { createMockHarness } from "./support/mock-harness.ts";
+import { createMockAgent } from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 
 function discussions(text: string) {
   const json = text.split("```untrusted-data\n")[1]?.split("\n```")[0];
@@ -82,19 +82,14 @@ test("side-chat context excludes copied history, tools, footers, private message
 });
 
 test("parent reads persisted side-chat exchanges on its next turn without a synthetic parent turn", async () => {
-  const inputs: HarnessTurnInput[] = [];
-  const mock = createMockHarness();
+  const inputs: AgentTurnInput[] = [];
+  const mock = createMockAgent();
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "qm-side-context-")) }), {
-    harnesses: {
-      pi: {
-        ...mock,
-        turns: {
-          ...mock.turns,
-          runTurn: async (input) => {
-            inputs.push(input);
-            return mock.turns.runTurn(input);
-          },
-        },
+    agent: {
+      ...mock,
+      runTurn: async (input) => {
+        inputs.push(input);
+        return mock.runTurn(input);
       },
     },
   });

@@ -1,6 +1,6 @@
 import { createHmac, scrypt } from "node:crypto";
 import { reportFailure } from "../util/errors.ts";
-import { probeModel } from "../harness/pi-harness.ts";
+import { probeModel } from "../agent/agent-run.ts";
 import { ProviderTurnError, type ProviderErrorCode } from "../core/turn-error.ts";
 import { embeddingModelFromDefinition, modelFromOverlay } from "./pi-models.ts";
 import { isEmbeddingModel, type RegisteredModel } from "./model-overlay.ts";

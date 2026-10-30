@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRuntimeService } from "../src/harness/runtime-control.ts";
-import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
+import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import type { RuntimeChoice } from "../src/harness/harness.ts";
+import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
 
 const active: RuntimeChoice = { modelId: "claude-opus-5", effortLevel: "high", fastMode: false };

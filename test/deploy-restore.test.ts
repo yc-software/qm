@@ -9,7 +9,7 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
-function harness(failRestore = false) {
+function agent(failRestore = false) {
   let applies = 0;
   let destroys = 0;
   const deploy = createDeployService({
@@ -75,7 +75,7 @@ function persistenceFailureHarness(failMethod: "setVersionImage" | "setEndpoint"
 }
 
 test("restore reapplies the archived current version before marking it running", async () => {
-  const { deploy, counts } = harness();
+  const { deploy, counts } = agent();
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -93,7 +93,7 @@ test("restore reapplies the archived current version before marking it running",
 });
 
 test("a failed restore leaves the deployment archived and unreachable", async () => {
-  const { deploy } = harness(true);
+  const { deploy } = agent(true);
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -110,7 +110,7 @@ test("a failed restore leaves the deployment archived and unreachable", async ()
 });
 
 test("restore is idempotent for retries and concurrent callers", async () => {
-  const { deploy } = harness();
+  const { deploy } = agent();
   const d = await deploy.deploy({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",

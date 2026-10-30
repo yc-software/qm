@@ -301,7 +301,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
 });
 
 import { createServer } from "node:http";
-import { oneShot, createPiHarness, wantsFastMode } from "../src/harness/pi-harness.ts";
+import { oneShot, createAgent, wantsFastMode } from "../src/agent/agent-run.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 
@@ -353,18 +353,18 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     assert.equal(received?.model, MODEL_ID);
     assert.equal(received?.max_tokens, 10_000);
     assert.equal(authorized, true);
-    const harness = createPiHarness({ apiKey: "local-test-key", captureRequests: false });
+    const agent = createAgent({ apiKey: "local-test-key", captureRequests: false });
     const turn = {
-      session: { id: "overlay-runtime" } as import("../src/harness/harness.ts").HarnessTurnInput["session"],
+      session: { id: "overlay-runtime" } as import("../src/agent/agent.ts").AgentTurnInput["session"],
       input: "Hello",
       systemPrompt: "Be brief",
       history: [],
       runtime: { modelId: MODEL_ID },
       recordModelCall: () => {},
-      tools: {} as import("../src/harness/harness.ts").HarnessTurnInput["tools"],
+      tools: {} as import("../src/agent/agent.ts").AgentTurnInput["tools"],
       scopeLabel: "personal:alice" as const,
       orgScopeId: "org:default-org" as const,
-      emit: async (entry: Parameters<import("../src/harness/harness.ts").HarnessTurnInput["emit"]>[0]) => ({
+      emit: async (entry: Parameters<import("../src/agent/agent.ts").AgentTurnInput["emit"]>[0]) => ({
         ...entry,
         seq: 1,
         sessionId: "overlay-runtime",
@@ -372,16 +372,16 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
         createdAt: Date.now(),
       }),
     };
-    await harness.turns.runTurn(turn);
+    await agent.runTurn(turn);
     assert.equal(received?.model, MODEL_ID);
     assert.equal(received?.max_tokens, 10_000);
     setModelOverlays([
       validateModelOverlay({ ...spec, provider: "anthropic", template: "claude-opus-4-8", maxTokens: 16_000 }),
     ]);
-    await harness.turns.runTurn(turn);
+    await agent.runTurn(turn);
     assert.equal(received?.max_tokens, 16_000);
     setModelOverlays([], [MODEL_ID]);
-    await assert.rejects(harness.turns.runTurn(turn), /Unsupported model/);
+    await assert.rejects(agent.runTurn(turn), /Unsupported model/);
     const usage = {
       input: 210_000,
       output: 100,
@@ -491,7 +491,7 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 });
 
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { resolveRuntimeChoice } from "../src/harness/runtime-choice.ts";
+import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = createMemoryConfigStore("default-org");

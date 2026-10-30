@@ -7,7 +7,7 @@ import { createThreadTracker } from "../src/slack/message-gating.ts";
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const CLAIM_MS = 300;
 
-function harness() {
+function agent() {
   const store = createDeliveryStore();
   const posted: Array<{ relay: string; text: string; ts: string; metadata?: unknown }> = [];
   const makeClient = (
@@ -82,7 +82,7 @@ function harness() {
 }
 
 test("a sibling relay re-claiming an expired batch does not double-post the tail delivery", async () => {
-  const { store, posted, makeClient, makePoller } = harness();
+  const { store, posted, makeClient, makePoller } = agent();
   await store.enqueue({
     destination: { type: "slack", target: "C1:100.0" },
     text: "SLOW head-of-line",
@@ -102,7 +102,7 @@ test("a sibling relay re-claiming an expired batch does not double-post the tail
 });
 
 test("a lone relay renews its own expired claim and still delivers the tail", async () => {
-  const { store, posted, makeClient, makePoller } = harness();
+  const { store, posted, makeClient, makePoller } = agent();
   await store.enqueue({
     destination: { type: "slack", target: "C1:100.0" },
     text: "SLOW head-of-line",
@@ -124,7 +124,7 @@ test("a lone relay renews its own expired claim and still delivers the tail", as
 });
 
 test("a transient claim failure at re-claim time does not strand an owned row", async () => {
-  const { store, posted, makeClient } = harness();
+  const { store, posted, makeClient } = agent();
 
   let failNext = 0;
   const flakyStore = {
@@ -171,7 +171,7 @@ test("a transient claim failure at re-claim time does not strand an owned row", 
 });
 
 test("with a shared dispatch lease, a second relay never posts at all (single dispatcher)", async () => {
-  const { store, posted, makeClient } = harness();
+  const { store, posted, makeClient } = agent();
 
   let held = false;
   const lease = async (fn: (lost: Promise<void>) => Promise<unknown>): Promise<unknown> => {
@@ -218,7 +218,7 @@ test("with a shared dispatch lease, a second relay never posts at all (single di
 });
 
 test("lease loss mid-drain stops posting; rows recover via the claim TTL", async () => {
-  const { store, posted, makeClient } = harness();
+  const { store, posted, makeClient } = agent();
   let notifyLost!: () => void;
   const lostPromise = new Promise<void>((r) => (notifyLost = r));
   const poller = createDeliveryPoller({
@@ -257,7 +257,7 @@ test("lease loss mid-drain stops posting; rows recover via the claim TTL", async
 });
 
 test("a drain cycle slower than the alarm threshold reports exactly one slow-drain event", async () => {
-  const { store, makeClient, makePoller, slowDrainReports } = harness();
+  const { store, makeClient, makePoller, slowDrainReports } = agent();
   await store.enqueue({
     destination: { type: "slack", target: "C1:100.0" },
     text: "SLOW poster",
@@ -285,7 +285,7 @@ test("a drain cycle slower than the alarm threshold reports exactly one slow-dra
 });
 
 test("a permanently failing post reports an undeliverable event but the row survives for the TTL", async () => {
-  const { store, posted, makeClient, makePoller, undeliverable } = harness();
+  const { store, posted, makeClient, makePoller, undeliverable } = agent();
   const dead = await store.enqueue({
     destination: { type: "slack", target: "C-deleted:100.0" },
     text: "DEADCHAN notice",
@@ -319,7 +319,7 @@ test("a permanently failing post reports an undeliverable event but the row surv
 });
 
 test("a transient post error is retried, never dropped", async () => {
-  const { store, makeClient, makePoller, undeliverable, posted } = harness();
+  const { store, makeClient, makePoller, undeliverable, posted } = agent();
   const flaky = await store.enqueue({
     destination: { type: "slack", target: "C-flaky:100.0" },
     text: "FLAKY message",
@@ -341,7 +341,7 @@ test("a transient post error is retried, never dropped", async () => {
 });
 
 test("a redeployed poller finds a finalized-in-place reply by its marker and re-posts nothing", async () => {
-  const { store, makePoller } = harness();
+  const { store, makePoller } = agent();
   const marker = { event_type: "qm_delivery", event_payload: { idempotency_key: "run:R1" } };
   const posts: unknown[] = [];
   const scans: string[] = [];
@@ -399,7 +399,7 @@ test("a redeployed poller finds a finalized-in-place reply by its marker and re-
 });
 
 test("an in-place recovery of a marked task-list reply does not replay attachments", async () => {
-  const { store, makePoller } = harness();
+  const { store, makePoller } = agent();
   const marker = { event_type: "qm_delivery", event_payload: { idempotency_key: "run:R2" } };
   const posts: unknown[] = [];
   const updates: unknown[] = [];
@@ -456,7 +456,7 @@ test("an in-place recovery of a marked task-list reply does not replay attachmen
 });
 
 test("a post Slack refuses for good (DM to a bot) fails the row on the first attempt", async () => {
-  const { store, makeClient, makePoller, failed } = harness();
+  const { store, makeClient, makePoller, failed } = agent();
   const dead = await store.enqueue({
     destination: { type: "slack", target: "D-bot:100.0" },
     text: "BOTDM approval card",

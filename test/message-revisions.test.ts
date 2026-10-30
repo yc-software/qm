@@ -13,7 +13,7 @@ import {
 import { parseSlackThreadRef, slackThreadRefCandidates } from "../src/slack/message-gating.ts";
 import { sleep } from "../src/util/async.ts";
 import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";
-import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { IngestEvent } from "../src/surface-cache/types.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";

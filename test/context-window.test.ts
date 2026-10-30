@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createContextSummaryPayload, type SessionStore } from "../src/sessions/session-store.ts";
-import { forModelContext } from "../src/harness/context-compaction.ts";
+import { forModelContext } from "../src/agent/context-compaction.ts";
 import { scopeId } from "../src/types.ts";
 
 const URL = process.env.DATABASE_URL;

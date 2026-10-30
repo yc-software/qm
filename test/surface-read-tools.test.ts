@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { SurfaceContextResult, TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tools.ts";
+import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

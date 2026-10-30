@@ -1,22 +1,22 @@
 import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import * as mockHarness from "./support/mock-harness.ts";
+import * as mockAgent from "./support/mock-agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { AgentTurnInput } from "../src/agent/agent.ts";
 
-let exercise: (turn: HarnessTurnInput) => Promise<void>;
-mock.module("./support/mock-harness.ts", {
+let exercise: (turn: AgentTurnInput) => Promise<void>;
+mock.module("./support/mock-agent.ts", {
   namedExports: {
-    ...mockHarness,
-    createMockHarness: () => {
-      const harness = mockHarness.createMockHarness();
-      harness.turns.runTurn = async (turn) => {
+    ...mockAgent,
+    createMockAgent: () => {
+      const agent = mockAgent.createMockAgent();
+      agent.runTurn = async (turn) => {
         await exercise(turn);
         return { reply: "Done" };
       };
-      return harness;
+      return agent;
     },
   },
 });

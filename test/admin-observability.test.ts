@@ -1254,7 +1254,7 @@ test("admin governance: base model round-trips per-scope, validates ids", async 
     assert.equal(
       built.config.getBaseModel("org:default-org"),
       "claude-opus-4-8",
-      "the store the harness reads sees the change",
+      "the store the agent reads sees the change",
     );
 
     const nonString = await fetch(base + "/v1/admin/scopes/org%3Adefault-org/base-model", {

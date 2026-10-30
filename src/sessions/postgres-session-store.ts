@@ -6,7 +6,7 @@ import { createPgPool, type PoolClient, withPgTransaction } from "../persistence
 import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
 import { reportFailure } from "../util/errors.ts";
 import type { Session, SessionEntry, SessionType, ScopeId } from "../types.ts";
-import type { GoalRecord } from "../harness/goal.ts";
+import type { GoalRecord } from "../agent/goal.ts";
 import type {
   NewSessionPin,
   SessionPin,
