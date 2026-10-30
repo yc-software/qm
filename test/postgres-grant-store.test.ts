@@ -6,6 +6,9 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres grant-store tests";

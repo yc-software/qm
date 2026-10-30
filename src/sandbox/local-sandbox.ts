@@ -1,4 +1,5 @@
 import { cleanupFailedProvision } from "./sandbox.ts";
+import type { PgPool } from "../persistence/pg-pool.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { orgId as configOrgId } from "../config.ts";
 import { arch } from "node:os";
@@ -53,7 +54,7 @@ export interface LocalSandboxOptions {
   dockerExec?: DockerExec;
   fetchImpl?: typeof fetch;
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
-  tenantCount: () => Promise<number>;
+  tenants: Pick<PgPool, "q"> | undefined;
 }
 
 const SINGLE_TENANT_RECHECK_MS = 60_000;
@@ -112,7 +113,8 @@ export function createLocalSandbox(workspace: WorkspaceStore, opts: LocalSandbox
   let singleTenantUntil = 0;
   async function requireSingleTenant(): Promise<void> {
     if (Date.now() < singleTenantUntil) return;
-    const tenants = await opts.tenantCount();
+    if (!opts.tenants) throw new Error("The local Docker sandbox requires the QM database");
+    const tenants = Number((await opts.tenants.q("SELECT count(*) AS n FROM tenants"))[0]?.n);
     if (tenants !== 1)
       throw new Error(
         `The local Docker sandbox shares the host Docker daemon and network, so it serves single-tenant installs only; this database has ${tenants} tenants`,

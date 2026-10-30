@@ -14,7 +14,6 @@ import { supportsBlobStaging, supportsProcessSessions } from "../src/sandbox/san
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { scopeId } from "../src/types.ts";
-import { orgId } from "../src/config.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeModal, type FakeModal } from "./support/fake-modal.ts";
 import { ModalSandboxGoneError, type ModalClient, type ModalSession } from "../src/sandbox/modal-client.ts";
@@ -983,7 +982,6 @@ test("turn env reaches commands through the exec env parameter, never as inlined
 test("scope and scratch sandboxes carry ownership tags", async () => {
   const h = await sandbox.provision(layers);
   assert.deepEqual(fake.tagsOf(fake.current(h.id)!.sandboxId), {
-    "qm-org": orgId(),
     "qm-tenant": TEST_TENANT,
     "qm-prefix": "qmt",
     "qm-kind": "scope",
@@ -993,7 +991,6 @@ test("scope and scratch sandboxes carry ownership tags", async () => {
   for await (const id of fake.client.listRunning!({ "qm-kind": "scratch" })) scratchIds.push(id);
   assert.equal(scratchIds.length, 1);
   assert.deepEqual(fake.tagsOf(scratchIds[0]!), {
-    "qm-org": orgId(),
     "qm-tenant": TEST_TENANT,
     "qm-prefix": "qmt",
     "qm-kind": "scratch",
@@ -1067,7 +1064,7 @@ test("untracked scope sandboxes are terminated after a grace period while scratc
   const s = make({ store, orphanGraceMs: 40 });
   const handle = await s.provision(layers);
   const tracked = fake.current(handle.id)!.sandboxId;
-  const owned = { "qm-org": orgId(), "qm-tenant": TEST_TENANT, "qm-prefix": "qmt" };
+  const owned = { "qm-tenant": TEST_TENANT, "qm-prefix": "qmt" };
   const orphan = fake.createUntracked({ ...owned, "qm-kind": "scope" });
   const scratch = fake.createUntracked({ ...owned, "qm-kind": "scratch" });
   const foreign = fake.createUntracked({ ...owned, "qm-prefix": "other", "qm-kind": "scope" });

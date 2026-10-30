@@ -805,16 +805,18 @@ export function buildApp(
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
       : createLocalBlobTransferStore(join(config.dataDir, "transfer"));
-  const fileBytes: DurableByteStore =
-    config.snapshotStore === "s3" && config.s3Bucket
+  const s3Bytes = config.snapshotStore === "s3" && config.s3Bucket ? config.s3Bucket : undefined;
+  const durableBytes = (area: string): DurableByteStore =>
+    s3Bytes
       ? createS3DurableByteStore({
           ...s3Override,
-          bucket: config.s3Bucket,
-          area: FILES_AREA,
+          bucket: s3Bytes,
+          area,
           ...(config.s3Region ? { region: config.s3Region } : {}),
           ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
         })
-      : createLocalDurableByteStore(join(config.dataDir, FILES_AREA));
+      : createLocalDurableByteStore(join(config.dataDir, area));
+  const fileBytes = durableBytes(FILES_AREA);
   const files: FileArtifactStore = config.databaseUrl
     ? createPostgresFileArtifactStore(config.databaseUrl, fileBytes)
     : createMemoryFileArtifactStore(fileBytes);
@@ -872,10 +874,7 @@ export function buildApp(
     createLocalSandbox(workspace, {
       ...config.localSandbox,
       onError: sandboxOnError,
-      tenantCount: async () => {
-        if (!pgArtifactMap) throw new Error("The local Docker sandbox requires the QM database");
-        return Number((await pgArtifactMap.pool.q("SELECT count(*) AS n FROM tenants"))[0]?.n);
-      },
+      tenants: pgArtifactMap?.pool,
     });
   const buildSprites = (): Sandbox => {
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;
@@ -1372,16 +1371,7 @@ export function buildApp(
     config.sessionStore === "postgres" && pgArtifactMap
       ? createPostgresToolOutputStore({
           pool: pgArtifactMap.pool,
-          bytes:
-            config.snapshotStore === "s3" && config.s3Bucket
-              ? createS3DurableByteStore({
-                  ...s3Override,
-                  bucket: config.s3Bucket,
-                  area: TOOL_OUTPUT_AREA,
-                  ...(config.s3Region ? { region: config.s3Region } : {}),
-                  ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-                })
-              : createLocalDurableByteStore(join(config.dataDir, TOOL_OUTPUT_AREA)),
+          bytes: durableBytes(TOOL_OUTPUT_AREA),
         })
       : createMemoryToolOutputStore({ sessions });
   const runStoreKind = config.runStore;
@@ -1745,17 +1735,7 @@ export function buildApp(
     git: {
       repoRoot: config.deployGitDir,
       archiveStore: artifactMap<DeployGitArchive>("deploy_git_repos"),
-      ...(config.snapshotStore === "s3" && config.s3Bucket
-        ? {
-            archiveBytes: createS3DurableByteStore({
-              ...s3Override,
-              bucket: config.s3Bucket,
-              area: "deploy-git",
-              ...(config.s3Region ? { region: config.s3Region } : {}),
-              ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-            }),
-          }
-        : {}),
+      ...(s3Bytes ? { archiveBytes: durableBytes("deploy-git") } : {}),
     },
   });
   const renderDeployBodies = artifactMap<StoredRenderDeploy>("render_deploy_bodies");
@@ -3193,16 +3173,7 @@ export function buildApp(
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
     sessionShares: artifactMap<SessionShare>("session_shares"),
-    sessionShareBytes:
-      config.snapshotStore === "s3" && config.s3Bucket
-        ? createS3DurableByteStore({
-            ...s3Override,
-            bucket: config.s3Bucket,
-            area: "session-shares",
-            ...(config.s3Region ? { region: config.s3Region } : {}),
-            ...(config.s3Prefix ? { prefix: config.s3Prefix } : {}),
-          })
-        : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
+    sessionShareBytes: durableBytes("session-shares"),
     skillSyncEngine,
     slackCore,
   };

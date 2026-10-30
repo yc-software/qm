@@ -1,6 +1,7 @@
 import { lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CopyObjectCommand,
   CreateMultipartUploadCommand,
@@ -11,6 +12,8 @@ import {
 } from "@aws-sdk/client-s3";
 import type { Config } from "../config.ts";
 import { isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
+import { createPgPool, PG_MIGRATIONS_TABLE } from "../persistence/pg-pool.ts";
+import { swallowAs } from "../util/errors.ts";
 import { FILES_AREA } from "../files/durable-byte-store.ts";
 import { HOME_SNAPSHOT_AREAS } from "../sandbox/home-snapshot.ts";
 import { awsHomeArea } from "../sandbox/aws-sandbox.ts";
@@ -52,9 +55,12 @@ function storageAreas(config: Config, clientFor: (region?: string, endpoint?: st
   add(snapshots, config.e2bSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.e2b);
   add(snapshots, config.managedAgentsSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.managedAgents);
   add(snapshots, config.modalSandbox.snapshotS3Bucket, HOME_SNAPSHOT_AREAS.modal);
-  const aws = clientFor(config.awsSandbox.region);
-  add(aws, config.awsSandbox.s3Bucket, awsHomeArea(config.awsSandbox.s3Prefix));
-  add(aws, config.awsDeploy.dataBucket ?? config.awsSandbox.s3Bucket, deployDataArea(config.awsDeploy.dataPrefix));
+  add(clientFor(config.awsSandbox.region), config.awsSandbox.s3Bucket, awsHomeArea(config.awsSandbox.s3Prefix));
+  add(
+    clientFor(config.awsDeploy.region),
+    config.awsDeploy.dataBucket ?? config.awsSandbox.s3Bucket,
+    deployDataArea(config.awsDeploy.dataPrefix),
+  );
   const dirs = ["transfer", FILES_AREA, "session-shares", "workspaces"].map((area) => join(config.dataDir, area));
   return { objects, dirs: [...dirs, config.deployGitDir] };
 }
@@ -114,39 +120,40 @@ async function copyObject(area: ObjectArea, source: Listed, Key: string): Promis
     UploadId?: string;
   };
   if (!started.UploadId) throw new Error(`S3 did not start a copy of ${source.Key}`);
-  const Parts: Array<{ ETag: string; PartNumber: number }> = [];
-  for (let start = 0; start < source.Size; start += COPY_PART_BYTES) {
-    const end = Math.min(source.Size, start + COPY_PART_BYTES) - 1;
-    const PartNumber = Parts.length + 1;
-    const part = (await area.client.send(
-      new UploadPartCopyCommand({
-        Bucket: area.bucket,
-        Key,
-        UploadId: started.UploadId,
-        PartNumber,
-        CopySource,
-        CopySourceRange: `bytes=${start}-${end}`,
-      }),
-    )) as { CopyPartResult?: { ETag?: string } };
-    if (!part.CopyPartResult?.ETag) throw new Error(`S3 did not copy part ${PartNumber} of ${source.Key}`);
-    Parts.push({ ETag: part.CopyPartResult.ETag, PartNumber });
+  const UploadId = started.UploadId;
+  try {
+    const Parts: Array<{ ETag: string; PartNumber: number }> = [];
+    for (let start = 0; start < source.Size; start += COPY_PART_BYTES) {
+      const end = Math.min(source.Size, start + COPY_PART_BYTES) - 1;
+      const PartNumber = Parts.length + 1;
+      const part = (await area.client.send(
+        new UploadPartCopyCommand({
+          Bucket: area.bucket,
+          Key,
+          UploadId,
+          PartNumber,
+          CopySource,
+          CopySourceRange: `bytes=${start}-${end}`,
+        }),
+      )) as { CopyPartResult?: { ETag?: string } };
+      if (!part.CopyPartResult?.ETag) throw new Error(`S3 did not copy part ${PartNumber} of ${source.Key}`);
+      Parts.push({ ETag: part.CopyPartResult.ETag, PartNumber });
+    }
+    await area.client.send(
+      new CompleteMultipartUploadCommand({ Bucket: area.bucket, Key, UploadId, MultipartUpload: { Parts } }),
+    );
+  } catch (error) {
+    await area.client
+      .send(new AbortMultipartUploadCommand({ Bucket: area.bucket, Key, UploadId }))
+      .catch(swallowAs("tenant storage: abort copy", undefined));
+    throw error;
   }
-  await area.client.send(
-    new CompleteMultipartUploadCommand({
-      Bucket: area.bucket,
-      Key,
-      UploadId: started.UploadId,
-      MultipartUpload: { Parts },
-    }),
-  );
 }
 
-async function newer(area: ObjectArea, Key: string, than: Date): Promise<boolean> {
+async function exists(area: ObjectArea, Key: string): Promise<boolean> {
   try {
-    const head = (await area.client.send(new HeadObjectCommand({ Bucket: area.bucket, Key }))) as {
-      LastModified?: Date;
-    };
-    return (head.LastModified?.getTime() ?? 0) >= than.getTime();
+    await area.client.send(new HeadObjectCommand({ Bucket: area.bucket, Key }));
+    return true;
   } catch (error) {
     if (isNoSuchKey(error)) return false;
     throw error;
@@ -158,7 +165,7 @@ export async function migrateObjects(area: ObjectArea, tenants: ReadonlySet<stri
   for await (const source of legacyObjects(area, tenants)) {
     const rest = source.Key.slice(area.from.length);
     const Key = `${area.to}${soleTenant(tenants, `s3://${area.bucket}/${source.Key}`)}/${area.under ?? ""}${rest}`;
-    if (!(await newer(area, Key, source.LastModified))) await copyObject(area, source, Key);
+    if (!(await exists(area, Key))) await copyObject(area, source, Key);
     await area.client.send(new DeleteObjectCommand({ Bucket: area.bucket, Key: source.Key }));
     moved++;
   }
@@ -171,17 +178,8 @@ async function mergeInto(from: string, to: string): Promise<void> {
     await rename(from, to);
     return;
   }
-  const source = await lstat(from);
-  if (source.isDirectory() && target.isDirectory()) {
+  if ((await lstat(from)).isDirectory() && target.isDirectory())
     for (const name of await readdir(from)) await mergeInto(join(from, name), join(to, name));
-    await rm(from, { recursive: true, force: true });
-    return;
-  }
-  if (source.mtimeMs > target.mtimeMs) {
-    await rm(to, { recursive: true, force: true });
-    await rename(from, to);
-    return;
-  }
   await rm(from, { recursive: true, force: true });
 }
 
@@ -208,4 +206,30 @@ export async function migrateTenantStorage(
   for (const dir of areas.dirs) moved += await migrateDir(dir, tenants);
   for (const area of areas.objects) moved += await migrateObjects(area, tenants);
   return moved;
+}
+
+const STORAGE_MIGRATION = "tenants/storage-layout";
+
+export async function migrateTenantStorageOnce(config: Config): Promise<void> {
+  if (!config.databaseUrl) return;
+  const db = createPgPool(config.databaseUrl);
+  try {
+    const client = await (await db.pool()).connect();
+    try {
+      await client.query("SELECT pg_advisory_lock(hashtext($1))", [STORAGE_MIGRATION]);
+      const done = await client.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [STORAGE_MIGRATION]);
+      if (done.rowCount) return;
+      const tenants = new Set((await client.query("SELECT id::text AS id FROM tenants")).rows.map((r) => String(r.id)));
+      const moved = await migrateTenantStorage(config, tenants);
+      await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $1)`, [STORAGE_MIGRATION]);
+      console.log(`[qm:migrate] tenant storage layout applied (${moved} moved)`);
+    } finally {
+      await client
+        .query("SELECT pg_advisory_unlock(hashtext($1))", [STORAGE_MIGRATION])
+        .catch(swallowAs("tenant storage: unlock", undefined));
+      client.release();
+    }
+  } finally {
+    await db.close();
+  }
 }

@@ -3,12 +3,14 @@ import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { migrateTenantStorageOnce } from "../tenants/storage-migration.ts";
 import { instanceTenant } from "../tenants/instance.ts";
 import { enterTenant } from "../tenants/context.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
 await migrateRegisteredPgSchemas(config.databaseUrl);
+await migrateTenantStorageOnce(config);
 const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);
 await built.sandboxResources.initialize();

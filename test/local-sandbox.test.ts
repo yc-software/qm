@@ -18,6 +18,8 @@ import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
+const oneTenant = { q: async () => [{ n: 1 }] };
+
 bindTestTenant();
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
@@ -60,7 +62,7 @@ after(() => {
 function makeSandbox(fake: FakeDocker, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "local-ws-"));
   return createLocalSandbox(createLocalWorkspaceStore(dir), {
-    tenantCount: async () => 1,
+    tenants: oneTenant,
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
     repoRoot: tmp,
@@ -71,7 +73,7 @@ const rw = (scope: string) => [{ scopeId: scope, mountPath: "", mode: "rw" as co
 
 test("the local Docker sandbox refuses to provision for a database with more than one tenant", async () => {
   const fake = installFakeDocker(daemonPort);
-  const sb = makeSandbox(fake, { tenantCount: async () => 2 });
+  const sb = makeSandbox(fake, { tenants: { q: async () => [{ n: 2 }] } });
   await assert.rejects(sb.provision(rw(scopeId("personal", "U1"))), /single-tenant installs only; this database has 2/);
   assert.equal(fake.runCount, 0);
 });
@@ -249,7 +251,7 @@ test("read-only layers materialize into the workspace once per content fingerpri
   const shared = scopeId("org", "default-org");
   await workspace.write(shared, "guide.md", "shared doc");
   const sb = createLocalSandbox(workspace, {
-    tenantCount: async () => 1,
+    tenants: oneTenant,
     dockerExec: fake.dockerExec,
     homeDir: guestHome,
     repoRoot: tmp,

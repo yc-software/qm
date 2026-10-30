@@ -116,12 +116,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const orphanGraceMs = opts.orphanGraceMs ?? 10 * 60_000;
   const rotationHoldUntil = new Map<string, number>();
   const orphanFirstSeenMs = new Map<string, number>();
-  const tags = (kind: "scope" | "scratch"): Record<string, string> => ({
-    "qm-org": configOrgId(),
-    "qm-tenant": currentTenant(),
-    "qm-prefix": prefix,
-    "qm-kind": kind,
-  });
+  const tags = (kind: "scope" | "scratch") => ({ "qm-tenant": currentTenant(), "qm-prefix": prefix, "qm-kind": kind });
   const workspaceDir = `${HOME_DIR}/${WORKSPACE_BASENAME}`;
   const store = opts.store;
   const localQueue = createKeyedQueue<string>();
