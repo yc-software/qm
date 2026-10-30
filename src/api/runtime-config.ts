@@ -291,18 +291,23 @@ export async function assertSubagentRuntime(
   }
   if (!reason) return;
   const head = `${choice.harnessId}/${choice.modelId} can't run subagents here (${reason}). Don't guess another model. Omit model and harness to use the default`;
-  const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(
-    ctx,
-    scope,
-    undefined,
-    "subagent",
-  ).catch((listError: unknown) => {
-    throw new Error(`${head} (listing usable models failed)`, { cause: listError });
+  const listing = async () => {
+    const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(
+      ctx,
+      scope,
+      undefined,
+      "subagent",
+    );
+    const usable: string[] = [];
+    for (const harnessId of approvedHarnesses)
+      for (const modelId of modelsByHarness[harnessId] ?? [])
+        if (await webuiModelEnabled(ctx, modelId, "subagent")) usable.push(`${harnessId}/${modelId}`);
+    return `${effective.harnessId}/${effective.modelId}${usable.length ? `, or pick one of: ${usable.join(", ")}` : ""}`;
+  };
+  const options = await listing().catch((listError: unknown) => {
+    throw new Error(`${head} (listing usable models failed)`, {
+      cause: new AggregateError(cause ? [cause, listError] : [listError]),
+    });
   });
-  const usable: string[] = [];
-  for (const harnessId of approvedHarnesses)
-    for (const modelId of modelsByHarness[harnessId] ?? [])
-      if (await webuiModelEnabled(ctx, modelId, "subagent")) usable.push(`${harnessId}/${modelId}`);
-  const options = usable.length ? `, or pick one of: ${usable.join(", ")}` : "";
-  throw new Error(`${head}, ${effective.harnessId}/${effective.modelId}${options}.`, { cause });
+  throw new Error(`${head}, ${options}.`, { cause });
 }
