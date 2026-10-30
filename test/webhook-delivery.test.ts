@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { withWebTranscriptDeliveries } from "../src/delivery/web-transcript-delivery.ts";
 import { createWebhookDeliveryWorker } from "../src/delivery/webhook-delivery.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -26,7 +26,7 @@ const receiver = {
 };
 
 async function setup() {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread(threadRef, "dm", ownerScope, undefined, "web");
   const deliveries = withWebTranscriptDeliveries(createDeliveryStore(), sessions);
   const delivery = await deliveries.enqueue({
@@ -227,78 +227,94 @@ test("a transient failure while sending the bounded notice retries the original 
   assert.notEqual((await deliveries.get(delivery.id))?.deliveredAt, null);
 });
 
-test("a slow destination does not hold up subsequent deliveries to another destination", async () => {
-  const { sessions, deliveries, delivery } = await setup();
-  const otherDestination = { ...destination, target: "web:alice@example.test:other" };
-  await sessions.getOrCreateByThread(otherDestination.target, "dm", ownerScope, undefined, "web");
-  await deliveries.enqueue({ destination: otherDestination, text: "Fast first", idempotencyKey: "fast-first" });
-  await deliveries.enqueue({ destination: otherDestination, text: "Fast second", idempotencyKey: "fast-second" });
-  const slow = Promise.withResolvers<Response>();
-  const received: string[] = [];
-  const draining = createWebhookDeliveryWorker(deliveries, sessions, receiver, async (_url, options) => {
-    const key = JSON.parse(String(options?.body)).idempotencyKey;
-    received.push(key);
-    return key === delivery.idempotencyKey ? slow.promise : new Response(null, { status: 204 });
-  }).drain();
-  try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.ok(received.includes("fast-second"));
-  } finally {
-    slow.resolve(new Response(null, { status: 204 }));
-    await draining;
-  }
-});
-
-test("completion during a pending claim wakes the next delivery without waiting for another target", async () => {
-  const { sessions, deliveries, delivery } = await setup();
-  const otherDestination = { ...destination, target: "web:alice@example.test:other" };
-  await sessions.getOrCreateByThread(otherDestination.target, "dm", ownerScope, undefined, "web");
-  await deliveries.enqueue({ destination: otherDestination, text: "First", idempotencyKey: "fast-first" });
-  await deliveries.enqueue({ destination: otherDestination, text: "Second", idempotencyKey: "fast-second" });
-  const claimStarted = Promise.withResolvers<void>();
-  const claimGate = Promise.withResolvers<Awaited<ReturnType<typeof deliveries.claimPending>>>();
-  const slow = Promise.withResolvers<Response>();
-  const first = Promise.withResolvers<Response>();
-  let claims = 0;
-  const received: string[] = [];
-  const worker = createWebhookDeliveryWorker(
-    {
-      ...deliveries,
-      claimPending: async (...args) => {
-        if (++claims === 2) {
-          claimStarted.resolve();
-          return claimGate.promise;
-        }
-        return deliveries.claimPending(...args);
-      },
-    },
-    sessions,
-    receiver,
-    async (_url, options) => {
+test(
+  "a slow destination does not hold up subsequent deliveries to another destination",
+  { timeout: 5_000 },
+  async () => {
+    const { sessions, deliveries, delivery } = await setup();
+    const otherDestination = { ...destination, target: "web:alice@example.test:other" };
+    await sessions.getOrCreateByThread(otherDestination.target, "dm", ownerScope, undefined, "web");
+    await deliveries.enqueue({ destination: otherDestination, text: "Fast first", idempotencyKey: "fast-first" });
+    await deliveries.enqueue({ destination: otherDestination, text: "Fast second", idempotencyKey: "fast-second" });
+    const slow = Promise.withResolvers<Response>();
+    const received: string[] = [];
+    const fastSecond = Promise.withResolvers<void>();
+    const draining = createWebhookDeliveryWorker(deliveries, sessions, receiver, async (_url, options) => {
       const key = JSON.parse(String(options?.body)).idempotencyKey;
       received.push(key);
-      if (key === delivery.idempotencyKey) return slow.promise;
-      if (key === "fast-first") return first.promise;
-      return new Response(null, { status: 204 });
-    },
-  );
-  const draining = worker.drain();
-  try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    void worker.drain();
-    await claimStarted.promise;
-    first.resolve(new Response(null, { status: 204 }));
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    claimGate.resolve([]);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.ok(received.includes("fast-second"));
-  } finally {
-    claimGate.resolve([]);
-    first.resolve(new Response(null, { status: 204 }));
-    slow.resolve(new Response(null, { status: 204 }));
-    await draining;
-  }
-});
+      if (key === "fast-second") fastSecond.resolve();
+      return key === delivery.idempotencyKey ? slow.promise : new Response(null, { status: 204 });
+    }).drain();
+    try {
+      await fastSecond.promise;
+      assert.ok(received.includes("fast-second"));
+    } finally {
+      slow.resolve(new Response(null, { status: 204 }));
+      await draining;
+    }
+  },
+);
+
+test(
+  "completion during a pending claim wakes the next delivery without waiting for another target",
+  { timeout: 5_000 },
+  async () => {
+    const { sessions, deliveries, delivery } = await setup();
+    const otherDestination = { ...destination, target: "web:alice@example.test:other" };
+    await sessions.getOrCreateByThread(otherDestination.target, "dm", ownerScope, undefined, "web");
+    await deliveries.enqueue({ destination: otherDestination, text: "First", idempotencyKey: "fast-first" });
+    await deliveries.enqueue({ destination: otherDestination, text: "Second", idempotencyKey: "fast-second" });
+    const claimStarted = Promise.withResolvers<void>();
+    const claimGate = Promise.withResolvers<Awaited<ReturnType<typeof deliveries.claimPending>>>();
+    const slow = Promise.withResolvers<Response>();
+    const first = Promise.withResolvers<Response>();
+    const firstStarted = Promise.withResolvers<void>();
+    const fastSecond = Promise.withResolvers<void>();
+    let claims = 0;
+    const received: string[] = [];
+    const worker = createWebhookDeliveryWorker(
+      {
+        ...deliveries,
+        claimPending: async (...args) => {
+          if (++claims === 2) {
+            claimStarted.resolve();
+            return claimGate.promise;
+          }
+          return deliveries.claimPending(...args);
+        },
+      },
+      sessions,
+      receiver,
+      async (_url, options) => {
+        const key = JSON.parse(String(options?.body)).idempotencyKey;
+        received.push(key);
+        if (key === delivery.idempotencyKey) return slow.promise;
+        if (key === "fast-first") {
+          firstStarted.resolve();
+          return first.promise;
+        }
+        if (key === "fast-second") fastSecond.resolve();
+        return new Response(null, { status: 204 });
+      },
+    );
+    const draining = worker.drain();
+    try {
+      await firstStarted.promise;
+      void worker.drain();
+      await claimStarted.promise;
+      first.resolve(new Response(null, { status: 204 }));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      claimGate.resolve([]);
+      await fastSecond.promise;
+      assert.ok(received.includes("fast-second"));
+    } finally {
+      claimGate.resolve([]);
+      first.resolve(new Response(null, { status: 204 }));
+      slow.resolve(new Response(null, { status: 204 }));
+      await draining;
+    }
+  },
+);
 
 test("both exact-message and agent crons retain the callback binding in their durable deliveries", async () => {
   for (const exact of [true, false]) {
@@ -307,8 +323,8 @@ test("both exact-message and agent crons retain the callback binding in their du
       {
         deliveries,
         sessions,
-        identity: createIdentityService(),
-        idempotency: createIdempotencyStore(createMemoryMap()),
+        identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+        idempotency: createIdempotencyStore(testMap()),
         run: async () => ({ status: "ok", reply: "computed update" }),
       },
       {

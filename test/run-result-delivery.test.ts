@@ -539,7 +539,7 @@ test("bound webhook results identify every terminal outcome for native receiver 
 });
 
 test("recovery replays an authorized scheduled webhook result after its caller exits", async () => {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const target = "web:alice:conversation";
   const request: OrchestratorInput = {
