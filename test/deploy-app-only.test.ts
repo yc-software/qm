@@ -19,6 +19,9 @@ import { scopeId } from "../src/types.ts";
 import { deployRef, encodeRef } from "../src/acl/resource-ref.ts";
 import type { FeatureFlagStore } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 

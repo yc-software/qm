@@ -14,6 +14,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { withTraceCarrier } from "../src/runs/run-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const captured: Record<string, any>[] = [];
 const collector = createServer(async (req, res) => {

@@ -8,6 +8,9 @@ import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts"
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const members = [
   { id: "U-carol", type: "internal" as const },

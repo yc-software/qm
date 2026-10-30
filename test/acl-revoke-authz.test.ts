@@ -13,6 +13,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type Grant } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");

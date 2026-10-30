@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const spec = {
   id: "verify-future",

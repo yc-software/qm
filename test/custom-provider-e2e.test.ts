@@ -20,6 +20,9 @@ import { createCustomProviderStore } from "../src/model/custom-provider-store.ts
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

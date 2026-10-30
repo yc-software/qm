@@ -16,6 +16,9 @@ import { gzipAccepted, json as sendJson, sendBuffered } from "../plugins/chassis
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 interface RawResponse {
   status: number;

@@ -9,9 +9,8 @@ export function tenantScopedBus<T extends { tenant?: string }>(inner: EventBus<T
       const tenant = allTenants ? undefined : currentTenant();
       return inner.subscribe(
         (event) => {
-          if (!event.tenant) return;
-          if (tenant === undefined) withTenant(event.tenant, () => cb(event));
-          else if (event.tenant === tenant) cb(event);
+          if (event.tenant && (tenant === undefined || event.tenant === tenant))
+            withTenant(event.tenant, () => cb(event));
         },
         onResync ? { onResync: tenant === undefined ? onResync : () => withTenant(tenant, onResync) } : {},
       );

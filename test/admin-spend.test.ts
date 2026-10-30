@@ -14,6 +14,9 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const DAY = 86_400_000;
 const ALICE = { "x-admin-actor": "admin-alice@default-org" };

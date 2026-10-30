@@ -9,6 +9,8 @@ import { createMemoryLedgerEventBus } from "../src/loops/ledger-events.ts";
 import { createRunStreamBus } from "../src/runs/run-stream-events.ts";
 import { cachedArtifactData } from "../src/files/artifact-data-cache.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { tenantScopedBus } from "../src/tenants/bus.ts";
+import { createMemoryEventBus } from "../src/util/event-bus.ts";
 
 const A = "00000000-0000-4000-8000-00000000000a";
 const B = "00000000-0000-4000-8000-00000000000b";
@@ -110,6 +112,16 @@ test("an all-tenant subscriber runs bound to each event's tenant", () => {
     ["r1", A],
     ["r2", B],
   ]);
+});
+
+test("a subscriber runs bound to its own tenant whatever context delivers the event", () => {
+  const inner = createMemoryEventBus<{ n: number; tenant?: string }>("probe");
+  const bus = tenantScopedBus(inner);
+  const seen: Array<string | undefined> = [];
+  withTenant(B, () => bus.subscribe(() => seen.push(boundTenant())));
+  withTenant(A, () => inner.emit({ n: 1, tenant: B }));
+  inner.emit({ n: 2 });
+  assert.deepEqual(seen, [B]);
 });
 
 test("artifact data cache does not serve another tenant's load", async () => {

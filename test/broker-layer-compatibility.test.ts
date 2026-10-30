@@ -9,6 +9,9 @@ import { testConfig } from "./support/test-config.ts";
 import { parseToolDescriptor } from "../src/deployment/deployment-layer.ts";
 import { BASE_EPHEMERAL_CRED_LINKS, BASE_RESIDENT_AUTH_PATHS } from "../src/credentials/resident-paths.ts";
 import { evaluateCommandWithLayer } from "../src/policy/command-policy.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const credentialFile = (path: string) => ({ path, kind: "file" as const });
 const credentialDirectory = (path: string) => ({ path, kind: "directory" as const });

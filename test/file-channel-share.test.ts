@@ -10,6 +10,9 @@ import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const initiator = "U1";

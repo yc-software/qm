@@ -5,6 +5,9 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const approval = (sessionId: string, actor: string, command: string, blocksInput = true): PendingApprovalRecord => ({
   sessionId,

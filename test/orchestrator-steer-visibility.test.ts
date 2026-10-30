@@ -6,6 +6,9 @@ import { recordSteerIntake } from "../src/harness/harness-shared.ts";
 import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let exercise: ((turn: HarnessTurnInput) => Promise<HarnessTurnResult | void>) | undefined;
 mock.module("./support/mock-harness.ts", {

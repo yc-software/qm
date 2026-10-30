@@ -10,6 +10,9 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { startSession } from "../src/api/start-session.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "agent-conversations-secret".repeat(2);
 

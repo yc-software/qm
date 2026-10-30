@@ -11,6 +11,9 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { MemoryFact } from "../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fixture() {
   const notebooks = new Map<ScopeId, MemoryFact[]>();

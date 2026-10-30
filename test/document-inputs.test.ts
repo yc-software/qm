@@ -16,6 +16,9 @@ import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "
 import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const openai = { api: "openai-responses", provider: "openai", input: ["text", "image"] };
 const anthropic = { api: "anthropic-messages", provider: "anthropic", input: ["text", "image"] };
