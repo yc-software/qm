@@ -46,6 +46,10 @@ const PERMANENT_POST_ERRORS = new Set([
   "message_not_found",
 ]);
 
+// The recipient itself can never accept the post (e.g. a DM to a bot user), so retrying
+// or re-enqueuing the same key is pointless: fail the row once instead.
+const TERMINAL_POST_ERRORS = new Set(["cannot_dm_bot"]);
+
 const SETTLED_PIN_ERRORS = new Set(["already_pinned", "no_pin", "not_pinned"]);
 
 const DELIVERY_CLAIM_MARGIN_MS = 2_000;
@@ -176,6 +180,12 @@ export function createDeliveryPoller(deps: {
     (id: string) =>
     (stage: "post" | "ack", err: unknown, gaveUp: boolean): void => {
       const code = slackErrorCode(err);
+      if (stage === "post" && code && TERMINAL_POST_ERRORS.has(code) && core.failDelivery) {
+        deliveryTracker.clear(id);
+        console.error(`[slack-plugin] delivery ${id} post refused permanently (${code}) — failing it, no retry`);
+        void core.failDelivery(id, code).catch(swallowAs("slack-plugin: fail delivery", undefined));
+        return;
+      }
       if (stage === "post" && gaveUp && code && PERMANENT_POST_ERRORS.has(code) && !undeliverableReported.has(id)) {
         if (undeliverableReported.size >= 5000) undeliverableReported.clear();
         undeliverableReported.add(id);

@@ -111,3 +111,13 @@ test("approvals requested from a Slack DM thread are delivered into that thread"
   await approvals.put("A2", channel);
   assert.equal((await deliveries.pending("principal"))[0]?.destination.threadTs, undefined);
 });
+
+test("approvals requested by a bot are never queued as a Slack DM", async () => {
+  const deliveries = createDeliveryStore();
+  const approvals = createApprovalStore(createMemoryMap<PendingApprovalRecord>(), deliveries);
+  const r = record("dm:D1");
+  r.request!.actor = { externalId: "U-bot", isBot: true };
+  await approvals.put("A1", r);
+  await approvals.deliverPending();
+  assert.deepEqual(await deliveries.pending("principal"), []);
+});

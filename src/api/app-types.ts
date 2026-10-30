@@ -517,6 +517,7 @@ export interface App {
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
+  failDelivery(id: string, reason: string): Promise<Delivery | null>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;

@@ -112,6 +112,7 @@ export interface SlackCoreClient {
   ackDelivery(id: string, body?: { recipientThreadRef?: string; slackApiMs?: number }): Promise<void>;
   reportSlowDeliveryDrain?(info: { durationMs: number; rows: number }): Promise<void>;
   reportDeliveryUndeliverable?(id: string, reason: string): Promise<void>;
+  failDelivery?(id: string, reason: string): Promise<void>;
 
   holdDeliveryDispatch<T>(fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
   holdEnvelopeReplay<T>(account: string, fn: (lost: Promise<void>) => Promise<T>): Promise<T | null>;
@@ -467,6 +468,19 @@ export function createSlackCoreClient(deps: SlackCoreClientDeps): SlackCoreClien
         category: "delivery",
         code: "delivery_undeliverable",
         message: `delivery ${id} cannot be delivered (${reason}) — retrying until the TTL expires it`,
+        scopeLabel: "slack:deliveries" as ScopeId,
+      });
+    },
+
+    async failDelivery(id, reason) {
+      const failed = await deps.app.failDelivery(id, reason);
+      if (!failed) return;
+      deps.errors?.record({
+        category: "delivery",
+        code: "delivery_failed",
+        message:
+          `delivery ${id} to ${failed.destination.type} ${failed.destination.target} was refused permanently (${reason}) — ` +
+          `dropped, not retried${failed.destination.commandApprovalId ? `; approval ${failed.destination.commandApprovalId} never reached its requester` : ""}`,
         scopeLabel: "slack:deliveries" as ScopeId,
       });
     },

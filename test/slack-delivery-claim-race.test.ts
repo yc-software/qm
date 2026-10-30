@@ -52,6 +52,7 @@ function harness() {
   });
   const slowDrainReports: Array<{ durationMs: number; rows: number }> = [];
   const undeliverable: Array<{ id: string; reason: string }> = [];
+  const failed: Array<{ id: string; reason: string }> = [];
   const makePoller = (opts: { slowDrainMs?: number } = {}) =>
     createDeliveryPoller({
       core: {
@@ -66,6 +67,10 @@ function harness() {
         reportDeliveryUndeliverable: async (id: string, reason: string) => {
           undeliverable.push({ id, reason });
         },
+        failDelivery: async (id: string, reason: string) => {
+          failed.push({ id, reason });
+          await store.fail(id, reason, Date.now());
+        },
       } as never,
       flow: { inFlightRuns: { add() {}, delete() {}, has: () => false } } as never,
       threads: createThreadTracker(),
@@ -73,7 +78,7 @@ function harness() {
       claimMs: CLAIM_MS,
       ...(opts.slowDrainMs !== undefined ? { slowDrainMs: opts.slowDrainMs } : {}),
     });
-  return { store, posted, makeClient, makePoller, slowDrainReports, undeliverable };
+  return { store, posted, makeClient, makePoller, slowDrainReports, undeliverable, failed };
 }
 
 test("a sibling relay re-claiming an expired batch does not double-post the tail delivery", async () => {
@@ -448,4 +453,31 @@ test("an in-place recovery of a marked task-list reply does not replay attachmen
   assert.deepEqual(posts, [], "no fallback post");
   assert.deepEqual(uploads, [], "attachments behind a delivered marker are not replayed");
   assert.equal((await store.pending("slack")).length, 0, "the delivery is acked");
+});
+
+test("a post Slack refuses for good (DM to a bot) fails the row on the first attempt", async () => {
+  const { store, posted, makeClient, makePoller, failed } = harness();
+  const dead = await store.enqueue({
+    destination: { type: "slack", target: "D-bot:100.0" },
+    text: "BOTDM approval card",
+    idempotencyKey: "post:bot:a",
+  });
+  const live = await store.enqueue({
+    destination: { type: "slack", target: "C-live:100.0" },
+    text: "healthy message",
+    idempotencyKey: "post:bot:b",
+  });
+  const poller = makePoller();
+  for (let i = 0; i < 4; i++) {
+    await poller.pollDeliveries(makeClient("relay", {}, { BOTDM: "cannot_dm_bot" }));
+    await sleep(CLAIM_MS + 50);
+  }
+  assert.deepEqual(failed, [{ id: dead.id, reason: "cannot_dm_bot" }], "failed exactly once, no retries");
+  assert.equal((await store.get(dead.id))?.failedReason, "cannot_dm_bot");
+  assert.equal((await store.pending("slack")).length, 0, "nothing left queued");
+  assert.equal((await store.get(live.id))?.deliveredAt !== null, true);
+  assert.equal(
+    posted.some((p) => p.text.includes("BOTDM")),
+    false,
+  );
 });

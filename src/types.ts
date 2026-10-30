@@ -520,6 +520,7 @@ export interface Delivery {
   createdAt: number;
   deliveredAt: number | null;
   expiredAt?: number;
+  failedReason?: string;
   shadow?: boolean;
   recipientThreadRef?: string;
   deliverLatencyMs?: number;

@@ -97,6 +97,7 @@ export function createMessagingMethods(
   | "pendingContextRequests"
   | "fulfillContextRequest"
   | "ackDelivery"
+  | "failDelivery"
   | "ackDeliveryByKey"
   | "setRunDeliveryState"
   | "upsertDirectory"
@@ -415,6 +416,9 @@ export function createMessagingMethods(
     },
     async ackDelivery(id, slackApiMs) {
       await deps.deliveries.ack(id, Date.now(), slackApiMs);
+    },
+    failDelivery(id, reason) {
+      return deps.deliveries.fail(id, reason, Date.now());
     },
     async ackDeliveryByKey(idempotencyKey) {
       await deps.deliveries.ackByKey(idempotencyKey, Date.now());
