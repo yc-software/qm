@@ -85,6 +85,15 @@ test("cron rows round-trip through typed columns and the indexed lookups", { ski
 
         await crons.delete(other.id);
         assert.equal(await crons.get(other.id), null);
+        const upper = scopeId("personal", "OwnerU");
+        await crons.create(input({ owner: "OwnerU", createdBy: "OwnerU", ownerScopeId: upper }));
+        await crons.create(
+          input({ owner: "owneru", createdBy: "owneru", ownerScopeId: scopeId("personal", "owneru") }),
+        );
+        assert.deepEqual(
+          (await crons.ownedBy(upper)).map((c) => c.ownerScopeId),
+          [upper],
+        );
       });
     },
   );

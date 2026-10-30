@@ -15,6 +15,9 @@ import { createMemoryAdvisoryLock, type AdvisoryLock } from "../src/persistence/
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const OWNER = "owner";
