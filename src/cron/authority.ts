@@ -37,7 +37,7 @@ export async function unattendedGrantRefusal(
   if (capability.liveActor !== true)
     return forbidden("unattended grants require a live turn started by the cron owner");
   if (!(await app.samePerson(cron.owner, capability.actorId)))
-    return forbidden("only the cron owner may set unattended grants");
+    return forbidden("only the cron owner may set unattended grants or change a cron that carries them");
   if (!grantsHomedWithOwner(cron))
     return {
       code: "bad_request",
