@@ -217,21 +217,9 @@ export const flyScaffold: ProviderScaffold = {
 export const awsScaffold: ProviderScaffold = {
   renderConfig: (orgId, modelProvider, emailTransport) => {
     const cluster = clusterName(orgId);
-    const services = Object.fromEntries(
-      [
-        ["core", 2048, 4096],
-        ["web-ui", 512, 1024],
-        ["portal", 512, 1024],
-      ].map(([name, cpu, memory]) => [
-        name,
-        {
-          ecrRepository: `${orgId}-qm-${name}`,
-          ecsService: `${cluster}-${name}`,
-          cpu,
-          memory,
-        },
-      ]),
-    );
+    const services = {
+      core: { ecrRepository: `${orgId}-qm-core`, ecsService: `${cluster}-core`, cpu: 2048, memory: 4096 },
+    };
     return renderConfig(orgId, {
       target: "aws",
       modelProvider,

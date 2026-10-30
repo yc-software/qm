@@ -1,4 +1,5 @@
 import type { QmConfig } from "./config.ts";
+import { hostsWebEdge } from "./services.ts";
 
 export const validAlbHostname = (value: string): boolean =>
   value.length <= 253 &&
@@ -8,7 +9,7 @@ export const validAlbHostname = (value: string): boolean =>
     .every((label) => label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label));
 
 export function awsPortalAppsDomain(config: QmConfig): string | undefined {
-  if (!config.aws?.services.portal) return undefined;
+  if (!config.aws || !hostsWebEdge(config.services)) return undefined;
   const domain = config.env.portal?.PORTAL_APPS_DOMAIN?.trim().toLowerCase().replace(/\.$/, "");
   if (!domain) return undefined;
   const coreDomain = (config.env.core?.DEPLOY_APPS_DOMAIN || config.env.core?.AWS_DEPLOY_APPS_DOMAIN)

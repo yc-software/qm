@@ -43,15 +43,15 @@ import {
   type ComputedSecret,
 } from "../secrets.ts";
 import {
-  brokerWiring,
-  brandEnvOf,
-  orgEnv,
+  coreWorkloadEnv,
+  hostsWebEdge,
+  isCoreWorkload,
+  PUBLIC_PORT,
   runnableServices,
   hostedServiceEnv,
-  serviceHost,
   serviceDef,
+  serviceWorkloads,
   isServiceName,
-  virtualServiceEnv,
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
@@ -251,8 +251,17 @@ function rdsInstanceIdentifier(aws: AwsConfig): string {
   return aws.rdsInstance ?? `${aws.cluster}-core`;
 }
 
-function deployedAwsServices(aws: AwsConfig): string[] {
-  return Object.keys(aws.services).filter((name) => serviceHost(name) === name);
+export const ecsContainerName = (workload: string): string => (workload === "edge" ? "core" : workload);
+
+const configuredServiceKey = (workload: string): string => (isCoreWorkload(workload) ? "core" : workload);
+
+function workloadContainer(
+  task: Record<string, unknown> | null | undefined,
+  workload: string,
+): Record<string, unknown> | undefined {
+  return (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
+    (item) => item.name === ecsContainerName(workload),
+  );
 }
 
 function awsTopology(
@@ -266,7 +275,7 @@ function awsTopology(
   const workloads = [...runnableServices(config.services), ...discovered.plugins.map((plugin) => plugin.name)];
   const enabled = new Set(workloads);
   const stale = Object.keys(aws.services)
-    .filter((workload) => !enabled.has(workload) && !enabled.has(serviceHost(workload)))
+    .filter((workload) => !enabled.has(workload))
     .sort();
   const missing = workloads.filter((workload) => !aws.services[workload]);
   if (stale.length || missing.length) {
@@ -378,28 +387,22 @@ function secretValueFrom(config: QmConfig, name: string, arns?: Record<string, s
 export function serviceEnvironment(config: QmConfig, service: ServiceName): Record<string, string> {
   const aws = requireAws(config);
   const def = serviceDef(service);
-  const coreUrl = `http://core.${aws.networking.cloudMapNamespace}:8080`;
-  const coreEnv =
-    service === "core"
+  const core = isCoreWorkload(service);
+  const env: Record<string, string> = {
+    ...(core
       ? {
+          ...coreWorkloadEnv(config, service),
           ...(config.model ? { PI_MODEL: config.model } : {}),
           ...(config.modelProvider ? { MODEL_PROVIDER: config.modelProvider } : {}),
-          ...virtualServiceEnv(config.services, config.env),
         }
-      : {};
-  const env: Record<string, string> = {
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
-    ...(service === "core"
-      ? {}
       : {
-          CORE_API_URL:
-            isServiceName(service) && serviceDef(service).tcpIngress ? (config.apiUrl ?? config.publicUrl) : coreUrl,
+          CORE_ORG_ID: config.orgId,
+          CORE_API_URL: def.tcpIngress ? (config.apiUrl ?? config.publicUrl) : coreApiUrl(config),
         }),
-    ...coreEnv,
     ...hostedServiceEnv(config.services, config.env, service),
-    ...(service === "core" ? securityScreenEnv(config) : {}),
+    ...(core ? securityScreenEnv(config) : {}),
   };
-  if (service === "core") {
+  if (core) {
     const sandboxBackend = config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
     const stores = {
       DEPLOY_PROVIDER: config.env.core?.DEPLOY_PROVIDER?.trim() || "aws",
@@ -427,28 +430,13 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       });
     }
   }
-  if (service === "portal") {
-    env.WEB_UI_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080`;
-    env.ADMIN_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080/admin`;
-    env.PORTAL_XFF_TRUSTED_HOPS = "1";
-  }
-  if (config.services.includes("auth")) {
-    Object.assign(
-      env,
-      brokerWiring(service, {
-        publicUrl: config.publicUrl,
-        authBaseUrl: `http://auth.${aws.networking.cloudMapNamespace}:8080`,
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
-      }),
-    );
-  }
-  if (config.services.includes("portal") && (service === "web-ui" || service === "admin")) {
-    env.REQUIRE_SIGNED_PORTAL_IDENTITY = "1";
-  }
+  if (service === "edge" && hostsWebEdge(config.services)) env.PORTAL_XFF_TRUSTED_HOPS = "1";
   env[def.docker.portEnv] = String(def.docker.internalPort);
   return Object.fromEntries(Object.entries(env).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+function coreApiUrl(config: QmConfig): string {
+  return `http://${ecsContainerName("edge")}.${requireAws(config).networking.cloudMapNamespace}:8080`;
 }
 
 function workloadEnvironment(
@@ -458,7 +446,7 @@ function workloadEnvironment(
 ): Record<string, string> {
   if (isServiceName(workload)) {
     const env = serviceEnvironment(config, workload);
-    if (workload === "core" && requireAws(config).backgroundWorkControl) {
+    if (workload === "harness" && requireAws(config).backgroundWorkControl) {
       if (!backgroundDeploymentId)
         throw new CliError("controlled background work requires a manifest-bound deployment identity");
       env.BACKGROUND_DEPLOYMENT_ID = backgroundDeploymentId;
@@ -468,10 +456,8 @@ function workloadEnvironment(
   const plugin = config.plugins.find((entry) => entry.name === workload);
   return Object.fromEntries(
     Object.entries({
-      ...(plugin?.coreAccess === false
-        ? {}
-        : { CORE_API_URL: `http://core.${requireAws(config).networking.cloudMapNamespace}:8080` }),
-      ...orgEnv(workload, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+      ...(plugin?.coreAccess === false ? {} : { CORE_API_URL: coreApiUrl(config) }),
+      CORE_ORG_ID: config.orgId,
       ...plugin?.env,
       PORT: "8080",
     }).sort(([a], [b]) => a.localeCompare(b)),
@@ -513,9 +499,11 @@ export function renderTaskDefinition(
   const def = isServiceName(service) ? serviceDef(service) : undefined;
   const internalPort = def?.docker.internalPort ?? 8080;
   const executionRoleArn = spec.executionRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-task-execution`;
-  const managedTaskRole = spec.assumeRoleArns?.length
-    ? `${aws.cluster}-${service}-task`
-    : `${aws.cluster}-${service === "core" ? "core-task" : "task"}`;
+  const managedTaskRole = isCoreWorkload(service)
+    ? `${aws.cluster}-core-task`
+    : spec.assumeRoleArns?.length
+      ? `${aws.cluster}-${service}-task`
+      : `${aws.cluster}-task`;
   const taskRoleArn = spec.taskRoleArn ?? `arn:aws:iam::${aws.accountId}:role/${managedTaskRole}`;
   const secrets = workloadSecrets(config, service, secretArns)
     .flatMap((secret) =>
@@ -539,6 +527,7 @@ export function renderTaskDefinition(
         startPeriod: 30,
       }
     : undefined;
+  const container = ecsContainerName(service);
   return {
     family: spec.ecsService,
     networkMode: "awsvpc",
@@ -553,21 +542,33 @@ export function renderTaskDefinition(
     taskRoleArn,
     containerDefinitions: [
       {
-        name: service,
+        name: container,
         image,
         essential: true,
+        ...(def?.command ? { command: def.command } : {}),
         environment: Object.entries(workloadEnvironment(config, service, backgroundDeploymentId)).map(
           ([name, value]) => ({ name, value }),
         ),
         secrets,
         portMappings: [
           {
-            name: service,
+            name: container,
             containerPort: internalPort,
             hostPort: internalPort,
             protocol: "tcp",
             ...(def?.tcpIngress ? {} : { appProtocol: "http" }),
           },
+          ...(service === "edge" && hostsWebEdge(config.services)
+            ? [
+                {
+                  name: "public",
+                  containerPort: PUBLIC_PORT,
+                  hostPort: PUBLIC_PORT,
+                  protocol: "tcp",
+                  appProtocol: "http",
+                },
+              ]
+            : []),
         ],
         ...(healthCheck ? { healthCheck } : {}),
         ...(spec.stopTimeout !== undefined ? { stopTimeout: spec.stopTimeout } : {}),
@@ -576,7 +577,7 @@ export function renderTaskDefinition(
           options: {
             "awslogs-group": spec.logGroup ?? `/ecs/${spec.ecsService}`,
             "awslogs-region": aws.region,
-            "awslogs-stream-prefix": service,
+            "awslogs-stream-prefix": container,
           },
         },
       },
@@ -611,7 +612,18 @@ function dockerLogin(aws: AwsConfig): void {
 }
 
 function sourceImage(config: QmConfig, service: ServiceName): string {
-  return config.imageOverrides[service] ?? manifestRef(service);
+  const image = serviceDef(service).docker.image;
+  return config.imageOverrides[image] ?? manifestRef(image);
+}
+
+function sharedImageWorkloads(config: QmConfig, workloads: readonly string[]): Map<string, string[]> {
+  const aws = requireAws(config);
+  const byRepository = new Map<string, string[]>();
+  for (const workload of workloads) {
+    const repository = aws.services[workload]!.ecrRepository;
+    byRepository.set(repository, [...(byRepository.get(repository) ?? []), workload]);
+  }
+  return new Map([...byRepository.values()].map((group) => [group[0]!, group]));
 }
 
 function workloadSourceImage(
@@ -639,7 +651,7 @@ function workloadImageProvenance(
     return {
       kind: "source-build",
       source: "checkout",
-      ...sourceBuildInfo(resolveBuildRepoRoot(opts.buildFromPath, [workload])),
+      ...sourceBuildInfo(resolveBuildRepoRoot(opts.buildFromPath, [serviceDef(workload).docker.image])),
     };
   }
   const source = workloadSourceImage(config, workload, plugin);
@@ -717,10 +729,13 @@ async function publishWorkloadImage(
     if (signal) await runInheritAsync("docker", args, { signal });
     else runInherit("docker", args);
   } else if (opts.buildFrom && isServiceName(workload)) {
-    const root = resolveBuildRepoRoot(opts.buildFromPath, [workload]);
-    const dockerfile = join(root, spec.dockerfile ?? join("deploy", workload, "Dockerfile"));
+    const image = serviceDef(workload).docker.image;
+    const root = resolveBuildRepoRoot(opts.buildFromPath, [image]);
+    const dockerfile = join(root, spec.dockerfile ?? join("deploy", image, "Dockerfile"));
     if (spec.dockerfile && !existsSync(dockerfile)) {
-      throw new CliError(`aws.services.${workload}.dockerfile is missing from the build checkout: ${spec.dockerfile}`);
+      throw new CliError(
+        `aws.services.${configuredServiceKey(workload)}.dockerfile is missing from the build checkout: ${spec.dockerfile}`,
+      );
     }
     const args = [
       "buildx",
@@ -824,18 +839,22 @@ function releaseCandidate(config: QmConfig, path: string): AwsReleaseCandidate {
       !aws.services[workload]!.architecture
     )
       throw new CliError(
-        `AWS release candidate ${path} has no architecture for source-built ${workload}; set aws.services.${workload}.architecture to the image platform or rebuild the candidate`,
+        `AWS release candidate ${path} has no architecture for source-built ${workload}; set aws.services.${configuredServiceKey(workload)}.architecture to the image platform or rebuild the candidate`,
       );
+  }
+  for (const group of sharedImageWorkloads(config, Object.keys(candidate.images)).values()) {
+    if (new Set(group.map((workload) => candidate.images![workload])).size !== 1)
+      throw new CliError(`AWS release candidate ${path} gives ${group.join(" and ")} different images of one repository`);
   }
   return candidate as AwsReleaseCandidate;
 }
 
 export async function awsMigrateCandidate(config: QmConfig, configDir: string, candidatePath: string): Promise<void> {
   const { aws, workloads } = awsTopology(config, configDir);
-  if (!workloads.includes("core")) throw new CliError("AWS migrations require the core workload");
+  if (!workloads.includes("edge")) throw new CliError("AWS migrations require the edge workload");
   const candidate = releaseCandidate(config, candidatePath);
-  const coreImage = candidate.images.core;
-  if (!coreImage) throw new CliError(`AWS release candidate ${candidatePath} does not contain core`);
+  const coreImage = candidate.images.edge;
+  if (!coreImage) throw new CliError(`AWS release candidate ${candidatePath} does not contain edge`);
   assertAwsCallerAccount(aws);
   await withAwsLease(aws, async () => {
     if (aws.predeployDbSnapshot === false)
@@ -852,14 +871,14 @@ async function runAwsCandidateMigration(
   existingTaskDefinition?: string,
 ): Promise<void> {
   const aws = requireAws(config);
-  const spec = aws.services.core;
-  if (!spec) throw new CliError("AWS migrations require the core workload");
+  const spec = aws.services.edge;
+  if (!spec) throw new CliError("AWS migrations require the edge workload");
   const service = awsJson<{ services?: AwsMigrationService[]; failures?: Array<{ arn?: string; reason?: string }> }>(
     aws,
     ["ecs", "describe-services", "--cluster", aws.cluster, "--services", spec.ecsService],
   );
   if (service.failures?.length || service.services?.[0]?.status !== "ACTIVE") {
-    throw new CliError(`AWS core service ${spec.ecsService} is not active`);
+    throw new CliError(`AWS edge service ${spec.ecsService} is not active`);
   }
   const live = service.services[0]!;
   const network = live.networkConfiguration?.awsvpcConfiguration;
@@ -869,7 +888,7 @@ async function runAwsCandidateMigration(
     !network.securityGroups?.length ||
     (network.assignPublicIp !== "ENABLED" && network.assignPublicIp !== "DISABLED")
   ) {
-    throw new CliError(`AWS core service ${spec.ecsService} does not expose a reusable Fargate network configuration`);
+    throw new CliError(`AWS edge service ${spec.ecsService} does not expose a reusable Fargate network configuration`);
   }
   const temp = mkdtempSync(join(tmpdir(), "qm-migration-task-"));
   let taskDefinition: string | undefined;
@@ -877,10 +896,10 @@ async function runAwsCandidateMigration(
     if (existingTaskDefinition) {
       taskDefinition = existingTaskDefinition;
     } else {
-      const definitionPath = join(temp, "core.json");
-      const definition = renderTaskDefinition(config, "core", coreImage, secretArns(config));
-      const container = definition.containerDefinitions.find((candidate) => candidate.name === "core");
-      if (!container) throw new CliError("AWS migration task definition has no core container");
+      const definitionPath = join(temp, "edge.json");
+      const definition = renderTaskDefinition(config, "edge", coreImage, secretArns(config));
+      const container = workloadContainer(definition as unknown as Record<string, unknown>, "edge");
+      if (!container) throw new CliError("AWS migration task definition has no edge container");
       delete container.healthCheck;
       writeFileSync(definitionPath, JSON.stringify(definition));
       taskDefinition = registerTaskDefinition(config, definitionPath);
@@ -902,7 +921,9 @@ async function runAwsCandidateMigration(
       "--network-configuration",
       JSON.stringify({ awsvpcConfiguration: network }),
       "--overrides",
-      JSON.stringify({ containerOverrides: [{ name: "core", command: ["node", "src/migrate-main.ts"] }] }),
+      JSON.stringify({
+        containerOverrides: [{ name: ecsContainerName("edge"), command: ["node", "src/migrate-main.ts"] }],
+      }),
       "--started-by",
       "qm-migration",
     ]);
@@ -1164,10 +1185,10 @@ interface EcsServiceRevision {
   taskDefinition?: string;
 }
 
-async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<void> {
+async function awsLiveSession(config: QmConfig, edge: EcsServiceState): Promise<void> {
   const aws = requireAws(config);
-  if (!core.taskDefinition) throw new Error("core service has no live task definition");
-  if (!core.networkConfiguration?.awsvpcConfiguration) throw new Error("core service has no VPC network configuration");
+  if (!edge.taskDefinition) throw new Error("edge service has no live task definition");
+  if (!edge.networkConfiguration?.awsvpcConfiguration) throw new Error("edge service has no VPC network configuration");
   const taskArns =
     awsJson<{ taskArns?: string[] }>(aws, [
       "ecs",
@@ -1175,11 +1196,11 @@ async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<
       "--cluster",
       aws.cluster,
       "--service-name",
-      aws.services.core!.ecsService,
+      aws.services.edge!.ecsService,
       "--desired-status",
       "RUNNING",
     ]).taskArns ?? [];
-  if (!taskArns.length) throw new Error("core service has no running tasks for the private canary");
+  if (!taskArns.length) throw new Error("edge service has no running tasks for the private canary");
   let address: string | undefined;
   for (let offset = 0; offset < taskArns.length && !address; offset += 100) {
     const tasks =
@@ -1195,15 +1216,15 @@ async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<
     address = tasks
       .filter(
         (task) =>
-          task.taskDefinitionArn === core.taskDefinition &&
+          task.taskDefinitionArn === edge.taskDefinition &&
           task.lastStatus === "RUNNING" &&
           task.healthStatus !== "UNHEALTHY",
       )
-      .flatMap((task) => task.containers?.filter((container) => container.name === "core") ?? [])
+      .flatMap((task) => task.containers?.filter((container) => container.name === ecsContainerName("edge")) ?? [])
       .flatMap((container) => container.networkInterfaces ?? [])
       .find((network) => network.privateIpv4Address)?.privateIpv4Address;
   }
-  if (!address) throw new Error("core service has no current running task with a private IPv4 address");
+  if (!address) throw new Error("edge service has no current running task with a private IPv4 address");
   const started = awsJson<{
     tasks?: Array<{ taskArn?: string }>;
     failures?: Array<{ arn?: string; reason?: string; detail?: string }>;
@@ -1213,16 +1234,16 @@ async function awsLiveSession(config: QmConfig, core: EcsServiceState): Promise<
     "--cluster",
     aws.cluster,
     "--task-definition",
-    core.taskDefinition,
+    edge.taskDefinition,
     "--launch-type",
     "FARGATE",
     "--network-configuration",
-    JSON.stringify(core.networkConfiguration),
+    JSON.stringify(edge.networkConfiguration),
     "--overrides",
     JSON.stringify({
       containerOverrides: [
         {
-          name: "core",
+          name: ecsContainerName("edge"),
           command: ["node", "src/deployment/postdeploy-smoke.ts", "session", `http://${address}:8080`],
         },
       ],
@@ -1258,10 +1279,10 @@ async function awaitEcsTaskExit(aws: AwsConfig, taskArn: string, kind: string): 
       throw new CliError(`AWS ${kind} task ${taskArn} failed (${failures.join(", ")})`);
     }
     if (task?.lastStatus === "STOPPED") {
-      const core = task.containers?.find((container) => container.name === "core");
-      if (core?.exitCode === 0) return;
+      const edge = task.containers?.find((container) => container.name === ecsContainerName("edge"));
+      if (edge?.exitCode === 0) return;
       throw new CliError(
-        `AWS ${kind} task ${taskArn} exited ${core?.exitCode ?? "without a code"}: ${[core?.reason, task.stoppedReason].filter(Boolean).join("; ") || "unknown reason"}`,
+        `AWS ${kind} task ${taskArn} exited ${edge?.exitCode ?? "without a code"}: ${[edge?.reason, task.stoppedReason].filter(Boolean).join("; ") || "unknown reason"}`,
       );
     }
     if (Date.now() > deadline) {
@@ -1651,11 +1672,25 @@ function deploymentManifest(aws: AwsConfig, id: string): DeploymentManifest {
   ]);
   const raw = dynamoString(response.Item, "manifest");
   if (!raw) throw new CliError(`AWS deployment manifest ${id} is missing`);
+  let manifest: DeploymentManifest;
   try {
-    return JSON.parse(raw) as DeploymentManifest;
+    manifest = JSON.parse(raw) as DeploymentManifest;
   } catch {
     throw new CliError(`AWS deployment manifest ${id} is invalid`);
   }
+  return withEdgeForLegacyCore(manifest);
+}
+
+function withEdgeForLegacyCore(manifest: DeploymentManifest): DeploymentManifest {
+  if (!manifest.tasks?.core || manifest.tasks.edge) return manifest;
+  const rename = <T>(entries: Record<string, T>): Record<string, T> =>
+    Object.fromEntries(Object.entries(entries).map(([name, value]) => [name === "core" ? "edge" : name, value]));
+  return {
+    ...manifest,
+    tasks: rename(manifest.tasks),
+    ...(manifest.counts ? { counts: rename(manifest.counts) } : {}),
+    ...(manifest.imageProvenance ? { imageProvenance: rename(manifest.imageProvenance) } : {}),
+  };
 }
 
 function currentDeploymentManifest(aws: AwsConfig): DeploymentManifest | undefined {
@@ -1884,14 +1919,14 @@ function trustedDeploymentBaseline(
         `cannot ${action} while untouched workload ${workload} differs from the current deployment manifest`,
       );
     }
-    const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-      "ecs",
-      "describe-task-definition",
-      "--task-definition",
-      current.tasks[workload]!,
-    ]).taskDefinition;
-    const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-      (item) => item.name === workload,
+    const container = workloadContainer(
+      awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
+        "ecs",
+        "describe-task-definition",
+        "--task-definition",
+        current.tasks[workload]!,
+      ]).taskDefinition,
+      workload,
     );
     if (
       !container ||
@@ -1925,62 +1960,12 @@ function adoptMissingWorkloads(
   return true;
 }
 
-function unchangedWebRouting(
-  config: QmConfig,
-  manifest: DeploymentManifest | undefined,
-  desired: Array<{ service: string; task: EcsTaskDefinition }>,
-): boolean {
-  if (!manifest) return false;
-  const workloads = ["web-ui", "portal"];
-  if (workloads.some((workload) => !desired.some((item) => item.service === workload))) return false;
-  try {
-    const states = describedServices(config, workloads);
-    for (const workload of workloads) {
-      const count = manifest.counts?.[workload];
-      const definition = manifest.tasks[workload];
-      if (!definition || !count || count !== workloadDesiredCount(config, workload)) return false;
-      stableWorkloadCapacity(config, workload, states.get(workload)!, definition, count);
-      const prior = awsJson<{ taskDefinition?: Record<string, unknown> }>(requireAws(config), [
-        "ecs",
-        "describe-task-definition",
-        "--task-definition",
-        definition,
-      ]).taskDefinition;
-      const next = desired.find((item) => item.service === workload)!.task;
-      const keys = workload === "portal" ? ["WEB_UI_UPSTREAM", "ADMIN_UPSTREAM"] : ["ADMIN_ENABLED"];
-      const settings = (task: Record<string, unknown> | undefined): string[] | undefined => {
-        const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
-        const matches = containers?.filter((container) => container.name === workload);
-        if (matches?.length !== 1) return undefined;
-        const container = matches[0]!;
-        const secrets = (container.secrets ?? []) as Array<{ name: string }>;
-        const environment = (container.environment ?? []) as Array<{ name: string; value: string }>;
-        const values: string[] = [];
-        for (const key of keys) {
-          const entries = environment.filter((entry) => entry.name === key);
-          if (secrets.some((entry) => entry.name === key) || entries.length !== 1 || !entries[0]!.value)
-            return undefined;
-          values.push(entries[0]!.value);
-        }
-        return values;
-      };
-      const previous = settings(prior);
-      const upcoming = settings(next as unknown as Record<string, unknown>);
-      if (!previous || !upcoming || canonicalJson(previous) !== canonicalJson(upcoming)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function applyServiceTargets(
   config: QmConfig,
   targets: Record<string, string>,
   desiredCounts?: Record<string, number>,
   options: {
     timeoutMs?: number;
-    webBeforePortal?: boolean;
     onSubmitted?: () => void;
   } = {},
 ): Promise<void> {
@@ -1994,23 +1979,7 @@ async function applyServiceTargets(
   );
   const changed: string[] = [];
   try {
-    for (const workload of options.webBeforePortal
-      ? [...workloads].sort(
-          (a, b) => Number(a === "portal") - Number(b === "portal") || Number(b === "web-ui") - Number(a === "web-ui"),
-        )
-      : workloads) {
-      if (options.webBeforePortal && workload === "portal" && targets["web-ui"]) {
-        await awaitServiceTargets(
-          config,
-          {
-            "web-ui": {
-              taskDefinition: targets["web-ui"]!,
-              desiredCount: expectedCounts["web-ui"]!,
-            },
-          },
-          options.timeoutMs,
-        );
-      }
+    for (const workload of workloads) {
       const args = [
         "ecs",
         "update-service",
@@ -2268,18 +2237,13 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     );
   }
   const plugins = new Map(topology.plugins.map((plugin) => [plugin.name, plugin]));
-  const services = opts.only ? [...new Set(opts.only.map(serviceHost))] : topology.workloads;
+  const services = opts.only ? [...new Set(opts.only.flatMap(serviceWorkloads))] : topology.workloads;
   const buildConcurrency = opts.buildConcurrency ?? 1;
   if (!Number.isSafeInteger(buildConcurrency) || buildConcurrency < 1)
     throw new CliError("--build-concurrency requires a positive integer");
   if (opts.buildConcurrency !== undefined && !opts.buildOnly)
     throw new CliError("--build-concurrency requires --build-only");
-  if (
-    buildConcurrency > 1 &&
-    new Set(services.map((service) => aws.services[service]?.ecrRepository)).size !== services.length
-  )
-    throw new CliError("--build-concurrency requires distinct ECR repositories for selected workloads");
-  const restart = new Set((opts.restart ?? []).map(serviceHost));
+  const restart = new Set((opts.restart ?? []).flatMap(serviceWorkloads));
   if (restart.size && opts.buildOnly) throw new CliError("--restart cannot be used with --build-only");
   for (const service of restart) {
     if (!services.includes(service)) throw new CliError(`--restart workload ${service} is not selected for deployment`);
@@ -2295,7 +2259,10 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
   if (opts.imageLabel && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(opts.imageLabel)) {
     throw new CliError("--image-label must be a valid ECR tag");
   }
-  if (opts.buildFrom) resolveBuildRepoRoot(opts.buildFromPath, services.filter(isServiceName));
+  if (opts.buildFrom)
+    resolveBuildRepoRoot(opts.buildFromPath, [
+      ...new Set(services.filter(isServiceName).map((service) => serviceDef(service).docker.image)),
+    ]);
   if (opts.buildOnly) {
     assertAwsCallerAccount(aws);
     header(`qm ${opts.dryRun ? "plan" : "build"} — ${config.orgId} (aws candidate ${opts.imageLabel})`);
@@ -2314,11 +2281,12 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     const cancelBuilds = () => controller.abort();
     process.on("SIGINT", cancelBuilds);
     process.on("SIGTERM", cancelBuilds);
+    const groups = [...sharedImageWorkloads(config, services)];
     try {
-      for (let offset = 0; offset < services.length; offset += buildConcurrency) {
+      for (let offset = 0; offset < groups.length; offset += buildConcurrency) {
         await settleAll(
-          services.slice(offset, offset + buildConcurrency).map(async (service) => {
-            images[service] = await publishWorkloadImage(
+          groups.slice(offset, offset + buildConcurrency).map(async ([service, group]) => {
+            const image = await publishWorkloadImage(
               config,
               service,
               plugins.get(service),
@@ -2326,6 +2294,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
               opts,
               controller.signal,
             );
+            for (const member of group) images[member] = image;
           }),
         );
       }
@@ -2386,30 +2355,28 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       adoptMissingWorkloads(baseline, before, services);
     }
     const images: Record<string, string> = {};
-    for (const service of services) {
+    for (const [service, group] of sharedImageWorkloads(config, services)) {
+      let image: string;
       if (candidate) {
-        images[service] = candidate.images[service]!;
-        step(`${service}: immutable candidate ${candidate.label}`);
-        continue;
+        image = candidate.images[service]!;
+        step(`${group.join(", ")}: immutable candidate ${candidate.label}`);
+      } else if ((opts.buildFrom && isServiceName(service)) || plugins.get(service)?.kind === "source") {
+        image = `${ecrHost(aws)}/${aws.services[service]!.ecrRepository}@sha256:${"0".repeat(64)}`;
+        step(`${group.join(", ")}: source build planned; image digest is unresolved until build`);
+      } else {
+        image = plannedWorkloadImage(config, service, plugins.get(service));
       }
-      const spec = aws.services[service]!;
-      const sourceBuild = (opts.buildFrom && isServiceName(service)) || plugins.get(service)?.kind === "source";
-      if (sourceBuild) {
-        images[service] = `${ecrHost(aws)}/${spec.ecrRepository}@sha256:${"0".repeat(64)}`;
-        step(`${service}: source build planned; image digest is unresolved until build`);
-        continue;
-      }
-      images[service] = plannedWorkloadImage(config, service, plugins.get(service));
+      for (const member of group) images[member] = image;
     }
     const backgroundDeploymentId = aws.backgroundWorkControl
       ? (currentDeploymentManifest(aws)?.backgroundDeploymentId ??
-        `${aws.services.core!.ecsService}:00000000-0000-0000-0000-000000000000`)
+        `${aws.services.harness!.ecsService}:00000000-0000-0000-0000-000000000000`)
       : undefined;
     reportTaskChanges(config, services, images, arns, restart, backgroundDeploymentId);
     for (const service of services) {
       step(`${service}: desired count ${before.counts[service] ?? 0} → ${workloadDesiredCount(config, service)}`);
     }
-    if (opts.sandboxDir && existsSync(opts.sandboxDir) && (!opts.only || opts.only.includes("core"))) {
+    if (opts.sandboxDir && existsSync(opts.sandboxDir) && services.includes("edge")) {
       const hash = createHash("sha256").update(deploymentLayerBody(opts.sandboxDir)).digest("hex");
       try {
         const current = currentDeploymentManifest(aws);
@@ -2418,7 +2385,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         step(`deployment layer: desired ${hash.slice(0, 12)} (live state unavailable)`);
       }
     } else {
-      step("deployment layer: preserved (no sandbox directory selected for core)");
+      step("deployment layer: preserved (no sandbox directory selected for edge)");
     }
     note(
       `Plan only. Re-run \`qm up${opts.candidate ? ` --candidate ${opts.candidate}` : ""}${restart.size ? ` --restart ${[...restart].join(",")}` : ""} --yes\` to deploy.`,
@@ -2450,10 +2417,10 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     if (current?.backgroundDeploymentId && !aws.backgroundWorkControl)
       throw new CliError("cannot disable background ownership control while a controlled deployment is recorded");
     if (aws.backgroundWorkControl) {
-      if (!current?.backgroundDeploymentId && !services.includes("core"))
-        throw new CliError("enabling background ownership requires deploying core to allocate its identity");
+      if (!current?.backgroundDeploymentId && !services.includes("harness"))
+        throw new CliError("enabling background ownership requires deploying harness to allocate its identity");
       reconcileBackgroundPreparation(aws, current, before);
-      if (services.includes("core")) await assertNotBackgroundOwner(config, current);
+      if (services.includes("harness")) await assertNotBackgroundOwner(config, current);
     }
     const selected = new Set(services);
     if (allServices.some((service) => !selected.has(service))) {
@@ -2470,7 +2437,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     if (current?.layer) {
       desiredLayer = current.layer;
     } else {
-      if (current || before.counts.core !== 0) {
+      if (current || before.counts.edge !== 0) {
         const previousState = await currentDeploymentLayerState({
           config,
           transport: awsDeploymentLayerTransport,
@@ -2491,12 +2458,12 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         }
       }
     }
-    if (opts.sandboxDir && existsSync(opts.sandboxDir) && (!opts.only || opts.only.includes("core"))) {
+    if (opts.sandboxDir && existsSync(opts.sandboxDir) && services.includes("edge")) {
       previousLayerBody ??= getDeploymentLayerArtifact(config, desiredLayer);
       desiredLayerBody = deploymentLayerBody(opts.sandboxDir);
       desiredLayer = putDeploymentLayerArtifact(config, desiredLayerBody);
       layerChanged = desiredLayer.sha256 !== current?.layer?.sha256;
-      if (!layerChanged && before.counts.core !== 0) {
+      if (!layerChanged && before.counts.edge !== 0) {
         const state = await currentDeploymentLayerState({
           config,
           transport: awsDeploymentLayerTransport,
@@ -2515,24 +2482,30 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     if (!candidate) dockerLogin(aws);
     const images: Record<string, string> = {};
     const selectedImageProvenance: Record<string, DeploymentImageProvenance> = {};
-    for (const service of services) {
+    for (const [service, group] of sharedImageWorkloads(config, services)) {
       if (candidate) {
-        selectedImageProvenance[service] = candidate.imageProvenance[service]!;
-        images[service] = candidate.images[service]!;
-      } else {
-        staged.add(service);
-        selectedImageProvenance[service] = workloadImageProvenance(config, service, plugins.get(service), opts);
-        images[service] = await publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
+        for (const member of group) {
+          selectedImageProvenance[member] = candidate.imageProvenance[member]!;
+          images[member] = candidate.images[member]!;
+        }
+        continue;
+      }
+      for (const member of group) staged.add(member);
+      const provenance = workloadImageProvenance(config, service, plugins.get(service), opts);
+      const image = await publishWorkloadImage(config, service, plugins.get(service), stagingLabel, opts);
+      for (const member of group) {
+        selectedImageProvenance[member] = provenance;
+        images[member] = image;
       }
     }
     let backgroundDeploymentId = current?.backgroundDeploymentId;
     if (aws.backgroundWorkControl && !backgroundDeploymentId)
-      backgroundDeploymentId = `${aws.services.core!.ecsService}:${releaseId}`;
+      backgroundDeploymentId = `${aws.services.harness!.ecsService}:${releaseId}`;
     const desired = reportTaskChanges(config, services, images, arns, restart, backgroundDeploymentId);
-    const changedCore = desired.find((item) => item.service === "core" && item.changed);
-    if (aws.backgroundWorkControl && changedCore) {
-      backgroundDeploymentId = `${aws.services.core!.ecsService}:${releaseId}`;
-      changedCore.task = renderTaskDefinition(config, "core", images.core!, arns, backgroundDeploymentId);
+    const changedHarness = desired.find((item) => item.service === "harness" && item.changed);
+    if (aws.backgroundWorkControl && changedHarness) {
+      backgroundDeploymentId = `${aws.services.harness!.ecsService}:${releaseId}`;
+      changedHarness.task = renderTaskDefinition(config, "harness", images.harness!, arns, backgroundDeploymentId);
       prepareBackgroundDeployment(aws, {
         id: releaseId,
         previousManifestId: current?.id,
@@ -2551,8 +2524,8 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
       const taskDefinition = registerTaskDefinition(config, file);
       targets[item.service] = taskDefinition;
     }
-    if (candidate?.images.core && services.includes("core")) {
-      await runAwsCandidateMigration(config, candidate.images.core, candidate.label, targets.core!);
+    if (candidate?.images.edge && services.includes("edge")) {
+      await runAwsCandidateMigration(config, candidate.images.edge, candidate.label, targets.edge!);
       migratedCandidate = true;
     }
     const rolloutTargets = Object.fromEntries(
@@ -2571,10 +2544,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         Object.fromEntries(
           Object.keys(rolloutTargets).map((service) => [service, workloadDesiredCount(config, service)]),
         ),
-        {
-          webBeforePortal: !unchangedWebRouting(config, current, desired),
-          onSubmitted: reportProgress ? () => reportProgress(targets) : undefined,
-        },
+        { onSubmitted: reportProgress ? () => reportProgress(targets) : undefined },
       );
       applied = true;
     } else {
@@ -2631,7 +2601,7 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
         imageProvenance: releaseImageProvenance,
       });
     }
-    if (aws.backgroundWorkControl && changedCore) clearBackgroundPreparation(aws);
+    if (aws.backgroundWorkControl && changedHarness) clearBackgroundPreparation(aws);
     if (recorded && dbRestorePoint) confirmDbRestorePointCovered(config, dbRestorePoint);
     for (const service of candidate ? [] : services) {
       try {
@@ -2675,8 +2645,8 @@ export async function awsUp(config: QmConfig, _configDir: string, opts: AwsUpOpt
     }
     throwAfterCompensation(error, compensationFailures);
   } finally {
-    for (const service of staged) {
-      if (releaseSucceeded && !promotedServices.has(service)) continue;
+    for (const [service, group] of sharedImageWorkloads(config, [...staged])) {
+      if (releaseSucceeded && group.some((member) => !promotedServices.has(member))) continue;
       try {
         awsText(aws, [
           "ecr",
@@ -2705,7 +2675,7 @@ export function awsStatus(config: QmConfig, configDir = process.cwd()): void {
     const service = result.get(workload)!;
     note(`${service.serviceName}: ${service.runningCount}/${service.desiredCount} running · ${service.taskDefinition}`);
   }
-  if (config.services.includes("slack")) note("slack: virtual service running in the core task");
+  if (config.services.includes("slack")) note("slack: virtual service running in the edge task");
 }
 
 export function awsLogs(
@@ -2728,14 +2698,17 @@ export function awsLogs(
       ...(opts.follow ? ["--follow"] : []),
     ]);
   };
-  if (service) {
-    const resolved = serviceHost(service);
-    if (resolved !== service) note(`${service} runs in ${resolved}; showing ${resolved} logs`);
-    runInherit(process.env.AWS_BIN ?? "aws", logArgs(resolved));
+  const selected = service ? serviceWorkloads(service) : workloads;
+  if (service && selected.join() !== service) {
+    const hosts = selected.join(" and ");
+    note(`${service} runs in ${hosts}; showing ${hosts} logs`);
+  }
+  if (service && selected.length === 1) {
+    runInherit(process.env.AWS_BIN ?? "aws", logArgs(selected[0]!));
     return;
   }
   return streamLabeled(
-    workloads.map((name) => ({ label: name, command: process.env.AWS_BIN ?? "aws", args: logArgs(name) })),
+    selected.map((name) => ({ label: name, command: process.env.AWS_BIN ?? "aws", args: logArgs(name) })),
     (label, line) => note(`${dim(label)} | ${line}`),
   );
 }
@@ -2810,7 +2783,10 @@ export async function awsRollback(
         throw new CliError("controlled rollback requires a protocol-capable target deployment");
       await assertNotBackgroundOwner(config, currentManifest);
     }
-    const missing = services.filter((service) => !targetManifest.tasks[service]);
+    const predatesHarness = Boolean(targetManifest.tasks.edge) && !targetManifest.tasks.harness;
+    const missing = services.filter(
+      (service) => !targetManifest.tasks[service] && !(predatesHarness && service === "harness"),
+    );
     if (missing.length)
       throw new CliError(`target AWS deployment manifest is missing workloads: ${missing.join(", ")}`);
     let targetLayerBody: string | undefined;
@@ -2822,9 +2798,16 @@ export async function awsRollback(
         throw new CliError(`current AWS deployment manifest ${currentManifest.id} has no restorable deployment layer`);
       layerNeedsSync = currentManifest?.layer?.sha256 !== targetManifest.layer!.sha256;
     }
-    const targets = Object.fromEntries(services.map((service) => [service, targetManifest!.tasks[service]!]));
+    const targets = Object.fromEntries(
+      services.map((service) => [service, targetManifest!.tasks[service] ?? before!.tasks[service]!]),
+    );
     const targetCounts = Object.fromEntries(
-      services.map((service) => [service, targetManifest.counts?.[service] ?? before!.counts[service]!]),
+      services.map((service) => [
+        service,
+        predatesHarness && service === "harness"
+          ? 0
+          : (targetManifest.counts?.[service] ?? before!.counts[service]!),
+      ]),
     );
     const changedTargets = Object.fromEntries(
       services
@@ -2851,9 +2834,9 @@ export async function awsRollback(
       ),
     );
     if (targetLayerBody && layerOpts && layerNeedsSync) {
-      if (targetCounts.core === 0) {
+      if (targetCounts.edge === 0) {
         note(
-          "deployment layer sync deferred: core is scaled to zero, so `check --live` will flag the layer until the next `qm up` applies it",
+          "deployment layer sync deferred: edge is scaled to zero, so `check --live` will flag the layer until the next `qm up` applies it",
         );
       } else {
         layerAttempted = true;
@@ -2917,14 +2900,14 @@ export function taskDefinitionForBackgroundWork(
   enabled: boolean,
 ): Record<string, unknown> {
   const containers = structuredClone(task.containerDefinitions) as Array<Record<string, unknown>> | undefined;
-  const core = containers?.find((container) => container.name === "core");
-  if (!core) throw new CliError("core task definition has no core container");
-  const secrets = core.secrets as Array<{ name: string }> | undefined;
+  const harness = containers?.find((container) => container.name === ecsContainerName("harness"));
+  if (!harness) throw new CliError("harness task definition has no harness container");
+  const secrets = harness.secrets as Array<{ name: string }> | undefined;
   if (secrets?.some((entry) => entry.name === "BACKGROUND_WORK_ENABLED")) {
     throw new CliError("BACKGROUND_WORK_ENABLED cannot be changed while supplied as a secret");
   }
-  const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
-  core.environment = [
+  const environment = (harness.environment ?? []) as Array<{ name: string; value: string }>;
+  harness.environment = [
     ...environment.filter((entry) => entry.name !== "BACKGROUND_WORK_ENABLED"),
     { name: "BACKGROUND_WORK_ENABLED", value: enabled ? "1" : "0" },
   ];
@@ -3012,7 +2995,7 @@ export function awsBackgroundWorkBootState(config: QmConfig): { enabled: boolean
   const aws = requireAws(config);
   assertAwsCallerAccount(aws);
   const manifest = currentDeploymentManifest(aws);
-  const taskDefinition = manifest?.tasks.core;
+  const taskDefinition = manifest?.tasks.harness;
   if (!taskDefinition) return undefined;
   const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
     "ecs",
@@ -3021,22 +3004,23 @@ export function awsBackgroundWorkBootState(config: QmConfig): { enabled: boolean
     taskDefinition,
   ]).taskDefinition;
   const containers = task?.containerDefinitions as Array<Record<string, unknown>> | undefined;
-  const core = containers?.filter((container) => container.name === "core");
-  if (core?.length !== 1) throw new CliError("recorded task definition must contain exactly one core container");
-  const secrets = (core[0]!.secrets ?? []) as Array<{ name: string }>;
+  const harness = containers?.filter((container) => container.name === ecsContainerName("harness"));
+  if (harness?.length !== 1)
+    throw new CliError("recorded task definition must contain exactly one harness container");
+  const secrets = (harness[0]!.secrets ?? []) as Array<{ name: string }>;
   if (secrets.some((secret) => secret.name === "BACKGROUND_WORK_ENABLED" || secret.name === "BACKGROUND_DEPLOYMENT_ID"))
     throw new CliError("recorded background boot settings cannot be supplied as secrets");
-  const environment = (core[0]!.environment ?? []) as Array<{ name: string; value: string }>;
+  const environment = (harness[0]!.environment ?? []) as Array<{ name: string; value: string }>;
   const identities = environment.filter((entry) => entry.name === "BACKGROUND_DEPLOYMENT_ID");
   if (
     manifest.backgroundDeploymentId
       ? identities.length !== 1 || identities[0]!.value !== manifest.backgroundDeploymentId
       : identities.length !== 0
   )
-    throw new CliError("recorded core task does not match the manifest background deployment identity");
+    throw new CliError("recorded harness task does not match the manifest background deployment identity");
   const flags = environment.filter((entry) => entry.name === "BACKGROUND_WORK_ENABLED");
   if (flags.length !== 1 || !["0", "1"].includes(flags[0]!.value))
-    throw new CliError("recorded core task must contain one explicit BACKGROUND_WORK_ENABLED value of 0 or 1");
+    throw new CliError("recorded harness task must contain one explicit BACKGROUND_WORK_ENABLED value of 0 or 1");
   return {
     enabled: flags[0]!.value === "1",
     ...(manifest.backgroundDeploymentId ? { deploymentId: manifest.backgroundDeploymentId } : {}),
@@ -3062,14 +3046,14 @@ async function awsBackgroundCohort(
   for (const workload of workloads) {
     if (manifest.tasks[workload] !== before.tasks[workload] || manifest.counts?.[workload] !== before.counts[workload])
       throw new CliError(`cannot control background work while ${workload} differs from the deployment manifest`);
-    const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-      "ecs",
-      "describe-task-definition",
-      "--task-definition",
-      before.tasks[workload]!,
-    ]).taskDefinition;
-    const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-      (item) => item.name === workload,
+    const container = workloadContainer(
+      awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
+        "ecs",
+        "describe-task-definition",
+        "--task-definition",
+        before.tasks[workload]!,
+      ]).taskDefinition,
+      workload,
     );
     if (typeof container?.image !== "string" || !isPinnedWorkloadImage(config, workload, container.image))
       throw new CliError(`${workload} does not have a trusted digest-pinned image`);
@@ -3080,20 +3064,20 @@ async function awsBackgroundCohort(
         canonicalJson(candidate.imageProvenance[workload]) !== canonicalJson(manifest.imageProvenance?.[workload]))
     )
       throw new CliError(`${workload} does not match the expected release candidate`);
-    if (workload === "core") {
+    if (workload === "harness") {
       const environment = (container.environment ?? []) as Array<{ name: string; value: string }>;
       if (
         environment.find((entry) => entry.name === "BACKGROUND_DEPLOYMENT_ID")?.value !==
         manifest.backgroundDeploymentId
       )
-        throw new CliError("core task definition does not match the recorded background deployment identity");
+        throw new CliError("harness task definition does not match the recorded background deployment identity");
     }
   }
-  const count = before.counts.core;
-  if (!count) throw new CliError("background ownership requires running core capacity");
+  const count = before.counts.harness;
+  if (!count) throw new CliError("background ownership requires running harness capacity");
   if (waitForReady)
     await awaitServiceTargets(config, {
-      core: { taskDefinition: before.tasks.core!, desiredCount: count },
+      harness: { taskDefinition: before.tasks.harness!, desiredCount: count },
     });
   const taskArns =
     awsJson<{ taskArns?: string[] }>(aws, [
@@ -3102,7 +3086,7 @@ async function awsBackgroundCohort(
       "--cluster",
       aws.cluster,
       "--service-name",
-      aws.services.core!.ecsService,
+      aws.services.harness!.ecsService,
       "--desired-status",
       "RUNNING",
     ]).taskArns ?? [];
@@ -3111,19 +3095,21 @@ async function awsBackgroundCohort(
       tasks?: Array<{ taskArn?: string; taskDefinitionArn?: string; lastStatus?: string; healthStatus?: string }>;
       failures?: unknown[];
     }>(aws, ["ecs", "describe-tasks", "--cluster", aws.cluster, "--tasks", ...batch]);
-    if (response.failures?.length) throw new CliError("cannot prove every running core task identity");
+    if (response.failures?.length) throw new CliError("cannot prove every running harness task identity");
     return response.tasks ?? [];
   });
   const current = tasks.filter(
     (task) =>
-      task.taskDefinitionArn === before.tasks.core && task.lastStatus === "RUNNING" && task.healthStatus === "HEALTHY",
+      task.taskDefinitionArn === before.tasks.harness &&
+      task.lastStatus === "RUNNING" &&
+      task.healthStatus === "HEALTHY",
   );
   if (
     current.length !== count ||
     current.some((task) => !task.taskArn) ||
     new Set(current.map((task) => task.taskArn)).size !== count
   )
-    throw new CliError("core does not have the exact healthy task cohort recorded in its deployment manifest");
+    throw new CliError("harness does not have the exact healthy task cohort recorded in its deployment manifest");
   return { deploymentId: manifest.backgroundDeploymentId, taskArns: current.map((task) => task.taskArn!), manifest };
 }
 
@@ -3262,8 +3248,8 @@ export async function awsBackgroundWorkCapacity(
       cohort.manifest.counts?.[workload],
     );
   }
-  if (canonicalJson(proof.workloads.core?.taskArns) !== canonicalJson([...cohort.taskArns].sort()))
-    throw new CliError("core task cohort changed while checking capacity");
+  if (canonicalJson(proof.workloads.harness?.taskArns) !== canonicalJson([...cohort.taskArns].sort()))
+    throw new CliError("harness task cohort changed while checking capacity");
   const finalManifest = currentDeploymentManifest(aws);
   if (canonicalJson(finalManifest) !== canonicalJson(cohort.manifest))
     throw new CliError("deployment manifest changed while checking capacity");
@@ -3278,9 +3264,13 @@ export async function awsStoppedCoreOwner(
   config: QmConfig,
   deploymentId: string,
 ): Promise<BackgroundWorkStatus | undefined> {
-  const state = describedServices(config, ["core"]).get("core");
-  if (!state || state.desiredCount !== 0) return undefined;
-  stableWorkloadCapacity(config, "core", state, state.taskDefinition ?? "", 0);
+  const workloads = ["edge", "harness"];
+  const states = describedServices(config, workloads);
+  if (workloads.some((workload) => states.get(workload)?.desiredCount !== 0)) return undefined;
+  for (const workload of workloads) {
+    const state = states.get(workload)!;
+    stableWorkloadCapacity(config, workload, state, state.taskDefinition ?? "", 0);
+  }
   return readProductionOwner(awsBackgroundWorkTransport(config, undefined, undefined, undefined, true), deploymentId);
 }
 
@@ -3289,7 +3279,7 @@ async function assertNotBackgroundOwner(config: QmConfig, current: DeploymentMan
   if (await awsStoppedCoreOwner(config, current.backgroundDeploymentId)) return;
   const status = await readBackgroundWork(awsBackgroundWorkTransport(config), current.backgroundDeploymentId);
   if (status.ownerDeploymentId === current.backgroundDeploymentId)
-    throw new CliError("hand background ownership to another deployment before replacing the current core tasks");
+    throw new CliError("hand background ownership to another deployment before replacing the current harness tasks");
 }
 
 export async function awsSetBackgroundWork(
@@ -3300,7 +3290,7 @@ export async function awsSetBackgroundWork(
   expectedOwnership?: Pick<BackgroundWorkStatus, "ownerDeploymentId">,
 ): Promise<BackgroundWorkStatus | undefined> {
   const { aws, workloads } = awsTopology(config, configDir);
-  if (!workloads.includes("core")) throw new CliError("background work requires the core workload");
+  if (!workloads.includes("harness")) throw new CliError("background work requires the harness workload");
   const candidate = candidatePath ? releaseCandidate(config, candidatePath) : undefined;
   assertAwsCallerAccount(aws);
   const confirmed = await withAwsLease(aws, async () => {
@@ -3317,18 +3307,16 @@ export async function awsSetBackgroundWork(
         throw new CliError(`cannot change background work while ${workload} differs from the deployment manifest`);
       }
     }
-    if (!before.counts.core) throw new CliError("cannot change background work while core is scaled down");
-    let coreTask: Record<string, unknown> | undefined;
-    for (const workload of candidate ? workloads : ["core"]) {
+    if (!before.counts.harness) throw new CliError("cannot change background work while harness is scaled down");
+    let harnessTask: Record<string, unknown> | undefined;
+    for (const workload of candidate ? workloads : ["harness"]) {
       const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
         "ecs",
         "describe-task-definition",
         "--task-definition",
         before.tasks[workload]!,
       ]).taskDefinition;
-      const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-        (item) => item.name === workload,
-      );
+      const container = workloadContainer(task, workload);
       if (!task || typeof container?.image !== "string" || !isPinnedWorkloadImage(config, workload, container.image)) {
         throw new CliError(`${workload} does not have a trusted digest-pinned image`);
       }
@@ -3340,7 +3328,7 @@ export async function awsSetBackgroundWork(
       ) {
         throw new CliError(`${workload} does not match the expected release candidate`);
       }
-      if (workload === "core") coreTask = task;
+      if (workload === "harness") harnessTask = task;
     }
     if (aws.backgroundWorkControl) {
       const cohort = await awsBackgroundCohort(config, configDir, candidatePath);
@@ -3366,18 +3354,16 @@ export async function awsSetBackgroundWork(
     if (expectedOwnership) throw new CliError("ownership preconditions require controlled background work");
     if (current.backgroundDeploymentId)
       throw new CliError("controlled background work cannot fall back to task replacement");
-    const desired = taskDefinitionForBackgroundWork(coreTask!, enabled);
-    const core = (coreTask!.containerDefinitions as Array<Record<string, unknown>>).find(
-      (item) => item.name === "core",
-    )!;
-    const environment = (core.environment ?? []) as Array<{ name: string; value: string }>;
+    const desired = taskDefinitionForBackgroundWork(harnessTask!, enabled);
+    const harness = workloadContainer(harnessTask, "harness")!;
+    const environment = (harness.environment ?? []) as Array<{ name: string; value: string }>;
     const currentFlag = environment.find((entry) => entry.name === "BACKGROUND_WORK_ENABLED")?.value;
     const timeoutMs = envNum("QM_AWS_ROLLOUT_DEADLINE_MS", 30 * 60_000);
     if (currentFlag === (enabled ? "1" : "0")) {
       await awaitServiceTargets(
         config,
         {
-          core: { taskDefinition: before.tasks.core!, desiredCount: before.counts.core },
+          harness: { taskDefinition: before.tasks.harness!, desiredCount: before.counts.harness },
         },
         timeoutMs,
       );
@@ -3385,14 +3371,14 @@ export async function awsSetBackgroundWork(
     }
     const dir = mkdtempSync(join(tmpdir(), "qm-background-work-"));
     try {
-      const file = join(dir, "core.json");
+      const file = join(dir, "harness.json");
       writeFileSync(file, JSON.stringify(desired));
       const target = registerTaskDefinition(config, file);
-      await applyServiceTargets(config, { core: target }, { core: before.counts.core }, { timeoutMs });
+      await applyServiceTargets(config, { harness: target }, { harness: before.counts.harness }, { timeoutMs });
       try {
         recordDeploymentManifest(
           aws,
-          { ...before.tasks, core: target },
+          { ...before.tasks, harness: target },
           {
             counts: current.counts,
             imageLabel: current.imageLabel,
@@ -3404,7 +3390,12 @@ export async function awsSetBackgroundWork(
       } catch (error) {
         const failures: string[] = [];
         try {
-          await applyServiceTargets(config, { core: before.tasks.core! }, { core: before.counts.core }, { timeoutMs });
+          await applyServiceTargets(
+            config,
+            { harness: before.tasks.harness! },
+            { harness: before.counts.harness },
+            { timeoutMs },
+          );
           manifestTransaction(aws, current, current.id);
         } catch (restoreError) {
           failures.push(`restoring background work: ${errMessage(restoreError)}`);
@@ -3484,7 +3475,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
       );
       if (baseline && before) {
         for (const workload of affected) {
-          if (aws.backgroundWorkControl && workload === "core") continue;
+          if (aws.backgroundWorkControl && workload === "harness") continue;
           const live = awsJson<{ taskDefinition?: { runtimePlatform?: { cpuArchitecture?: string } } }>(aws, [
             "ecs",
             "describe-task-definition",
@@ -3495,7 +3486,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
           const expected = workloadArchitecture(config, workload) === "arm64" ? "ARM64" : "X86_64";
           if (architecture !== expected)
             throw new CliError(
-              `cannot rotate secrets while ${workload} uses ${architecture} but its configuration selects ${expected}; set aws.services.${workload}.architecture to match the deployed image or rebuild it with qm up --build-from`,
+              `cannot rotate secrets while ${workload} uses ${architecture} but its configuration selects ${expected}; set aws.services.${configuredServiceKey(workload)}.architecture to match the deployed image or rebuild it with qm up --build-from`,
             );
         }
       }
@@ -3541,32 +3532,11 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
         if (affected.length) step("secret activation deferred to the first complete AWS deployment");
         return;
       }
-      if (aws.backgroundWorkControl && affected.includes("core")) {
+      if (aws.backgroundWorkControl && affected.includes("harness")) {
         note(
-          "core secret activation deferred: pause or hand over background ownership, then run qm up --restart core to allocate a new deployment identity",
+          "harness secret activation deferred: pause or hand over background ownership, then run qm up --restart harness to allocate a new deployment identity",
         );
-        affected.splice(affected.indexOf("core"), 1);
-      }
-      for (const [component, host, marker, expected] of [
-        ["admin", "web-ui", "ADMIN_ENABLED", "1"],
-        ["auth", "portal", "AUTH_EMBEDDED", "1"],
-        ["admin", "portal", "ADMIN_UPSTREAM", serviceEnvironment(config, "portal").ADMIN_UPSTREAM],
-      ] as const) {
-        if (!config.services.includes(component) || !workloads.includes(host)) continue;
-        const task = awsJson<{ taskDefinition?: Record<string, unknown> }>(aws, [
-          "ecs",
-          "describe-task-definition",
-          "--task-definition",
-          before.tasks[host]!,
-        ]).taskDefinition;
-        const container = (task?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-          (item) => item.name === host,
-        );
-        const environment = (container?.environment ?? []) as Array<{ name: string; value: string }>;
-        if (!environment.some((entry) => entry.name === marker && entry.value === expected)) {
-          step("secret activation deferred until combined web-ui and portal images are deployed with qm up");
-          return;
-        }
+        affected.splice(affected.indexOf("harness"), 1);
       }
       const arns = secretArns(config);
       const targets = { ...before.tasks };
@@ -3579,9 +3549,7 @@ export async function awsSecretsPush(config: QmConfig, configDir: string, envFil
             "--task-definition",
             before.tasks[workload]!,
           ]).taskDefinition ?? null;
-        const container = (live?.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-          (item) => item.name === workload,
-        );
+        const container = workloadContainer(live, workload);
         if (
           !container ||
           typeof container.image !== "string" ||
@@ -3845,6 +3813,7 @@ interface AwsEcsRoutingService {
   }>;
   loadBalancers?: Array<{
     targetGroupArn?: string;
+    containerPort?: number;
     advancedConfiguration?: {
       alternateTargetGroupArn?: string;
       productionListenerRule?: string;
@@ -3873,7 +3842,7 @@ export function assertAwsServiceDiscovery(
     ]).Namespaces ?? [];
   let namespaceId: string | undefined;
   let registrations: Array<{ Arn?: string; Name?: string }> = [];
-  for (const name of deployedAwsServices(aws)) {
+  for (const name of Object.keys(aws.services)) {
     const ecsService = ecsServices.get(name);
     const connect = ecsService ? awsServiceConnectConfiguration(ecsService) : undefined;
     if (!connect?.enabled) throw new Error(`ECS service ${name} does not have Service Connect enabled`);
@@ -3892,15 +3861,16 @@ export function assertAwsServiceDiscovery(
           `Name=NAMESPACE_ID,Values=${namespaceId},Condition=EQ`,
         ]).Services ?? [];
     }
-    const endpoints = connect.services?.filter((service) => service.portName === name) ?? [];
+    const portName = ecsContainerName(name);
+    const endpoints = connect.services?.filter((service) => service.portName === portName) ?? [];
     if (endpoints.length !== 1)
-      throw new Error(`ECS service ${name} does not publish its named ${name} port through Service Connect`);
+      throw new Error(`ECS service ${name} does not publish its named ${portName} port through Service Connect`);
     const endpoint = endpoints[0]!;
     const discoveryName = endpoint.discoveryName ?? endpoint.portName;
     if (!registrations.some((service) => service.Name === discoveryName && service.Arn)) {
       throw new Error(`service ${discoveryName} is missing from ${namespace.Name}`);
     }
-    const expectedDns = `${name}.${aws.networking.cloudMapNamespace}`;
+    const expectedDns = `${portName}.${aws.networking.cloudMapNamespace}`;
     const expectedPort = isServiceName(name) ? serviceDef(name).docker.internalPort : 8080;
     if (!endpoint.clientAliases?.some((alias) => alias.dnsName === expectedDns && alias.port === expectedPort)) {
       throw new Error(`ECS service ${name} does not publish the ${expectedDns}:${expectedPort} client alias`);
@@ -3910,7 +3880,7 @@ export function assertAwsServiceDiscovery(
 
 function awsEcsRoutingServices(config: QmConfig): ReadonlyMap<string, AwsEcsRoutingService> {
   const aws = requireAws(config);
-  const entries = deployedAwsServices(aws).map((name) => [name, aws.services[name]!] as const);
+  const entries = Object.keys(aws.services).map((name) => [name, aws.services[name]!] as const);
   const services: AwsEcsRoutingService[] = [];
   const failures: Array<{ arn?: string; reason?: string }> = [];
   for (const batch of chunks(
@@ -4034,10 +4004,16 @@ export function assertAwsPublicRouting(
   const aws = requireAws(config);
   const hash = (value: string, length: number): string =>
     createHash("sha1").update(value).digest("hex").slice(0, length);
+  const hasPortal = hostsWebEdge(config.services);
+  const frontDoor = hasPortal ? "portal" : "core";
+  const ingressService = (name: string): string => (name === "portal" || name === "core" ? "edge" : name);
+  const pinned = (name: string): string | undefined => {
+    if (name === frontDoor) return aws.services.edge?.targetGroup;
+    return ingressService(name) === "edge" ? undefined : aws.services[name]?.targetGroup;
+  };
   const targetName = (name: string): string =>
-    aws.services[name]?.targetGroup ??
+    pinned(name) ??
     `${aws.cluster.slice(0, 20)}-${name.replaceAll("-", "").slice(0, 4)}-${hash(`${aws.cluster}:${name}`, 6)}`;
-  const hasPortal = Boolean(aws.services.portal);
   const coreHosts = hasPortal ? awsCoreHostnames(config) : [];
   let ingress = ["core"];
   if (hasPortal) ingress = coreHosts.length ? ["portal", "core"] : ["portal"];
@@ -4066,11 +4042,14 @@ export function assertAwsPublicRouting(
     if (!target?.TargetGroupArn) throw new Error(`target group for ${name} is missing`);
     targets.set(name, target.TargetGroupArn);
     expectedTargetArns.add(target.TargetGroupArn);
-    const attachment = (routingServices.get(name)?.loadBalancers ?? []).find(
+    const attachment = (routingServices.get(ingressService(name))?.loadBalancers ?? []).find(
       (item) => item.targetGroupArn === target.TargetGroupArn,
     );
     if (!attachment) {
-      throw new Error(`ECS service ${name} is not attached to its target group`);
+      throw new Error(`ECS service ${ingressService(name)} is not attached to the ${name} target group`);
+    }
+    if (name === "portal" && attachment.containerPort !== PUBLIC_PORT) {
+      throw new Error(`the portal target group must reach edge on its public port ${PUBLIC_PORT}`);
     }
     const alternate = attachment.advancedConfiguration?.alternateTargetGroupArn;
     const productionRule = attachment.advancedConfiguration?.productionListenerRule;
@@ -4086,9 +4065,9 @@ export function assertAwsPublicRouting(
       expectedTargetArns.add(alternate);
     }
   }
-  for (const name of deployedAwsServices(aws)) {
+  for (const name of Object.keys(aws.services)) {
     if (
-      !ingress.includes(name) &&
+      !ingress.map(ingressService).includes(name) &&
       !(isServiceName(name) && serviceDef(name).tcpIngress) &&
       (routingServices.get(name)?.loadBalancers ?? []).length
     ) {
@@ -4546,13 +4525,28 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
     }>(aws, ["rds", "describe-db-instances", "--db-instance-identifier", rdsInstanceIdentifier(aws)]).DBInstances?.[0];
     if (database?.DBInstanceStatus !== "available" && database?.DBInstanceStatus !== "storage-optimization")
       throw new Error(`database is ${database?.DBInstanceStatus || "missing"}`);
-    const coreService = aws.services.core;
-    if (!coreService) throw new Error("aws.services.core is missing");
-    const coreGroups =
-      awsJson<{ services?: Array<{ networkConfiguration?: { awsvpcConfiguration?: { securityGroups?: string[] } } }> }>(
-        aws,
-        ["ecs", "describe-services", "--cluster", aws.cluster, "--services", coreService.ecsService],
-      ).services?.[0]?.networkConfiguration?.awsvpcConfiguration?.securityGroups ?? [];
+    const coreServices = ["edge", "harness"].map((workload) => {
+      const spec = aws.services[workload];
+      if (!spec) throw new Error(`aws.services.${workload} is missing`);
+      return [workload, spec.ecsService] as const;
+    });
+    const securityGroups = new Map(
+      (
+        awsJson<{
+          services?: Array<{
+            serviceName?: string;
+            networkConfiguration?: { awsvpcConfiguration?: { securityGroups?: string[] } };
+          }>;
+        }>(aws, [
+          "ecs",
+          "describe-services",
+          "--cluster",
+          aws.cluster,
+          "--services",
+          ...coreServices.map(([, ecsService]) => ecsService),
+        ]).services ?? []
+      ).map((service) => [service.serviceName, service.networkConfiguration?.awsvpcConfiguration?.securityGroups ?? []]),
+    );
     const databaseGroups = (database.VpcSecurityGroups ?? []).flatMap((group) =>
       group.VpcSecurityGroupId ? [group.VpcSecurityGroupId] : [],
     );
@@ -4570,14 +4564,18 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
           (group) => group.IpPermissions ?? [],
         ) ?? [])
       : [];
-    const reachable = permissions.some(
-      (permission) =>
-        permission.IpProtocol === "tcp" &&
-        (permission.FromPort ?? Infinity) <= 5432 &&
-        (permission.ToPort ?? -Infinity) >= 5432 &&
-        (permission.UserIdGroupPairs ?? []).some((pair) => pair.GroupId && coreGroups.includes(pair.GroupId)),
-    );
-    if (!reachable) throw new Error("database security groups do not allow the core ECS service on port 5432");
+    for (const [workload, ecsService] of coreServices) {
+      const groups = securityGroups.get(ecsService) ?? [];
+      const reachable = permissions.some(
+        (permission) =>
+          permission.IpProtocol === "tcp" &&
+          (permission.FromPort ?? Infinity) <= 5432 &&
+          (permission.ToPort ?? -Infinity) >= 5432 &&
+          (permission.UserIdGroupPairs ?? []).some((pair) => pair.GroupId && groups.includes(pair.GroupId)),
+      );
+      if (!reachable)
+        throw new Error(`database security groups do not allow the ${workload} ECS service on port 5432`);
+    }
     const databaseUrl = awsText(aws, [
       "secretsmanager",
       "get-secret-value",
@@ -4590,7 +4588,8 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
       throw new Error("DATABASE_URL does not point at the configured RDS endpoint");
   });
   const ecsServices = new Map<string, AwsEcsRoutingService>();
-  for (const service of deployedAwsServices(aws)) {
+  const checkedRepositories = new Set<string>();
+  for (const service of Object.keys(aws.services)) {
     const spec = aws.services[service]!;
     check(`ECS service ${spec.ecsService}`, () => {
       const found = awsJson<{ services?: AwsEcsRoutingService[] }>(aws, [
@@ -4604,6 +4603,8 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
       if (found?.status !== "ACTIVE") throw new Error(`service is ${found?.status ?? "missing"}`);
       ecsServices.set(service, found);
     });
+    if (checkedRepositories.has(spec.ecrRepository)) continue;
+    checkedRepositories.add(spec.ecrRepository);
     check(`ECR ${spec.ecrRepository}`, () => {
       const repository = awsJson<{ repositories?: Array<{ repositoryArn?: string }> }>(aws, [
         "ecr",
@@ -4630,7 +4631,7 @@ export async function awsDoctor(config: QmConfig, configDir: string): Promise<vo
         ]).logGroups ?? [];
       if (!found.some((item) => item.logGroupName === group)) {
         throw new Error(
-          `log group is missing — the awslogs driver refuses to start ${names.join(", ")} without it; create it or fix aws.services.${names.join("/")}.logGroup`,
+          `log group is missing — the awslogs driver refuses to start ${names.join(", ")} without it; create it or fix aws.services.${[...new Set(names.map(configuredServiceKey))].join("/")}.logGroup`,
         );
       }
     });
@@ -4710,7 +4711,7 @@ async function checkLive(
     if (!provenance) continue;
     const plugin = plugins.get(service);
     if (provenance.kind === "source-build") {
-      if (plugin?.kind === "image" || (isServiceName(service) && config.imageOverrides[service])) {
+      if (plugin?.kind === "image" || (isServiceName(service) && config.imageOverrides[serviceDef(service).docker.image])) {
         failures.push(
           `${service}: image build provenance drift (deployed from source, current workload uses a configured image)`,
         );
@@ -4772,9 +4773,7 @@ async function checkLive(
       failures.push(`${service}: no live task definition`);
       continue;
     }
-    const container = (live.containerDefinitions as Array<Record<string, unknown>> | undefined)?.find(
-      (item) => item.name === service,
-    );
+    const container = workloadContainer(live, service);
     const liveEnv = Object.fromEntries(
       ((container?.environment as Array<{ name: string; value: string }> | undefined) ?? []).map((item) => [
         item.name,
@@ -4802,7 +4801,7 @@ async function checkLive(
       const fields = taskDefinitionDiff(
         renderTaskDefinition(config, service, comparisonImage, arns, manifest.backgroundDeploymentId),
         live,
-      ).filter((field) => desiredImage || field !== `taskDefinition.containerDefinitions.${service}.image`);
+      ).filter((field) => desiredImage || field !== `taskDefinition.containerDefinitions.${ecsContainerName(service)}.image`);
       if (fields.length) failures.push(`${service}: task-definition drift (${fields.join(", ")})`);
     }
   }
@@ -4854,11 +4853,11 @@ async function checkLive(
           request: (body) => transport("POST", body),
         });
       } else {
-        await awsLiveSession(config, states.get("core")!);
+        await awsLiveSession(config, states.get("edge")!);
       }
-      if (opts.report ?? true) step("core: private live session smoke passed");
+      if (opts.report ?? true) step("edge: private live session smoke passed");
     } catch (error) {
-      failures.push(`core: private live session smoke failed: ${errMessage(error)}`);
+      failures.push(`edge: private live session smoke failed: ${errMessage(error)}`);
     }
   }
   if (failures.length)
