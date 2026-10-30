@@ -3,20 +3,6 @@ import { defaultModelForHarness } from "./pi-models.ts";
 import type { HarnessModelUtilities } from "../agent/harness.ts";
 import { type Api, type Model } from "@earendil-works/pi-ai";
 
-type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-const TURN_EFFORT_LEVELS = new Set<string>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultracode",
-  "auto",
-  "default",
-  "adaptive",
-]);
 import type { ScopeId } from "../types.ts";
 import { TitleRejected } from "../core/turn-error.ts";
 import { swallow } from "../util/errors.ts";

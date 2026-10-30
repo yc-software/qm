@@ -16,22 +16,8 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { type Api, type AssistantMessage, type Model, type ToolResultMessage, type Usage } from "@earendil-works/pi-ai";
-import { baseModelProviders, configuredModelForHarness, CONFIG_DEFAULTS, type Config } from "../config.ts";
+import { CONFIG_DEFAULTS, type Config } from "../config.ts";
 
-type LegacyThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-const TURN_EFFORT_LEVELS = new Set<string>([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-  "ultracode",
-  "auto",
-  "default",
-  "adaptive",
-]);
 import type { ConversationTurn, ScopeId, SessionEntry } from "../types.ts";
 import type { LlmCallUsage, LlmTransportMeta } from "../sessions/session-store.ts";
 import { NonRetryableTurnError, ProviderTurnError } from "../core/turn-error.ts";
@@ -39,7 +25,6 @@ import { MAX_LLM_REQUEST_BYTES } from "../core/attachments.ts";
 import { asError, swallow, swallowAs } from "../util/errors.ts";
 import { startPhase } from "../../plugins/chassis/src/error-reporting.ts";
 import {
-  defaultModelForHarness,
   defaultInteractiveThinkingLevel,
   modelDisplayName,
   resolveModel,
