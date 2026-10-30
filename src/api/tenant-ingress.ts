@@ -50,11 +50,11 @@ export async function withRequestTenant(
   req: IncomingMessage,
   res: ServerResponse,
   route: Pick<Route, "auth" | "unbound"> | undefined,
-  deps: { tenants?: TenantResolver; capabilitySecret: string | undefined },
+  deps: { tenants?: TenantResolver; capabilitySecret: string | undefined; unsignedTenant: string | null },
   next: () => Promise<void> | void,
 ): Promise<void> {
   if (route?.auth === "public") return next();
-  const tenant = await claimedTenant(req, route?.auth, deps.capabilitySecret);
+  const tenant = (await claimedTenant(req, route?.auth, deps.capabilitySecret)) ?? deps.unsignedTenant;
   if (!tenant && route?.unbound) return next();
   if (!tenant) {
     sendJson(res, 401, { error: "unauthorized", message: "this request carries no verifiable tenant" });
