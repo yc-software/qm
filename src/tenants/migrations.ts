@@ -82,15 +82,14 @@ export const TENANCY_BASE: PgMigrationDefinition = {
          INTO present;
        IF populated THEN
          SELECT count(*), min(id::text)::uuid INTO tenant_count, tenant FROM tenants;
-         IF tenant_count > 1 THEN
-           RAISE 'Rows in % need a tenant but this database has % tenants', target, tenant_count;
-         END IF;
-         IF tenant IS NULL THEN
+         IF tenant_count = 0 THEN
            IF to_regclass('qm_tenant') IS NOT NULL THEN
              EXECUTE 'SELECT id FROM qm_tenant' INTO tenant;
            END IF;
            INSERT INTO tenants(id, slug, name) VALUES (COALESCE(tenant, gen_random_uuid()), 'main', 'Main')
              RETURNING id INTO tenant;
+         ELSIF tenant_count > 1 AND NOT present THEN
+           RAISE 'Rows in % need a tenant but this database has % tenants', target, tenant_count;
          END IF;
        END IF;
        IF NOT present AND populated THEN
@@ -145,7 +144,17 @@ const indexOn = (table: string, { name, columns, where }: TenantIndex, unique = 
 function tenantTableStatements({ table, primaryKey, unique = [], replacesOrgId }: TenantTable): string[] {
   return [
     `SELECT qm_tenant_column('${table}')`,
-    ...(replacesOrgId ? [`ALTER TABLE ${table} DROP COLUMN IF EXISTS org_id`] : []),
+    ...(replacesOrgId
+      ? [
+          `DO $qm_one_org$ BEGIN
+             IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '${table}'::regclass AND attname = 'org_id') THEN
+               DELETE FROM ${table} WHERE org_id IS DISTINCT FROM
+                 (SELECT org_id FROM ${table} GROUP BY org_id ORDER BY count(*) DESC, org_id LIMIT 1);
+             END IF;
+           END $qm_one_org$`,
+          `ALTER TABLE ${table} DROP COLUMN IF EXISTS org_id`,
+        ]
+      : []),
     ...(primaryKey === undefined
       ? []
       : [

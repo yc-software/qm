@@ -1,7 +1,7 @@
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import type { Grant, Permission, ScopeId } from "../types.ts";
 import type { GrantPersistence } from "./acl-store.ts";
-import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { TENANCY_BASE, TENANT, tenantTables } from "../tenants/migrations.ts";
 import { currentTenant } from "../tenants/context.ts";
 
 function rowToGrant(r: Record<string, unknown>): Grant {
@@ -94,11 +94,25 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
         after: [
           `CREATE OR REPLACE FUNCTION acl_grants_bump_version() RETURNS trigger LANGUAGE plpgsql AS $fn$
       BEGIN
-        INSERT INTO acl_grants_version(only_row, v) VALUES (TRUE, 1)
-        ON CONFLICT (tenant_id, only_row) DO UPDATE SET v = acl_grants_version.v + 1;
+        IF TG_LEVEL = 'STATEMENT' THEN
+          UPDATE acl_grants_version SET v = v + 1;
+        ELSE
+          INSERT INTO acl_grants_version(tenant_id, only_row, v)
+          SELECT DISTINCT tenant, TRUE, 1
+            FROM (VALUES (CASE WHEN TG_OP <> 'INSERT' THEN OLD.tenant_id END),
+                         (CASE WHEN TG_OP <> 'DELETE' THEN NEW.tenant_id END)) changed(tenant)
+           WHERE tenant IS NOT NULL
+          ON CONFLICT (tenant_id, only_row) DO UPDATE SET v = acl_grants_version.v + 1;
+        END IF;
         RETURN NULL;
       END
       $fn$`,
+          `DROP TRIGGER IF EXISTS acl_grants_bump ON acl_grants`,
+          `CREATE TRIGGER acl_grants_bump AFTER INSERT OR UPDATE OR DELETE ON acl_grants
+      FOR EACH ROW EXECUTE FUNCTION acl_grants_bump_version()`,
+          `DROP TRIGGER IF EXISTS acl_grants_truncate ON acl_grants`,
+          `CREATE TRIGGER acl_grants_truncate AFTER TRUNCATE ON acl_grants
+      FOR EACH STATEMENT EXECUTE FUNCTION acl_grants_bump_version()`,
         ],
       },
     ),
@@ -108,17 +122,16 @@ export function createPostgresGrantStore(connectionString: string): GrantPersist
 
   return {
     async all() {
-      const versionRows = await q("SELECT v FROM acl_grants_version");
-      const version = versionRows.length ? String(versionRows[0]!.v) : null;
+      const versionRows = await q(`SELECT v FROM acl_grants_version WHERE tenant_id = ${TENANT}`);
+      const version = versionRows.length ? String(versionRows[0]!.v) : "0";
       const tenant = currentTenant();
       const cached = cache.get(tenant);
-      if (cached && version !== null && cached.v === version) return [...cached.grants];
+      if (cached?.v === version) return [...cached.grants];
       const rows = await q(
         "SELECT owner_scope_id, path, grantee_scope_id, permission, granted_by FROM acl_grants ORDER BY owner_scope_id, path, grantee_scope_id, permission",
       );
       const grants = rows.map(rowToGrant);
-      if (version === null) cache.delete(tenant);
-      else cache.set(tenant, { v: version, grants });
+      cache.set(tenant, { v: version, grants });
       return [...grants];
     },
     async put(g) {

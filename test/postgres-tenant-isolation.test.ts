@@ -21,6 +21,7 @@ interface Tenancy {
   app: ReturnType<typeof createPgPool>;
   admin: pg.Pool;
   url: string;
+  schema: string;
   a: string;
   b: string;
   sessionId: string;
@@ -53,7 +54,7 @@ async function withTenancy(fn: (ctx: Tenancy) => Promise<void>): Promise<void> {
     appUrl.password = APP_PASSWORD;
     const app = createPgPool(appUrl.toString());
     try {
-      await fn({ app, admin, url, a, b, sessionId: session.id });
+      await fn({ app, admin, url, schema, a, b, sessionId: session.id });
     } finally {
       await app.close();
     }
@@ -245,5 +246,37 @@ test("transactions and queued pool queries keep the tenant of the caller that is
       await client.query("ROLLBACK");
       client.release();
     }
+  });
+});
+
+test("acl grant caches and version bumps stay per tenant", { skip }, async () => {
+  await withTenancy(async ({ admin, url, schema, a, b }) => {
+    await admin.query(`GRANT CREATE ON SCHEMA ${schema} TO qm_app`);
+    const appUrl = new globalThis.URL(url);
+    appUrl.username = "qm_app";
+    appUrl.password = APP_PASSWORD;
+    const grants = createPostgresGrantStore(appUrl.toString());
+    const grant = (ref: string) => ({
+      ownerScopeId: scopeId("personal", "a"),
+      ref,
+      granteeScopeId: scopeId("personal", "b"),
+      permission: "read" as const,
+      grantedBy: "a",
+    });
+    await withTenant(a, () => grants.put(grant("a.md")));
+    assert.deepEqual(
+      (await withTenant(a, () => grants.all())).map((g) => g.ref),
+      ["a.md"],
+    );
+    assert.deepEqual(await withTenant(b, () => grants.all()), []);
+    await withTenant(b, () => grants.put(grant("b.md")));
+    assert.deepEqual(
+      (await withTenant(b, () => grants.all())).map((g) => g.ref),
+      ["b.md"],
+    );
+    assert.deepEqual(
+      (await withTenant(a, () => grants.all())).map((g) => g.ref),
+      ["a.md"],
+    );
   });
 });
