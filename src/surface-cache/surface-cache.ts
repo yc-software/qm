@@ -1,5 +1,6 @@
 import { orgId as configOrgId } from "../config.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
+import { jsonbSafe } from "../util/text.ts";
 import type {
   ActiveThread,
   CachedFile,
@@ -27,16 +28,8 @@ const MAX_READ_LIMIT = 500;
 const DEFAULT_SEARCH_LIMIT = 50;
 const DEFAULT_THREADS_LIMIT = 50;
 
-function wellFormed(value: unknown): unknown {
-  if (typeof value === "string") return value.replace(/\u0000/g, "").toWellFormed();
-  if (Array.isArray(value)) return value.map(wellFormed);
-  if (value && typeof value === "object")
-    return Object.fromEntries(Object.entries(value).map(([key, inner]) => [wellFormed(key), wellFormed(inner)]));
-  return value;
-}
-
 function normalizeEvent(event: IngestEvent): IngestEvent {
-  return wellFormed(event) as IngestEvent;
+  return JSON.parse(JSON.stringify(jsonbSafe(event))) as IngestEvent;
 }
 
 function clampLimit(limit: number | undefined, fallback: number): number {

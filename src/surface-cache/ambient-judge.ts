@@ -108,8 +108,6 @@ export interface AmbientJudgeDeps {
 }
 
 export async function judgeAmbientBatch(deps: AmbientJudgeDeps, batch: AmbientBatch): Promise<AmbientDecision> {
-  const shown = batch.messages.filter((m) => !m.deleted && (m.text ?? "").trim());
-  if (!shown.length && !batch.scheduled) return { act: false };
   if (!deps.judge) return { act: false };
   const raw = await deps.judge(AMBIENT_JUDGE_SYSTEM, renderAmbientPrompt(batch));
   const decision = parseAmbientDecision(raw);
