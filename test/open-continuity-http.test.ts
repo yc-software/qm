@@ -6,12 +6,15 @@ import { randomUUID } from "node:crypto";
 import { createMockHarness } from "./support/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { signedHeaders as chassisSignedHeaders } from "../plugins/chassis/src/core-client.ts";
+import { inChassisTenant } from "./support/signed-core.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+
+const signedHeaders = inChassisTenant(chassisSignedHeaders);
 
 mock.module("./support/mock-harness.ts", {
   namedExports: {

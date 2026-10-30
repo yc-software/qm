@@ -8,8 +8,7 @@ import type { AddressInfo } from "node:net";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { createServer } from "../src/api/server.ts";
-import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
+import { signedCoreHeaders } from "./support/signed-core.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
@@ -37,7 +36,6 @@ test("account API binds choice to the signed-in person, preserves connections, a
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "personal-account-")) }));
   const server = createServer(built.app, {
     signingSecret: SECRET,
-    requireSignedPortalIdentity: true,
     capabilitySecret: SECRET + "capability",
     portalIdentitySecret: SECRET + "portal",
     config: built.config,
@@ -49,15 +47,14 @@ test("account API binds choice to the signed-in person, preserves connections, a
   async function request(account: unknown, principalId = "alice@default-org", signedIn = "alice@default-org") {
     const path = "/v1/user-model-auth/account";
     const body = JSON.stringify({ account, principalId, nonce: crypto.randomUUID() });
-    const ts = Math.floor(Date.now() / 1000);
+    const headers = await signedCoreHeaders(SECRET, "POST", path, body, {
+      actor: signedIn,
+      identitySecret: SECRET + "portal",
+      headers: { "content-type": "application/json" },
+    });
     return fetch(base + path, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${body}`),
-        "x-portal-identity": await mintPortalIdentity({ p: signedIn, exp: Date.now() + 60_000 }, SECRET + "portal"),
-      },
+      headers,
       body,
     });
   }
