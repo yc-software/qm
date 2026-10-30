@@ -53,12 +53,10 @@ import {
   modelSupportedByHarness,
   modelSupportsFastMode,
   fastModeModelIds,
-  defaultWebuiModelIds,
 } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { selectableModelCatalog } from "../src/model/model-catalog.ts";
+import { builtInModelCatalog, selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
-import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
 
 const createModelOverlayStore: typeof createStore = (backing, write) =>
   createStore(backing, write, async () => ({ fingerprint: "fixture", probe: async () => {} }));
@@ -128,8 +126,7 @@ test("store reload and independent readers observe edits and soft deletion witho
   const inFlight = getRequiredModel(MODEL_ID);
   assert.equal(contextTokenBudgetForModel(MODEL_ID), 150_000);
   assert.deepEqual(inFlight.cost, spec.cost);
-  assert.ok(defaultWebuiModelIds().includes(MODEL_ID));
-  assert.equal(validateWebTurnModelOptions({ model: MODEL_ID }, null), null);
+  assert.ok(builtInModelCatalog().some((m) => m.id === MODEL_ID));
   assert.equal(modelSupportedByHarness(MODEL_ID, "pi"), true);
   assert.equal(modelSupportedByHarness(MODEL_ID, "claude"), false);
   assert.equal(resolveModel(`codex/${MODEL_ID}`), undefined);

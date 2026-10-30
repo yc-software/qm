@@ -1,5 +1,6 @@
 import { gatewayModelCatalog } from "./gateway-models.ts";
 import {
+  modelOfferedInWebui,
   modelSupportedByHarness,
   registerOpenRouterCatalogModel,
   resolveModel,
@@ -205,6 +206,18 @@ export function selectableCatalogForHarness(
   return catalog.filter(
     (model) => (model.provider !== "openrouter" || harness === "pi") && modelSupportedByHarness(model.id, harness),
   );
+}
+
+/** The web picker's model ids when no allowlist is set; web turns validate against the same list. */
+export async function webuiCatalogModelIds(
+  harness: string,
+  openrouter: boolean,
+  fetcher?: typeof fetch,
+): Promise<string[]> {
+  const catalog = openrouter ? await selectableModelCatalog(fetcher) : builtInModelCatalog();
+  return selectableCatalogForHarness(catalog, harness)
+    .filter((model) => modelOfferedInWebui(model.id))
+    .map((model) => model.id);
 }
 
 export function cachedModelCatalog(fetcher: typeof fetch = fetch): {

@@ -98,6 +98,42 @@ test("custom provider lifecycle: register, list, resolve, delete — admin only,
   }
 });
 
+test("a custom model the picker offers is accepted on web turns when no allowlist is set (#952)", async () => {
+  const srv = start();
+  try {
+    const put = await fetch(`${srv.base}/v1/admin/custom-providers/acme-gateway`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify(BODY),
+    });
+    assert.equal(put.status, 200);
+    const model = "custom/acme-gateway/acme-large";
+    const surface = (await (await fetch(`${srv.base}/v1/surface-config`, { headers: USER })).json()) as {
+      webuiModels: string[];
+    };
+    assert.ok(surface.webuiModels.includes(model), "picker offers the custom model");
+
+    const turn = (threadRef: string) =>
+      srv.built.app.turn({
+        surface: "web",
+        actor: { externalId: "bob" },
+        conversation: { kind: "dm", threadRef },
+        text: "hello",
+        model,
+        async: true,
+      });
+    const accepted = await turn("web:bob:custom-no-allowlist");
+    assert.equal(accepted.status, "queued", JSON.stringify(accepted));
+
+    await srv.built.config.setWebuiModels("org:default-org", ["claude-opus-4-8"]);
+    const refused = await turn("web:bob:custom-allowlist-miss");
+    assert.equal(refused.status, "refused");
+    assert.equal(refused.status === "refused" && refused.reason, "that model is not enabled for the web UI");
+  } finally {
+    await srv.close();
+  }
+});
+
 test("a rejected key blocks registration unless validate:false", async () => {
   const srv = start(async () => new Response(null, { status: 401 }));
   try {

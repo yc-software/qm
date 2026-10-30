@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   MODEL_REGISTRY,
   SELECTABLE_BASE_MODELS,
-  DEFAULT_WEBUI_MODEL_IDS,
   FAST_MODE_MODEL_IDS,
   resolveModel,
   modelSupportsFastMode,
@@ -15,6 +14,7 @@ import {
   modelProviderAvailabilityFor,
 } from "../src/model/pi-models.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
+import { webuiCatalogModelIds } from "../src/model/model-catalog.ts";
 
 test("registry model identifiers are unique", () => {
   const ids = MODEL_REGISTRY.map((model) => model.id);
@@ -27,32 +27,11 @@ test("every registry model resolves via pi-ai (nothing offered that turns can't 
   }
 });
 
-test("picker ⊆ gate: every selectable base model is web-ui-enabled", () => {
-  const webui = new Set(DEFAULT_WEBUI_MODEL_IDS);
-  for (const m of SELECTABLE_BASE_MODELS) {
-    assert.ok(
-      webui.has(m.id),
-      `${m.id} is offered in the picker but not in the web-ui gate set — this is the drift that 403s`,
-    );
-  }
+test("regression: gpt-5.6-sol is web-ui-enabled (the reported 403)", async () => {
+  assert.ok((await webuiCatalogModelIds("pi", false)).includes("gpt-5.6-sol"));
 });
 
-test("every web-ui-enabled model passes the web-turn model gate (no 403 for an offered model)", () => {
-  for (const id of DEFAULT_WEBUI_MODEL_IDS) {
-    assert.equal(
-      validateWebTurnModelOptions({ model: id }, null),
-      null,
-      `${id} must not be refused by validateWebTurnModelOptions`,
-    );
-  }
-});
-
-test("regression: gpt-5.6-sol is web-ui-enabled (the reported 403)", () => {
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-5.6-sol"));
-  assert.equal(validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null), null);
-});
-
-test("gpt-6-astra is offered with its published context, output ceiling, and rates", () => {
+test("gpt-6-astra is offered with its published context, output ceiling, and rates", async () => {
   const model = resolveModel("gpt-6-astra");
   assert.ok(model, "gpt-6-astra must resolve");
   assert.equal(model.provider, "openai");
@@ -70,8 +49,7 @@ test("gpt-6-astra is offered with its published context, output ceiling, and rat
   assert.deepEqual((model.cost as { tiers?: unknown }).tiers, [
     { inputTokensAbove: 272_000, input: 20, output: 75, cacheRead: 2, cacheWrite: 25 },
   ]);
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes("gpt-6-astra"));
-  assert.equal(validateWebTurnModelOptions({ model: "gpt-6-astra" }, null), null);
+  assert.ok((await webuiCatalogModelIds("pi", false)).includes("gpt-6-astra"));
 });
 
 test("Opus 5.5 inherits adaptive thinking without off, with its own rates and limits", () => {
@@ -97,10 +75,10 @@ test("Opus 5.5 inherits adaptive thinking without off, with its own rates and li
   assert.equal(resolveModel("claude-opus-4-8")?.thinkingLevelMap?.xhigh, "xhigh");
 });
 
-test("Opus 5.5 is selectable with compatible harnesses and credentials, without changing defaults", () => {
+test("Opus 5.5 is selectable with compatible harnesses and credentials, without changing defaults", async () => {
   const id = "claude-opus-5-5";
   assert.ok(SELECTABLE_BASE_MODELS.some((model) => model.id === id));
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok((await webuiCatalogModelIds("pi", false)).includes(id));
   assert.ok(FAST_MODE_MODEL_IDS.includes(id));
   assert.equal(safeModelMetadata(id)?.label, "Opus 5.5");
   for (const harness of ["pi", "claude"]) {
@@ -108,16 +86,16 @@ test("Opus 5.5 is selectable with compatible harnesses and credentials, without 
     assert.equal(defaultModelForHarness(harness), "claude-opus-5");
   }
   assert.match(
-    validateWebTurnModelOptions({ model: id }, null, { anthropic: false, openai: true, openrouter: false }) ?? "",
+    validateWebTurnModelOptions({ model: id }, [id], { anthropic: false, openai: true, openrouter: false }) ?? "",
     /provider isn't configured/,
   );
   assert.equal(
-    validateWebTurnModelOptions({ model: id }, null, { anthropic: true, openai: false, openrouter: false }),
+    validateWebTurnModelOptions({ model: id }, [id], { anthropic: true, openai: false, openrouter: false }),
     null,
   );
 });
 
-test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, and leaves defaults alone", () => {
+test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, and leaves defaults alone", async () => {
   const id = "claude-sonnet-5-5";
   const model = resolveModel(id);
   assert.ok(model);
@@ -125,7 +103,7 @@ test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, an
   assert.equal((model.compat as { supportsTemperature?: boolean }).supportsTemperature, false);
   assert.deepEqual(model.cost, { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, tiers: undefined });
   assert.equal(safeModelMetadata(id)?.label, "Sonnet 5.5");
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok((await webuiCatalogModelIds("pi", false)).includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
   for (const harness of ["pi", "claude"]) {
     assert.equal(modelSupportedByHarness(id, harness), true);
@@ -133,7 +111,7 @@ test("Sonnet 5.5 never turns thinking off, rejects temperature and fast mode, an
   }
 });
 
-test("Haiku 5.5 offers every effort, keeps thinking off available, rejects temperature and fast mode, and leaves defaults alone", () => {
+test("Haiku 5.5 offers every effort, keeps thinking off available, rejects temperature and fast mode, and leaves defaults alone", async () => {
   const id = "claude-haiku-5-5";
   const model = resolveModel(id);
   assert.ok(model);
@@ -154,7 +132,7 @@ test("Haiku 5.5 offers every effort, keeps thinking off available, rejects tempe
     "max",
     "ultracode",
   ]);
-  assert.ok(DEFAULT_WEBUI_MODEL_IDS.includes(id));
+  assert.ok((await webuiCatalogModelIds("pi", false)).includes(id));
   assert.ok(!FAST_MODE_MODEL_IDS.includes(id));
   for (const harness of ["pi", "claude"]) {
     assert.equal(modelSupportedByHarness(id, harness), true);
@@ -209,10 +187,14 @@ test("a company ChatGPT subscription serves OpenAI models that have a subscripti
 
 test("web-turn gate refuses a keyless model cleanly, accepts it once the provider is configured", () => {
   const noOpenai = { anthropic: true, openai: false, openrouter: false };
-  const refused = validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null, noOpenai);
+  const refused = validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, ["gpt-5.6-sol"], noOpenai);
   assert.match(refused ?? "", /provider isn't configured/);
   assert.equal(
-    validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, null, { anthropic: true, openai: true, openrouter: false }),
+    validateWebTurnModelOptions({ model: "gpt-5.6-sol" }, ["gpt-5.6-sol"], {
+      anthropic: true,
+      openai: true,
+      openrouter: false,
+    }),
     null,
   );
 });

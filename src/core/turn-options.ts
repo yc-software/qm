@@ -1,6 +1,5 @@
 import type { RuntimePurpose } from "../resolution/config-store.ts";
 import {
-  defaultWebuiModelIds,
   THINKING_LEVELS,
   serviceableModelIds,
   modelServiceable,
@@ -52,11 +51,10 @@ export function turnModelOptions(input: {
 
 export function validateWebTurnModelOptions(
   input: { model?: string; thinkingLevel?: string },
-  enabledModels: readonly string[] | null,
+  enabledModels: readonly string[],
   providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
 ): string | null {
-  const enabled = enabledModels ?? defaultWebuiModelIds();
-  const allowedModels = serviceableModelIds(enabled, providers);
+  const allowedModels = serviceableModelIds(enabledModels, providers);
   if (input.model && !allowedModels.includes(input.model)) {
     return resolveModel(input.model) && !modelServiceable(input.model, providers)
       ? "that model isn't available on this deployment (its provider isn't configured)"
