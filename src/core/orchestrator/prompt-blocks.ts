@@ -6,7 +6,7 @@ import type { CandidateDestination, GatewayContext, GrantedHandle, SessionEntry 
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
 
-export const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
+const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
   `${m.displayName} (${[m.principalId, m.slackId].filter(Boolean).join(", ")})`;
 
 export function renderSandboxProviders(
