@@ -40,7 +40,8 @@ function attachmentText(attachment: SlackNode): string {
   ]
     .map((part) => part.trim())
     .filter(Boolean);
-  return (parts.length ? parts : [str(attachment.fallback).trim()]).filter(Boolean).join("\n");
+  if (parts.length) return parts.join("\n");
+  return Array.isArray(attachment.blocks) ? "" : str(attachment.fallback).trim();
 }
 
 function forwardLabel(attachment: SlackNode): string {

@@ -102,6 +102,12 @@ test("slackMessageContent renders legacy attachment fields and falls back only w
         fallback: "fallback summary",
       },
       { fallback: "only a fallback" },
+      {
+        fallback: "[no preview available]",
+        blocks: [
+          { type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: "Ack" }, value: "ack" }] },
+        ],
+      },
     ],
   });
 
