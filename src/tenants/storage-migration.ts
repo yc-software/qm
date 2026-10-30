@@ -195,7 +195,7 @@ export async function migrateDir(root: string, tenants: ReadonlySet<string>): Pr
   return moved;
 }
 
-export async function migrateTenantStorage(
+async function migrateTenantStorage(
   config: Config,
   tenants: ReadonlySet<string>,
   clientFor: (region?: string, endpoint?: string) => S3Send = (region, endpoint) =>
