@@ -92,10 +92,11 @@ Every turn runs through a central core, which can use a variety of models and ha
 to generate the response. A Postgres persistence layer holds user data, session history,
 and other durable state. The agent has a small, fixed tool surface; one of those tools is
 `execute`, which runs commands in the scope's own isolated sandbox — its durable computer,
-where installed tools stay installed. The web UI and admin panel share one service; the portal and optional built-in
-auth broker share another. These modules communicate with core over its HTTP API.
-See [combined services](docs/combined-services.md) for configuration and migration;
-Slack is an optional in-process plugin that core starts
+where installed tools stay installed. Core deploys as two services from one image: the
+edge serves HTTP and enqueues turns, and the harness claims and runs them. The portal, the
+web UI with its admin panel, and the optional built-in auth broker run inside the edge on
+its public port. See [edge and harness](docs/combined-services.md) for configuration and
+migration; Slack is an optional in-process plugin that the edge starts
 and supervises through a direct service client.
 
 The core runs TypeScript directly on Node and uses Fastify for HTTP. The Slack plugin
