@@ -27,6 +27,9 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
   let busy = false;
   let hint = "";
   let resetHint = "";
+  let offboard: any = null;
+  let offboardHint = "";
+  let deactivated = !!d.deactivated;
   let credentials: any = null;
   let credentialError = "";
   let sort = "default";
@@ -84,6 +87,124 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
       busy = false;
       draw();
     }
+  }
+  async function runOffboard(apply: boolean) {
+    busy = true;
+    offboardHint = apply ? "Offboarding…" : "Checking what this person owns…";
+    draw();
+    try {
+      const result = await s.api("POST", "/api/users/" + encodeURIComponent(principal) + "/offboard", { apply });
+      if (!result.ok) offboardHint = result.data?.message || "Failed (" + result.status + ").";
+      else {
+        offboard = result.data;
+        const failed = offboard.changes.filter((c: any) => c.result === "failed").length;
+        if (offboard.changes.some((c: any) => c.kind === "sign_in" && c.result === "done")) deactivated = true;
+        offboardHint = "";
+        if (apply) offboardHint = failed ? failed + " change(s) failed. Preview again to retry them." : "Done.";
+      }
+    } catch {
+      offboardHint = "Network error. Try again.";
+    } finally {
+      busy = false;
+      draw();
+    }
+  }
+  async function confirmOffboard() {
+    const n = offboard?.changes?.length || 0;
+    if (
+      !s.confirm(
+        "Offboard " +
+          principal +
+          "? This applies the " +
+          n +
+          " change(s) listed. Retired computers lose their disks. Conversations, memory and files are kept.",
+      )
+    )
+      return;
+    await runOffboard(true);
+  }
+  async function reactivate() {
+    if (!s.confirm("Turn sign-in back on for " + principal + "? Archived items stay archived.")) return;
+    busy = true;
+    offboardHint = "Reactivating…";
+    draw();
+    try {
+      const result = await s.api("POST", "/api/users/" + encodeURIComponent(principal) + "/reactivate");
+      if (!result.ok) offboardHint = result.data?.message || "Failed (" + result.status + ").";
+      else {
+        deactivated = false;
+        offboard = null;
+        offboardHint = "Sign-in is back on.";
+      }
+    } catch {
+      offboardHint = "Network error. Try again.";
+    } finally {
+      busy = false;
+      draw();
+    }
+  }
+  function offboarding() {
+    const changes = offboard?.changes || [];
+    const kept = offboard?.kept || [];
+    const pending = offboard && !offboard.applied;
+    return card(
+      "Offboarding",
+      "Turn off a departed person's sign-in and clean up what they own. Conversations, memory and files stay as the record.",
+      html`<div>
+        ${
+          deactivated
+            ? html`<p class="obstatus">
+                Sign-in: ${badge("deactivated", "warn")}
+                <button type="button" class="link" ?disabled=${busy} @click=${reactivate}>Reactivate sign-in</button>
+              </p>`
+            : nothing
+        }
+        ${
+          offboard
+            ? table(
+                pending ? ["Change", "Item", "Scope"] : ["Change", "Item", "Scope", "Result"],
+                changes.map((c: any) => [
+                  { node: stacked(c.action.replaceAll("_", " "), c.kind.replaceAll("_", " ")) },
+                  { node: stacked(c.label, c.id), cls: "mono" },
+                  { node: muted(c.scopeId) },
+                  ...(pending
+                    ? []
+                    : [
+                        { node: c.result === "done" ? badge("done", "ok") : stacked(badge("failed", "warn"), c.error) },
+                      ]),
+                ]),
+                pending ? "Nothing to change." : "Nothing was changed.",
+              )
+            : nothing
+        }
+        ${
+          kept.length
+            ? table(
+                ["Kept", "Item", "Scope", "Why"],
+                kept.map((k: any) => [
+                  { node: muted(k.kind.replaceAll("_", " ")) },
+                  { node: stacked(k.label, k.id), cls: "mono" },
+                  { node: muted(k.scopeId) },
+                  { node: muted(k.reason) },
+                ]),
+                "",
+              )
+            : nothing
+        }
+        <div class="obactions">
+          ${
+            pending && changes.length
+              ? html`<button type="button" class="danger" ?disabled=${busy} @click=${confirmOffboard}>
+                  Offboard (${changes.length} change${changes.length === 1 ? "" : "s"})
+                </button>`
+              : html`<button type="button" ?disabled=${busy} @click=${() => runOffboard(false)}>
+                  Preview offboarding
+                </button>`
+          }
+        </div>
+        <p class="hint">${offboardHint}</p>
+      </div>`,
+    );
   }
   async function showUsage(grant: any) {
     const request = ++usageRequest;
@@ -307,7 +428,7 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
             </button>
             <p class="hint">${resetHint}</p>
           </div>`,
-        )}
+        )}${offboarding()}
       </div>`,
     );
   }
