@@ -18,6 +18,7 @@ import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 bindTestTenant();
 
@@ -74,7 +75,7 @@ test("C3 — a catalog host wrongly listed as a service host is detectable via t
 const SECRET = "invariant-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;
 
-test("cross-org — the callback rejects sealed state minted for a different org BEFORE exchange", async () => {
+test("cross-tenant — the callback rejects sealed state that names no tenant BEFORE exchange", async () => {
   let exchanged = false;
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "xorg-")), signingSecret: SECRET }));
   const server = createServer(built.app, {
@@ -90,19 +91,15 @@ test("cross-org — the callback rejects sealed state minted for a different org
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    const state = await sealOAuthState(
-      {
-        provider: "google",
-        principalId: "U1",
-        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
-        orgId: "other",
-      },
-      { secret: SECRET },
+    const redirectUri = `${base}/v1/connectors/oauth/google/callback`;
+    const state = await mintSignedPayload(
+      { provider: "google", principalId: "U1", redirectUri, issuedAt: Date.now(), nonce: "n1", orgId: "other" },
+      SECRET,
     );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
+    const res = await fetch(`${redirectUri}?code=c&state=${encodeURIComponent(state)}`);
     assert.equal(res.status, 400);
-    assert.match(await res.text(), /different org/);
-    assert.equal(exchanged, false, "exchange must NOT run for a foreign-org state");
+    assert.match(await res.text(), /invalid OAuth state/);
+    assert.equal(exchanged, false, "exchange must NOT run for a state that names no tenant");
     assert.equal(await built.connectorTokens.connectorAccessToken("gmail.googleapis.com", "U1"), null);
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
@@ -122,7 +119,12 @@ test("empty-token guard — an adapter returning no access token fails the conne
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const state = await sealOAuthState(
-      { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
+      {
+        provider: "google",
+        principalId: "U1",
+        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+        tenant: TEST_TENANT,
+      },
       { secret: SECRET },
     );
     const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
