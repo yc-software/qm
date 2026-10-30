@@ -139,6 +139,8 @@ test("current membership resolves directory identity aliases and fails closed wh
         principalId === "u1@example.com" ? { principalId: "u1@example.com", slackId: "U1" } : null,
       channelMember: async (_channelId, principalId) => principalId === "U1",
       groupMember: async () => false,
+      channelMembership: async () => undefined,
+      groupMembership: async () => undefined,
     },
   });
   assert.equal(await member("u1@example.com", scopeId("channel", "C1")), true);

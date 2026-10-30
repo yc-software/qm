@@ -16,6 +16,8 @@ function unknownChannelDirectory() {
   return {
     channelMember: async (_c: string, _pid: string) => false,
     groupMember: async (_g: string, _pid: string) => false,
+    channelMembership: async (): Promise<boolean | undefined> => undefined,
+    groupMembership: async (): Promise<boolean | undefined> => undefined,
     listChannelsFor: async (): Promise<{ channelId: string; name: string }[]> => [],
     channelPrivacy: async (): Promise<boolean | undefined> => undefined,
     list: async () => [{ principalId: OWNER, displayName: "Pete" }],
