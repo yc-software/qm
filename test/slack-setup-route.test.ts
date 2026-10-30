@@ -6,6 +6,9 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type SlackSetupStatus = {
   configured: boolean;
