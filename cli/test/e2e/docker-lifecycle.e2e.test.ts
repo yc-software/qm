@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   runCli,
@@ -25,6 +25,12 @@ const suffix = (names: string[], end: string): string | undefined => names.find(
 
 function lifecycleSkip(): string | false {
   if (!dockerAvailable()) return "no Docker daemon reachable";
+  try {
+    const socket = process.env.DOCKER_HOST?.slice("unix://".length) || "/var/run/docker.sock";
+    statSync(socket);
+  } catch {
+    return "Docker socket for local sandbox is not readable on this host";
+  }
   const pre = preexistingServiceImages(SERVICES);
   if (pre.length) return `refusing to clobber your local images: ${pre.join(", ")} (docker rmi them to run this test)`;
   return false;
