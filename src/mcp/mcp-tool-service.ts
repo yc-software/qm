@@ -1,7 +1,7 @@
 import type { ConnectorTokenStore } from "../credentials/keychain.ts";
 import type { AuditLog } from "../audit/audit-log.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
-import { setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
+import { setPublicOAuthClientSource, setPublicOAuthClients, type PublicOAuthClient } from "../connectors/oauth.ts";
 import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { boundTenant, perTenant } from "../tenants/context.ts";
@@ -9,6 +9,7 @@ import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpL
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
+const COLD_TOOL_WAIT_MS = 1_000;
 const CATALOG_TTL_MS = 60_000;
 const CATALOG_CACHE_MAX = 1_000;
 const CATALOG_MAX_TOOLS = 5_000;
@@ -291,63 +292,60 @@ export function createMcpToolService(opts: {
     return run;
   }
 
+  async function serverTools(server: McpServer): Promise<McpToolDescriptor[]> {
+    if (server.catalog) return [catalogDescriptor(server)];
+    const next: McpToolDescriptor[] = [];
+    try {
+      let tools: NonNullable<McpServer["tools"]>;
+      let about = server.about;
+      if (server.auth === "oauth-user") {
+        next.push({
+          name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+          serverId: server.id,
+          serverName: server.name,
+          remoteName: "sign_in",
+          signIn: true,
+          description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
+          inputSchema: { type: "object", properties: {} },
+          readOnly: true,
+          needsApproval: false,
+        });
+        tools = server.tools ?? [];
+        if (!tools.length) return next;
+      } else {
+        const listing = await clientFor(server).listTools({ headers: headersFor(server, undefined) });
+        tools = listing.tools;
+        about = listing.about ?? about;
+      }
+      for (const tool of tools) {
+        next.push({
+          name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+          serverId: server.id,
+          serverName: server.name,
+          ...(about ? { serverAbout: about } : {}),
+          remoteName: tool.name,
+          description: tool.description || `${tool.name} on ${server.name}`,
+          inputSchema: modelInputSchema(tool.inputSchema),
+          readOnly: server.readOnly,
+          needsApproval: mcpToolNeedsApproval(server, tool.annotations),
+        });
+      }
+      record("list", server.id, `ok tools=${tools.length}`);
+    } catch (e) {
+      record("list", server.id, `error: ${errMessage(e)}`);
+    }
+    return next;
+  }
+
   async function load(state: ReturnType<typeof tenantState>): Promise<void> {
     state.catalogs.clear();
     const all = await opts.servers.list();
     setPublicOAuthClients(mcpPublicOAuthClients(all));
     const servers = all.filter((s) => s.enabled);
-    const next: McpToolDescriptor[] = [];
-    const nextPerUser = new Map<string, McpServer>();
-    for (const server of servers) {
-      try {
-        let tools: NonNullable<McpServer["tools"]>;
-        let about = server.about;
-        if (server.catalog) {
-          next.push(catalogDescriptor(server));
-          continue;
-        }
-        if (server.auth === "oauth-user") {
-          nextPerUser.set(server.id, server);
-          next.push({
-            name: `${server.id}_sign_in`.replace(/[^a-zA-Z0-9_-]/g, "_"),
-            serverId: server.id,
-            serverName: server.name,
-            remoteName: "sign_in",
-            signIn: true,
-            description: `Connect your own ${server.name} account and load its tools. Call this before anything else on ${server.name}.`,
-            inputSchema: { type: "object", properties: {} },
-            readOnly: true,
-            needsApproval: false,
-          });
-          tools = server.tools ?? [];
-          if (!tools.length) continue;
-        } else {
-          const listing = await clientFor(server).listTools({ headers: headersFor(server, undefined) });
-          tools = listing.tools;
-          about = listing.about ?? about;
-        }
-        for (const tool of tools) {
-          next.push({
-            name: `${server.id}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
-            serverId: server.id,
-            serverName: server.name,
-            ...(about ? { serverAbout: about } : {}),
-            remoteName: tool.name,
-            description: tool.description || `${tool.name} on ${server.name}`,
-            inputSchema: modelInputSchema(tool.inputSchema),
-            readOnly: server.readOnly,
-            needsApproval: mcpToolNeedsApproval(server, tool.annotations),
-          });
-        }
-        record("list", server.id, `ok tools=${tools.length}`);
-      } catch (e) {
-        record("list", server.id, `error: ${errMessage(e)}`);
-      }
-    }
-    // De-duplicate on the namespaced name; first server wins deterministically.
+    const next = (await Promise.all(servers.map(serverTools))).flat();
     const seen = new Set<string>();
     state.snapshot = next.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)));
-    state.perUserServers = nextPerUser;
+    state.perUserServers = new Map(servers.filter((s) => !s.catalog && s.auth === "oauth-user").map((s) => [s.id, s]));
   }
 
   async function connected(server: McpServer, principalId: string | undefined): Promise<boolean> {
@@ -363,16 +361,24 @@ export function createMcpToolService(opts: {
     void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   }
 
-  async function loaded(): Promise<ReturnType<typeof tenantState>> {
+  async function loaded(maxWaitMs = Infinity): Promise<ReturnType<typeof tenantState>> {
     const state = tenantState();
-    if (state.loadedAt === undefined && !closed)
-      await (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
-    else refreshIfStale(state);
+    if (state.loadedAt !== undefined || closed) {
+      refreshIfStale(state);
+      return state;
+    }
+    const first = (state.pending ?? refresh()).catch(reportFailureAs("mcp: refresh tools", undefined));
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      if (Number.isFinite(maxWaitMs)) timer = setTimeout(resolve, maxWaitMs);
+    });
+    await Promise.race([first, deadline]);
+    clearTimeout(timer);
     return state;
   }
 
   async function toolDefsFor(principalId?: string): Promise<McpToolDescriptor[]> {
-    const { snapshot: current, perUserServers: gated } = await loaded();
+    const { snapshot: current, perUserServers: gated } = await loaded(COLD_TOOL_WAIT_MS);
     if (!gated.size) return current;
     const withTools = new Set(current.filter((t) => gated.has(t.serverId) && !t.signIn).map((t) => t.serverId));
     const ready = new Set<string>();
@@ -384,6 +390,7 @@ export function createMcpToolService(opts: {
     return current.filter((t) => !gated.has(t.serverId) || Boolean(t.signIn) !== ready.has(t.serverId));
   }
 
+  setPublicOAuthClientSource(async () => mcpPublicOAuthClients(await opts.servers.list()));
   const unsubscribe = opts.servers.onChange(() => {
     if (!closed && boundTenant()) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   });

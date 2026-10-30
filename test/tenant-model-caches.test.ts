@@ -12,7 +12,13 @@ import { gatewayModelsVersion, resolveGatewayModel, setGatewayModels } from "../
 import { modelOverlayVersion, modelUnavailableReason, resolveModel, setModelOverlays } from "../src/model/pi-models.ts";
 import { createModelGateway } from "../src/model/model-gateway.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
-import { oauthProvider, setPublicOAuthClients, withPublicOAuthClients } from "../src/connectors/oauth.ts";
+import {
+  oauthProvider,
+  publicOAuthClientsReady,
+  setPublicOAuthClientSource,
+  setPublicOAuthClients,
+  withPublicOAuthClients,
+} from "../src/connectors/oauth.ts";
 import { createBudgetTracker } from "../src/ratelimit/budget.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
@@ -227,6 +233,38 @@ test("public OAuth clients registered for one tenant do not resolve in another",
   withTenant(B, () => setPublicOAuthClients([]));
 });
 
+test("a cold tenant loads its own public OAuth clients before resolving one", async () => {
+  const C = "00000000-0000-4000-8000-00000000000c";
+  const D = "00000000-0000-4000-8000-00000000000d";
+  let loads = 0;
+  setPublicOAuthClientSource(async () => {
+    loads += 1;
+    return currentTenant() === C
+      ? [
+          {
+            name: "acme",
+            host: "acme.example",
+            authUrl: "https://acme.example/authorize",
+            tokenUrl: "https://acme.example/token",
+            scopes: [],
+            clientId: "client-c",
+            label: "Acme",
+          },
+        ]
+      : [];
+  });
+  const resolve = withPublicOAuthClients(async () => ({ id: "fallback", secret: "", clientRef: "fallback" }));
+  assert.equal((await withTenant(C, () => resolve("acme", {} as never)))?.id, "client-c");
+  assert.equal((await withTenant(D, () => resolve("acme", {} as never)))?.id, "fallback");
+  await withTenant(C, () => publicOAuthClientsReady());
+  assert.equal(loads, 2);
+  assert.equal(
+    withTenant(D, () => oauthProvider("acme")),
+    undefined,
+  );
+  await assert.rejects(publicOAuthClientsReady(), UNBOUND);
+});
+
 test("model call records, budgets and rate limits are counted per tenant", async () => {
   const gateway = createModelGateway();
   withTenant(A, () =>
@@ -295,4 +333,19 @@ test("MCP tool snapshots load and refresh per tenant", async (t) => {
     [],
   );
   assert.throws(() => service.toolDefs(), UNBOUND);
+});
+
+test("a cold tenant's first turn waits only briefly for MCP tools that are slow to list", async (t) => {
+  const store: McpServerStore = {
+    list: () => new Promise<McpServer[]>(() => {}),
+    get: async () => null,
+    put: async () => {},
+    delete: async () => {},
+    onChange: () => () => {},
+  };
+  const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
+  t.after(() => service.close());
+  const started = Date.now();
+  assert.deepEqual(await withTenant(A, () => service.toolDefsFor()), []);
+  assert.ok(Date.now() - started < 3_000);
 });

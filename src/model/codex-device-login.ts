@@ -3,6 +3,7 @@ import type { AuthEvent, AuthPrompt, OAuthAuth, OAuthCredential } from "@earendi
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import type { UserOAuthTokens } from "./user-model-credential-store.ts";
 import { chatgptAccountIdFromToken } from "./chatgpt-auth-file.ts";
+import { currentTenant } from "../tenants/context.ts";
 import type { ChatGPTDevicePrompt } from "./subscription-oauth.ts";
 
 const LOGIN_TTL_MS = 15 * 60 * 1000;
@@ -10,6 +11,7 @@ const START_TIMEOUT_MS = 30_000;
 const DEVICE_CODE_METHOD = "device_code";
 
 interface PendingLogin {
+  tenant: string;
   abort: AbortController;
   expiresAt: number;
   outcome: Promise<UserOAuthTokens>;
@@ -44,6 +46,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
 
   return {
     async start(): Promise<ChatGPTDevicePrompt> {
+      const tenant = currentTenant();
       sweep();
       const oauth = opts.oauth ?? openaiCodexProvider().auth.oauth;
       if (!oauth) throw new Error("ChatGPT subscription login is unavailable");
@@ -79,7 +82,7 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
         ]);
         const loginId = randomUUID();
         const expiresAt = Date.now() + Math.min(LOGIN_TTL_MS, (event.expiresInSeconds ?? Infinity) * 1000);
-        const login: PendingLogin = { abort, expiresAt, outcome, settled: false };
+        const login: PendingLogin = { tenant, abort, expiresAt, outcome, settled: false };
         void outcome
           .catch(() => undefined)
           .finally(() => {
@@ -102,9 +105,10 @@ export function createCodexDeviceLogin(opts: { oauth?: OAuthAuth } = {}) {
     },
 
     async poll(loginId: string): Promise<UserOAuthTokens | "pending"> {
+      const tenant = currentTenant();
       sweep();
       const login = pending.get(loginId);
-      if (!login) throw new Error("login expired or unknown — start again");
+      if (!login || login.tenant !== tenant) throw new Error("login expired or unknown — start again");
       if (!login.settled) return "pending";
       try {
         return await login.outcome;
