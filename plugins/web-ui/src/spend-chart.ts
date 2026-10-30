@@ -10,7 +10,8 @@ export const BACKGROUND_SOURCES = [
 ] as const;
 const PARTS = [["live", "Live"], ...BACKGROUND_SOURCES] as const;
 const categoryCost = (p: any, key: string) => (key === "live" ? p?.live : p?.background?.sources?.[key])?.costUsd;
-const usd = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+export const usd = (n: number) => currency.format(n);
 const date = (ms: number) =>
   new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 
@@ -37,7 +38,7 @@ export function spendChart(data: any, breakdown: "category" | "model" | "person"
           return {
             key,
             label: key === null ? unknown : names.get(key) || key,
-            color: key === null ? "var(--muted)" : `hsl(${hash % 360} 55% 48%)`,
+            color: key === null ? "var(--muted-foreground)" : `hsl(${hash % 360} 55% 48%)`,
             cls: `spend-${breakdown}`,
           };
         })

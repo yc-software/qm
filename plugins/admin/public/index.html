@@ -7226,7 +7226,7 @@
         if (st.view === "crons" && st.cron) p.set("cron", st.cron);
         if (st.own && SCOPED.has(st.view)) p.set("own", st.own);
         if (st.view === "memory" && st.mem) p.set("mem", st.mem);
-        const spendWindow = st.view === "spend" ? governanceUI.spend.spendWindow(st) : null;
+        const spendWindow = st.view === "spend" ? governanceUI.spendWindow(st) : null;
         if (spendWindow && spendWindow.preset === null) {
           p.set("from", spendWindow.from);
           p.set("to", spendWindow.to);
@@ -9174,7 +9174,7 @@
       }
 
       function spendQuery(st) {
-        const { from, to, bucket } = governanceUI.spend.spendWindow(st);
+        const { from, to, bucket } = governanceUI.spendWindow(st);
         return new URLSearchParams({ from, to, bucket }).toString();
       }
       function renderSpend(root, d) {
@@ -9186,7 +9186,7 @@
           shortSchedule,
           cronName,
           plural,
-          window: governanceUI.spend.spendWindow(urlToState()),
+          window: governanceUI.spendWindow(urlToState()),
           openUser: (principal) => go({ view: "user", scope, session: null, principal }),
           openCronRuns: (cron, cronScope) =>
             go({ view: "history", scope: cronScope, session: null, historyKind: "cron", cron }),

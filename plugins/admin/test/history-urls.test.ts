@@ -3,7 +3,7 @@ import { renderDesign } from "./design-source.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { spendWindow } from "../ui/spend.ts";
+import { spendWindow } from "../../web-ui/src/spend-window.ts";
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 
@@ -53,7 +53,7 @@ function routerAt(pathname: string, search = "", base = "/admin") {
     { pathname, search },
     "channel:LAST-VIEWED",
     "acme",
-    { spend: { spendWindow } },
+    { spendWindow },
   ) as {
     stateToUrl: (st: Record<string, unknown>) => string;
     urlToState: () => {

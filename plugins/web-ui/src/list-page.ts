@@ -16,6 +16,32 @@ export function listRowsTpl(rows: TemplateResult[], className = ""): TemplateRes
   </div>`;
 }
 
+export interface ChipTab {
+  label: string;
+  active: boolean;
+  count?: number;
+  onClick: () => void;
+}
+
+export function chipTabs(label: string, tabs: ChipTab[]): TemplateResult {
+  return html`<div class="cron-list-controls" role="tablist" aria-label=${label}>
+    ${tabs.map(
+      (tab) =>
+        html`<button
+          type="button"
+          role="tab"
+          aria-selected=${tab.active}
+          class="cron-filter-chip ${tab.active ? "active" : ""}"
+          @click=${tab.onClick}
+        >
+          <span>${tab.label}</span>${
+            tab.count === undefined ? nothing : html`<span class="cron-filter-count">${tab.count}</span>`
+          }
+        </button>`,
+    )}
+  </div>`;
+}
+
 export interface ListPageOpts {
   title: string;
   subtitle?: string;

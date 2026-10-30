@@ -25,7 +25,7 @@ function humanizeCronInterval(ms: number): string {
   return `${Math.round(ms / 1000)}s`;
 }
 
-export function cronScheduleSummary(c: CronTimingView): string {
+export function cronScheduleSummary(c: Pick<CronTimingView, "schedule">): string {
   if (c.schedule.cron) return `cron ${c.schedule.cron.trim().replace(/\s+/g, " ")}`;
   return c.schedule.everyMs != null ? `every ${humanizeCronInterval(c.schedule.everyMs)}` : "one-time";
 }
@@ -155,4 +155,29 @@ function formatTitleDateTime(ms: number, timeZone?: string): string {
   } catch {
     return new Date(ms).toLocaleString();
   }
+}
+
+export function cronText(c: { message?: string; action?: string }): string {
+  return c.message ?? c.action ?? "";
+}
+
+function cleanCronText(text: string): string {
+  return text
+    .trim()
+    .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, "")
+    .replace(/[*_`~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function clipWords(text: string, max = 64): string {
+  const clean = cleanCronText(text);
+  if (clean.length <= max) return clean;
+  const cut = clean.slice(0, max);
+  const wordCut = cut.replace(/\s+\S*$/, "");
+  return `${(wordCut.length >= max * 0.55 ? wordCut : cut).trim()}…`;
+}
+
+export function cronTitle(c: { title?: string; message?: string; action?: string }): string {
+  return c.title?.trim() || clipWords(cronText(c), 58) || "(untitled cron)";
 }
