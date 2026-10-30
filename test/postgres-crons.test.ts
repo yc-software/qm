@@ -164,7 +164,7 @@ test(
           await crons.setEnabled(mine.id, false);
           await crons.delete(mine.id);
           const twin = await crons.create(input());
-          assert.equal(twin.id, mine.id);
+          assert.notEqual(twin.id, mine.id);
         });
         const kept = await withTenant(tenant, () => crons.get(mine.id));
         assert.equal(kept?.enabled, true);

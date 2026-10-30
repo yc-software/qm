@@ -14,6 +14,7 @@ import {
   withFields,
 } from "../triggers/trigger-store.ts";
 import { assertCronRuntime } from "./runtime.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { hashId } from "../util/crypto.ts";
 import { advanceNextFireAt, isCalendarSchedule, normalizeSchedule, recoverNextFireAt } from "./schedule.ts";
 
@@ -122,6 +123,7 @@ function buildCron(input: CreateCronInput, now: number): Cron {
   const title = normalizeTitle(input.title);
   const { schedule, nextFireAt } = normalizeSchedule(input.schedule, now);
   const id = hashId([
+    contentPart(currentTenant()),
     contentPart(input.owner),
     contentPart(input.ownerScopeId),
     contentPart(input.schedule),
