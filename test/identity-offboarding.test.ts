@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
+import { signedCoreHeaders } from "./support/signed-core.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -25,17 +25,11 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   let base: string;
   let built: BuiltApp;
 
-  const signedPost = (path: string) => {
-    const ts = Math.floor(Date.now() / 1000);
-    return fetch(`${base}${path}`, {
+  const signedPost = async (path: string) =>
+    fetch(`${base}${path}`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-timestamp": String(ts),
-        "x-signature": signRequest(SECRET, ts, `POST\n${path}\n`),
-      },
+      headers: await signedCoreHeaders(SECRET, "POST", path, "", { headers: { "content-type": "application/json" } }),
     });
-  };
 
   before(async () => {
     built = buildApp(
@@ -110,6 +104,8 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   });
 
   it("an agent capability token cannot reach the principals routes (source-auth only)", async () => {
+    await built.app.upsertDirectory([member("U-stay")]);
+    assert.equal(built.identity.classify("U-stay").type, "internal");
     const cap = await mintCapabilityToken(
       { actorId: "U-stay", scopeId: scopeId("personal", "U-stay"), exp: Date.now() + CAPABILITY_TTL_MS },
       SECRET,
@@ -118,6 +114,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
       method: "POST",
       headers: { "content-type": "application/json", "x-agent-capability": cap },
     });
-    assert.equal(res.status, 401);
+    assert.equal(res.status, 403);
+    assert.equal(((await res.json()) as { message: string }).message, "capability token not valid for this route");
   });
 });
