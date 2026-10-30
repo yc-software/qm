@@ -7553,15 +7553,21 @@ h3.ambient-field-label {
   display: inline-flex;
 }
 
+/* Multi-tab groups: tabs shrink from 150px to a floor, then move into the strip's
+   overflow menu; the active tab never shrinks, so it is never the one clipped. */
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
   height: var(--split-tab-h);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   width: 150px;
-  min-width: 0;
+  min-width: 72px;
   padding: 0 8px 0 10px;
   display: flex;
   align-items: center;
   margin-right: 4px;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab.dv-active-tab {
+  flex-shrink: 0;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-title {
@@ -7580,6 +7586,56 @@ h3.ambient-field-label {
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-group-close {
   display: none;
+}
+
+/* Tabs the strip can no longer fit collapse into its overflow control — a chevron and a
+   count sitting with the pane actions, in their idiom. */
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default {
+  height: 26px;
+  padding: 0 6px;
+  margin: 0 2px 0 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default:hover {
+  border-radius: var(--radius-sm);
+  background: var(--secondary);
+}
+
+/* Its menu is anchored in a layer the pane render-overlays and the sashes (z-index 1 and
+   99) would otherwise paint over, and dockview ships it unstyled — lift it clear of both
+   and dress it as one of the app's own popovers. The anchor is a stacking context, so this
+   is the ceiling for everything inside it: keep it at dockview's own overlay level. */
+.dockview-theme-qm .dv-popover-anchor {
+  z-index: 1000;
+}
+
+.dv-tabs-overflow-container {
+  min-width: 200px;
+  max-width: 300px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+
+.dv-tabs-overflow-container .dv-tab {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.dv-tabs-overflow-container .dv-tab:hover,
+.dv-tabs-overflow-container .dv-tab.dv-active-tab {
+  background: var(--secondary);
 }
 
 .split-tab-actions {
