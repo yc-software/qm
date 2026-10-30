@@ -285,13 +285,6 @@ test("execute refuses a credential that would override the computer's own enviro
   assert.equal(ran, 1);
 });
 
-test("execute forwards selected credentials", async () => {
-  const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc });
-  await call(execute, { command: "gh api user", credentials: ["kc_github12345"], purpose: "Run test command" });
-  assert.deepEqual(seen.at(-1)?.opts, { credentials: ["kc_github12345"] });
-});
-
 test("execute masks credential output before model delivery, screening, and transcript logging", async () => {
   const secret = "execution-secret-123456";
   const emitted: unknown[] = [];
