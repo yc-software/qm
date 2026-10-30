@@ -33,9 +33,10 @@ cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
-socket_group="$(node -e 'console.log(require("node:fs").statSync("/var/run/docker.sock").gid)')"
+socket_groups=()
+while IFS= read -r gid; do socket_groups+=(--group-add "$gid"); done < <(node --input-type=module -e 'import { hostDockerSocket } from "./cli/src/backends/docker.ts"; for (const gid of hostDockerSocket().gids) console.log(gid);')
 printf 'core=%s\nsource=%s\nlocal=%s\n' "$core_image" "$source_sha" "$local_image"
-docker run --rm --name "$container" --group-add "$socket_group" \
+docker run --rm --name "$container" "${socket_groups[@]}" \
   --add-host host.docker.internal:host-gateway \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD/test/live-slack/local-provider.ts:/app/test/live-slack/local-provider.ts:ro" \

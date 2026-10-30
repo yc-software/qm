@@ -438,6 +438,11 @@ test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () =
   }
 });
 
+test("the local sandbox backend learns core's own container so it can reach sandboxes over Docker networking", () => {
+  assert.equal(loadConfig({}).localSandbox.coreContainer, undefined);
+  assert.equal(loadConfig({ QM_CORE_CONTAINER: "qm-acme-core" }).localSandbox.coreContainer, "qm-acme-core");
+});
+
 test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary variable is tolerated", () => {
   assert.equal(loadConfig({}).sandboxBackend, "local");
   assert.throws(
