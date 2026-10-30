@@ -158,7 +158,8 @@ export async function relayCoreStream(
 
 const HOST_TTL_MS = 60_000;
 const HOSTS_MAX = 1_000;
-const hosts = new Map<string, { tenant: string; until: number }>();
+const MISS_TTL_MS = 5_000;
+const hosts = new Map<string, { tenant: string | null; until: number }>();
 
 export async function hostTenant(core: string, secret: string | undefined, host: string): Promise<string | null> {
   const key = host.toLowerCase();
@@ -169,11 +170,11 @@ export async function hostTenant(core: string, secret: string | undefined, host:
     headers: signedRequestHeaders(secret, "GET", path),
     signal: AbortSignal.timeout(5_000),
   });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`Tenant lookup failed with HTTP ${response.status}`);
-  const { tenant } = (await response.json()) as { tenant?: unknown };
-  if (!isTenantId(tenant)) throw new Error("Tenant lookup returned an invalid tenant");
-  if (hosts.size >= HOSTS_MAX) hosts.clear();
-  hosts.set(key, { tenant, until: Date.now() + HOST_TTL_MS });
+  if (response.status !== 404 && !response.ok) throw new Error(`Tenant lookup failed with HTTP ${response.status}`);
+  const tenant = response.status === 404 ? null : ((await response.json()) as { tenant?: unknown }).tenant;
+  if (tenant !== null && !isTenantId(tenant)) throw new Error("Tenant lookup returned an invalid tenant");
+  hosts.delete(key);
+  if (hosts.size >= HOSTS_MAX) hosts.delete(hosts.keys().next().value!);
+  hosts.set(key, { tenant, until: Date.now() + (tenant ? HOST_TTL_MS : MISS_TTL_MS) });
   return tenant;
 }

@@ -56,7 +56,7 @@ export async function startServer(
     },
   });
   const forTenant = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.method === "GET" && req.url === "/healthz") return handle(req, res);
+    if (req.method === "GET" && /^\/(healthz|\.well-known\/)/.test(req.url ?? "")) return handle(req, res);
     const tenant = await hostTenant(CFG.coreApiUrl, CFG.coreSigningSecret, (req.headers.host ?? "").split(":")[0]!);
     if (!tenant) return json(res, 404, { error: "not_found", message: "no tenant serves this host" });
     return withTenant(tenant, () => handle(req, res));

@@ -7,7 +7,7 @@ import { CAPABILITY_HEADER } from "./contract.ts";
 import { sendJson, tenantHeader } from "./http.ts";
 import type { Route } from "./routes/route.ts";
 
-const verified = new WeakMap<IncomingMessage, Promise<VerifiedCapability | null>>();
+const verified = new WeakMap<IncomingMessage, { token: string; claims: Promise<VerifiedCapability | null> }>();
 
 export function capabilityToken(req: IncomingMessage, bearer: boolean): string | null {
   const header = req.headers[CAPABILITY_HEADER];
@@ -23,11 +23,10 @@ export function requestCapability(
   token: string,
   secret: string | undefined,
 ): Promise<VerifiedCapability | null> {
-  let claims = verified.get(req);
-  if (!claims) {
-    claims = secret ? verifyCapabilityToken(token, secret) : Promise.resolve(null);
-    verified.set(req, claims);
-  }
+  const cached = verified.get(req);
+  if (cached?.token === token) return cached.claims;
+  const claims = secret ? verifyCapabilityToken(token, secret) : Promise.resolve(null);
+  verified.set(req, { token, claims });
   return claims;
 }
 

@@ -7,7 +7,8 @@ import {
   type SharedMessage,
 } from "../../sessions/session-share.ts";
 import { MAX_ATTACHMENT_BYTES } from "../../core/attachments.ts";
-import { pipeToResponse, sendJson } from "../http.ts";
+import { pipeToResponse, sendJson, tenantHeader } from "../http.ts";
+import { currentTenant } from "../../tenants/context.ts";
 import { withRowTenant } from "../tenant-ingress.ts";
 import { audit, isObj } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
@@ -114,7 +115,10 @@ async function createShare(ctx: ApiCtx): Promise<void> {
 
 function readPublicShare(ctx: ApiCtx): Promise<void> {
   const row = { table: "session_shares", columns: ["id"], id: ctx.params.token! };
-  return withRowTenant(ctx.res, ctx.deps.rowTenants, row, () => readShare(ctx));
+  const claimed = tenantHeader(ctx.req);
+  return withRowTenant(ctx.res, ctx.deps.rowTenants, row, () =>
+    claimed && claimed !== currentTenant() ? sendJson(ctx.res, 404, { error: "not_found" }) : readShare(ctx),
+  );
 }
 
 async function readShare(ctx: ApiCtx): Promise<void> {
