@@ -55,8 +55,6 @@ export interface SandboxConfig {
   app?: string;
   image?: string;
   baseImage?: string;
-  env?: Record<string, string>;
-  secretEnv?: string[];
 }
 
 type SecurityScreenMode = "off" | "observe" | "enforce";
@@ -257,12 +255,6 @@ export function sandboxCoreEnv(
   if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
     env.SANDBOX_BACKEND = backend;
     return { env, missingSecrets };
-  }
-  for (const [k, v] of Object.entries(sb.env ?? {})) env[`FLY_RESIDENT_ENV_${k}`] = v;
-  for (const name of sb.secretEnv ?? []) {
-    const v = lookup?.(name);
-    if (v === undefined || v === "") missingSecrets.push(name);
-    else env[`FLY_RESIDENT_ENV_${name}`] = v;
   }
   return { env, missingSecrets };
 }
@@ -797,7 +789,6 @@ function validate(raw: unknown, path: string): QmConfig {
   if (o["aws"] !== undefined) {
     const configuredSecretNames = [
       ...plugins.flatMap((plugin) => (plugin.secrets ?? []).map((secret) => secret.name)),
-      ...(sandbox?.secretEnv ?? []),
       ...Object.values(secretEnv).flatMap((entries) => Object.values(entries ?? {})),
     ];
     out.aws = validateAws(o["aws"], path, runnableServices(services), configuredSecretNames);
@@ -1669,14 +1660,11 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     }
     out.baseImage = o["baseImage"];
   }
-  if (o["env"] !== undefined) {
-    out.env = validateStringMap(o["env"], path, "sandbox.env");
-    for (const k of Object.keys(out.env)) assertEnvName(k, `"sandbox.env" key`);
-  }
-  if (o["secretEnv"] !== undefined) {
-    const se = validateStringArray(o["secretEnv"], path, "sandbox.secretEnv");
-    for (const name of se) assertEnvName(name, `"sandbox.secretEnv" entry`);
-    out.secretEnv = se;
+  const sandboxWide = (["env", "secretEnv"] as const).filter((key) => o[key] !== undefined);
+  if (sandboxWide.length) {
+    throw new CliError(
+      `${path}: ${sandboxWide.map((key) => `"sandbox.${key}"`).join(", ")} would reach every tenant's computers — store each credential in the keychain of the scope that owns it and remove the key`,
+    );
   }
   if (out.backend !== undefined && !SANDBOX_BACKEND_POLICY[target].allowed.includes(out.backend)) {
     const targets = targetsAllowingSandboxBackend(out.backend)
@@ -1686,7 +1674,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     throw new CliError(`${path}: "sandbox.backend": ${JSON.stringify(out.backend)}${label} requires target ${targets}`);
   }
   if (out.backend === "local") {
-    const stray = (["app", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    const stray = (["app", "baseImage"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
         `${path}: "sandbox.backend": "local" ignores ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — remove them; use "sandbox.image" for the runnable local sandbox image`,
@@ -1694,7 +1682,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     }
   }
   if (out.backend === "aws") {
-    const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    const stray = (["app", "image", "baseImage"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
         `${path}: "sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore ${stray.map((key) => `"sandbox.${key}"`).join(", ")} (Fly sandbox settings) — remove them or set "sandbox.backend": "sprites"`,
@@ -1702,7 +1690,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     }
   }
   if (out.backend === "agent37" || out.backend === "superserve" || out.backend === "e2b" || out.backend === "render") {
-    const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    const stray = (["app", "image", "baseImage"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
         `${path}: "sandbox.backend": "${out.backend}" ignores ${stray.map((key) => `"sandbox.${key}"`).join(", ")} — remove them`,

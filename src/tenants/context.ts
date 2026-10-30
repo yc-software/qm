@@ -4,6 +4,10 @@ const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 
 const bound = new AsyncLocalStorage<string>();
 
+export function isTenantId(value: string): boolean {
+  return TENANT_ID.test(value);
+}
+
 function tenantId(id: string): string {
   const normalized = id.toLowerCase();
   if (!TENANT_ID.test(normalized)) throw new Error(`Invalid tenant id: ${JSON.stringify(id)}`);

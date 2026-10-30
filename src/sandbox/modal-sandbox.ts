@@ -29,6 +29,7 @@ import {
 import { killableScript, killScript } from "./exec-kill.ts";
 import { visibleNotInstalled, visibleTools } from "./sandbox.ts";
 import { sandboxScopeName } from "./exec-sandbox-base.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { ModalNameConflictError, ModalSandboxGoneError, type ModalClient, type ModalSession } from "./modal-client.ts";
 import {
   createHomeSnapshotOps,
@@ -117,6 +118,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
   const orphanFirstSeenMs = new Map<string, number>();
   const tags = (kind: "scope" | "scratch"): Record<string, string> => ({
     "qm-org": configOrgId(),
+    "qm-tenant": currentTenant(),
     "qm-prefix": prefix,
     "qm-kind": kind,
   });
@@ -300,7 +302,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
         allowRotation &&
         !!stored &&
         Date.now() - stored.createdAtMs > rotateAfterMs &&
-        Date.now() >= (rotationHoldUntil.get(scope) ?? 0);
+        Date.now() >= (rotationHoldUntil.get(name) ?? 0);
 
       const cached = sessionByName.get(name);
       if (cached && !stale) return { session: cached, coldStart: false };
@@ -332,7 +334,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_snapshot", "rotate_snapshot_failed", errMessage(e), scope);
-              rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
+              rotationHoldUntil.set(name, Date.now() + rotationHoldMs);
               sessionByName.set(name, session);
               await store.merge(scope, { lastActivityMs: Date.now() });
               return { session, coldStart: false };
@@ -343,7 +345,7 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
           } catch (e) {
             if (!(e instanceof ModalSandboxGoneError)) {
               reportError("sandbox_teardown", "rotate_terminate_failed", errMessage(e), scope);
-              rotationHoldUntil.set(scope, Date.now() + rotationHoldMs);
+              rotationHoldUntil.set(name, Date.now() + rotationHoldMs);
               sessionByName.set(name, session);
               await store.merge(scope, { lastActivityMs: Date.now() });
               return { session, coldStart: false };
@@ -429,8 +431,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     const scope = scopeByName.get(name);
     if (!scope || scratchKeyByName.has(name)) return;
     const now = Date.now();
-    if (now - (lastTouchMs.get(scope) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
-    lastTouchMs.set(scope, now);
+    if (now - (lastTouchMs.get(name) ?? 0) < ACTIVITY_TOUCH_INTERVAL_MS) return;
+    lastTouchMs.set(name, now);
     await store.merge(scope, { lastActivityMs: now }).catch(swallowAs("modal-sandbox: record activity", undefined));
   }
 
@@ -533,8 +535,8 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
     await store.delete(scope);
     sessionByName.delete(name);
     scopeByName.delete(name);
-    rotationHoldUntil.delete(scope);
-    lastTouchMs.delete(scope);
+    rotationHoldUntil.delete(name);
+    lastTouchMs.delete(name);
   }
 
   function checkpointRenewalDue(rec: StoredModalSandbox, now: number): boolean {

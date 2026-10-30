@@ -109,7 +109,6 @@ export function runChecks(
   };
   for (const [service, env] of Object.entries(config.env)) flagSecretValue(service, env);
   for (const plugin of config.plugins) flagSecretValue(`plugins.${plugin.name}`, plugin.env);
-  flagSecretValue("sandbox", config.sandbox?.env);
   for (const [service, spec] of Object.entries(config.aws?.services ?? {})) {
     flagSecretValue(`aws.services.${service}.buildArgs`, spec.buildArgs);
   }
