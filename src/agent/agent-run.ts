@@ -2358,24 +2358,21 @@ export function createAgent(opts?: AgentOptions): Agent {
       if (!text.trim() || candidates.length === 0) return undefined;
       const ackModelId = auxiliaryModelForProvider("anthropic");
       if (!ackModelId) return undefined;
-      try {
-        const model = requiredModel(ackModelId);
-        const providerKeys = await resolveProviderKeys();
-        if (!keyForModel(providerKeys, model)) return undefined;
-        const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
-        const runtime = await buildModelRuntime(providerKeys, modelGateway);
-        const reply = await runtime.completeSimple(
-          model,
-          { systemPrompt: ACK_EMOJI_PROMPT, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
-          { maxTokens: 64, signal: AbortSignal.timeout(2_000) },
-        );
-        const raw = reply.content.find((block) => block.type === "text")?.text;
-        if (!raw) return undefined;
-        const emoji = (JSON.parse(raw.replace(/```json|```/g, "").trim()) as { emoji?: unknown }).emoji;
-        return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;
-      } catch {
-        return undefined;
-      }
+      const model = requiredModel(ackModelId);
+      const providerKeys = await resolveProviderKeys();
+      if (!keyForModel(providerKeys, model)) return undefined;
+      const prompt = `Candidates: ${candidates.join(", ")}\n\nMessage: ${text.slice(0, 2000)}`;
+      const runtime = await buildModelRuntime(providerKeys, modelGateway);
+      const reply = await runtime.completeSimple(
+        model,
+        { systemPrompt: ACK_EMOJI_PROMPT, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
+        { maxTokens: 64, signal: AbortSignal.timeout(2_000) },
+      );
+      if (reply.stopReason === "error") throw providerTurnError(reply);
+      const raw = reply.content.find((block) => block.type === "text")?.text;
+      if (!raw) return undefined;
+      const emoji = (JSON.parse(raw.replace(/```json|```/g, "").trim()) as { emoji?: unknown }).emoji;
+      return typeof emoji === "string" && candidates.includes(emoji) ? emoji : undefined;
     },
 
     async generateTitle(transcript: string): Promise<string | undefined> {

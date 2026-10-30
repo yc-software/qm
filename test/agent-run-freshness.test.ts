@@ -224,3 +224,21 @@ test("ack emoji on a Claude subscription token signs the call as a subscription 
     globalThis.fetch = realFetch;
   }
 });
+
+test("an ack emoji provider failure surfaces its error instead of reading as a declined pick", async () => {
+  const agent = createAgent({
+    defaultModelId: "claude-sonnet-5",
+    resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-revoked" }),
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ type: "error", error: { type: "authentication_error", message: "revoked" } }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    })) as typeof globalThis.fetch;
+  try {
+    await assert.rejects(async () => agent.pickAckEmoji?.("ship it", ["eyes"]), /authentication_error|revoked/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
