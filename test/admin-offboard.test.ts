@@ -33,12 +33,14 @@ async function start() {
     deployment("app-personal", "personal:U1", "U1"),
     deployment("app-shared", "channel:C1", "U1"),
     deployment("app-other", "personal:U9", "U9"),
+    deployment("app-broken", "personal:U1", "U1"),
   ];
   const archivedApps: string[] = [];
   const app = {
     ...built.app,
     listDeployments: async () => deployments,
     archiveDeployment: async (id: string) => {
+      if (id === "app-broken") throw new Error("runtime destroy failed");
       archivedApps.push(id);
       deployments.find((d) => d.id === id)!.status = "archived";
     },
@@ -50,6 +52,7 @@ async function start() {
     keychain: built.keychain,
     sandboxResources: built.sandboxResources,
     sessions: built.sessions,
+    loops: built.loops,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -84,6 +87,14 @@ test("offboarding previews, then disables, revokes, archives and retires what th
       schedule: { everyMs: 60_000 },
       action: "noise",
     });
+    const { loop } = await s.built.loops.store.create({
+      owner: "U1",
+      createdBy: "U1",
+      ownerScopeId: "personal:U1",
+      name: "inbox",
+      playbook: "triage",
+      successCondition: "done",
+    });
     const webhook = await app.createWebhook({
       ownerScopeId: "personal:U1",
       owner: "U1",
@@ -112,19 +123,21 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     assert.deepEqual(
       planned.changes.map((c: any) => `${c.kind}:${c.id}:${c.action}`).sort(),
       [
-        `app:app-personal:archive`,
-        `computer:${computer.id}:retire`,
+        `deployment:app-broken:archive`,
+        `deployment:app-personal:archive`,
+        `sandbox:${computer.id}:retire`,
         `cron:${channelCron.id}:disable_and_archive`,
         `cron:${personalCron.id}:disable_and_archive`,
-        `keychain_grant:${grant.id}:revoke`,
-        `sign_in:U1:deactivate`,
+        `keychain:${grant.id}:revoke`,
+        `loop:${loop.id}:pause`,
+        `principal:U1:deactivate`,
         `skill:${personalSkill.id}:archive`,
         `webhook:${webhook.id}:disable`,
       ].sort(),
     );
     assert.deepEqual(
       planned.kept.map((k: any) => `${k.kind}:${k.id}`).sort(),
-      [`app:app-shared`, `credential:${credential.id}`, `skill:${sharedSkill.id}`].sort(),
+      [`deployment:app-shared`, `credential:${credential.id}`, `skill:${sharedSkill.id}`].sort(),
     );
     assert.equal(identity.classify("U1").type, "internal", "preview changes nothing");
     assert.equal((await app.getCron(personalCron.id))!.enabled, true);
@@ -133,8 +146,9 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     const applied: any = await (await s.offboard("U1", { apply: true })).json();
     assert.equal(applied.applied, true);
     assert.deepEqual(
-      applied.changes.filter((c: any) => c.result !== "done"),
-      [],
+      applied.changes.filter((c: any) => c.result !== "done").map((c: any) => [c.id, c.error]),
+      [["app-broken", "runtime destroy failed"]],
+      "one failure is reported and does not stop the rest",
     );
     assert.equal(identity.classify("U1").type, "guest", "sign-in is off");
     for (const id of [personalCron.id, channelCron.id]) {
@@ -144,6 +158,7 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     }
     assert.equal((await app.getCron(othersCron.id))!.enabled, true, "someone else's cron is untouched");
     assert.equal((await app.getWebhook(webhook.id))!.enabled, false);
+    assert.equal((await s.built.loops.store.get(loop.id))!.state, "paused");
     assert.equal((await keychain!.getGrant(grant.id))!.status, "revoked");
     assert.equal((await skills.get(personalSkill.id))!.status, "archived");
     assert.notEqual((await skills.get(sharedSkill.id))!.status, "archived");
@@ -152,13 +167,35 @@ test("offboarding previews, then disables, revokes, archives and retires what th
     assert.equal(await sandboxResources.resolve("personal:U1"), null, "the default was cleared first");
 
     const events = await s.built.auditLog.events();
-    const offboardEvents = events.filter((e) => e.action.startsWith("offboard."));
-    assert.equal(offboardEvents.length, applied.changes.length);
-    assert.ok(offboardEvents.every((e) => e.principalId === "admin-alice"));
+    assert.ok(
+      events.some(
+        (e) =>
+          e.action === "deployment.archive" &&
+          e.resource === "app-broken" &&
+          e.status === "error" &&
+          e.detail === "runtime destroy failed",
+      ),
+      "the failure is audited with its error",
+    );
+    for (const change of applied.changes.filter((c: any) => c.result === "done"))
+      assert.ok(
+        events.some(
+          (e) =>
+            e.action === `${change.kind}.${change.action}` &&
+            e.resource === change.id &&
+            e.principalId === "admin-alice" &&
+            e.status === "ok",
+        ),
+        `${change.kind} ${change.id} is audited as the admin`,
+      );
     assert.ok(events.some((e) => e.action === "user.offboard" && e.principalId === "admin-alice"));
 
     const again: any = await (await s.offboard("U1", {})).json();
-    assert.deepEqual(again.changes, [], "a second preview finds nothing left to do");
+    assert.deepEqual(
+      again.changes.map((c: any) => c.id),
+      ["app-broken"],
+      "a second preview finds only what failed",
+    );
 
     const reactivated = await fetch(`${s.base}/v1/admin/users/U1/reactivate`, { method: "POST", headers: ADMIN });
     assert.equal(reactivated.status, 200);
@@ -180,6 +217,8 @@ test("offboarding refuses non-admins, the admin themselves, and unknown body fie
     assert.equal(s.built.identity.classify("admin-alice").type, "internal");
     assert.equal((await s.offboard("U1", { apply: "yes" })).status, 400);
     assert.equal((await s.offboard("U1", { dryRun: true })).status, 400);
+    assert.equal((await s.offboard("nobody-by-that-name", { apply: true })).status, 404);
+    assert.equal(s.built.identity.deactivationSource("nobody-by-that-name"), undefined);
     const deniedReactivate = await fetch(`${s.base}/v1/admin/users/U1/reactivate`, {
       method: "POST",
       headers: { "x-admin-actor": "user-uma@default-org" },

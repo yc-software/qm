@@ -98,9 +98,9 @@ export async function detail(root: HTMLElement, principal: string, s: Record<str
       else {
         offboard = result.data;
         const failed = offboard.changes.filter((c: any) => c.result === "failed").length;
-        if (offboard.changes.some((c: any) => c.kind === "sign_in" && c.result === "done")) deactivated = true;
+        if (offboard.changes.some((c: any) => c.kind === "principal" && c.result === "done")) deactivated = true;
         offboardHint = "";
-        if (apply) offboardHint = failed ? failed + " change(s) failed. Preview again to retry them." : "Done.";
+        if (apply) offboardHint = failed ? s.plural(failed, "change") + " failed. Preview again to retry." : "Done.";
       }
     } catch {
       offboardHint = "Network error. Try again.";

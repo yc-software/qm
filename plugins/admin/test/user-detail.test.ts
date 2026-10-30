@@ -57,7 +57,7 @@ test("offboarding previews, applies only after confirmation, and reports each re
     action: "disable_and_archive",
   };
   const signIn = {
-    kind: "sign_in",
+    kind: "principal",
     id: "alex@example.com",
     label: "sign-in and app access",
     scopeId: "org:test",
@@ -114,7 +114,7 @@ test("offboarding previews, applies only after confirmation, and reports each re
   await settle();
   assert.deepEqual(posts[1], ["/api/users/alex%40example.com/offboard", { apply: true }]);
   assert.match(f.root.textContent!, /store unavailable/);
-  assert.match(f.root.textContent!, /1 change\(s\) failed/);
+  assert.match(f.root.textContent!, /1 changes failed/);
   assert.ok(button("Reactivate sign-in"), "sign-in shows as deactivated");
   f.dom.window.close();
 });
