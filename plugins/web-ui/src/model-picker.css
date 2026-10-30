@@ -726,3 +726,30 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Compact composers hide the label and squeeze the trigger to a square; with Fast/Ultrafast on,
+   the bolt + chevron overflowed and clipped. Let the trigger grow just enough for its icons. */
+@container split-pane (max-width: 470px) {
+  .composer-wrap .composer-toolbar .menu-button.loadout-button:has(.loadout-bolt, .loadout-ultrafast-badge) {
+    width: auto;
+    min-width: var(--composer-control-size, 34px);
+    padding-inline: 6px;
+    gap: 2px;
+  }
+  .composer-wrap .loadout-button .loadout-ultrafast-badge {
+    gap: 0;
+    font-size: 0;
+  }
+}
+@media (max-width: 860px) {
+  .composer-wrap .composer-toolbar .menu-button.loadout-button:has(.loadout-bolt, .loadout-ultrafast-badge) {
+    width: auto;
+    min-width: 44px;
+    padding-inline: 8px;
+    gap: 2px;
+  }
+  .composer-wrap .loadout-button .loadout-ultrafast-badge {
+    gap: 0;
+    font-size: 0;
+  }
+}

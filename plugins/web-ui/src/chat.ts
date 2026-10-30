@@ -28,6 +28,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import type { UserMessageWithAttachments } from "@earendil-works/pi-web-ui";
 import { markdown } from "./message-markdown";
+import { onSpeakerAvatars, speakerAvatar } from "./speaker-avatars";
 import { html, nothing, render, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { ref } from "lit/directives/ref.js";
@@ -148,7 +149,7 @@ import type { ChatSurface, ConvCtx } from "./conv-types";
 import { errMessage, swallow } from "../../chassis/src/errors";
 import { showStateError } from "./error-banner";
 import { splitLinks } from "./linkify";
-import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
+import { slackWireToMarkdown, slackWireToPlain, stripSlackDirectives } from "./slack-text";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
 import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
@@ -377,7 +378,10 @@ export function createChatSurface(
     const speakerId = (message as { speakerId?: string }).speakerId;
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
-    return project?.members.find((m) => m.principalId === speakerId);
+    const member = project?.members.find((m) => m.principalId === speakerId);
+    if (member?.avatarUrl) return member;
+    // Slack-originated conversations rarely map to a project; fall back to the directory's Slack photo.
+    return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
@@ -795,8 +799,14 @@ export function createChatSurface(
     if (chatState.agent) drawActiveChat();
   }
 
+  const stopAvatarWatch = onSpeakerAvatars(() => {
+    if (chatState.agent) drawActiveChat();
+    else readonlyRedraw?.();
+  });
+
   function dispose(): void {
     redrawHooks.delete(redrawForConnector);
+    stopAvatarWatch();
     stopPrefsWatch();
     teardownActiveChat();
   }
@@ -1261,7 +1271,7 @@ export function createChatSurface(
       render(
         html`
           <div class="custom-chat-shell">
-            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack")}
+            ${chatHeader(groupDmTitle(s), surfaceOf(s), surfaceOf(s) !== "slack", shownMessages)}
             <div class="readonly-banner">
               ${
                 surfaceOf(s) === "slack"
@@ -1838,13 +1848,43 @@ export function createChatSurface(
     });
   }
 
-  function chatHeader(title: string | TemplateResult, detail: string, readOnly: boolean): TemplateResult {
+  type Participant = { key: string; name: string; avatarUrl?: string };
+
+  function conversationParticipants(messages: AgentMessage[]): Participant[] {
+    const seen = new Map<string, Participant>();
+    for (const message of messages) {
+      const name = (message as { speaker?: string }).speaker?.trim();
+      if (!name) continue;
+      const member = speakerMember(message);
+      const key = member?.principalId ?? name;
+      if (!seen.has(key)) seen.set(key, { key, name, avatarUrl: member?.avatarUrl });
+    }
+    return [...seen.values()];
+  }
+
+  function participantStack(people: Participant[]): TemplateResult | typeof nothing {
+    if (!people.length) return nothing;
+    const shown = people.slice(0, 5);
+    const rest = people.slice(5);
+    return html`<div class="chat-participants" role="list" aria-label=${`${people.length} participants`}>
+      ${shown.map((person) => html`<span role="listitem" class="chat-participant">${avatarTpl(person)}</span>`)}
+      ${rest.length ? html`<span class="chat-participant-more" ${tip(rest.map((p) => p.name).join(", "))}>+${rest.length}</span>` : nothing}
+    </div>`;
+  }
+
+  function chatHeader(
+    title: string | TemplateResult,
+    detail: string,
+    readOnly: boolean,
+    messages: AgentMessage[] = [],
+  ): TemplateResult {
     return html`
       <header class="chat-topbar">
         <div class="chat-heading">
           <div class="chat-title" dir="auto">${title}</div>
           <div class="chat-subtitle">${readOnly ? "Read-only" : detail}</div>
         </div>
+        ${participantStack(conversationParticipants(messages))}
       </header>
     `;
   }
@@ -2007,7 +2047,11 @@ export function createChatSurface(
             ?hidden=${!messageText(message).trim() && !edited && !deleted}
           >
             <div class="pin-content">
-              ${isReadOnlySlackView() ? slackWireBubble(messageText(message)) : markdown(messageText(message))}
+              ${
+                isReadOnlySlackView()
+                  ? html`<div class="slack-md-text">${markdown(slackWireToMarkdown(messageText(message)))}</div>`
+                  : markdown(messageText(message))
+              }
               ${edited || deleted ? html`<span class="revision-badge">(${deleted ? "deleted" : "edited"})</span>` : nothing}
             </div>
             <button class="pin-toggle" type="button" hidden aria-expanded="false">
@@ -2299,22 +2343,7 @@ export function createChatSurface(
 
   function assistantDisplayText(text: string, stopReason?: string): string {
     if (stopReason === "aborted" && text.trim() === "(stopped)") return "";
-    return isReadOnlySlackView() ? stripSlackDirectives(text) : text;
-  }
-
-  function slackWireBubble(text: string): TemplateResult {
-    const self = (appState.me?.user?.split("@")[0] ?? "").trim().toLowerCase();
-    const chip = (handle: string): TemplateResult =>
-      html`<span class="slack-mention ${handle.toLowerCase() === self ? "self" : ""}">@${handle}</span>`;
-    const segments = splitSlackWire(text).map((seg) => {
-      if (seg.kind === "mention") return chip(seg.handle);
-      if (seg.kind === "link")
-        return html`<a class="inbox-text-link" href=${seg.href} target="_blank" rel="noreferrer noopener"
-          >${seg.label}</a
-        >`;
-      return seg.text;
-    });
-    return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
+    return isReadOnlySlackView() ? slackWireToMarkdown(stripSlackDirectives(text), { emphasis: false }) : text;
   }
 
   function assistantContent(message: AssistantMessage, isStreaming = false, hasWork = false): TemplateResult[] {
@@ -3284,12 +3313,16 @@ export function createChatSurface(
 
   function subagentChip(title: string, sessionId?: string): TemplateResult {
     const session = sessionsState.list.find((row) => row.id === sessionId);
-    const inner = html`<span dir="auto">${session?.title || title}</span>`;
-    if (!sessionId) return html`<span class="subagent-chip">${inner}</span>`;
+    const name = session?.title || title;
+    // The pill read as "a different conversation"; say plainly that it's a subagent.
+    const inner = html`${icon(Bot, 12)}<span class="subagent-chip-kind">Subagent</span
+      ><span class="subagent-chip-title" dir="auto">${name}</span>`;
+    if (!sessionId) return html`<span class="subagent-chip" ${tip(`Subagent: ${name}`)}>${inner}</span>`;
     return html`<button
       class="subagent-chip"
       type="button"
-      title="Open subagent · Drag to the sidebar to make a top-level session"
+      aria-label=${`Open subagent “${name}”`}
+      ${tip(`Subagent “${name}”: a helper session this conversation started. Click to open; drag to the sidebar to make it top-level.`)}
       draggable=${session ? "true" : "false"}
       @dragstart=${(e: DragEvent) => {
         if (session) onSessionDragStart(e, session);

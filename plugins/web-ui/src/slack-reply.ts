@@ -7,6 +7,8 @@ import { withBase } from "./core-bridge";
 import "./slack-account";
 import "./slack-reply.css";
 
+let lastStatus: { connected: boolean; linkAvailable: boolean; label: string } | null = null;
+
 export class SlackReply extends LitElement {
   static properties = {
     sessionId: {},
@@ -66,6 +68,11 @@ export class SlackReply extends LitElement {
     }
   }
   protected firstUpdated(): void {
+    // Reuse the last answer so reopening a Slack conversation shows the prompt box at once.
+    if (lastStatus) {
+      ({ connected: this.connected, linkAvailable: this.linkAvailable, label: this.label } = lastStatus);
+      this.loading = false;
+    }
     void this.refresh();
   }
   private refresh = async (): Promise<void> => {
@@ -75,6 +82,7 @@ export class SlackReply extends LitElement {
       this.connected = response.ok && result.connected === true;
       this.linkAvailable = response.ok;
       this.label = result.user ?? "yourself";
+      lastStatus = response.ok ? { connected: this.connected, linkAvailable: true, label: this.label } : null;
       this.error = response.ok ? "" : (result.message ?? "Could not check your Slack connection.");
       if (!response.ok && result.error === "composio_unavailable")
         this.error = "Slack linking isn’t configured for your account on this deployment.";
@@ -117,7 +125,19 @@ export class SlackReply extends LitElement {
   }
   protected render() {
     if (this.loading)
-      return html`<div class="slack-reply-box"><p role="status">Checking your Slack connection…</p></div>`;
+      // Same footprint as the real composer, so nothing jumps when the connection check lands.
+      return html`<div
+        class="composer-wrap slack-reply-skeleton"
+        role="status"
+        aria-busy="true"
+        aria-label="Checking your Slack connection"
+      >
+        <div class="skeleton-input"><span class="skeleton-bar"></span></div>
+        <div class="composer-toolbar">
+          <div class="composer-left"></div>
+          <div class="composer-right"><span class="skeleton-send"></span></div>
+        </div>
+      </div>`;
     if (this.connected)
       return html`<form class="composer-wrap" @submit=${(e: Event) => void this.send(e)}>
         ${composerInput({

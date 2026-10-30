@@ -13,11 +13,14 @@ test("Slack message bubbles render the message text without template whitespace"
     await h.boot();
     let bubble: Element | null = null;
     for (let i = 0; i < 100 && !bubble; i++) {
-      bubble = document.querySelector(".slack-wire-text");
+      bubble = document.querySelector(".slack-md-text");
       if (!bubble) await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.ok(bubble, "Slack bubble rendered");
-    assert.equal(bubble.textContent, text);
+    // Slack mrkdwn is rendered as Markdown; each Slack newline is a hard line break.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(bubble.textContent?.trim(), text.replace("\n", ""));
+    assert.equal(bubble.querySelectorAll("br").length, 1);
   } finally {
     await h.close();
   }

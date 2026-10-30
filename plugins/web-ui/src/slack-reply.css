@@ -12,3 +12,43 @@ qm-slack-reply {
   max-width: none;
   margin-bottom: 0;
 }
+
+/* Placeholder composer while the Slack connection check runs. */
+.slack-reply-skeleton {
+  pointer-events: none;
+}
+.slack-reply-skeleton .skeleton-input {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: var(--composer-pad-block, 12px) var(--composer-pad-inline, 14px);
+}
+.slack-reply-skeleton .skeleton-bar {
+  display: block;
+  width: 40%;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--muted) 0%, var(--secondary) 50%, var(--muted) 100%);
+  background-size: 200% 100%;
+  animation: slack-reply-shimmer 1.2s ease-in-out infinite;
+}
+.slack-reply-skeleton .skeleton-send {
+  display: block;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+@keyframes slack-reply-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slack-reply-skeleton .skeleton-bar {
+    animation: none;
+  }
+}

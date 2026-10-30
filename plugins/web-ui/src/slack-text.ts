@@ -86,3 +86,50 @@ export function stripSlackDirectives(text: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+const MD_CODE_REGION = /```[\s\S]*?```|`[^`\n]*`/g;
+
+function escapeMdLabel(label: string): string {
+  return label.replace(/[[\]\\]/g, (c) => `\\${c}`);
+}
+
+function convertWireTokens(text: string): string {
+  return text.replace(WIRE_TOKEN, (_m, inner: string) => {
+    const seg = segmentForToken(inner);
+    if (seg.kind === "mention") return `**@${seg.handle.replace(/[*_~`]/g, "")}**`;
+    if (seg.kind === "link")
+      return seg.label === seg.href ? `<${seg.href}>` : `[${escapeMdLabel(seg.label)}](<${seg.href}>)`;
+    // Keep untrusted angle text inert for the markdown renderer.
+    return seg.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  });
+}
+
+function convertMrkdwnEmphasis(text: string): string {
+  return (
+    text
+      .replace(/(^|[\s(>])\*([^*\n]+?)\*(?=$|[\s).,!?:;<])/gm, "$1**$2**")
+      .replace(/(^|[\s(>])_([^_\n]+?)_(?=$|[\s).,!?:;<])/gm, "$1*$2*")
+      .replace(/(^|[\s(>])~([^~\n]+?)~(?=$|[\s).,!?:;<])/gm, "$1~~$2~~")
+      .replace(/^(\s*)[•◦▪]\s+/gm, "$1- ")
+      // Slack treats every newline as a line break; Markdown needs a hard break for that.
+      .replace(/([^\n])\n(?=[^\n])/g, "$1  \n")
+  );
+}
+
+/**
+ * Convert Slack wire text (mrkdwn, `<url|label>` / `<@U|name>` tokens, `&lt;` entities) to the
+ * Markdown the web renderer understands. Code spans are entity-decoded but otherwise untouched.
+ * `emphasis: false` converts only tokens, for text that is already Markdown (assistant replies).
+ */
+export function slackWireToMarkdown(text: string, options: { emphasis?: boolean } = {}): string {
+  if (!text) return text;
+  const convert = (part: string): string =>
+    options.emphasis === false ? convertWireTokens(part) : convertMrkdwnEmphasis(convertWireTokens(part));
+  let out = "";
+  let cursor = 0;
+  for (const match of text.matchAll(MD_CODE_REGION)) {
+    out += convert(text.slice(cursor, match.index)) + decodeSlackEntities(match[0]);
+    cursor = match.index + match[0].length;
+  }
+  return out + convert(text.slice(cursor));
+}
