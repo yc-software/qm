@@ -85,7 +85,11 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
       label: loop.name,
       scopeId: loop.ownerScopeId,
       action: "pause",
-      run: () => loops!.setState(loop.id, "paused"),
+      run: async () => {
+        const paused = await loops!.setState(loop.id, "paused");
+        if (paused && loop.cronId) await app.setCronEnabled(loop.cronId, false);
+        return paused;
+      },
     });
   }
   for (const webhook of await app.listWebhooks()) {
@@ -237,7 +241,11 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
   const { steps, kept } = await planOffboarding(ctx, actor.id, principalId);
   const known =
-    member || deps.identity?.externalMember(principalId) || kept.length || steps.some((s) => s.kind !== "principal");
+    member ||
+    deps.identity?.externalMember(principalId) ||
+    deps.identity?.deactivationSource(principalId) ||
+    kept.length ||
+    steps.some((s) => s.kind !== "principal");
   if (!known) return sendJson(res, 404, { error: "not_found", message: `nothing is known about ${principalId}` });
   const org = orgScope(deps);
   const view = ({ run: _run, ...change }: Step): Change => change;
@@ -249,19 +257,20 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   for (const step of steps) {
     const change = view(step);
     try {
-      await step.run();
+      const outcome = await step.run();
+      if (outcome === null || outcome === false) throw new Error("it no longer exists");
       changes.push({ ...change, result: "done" });
     } catch (error) {
       changes.push({ ...change, result: "failed", error: errMessage(error) });
     }
-    const outcome = changes.at(-1)!;
+    const recorded = changes.at(-1)!;
     audit(deps, {
       principalId: actor.id,
       action: `${step.kind}.${step.action}`,
       resource: step.id,
       scopeLabel: step.scopeId,
-      status: outcome.result === "done" ? "ok" : "error",
-      ...(outcome.error ? { detail: outcome.error } : {}),
+      status: recorded.result === "done" ? "ok" : "error",
+      ...(recorded.error ? { detail: recorded.error } : {}),
     });
   }
   const failed = changes.filter((c) => c.result === "failed").length;

@@ -11,6 +11,17 @@ export function badge(text: unknown, kind = "") {
   return html`<span class=${"badge" + (kind ? " " + kind : "")}>${text}</span>`;
 }
 
+export function stacked(primary: unknown, secondary: unknown) {
+  return html`<div>
+    <div class="primaryline">${primary}</div>
+    ${secondary ? html`<div class="subline">${secondary}</div>` : nothing}
+  </div>`;
+}
+
+export function muted(text: string) {
+  return html`<span class="subline">${text}</span>`;
+}
+
 export function cell(value: any): unknown {
   if (value?.node) return value.node;
   if (value?.badges)
