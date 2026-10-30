@@ -819,4 +819,3 @@ export function buildHarness(config: Config, core: Core, overrides: HarnessOverr
   return { agent, orchestrator, scheduler, runtime, monitorPoller, skillSyncEngine, reaper, workers };
 }
 
-type BuiltHarness = ReturnType<typeof buildHarness>;
