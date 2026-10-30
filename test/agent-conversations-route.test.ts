@@ -4,12 +4,15 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, TEST_TENANT } from "./support/build-app.ts";
+import { enterTenant } from "../src/tenants/context.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { startSession } from "../src/api/start-session.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+
+enterTenant(TEST_TENANT);
 
 const SECRET = "agent-conversations-secret".repeat(2);
 
@@ -41,6 +44,7 @@ describe("agent conversations self-API", async () => {
 
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
+    await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
     server = createServer(built.app, {
       signingSecret: SECRET,
       portalUrl: "https://portal.example/",

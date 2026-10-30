@@ -235,6 +235,7 @@ for (const storage of ["memory", "postgres"] as const) {
         }
       }
       let built = buildApp(config);
+      await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
       const tokenCommand = "printf '%s' \"$AGENT_API_TOKEN\"";
       const issuedTokens = new Map<string, string>();
       const captureIssuedTokens = () => {
@@ -478,6 +479,7 @@ test("unbound request fields cannot claim verified swarm provenance", async () =
 
 test("a resolved command approval informs the model without changing its requested command", async () => {
   const built = buildApp(testConfig());
+  await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
   const sandbox = await built.sandboxResources.create("U1", "personal:U1", "sprites");
   await built.sandboxResources.setDefault("U1", "personal:U1", sandbox.id);
   const request: TurnRequest = {

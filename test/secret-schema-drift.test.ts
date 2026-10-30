@@ -6,6 +6,7 @@ import { MODEL_PROVIDERS, MODEL_PROVIDER_HARNESSES } from "../cli/src/config.ts"
 import { isInvalidSecret as cliRejectsSecret } from "../cli/src/util.ts";
 import { CORE_SECRET_SPECS, validateCoreSecretEnv } from "../src/deployment/secret-schema.ts";
 import { HARNESS_IDS, defaultModelForProvider } from "../src/model/pi-models.ts";
+import { tenantImportKeys } from "../src/tenants/settings-import.ts";
 
 test("the standalone CLI and core agree on runtime-enforced core secret names", () => {
   const cli = new Set(
@@ -14,7 +15,11 @@ test("the standalone CLI and core agree on runtime-enforced core secret names", 
     ),
   );
   const runtime = new Set(CORE_SECRET_SPECS.map((secret) => secret.name));
-  assert.deepEqual([...runtime].sort(), [...cli].filter((name) => name !== "PUBLIC_API_URL").sort());
+  const tenantOwned = new Set(tenantImportKeys());
+  assert.deepEqual(
+    [...runtime].sort(),
+    [...cli].filter((name) => name !== "PUBLIC_API_URL" && (runtime.has(name) || !tenantOwned.has(name))).sort(),
+  );
 });
 
 test("background ownership requires strong control credentials only for configured deployments", () => {
@@ -72,33 +77,6 @@ test("AWS deployment app domains reject a missing or placeholder gate secret", (
   );
 });
 
-test("a declared base model provider is enforced at boot, not just at deploy time", () => {
-  for (const [provider, key] of [
-    ["anthropic", "ANTHROPIC_API_KEY"],
-    ["openai", "OPENAI_API_KEY"],
-    ["openrouter", "OPENROUTER_API_KEY"],
-  ] as const) {
-    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider } as NodeJS.ProcessEnv), [key]);
-    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider, [key]: "real-key" } as NodeJS.ProcessEnv), []);
-    assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: provider, [key]: "replace-me" } as NodeJS.ProcessEnv), [
-      key,
-    ]);
-  }
-  assert.deepEqual(validateCoreSecretEnv({} as NodeJS.ProcessEnv), [], "no provider declared, nothing required");
-});
-
-test("an OpenAI base model needs an API key unless a company ChatGPT login serves it", () => {
-  assert.deepEqual(validateCoreSecretEnv({ MODEL_PROVIDER: "openai" } as NodeJS.ProcessEnv), ["OPENAI_API_KEY"]);
-  assert.deepEqual(
-    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_CREDENTIAL: "cred-1" } as NodeJS.ProcessEnv),
-    [],
-  );
-  assert.deepEqual(
-    validateCoreSecretEnv({ MODEL_PROVIDER: "openai", CODEX_AUTH_FILE: "/tmp/auth.json" } as NodeJS.ProcessEnv),
-    [],
-  );
-});
-
 test("each core secret is named by exactly one spec, so boot failures never repeat a name", () => {
   const names = CORE_SECRET_SPECS.map((spec) => spec.name);
   assert.deepEqual(
@@ -133,26 +111,18 @@ test("production rejects weak encryption key material for managed credentials", 
   assert.deepEqual(validateCoreSecretEnv({ ...env, CONNECTOR_SECRET_KEY: "short" }), ["CONNECTOR_SECRET_KEY"]);
 });
 
-test("both porter roles share PORTER_DEPLOY_API_TOKEN", () => {
-  assert.deepEqual(validateCoreSecretEnv({ SANDBOX_BACKEND: "porter" } as NodeJS.ProcessEnv), [
-    "PORTER_DEPLOY_API_TOKEN",
-  ]);
+test("porter publishing requires PORTER_DEPLOY_API_TOKEN", () => {
   assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "porter" } as NodeJS.ProcessEnv), [
     "PORTER_DEPLOY_API_TOKEN",
   ]);
   assert.deepEqual(
-    validateCoreSecretEnv({
-      SANDBOX_BACKEND: "porter",
-      DEPLOY_PROVIDER: "porter",
-      PORTER_DEPLOY_API_TOKEN: "t-1",
-    } as NodeJS.ProcessEnv),
+    validateCoreSecretEnv({ DEPLOY_PROVIDER: "porter", PORTER_DEPLOY_API_TOKEN: "t-1" } as NodeJS.ProcessEnv),
     [],
   );
 });
 
-test("E2B sandboxes and E2B publishing share E2B_API_KEY", () => {
+test("E2B publishing requires E2B_API_KEY", () => {
   assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "e2b" } as NodeJS.ProcessEnv), ["E2B_API_KEY"]);
-  assert.deepEqual(validateCoreSecretEnv({ SANDBOX_BACKEND: "e2b" } as NodeJS.ProcessEnv), ["E2B_API_KEY"]);
   assert.deepEqual(validateCoreSecretEnv({ DEPLOY_PROVIDER: "e2b", E2B_API_KEY: "k" } as NodeJS.ProcessEnv), []);
 });
 

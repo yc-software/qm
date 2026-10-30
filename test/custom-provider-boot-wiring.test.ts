@@ -10,7 +10,6 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { defaultModelForHarness } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
@@ -30,13 +29,12 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
   const deps = serverDeps(config, built);
   assert.equal(deps.customProviders, built.customProviders);
   assert.equal(deps.refreshCustomProviders, built.refreshCustomProviders);
-  assert.equal(deps.baseModelDefault?.(), "custom/acme-gateway/acme-large");
 
   const server = createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
-    assert.notEqual(defaultModelForHarness("pi", deps.baseModelDefault?.()), "custom/acme-gateway/acme-large");
+    assert.notEqual(deps.baseModelDefault?.(), "custom/acme-gateway/acme-large");
 
     const list = await fetch(`${base}/v1/admin/custom-providers`, { headers: ADMIN });
     assert.equal(list.status, 200);
@@ -55,7 +53,7 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
     });
     assert.equal(put.status, 200);
 
-    assert.equal(defaultModelForHarness("pi", deps.baseModelDefault?.()), "custom/acme-gateway/acme-large");
+    assert.equal(deps.baseModelDefault?.(), "custom/acme-gateway/acme-large");
 
     const runtime = await fetch(
       `${base}/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice@default-org`,

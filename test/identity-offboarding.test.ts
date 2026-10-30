@@ -41,7 +41,6 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "offboarding-")), signingSecret: SECRET }), {
       tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "allowed@example.com" }),
     });
-    await built.tenantSettings.get();
     await built.identity.hydrate();
     server = createServer(built.app, { signingSecret: SECRET, identity: built.identity, auditLog: built.auditLog });
     await new Promise<void>((resolve) => server.listen(0, resolve));
