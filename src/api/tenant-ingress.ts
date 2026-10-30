@@ -31,7 +31,7 @@ export function requestCapability(
   return claims;
 }
 
-export function requestHost(req: IncomingMessage): string {
+function requestHost(req: IncomingMessage): string {
   return (req.headers.host ?? "").split(":")[0]!.toLowerCase();
 }
 

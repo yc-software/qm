@@ -794,7 +794,7 @@ async function fetchDeploymentResponse(
 }
 
 export async function proxyDeploymentSubdomain(ctx: BaseCtx): Promise<boolean> {
-  const { req, res, app, deps, url, pathname } = ctx;
+  const { req, res, deps } = ctx;
   const appsDomain = deps.deployAppsDomain;
   const gateSecret = deps.deployGateSecret;
   const fromAppHost = req.headers["x-qm-app-host"] === "1";
