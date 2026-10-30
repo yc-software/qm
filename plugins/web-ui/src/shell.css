@@ -7555,13 +7555,17 @@ h3.ambient-field-label {
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab {
   height: var(--split-tab-h);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   width: 150px;
-  min-width: 0;
+  min-width: 72px;
   padding: 0 8px 0 10px;
   display: flex;
   align-items: center;
   margin-right: 4px;
+}
+
+.dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .dv-tab.dv-active-tab {
+  flex-shrink: 0;
 }
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-pane-title {
@@ -7580,6 +7584,49 @@ h3.ambient-field-label {
 
 .dockview-theme-qm .dv-tabs-and-actions-container:not(.dv-single-tab) .split-group-close {
   display: none;
+}
+
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default {
+  height: 26px;
+  padding: 0 6px;
+  margin: 0 2px 0 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dockview-theme-qm .dv-tabs-overflow-dropdown-default:hover {
+  background: var(--secondary);
+}
+
+.dockview-theme-qm .dv-popover-anchor {
+  z-index: 1000;
+}
+
+.dv-tabs-overflow-container {
+  min-width: 200px;
+  max-width: 300px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+
+.dv-tabs-overflow-container .dv-tab {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.dv-tabs-overflow-container .dv-tab:hover,
+.dv-tabs-overflow-container .dv-tab.dv-active-tab {
+  background: var(--secondary);
 }
 
 .split-tab-actions {
