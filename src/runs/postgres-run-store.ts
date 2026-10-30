@@ -19,6 +19,7 @@ import {
   withTraceCarrier,
 } from "./run-store.ts";
 import { errMessage, swallow } from "../util/errors.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export interface PostgresRuntime {
   runs: RunStore;
@@ -64,6 +65,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
   events.setMaxListeners(0);
 
   const { query: q, close: closePool } = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "runs/store/0001",
       expectedChecksum: "07a121d0fa4e8ae4049e0574939dbf938c8615dc39ce29b74805a7e8ccb4ad0f",
@@ -161,6 +163,16 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
       id: "runs/store/0010-drop-turn-metrics",
       statements: [`SET LOCAL lock_timeout = '60s'`, `DROP TABLE IF EXISTS turn_metrics`],
     },
+    tenantTables("runs/store/0011-tenants", [
+      {
+        table: "runs",
+        primaryKey: "id",
+        unique: [
+          { name: "runs_idempotency_key_key", columns: "idempotency_key", constraint: true },
+          { name: "idx_runs_one_running_per_session", columns: "session_id", where: "status = 'running'" },
+        ],
+      },
+    ]),
   ]);
 
   const availabilityListeners = new Map<() => void, number>();
@@ -304,7 +316,7 @@ export function createPostgresRunStore(connectionString: string, opts?: { maxCla
         const { rows } = await q(
           `INSERT INTO runs(id, session_id, status, request, idempotency_key, attempts, max_attempts, created_at, claim_priority)
            VALUES ($1,$2,'pending',$3,$4,0,$5,$6,$7)
-           ON CONFLICT (idempotency_key) DO NOTHING
+           ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
            RETURNING *, pg_notify('qm_run_available', 'null')`,
           [
             id,

@@ -1,5 +1,6 @@
 import type { ProcessCredentialFiles } from "../credentials/execute-files.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export type ProcessKind = "build" | "dev-server" | "background";
 
@@ -140,15 +141,21 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
 }
 
 export function createPostgresProcessRegistry(connectionString: string): ProcessRegistry {
-  const pg = createPgPool(connectionString, "processes/registry/0001", [
-    `CREATE TABLE IF NOT EXISTS process_sessions(
+  const pg = createPgPool(connectionString, [
+    TENANCY_BASE,
+    {
+      id: "processes/registry/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS process_sessions(
         process_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, kind TEXT NOT NULL,
         command TEXT NOT NULL, started_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
         status TEXT NOT NULL
       )`,
-    `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT`,
-    `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT`,
-    `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
+        `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT`,
+        `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT`,
+        `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
+      ],
+    },
   ]);
 
   const migration = {
@@ -166,12 +173,17 @@ export function createPostgresProcessRegistry(connectionString: string): Process
     statements: ["ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS credential_files JSONB"],
   };
   pg.registerMigration(credentialFilesMigration);
+  const tenantMigration = tenantTables("processes/registry/0005-tenants", [
+    { table: "process_sessions", primaryKey: "process_id" },
+  ]);
+  pg.registerMigration(tenantMigration);
   let ready: Promise<void> | undefined;
   const q: typeof pg.q = async (...args) => {
     ready ??= pg
       .migrate(migration)
       .then(() => pg.migrate(purposeMigration))
       .then(() => pg.migrate(credentialFilesMigration))
+      .then(() => pg.migrate(tenantMigration))
       .catch((error) => {
         ready = undefined;
         throw error;

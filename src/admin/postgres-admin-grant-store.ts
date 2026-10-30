@@ -1,4 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantPersistence, AdminRole } from "./admin-grant-store.ts";
 
@@ -24,7 +25,11 @@ const SCHEMA_SQL = [
 ];
 
 export function createPostgresAdminGrantStore(connectionString: string): AdminGrantPersistence {
-  const pg = createPgPool(connectionString, "admin/grants/0001", SCHEMA_SQL);
+  const pg = createPgPool(connectionString, [
+    TENANCY_BASE,
+    { id: "admin/grants/0001", statements: SCHEMA_SQL },
+    tenantTables("admin/grants/0002-tenants", [{ table: "admin_grants", primaryKey: "principal_id, scope_id, role" }]),
+  ]);
 
   return {
     async all() {
@@ -35,7 +40,7 @@ export function createPostgresAdminGrantStore(connectionString: string): AdminGr
       await pg.query(
         `INSERT INTO admin_grants (principal_id, scope_id, role, granted_by, created_at)
          VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (principal_id, scope_id, role)
+         ON CONFLICT (tenant_id, principal_id, scope_id, role)
          DO UPDATE SET granted_by = EXCLUDED.granted_by, created_at = EXCLUDED.created_at`,
         [g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
       );
@@ -44,7 +49,7 @@ export function createPostgresAdminGrantStore(connectionString: string): AdminGr
       const result = await pg.query(
         `INSERT INTO admin_grants (principal_id, scope_id, role, granted_by, created_at)
          VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (principal_id, scope_id, role) DO NOTHING`,
+         ON CONFLICT (tenant_id, principal_id, scope_id, role) DO NOTHING`,
         [g.principalId, g.scopeId, g.role, g.grantedBy ?? null, g.createdAt ?? null],
       );
       return (result.rowCount ?? 0) > 0;

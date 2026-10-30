@@ -1,4 +1,5 @@
-import { orgId as configOrgId } from "../config.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 
 export const BOT_MODES = ["ignore", "rollup", "action", "user"] as const;
@@ -77,28 +78,41 @@ export interface ChannelPolicyStore {
 const HISTORY_DEFAULT_LIMIT = 50;
 
 export function createPostgresChannelPolicyStore(connectionString: string): ChannelPolicyStore {
-  const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, "surface-cache/channel-policy/0001", [
-    `CREATE TABLE IF NOT EXISTS channel_policy(
+  const { q, close } = createPgPool(connectionString, [
+    TENANCY_BASE,
+    {
+      id: "surface-cache/channel-policy/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS channel_policy(
         org_id TEXT NOT NULL, container TEXT NOT NULL,
         orders TEXT NOT NULL DEFAULT '', bots JSONB NOT NULL DEFAULT '{}'::jsonb,
         set_by TEXT, updated_at BIGINT NOT NULL,
         PRIMARY KEY(org_id, container)
       )`,
-    `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS bots JSONB NOT NULL DEFAULT '{}'::jsonb`,
-    `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
-    `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP NOT NULL`,
-    `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP DEFAULT`,
-    `CREATE TABLE IF NOT EXISTS channel_policy_history(
+        `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS bots JSONB NOT NULL DEFAULT '{}'::jsonb`,
+        `ALTER TABLE channel_policy ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
+        `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP NOT NULL`,
+        `ALTER TABLE channel_policy ALTER COLUMN ambient_enabled DROP DEFAULT`,
+        `CREATE TABLE IF NOT EXISTS channel_policy_history(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, container TEXT NOT NULL,
         orders TEXT NOT NULL, set_by TEXT, session_id TEXT,
         created_at BIGINT NOT NULL
       )`,
-    `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS bots JSONB`,
-    `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
-    `CREATE INDEX IF NOT EXISTS channel_policy_history_container
+        `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS bots JSONB`,
+        `ALTER TABLE channel_policy_history ADD COLUMN IF NOT EXISTS ambient_enabled BOOLEAN`,
+        `CREATE INDEX IF NOT EXISTS channel_policy_history_container
         ON channel_policy_history(org_id, container, id DESC)`,
+      ],
+    },
+    tenantTables("surface-cache/channel-policy/0002-tenants", [
+      { table: "channel_policy", primaryKey: "container", replacesOrgId: [] },
+      {
+        table: "channel_policy_history",
+        primaryKey: "id",
+        replacesOrgId: [{ name: "channel_policy_history_container", columns: "container, id DESC" }],
+      },
+    ]),
   ]);
   const row = (r: Record<string, unknown>): ChannelPolicy => ({
     container: r.container as string,
@@ -119,7 +133,10 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
   });
   return {
     async get(container) {
-      const rows = await q("SELECT * FROM channel_policy WHERE org_id = $1 AND container = $2", [orgId, container]);
+      const rows = await q("SELECT * FROM channel_policy WHERE tenant_id = $1 AND container = $2", [
+        currentTenant(),
+        container,
+      ]);
       return rows[0] ? row(rows[0]) : null;
     },
     async set(container, orders, opts) {
@@ -132,24 +149,24 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
                  bots = COALESCE($4::jsonb, channel_policy.bots),
                  ambient_enabled = CASE WHEN $9 THEN $8::boolean ELSE channel_policy.ambient_enabled END,
                  set_by = $5, updated_at = $6
-               WHERE org_id = $1 AND container = $2 AND orders = $10
+               WHERE tenant_id = $1 AND container = $2 AND orders = $10
                RETURNING *`
               : `
-           INSERT INTO channel_policy(org_id, container, orders, bots, ambient_enabled, set_by, updated_at)
+           INSERT INTO channel_policy(tenant_id, container, orders, bots, ambient_enabled, set_by, updated_at)
            VALUES ($1,$2,COALESCE($3,''),COALESCE($4::jsonb,'{}'::jsonb),CASE WHEN $9 THEN $8::boolean END,$5,$6)
-           ON CONFLICT (org_id, container) DO UPDATE SET orders = COALESCE($3, channel_policy.orders),
+           ON CONFLICT (tenant_id, container) DO UPDATE SET orders = COALESCE($3, channel_policy.orders),
              bots = COALESCE($4::jsonb, channel_policy.bots),
              ambient_enabled = CASE WHEN $9 THEN $8::boolean ELSE channel_policy.ambient_enabled END,
              set_by = EXCLUDED.set_by, updated_at = EXCLUDED.updated_at
            RETURNING *`
           }
          ), hist AS (
-           INSERT INTO channel_policy_history(org_id, container, orders, bots, ambient_enabled, set_by, session_id, created_at)
+           INSERT INTO channel_policy_history(tenant_id, container, orders, bots, ambient_enabled, set_by, session_id, created_at)
            SELECT $1, $2, up.orders, up.bots, up.ambient_enabled, $5, $7, $6 FROM up
          )
          SELECT * FROM up`,
         [
-          orgId,
+          currentTenant(),
           container,
           orders ?? null,
           opts?.bots ? JSON.stringify(opts.bots) : null,
@@ -166,13 +183,15 @@ export function createPostgresChannelPolicyStore(connectionString: string): Chan
     },
     async history(container, limit = HISTORY_DEFAULT_LIMIT) {
       const rows = await q(
-        "SELECT * FROM channel_policy_history WHERE org_id = $1 AND container = $2 ORDER BY id DESC LIMIT $3",
-        [orgId, container, limit],
+        "SELECT * FROM channel_policy_history WHERE tenant_id = $1 AND container = $2 ORDER BY id DESC LIMIT $3",
+        [currentTenant(), container, limit],
       );
       return rows.map(revision);
     },
     async list() {
-      const rows = await q("SELECT * FROM channel_policy WHERE org_id = $1 ORDER BY updated_at DESC", [orgId]);
+      const rows = await q("SELECT * FROM channel_policy WHERE tenant_id = $1 ORDER BY updated_at DESC", [
+        currentTenant(),
+      ]);
       return rows.map(row);
     },
     close,

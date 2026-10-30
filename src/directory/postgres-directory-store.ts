@@ -1,7 +1,8 @@
 import { likeEscape } from "../persistence/like.ts";
-import { orgId as configOrgId } from "../config.ts";
 import { createHash } from "node:crypto";
 import { createPgPool, type PoolClient, withPgTransaction } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
+import { currentTenant } from "../tenants/context.ts";
 import type { PrincipalType } from "../types.ts";
 import { foldPrincipalId, rosterIds } from "./person.ts";
 import {
@@ -171,6 +172,7 @@ function dedupMemberships(rows: ChannelMembership[]): ChannelMembership[] {
 }
 
 export const DIRECTORY_MIGRATIONS = [
+  TENANCY_BASE,
   {
     id: "directory/store/0001",
     expectedChecksum: "c47a45848f9d225ff601c9df13dc272349c7df7525e7e2417f33d68be7672cc1",
@@ -186,10 +188,36 @@ export const DIRECTORY_MIGRATIONS = [
     id: "directory/store/0005",
     statements: ["ALTER TABLE directory_members ADD COLUMN IF NOT EXISTS avatar_url TEXT"],
   },
+  tenantTables("directory/store/0006-tenants", [
+    {
+      table: "directory_members",
+      primaryKey: "principal_id",
+      replacesOrgId: [
+        { name: "directory_members_name", columns: "display_name_lc" },
+        { name: "directory_members_lower_pid", columns: "lower(principal_id)" },
+      ],
+    },
+    {
+      table: "directory_channels",
+      primaryKey: "channel_id",
+      replacesOrgId: [
+        { name: "directory_channels_name", columns: "name_lc" },
+        { name: "directory_channels_lower_cid", columns: "lower(channel_id)" },
+      ],
+    },
+    { table: "directory_channel_members", primaryKey: "channel_id, principal_id", replacesOrgId: [] },
+    {
+      table: "directory_group_members",
+      primaryKey: "group_id, principal_id",
+      replacesOrgId: [{ name: "directory_group_members_principal", columns: "principal_id, group_id" }],
+    },
+    { table: "directory_groups", primaryKey: "group_id", replacesOrgId: [] },
+    { table: "directory_sync", primaryKey: "", replacesOrgId: [] },
+    { table: "directory_meta", primaryKey: "", replacesOrgId: [] },
+  ]),
 ];
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
-  const orgId = configOrgId();
   const { q, pool } = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
 
   async function pick<T>(
@@ -202,14 +230,14 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   ): Promise<{ kind: "one"; item: T } | { kind: "ambiguous"; items: T[] } | { kind: "none" }> {
     const qn = normDirectoryQuery(query);
     if (!qn) return { kind: "none" };
-    const from = `FROM ${table} WHERE org_id = $1`;
+    const from = `FROM ${table} WHERE tenant_id = $1`;
 
-    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [orgId, qn]);
+    const byId = await q(`SELECT ${cols} ${from} AND lower(${idCol}) = $2 LIMIT 1`, [currentTenant(), qn]);
     if (byId.length) return { kind: "one", item: map(byId[0]!) };
 
     const exact = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} = $2 ORDER BY ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [orgId, qn],
+      [currentTenant(), qn],
     );
     if (exact.length === 1) return { kind: "one", item: map(exact[0]!) };
     if (exact.length > 1) return { kind: "ambiguous", items: exact.slice(0, MAX_CANDIDATES).map(map) };
@@ -217,12 +245,12 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     const esc = likeEscape(qn);
     let pool2 = await q(
       `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-      [orgId, `${esc}%`],
+      [currentTenant(), `${esc}%`],
     );
     if (!pool2.length) {
       pool2 = await q(
         `SELECT ${cols} ${from} AND ${labelLcCol} LIKE $2 ESCAPE '\\' ORDER BY ${labelLcCol}, ${idCol} LIMIT ${MAX_CANDIDATES + 1}`,
-        [orgId, `%${esc}%`],
+        [currentTenant(), `%${esc}%`],
       );
     }
     if (!pool2.length) return { kind: "none" };
@@ -239,9 +267,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
   ): Promise<boolean> {
     const syncedAtCol = hashCol.replace(/_hash$/, "_synced_at");
     return withPgTransaction(await pool(), async (client) => {
-      await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
-      const sync = await client.query(`SELECT ${hashCol}, ${syncedAtCol} FROM directory_sync WHERE org_id = $1`, [
-        orgId,
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [currentTenant()]);
+      const sync = await client.query(`SELECT ${hashCol}, ${syncedAtCol} FROM directory_sync WHERE tenant_id = $1`, [
+        currentTenant(),
       ]);
       const row = sync.rows[0];
       if (
@@ -250,15 +278,15 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         (partial ? Number(row[syncedAtCol]) >= syncedAt : Number(row[syncedAtCol]) > syncedAt)
       ) {
         console.warn(
-          `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${orgId}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
+          `[directory] refused stale ${hashCol.replace(/_hash$/, "")} swap for ${currentTenant()}: stamped ${Number(row[syncedAtCol]) - syncedAt}ms behind`,
         );
         return false;
       }
       if (!partial && row?.[hashCol] === hash) {
         if (syncedAt !== undefined) {
           await client.query(
-            `UPDATE directory_sync SET ${syncedAtCol} = GREATEST(COALESCE(${syncedAtCol}, 0), $2) WHERE org_id = $1`,
-            [orgId, syncedAt],
+            `UPDATE directory_sync SET ${syncedAtCol} = GREATEST(COALESCE(${syncedAtCol}, 0), $2) WHERE tenant_id = $1`,
+            [currentTenant(), syncedAt],
           );
         }
         return true;
@@ -266,11 +294,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const complete = await write(client);
       if (partial && complete === false) return false;
       await client.query(
-        `INSERT INTO directory_sync (org_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (org_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
+        `INSERT INTO directory_sync (tenant_id, ${hashCol}, ${syncedAtCol}, updated_at) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (tenant_id) DO UPDATE SET ${hashCol} = EXCLUDED.${hashCol},
            ${syncedAtCol} = COALESCE(EXCLUDED.${syncedAtCol}, directory_sync.${syncedAtCol}),
            updated_at = EXCLUDED.updated_at`,
-        [orgId, partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
+        [currentTenant(), partial || complete === false ? null : hash, partial ? null : (syncedAt ?? null), Date.now()],
       );
       return true;
     });
@@ -287,13 +315,13 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       );
 
       return swapIfChanged("members_hash", hash, syncedAt, async (client) => {
-        await client.query("DELETE FROM directory_members WHERE org_id = $1", [orgId]);
+        await client.query("DELETE FROM directory_members WHERE tenant_id = $1", [currentTenant()]);
         if (internal.length) {
           await client.query(
-            `INSERT INTO directory_members (org_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
+            `INSERT INTO directory_members (tenant_id, principal_id, display_name, display_name_lc, type, slack_id, avatar_url)
              SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])`,
             [
-              orgId,
+              currentTenant(),
               internal.map((m) => m.principalId),
               internal.map((m) => m.displayName),
               internal.map((m) => normDirectoryQuery(m.displayName)),
@@ -340,8 +368,8 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         syncedAt,
         async (client) => {
           const protectedRows = await client.query(
-            "SELECT channel_id FROM directory_channels WHERE org_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2))",
-            [orgId, syncedAt ?? null, partial],
+            "SELECT channel_id FROM directory_channels WHERE tenant_id = $1 AND (observed_at > $2 OR ($3 AND observed_at = $2))",
+            [currentTenant(), syncedAt ?? null, partial],
           );
           const protectedIds = new Set(protectedRows.rows.map((row) => row.channel_id as string));
           if (partial && list.some((channel) => protectedIds.has(channel.channelId))) return false;
@@ -353,19 +381,19 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           const channelIds = list.map((channel) => channel.channelId);
           if (!partial) {
             await client.query(
-              "DELETE FROM directory_channels WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
-              [orgId, retainedIds],
+              "DELETE FROM directory_channels WHERE tenant_id = $1 AND NOT (channel_id = ANY($2::text[]))",
+              [currentTenant(), retainedIds],
             );
             await client.query(
-              "DELETE FROM directory_channel_members WHERE org_id = $1 AND NOT (channel_id = ANY($2::text[]))",
-              [orgId, retainedIds],
+              "DELETE FROM directory_channel_members WHERE tenant_id = $1 AND NOT (channel_id = ANY($2::text[]))",
+              [currentTenant(), retainedIds],
             );
           }
           if (list.length) {
             await client.query(
-              `INSERT INTO directory_channels (org_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
+              `INSERT INTO directory_channels (tenant_id, channel_id, name, name_lc, is_private, is_external, roster_known, observed_at)
              SELECT $1, rows.*, $8::bigint FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::boolean[]) AS rows
-             ON CONFLICT (org_id, channel_id) DO UPDATE SET
+             ON CONFLICT (tenant_id, channel_id) DO UPDATE SET
                name = EXCLUDED.name,
                name_lc = EXCLUDED.name_lc,
                is_private = EXCLUDED.is_private,
@@ -373,7 +401,7 @@ export function createPostgresDirectoryStore(connectionString: string): Director
                roster_known = directory_channels.roster_known OR EXCLUDED.roster_known,
                observed_at = EXCLUDED.observed_at`,
               [
-                orgId,
+                currentTenant(),
                 channelIds,
                 list.map((c) => c.name),
                 list.map((c) => normDirectoryQuery(c.name)),
@@ -386,14 +414,14 @@ export function createPostgresDirectoryStore(connectionString: string): Director
           }
           if (membershipRows !== undefined) {
             await client.query(
-              "DELETE FROM directory_channel_members WHERE org_id = $1 AND channel_id = ANY($2::text[])",
-              [orgId, [...rosterIds!]],
+              "DELETE FROM directory_channel_members WHERE tenant_id = $1 AND channel_id = ANY($2::text[])",
+              [currentTenant(), [...rosterIds!]],
             );
             if (membershipRows.length) {
               await client.query(
-                `INSERT INTO directory_channel_members (org_id, channel_id, principal_id)
+                `INSERT INTO directory_channel_members (tenant_id, channel_id, principal_id)
                SELECT $1, * FROM unnest($2::text[], $3::text[])`,
-                [orgId, membershipRows.map((m) => m.channelId), membershipRows.map((m) => m.principalId)],
+                [currentTenant(), membershipRows.map((m) => m.channelId), membershipRows.map((m) => m.principalId)],
               );
             }
           }
@@ -401,9 +429,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
             await client.query(
               `DELETE FROM directory_channel_members member
              USING unnest($2::text[], $3::text[]) AS revoked(channel_id, principal_id)
-             WHERE member.org_id = $1 AND member.channel_id = revoked.channel_id
+             WHERE member.tenant_id = $1 AND member.channel_id = revoked.channel_id
                AND member.principal_id = revoked.principal_id`,
-              [orgId, revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
+              [currentTenant(), revokedRows.map((m) => m.channelId), revokedRows.map((m) => m.principalId)],
             );
           }
           return partial || protectedIds.size === 0;
@@ -411,44 +439,44 @@ export function createPostgresDirectoryStore(connectionString: string): Director
         partial,
       );
       if (applied && membershipRows !== undefined) {
-        await q("UPDATE directory_sync SET channel_members_synced = TRUE WHERE org_id = $1", [orgId]);
+        await q("UPDATE directory_sync SET channel_members_synced = TRUE WHERE tenant_id = $1", [currentTenant()]);
       }
       return applied;
     },
 
     async setWorkspaceUrl(url) {
       await q(
-        `INSERT INTO directory_meta (org_id, workspace_url, updated_at) VALUES ($1, $2, $3)
-         ON CONFLICT (org_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
-        [orgId, url, Date.now()],
+        `INSERT INTO directory_meta (tenant_id, workspace_url, updated_at) VALUES ($1, $2, $3)
+         ON CONFLICT (tenant_id) DO UPDATE SET workspace_url = EXCLUDED.workspace_url, updated_at = EXCLUDED.updated_at`,
+        [currentTenant(), url, Date.now()],
       );
     },
 
     async meta() {
-      const rows = await q("SELECT workspace_url FROM directory_meta WHERE org_id = $1", [orgId]);
+      const rows = await q("SELECT workspace_url FROM directory_meta WHERE tenant_id = $1", [currentTenant()]);
       return { workspaceUrl: (rows[0]?.workspace_url as string | null) ?? null };
     },
 
     async channelMember(channelId, principalId) {
       const rows = await q(
         `SELECT 1 FROM directory_channel_members member
-         JOIN directory_channels channel USING (org_id, channel_id)
-         WHERE member.org_id = $1 AND member.channel_id = $2 AND member.principal_id = ANY($3::text[])
+         JOIN directory_channels channel USING (tenant_id, channel_id)
+         WHERE member.tenant_id = $1 AND member.channel_id = $2 AND member.principal_id = ANY($3::text[])
            AND NOT (channel.is_private AND channel.is_external) LIMIT 1`,
-        [orgId, channelId, rosterIds(principalId)],
+        [currentTenant(), channelId, rosterIds(principalId)],
       );
       return rows.length > 0;
     },
 
     async channelMemberIds(channelId) {
-      const known = await q("SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2", [
-        orgId,
+      const known = await q("SELECT roster_known FROM directory_channels WHERE tenant_id = $1 AND channel_id = $2", [
+        currentTenant(),
         channelId,
       ]);
       if (known[0]?.roster_known !== true) return undefined;
       const rows = await q(
-        "SELECT principal_id FROM directory_channel_members WHERE org_id = $1 AND channel_id = $2 ORDER BY principal_id",
-        [orgId, channelId],
+        "SELECT principal_id FROM directory_channel_members WHERE tenant_id = $1 AND channel_id = $2 ORDER BY principal_id",
+        [currentTenant(), channelId],
       );
       return rows.map((row) => row.principal_id as string);
     },
@@ -457,11 +485,11 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const rows = await q(
         `SELECT EXISTS (
            SELECT 1 FROM directory_channel_members
-           WHERE org_id = $1 AND channel_id = $2 AND principal_id = ANY($3::text[])
+           WHERE tenant_id = $1 AND channel_id = $2 AND principal_id = ANY($3::text[])
          ) AS member,
-         (SELECT is_private FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS is_private,
-         (SELECT roster_known FROM directory_channels WHERE org_id = $1 AND channel_id = $2) AS roster_known`,
-        [orgId, channelId, rosterIds(principalId)],
+         (SELECT is_private FROM directory_channels WHERE tenant_id = $1 AND channel_id = $2) AS is_private,
+         (SELECT roster_known FROM directory_channels WHERE tenant_id = $1 AND channel_id = $2) AS roster_known`,
+        [currentTenant(), channelId, rosterIds(principalId)],
       );
       const member = rows[0]?.member === true;
       if (rows[0]?.roster_known !== true) return undefined;
@@ -469,10 +497,10 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
 
     async channelPrivacy(channelId) {
-      const rows = await q("SELECT is_private FROM directory_channels WHERE org_id = $1 AND channel_id = $2 LIMIT 1", [
-        orgId,
-        channelId,
-      ]);
+      const rows = await q(
+        "SELECT is_private FROM directory_channels WHERE tenant_id = $1 AND channel_id = $2 LIMIT 1",
+        [currentTenant(), channelId],
+      );
       return rows.length > 0 ? (rows[0]!.is_private as boolean) : undefined;
     },
 
@@ -495,31 +523,31 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
       return swapIfChanged("groups_hash", hash, syncedAt, async (client) => {
         await client.query(
-          "DELETE FROM directory_group_members WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))",
-          [orgId, listedIds],
+          "DELETE FROM directory_group_members WHERE tenant_id = $1 AND NOT (group_id = ANY($2::text[]))",
+          [currentTenant(), listedIds],
         );
-        await client.query("DELETE FROM directory_groups WHERE org_id = $1 AND NOT (group_id = ANY($2::text[]))", [
-          orgId,
+        await client.query("DELETE FROM directory_groups WHERE tenant_id = $1 AND NOT (group_id = ANY($2::text[]))", [
+          currentTenant(),
           listedIds,
         ]);
         if (listedIds.length) {
           await client.query(
-            `INSERT INTO directory_groups (org_id, group_id, roster_known)
+            `INSERT INTO directory_groups (tenant_id, group_id, roster_known)
              SELECT $1, * FROM unnest($2::text[], $3::boolean[])
-             ON CONFLICT (org_id, group_id) DO UPDATE SET
+             ON CONFLICT (tenant_id, group_id) DO UPDATE SET
                roster_known = directory_groups.roster_known OR EXCLUDED.roster_known`,
-            [orgId, listedIds, listedIds.map((groupId) => rostered.has(groupId))],
+            [currentTenant(), listedIds, listedIds.map((groupId) => rostered.has(groupId))],
           );
         }
-        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = ANY($2::text[])", [
-          orgId,
+        await client.query("DELETE FROM directory_group_members WHERE tenant_id = $1 AND group_id = ANY($2::text[])", [
+          currentTenant(),
           rosterIds,
         ]);
         if (rows.length) {
           await client.query(
-            `INSERT INTO directory_group_members (org_id, group_id, principal_id)
+            `INSERT INTO directory_group_members (tenant_id, group_id, principal_id)
              SELECT $1, * FROM unnest($2::text[], $3::text[])`,
-            [orgId, rows.map((m) => m.groupId), rows.map((m) => m.principalId)],
+            [currentTenant(), rows.map((m) => m.groupId), rows.map((m) => m.principalId)],
           );
         }
       });
@@ -529,27 +557,31 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const ids = [...new Set(principalIds.filter(Boolean))];
       if (!groupId || !ids.length) return;
       await withPgTransaction(await pool(), async (client) => {
-        await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [orgId]);
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('directory'), hashtext($1))", [currentTenant()]);
         await client.query(
-          `INSERT INTO directory_groups (org_id, group_id, roster_known) VALUES ($1, $2, TRUE)
-           ON CONFLICT (org_id, group_id) DO UPDATE SET roster_known = TRUE`,
-          [orgId, groupId],
+          `INSERT INTO directory_groups (tenant_id, group_id, roster_known) VALUES ($1, $2, TRUE)
+           ON CONFLICT (tenant_id, group_id) DO UPDATE SET roster_known = TRUE`,
+          [currentTenant(), groupId],
         );
-        await client.query("DELETE FROM directory_group_members WHERE org_id = $1 AND group_id = $2", [orgId, groupId]);
-        await client.query(
-          `INSERT INTO directory_group_members (org_id, group_id, principal_id)
-           SELECT $1, $2, * FROM unnest($3::text[])`,
-          [orgId, groupId, ids],
-        );
-        const all = await client.query("SELECT group_id, principal_id FROM directory_group_members WHERE org_id = $1", [
-          orgId,
+        await client.query("DELETE FROM directory_group_members WHERE tenant_id = $1 AND group_id = $2", [
+          currentTenant(),
+          groupId,
         ]);
         await client.query(
-          `INSERT INTO directory_sync (org_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, $2, $3, $3)
-           ON CONFLICT (org_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
+          `INSERT INTO directory_group_members (tenant_id, group_id, principal_id)
+           SELECT $1, $2, * FROM unnest($3::text[])`,
+          [currentTenant(), groupId, ids],
+        );
+        const all = await client.query(
+          "SELECT group_id, principal_id FROM directory_group_members WHERE tenant_id = $1",
+          [currentTenant()],
+        );
+        await client.query(
+          `INSERT INTO directory_sync (tenant_id, groups_hash, groups_synced_at, updated_at) VALUES ($1, $2, $3, $3)
+           ON CONFLICT (tenant_id) DO UPDATE SET groups_hash = EXCLUDED.groups_hash,
              groups_synced_at = GREATEST(COALESCE(directory_sync.groups_synced_at, 0), EXCLUDED.groups_synced_at),
              updated_at = EXCLUDED.updated_at`,
-          [orgId, hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
+          [currentTenant(), hashRoster(all.rows.map((r) => `${r.group_id}|${r.principal_id}`)), Date.now()],
         );
       });
     },
@@ -559,19 +591,19 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       if (!key) return { kind: "none" };
       const rows = await q(
         `SELECT group_id FROM directory_group_members
-         WHERE org_id = $1
+         WHERE tenant_id = $1
          GROUP BY group_id
          HAVING string_agg(DISTINCT principal_id, ',' ORDER BY principal_id) = $2
          LIMIT 1`,
-        [orgId, key],
+        [currentTenant(), key],
       );
       return rows.length ? { kind: "one", groupId: rows[0]!.group_id as string } : { kind: "none" };
     },
 
     async groupMember(groupId, principalId) {
       const rows = await q(
-        "SELECT 1 FROM directory_group_members WHERE org_id = $1 AND group_id = $2 AND principal_id = ANY($3::text[]) LIMIT 1",
-        [orgId, groupId, rosterIds(principalId)],
+        "SELECT 1 FROM directory_group_members WHERE tenant_id = $1 AND group_id = $2 AND principal_id = ANY($3::text[]) LIMIT 1",
+        [currentTenant(), groupId, rosterIds(principalId)],
       );
       return rows.length > 0;
     },
@@ -580,18 +612,18 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const rows = await q(
         `SELECT EXISTS (
            SELECT 1 FROM directory_group_members
-           WHERE org_id = $1 AND group_id = $2 AND principal_id = ANY($3::text[])
+           WHERE tenant_id = $1 AND group_id = $2 AND principal_id = ANY($3::text[])
          ) AS member,
          EXISTS (
-           SELECT 1 FROM directory_groups WHERE org_id = $1 AND group_id = $2
+           SELECT 1 FROM directory_groups WHERE tenant_id = $1 AND group_id = $2
          ) AS listed,
          COALESCE((
-           SELECT roster_known FROM directory_groups WHERE org_id = $1 AND group_id = $2
+           SELECT roster_known FROM directory_groups WHERE tenant_id = $1 AND group_id = $2
          ), FALSE) AS roster_known,
          EXISTS (
-           SELECT 1 FROM directory_sync WHERE org_id = $1 AND groups_hash IS NOT NULL
+           SELECT 1 FROM directory_sync WHERE tenant_id = $1 AND groups_hash IS NOT NULL
          ) AS synced`,
-        [orgId, groupId, rosterIds(principalId)],
+        [currentTenant(), groupId, rosterIds(principalId)],
       );
       if (rows[0]?.member === true) return true;
       if (rows[0]?.listed !== true) return rows[0]?.synced === true ? false : undefined;
@@ -600,8 +632,8 @@ export function createPostgresDirectoryStore(connectionString: string): Director
 
     async listGroupsFor(principalId) {
       const rows = await q(
-        "SELECT DISTINCT group_id FROM directory_group_members WHERE org_id = $1 AND principal_id = ANY($2::text[]) ORDER BY group_id",
-        [orgId, rosterIds(principalId)],
+        "SELECT DISTINCT group_id FROM directory_group_members WHERE tenant_id = $1 AND principal_id = ANY($2::text[]) ORDER BY group_id",
+        [currentTenant(), rosterIds(principalId)],
       );
       return rows.map((row) => row.group_id as string);
     },
@@ -614,24 +646,24 @@ export function createPostgresDirectoryStore(connectionString: string): Director
                       member.principal_id, member.display_name, member.type, member.slack_id
                FROM directory_channels channel
                LEFT JOIN directory_channel_members roster
-                 ON roster.org_id = channel.org_id AND roster.channel_id = channel.channel_id
+                 ON roster.tenant_id = channel.tenant_id AND roster.channel_id = channel.channel_id
                LEFT JOIN directory_members member
-                 ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
-               WHERE channel.org_id = $1 AND channel.channel_id = $2
+                 ON member.tenant_id = roster.tenant_id AND member.principal_id = roster.principal_id
+               WHERE channel.tenant_id = $1 AND channel.channel_id = $2
                ORDER BY roster.principal_id`,
-              [orgId, id],
+              [currentTenant(), id],
             )
           : await q(
               `SELECT group_row.roster_known, FALSE AS is_external, roster.principal_id AS roster_principal_id,
                       member.principal_id, member.display_name, member.type, member.slack_id
                FROM directory_groups group_row
                LEFT JOIN directory_group_members roster
-                 ON roster.org_id = group_row.org_id AND roster.group_id = group_row.group_id
+                 ON roster.tenant_id = group_row.tenant_id AND roster.group_id = group_row.group_id
                LEFT JOIN directory_members member
-                 ON member.org_id = roster.org_id AND member.principal_id = roster.principal_id
-               WHERE group_row.org_id = $1 AND group_row.group_id = $2
+                 ON member.tenant_id = roster.tenant_id AND member.principal_id = roster.principal_id
+               WHERE group_row.tenant_id = $1 AND group_row.group_id = $2
                ORDER BY roster.principal_id`,
-              [orgId, id],
+              [currentTenant(), id],
             );
       if (!rows.length || rows[0]?.roster_known !== true || rows[0]?.is_external === true) return undefined;
       if (rows.some((row) => !row.roster_principal_id || !row.principal_id)) return undefined;
@@ -641,24 +673,24 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async listChannelsFor(principalId) {
       const rows = await q(
         `SELECT channel_id, name, is_private, is_external FROM directory_channels c
-         WHERE org_id = $1 AND (is_private = FALSE OR (is_external = FALSE AND EXISTS (
+         WHERE tenant_id = $1 AND (is_private = FALSE OR (is_external = FALSE AND EXISTS (
            SELECT 1 FROM directory_channel_members m
-           WHERE m.org_id = c.org_id AND m.channel_id = c.channel_id AND m.principal_id = ANY($2::text[]))))
+           WHERE m.tenant_id = c.tenant_id AND m.channel_id = c.channel_id AND m.principal_id = ANY($2::text[]))))
          ORDER BY name_lc`,
-        [orgId, rosterIds(principalId)],
+        [currentTenant(), rosterIds(principalId)],
       );
       return rows.map(channelRow);
     },
 
     async list() {
-      const rows = await q(`SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1`, [orgId]);
+      const rows = await q(`SELECT ${MEMBER_COLS} FROM directory_members WHERE tenant_id = $1`, [currentTenant()]);
       return rows.map(memberRow);
     },
 
     async listChannels() {
       const rows = await q(
-        "SELECT channel_id, name, is_private, is_external FROM directory_channels WHERE org_id = $1",
-        [orgId],
+        "SELECT channel_id, name, is_private, is_external FROM directory_channels WHERE tenant_id = $1",
+        [currentTenant()],
       );
       return rows.map(channelRow);
     },
@@ -667,9 +699,9 @@ export function createPostgresDirectoryStore(connectionString: string): Director
       const key = foldPrincipalId(principalId);
       const rows = await q(
         `SELECT ${MEMBER_COLS} FROM directory_members
-         WHERE org_id = $1 AND (principal_id = $2 OR ($3 AND lower(principal_id) = $4))
+         WHERE tenant_id = $1 AND (principal_id = $2 OR ($3 AND lower(principal_id) = $4))
          ORDER BY (principal_id = $2) DESC LIMIT 1`,
-        [orgId, principalId, key.includes("@"), key],
+        [currentTenant(), principalId, key.includes("@"), key],
       );
       return rows.length ? memberRow(rows[0]!) : null;
     },
@@ -677,16 +709,16 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     async getBySlackId(slackId) {
       const rows = await q(
         `SELECT ${MEMBER_COLS} FROM directory_members
-         WHERE org_id = $1 AND (slack_id = $2 OR (slack_id IS NULL AND principal_id = $2)) LIMIT 1`,
-        [orgId, slackId],
+         WHERE tenant_id = $1 AND (slack_id = $2 OR (slack_id IS NULL AND principal_id = $2)) LIMIT 1`,
+        [currentTenant(), slackId],
       );
       return rows.length ? memberRow(rows[0]!) : null;
     },
 
     async resolve(query) {
       const bySlackId = await q(
-        `SELECT ${MEMBER_COLS} FROM directory_members WHERE org_id = $1 AND slack_id = $2 LIMIT 1`,
-        [orgId, query.trim()],
+        `SELECT ${MEMBER_COLS} FROM directory_members WHERE tenant_id = $1 AND slack_id = $2 LIMIT 1`,
+        [currentTenant(), query.trim()],
       );
       if (bySlackId.length) return { kind: "one", member: memberRow(bySlackId[0]!) };
       const m = await pick(query, "directory_members", "principal_id", "display_name_lc", MEMBER_COLS, memberRow);

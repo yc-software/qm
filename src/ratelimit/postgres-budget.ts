@@ -1,4 +1,5 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 import type { BudgetTracker } from "./budget.ts";
 import { DEFAULT_BUDGET_WINDOW_MS } from "./budget.ts";
 import { reportFailure } from "../util/errors.ts";
@@ -11,14 +12,21 @@ export function createPostgresBudgetTracker(
   const orgLimitUsd = opts.orgLimitUsd ?? Infinity;
   const windowMs = opts.windowMs ?? DEFAULT_BUDGET_WINDOW_MS;
   const orgKey = "@org";
-  const { q } = createPgPool(connectionString, "ratelimit/budget/0001", [
-    `CREATE TABLE IF NOT EXISTS budget_spend(
+  const { q } = createPgPool(connectionString, [
+    TENANCY_BASE,
+    {
+      id: "ratelimit/budget/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS budget_spend(
         id BIGSERIAL PRIMARY KEY,
         principal_id TEXT NOT NULL,
         at BIGINT NOT NULL,
         usd DOUBLE PRECISION NOT NULL
       )`,
-    `CREATE INDEX IF NOT EXISTS budget_spend_by_principal_at ON budget_spend(principal_id, at)`,
+        `CREATE INDEX IF NOT EXISTS budget_spend_by_principal_at ON budget_spend(principal_id, at)`,
+      ],
+    },
+    tenantTables("ratelimit/budget/0002-tenants", [{ table: "budget_spend", primaryKey: "id" }]),
   ]);
 
   return {

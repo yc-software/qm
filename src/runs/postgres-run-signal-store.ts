@@ -3,6 +3,7 @@ import { jsonbStringify } from "../persistence/durable-map.ts";
 import { pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
+import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 const CHANNEL = "run_signals";
 
@@ -21,6 +22,7 @@ function toSignals(rows: Rows): RunSignal[] {
 
 export function createPostgresRunSignalStore(connectionString: string): RunSignalStore {
   const pg = createPgPool(connectionString, [
+    TENANCY_BASE,
     {
       id: "runs/signals/0001",
       statements: [
@@ -44,6 +46,13 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
       ],
     },
+    tenantTables("runs/signals/0003-tenants", [
+      {
+        table: "run_signals",
+        primaryKey: "id",
+        unique: [{ name: "run_signals_by_dedupe_key", columns: "dedupe_key", where: "dedupe_key IS NOT NULL" }],
+      },
+    ]),
   ]);
   const q = pg.query;
 
@@ -74,7 +83,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
       const { rows } = await q(
         `WITH ins AS (
            INSERT INTO run_signals(run_id, kind, text, payload, created_at, dedupe_key) VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+           ON CONFLICT (tenant_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
            RETURNING id
          )
          SELECT pg_notify('${CHANNEL}', $1) FROM ins`,
