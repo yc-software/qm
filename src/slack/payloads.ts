@@ -62,7 +62,7 @@ export function parseMessageEvent(event: unknown): SlackMessageEvent {
     user: str(e.user),
     username: str(e.username),
     bot_id: str(e.bot_id),
-    bot_profile: botProfile ? { name: str(botProfile.name) } : undefined,
+    bot_profile: botProfile ? { ...botProfile, name: str(botProfile.name) } : undefined,
     client_msg_id: str(e.client_msg_id),
     text: str(e.text),
     ts: coerced(e.ts) ?? "",

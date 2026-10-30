@@ -8,6 +8,8 @@ import { buildContextWindow } from "../src/slack/conversation.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { BotIdentity, Directory } from "../src/slack/directory.ts";
+import pg from "pg";
+import { amazonQAlarm } from "./support/slack-amazon-q-alarm.ts";
 
 const ids = { botUserId: "UBOT", ownBotId: "BBOT" } as BotIdentity;
 const directory = {
@@ -285,4 +287,77 @@ test("HTTP ingestion rejects invalid file sizes", () => {
     assert.equal(toEvent({ container: "C", ts: "1", files: [{ fileId: "F", size }] })!.files![0]!.size, undefined);
   }
   assert.equal(toEvent({ container: "C", ts: "1", files: [{ fileId: "F", size: 0 }] })!.files![0]!.size, 0);
+});
+
+test(
+  "the whole Slack message is stored in Postgres and follows the same edit and delete precedence as text",
+  { skip: !process.env.DATABASE_URL },
+  async () => {
+    const cache = createPostgresSurfaceCache(process.env.DATABASE_URL!);
+    const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    const container = `raw-${Date.now()}`;
+    const original = { ...amazonQAlarm, channel: container, ts: "1000" };
+    const edited = {
+      ...original,
+      edited: { ts: "1001" },
+      attachments: [{ id: 1, blocks: [{ type: "section", text: { type: "mrkdwn", text: "Alarm is in OK state" } }] }],
+    };
+    const storedRaw = async () =>
+      (await db.query("SELECT raw FROM channel_messages WHERE container = $1 AND ts = '1000'", [container])).rows[0]
+        ?.raw;
+    await db.connect();
+    try {
+      await cache.ingest([toEvent(slackMessageToIngestEvent(original, ids))!]);
+      assert.deepEqual(await storedRaw(), original);
+
+      await cache.ingest([toEvent(slackMessageToIngestEvent(edited, ids, { partial: true }))!]);
+      assert.deepEqual(await storedRaw(), edited);
+
+      await cache.ingest([toEvent(slackMessageToIngestEvent(original, ids, { handled: true }))!]);
+      assert.deepEqual(await storedRaw(), edited);
+
+      await cache.ingest([{ container, ts: "1000", deleted: true }]);
+      assert.deepEqual(await storedRaw(), edited);
+
+      await cache.ingest([
+        toEvent(
+          slackMessageToIngestEvent(
+            {
+              ...original,
+              ts: "2000",
+              text: "broken \ud800 emoji",
+              metadata: { event_type: "alarm", event_payload: { "key\udc00": "value" } },
+            } as Parameters<typeof slackMessageToIngestEvent>[0],
+            ids,
+          ),
+        )!,
+      ]);
+      const [lone] = (
+        await db.query(
+          "SELECT raw->>'text' AS text, raw->'metadata'->'event_payload' AS payload FROM channel_messages WHERE container = $1 AND ts = '2000'",
+          [container],
+        )
+      ).rows;
+      assert.equal(lone?.text, "broken \ufffd emoji");
+      assert.deepEqual(lone?.payload, { "key\ufffd": "value" });
+    } finally {
+      await db.end();
+      await cache.close();
+    }
+  },
+);
+
+test("a mention of the bot inside an attachment is not treated as addressing it", () => {
+  const event = slackMessageToIngestEvent(
+    {
+      channel: "C",
+      ts: "1",
+      bot_id: "BOTHER",
+      text: "",
+      attachments: [{ text: "paging <@UBOT> about the outage" }],
+    } as Parameters<typeof slackMessageToIngestEvent>[0],
+    ids,
+  );
+  assert.equal(event.text, "paging <@UBOT> about the outage");
+  assert.equal(event.mentionsSelf, undefined);
 });

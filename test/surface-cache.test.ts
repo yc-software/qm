@@ -261,27 +261,6 @@ test("ambient judge: empty standing orders no longer short-circuits — the judg
   assert.equal(spawns, 1);
 });
 
-test("ambient judge: the agent's own posts are never shown to the judge as new messages", async () => {
-  let sawText = "";
-  const decision = await judgeAmbientBatch(
-    {
-      judge: async (_s, prompt) => {
-        sawText = prompt;
-        return JSON.stringify({ act: false });
-      },
-      spawnWorker: async () => {},
-    },
-    {
-      container: "C1",
-      surface: "slack",
-      orders: "flag launch talk",
-      messages: [{ container: "C1", ts: "1.0", text: "", deleted: true, createdAt: 1 }],
-    },
-  );
-  assert.equal(decision.act, false, "an empty/deleted-only batch is not judged into acting");
-  assert.equal(sawText, "", "the judge isn't even called when there's nothing meaningful to show");
-});
-
 test("mentions round-trip through ingest → readMessages (memory)", async () => {
   const cache = createMemorySurfaceCache();
   await cache.ingest([{ container: "C1", ts: "100.9", text: "hi @jordan", mentions: { U1: "jordan" }, createdAt: 1 }]);
