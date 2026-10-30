@@ -47,7 +47,7 @@ import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { MemoryService } from "../memory/memory-service.ts";
 import type { EgressEnforcement, Sandbox } from "../sandbox/sandbox.ts";
 import type { EnvironmentStore } from "../environments/environment-store.ts";
-import type { Scheduler } from "../cron/scheduler.ts";
+import type { CronRunRequests } from "../cron/fires.ts";
 import type { WebhookReceiver } from "../webhooks/webhook-receiver.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { PrincipalLinkService } from "../identity/principal-links.ts";
@@ -198,7 +198,7 @@ export interface ServerDeps {
   deployAppsLoginUrl?: string;
   deployAppsLoginPath?: "/auth/login" | "/auth/trusted/login";
   appPageViews?: AppPageViewLog;
-  scheduler?: Scheduler;
+  cronRuns?: CronRunRequests;
   webhookReceiver?: WebhookReceiver;
   loopIngress?: LoopIngressService;
   identity?: IdentityService;

@@ -1,7 +1,7 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
 import type { Cron } from "../../types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
-import { describeRunNowRefusal } from "../../cron/scheduler.ts";
+import { describeRunNowRefusal } from "../../cron/fires.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody } from "../../cron/schedule.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -307,13 +307,13 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (!deps.scheduler) return sendJson(res, 404, { error: "not_found", message: "scheduler not wired" });
+  if (!deps.cronRuns) return sendJson(res, 404, { error: "not_found", message: "scheduler not wired" });
   if (cron.archived || !cron.enabled)
     return sendJson(res, 400, {
       error: "bad_request",
       message: `cron ${id} is ${cron.archived ? "archived" : "paused"} — enable it before firing it on demand`,
     });
-  const result = await deps.scheduler.runNow(id);
+  const result = await deps.cronRuns.runNow(id);
   if (!result.started) {
     const refusal = describeRunNowRefusal(id, result)!;
     return sendJson(res, CRON_ERROR_STATUS[refusal.error] ?? 400, refusal);

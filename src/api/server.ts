@@ -486,7 +486,7 @@ function buildServer(app: App, deps: ServerOptions, allowUnsignedSourceAuth: boo
       : null;
   const wiring: Wiring = {
     app,
-    deps: { ...deps, control: createControlService(app, deps.scheduler, deps.admin) },
+    deps: { ...deps, control: createControlService(app, deps.cronRuns, deps.admin) },
     secret: deps.signingSecret,
     auth,
     requirePortalIdentity,
