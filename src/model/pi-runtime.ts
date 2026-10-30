@@ -580,7 +580,7 @@ export function piFailedAssistant(session: AssistantTextSession): AssistantMessa
   return lastAssistant?.stopReason === "error" ? lastAssistant : undefined;
 }
 
-export function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
+function lastInputTokens(session: AssistantTextSession, failed: AssistantMessage): number | undefined {
   const ok = [...session.messages]
     .reverse()
     .find((m) => m !== failed && m.role === "assistant" && (m as AssistantMessage).stopReason !== "error") as
@@ -642,7 +642,7 @@ export function piUsageToCallUsage(
   return row;
 }
 
-export function servedTierCard(
+function servedTierCard(
   model: Model<Api>,
   fast: boolean | undefined,
   servedTier: string | undefined,

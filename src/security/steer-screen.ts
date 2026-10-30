@@ -5,7 +5,7 @@ import type { SessionStore } from "../sessions/session-store.ts";
 import { createSecurityClassifier, type SecurityClassifierDeps } from "./security-classifier.ts";
 import { securityScreenPayload, UNSCREENED_REASON } from "./security-posture.ts";
 
-export type SteerScreenDecision = "allow" | "block" | "unscreened";
+type SteerScreenDecision = "allow" | "block" | "unscreened";
 
 export type SteerScreen = (input: {
   payload: string;

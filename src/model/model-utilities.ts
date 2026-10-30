@@ -43,7 +43,7 @@ export function titleUserPrompt(transcript: string): string {
   ].join("\n");
 }
 
-export const ACK_EMOJI_PROMPT = [
+const ACK_EMOJI_PROMPT = [
   "You pick ONE emoji to react to a Slack message with, silently acknowledging you've seen it and",
   "are working on it. The emoji should fit the TOPIC or vibe of what the person asked — a debugging",
   "task gets :bug:, a data question gets :bar_chart:, a security task gets :lock:, a vague or general",
@@ -57,7 +57,7 @@ export const ACK_EMOJI_PROMPT = [
   'Output STRICT JSON only: {"emoji":"<name>"}. Nothing else.',
 ].join("\n");
 
-export const APPROVAL_SUMMARY_PROMPT = [
+const APPROVAL_SUMMARY_PROMPT = [
   "A command hit a human-approval gate. Explain, in ONE plain-English sentence, what running THIS",
   "specific command would actually do — concrete enough that a non-expert can decide whether to allow it.",
   "Name the real targets (files, branches, tables, URLs) the command acts on; don't restate the policy",
@@ -66,7 +66,7 @@ export const APPROVAL_SUMMARY_PROMPT = [
   "output exactly: NONE",
 ].join("\n");
 
-export const MAX_TITLE_CHARS = 60;
+const MAX_TITLE_CHARS = 60;
 
 export function sanitizeTitle(out = ""): string | undefined {
   let t = (out.trim().split("\n")[0] ?? "").trim();
