@@ -107,10 +107,20 @@ function toolLine(payload: { tool?: unknown; action?: unknown; command?: unknown
 export function peekLines(entries: readonly SessionEntry[], max = 4): PeekLine[] {
   const lines: PeekLine[] = [];
   for (const entry of entries) {
-    const payload = (entry.payload ?? {}) as { tool?: unknown; action?: unknown; command?: unknown; text?: unknown };
+    const payload = (entry.payload ?? {}) as {
+      tool?: unknown;
+      action?: unknown;
+      command?: unknown;
+      text?: unknown;
+      demoted?: unknown;
+    };
     const tool = entry.type === "tool_call" ? toolLine(payload) : null;
     if (tool) lines.push({ kind: "tool", text: tool });
-    else if ((entry.type === "assistant" || entry.type === "text") && typeof payload.text === "string") {
+    else if (
+      (entry.type === "assistant" || entry.type === "text") &&
+      payload.demoted !== true &&
+      typeof payload.text === "string"
+    ) {
       const text = clip(payload.text, 240);
       if (text) lines.push({ kind: "text", text });
     }

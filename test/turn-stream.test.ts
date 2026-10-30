@@ -479,3 +479,37 @@ test("reasoning streams per block beside the reply text, capped, and settles whe
   s.begin("r1");
   assert.deepEqual(s.reasoning("r1"), [], "a retried attempt never serves the previous attempt's blocks");
 });
+
+test("held text stays out of the stream until released, keeps its block boundaries, and can be discarded", () => {
+  const deltas: string[] = [];
+  const s = createTurnStream({ onDelta: (_runId, text) => deltas.push(text) });
+  s.begin("r1");
+  s.publish("r1", "Checking.");
+  s.hold("r1");
+  s.publishBlockStart("r1");
+  s.publish("r1", "draft one");
+  assert.equal(s.snapshot("r1"), "Checking.");
+  assert.equal(s.endOffset("r1"), "Checking.\n\ndraft one".length);
+
+  s.discard("r1");
+  assert.equal(s.endOffset("r1"), "Checking.".length);
+  s.publishBlockStart("r1");
+  s.publish("r1", "draft two");
+  assert.deepEqual(deltas, ["Checking."]);
+
+  s.release("r1");
+  assert.equal(s.snapshot("r1"), "Checking.\n\ndraft two");
+  assert.deepEqual(s.firstBlock("r1"), { text: "Checking.", closed: false });
+  s.publish("r1", " more");
+  assert.equal(s.snapshot("r1"), "Checking.\n\ndraft two more");
+});
+
+test("a new attempt on the same run starts unheld, dropping text a failed attempt held back", () => {
+  const s = createTurnStream();
+  s.begin("r1");
+  s.hold("r1");
+  s.publish("r1", "dead attempt");
+  s.begin("r1");
+  s.publish("r1", "live");
+  assert.equal(s.snapshot("r1"), "live");
+});

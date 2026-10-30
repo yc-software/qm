@@ -125,3 +125,12 @@ test("peek shows the latest tool steps and message", () => {
     { kind: "tool", text: "github" },
   ]);
 });
+
+test("peek lines leave out a reply draft that was held back and rewritten", () => {
+  const entry = (type: SessionEntry["type"], payload: unknown): SessionEntry => ({ type, payload, createdAt: 0 });
+  const lines = peekLines([
+    entry("text", { text: "| a | b |", demoted: true }),
+    entry("assistant", { text: "A and B." }),
+  ]);
+  assert.deepEqual(lines, [{ kind: "text", text: "A and B." }]);
+});

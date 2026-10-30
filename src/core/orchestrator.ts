@@ -55,7 +55,7 @@ import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
 import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
-import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.ts";
+import { acquireLeaseWithin, isApprovalEntry, isOverheardEntry } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { createBackgroundBroker } from "../connectors/background-exec-broker.ts";
 import { createMonitorBroker, readBackgroundOutputTail } from "../monitors/monitor-broker.ts";
@@ -154,9 +154,10 @@ import {
   selectOverheardToImport,
   type OverheardEntryPayload,
 } from "../harness/replay.ts";
-import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
+import { errMessage, reportFailure, reportFailureAs, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { headSlice, jsonbSafeStringify } from "../util/text.ts";
+import { createReplyCheck } from "../decisions/reply-check.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -3210,6 +3211,59 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           );
           if (error) throw new NonRetryableTurnError(error);
         }
+        const replyCheckMode = session.spawnMeta
+          ? undefined
+          : await deps.decide?.mode("turn_end").catch(reportFailureAs("orchestrator: reply check rules", undefined));
+        const heldRunId =
+          replyCheckMode === "enforce" && !input.surfaceTools && deps.turnStream ? input.runId : undefined;
+        if (heldRunId) deps.turnStream!.hold(heldRunId);
+        const releaseHeld = () => {
+          if (heldRunId) deps.turnStream!.release(heldRunId);
+        };
+        const flushHeld = () => {
+          if (!heldRunId) return;
+          deps.turnStream!.release(heldRunId);
+          deps.turnStream!.hold(heldRunId);
+        };
+        const markTextStart = (phase?: "commentary" | "final_answer"): Promise<unknown> => {
+          const runId = input.runId;
+          const runActivity = deps.runActivity;
+          if (!runId || !runActivity) return Promise.resolve();
+          const streamOffset = deps.turnStream?.endOffset(runId);
+          const entry = {
+            seq: emittedEntries.at(-1)?.seq ?? 0,
+            parentSeq: null,
+            type: "text_start",
+            payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
+            createdAt: Date.now(),
+          };
+          const started = mirrored.then(() => runActivity.append(runId, entry));
+          mirrored = started.catch(swallowAs("orchestrator: text-start activity", undefined));
+          return phase ? started : mirrored;
+        };
+        const conversationGuidance = deps.config?.getSoul(scopeId) ?? undefined;
+        const replyCheck =
+          replyCheckMode && deps.decide
+            ? createReplyCheck({
+                decide: deps.decide,
+                ...(input.surface ? { surfaceName: input.surface } : {}),
+                ...(conversationGuidance ? { guidance: conversationGuidance } : {}),
+                input: baseText,
+                turn: {
+                  actorId: actor.id,
+                  scopeLabel: scopeId,
+                  sessionId: session.id,
+                  ...(input.runId ? { runId: input.runId } : {}),
+                  cancel: turnAbort.signal,
+                },
+                posted: () => spine.surfaceOutboundCount > 0,
+                onRevise: () => {
+                  if (!heldRunId) return;
+                  deps.turnStream!.discard(heldRunId);
+                  void markTextStart();
+                },
+              })
+            : undefined;
         const runHarnessSegment = async (
           harnessInput: string,
           extras: {
@@ -3241,16 +3295,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const environment = [turnEnvironment, ...documentInputs.notices].filter(Boolean).join("\n");
           const silentResume = continueTurn && !continuation && !snapshot.text && !recall.text;
           let recordedRecall = false;
-          const emit: HarnessTurnInput["emit"] = async (entry) => {
+          const emit: HarnessTurnInput["emit"] = async (incoming) => {
+            if (incoming.type === "tool_call") flushHeld();
+            const entry = replyCheck ? await replyCheck.review(incoming) : incoming;
             turnProgress++;
             const stored = (() => {
-              if (
-                entry.type === "assistant" ||
-                entry.type === "approval_request" ||
-                ((entry.type === "tool_result" || entry.type === "tool_call") &&
-                  isObj(entry.payload) &&
-                  entry.payload.blocked === "needs_approval")
-              ) {
+              if (entry.type === "assistant" || isApprovalEntry(entry)) {
                 const payload = isObj(entry.payload) ? { ...entry.payload } : {};
                 if (typeof payload.workStartedAt !== "number")
                   payload.workStartedAt = input.runStartedAt ?? coreReceivedAt;
@@ -3664,6 +3714,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 deps.turnStream.publishReasoning(input.runId, step, index, chunk);
             },
             onToolCallStart: (name: string) => {
+              flushHeld();
               if (!earlyTaskAck || name === surfaceName) return;
               if (input.surfaceTools) publishFirstAck(false);
               else if (input.runId) deps.turnStream?.noteToolCall(input.runId);
@@ -3671,26 +3722,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onTextBlockStart: async (phase) => {
               if (input.runId && deps.turnStream && !input.surfaceTools) deps.turnStream.publishBlockStart(input.runId);
               if (input.surfaceTools && spineFirstBlock) spineFirstBlockOpen = false;
-              if (!input.surfaceTools) {
-                const streamOffset =
-                  input.runId && deps.turnStream
-                    ? deps.turnStream.startOffset(input.runId) + (deps.turnStream.snapshot(input.runId) ?? "").length
-                    : undefined;
-                const runId = input.runId;
-                const runActivity = deps.runActivity;
-                if (runId && runActivity) {
-                  const entry = {
-                    seq: emittedEntries.at(-1)?.seq ?? 0,
-                    parentSeq: null,
-                    type: "text_start",
-                    payload: { ...(phase ? { phase } : {}), ...(streamOffset !== undefined ? { streamOffset } : {}) },
-                    createdAt: Date.now(),
-                  };
-                  const started = mirrored.then(() => runActivity.append(runId, entry));
-                  mirrored = started.catch(swallowAs("orchestrator: text-start activity", undefined));
-                  await (phase ? started : mirrored);
-                }
-              }
+              if (!input.surfaceTools) await markTextStart(phase);
             },
             recordModelCall: (rec) => {
               deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
@@ -3703,7 +3735,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           return turnResult;
         };
         let runtimeHandoffs = restoredRuntime ? 1 : 0;
-        const runHarnessTurn = async (...args: Parameters<typeof runHarnessSegment>) => {
+        const runHarnessTurn = async (
+          ...args: Parameters<typeof runHarnessSegment>
+        ): Promise<Awaited<ReturnType<typeof runHarnessSegment>>> => {
           let segment = await runHarnessSegment(...args);
           while (segment.runtimeHandoff && !segment.stopped && !turnAbort.signal.aborted) {
             if (++runtimeHandoffs > 8) throw new NonRetryableTurnError("Too many runtime changes in one task");
@@ -3747,6 +3781,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
           }
           await mirrored;
+          const revisionPrompt = replyCheck?.takeRevision();
+          if (
+            revisionPrompt &&
+            !segment.stopped &&
+            !segment.pausedOnApproval &&
+            !segment.pendingApprovals?.length &&
+            !turnAbort.signal.aborted
+          ) {
+            return runHarnessTurn(revisionPrompt, inbound.images.length ? { images: inbound.images } : {}, {
+              history: filterHistory(forModelContext((await historyWindow()).entries)),
+            });
+          }
           return {
             ...segment,
             ...(segment.reply ? { reply: absoluteAppLinks(segment.reply, deps.publicWebUrl) } : {}),
@@ -3758,6 +3804,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(inbound.metas.length ? { attachments: inbound.metas } : {}),
           ...(inbound.images.length ? { images: inbound.images } : {}),
         });
+        releaseHeld();
         if (
           input.addressed &&
           !strictReadOnly &&

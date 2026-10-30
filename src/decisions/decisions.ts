@@ -2,12 +2,13 @@ const DECISION_HOOK_POINTS = {
   user_input: { actions: ["allow", "block"], decide: "most_restrictive" },
   tool_response: { actions: ["allow", "block"], decide: "most_restrictive" },
   turn_start: { actions: ["keep", "use_runtime"], decide: "most_confident" },
+  turn_end: { actions: ["keep", "revise"], decide: "most_restrictive" },
   goal_check: { actions: ["continue", "complete", "step_back", "pause"], decide: "most_confident" },
 } as const satisfies Record<string, { actions: readonly string[]; decide: "most_restrictive" | "most_confident" }>;
 export type DecisionHook = keyof typeof DECISION_HOOK_POINTS;
 type DecisionAction<H extends DecisionHook = DecisionHook> = (typeof DECISION_HOOK_POINTS)[H]["actions"][number];
 const DECISION_HOOKS = Object.keys(DECISION_HOOK_POINTS) as DecisionHook[];
-const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start"];
+const LIVE_DECISION_HOOKS: readonly DecisionHook[] = ["turn_start", "turn_end"];
 const rank = (hook: DecisionHook, action: string) =>
   (DECISION_HOOK_POINTS[hook].actions as readonly string[]).indexOf(action);
 
@@ -79,8 +80,14 @@ const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const MAX_RULES = 32;
 const MAX_OPTIONS = 8;
 const MAX_TEXT_CHARS = 500;
-const MAX_STATE_CHARS = 8_000;
+export const MAX_STATE_CHARS = 8_000;
 const MAX_RULE_TEXT_CHARS = 16_000;
+
+function capState(state: string): string {
+  if (state.length <= MAX_STATE_CHARS) return state;
+  const marker = `\n[cut: state exceeded MAX_STATE_CHARS (${MAX_STATE_CHARS}); ${state.length - MAX_STATE_CHARS} more characters omitted]`;
+  return state.slice(0, MAX_STATE_CHARS - marker.length) + marker;
+}
 
 export function parseDecisionProvider(raw: unknown): { provider: DecisionProvider } | { error: string } {
   const r = (raw ?? {}) as Record<string, unknown>;
@@ -141,6 +148,8 @@ export function parseDecisionRule(
     const rt = o.runtime as Record<string, unknown> | undefined;
     if ((o.action === "use_runtime") !== (rt !== undefined))
       return { error: `${r.id}.${key}: runtime is required with use_runtime and only allowed there` };
+    if (o.action === "revise" && !(o.message as string | undefined)?.trim())
+      return { error: `${r.id}.${key}: revise needs a message telling the agent what to change` };
     if (
       rt !== undefined &&
       (typeof rt !== "object" ||
@@ -172,6 +181,8 @@ export function parseDecisionRule(
   if (count < 2 || count > MAX_OPTIONS) return { error: `${r.id}: needs 2 to ${MAX_OPTIONS} options` };
   if (typeof r.onError !== "string" || !Object.hasOwn(options, r.onError))
     return { error: `${r.id}: onError must name one of its options` };
+  if (options[r.onError]!.action === "revise")
+    return { error: `${r.id}: onError must not revise, or a classifier outage would rewrite every reply` };
   const m = (r.model ?? {}) as Record<string, unknown>;
   if (typeof m.provider !== "string" || !providers.some((p) => p.id === m.provider))
     return { error: `${r.id}: model.provider must name a configured decision provider` };
@@ -275,7 +286,7 @@ async function runGroup(
           },
         ]),
       ),
-      state: state.slice(0, MAX_STATE_CHARS).toWellFormed(),
+      state: capState(state).toWellFormed(),
       model: rules[0]!.model,
       signal,
     });
@@ -324,5 +335,12 @@ export async function runHook(
     if (result.mode !== "enforce") continue;
     if (!decisive || weight(result) > weight(decisive)) decisive = result;
   }
-  return { ...(decisive ? { decisive } : {}), results };
+  if (!decisive) return { results };
+  if (confident) return { decisive, results };
+  const messages = [
+    ...new Set(
+      results.filter((r) => r.mode === "enforce" && r.action === decisive!.action && r.message).map((r) => r.message!),
+    ),
+  ];
+  return { decisive: { ...decisive, ...(messages.length ? { message: messages.join("\n") } : {}) }, results };
 }

@@ -1,6 +1,7 @@
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
 import type { GoalCreateInput } from "../../harness/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
+import type { DecisionHooks } from "../../decisions/hooks.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
 import type { RuntimeService } from "../../harness/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
@@ -173,6 +174,7 @@ export interface OrchestratorDeps {
   errors?: ErrorLog;
   signals?: RunSignalStore;
   turnStream?: TurnStream;
+  decide?: DecisionHooks;
   runActivity?: RunActivityStore;
   runs?: RunStore;
   blobTransfer: BlobTransferStore;

@@ -11,7 +11,7 @@ import {
   type DecisionProvider,
 } from "../src/decisions/decisions.ts";
 import { createDecisionBackend } from "../src/decisions/providers.ts";
-import { turnStartState } from "../src/decisions/hooks.ts";
+import { createDecisionHooks, turnEndState, turnStartState } from "../src/decisions/hooks.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -313,6 +313,40 @@ test("each hook point only accepts its own actions; use_runtime carries a runtim
   );
 });
 
+test("turn_end rules revise with a message and refuse a runtime switch", () => {
+  const style = (options: Record<string, unknown>) =>
+    parse({ ...injection(), id: "style", hook: "turn_end", onError: "keep", options });
+  const ok = style({
+    keep: { description: "follows the instructions", action: "keep" },
+    revise: { description: "breaks one", action: "revise", message: "Drop the table." },
+  });
+  assert.ok("rule" in ok, JSON.stringify(ok));
+  assert.match(
+    err(style({ keep: { description: "a", action: "keep" }, revise: { description: "b", action: "revise" } })),
+    /revise needs a message/,
+  );
+  assert.match(
+    err(
+      style({
+        keep: { description: "a", action: "keep" },
+        deep: { description: "b", action: "use_runtime", runtime: { modelId: "m-deep" } },
+      }),
+    ),
+    /turn_end must be one of keep, revise/,
+  );
+  const fallsBackToRevise = parse({
+    ...injection(),
+    id: "style",
+    hook: "turn_end",
+    onError: "revise",
+    options: {
+      keep: { description: "follows the instructions", action: "keep" },
+      revise: { description: "breaks one", action: "revise", message: "Drop the table." },
+    },
+  });
+  assert.ok("error" in fallsBackToRevise);
+});
+
 test("most_confident hook points follow the likeliest enforced verdict and errored rules fall back to onError", async () => {
   const signal = new AbortController().signal;
   const goal = (id: string, model: string) => ({
@@ -391,7 +425,10 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
     ),
   } as never;
   const decide = createDecisionHooks(store, fixed({ keep: 0.2, deep: 0.8 }), audit);
-  const verdict = await decide("turn_start", "refactor the scheduler", { scopeLabel: "personal:a", sessionId: "s1" });
+  const verdict = await decide.run("turn_start", "refactor the scheduler", {
+    scopeLabel: "personal:a",
+    sessionId: "s1",
+  });
   assert.deepEqual(asked, ["turn_start"]);
   assert.deepEqual(verdict?.runtime, { modelId: "m-deep" });
   assert.deepEqual(
@@ -402,7 +439,7 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
     ],
   );
   assert.equal(
-    await createDecisionHooks(undefined, fixed({}), audit)("turn_start", "x", {
+    await createDecisionHooks(undefined, fixed({}), audit).run("turn_start", "x", {
       scopeLabel: "s",
       sessionId: "s",
     }),
@@ -426,7 +463,10 @@ test("observe-only rules do not hold up the turn and are still audited", async (
     },
   };
   const decide = createDecisionHooks(store, backend, audit);
-  const verdict = await decide("turn_start", "refactor the scheduler", { scopeLabel: "personal:a", sessionId: "s1" });
+  const verdict = await decide.run("turn_start", "refactor the scheduler", {
+    scopeLabel: "personal:a",
+    sessionId: "s1",
+  });
   assert.equal(verdict?.ruleId, "router");
   assert.deepEqual(
     records.map((r) => r.resource),
@@ -441,6 +481,137 @@ test("observe-only rules do not hold up the turn and are still audited", async (
       ["shadow", "use_runtime"],
     ],
   );
+});
+
+test("however long one part is, the reply check still sees the instructions, the request and the draft", async () => {
+  const seen = async (parts: { guidance: string; input: string; reply: string }) => {
+    let state = "";
+    const backend: DecisionBackend = {
+      async choose({ questions, state: s }) {
+        state = s;
+        return Object.fromEntries(Object.keys(questions).map((k) => [k, { yes: 0.1, no: 0.9 }]));
+      },
+    };
+    await runHook(
+      [injection()],
+      "tool_response",
+      turnEndState({ scopeLabel: "personal:U1", ...parts }),
+      backend,
+      new AbortController().signal,
+    );
+    assert.ok(state.length <= 8_000);
+    return state;
+  };
+  const guidance = "At most two paragraphs unless I ask for more.";
+  const input = "Write me a detailed 2,000-word report.";
+  const reply = "The report begins here.";
+
+  const longDraft = await seen({ guidance, input, reply: reply + " word".repeat(3_000) + " The report ends here." });
+  assert.ok(longDraft.includes(guidance) && longDraft.includes(input));
+  assert.ok(longDraft.includes("The report begins here.") && longDraft.includes("The report ends here."));
+
+  const longMessage = await seen({ guidance, input: "pasted ".repeat(2_000) + input, reply });
+  assert.ok(longMessage.includes(guidance) && longMessage.includes(reply) && longMessage.includes(input));
+
+  const longInstructions = await seen({ guidance: "rule ".repeat(2_000) + guidance, input, reply });
+  assert.ok(longInstructions.includes(input) && longInstructions.includes(reply));
+
+  const roomyDraft = reply + " word".repeat(1_400);
+  const unused = await seen({ guidance, input, reply: roomyDraft });
+  assert.ok(unused.includes(roomyDraft));
+});
+
+test("with several enforcing reply rules, any one asking for a rewrite wins over the rest", async () => {
+  const style = (id: string) =>
+    ({
+      ...injection(),
+      id,
+      hook: "turn_end",
+      onError: "keep",
+      options: {
+        keep: { description: "Follows it", action: "keep" },
+        revise: { description: "Breaks it", action: "revise", message: `fix ${id}` },
+      },
+    }) as DecisionRule;
+  assert.equal(checkRuleSet([style("no-tables"), style("no-dashes")]), undefined);
+  const backend: DecisionBackend = {
+    async choose({ questions }) {
+      return Object.fromEntries(
+        Object.keys(questions).map((k) => [
+          k,
+          k === "no-tables" ? { keep: 0.97, revise: 0.03 } : { keep: 0.1, revise: 0.9 },
+        ]),
+      );
+    },
+  };
+  const { decisive } = await runHook(
+    [style("no-tables"), style("no-dashes")],
+    "turn_end",
+    "s",
+    backend,
+    new AbortController().signal,
+  );
+  assert.equal(decisive?.action, "revise");
+  assert.equal(decisive?.message, "fix no-dashes");
+
+  const allRevise: DecisionBackend = {
+    async choose({ questions }) {
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, { keep: 0.1, revise: 0.9 }]));
+    },
+  };
+  const both = await runHook(
+    [style("no-tables"), style("no-dashes")],
+    "turn_end",
+    "s",
+    allRevise,
+    new AbortController().signal,
+  );
+  assert.ok(both.decisive?.message?.includes("fix no-tables"));
+  assert.ok(both.decisive?.message?.includes("fix no-dashes"));
+});
+
+test("only enforcing rules that ask for a rewrite contribute to the rewrite message", async () => {
+  const style = (id: string, mode: DecisionRule["mode"]) =>
+    ({
+      ...injection(),
+      id,
+      mode,
+      hook: "turn_end",
+      onError: "keep",
+      options: {
+        keep: { description: "Follows it", action: "keep", message: `kept ${id}` },
+        revise: { description: "Breaks it", action: "revise", message: `fix ${id}` },
+      },
+    }) as DecisionRule;
+  const verdicts: Record<string, Record<string, number>> = {
+    watched: { keep: 0.1, revise: 0.9 },
+    fine: { keep: 0.9, revise: 0.1 },
+    broken: { keep: 0.1, revise: 0.9 },
+  };
+  const backend: DecisionBackend = {
+    async choose({ questions }) {
+      return Object.fromEntries(Object.keys(questions).map((k) => [k, verdicts[k]!]));
+    },
+  };
+  const { decisive } = await runHook(
+    [style("watched", "observe"), style("fine", "enforce"), style("broken", "enforce")],
+    "turn_end",
+    "s",
+    backend,
+    new AbortController().signal,
+  );
+  assert.equal(decisive?.action, "revise");
+  assert.equal(decisive?.message, "fix broken");
+});
+
+test("a hook point reports enforce when any active rule enforces, observe when only observing rules exist", async () => {
+  const hooks = (rules: DecisionRule[]) =>
+    createDecisionHooks({ rules: async () => rules } as never, fixed({}), { record: () => {} } as never);
+  const style = (mode: DecisionRule["mode"], id = "style") =>
+    ({ ...injection(), id, hook: "turn_end", mode, onError: "keep" }) as unknown as DecisionRule;
+  assert.equal(await hooks([]).mode("turn_end"), undefined);
+  assert.equal(await hooks([style("observe")]).mode("turn_end"), "observe");
+  assert.equal(await hooks([style("observe"), style("enforce", "strict")]).mode("turn_end"), "enforce");
 });
 
 test("turn_start rules see the turn's context alongside the message", () => {

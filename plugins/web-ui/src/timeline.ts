@@ -358,7 +358,7 @@ function streamTextFrom(text: string, offset: number, startOffset: number): stri
 export function streamingTextTail(text: string, activity: ToolActivity[]): string {
   let tail = text;
   for (const entry of activity) {
-    if (entry.type !== "text") continue;
+    if (entry.type !== "text" || (entry.payload as { demoted?: boolean } | null)?.demoted) continue;
     const spoken = ((entry.payload as { text?: string } | null)?.text ?? "").trim();
     if (!spoken) continue;
     const candidate = tail.trimStart();

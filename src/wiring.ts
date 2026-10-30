@@ -578,6 +578,7 @@ export function buildApp(
   overrides: {
     securityScreener?: SecurityScreener;
     decisionBackend?: DecisionBackend;
+    decisions?: DecisionStore;
     credentialBrokers?: Record<string, AwsRoleBroker>;
     modelCredentialFetch?: typeof fetch;
     modelVerificationProbe?: typeof probeModel;
@@ -693,7 +694,8 @@ export function buildApp(
   const teams = config.databaseUrl
     ? createPostgresTeamStore(config.databaseUrl, featureFlags, scopeId("org", config.orgId))
     : undefined;
-  const decisions = config.databaseUrl ? createPostgresDecisionStore(config.databaseUrl) : undefined;
+  const decisions =
+    overrides.decisions ?? (config.databaseUrl ? createPostgresDecisionStore(config.databaseUrl) : undefined);
   const slackInstallation = createSlackInstallationStore(
     config.orgId,
     artifactMap("slack_installation"),
@@ -1556,7 +1558,7 @@ export function buildApp(
         input.runtimePurpose,
       );
     const decision = await tracePhase("turn.decision", () =>
-      decide("turn_start", turnStartState(input), {
+      decide.run("turn_start", turnStartState(input), {
         ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
         scopeLabel: input.scopeLabel,
         sessionId: input.session.id,
@@ -2228,6 +2230,7 @@ export function buildApp(
     errors,
     signals: runSignals,
     turnStream,
+    decide,
     runActivity,
     runs,
     blobTransfer,

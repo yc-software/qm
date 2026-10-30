@@ -498,6 +498,12 @@ export function windowedTranscript(
   return { entries: (cut > 0 ? entries.slice(cut) : entries).map(projectEntry), earlier: cut };
 }
 
+export function isApprovalEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {
+  if (e.type === "approval_request") return true;
+  if (e.type !== "tool_result" && e.type !== "tool_call") return false;
+  return (e.payload as { blocked?: unknown } | null)?.blocked === "needs_approval";
+}
+
 export function isOverheardEntry(e: Pick<SessionEntry, "type" | "payload">): boolean {
   return e.type === "user" && (e.payload as { overheard?: unknown } | null)?.overheard === true;
 }
