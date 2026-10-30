@@ -72,7 +72,7 @@ async function fixture(t: TestContext) {
   const server = createServer(b.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    scheduler: b.scheduler,
+    cronRuns: b.scheduler,
     config: b.config,
     admin: b.admin,
   });

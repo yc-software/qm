@@ -661,6 +661,7 @@ export interface AppDeps {
   sessions: SessionStore;
   screenSecurity?: SecurityScreenProbe;
   screenSecuritySteer: SteerScreen;
+  runInline?: (run: Run, shutdown?: AbortSignal) => Promise<TurnResult>;
   regenerateTitle(
     sessionId: string,
     principalId: string,

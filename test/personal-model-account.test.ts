@@ -9,7 +9,7 @@ import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { createServer } from "../src/api/server.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp as buildProductionApp } from "../src/wiring.ts";
+import { buildApp as buildProductionApp } from "./support/compose.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";

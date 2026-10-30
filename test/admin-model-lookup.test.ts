@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp, serverDeps } from "./support/compose.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";

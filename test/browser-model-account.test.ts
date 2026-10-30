@@ -5,7 +5,7 @@ import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/compose.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";

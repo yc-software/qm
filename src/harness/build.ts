@@ -403,6 +403,7 @@ import { sleep, withTimeout } from "../util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "../surfaces/slack-installation.ts";
 
 import type { Core, Runtime } from "../wiring.ts";
+import { processRun } from "../runs/worker.ts";
 import { createControlService } from "../api/control-service.ts";
 export interface HarnessOverrides {
   decisionBackend?: DecisionBackend;
@@ -479,6 +480,7 @@ export function buildHarness(config: Config, core: Core, overrides: HarnessOverr
     rateLimiter,
     refreshModels,
     releaseWaiters,
+    setInlineRunner,
     resolution,
     resolveClient,
     resolvePiProviderKeys,
@@ -712,6 +714,7 @@ export function buildHarness(config: Config, core: Core, overrides: HarnessOverr
     layerBrokerFor,
   };
   const orchestrator = createOrchestrator(orchestratorDeps);
+  setInlineRunner((run, shutdown) => processRun({ runs, orchestrator, leaseTtlMs }, run, { shutdown }));
 
   const recoveryAdminBase = config.publicWebUrl?.replace(/\/$/, "");
   const recoveryAdminUrlFor = recoveryAdminBase

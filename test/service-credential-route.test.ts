@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { type TurnRequest } from "../src/types.ts";
 import {

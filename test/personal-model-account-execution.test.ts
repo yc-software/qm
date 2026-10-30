@@ -29,7 +29,7 @@ function observedHarness() {
 mock.module("../src/harness/pi-harness.ts", {
   namedExports: { ...piHarness, createPiHarness: observedPiHarness },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("./support/compose.ts");
 
 for (const provider of ["anthropic", "openai"] as const) {
   test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, async () => {

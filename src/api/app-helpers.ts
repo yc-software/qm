@@ -214,7 +214,22 @@ export function createAppHelpers(deps: AppDeps, app: App) {
           run.result ?? { status: "failed", sessionId: run.sessionId, reason: "run produced no result" },
         );
       }
-      if (deps.shutdown?.().aborted) return { status: "queued", sessionId: run.sessionId, runId };
+      const shutdown = deps.shutdown?.();
+      if (shutdown?.aborted) return { status: "queued", sessionId: run.sessionId, runId };
+      const claimed =
+        deps.runInline && run.status !== "running"
+          ? await deps.runs.claimForSession(run.sessionId, "inline", deps.leaseTtlMs)
+          : null;
+      if (claimed) {
+        try {
+          const result = await deps.runInline!(claimed, shutdown);
+          if (claimed.id === runId && !shutdown?.aborted) return withAdminLink(result);
+        } catch (error) {
+          if (claimed.id === runId && !shutdown?.aborted) throw error;
+          swallow("inline run did not complete", error);
+        }
+        continue;
+      }
       const remaining = deadline - performance.now();
       if (remaining <= 0) throw new Error(`run ${runId} did not finish within ${timeoutMs}ms`);
       await sleep(Math.min(100, remaining));

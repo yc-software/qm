@@ -272,7 +272,7 @@ test("external account DMs require admission under the current policy", async ()
 test("external sandbox API token cannot reach private APIs, while its safe broker token works", async (t) => {
   const { createServer } = await import("../src/api/server.ts");
   const { mintCapabilityToken } = await import("../src/auth/capability-token.ts");
-  const { serverDeps } = await import("../src/wiring.ts");
+  const { serverDeps } = await import("./support/compose.ts");
   const config = testConfig({ signingSecret: "synthetic-signing-key-for-http-test", externalSlackPolicies });
   const b = buildApp(config);
   await b.identity.hydrate();

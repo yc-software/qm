@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
+import { buildApp as buildProductionApp, serverDeps } from "./support/compose.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";

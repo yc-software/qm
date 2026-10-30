@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp as buildProductionApp, type BuiltApp } from "../src/wiring.ts";
+import { buildApp as buildProductionApp, type BuiltApp } from "./support/compose.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { providerKeysPresent, harnessCarriedModelAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";

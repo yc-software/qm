@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { createServer as httpServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
-import { serverDeps } from "../src/wiring.ts";
+import { serverDeps } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import {

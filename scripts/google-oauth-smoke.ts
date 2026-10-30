@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "../test/support/compose.ts";
 import { loadConfig } from "../src/config.ts";
 import { createServer } from "../src/api/server.ts";
 import { PROVIDERS } from "../src/connectors/oauth.ts";

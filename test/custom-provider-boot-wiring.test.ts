@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, afterEach } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp, serverDeps } from "./support/compose.ts";
 import { testConfig } from "./support/test-config.ts";
 import { defaultModelForHarness } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";

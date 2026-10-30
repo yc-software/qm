@@ -45,7 +45,9 @@ const REPAIR_INTERVAL_MS = 60_000;
 
 type FireResult = { authzFailed: boolean; deferred?: boolean };
 
-type RunNowResult = CronRunRequest | { started: true; fireKey: string; settled: Promise<void> };
+type RunNowResult =
+  | Exclude<CronRunRequest, { started: true }>
+  | { started: true; fireKey: string; settled: Promise<void> };
 
 export interface Scheduler {
   tick(now?: number): Promise<void>;

@@ -111,7 +111,7 @@ test("Project trigger access follows current membership while Slack-group owner 
   const server = createServer(built.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    scheduler: built.scheduler,
+    cronRuns: built.scheduler,
   });
   const base = await listen(server);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));

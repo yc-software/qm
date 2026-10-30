@@ -1,6 +1,6 @@
 import "./auto-fake-sprites.ts";
 import type { AddressInfo } from "node:net";
-import { buildApp, serverDeps } from "../../src/wiring.ts";
+import { buildApp, serverDeps } from "./compose.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { testConfig } from "./test-config.ts";
 

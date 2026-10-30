@@ -14,7 +14,7 @@ interface CronQueueHandlers {
 }
 
 export interface CronJobQueue {
-  start(handlers?: CronQueueHandlers): Promise<void>;
+  start(handlers: CronQueueHandlers | null): Promise<void>;
   enqueueFire(job: CronFireJob): Promise<void>;
   healthy(): boolean;
   stopClaims?(): Promise<void>;

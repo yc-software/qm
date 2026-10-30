@@ -402,6 +402,7 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import type { AppDeps } from "./api/app-types.ts";
 import { createPiModelUtilities, piModelConfigOptions } from "./model/pi-model-utilities.ts";
 import type { HarnessModelUtilities } from "./agent/harness.ts";
 import { createCronRunRequests } from "./cron/fires.ts";
@@ -1990,7 +1991,7 @@ export function buildCore(config: Config, overrides: CoreOverrides = {}) {
     sessions,
     titles: createSessionTitles({ sessions, models: modelUtilities, sessionStateBus, errors }),
   });
-  const app = createApp({
+  const appDeps: AppDeps = {
     screenSecuritySteer,
     regenerateTitle,
     teams,
@@ -2072,7 +2073,8 @@ export function buildCore(config: Config, overrides: CoreOverrides = {}) {
     providerKeys,
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
     runWaitMs: config.runWaitMs,
-  });
+  };
+  const app = createApp(appDeps);
   const surfaceContext = createSurfaceContextPuller(
     app,
     keychain
@@ -2265,6 +2267,9 @@ export function buildCore(config: Config, overrides: CoreOverrides = {}) {
       backgroundActive = active;
     },
     releaseWaiters: () => inlineShutdown.abort(),
+    setInlineRunner(runInline: NonNullable<AppDeps["runInline"]>) {
+      appDeps.runInline = runInline;
+    },
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
       flyTunnel?.monitor();
