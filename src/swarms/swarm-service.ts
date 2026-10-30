@@ -820,7 +820,7 @@ export function createSwarmService(deps: {
           .filter((message) => message.seq > after && (!options.replyTo || message.replyTo === options.replyTo))
           .slice(0, 32);
         const unread = new Set(
-          options.replyTo
+          caller.kind === "agent"
             ? messages
                 .filter((message) => message.notifications[auth.memberId]?.state === "mailbox")
                 .map((message) => message.id)

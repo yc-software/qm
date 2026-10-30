@@ -848,10 +848,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
                   )
                     return { ok: false, message: "the requestId was already used for different work" };
-                  const ahead = (await deps.runs.inFlightForThread(target.threadRef)).filter(
-                    (run) => run.id !== existing.id && run.createdAt <= existing.createdAt,
+                  const others = (await deps.runs.inFlightForThread(target.threadRef)).filter(
+                    (run) => run.id !== existing.id,
                   );
-                  return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: ahead.length > 0 };
+                  return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: others.length > 0 };
                 }
               }
               if (
