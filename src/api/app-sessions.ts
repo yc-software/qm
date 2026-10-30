@@ -1,3 +1,4 @@
+import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { isSideChatAnchor } from "../sessions/side-chat.ts";
 import { composeSoul } from "../resolution/resolution-service.ts";
 import { createCurrentScopeMembers } from "../resolution/scope-membership.ts";
@@ -1063,11 +1064,7 @@ export function createSessionMethods(
           const views = await Promise.all(
             projectMembers.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).entries),
           );
-          const common = new Set(views[0]!.map((entry) => entry.seq));
-          for (const view of views.slice(1)) {
-            const seqs = new Set(view.map((entry) => entry.seq));
-            for (const seq of common) if (!seqs.has(seq)) common.delete(seq);
-          }
+          const common = commonEntrySeqs(views);
           visible = visible.filter((entry) => common.has(entry.seq));
         }
         const upToSeq = opts?.upToSeq;

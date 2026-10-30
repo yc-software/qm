@@ -1446,6 +1446,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
     async getEntries(sessionId, opts?: GetEntriesOptions): Promise<SessionEntry[]> {
       const params: unknown[] = [sessionId, opts?.sinceSeq ?? 0];
       let sql = `SELECT ${ITEM_FIELDS} FROM ${ITEM_FROM} WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $2`;
+      if (opts?.messagesOnly)
+        sql += " AND i.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage') AND i.variant IS NULL";
       if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i")}`;
       if (opts?.beforeSeq !== undefined) {
         params.push(opts.beforeSeq);
@@ -1798,6 +1800,8 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $2
           WHERE i.tenant_id = ${TENANT} AND i.session_id = $1 AND i.seq >= $3
             AND ${withinParticipantWindow("i", "p")}`;
+      if (opts?.messagesOnly)
+        sql += " AND i.kind IN ('UserMessage', 'SteeringMessage', 'AgentMessage') AND i.variant IS NULL";
       if (opts?.transcript) sql += ` AND ${transcriptItemPredicate("i", "p")}`;
       if (opts?.beforeSeq !== undefined) {
         params.push(opts.beforeSeq);

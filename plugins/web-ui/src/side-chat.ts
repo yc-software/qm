@@ -16,19 +16,21 @@ import { reportHandledError } from "./browser-errors";
 export function createSideChatController(ctx: ConvCtx) {
   let sourceId: string | null = null;
   let chats: CoreSession[] = [];
-  let selected: {
+  type SelectionAnchor = {
     index: number;
     quote: string;
     occurrence: number;
     left: number;
     top: number;
     panelTop: number;
-  } | null = null;
+  };
+  let selected: SelectionAnchor | null = null;
   let active: CoreSession | null = null;
   let conversation: Conversation | null = null;
   let panel: HTMLElement | null = null;
   let busy = false;
   let selecting = false;
+  let pendingAnchor: SelectionAnchor | null = null;
   let pendingQuote: string | null = null;
   let pendingDraft = "";
   let maximized = false;
@@ -144,6 +146,11 @@ export function createSideChatController(ctx: ConvCtx) {
   function outsidePointerDown(event: Event) {
     const card = panel?.closest(".side-chat-panel");
     if (!card || event.composedPath().includes(card)) return;
+    if (
+      event.target instanceof Element &&
+      event.target.closest(".side-chat-error")?.parentElement === card.parentElement
+    )
+      return;
     close();
     redraw();
   }
@@ -157,13 +164,19 @@ export function createSideChatController(ctx: ConvCtx) {
         chats = result.sessions ?? [];
         redraw();
       },
-      (cause) => reportHandledError("web:side_chat_list", cause),
+      (cause) => {
+        reportHandledError("web:side_chat_list", cause);
+        if (sourceId !== id) return;
+        error = errMessage(cause, "Could not load side chats.");
+        redraw();
+      },
     );
   }
 
   function close() {
     if (active) refreshHighlights();
     pendingQuote = null;
+    pendingAnchor = null;
     pendingDraft = "";
     document.removeEventListener("pointerdown", outsidePointerDown, true);
     epoch++;
@@ -195,20 +208,7 @@ export function createSideChatController(ctx: ConvCtx) {
     chats = [];
     error = "";
     busy = false;
-    if (!id) return;
-    void api<{ sessions: CoreSession[] }>(`/api/sessions/${encodeURIComponent(id)}/side-chats`).then(
-      (result) => {
-        if (sourceId !== id) return;
-        chats = result.sessions ?? [];
-        redraw();
-      },
-      (cause) => {
-        reportHandledError("web:side_chat_list", cause);
-        if (sourceId !== id) return;
-        error = errMessage(cause, "Could not load side chats.");
-        redraw();
-      },
-    );
+    refreshHighlights();
   }
 
   function selectionStarted(event: MouseEvent) {
@@ -370,8 +370,9 @@ export function createSideChatController(ctx: ConvCtx) {
     );
     conversation = conv;
     try {
-      await openSessionInto(conv, session);
+      const loaded = await openSessionInto(conv, session);
       if (conversation === conv) {
+        if (!loaded) throw new Error("Could not load side chat. Try again.");
         if (creating) conv.composer.state.draft = pendingDraft;
         pendingQuote = null;
         pendingDraft = "";
@@ -387,14 +388,18 @@ export function createSideChatController(ctx: ConvCtx) {
     }
   }
 
-  async function discuss() {
-    if (!selected || !sourceId || busy) return;
-    const anchor = selected;
+  async function discuss(retry = false) {
+    const anchor = retry ? pendingAnchor : selected;
+    if (!anchor || !sourceId || busy) return;
+    const draft = retry ? pendingDraft : "";
+    const created = retry ? active : null;
     const id = sourceId;
     const messages = [...ctx.chat.state.inheritedMessages, ...(ctx.chat.state.agent?.state.messages ?? [])];
     close();
     const opening = epoch;
+    pendingAnchor = anchor;
     pendingQuote = anchor.quote;
+    pendingDraft = draft;
     cardLeft = anchor.left;
     cardTop = anchor.panelTop;
     maximized = false;
@@ -405,6 +410,10 @@ export function createSideChatController(ctx: ConvCtx) {
     redraw();
     queueMicrotask(() => panel?.closest(".side-chat-panel")?.querySelector<HTMLTextAreaElement>("textarea")?.focus());
     try {
+      if (created) {
+        await show(created, true);
+        return;
+      }
       const { entries } = await api<{ entries: SessionEntry[] }>(`/api/sessions/${encodeURIComponent(id)}`);
       const floor = Math.max(
         ctx.chat.state.forkSession?.forkBoundarySeq ?? -1,
@@ -566,7 +575,7 @@ export function createSideChatController(ctx: ConvCtx) {
       ${
         error
           ? html`<div class="side-chat-error" role="alert">
-              ${error}<button
+              ${error}${pendingQuote !== null ? html`<button @click=${() => void discuss(true)} ?disabled=${busy}>Retry</button>` : nothing}<button
                 @click=${() => {
                   error = "";
                   redraw();

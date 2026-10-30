@@ -1,3 +1,4 @@
+import { commonEntrySeqs } from "./transcript-source.ts";
 import { isSessionTurn, sessionTurnOrigin } from "../core/turn-origin.ts";
 import { TURN_STOPPED_KIND } from "../harness/replay.ts";
 import { principalDestination } from "../reach/reach.ts";
@@ -560,8 +561,8 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
             deps.sessions.visibleEntries(target.id, id),
           ),
         );
-        const allowed = views.slice(1).map((view) => new Set(view.map((entry) => entry.seq)));
-        return (views[0] ?? []).filter((entry) => allowed.every((seqs) => seqs.has(entry.seq)));
+        const allowed = commonEntrySeqs(views);
+        return (views[0] ?? []).filter((entry) => allowed.has(entry.seq));
       }
 
       async function currentCaller(): Promise<OrchestratorInput> {

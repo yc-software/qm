@@ -145,6 +145,7 @@ export interface SessionPin extends NewSessionPin {
 export const isWebThread = (threadRef: string): boolean => threadRef.startsWith("web:");
 
 export interface GetEntriesOptions {
+  messagesOnly?: boolean;
   transcript?: boolean;
   turnId?: string;
   sinceSeq?: number;

@@ -345,7 +345,12 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       );
       const log = opts?.transcript ? transcriptEntries(all) : all;
       const since = opts?.sinceSeq ?? 0;
-      const filtered = log.filter((e) => e.seq >= since && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq));
+      const filtered = log.filter(
+        (e) =>
+          (!opts?.messagesOnly || e.type === "user" || e.type === "assistant") &&
+          e.seq >= since &&
+          (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
+      );
       return opts?.limit !== undefined ? filtered.slice(-opts.limit) : filtered;
     },
 
@@ -648,7 +653,10 @@ export function createMemorySessionStore(opts: StoreOptions = {}): SessionStore 
       if (!win) return [];
       const all = (entries.get(sessionId) ?? []).filter((e) => entryWithinTenure(e, win));
       const visible = (opts?.transcript ? transcriptEntries(all) : all).filter(
-        (e) => e.seq >= (opts?.sinceSeq ?? 0) && (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
+        (e) =>
+          (!opts?.messagesOnly || e.type === "user" || e.type === "assistant") &&
+          e.seq >= (opts?.sinceSeq ?? 0) &&
+          (opts?.beforeSeq === undefined || e.seq < opts.beforeSeq),
       );
       return opts?.limit !== undefined ? visible.slice(-opts.limit) : visible;
     },

@@ -1,3 +1,4 @@
+import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { countTokens } from "../util/tokens.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "./side-chat-context.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
@@ -501,11 +502,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const views = await Promise.all(
           participantIds.map(async (memberId) => (await transcripts.forViewer(sessionId, memberId)).entries),
         );
-        const common = new Set(views[0]!.map((entry) => entry.seq));
-        for (const view of views.slice(1)) {
-          const visible = new Set(view.map((entry) => entry.seq));
-          for (const seq of common) if (!visible.has(seq)) common.delete(seq);
-        }
+        const common = commonEntrySeqs(views);
         entries = entries.filter((entry) => common.has(entry.seq));
       }
       if (entries.length === 0) return null;
@@ -744,11 +741,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const views = await Promise.all(
           participantIds.map((principalId) => deps.sessions.visibleEntries(sessionId, principalId)),
         );
-        participantHistorySeqs = new Set(views[0]!.map((entry) => entry.seq));
-        for (const view of views.slice(1)) {
-          const visible = new Set(view.map((entry) => entry.seq));
-          for (const seq of participantHistorySeqs) if (!visible.has(seq)) participantHistorySeqs.delete(seq);
-        }
+        participantHistorySeqs = commonEntrySeqs(views);
         await deps.harness.turns.resetSession?.(sessionId);
       };
       const securityPolicy = resolution.securityPolicy;
@@ -2355,13 +2348,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scopeAskList = scopeAsks;
         }
         if (session.sideChat && !session.sideChat.expanded) systemPrompt += `\n\n${SIDE_CHAT_GUIDANCE}`;
-        const sideDiscussions = await sideChatContext(deps.sessions, session, [
-          ...new Set([
-            actor.id,
-            ...conversation.audience.map((person) => person.id),
-            ...(input.sessionParticipantIds ?? []),
-          ]),
-        ]);
+        const sideDiscussions = await sideChatContext(
+          deps.sessions,
+          session,
+          [
+            ...new Set([
+              actor.id,
+              ...conversation.audience.map((person) => person.id),
+              ...(input.sessionParticipantIds ?? []),
+            ]),
+          ],
+          documentTokenBudget(scopeId, input.model),
+        );
         if (sideDiscussions) systemPrompt += `\n\n${sideDiscussions}`;
         systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
         if (swarmBinding)
@@ -2899,7 +2897,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               turnAbort.signal,
               undefined,
               undefined,
-              documentBudget,
+              Math.max(0, documentBudget - countTokens(sideDiscussions)),
             );
         const screenDocuments = async (
           documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
@@ -2962,7 +2960,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           MAX_DOCUMENT_BYTES -
           documentInputs.documents.reduce((sum, document) => sum + Buffer.byteLength(document.dataBase64, "base64"), 0);
         let remainingDocumentCount = 10 - documentInputs.documents.length;
-        let remainingDocumentTokens = documentBudget - documentInputs.tokens;
+        let remainingDocumentTokens = Math.max(
+          0,
+          documentBudget - countTokens(sideDiscussions) - documentInputs.tokens,
+        );
         const lastUserAt = visibleHistory.findLast((e) => e.type === "user" && !isOverheardEntry(e))?.createdAt;
         const principalDelivered = await recentPrincipalDeliveryNote(deps.deliveries, session.threadRef, lastUserAt);
         const sender =

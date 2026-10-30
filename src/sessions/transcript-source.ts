@@ -13,6 +13,15 @@ export interface TranscriptSource {
   forViewer(sessionId: string, principalId: string, opts?: GetEntriesOptions): Promise<TranscriptRead>;
 }
 
+export function commonEntrySeqs(views: readonly (readonly SessionEntry[])[]): Set<number> {
+  const common = new Set((views[0] ?? []).map((entry) => entry.seq));
+  for (const view of views.slice(1)) {
+    const visible = new Set(view.map((entry) => entry.seq));
+    for (const seq of common) if (!visible.has(seq)) common.delete(seq);
+  }
+  return common;
+}
+
 export function transcriptEntries(entries: readonly SessionEntry[]): SessionEntry[] {
   const received = new Set(
     entries.flatMap((entry) => {

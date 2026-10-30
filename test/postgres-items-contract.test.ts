@@ -293,3 +293,30 @@ test("pg items hide a Slack reply receipt once the real message arrives", { skip
     assert.equal((await store.getEntries(session.id)).length, 2);
   });
 });
+
+test("message-only transcript reads filter before pagination and retain visibility", { skip }, async () => {
+  await withSchema("message_pages", async ({ store }) => {
+    const scope = scopeId("personal", "alice");
+    const session = await store.getOrCreateByThread("web:message-pages", "dm", scope);
+    await store.addParticipant(session.id, "alice");
+    const { lease } = await store.acquireLease(session.id);
+    assert.ok(lease);
+    await store.append(lease, { type: "user", scopeLabel: scope, payload: { text: "question" } });
+    const answer = await store.append(lease, { type: "assistant", scopeLabel: scope, payload: { text: "answer" } });
+    await store.append(lease, {
+      type: "tool_result",
+      scopeLabel: scope,
+      payload: { callId: "read", tool: "read", result: "irrelevant tool output" },
+    });
+    await store.releaseLease(lease);
+    assert.deepEqual(
+      (await store.getEntries(session.id, { messagesOnly: true, limit: 1 })).map((e) => e.seq),
+      [answer.seq],
+    );
+    assert.deepEqual(
+      (await store.visibleEntries(session.id, "alice", { messagesOnly: true, limit: 1 })).map((e) => e.seq),
+      [answer.seq],
+    );
+    assert.deepEqual(await store.visibleEntries(session.id, "outsider", { messagesOnly: true, limit: 1 }), []);
+  });
+});

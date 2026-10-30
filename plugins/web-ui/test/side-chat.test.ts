@@ -26,6 +26,8 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
   ];
   let fork: CoreSession | undefined;
   let forkBody: unknown;
+  let failFork = true;
+  let failOpen = true;
   let releaseFork!: () => void;
   let forkReady = new Promise<void>((resolve) => {
     releaseFork = resolve;
@@ -71,10 +73,21 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
           forkBoundarySeq: 0,
           sideChat: { entrySeq: 0, quote: "durable", occurrence: 1, expanded: false },
         };
-        return forkReady.then(() => Response.json({ session: fork, entries }));
+        return forkReady.then(() => {
+          if (failFork) {
+            failFork = false;
+            return Response.json({ error: "Fork temporarily unavailable" }, { status: 503 });
+          }
+          return Response.json({ session: fork, entries });
+        });
       }
-      if (path.startsWith("/api/sessions/side?") || path === "/api/sessions/side")
+      if (path.startsWith("/api/sessions/side?") || path === "/api/sessions/side") {
+        if (failOpen) {
+          failOpen = false;
+          return Response.json({ error: "Load temporarily unavailable" }, { status: 503 });
+        }
         return Response.json({ session: fork, entries });
+      }
       if (path === "/api/sessions/side/expand") {
         assert.equal(init?.method, "POST");
         fork = { ...fork!, sideChat: { ...fork!.sideChat!, expanded: true } };
@@ -136,7 +149,21 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     assert.ok(document.querySelector(".side-chat-panel"));
     assert.equal(document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.value, "Explain this");
     releaseFork();
+    const retry = () =>
+      [...document.querySelectorAll<HTMLButtonElement>(".side-chat-error button")].find(
+        (button) => button.textContent === "Retry",
+      );
+    await until(() => Boolean(retry() && !retry()!.disabled));
+    assert.equal(document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.value, "Explain this");
+    retry()!.dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
+    retry()!.click();
+    await until(() => Boolean(retry() && !retry()!.disabled));
+    assert.equal(document.querySelector<HTMLTextAreaElement>(".side-chat-draft textarea")!.value, "Explain this");
+    const forkRequests = h.requests.filter((path) => path === "/api/sessions/source/fork").length;
+    retry()!.dispatchEvent(new window.Event("pointerdown", { bubbles: true, composed: true }));
+    retry()!.click();
     await until(() => Boolean(document.querySelector(".side-chat-conversation textarea")));
+    assert.equal(h.requests.filter((path) => path === "/api/sessions/source/fork").length, forkRequests);
     assert.equal(document.querySelector(".side-chat-panel .fork-origin-badge"), null);
     assert.equal(document.querySelector(".side-chat-panel .fork-origin-toggle"), null);
     assert.deepEqual(forkBody, { upToSeq: 0, sideChat: { entrySeq: 0, quote: "durable", occurrence: 1 } });
@@ -203,7 +230,7 @@ test("select a passage, discuss beside the source, reopen, and expand the same s
     document.querySelector<HTMLButtonElement>(".fork-origin-toggle")!.click();
     await until(() => document.querySelector(".fork-origin-toggle")?.textContent === "hide");
     assert.match(document.querySelector(".message-stack")!.textContent!, /Use durable, then durable shared queue/);
-    assert.equal(h.requests.filter((path) => path === "/api/sessions/source/fork").length, 1);
+    assert.equal(h.requests.filter((path) => path === "/api/sessions/source/fork").length, 2);
     await h.openSession(source);
     forkReady = new Promise<void>((resolve) => {
       releaseFork = resolve;
