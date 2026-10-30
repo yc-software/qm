@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { recentPrincipalDeliveryNote } from "../src/core/orchestrator/turn-helpers.ts";
+import { recentPrincipalDeliveryNote } from "../src/core/turn-helpers.ts";
 
 async function deliveredNote(texts: string[], since?: number): Promise<string> {
   const store = createDeliveryStore();

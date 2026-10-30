@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../../types.ts";
-import type { TurnOrigin } from "../turn-origin.ts";
+import type { TurnOrigin } from "../../core/turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
 import {
   securityScreenSystemPrompt,

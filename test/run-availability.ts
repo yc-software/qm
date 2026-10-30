@@ -6,7 +6,8 @@ import pg from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
-import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { Orchestrator } from "../src/harness/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };

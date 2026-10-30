@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { zstdDecompressSync } from "node:zlib";
-import { buildModelRuntime } from "../src/agent/agent-run.ts";
+import { buildModelRuntime } from "../src/model/pi-runtime.ts";
 import { contentText, createAssistantMessageEventStream, type StopReason } from "@earendil-works/pi-ai";
 import { summarizeHistory } from "../src/agent/history-summary.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";

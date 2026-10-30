@@ -304,7 +304,8 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
 });
 
 import { createServer } from "node:http";
-import { oneShot, createAgent, wantsFastMode } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { oneShot, wantsFastMode } from "../src/model/pi-runtime.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 

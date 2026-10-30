@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyReasoningMode, createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/agent/agent-run.ts";
+import { applyReasoningMode } from "../src/model/pi-runtime.ts";
 import { getRequiredModel, thinkingLevelsFor, safeModelMetadata } from "../src/model/pi-models.ts";
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";

@@ -1,6 +1,6 @@
 import type { ActorAssertion, TurnRequest } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";

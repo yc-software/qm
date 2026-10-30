@@ -1,5 +1,5 @@
 import { isSessionTurn } from "../core/turn-origin.ts";
-import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
+import { replayableRequest } from "../core/turn-helpers.ts";
 import {
   createSlackSessionStatus,
   type SlackStatusActivity,

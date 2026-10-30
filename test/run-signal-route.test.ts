@@ -12,7 +12,7 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { attributedSteerText } from "../src/api/app-turn.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";

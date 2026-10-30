@@ -9,7 +9,7 @@ import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
 import { goalWorkFromEntries } from "./goal.ts";
 import type { TurnLlmRequestRecord, ModelUtilities, AgentTurnInput, AgentTurnResult } from "./agent.ts";
-import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./agent-run.ts";
+import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "../model/model-utilities.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 

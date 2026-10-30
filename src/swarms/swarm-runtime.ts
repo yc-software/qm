@@ -1,4 +1,4 @@
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import { modelSupported, modelUnavailableReason, thinkingLevelsFor, THINKING_LEVELS } from "../model/pi-models.ts";
 
 export type SwarmMemberRuntime = Pick<OrchestratorInput, "model" | "thinkingLevel" | "fastMode">;

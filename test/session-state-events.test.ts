@@ -9,7 +9,7 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
 

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { calculateCost } from "@earendil-works/pi-ai";
 import { zeroUsage } from "../src/agent/replay.ts";
 import { zstdDecompressSync } from "node:zlib";
-import { buildModelRuntime, piUsageToCallUsage, wantsFastMode } from "../src/agent/agent-run.ts";
+import { buildModelRuntime, piUsageToCallUsage, wantsFastMode } from "../src/model/pi-runtime.ts";
 import { getRequiredModel, modelSupported, resolveModel } from "../src/model/pi-models.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 

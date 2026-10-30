@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSecurityScreenProxy } from "../src/security/security-screener.ts";
-import { createSecurityClassifier } from "../src/core/orchestrator/security-screen.ts";
-import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
+import { createSecurityClassifier } from "../src/harness/orchestrator/security-screen.ts";
+import type { OrchestratorDeps } from "../src/harness/orchestrator/types.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 
 test("the security screen proxy sends the neutral classifier contract and maps its scores", async () => {

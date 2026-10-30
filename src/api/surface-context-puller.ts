@@ -1,5 +1,5 @@
 import type { SurfaceContextQuery, SurfaceContextResult } from "../types.ts";
-import type { SurfaceContextPuller } from "../core/orchestrator.ts";
+import type { SurfaceContextPuller } from "../core/turn-input.ts";
 import { sleep } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";
 

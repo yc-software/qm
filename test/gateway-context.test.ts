@@ -124,7 +124,7 @@ test("triggered destination turns tell the agent to return the deliverable, not 
 });
 
 test("a web turn's default delivery destination is its own web session", async () => {
-  const { deliveryCandidatesFor } = await import("../src/core/orchestrator/turn-helpers.ts");
+  const { deliveryCandidatesFor } = await import("../src/core/turn-helpers.ts");
   const delivery = deliveryCandidatesFor("web", "web:session-1", undefined, scopeId("personal", "a@example.com"));
   const chosen = delivery.candidates.find((c) => c.key === delivery.defaultKey);
   assert.equal(chosen?.type, "web");

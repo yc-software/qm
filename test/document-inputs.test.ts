@@ -12,7 +12,8 @@ import {
   loadDocumentInputs,
   type DocumentInput,
 } from "../src/core/document-inputs.ts";
-import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/agent/agent-run.ts";
+import { sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/agent/agent-run.ts";
+import { guardOutputBudget } from "../src/model/pi-runtime.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";

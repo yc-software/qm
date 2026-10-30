@@ -8,16 +8,16 @@ import type {
   SessionEntry,
   TurnRequest,
   ActorAssertion,
-} from "../../types.ts";
-import { turnOriginRequestFields } from "../turn-origin.ts";
-import { isOverheardEntry } from "../../sessions/session-store.ts";
-import type { DeliveryStore } from "../../delivery/delivery-store.ts";
-import type { SkillBundle, SkillBundleStore } from "../../skills/skill-bundle-store.ts";
-import type { SkillResolution } from "../../skills/skill-store.ts";
-import { hostMatches } from "../../resolution/egress-policy.ts";
-import { swallow } from "../../util/errors.ts";
-import { hashId } from "../../util/crypto.ts";
-import type { OrchestratorInput } from "./types.ts";
+} from "../types.ts";
+import { turnOriginRequestFields } from "./turn-origin.ts";
+import { isOverheardEntry } from "../sessions/session-store.ts";
+import type { DeliveryStore } from "../delivery/delivery-store.ts";
+import type { SkillBundle, SkillBundleStore } from "../skills/skill-bundle-store.ts";
+import type { SkillResolution } from "../skills/skill-store.ts";
+import { hostMatches } from "../resolution/egress-policy.ts";
+import { swallow } from "../util/errors.ts";
+import { hashId } from "../util/crypto.ts";
+import type { OrchestratorInput } from "./turn-input.ts";
 
 export const MAX_AUTO_ATTACHMENT_SCREEN_BYTES = 12_000;
 

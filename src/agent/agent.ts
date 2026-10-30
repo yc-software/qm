@@ -17,7 +17,7 @@ import type { OverheardEntryPayload } from "./replay.ts";
 import type { GoalRecord } from "./goal.ts";
 import type { GrindMeter } from "./grind.ts";
 import type { McpToolDescriptor } from "../mcp/mcp-tool-service.ts";
-import type { ProviderKeys } from "./agent-run.ts";
+import type { ProviderKeys } from "../model/pi-runtime.ts";
 import type { ToolContext } from "../tools/primitives.ts";
 import type { SecurityScreenVerdict, ToolResultScreen, ToolResultScreenInput } from "../security/security-posture.ts";
 

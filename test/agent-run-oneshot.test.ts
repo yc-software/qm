@@ -5,26 +5,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { zstdDecompressSync } from "node:zlib";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import {
-  buildDetectionPrompt,
-  createAgent,
-  oneShot,
-  parseDetectVerdict,
-  agentConfigOptions,
-  piLastAssistantTextOrThrow,
-  piTurnError,
-  providerRefusalError,
-  refusalFallbackNote,
-  refusalFallbackModelId,
-  REFUSAL_FALLBACK_MODEL_IDS,
-  renderDetectPrompt,
-  resolveConfiguredModelId,
-  sanitizeLlmPayload,
-  trimPayloadToByteBudget,
-  seedRawMessagesIntoSession,
-  toPiMessage,
-  transportFromModel,
-} from "../src/agent/agent-run.ts";
+import { buildDetectionPrompt, createAgent, parseDetectVerdict, agentConfigOptions, providerRefusalError, refusalFallbackNote, refusalFallbackModelId, REFUSAL_FALLBACK_MODEL_IDS, renderDetectPrompt, sanitizeLlmPayload, trimPayloadToByteBudget, seedRawMessagesIntoSession, toPiMessage, transportFromModel } from "../src/agent/agent-run.ts";
+import { oneShot, piLastAssistantTextOrThrow, piTurnError, resolveConfiguredModelId } from "../src/model/pi-runtime.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
