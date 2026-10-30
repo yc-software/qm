@@ -232,6 +232,34 @@ test("write queues separately from a running child and interrupts explicitly", a
   assert.ok(rerun.some((run) => /check it again/.test(run.request.text)));
 });
 
+test("interrupt with text stops the running child and starts its next turn with the text", async () => {
+  const r = await rig();
+  const syscalls = r.syscallsFor(r.room);
+  const opened = await syscalls.open({ task: "measure the queries", name: "measure" });
+  assert.ok(opened.ok);
+  const child = await freshSession(r.sessions, opened.sessionId);
+  const queued = (await r.runs.inFlightForThread(child.threadRef))[0]!;
+  const claimed = await r.runs.claimById(queued.id, "w1", 60_000);
+  assert.ok(claimed);
+
+  const redirected = await syscalls.write({
+    followup: true,
+    target: "measure",
+    interrupt: true,
+    text: "report what you have now",
+  });
+  assert.ok(redirected.ok);
+  assert.equal(redirected.delivered, "queued_turn");
+  assert.equal((await r.signals.takePending(queued.id))[0]!.kind, "abort");
+  const next = (await r.runs.inFlightForThread(child.threadRef)).find((run) => run.id !== queued.id)!;
+  assert.match(next.request.text, /report what you have now/);
+
+  await r.runs.complete(queued.id, claimed!.leaseToken!, { status: "ok", reply: "stopped" });
+  const idle = await syscalls.write({ followup: true, target: "measure", interrupt: true, text: "one more thing" });
+  assert.ok(idle.ok);
+  assert.equal(idle.delivered, "queued_turn");
+});
+
 test("write refuses self, cross-scope, and nonparticipant targets", async () => {
   const r = await rig();
   const syscalls = r.syscallsFor(r.room);

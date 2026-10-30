@@ -1470,7 +1470,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     description:
       "Spawn and coordinate subagents: background workers that cannot see this conversation. Brief one like a capable colleague (goal, why it matters, what you know, real limits) and leave the approach to them; its final answer arrives as an internal message. " +
       "open: start one with `task`. followup_task: more work for an existing one; starts a turn if it is idle; active work is queued safely. " +
-      'send_message: inform a subagent, sibling or parent (target="parent") without starting a turn; interrupt:true stops its run. ' +
+      'send_message: inform a subagent, sibling or parent (target="parent") without starting a turn; interrupt:true stops its run, then any text starts its next turn. ' +
       "read: list subagents or read one's transcript. " +
       (delegateWork
         ? "Delegate substantial work, then end this turn promptly; a subagent's completion wakes you with the result. Do not wait or poll. "
@@ -1512,7 +1512,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }),
       ),
       text: Type.Optional(Type.String({ description: "send_message: the message." })),
-      interrupt: Type.Optional(Type.Boolean({ description: "send_message: abort the target's run instead." })),
+      interrupt: Type.Optional(Type.Boolean({ description: "send_message: stop its run; text starts its next turn." })),
       limit: Type.Optional(Type.Integer({ description: "read: max entries (default 30)." })),
     }),
     async execute(callId, params) {
@@ -1605,7 +1605,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         const result = await syscalls.write({
           requestId: callId,
-          followup,
+          followup: followup || Boolean(p.interrupt && body?.trim()),
           target: p.target ?? "",
           ...(body ? { text: body } : {}),
           ...(p.interrupt ? { interrupt: true } : {}),

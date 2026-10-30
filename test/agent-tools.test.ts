@@ -3451,12 +3451,14 @@ test("subagents followup_task takes its instruction in task, like open", async (
     /interrupt applies to send_message/,
   );
   await call(session, { action: "followup_task", target: "child", text: "misplaced" });
+  await call(session, { action: "send_message", target: "child", text: "report now", interrupt: true });
   assert.deepEqual(
     writes.map(({ followup, text, interrupt }) => ({ followup, text, interrupt })),
     [
       { followup: true, text: "next task", interrupt: undefined },
       { followup: false, text: "fyi", interrupt: undefined },
       { followup: true, text: undefined, interrupt: undefined },
+      { followup: true, text: "report now", interrupt: true },
     ],
   );
 });

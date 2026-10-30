@@ -799,9 +799,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                 if (caller.readOnly && !target.spawnMeta?.readOnly)
                   return { ok: false, message: "a read-only session cannot interrupt a writable task" };
                 const stopped = await stopSessionTree(deps, target, "by the parent agent");
-                return stopped
-                  ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
-                  : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
+                if (!input.followup)
+                  return stopped
+                    ? { ok: true, sessionId: target.id, title, delivered: "interrupted" }
+                    : { ok: false, message: `subagent "${title}" is not running — nothing to interrupt.` };
               }
               const text = input.text?.trim();
               if (!text)
