@@ -1920,6 +1920,7 @@ interface HistoryUserMessage {
   steered?: boolean;
   speaker?: string;
   speakerId?: string;
+  speakerAvatarUrl?: string;
   ts?: string;
   edited?: boolean;
   deleted?: boolean;
@@ -2095,6 +2096,7 @@ export function userEntryMessage(
     steered?: boolean;
     name?: string;
     speakerId?: string;
+    speakerAvatarUrl?: string;
     ts?: string;
     attachments?: Array<{ name?: string; mimetype?: string; sizeBytes?: number; artifactId?: string }>;
   } | null;
@@ -2112,6 +2114,9 @@ export function userEntryMessage(
     ...(mail ? { subagentMail: mail } : {}),
     ...(payload?.steered ? { steered: true } : {}),
     ...(typeof payload?.speakerId === "string" && payload.speakerId ? { speakerId: payload.speakerId } : {}),
+    ...(typeof payload?.speakerAvatarUrl === "string" && payload.speakerAvatarUrl.startsWith("https://")
+      ? { speakerAvatarUrl: payload.speakerAvatarUrl }
+      : {}),
     ...(typeof payload?.name === "string" && payload.name.trim() ? { speaker: payload.name.trim() } : {}),
     ...(typeof payload?.ts === "string" && payload.ts ? { ts: payload.ts } : {}),
     ...(attachments.length

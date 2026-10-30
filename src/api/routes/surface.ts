@@ -204,7 +204,35 @@ async function getSession(ctx: ApiCtx): Promise<void> {
   }
   const found = await app.getSessionForViewer(id, viewer, Object.keys(window).length ? window : undefined);
   if (!found) return sendJson(res, 404, { error: "not_found" });
-  return sendJson(res, 200, found);
+  return sendJson(res, 200, { ...found, entries: await withSpeakerAvatars(app, found.entries) });
+}
+
+// Photos for human speakers come from the org directory, so conversations outside a project (e.g. ones that
+// started in Slack) still show them. Projects resolve members the same way.
+async function withSpeakerAvatars<E extends { type: string; payload: unknown }>(
+  app: ApiCtx["app"],
+  entries: E[],
+): Promise<E[]> {
+  const speakerOf = (entry: E): string | undefined => {
+    if (entry.type !== "user" || !isObj(entry.payload)) return undefined;
+    const id = entry.payload.speakerId;
+    return typeof id === "string" && id ? id : undefined;
+  };
+  const ids = [...new Set(entries.map(speakerOf).filter((id): id is string => !!id))];
+  if (!ids.length) return entries;
+  const avatars = new Map<string, string>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const url = (await app.directoryMember(id).catch(() => null))?.avatarUrl;
+      if (url?.startsWith("https://")) avatars.set(id, url);
+    }),
+  );
+  if (!avatars.size) return entries;
+  return entries.map((entry) => {
+    const id = speakerOf(entry);
+    const avatarUrl = id && avatars.get(id);
+    return avatarUrl ? { ...entry, payload: { ...(entry.payload as object), speakerAvatarUrl: avatarUrl } } : entry;
+  });
 }
 
 async function getAgentConversation(ctx: ApiCtx): Promise<void> {

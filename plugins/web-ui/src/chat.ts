@@ -379,10 +379,13 @@ export function createChatSurface(
   }
 
   function speakerMember(message: AgentMessage): { principalId: string; avatarUrl?: string } | undefined {
-    const speakerId = (message as { speakerId?: string }).speakerId;
+    const { speakerId, speakerAvatarUrl } = message as { speakerId?: string; speakerAvatarUrl?: string };
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
-    return project?.members.find((m) => m.principalId === speakerId);
+    const member = project?.members.find((m) => m.principalId === speakerId);
+    const avatarUrl = member?.avatarUrl ?? speakerAvatarUrl;
+    if (!member && !avatarUrl) return undefined;
+    return { principalId: speakerId, ...(avatarUrl ? { avatarUrl } : {}) };
   }
 
   function speakerLabelTpl(speaker: string | undefined, message: AgentMessage): TemplateResult | typeof nothing {
