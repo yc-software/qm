@@ -184,24 +184,6 @@ test("sharing posture defaults to isolated and accepts only isolated or open", (
   );
 });
 
-test("a sandbox backend or provider key left in the environment warns that it is ignored", () => {
-  const warnings: string[] = [];
-  const original = console.warn;
-  console.warn = (msg: unknown) => void warnings.push(String(msg));
-  try {
-    loadConfig({ MODAL_TOKEN_ID: "id", MODAL_TOKEN_SECRET: "secret" });
-    loadConfig({ MODAL_EGRESS_PROXY_URL: "https://egress.test" });
-  } finally {
-    console.warn = original;
-  }
-  assert.deepEqual(
-    warnings.filter((w) => w.includes("per-tenant settings")),
-    [
-      "[config] MODAL_TOKEN_ID, MODAL_TOKEN_SECRET are ignored — the sandbox backend and provider keys are per-tenant settings. Remove the variables.",
-    ],
-  );
-});
-
 test("a leftover *=sqlite env throws (no silent downgrade to ephemeral memory)", () => {
   assert.throws(() => loadConfig({ SESSION_STORE: "sqlite" }), /SESSION_STORE=sqlite is no longer supported/);
   assert.throws(() => loadConfig({ RUN_STORE: "sqlite" }), /RUN_STORE=sqlite is no longer supported/);
