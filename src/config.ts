@@ -352,12 +352,26 @@ interface SpritesSandboxEnv {
   defaultTimeoutSec?: number;
 }
 
+const csvList = (value: string | undefined): string[] | undefined => {
+  const items = (value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return items.length ? items : undefined;
+};
+
+function egressProxyFor(env: NodeJS.ProcessEnv, backend: string): { egressProxyUrl?: string } {
+  return env.EGRESS_PROXY_URL && !csvList(env.EGRESS_PROXY_EXEMPT_BACKENDS)?.includes(backend)
+    ? { egressProxyUrl: env.EGRESS_PROXY_URL }
+    : {};
+}
+
 function spritesSandboxEnv(env: NodeJS.ProcessEnv): SpritesSandboxEnv {
   return {
     ...(env.SPRITES_TOKEN ? { token: env.SPRITES_TOKEN } : {}),
     ...(env.SPRITES_BASE_URL ? { baseUrl: env.SPRITES_BASE_URL } : {}),
     ...(env.SPRITES_NAME_PREFIX ? { namePrefix: env.SPRITES_NAME_PREFIX } : {}),
-    ...(env.SPRITES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SPRITES_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "sprites"),
     ...(env.SPRITES_EGRESS_PROXY_ADDITIONAL_URLS?.trim()
       ? {
           egressProxyAdditionalUrls: env.SPRITES_EGRESS_PROXY_ADDITIONAL_URLS.split(",")
@@ -403,7 +417,7 @@ function e2bSandboxEnv(env: NodeJS.ProcessEnv): E2bSandboxEnv {
       ? { maxLifetimeSec: numEnvStrict("E2B_MAX_LIFETIME_SEC", env.E2B_MAX_LIFETIME_SEC) }
       : {}),
     ...(env.E2B_PROXY ? { proxy: env.E2B_PROXY } : {}),
-    ...(env.E2B_EGRESS_PROXY_URL ? { egressProxyUrl: env.E2B_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "e2b"),
     ...(env.E2B_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.E2B_SNAPSHOT_S3_BUCKET } : {}),
     ...(numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) !== undefined
       ? { snapshotIntervalSec: numEnvStrict("E2B_SNAPSHOT_INTERVAL_SEC", env.E2B_SNAPSHOT_INTERVAL_SEC) }
@@ -513,7 +527,7 @@ function managedAgentsSandboxEnv(env: NodeJS.ProcessEnv): ManagedAgentsSandboxEn
     ...(numEnvStrict("DO_AGENTS_IDLE_TIMEOUT_SEC", env.DO_AGENTS_IDLE_TIMEOUT_SEC) !== undefined
       ? { idleTimeoutSec: numEnvStrict("DO_AGENTS_IDLE_TIMEOUT_SEC", env.DO_AGENTS_IDLE_TIMEOUT_SEC) }
       : {}),
-    ...(env.DO_AGENTS_EGRESS_PROXY_URL ? { egressProxyUrl: env.DO_AGENTS_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "do-managed-agents"),
     ...(env.DO_AGENTS_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.DO_AGENTS_SNAPSHOT_S3_BUCKET } : {}),
     ...(numEnvStrict("DO_AGENTS_SNAPSHOT_INTERVAL_SEC", env.DO_AGENTS_SNAPSHOT_INTERVAL_SEC) !== undefined
       ? { snapshotIntervalSec: numEnvStrict("DO_AGENTS_SNAPSHOT_INTERVAL_SEC", env.DO_AGENTS_SNAPSHOT_INTERVAL_SEC) }
@@ -571,7 +585,7 @@ function modalSandboxEnv(env: NodeJS.ProcessEnv): ModalSandboxEnv {
     ...(num("MODAL_SANDBOX_TIMEOUT_SEC") !== undefined ? { sandboxTimeoutSec: num("MODAL_SANDBOX_TIMEOUT_SEC") } : {}),
     ...(num("MODAL_ROTATE_AFTER_SEC") !== undefined ? { rotateAfterSec: num("MODAL_ROTATE_AFTER_SEC") } : {}),
     ...(num("MODAL_REAP_IDLE_SEC") !== undefined ? { reapIdleSec: num("MODAL_REAP_IDLE_SEC") } : {}),
-    ...(env.MODAL_EGRESS_PROXY_URL ? { egressProxyUrl: env.MODAL_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "modal"),
     ...(env.MODAL_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.MODAL_SNAPSHOT_S3_BUCKET } : {}),
     ...(num("SANDBOX_TIMEOUT_SEC") !== undefined ? { defaultTimeoutSec: num("SANDBOX_TIMEOUT_SEC") } : {}),
   };
@@ -610,7 +624,7 @@ function smolmachinesSandboxEnv(env: NodeJS.ProcessEnv): SmolmachinesSandboxEnv 
     ...(numEnvStrict("SMOLMACHINES_AUTOSTOP_SEC", env.SMOLMACHINES_AUTOSTOP_SEC) !== undefined
       ? { autoStopSec: numEnvStrict("SMOLMACHINES_AUTOSTOP_SEC", env.SMOLMACHINES_AUTOSTOP_SEC) }
       : {}),
-    ...(env.SMOLMACHINES_EGRESS_PROXY_URL ? { egressProxyUrl: env.SMOLMACHINES_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "smolmachines"),
     ...(env.SMOLMACHINES_SNAPSHOT_S3_BUCKET ? { snapshotS3Bucket: env.SMOLMACHINES_SNAPSHOT_S3_BUCKET } : {}),
     ...(numEnvStrict("SMOLMACHINES_SNAPSHOT_INTERVAL_SEC", env.SMOLMACHINES_SNAPSHOT_INTERVAL_SEC) !== undefined
       ? {
@@ -702,7 +716,7 @@ function porterSandboxEnv(env: NodeJS.ProcessEnv): PorterSandboxEnv {
     ...(env.PORTER_SANDBOX_NAME_PREFIX ? { namePrefix: env.PORTER_SANDBOX_NAME_PREFIX } : {}),
     ...(env.PORTER_SANDBOX_HOME ? { homeDir: env.PORTER_SANDBOX_HOME } : {}),
     ...(ttlSec !== undefined ? { ttlSec } : {}),
-    ...(env.PORTER_SANDBOX_EGRESS_PROXY_URL ? { egressProxyUrl: env.PORTER_SANDBOX_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "porter"),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
@@ -736,7 +750,7 @@ function agent37SandboxEnv(env: NodeJS.ProcessEnv): Agent37SandboxEnv {
     ...(numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) !== undefined
       ? { diskGb: numEnvStrict("AGENT37_DISK_GB", env.AGENT37_DISK_GB) }
       : {}),
-    ...(env.AGENT37_EGRESS_PROXY_URL ? { egressProxyUrl: env.AGENT37_EGRESS_PROXY_URL } : {}),
+    ...egressProxyFor(env, "agent37"),
     ...(numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) !== undefined
       ? { defaultTimeoutSec: numEnvStrict("SANDBOX_TIMEOUT_SEC", env.SANDBOX_TIMEOUT_SEC) }
       : {}),
@@ -756,14 +770,6 @@ interface SuperserveSandboxEnv {
   defaultTimeoutSec?: number;
   configGeneration?: number;
 }
-
-const csvList = (value: string | undefined): string[] | undefined => {
-  const items = (value ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-};
 
 function superserveSandboxEnv(env: NodeJS.ProcessEnv): SuperserveSandboxEnv {
   const egressAllow = csvList(env.SUPERSERVE_EGRESS_ALLOW);
@@ -1323,19 +1329,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "[config] smolmachines sandbox backend enabled without SMOLMACHINES_SNAPSHOT_S3_BUCKET — stopping a machine is not a backup; set SMOLMACHINES_SNAPSHOT_S3_BUCKET for durable home recovery snapshots.",
     );
   }
-  if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=sprites without SPRITES_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set SPRITES_EGRESS_PROXY_URL to the public egress proxy to force sandbox traffic through it.",
+  const retiredEgressKeys = ["SPRITES", "E2B", "DO_AGENTS", "MODAL", "SMOLMACHINES", "PORTER_SANDBOX", "AGENT37"]
+    .map((prefix) => `${prefix}_EGRESS_PROXY_URL`)
+    .filter((key) => env[key]);
+  if (retiredEgressKeys.length) {
+    throw new Error(
+      `${retiredEgressKeys.join(", ")} is no longer read, so sandboxes would run without the egress proxy. Set EGRESS_PROXY_URL instead (it applies to every provider; list any to leave out in EGRESS_PROXY_EXEMPT_BACKENDS).`,
     );
   }
-  if (env.SANDBOX_BACKEND === "e2b" && !env.E2B_EGRESS_PROXY_URL) {
+  if (
+    ["sprites", "e2b", "do-managed-agents", "modal", "smolmachines", "porter"].includes(env.SANDBOX_BACKEND ?? "") &&
+    !egressProxyFor(env, env.SANDBOX_BACKEND ?? "").egressProxyUrl
+  ) {
     console.warn(
-      "[config] SANDBOX_BACKEND=e2b without E2B_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set E2B_EGRESS_PROXY_URL to the public egress proxy so E2B's network rules admit only that host.",
-    );
-  }
-  if (env.SANDBOX_BACKEND === "do-managed-agents" && !env.DO_AGENTS_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=do-managed-agents without DO_AGENTS_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set DO_AGENTS_EGRESS_PROXY_URL to the public egress proxy so the session's egress allowlist admits only that host.",
+      `[config] SANDBOX_BACKEND=${env.SANDBOX_BACKEND} has no egress proxy — sandboxes run with NO egress enforcement (fail-open); set EGRESS_PROXY_URL to the public egress proxy and keep ${env.SANDBOX_BACKEND} out of EGRESS_PROXY_EXEMPT_BACKENDS to force sandbox traffic through it.`,
     );
   }
   if (env.DO_AGENTS_API_TOKEN && !env.DO_AGENTS_SNAPSHOT_S3_BUCKET) {
@@ -1343,28 +1350,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "[config] do-managed-agents sandbox backend enabled without DO_AGENTS_SNAPSHOT_S3_BUCKET — pause preserves the microVM, but a destroyed session takes the home with it; set DO_AGENTS_SNAPSHOT_S3_BUCKET so a replacement session can hydrate from a portable snapshot.",
     );
   }
-  if (env.MODAL_TOKEN_ID && env.MODAL_TOKEN_SECRET && !env.MODAL_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] modal sandbox backend enabled without MODAL_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set MODAL_EGRESS_PROXY_URL to the public https egress proxy so Modal's outbound allowlist admits only that host.",
-    );
-  }
   if (env.SANDBOX_BACKEND === "sprites" && !env.SPRITES_SNAPSHOT_S3_BUCKET) {
     console.warn(
       "[config] SANDBOX_BACKEND=sprites without SPRITES_SNAPSHOT_S3_BUCKET — retiring a computer deletes its sprite and every checkpoint irreversibly with no exported home; set SPRITES_SNAPSHOT_S3_BUCKET to export the home to S3 before a sprite is destroyed and to rehydrate a replacement.",
     );
   }
-  if (env.SANDBOX_BACKEND === "smolmachines" && !env.SMOLMACHINES_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=smolmachines without SMOLMACHINES_EGRESS_PROXY_URL — machines are created with open outbound networking and NO egress enforcement (fail-open); set SMOLMACHINES_EGRESS_PROXY_URL to allow-list only the egress proxy.",
-    );
-  }
   const dataDir = resolve(env.DATA_DIR ?? "./data");
   const porterSandboxSelected = env.SANDBOX_BACKEND === "porter";
-  if (porterSandboxSelected && !env.PORTER_SANDBOX_EGRESS_PROXY_URL) {
-    console.warn(
-      "[config] SANDBOX_BACKEND=porter without PORTER_SANDBOX_EGRESS_PROXY_URL — sandboxes run with NO egress enforcement (fail-open); set PORTER_SANDBOX_EGRESS_PROXY_URL to the egress proxy to force sandbox traffic through it.",
-    );
-  }
   if (env.DEPLOY_PROVIDER === "porter" && !env.PORTER_DEPLOY_APPS_DOMAIN && !env.DEPLOY_APPS_DOMAIN) {
     console.warn(
       "[config] DEPLOY_PROVIDER=porter without an apps domain — published apps are reachable signed-in at /d/<app>/ only; set DEPLOY_APPS_DOMAIN to a domain you control to serve each app on its own subdomain.",

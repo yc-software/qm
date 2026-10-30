@@ -124,7 +124,7 @@ export function modalEgressAllowlist(
   if (ipVersion) return { outboundCidrAllowlist: [`${host}/${ipVersion === 4 ? 32 : 128}`] };
   if (url.protocol === "https:" && (url.port === "" || url.port === "443")) return { outboundDomainAllowlist: [host] };
   throw new Error(
-    "MODAL_EGRESS_PROXY_URL must be an https URL on port 443 or an IP address: Modal domain allowlists pass only TLS traffic on port 443",
+    "EGRESS_PROXY_URL must be an https URL on port 443 or an IP address: Modal domain allowlists pass only TLS traffic on port 443",
   );
 }
 
