@@ -199,7 +199,6 @@ export interface ModelUtilities {
   summarizeApproval?(command: string, reason: string, purpose?: string): Promise<string | undefined>;
 }
 
-/** Runs agent turns and the small model calls around them (titles, screening, judging). */
 export interface Agent extends ModelUtilities {
   runTurn(input: AgentTurnInput): Promise<AgentTurnResult>;
   close?(): Promise<void> | void;

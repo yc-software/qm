@@ -4,9 +4,8 @@
  * An org admin can register additional model providers that speak a wire
  * protocol we already run — OpenAI Chat Completions, OpenAI Responses,
  * or Anthropic Messages — by giving a base URL, an API key, and the model
- * ids to expose. Registered models resolve like built-ins (the pi
- * agent reaches them through the same request path), surface in the
- * catalog, and are gated to agents that route through pi-ai.
+ * ids to expose. Registered models resolve like built-ins (the agent
+ * reaches them through the same request path) and surface in the catalog.
  *
  * Secrets never live here: this module holds the runtime registry
  * (everything except the key). Keys stay in the encrypted store and are

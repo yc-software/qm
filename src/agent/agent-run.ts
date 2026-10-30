@@ -392,11 +392,14 @@ async function directAnthropicJson(
   const gateway = modelGatewayRequest(modelGateway, model);
   const requestModel = gateway?.model ?? model;
   const requestKey = gateway?.apiKey ?? apiKey;
+  const subscription = requestKey.includes("sk-ant-oat");
   const res = await fetch(`${requestModel.baseUrl}/v1/messages`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-api-key": requestKey,
+      ...(subscription
+        ? { authorization: `Bearer ${requestKey}`, "anthropic-beta": CLAUDE_SUBSCRIPTION_BETAS.join(",") }
+        : { "x-api-key": requestKey }),
       "anthropic-version": "2023-06-01",
       ...gateway?.headers,
     },
@@ -405,7 +408,12 @@ async function directAnthropicJson(
       max_tokens: 64,
       // Haiku 5.5 thinks by default; a 64-token budget would go entirely to thinking.
       thinking: { type: "disabled" },
-      system: systemPrompt,
+      system: subscription
+        ? [
+            { type: "text", text: CLAUDE_CODE_IDENTITY },
+            { type: "text", text: systemPrompt },
+          ]
+        : systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
     }),
     signal: AbortSignal.timeout(2_000),
@@ -1413,6 +1421,7 @@ export function resolveConfiguredModelId(configured: string | undefined, default
 }
 
 const CLAUDE_SUBSCRIPTION_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
+const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 function withSubscriptionBetas(model: Model<Api>, apiKey: string | undefined): Model<Api> {
   const prior = model.headers?.["anthropic-beta"];

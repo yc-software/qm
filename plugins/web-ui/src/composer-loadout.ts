@@ -53,7 +53,6 @@ export function parseLoadout(raw: string | null): LoadoutEntry[] {
         !EFFORT_LEVELS.some(({ value }) => value === entry.effort)
       )
         continue;
-      // Loadouts saved while a harness picker existed carry a "pi:" or "claude:" prefix.
       const value = entry.value.replace(/^(?:pi|claude):/, "");
       entries.push({ value, effort: entry.effort, fast: entry.fast === true });
     }

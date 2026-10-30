@@ -1840,7 +1840,7 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
 test("a failing cron posts one notice to its destination, then stays quiet until a fire succeeds", async () => {
   let result: TurnResult = {
     status: "refused",
-    reason: "pi/claude-sonnet-5 can't run here (runtime is no longer available).",
+    reason: "claude-sonnet-5 can't run here (runtime is no longer available).",
   };
   let clock = 1_000_000;
   const { crons, deliveries, scheduler } = agent(
@@ -1862,7 +1862,7 @@ test("a failing cron posts one notice to its destination, then stays quiet until
 
   await runNowSettled(scheduler, cron.id);
   assert.deepEqual(await texts(), [
-    "⚠️ Scheduled task “Daily standup” did not run: pi/claude-sonnet-5 can't run here (runtime is no longer available). Later failures go only to its run log until it runs successfully again.",
+    "⚠️ Scheduled task “Daily standup” did not run: claude-sonnet-5 can't run here (runtime is no longer available). Later failures go only to its run log until it runs successfully again.",
   ]);
 
   await runNowSettled(scheduler, cron.id);
@@ -1885,9 +1885,7 @@ test("a cron whose model can't run fires on the default model and is told why", 
   const unavailable = new Set(["claude-sonnet-5"]);
   const { crons, calls, scheduler } = agent("standup posted", undefined, undefined, undefined, {
     runtimeError: async (_scope, runtime) =>
-      unavailable.has(runtime.modelId)
-        ? `pi/${runtime.modelId} can't run here (runtime is no longer available).`
-        : null,
+      unavailable.has(runtime.modelId) ? `${runtime.modelId} can't run here (runtime is no longer available).` : null,
   });
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
@@ -1903,7 +1901,7 @@ test("a cron whose model can't run fires on the default model and is told why", 
   assert.equal(calls[0]?.model, undefined, "the unusable model is dropped so the cron default applies");
   assert.match(
     calls[0]?.text ?? "",
-    /runs on the default model because the cron's own model can't run: pi\/claude-sonnet-5 can't run here/,
+    /runs on the default model because the cron's own model can't run: claude-sonnet-5 can't run here/,
   );
   assert.equal((await crons.get(cron.id))?.runtime?.modelId, "claude-sonnet-5", "the stored model is kept");
 

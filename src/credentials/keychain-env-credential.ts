@@ -1,15 +1,6 @@
 import type { Keychain } from "./keychain.ts";
 import { errMessage } from "../util/errors.ts";
 
-/**
- * Resolve a keychain env credential (e.g. a CLAUDE_CODE_OAUTH_TOKEN saved by
- * `claude setup-token`) into the env vars a agent child should receive.
- * The credential's metadata is checked on every call and its secret is
- * re-read only when that metadata changes, so a rotated or revoked
- * credential takes effect on the next call with no restart. Returns {} when the credential
- * is missing, expired, or not env-shaped, so the agent falls back to
- * whatever static configuration it has.
- */
 export function keychainEnvCredential(
   keychain: Keychain,
   credentialId: string,

@@ -177,3 +177,25 @@ test("prior-turn bootstrap reaches the model before the first prompt", async () 
   assert.match(bodies[0]!, /release result/);
   assert.match(bodies[0]!, /tell me more/);
 });
+
+test("ack emoji on a Claude subscription token signs the call as a subscription request", async () => {
+  const agent = createAgent({
+    defaultModelId: "claude-sonnet-5",
+    resolveProviderKeys: async () => ({ anthropic: "sk-ant-oat01-ack" }),
+  });
+  const realFetch = globalThis.fetch;
+  const seen: Array<{ headers: Headers; system: unknown }> = [];
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    seen.push({ headers: new Headers(init?.headers), system: JSON.parse(String(init?.body ?? "{}")).system });
+    return new Response(JSON.stringify({ content: [{ type: "text", text: '{"emoji":"eyes"}' }] }), { status: 200 });
+  }) as typeof globalThis.fetch;
+  try {
+    assert.equal(await agent.pickAckEmoji?.("ship it", ["eyes"]), "eyes");
+    assert.equal(seen[0]!.headers.get("authorization"), "Bearer sk-ant-oat01-ack");
+    assert.equal(seen[0]!.headers.get("x-api-key"), null);
+    assert.match(seen[0]!.headers.get("anthropic-beta") ?? "", /oauth-2025-04-20/);
+    assert.match(JSON.stringify(seen[0]!.system), /You are Claude Code/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
