@@ -1,5 +1,5 @@
 import type { Config } from "../../src/config.ts";
-import type { Agent, CompactInput, DetectInput, ScreenSecurityInput } from "../../src/agent/agent.ts";
+import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
 import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
 
@@ -17,12 +17,10 @@ function recordingModelCalls(agent: Agent, calls: ModelCall[]): Agent {
       input.recordModelCall(rec);
     },
   });
-  const { shouldRespond, compactHistory, screenSecurity } = agent;
+  const { screenSecurity } = agent;
   return {
     ...agent,
     runTurn: (input) => agent.runTurn(tap(input)),
-    ...(shouldRespond ? { shouldRespond: (input: DetectInput) => shouldRespond(tap(input)) } : {}),
-    ...(compactHistory ? { compactHistory: (input: CompactInput) => compactHistory(tap(input)) } : {}),
     ...(screenSecurity ? { screenSecurity: (input: ScreenSecurityInput) => screenSecurity(tap(input)) } : {}),
   };
 }

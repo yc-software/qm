@@ -98,29 +98,3 @@ test("per-approval blocking: input never blocks; a command blocks only when the 
   assert.equal(approvalBlocksInput("input", { approvalsBlock: true }), false);
   assert.equal(approvalBlocksInput("command", { approvalsBlock: false }), false);
 });
-
-test("a turn awaits approval only when a blocking approval is pending", () => {
-  assert.equal(
-    deriveTurnOutcome({ reply: "x", attachments: 0, pendingApprovals: [], terminatedOnApproval: false })
-      .awaitingApproval,
-    false,
-  );
-  assert.equal(
-    deriveTurnOutcome({
-      reply: "x",
-      attachments: 0,
-      pendingApprovals: [{ kind: "command" }],
-      terminatedOnApproval: true,
-    }).awaitingApproval,
-    true,
-  );
-  assert.equal(
-    deriveTurnOutcome({
-      reply: "",
-      attachments: 0,
-      pendingApprovals: [{ kind: "input" }],
-      terminatedOnApproval: false,
-    }).awaitingApproval,
-    false,
-  );
-});

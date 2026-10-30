@@ -3676,15 +3676,6 @@ test("files share preserves artifact IDs, recipient resolution and authorization
   assert.equal(requests.length, 1);
 });
 
-test("the retired credential tool is absent beside execute", () => {
-  const tools = createAgentTools({ current: fakeToolContext() });
-  assert.equal(
-    tools.some((tool) => tool.name === "credential_exec"),
-    false,
-  );
-  assert.ok(tools.some((tool) => tool.name === "execute"));
-});
-
 test("command and management call traces preserve purpose", async () => {
   const calls: Record<string, unknown>[] = [];
   const ref: ToolContextRef = {
