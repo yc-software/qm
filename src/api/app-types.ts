@@ -714,7 +714,7 @@ export interface AppDeps {
   monitors?: MonitorStore;
   sandbox?: Sandbox;
   reaperPoke?: () => void;
-  engaged?: EngagedRegistry;
+  engaged?: Pick<EngagedRegistry, "engage">;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;

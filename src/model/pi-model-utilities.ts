@@ -1,3 +1,5 @@
+import { baseModelProviders, configuredModelForHarness, type Config } from "../config.ts";
+import { defaultModelForHarness } from "./pi-models.ts";
 import type { HarnessModelUtilities } from "../agent/harness.ts";
 import { type Api, type Model } from "@earendil-works/pi-ai";
 
@@ -320,5 +322,21 @@ export function createPiModelUtilities(
       if (!out || out === "NONE") return undefined;
       return out.replace(/^["']|["']$/g, "").slice(0, 300);
     },
+  };
+}
+
+export function piModelConfigOptions(config: Config): PiModelOptions {
+  const defaultModelId =
+    configuredModelForHarness(config, "pi") ??
+    (config.modelProvider ? defaultModelForHarness("pi", undefined, baseModelProviders(config)) : undefined);
+  return {
+    ...(defaultModelId ? { defaultModelId } : {}),
+    ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
+    ...(config.titleModelId ? { titleModelId: config.titleModelId } : {}),
+    ...(config.judgeModelId ? { judgeModelId: config.judgeModelId } : {}),
+    ...(config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {}),
+    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
+    ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
+    ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
   };
 }

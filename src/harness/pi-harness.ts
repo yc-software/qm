@@ -116,7 +116,7 @@ import {
   createIsolatedResources,
   removeIsolatedDirs,
 } from "../model/pi-runtime.ts";
-import { createPiModelResolvers, createPiModelUtilities } from "../model/pi-model-utilities.ts";
+import { createPiModelResolvers, createPiModelUtilities, piModelConfigOptions } from "../model/pi-model-utilities.ts";
 
 export interface PiHarnessOptions {
   modelId?: string | ((scope?: ScopeId) => string | undefined);
@@ -146,18 +146,8 @@ export interface PiHarnessOptions {
 }
 
 export function piHarnessConfigOptions(config: Config): PiHarnessOptions {
-  const defaultModelId =
-    configuredModelForHarness(config, "pi") ??
-    (config.modelProvider ? defaultModelForHarness("pi", undefined, baseModelProviders(config)) : undefined);
   return {
-    ...(defaultModelId ? { defaultModelId } : {}),
-    ...(config.detectModelId ? { detectModelId: config.detectModelId } : {}),
-    ...(config.titleModelId ? { titleModelId: config.titleModelId } : {}),
-    ...(config.judgeModelId ? { judgeModelId: config.judgeModelId } : {}),
-    ...(config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {}),
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
-    ...(config.openrouterApiKey ? { openrouterApiKey: config.openrouterApiKey } : {}),
-    ...(config.modelGateway ? { modelGateway: config.modelGateway } : {}),
+    ...piModelConfigOptions(config),
     captureRequests: config.piCaptureRequests,
     ...coreToolOptions(config),
     turnWallClockMs: config.turnWallClockMs,

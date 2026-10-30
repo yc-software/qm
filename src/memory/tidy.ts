@@ -1,7 +1,7 @@
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
-import type { Scheduler } from "../cron/scheduler.ts";
+import type { CronChangeNotifier } from "../cron/fires.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { reportFailure } from "../util/errors.ts";
 import { parseScopeId, scopeActor, type Cron, type ScopeId } from "../types.ts";
@@ -22,7 +22,7 @@ export function createMemoryTidyService(deps: {
   memory: Pick<MemoryService, "facts">;
   timezone: (principalId: string) => Promise<string | undefined>;
   crons: CronStore;
-  scheduler: Pick<Scheduler, "notifyChanged">;
+  scheduler: CronChangeNotifier;
 }) {
   return {
     async ensure(scope: ScopeId): Promise<void> {

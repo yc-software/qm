@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { Cron } from "../types.ts";
 import type { CreateCronInput, CronStore } from "./cron-store.ts";
-import type { Scheduler } from "./scheduler.ts";
+import type { CronChangeNotifier } from "./fires.ts";
 
 export const nightlyAt = (key: string, hour: number) =>
   `${createHash("sha256").update(key).digest()[0]! % 60} ${hour} * * *`;
@@ -12,7 +12,7 @@ export interface ManagedCronClaim {
   arming?: boolean;
 }
 
-type ManagedCronDeps<T> = { store: DurableMap<T>; crons: CronStore; scheduler: Pick<Scheduler, "notifyChanged"> };
+type ManagedCronDeps<T> = { store: DurableMap<T>; crons: CronStore; scheduler: CronChangeNotifier };
 
 export async function claimManagedCron<T extends ManagedCronClaim>(
   deps: ManagedCronDeps<T>,

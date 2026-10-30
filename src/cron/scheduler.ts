@@ -22,7 +22,14 @@ import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { recoverNextFireAt } from "./schedule.ts";
 import type { CronFireJob, CronJobQueue } from "./job-queue.ts";
-import { hashId } from "../util/crypto.ts";
+import {
+  cronFireReadsNotes,
+  cronFireThreadRef,
+  echoesCronContextMarkers,
+  flattenFireNote,
+  isOneShotSchedule,
+  type CronRunRequest,
+} from "./fires.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
@@ -38,26 +45,7 @@ const REPAIR_INTERVAL_MS = 60_000;
 
 type FireResult = { authzFailed: boolean; deferred?: boolean };
 
-type RunNowResult =
-  | { started: true; fireKey: string; settled: Promise<void> }
-  | { started: false; reason: "unavailable" }
-  | { started: false; reason: "already_running"; running: CronFireLogEntry };
-
-export function describeRunNowRefusal(
-  id: string,
-  result: RunNowResult,
-  now = Date.now(),
-): { error: "already_running" | "bad_request"; message: string } | null {
-  if (result.started) return null;
-  if (result.reason === "already_running") {
-    const ageMin = Math.round((now - result.running.firedAt) / 60_000);
-    return {
-      error: "already_running",
-      message: `cron ${id} is already firing (fire ${result.running.fireKey}, started ${ageMin}m ago) — wait for it to finish instead of firing again`,
-    };
-  }
-  return { error: "bad_request", message: `cron ${id} can't be fired on demand right now` };
-}
+type RunNowResult = CronRunRequest | { started: true; fireKey: string; settled: Promise<void> };
 
 export interface Scheduler {
   tick(now?: number): Promise<void>;
@@ -105,31 +93,11 @@ function truncate(s: string, maxChars: number): string {
   return s.length <= maxChars ? s : `${s.slice(0, maxChars - 3)}...`;
 }
 
-const CRON_CONTEXT_MARKERS = ["[Cron runtime context]", "[End cron runtime context]"] as const;
-
-export function echoesCronContextMarkers(s: string): boolean {
-  return CRON_CONTEXT_MARKERS.some((marker) => s.includes(marker));
-}
-
 function cronFireLogReply(s: string): string {
   if (echoesCronContextMarkers(s)) {
     return "[reply echoed cron runtime context; omitted]";
   }
   return truncate(s, CRON_FIRE_REPLY_MAX_CHARS);
-}
-
-function isOneShotSchedule(schedule: Cron["schedule"]): boolean {
-  return schedule.everyMs == null && schedule.cron == null;
-}
-
-export function cronFireReadsNotes(cron: Pick<Cron, "schedule" | "action" | "loopId">): boolean {
-  const task = cron.action ?? "";
-  if (cron.loopId || !task.trim() || /^!(run|scratch)\s/.test(task.trimStart())) return false;
-  return !isOneShotSchedule(cron.schedule);
-}
-
-export function flattenFireNote(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
 }
 
 function fireNoteLine(note: CronFireNote | undefined): string[] {
@@ -141,10 +109,6 @@ function fireNoteLine(note: CronFireNote | undefined): string[] {
       ? `Note left for this fire by ${note.by} (${utcMinute(note.at)}): ${text}`
       : `Notes from last fire agent (${utcMinute(note.at)}): ${text}`,
   ];
-}
-
-function cronFireThreadRef(cronId: string, fireKey: string): string {
-  return `cron:${cronId}:fire:${hashId([fireKey], 12)}`;
 }
 
 const CRON_MENTION_ROSTER_MAX = 40;
@@ -466,6 +430,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   async function fireJob(job: CronFireJob): Promise<void> {
+    if (job.fireKey) return fireRequested(job.cronId, job.scheduledAt, job.fireKey);
     const observed = epoch;
     const cron = await deps.crons.get(job.cronId);
     if (!cron || cron.archived || !cron.enabled) return;
@@ -503,6 +468,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await enqueueNext(job.cronId);
     });
     if (result === null) await enqueueNext(job.cronId);
+  }
+
+  async function fireRequested(cronId: string, firedAt: number, fireKey: string): Promise<void> {
+    const cron = await deps.crons.get(cronId);
+    if (!cron) return;
+    await withWork(() => withCronLifecycle(cron.id, false, () => fire(cron, firedAt, fireKey))).catch(
+      reportFailureAs("scheduler: requested fire", undefined, `cron=${cronId}`),
+    );
   }
 
   async function reconcile(): Promise<void> {

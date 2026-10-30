@@ -402,6 +402,12 @@ import { createPostgresErrorLog } from "./admin/postgres-error-log.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
 import { sleep, withTimeout } from "./util/async.ts";
 import { createSlackInstallationStore, type SlackInstallationStore } from "./surfaces/slack-installation.ts";
+import { createPiModelUtilities, piModelConfigOptions } from "./model/pi-model-utilities.ts";
+import type { HarnessModelUtilities } from "./agent/harness.ts";
+import { createCronRunRequests } from "./cron/fires.ts";
+import { createHarnessNudges } from "./runs/harness-nudges.ts";
+import { createSteerScreen } from "./security/steer-screen.ts";
+import { createSessionTitles, createTitleRegenerator } from "./core/session-title.ts";
 
 export interface Runtime {
   start(): void;
@@ -446,114 +452,18 @@ export function stopWithBackstop(
   );
 }
 
-export interface BuiltApp {
-  checkReadiness: (signal: AbortSignal) => Promise<void>;
-  backgroundOwnership?: BackgroundOwnershipControl;
-  suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
-  app: App;
-  screenSecurity?: SecurityScreenProbe;
-  deploymentLayer: DeploymentLayerRuntime;
-  brokeredTools: readonly BrokeredLayerTool[];
-  deploymentLayerStore: DeploymentLayerStore;
-  deploymentLayerReady: Promise<unknown>;
-  deploymentLayerRefresh: Sweeper;
-  sessions: SessionStore;
-  runs: RunStore;
-  signals: RunSignalStore;
-  sessionStateBus: SessionStateBus;
-  sessionSyscalls: SessionSyscallsFactory;
-  ledgerEventBus: LedgerEventBus;
-  surfaceCache: SurfaceCache;
-  runtime: Runtime;
-  config: ScopedConfigStore;
-  connectorTokens: ConnectorTokenStore;
-  slackInstallation: SlackInstallationStore;
-  resolveClient: OAuthClientResolver;
-  consentLinks: ConsentLinkStore;
-  oauthFlows: OAuthFlowStore;
-  secretDrops: SecretDropStore;
-  modelGatewayTransport?: ModelGatewayTransportConfig;
-  resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
-  modelGateway: ModelGateway;
-  modelCredentials: ModelCredentialStore;
-  userModelCredentials: UserModelCredentialStore;
-  modelRegistry: ModelOverlayStore;
-  modelVerifier: ModelVerifier;
-  refreshModels: () => Promise<void>;
-  customProviders: CustomProviderStore;
-  refreshCustomProviders: () => Promise<void>;
-  mcpServers: McpServerStore;
-  mcpToolService: McpToolService;
-  acl: AclStore;
-  skills: SkillStore;
-  skillBundles: SkillBundleStore;
-  skillFetcher: SkillPackFetcher;
-  auditLog: AuditLog;
-  scheduler: Scheduler;
-  loops: LoopServiceDeps;
-  webhookReceiver: WebhookReceiver;
-  loopIngress: LoopIngressService;
-  admin: AdminService;
-  rateLimiter: RateLimiter;
-  budget: BudgetTracker | undefined;
-  errors: ErrorLog;
-  crons: CronStore;
-  credentialUsage: CredentialUsageSink;
-  egressAudit: EgressAuditSink;
-  identity: IdentityService;
-  principalLinks: PrincipalLinkService;
-  slackAccounts: DurableMap<SlackAccountLink>;
-  composioReturns: DurableMap<ComposioReturn>;
-  keychain?: Keychain;
-  serviceCreds: ServiceCredentialStore;
-  deliveries: DeliveryStore;
-  keychainApprovals?: KeychainApprovals;
-  fireAskResolution?: (ask: KeychainAsk, grant?: KeychainGrant) => Promise<unknown>;
-  fireDropResolution?: (drop: DropResolution) => Promise<unknown>;
-  workspace: WorkspaceStore;
-  memory: MemoryService;
-  sandbox: Sandbox;
-  advisoryLock: AdvisoryLock;
-  sandboxResources: SandboxResources;
-  blobTransfer: BlobTransferStore;
-  files: FileArtifactStore;
-  fileUploads?: DirectFileUploads;
-  featureFlags: FeatureFlagStore;
-  teams?: TeamStore;
-  decisions?: DecisionStore;
-  replayDedupe: ReplayDedupe;
-  brokerSessions?: BrokerSessionStore;
-  directory: DirectoryStore;
-  projects: ProjectStore;
-  environments: EnvironmentStore;
-  processes?: ProcessRegistry;
-  appPageViews?: AppPageViewLog;
-  monitors: MonitorStore;
-  browserSessionStore?: BrowserSessionStore;
-  monitorPoller?: MonitorPoller;
-  ambientJudgments?: AmbientJudgmentStore;
-  ackEmojiPicks?: AckEmojiPickStore;
-  channelPolicy: ChannelPolicyStore;
-  uiState: UiStateStore;
-  sessionShares: SessionShareStore;
-  sessionShareBytes: DurableByteStore;
-  skillSyncEngine: SkillSyncEngine;
-  slackCore: SlackCoreClient;
-}
 
 const MEMORY_CAPTURE_ENTRY_WINDOW = 2_000;
 
-export function buildApp(
-  config: Config,
-  overrides: {
-    securityScreener?: SecurityScreener;
-    decisionBackend?: DecisionBackend;
-    credentialBrokers?: Record<string, AwsRoleBroker>;
-    modelCredentialFetch?: typeof fetch;
-    modelVerificationProbe?: typeof probeModel;
-    harnesses?: Partial<Record<HarnessId, Harness>>;
-  } = {},
-): BuiltApp {
+export interface CoreOverrides {
+  securityScreener?: SecurityScreener;
+  credentialBrokers?: Record<string, AwsRoleBroker>;
+  modelCredentialFetch?: typeof fetch;
+  modelVerificationProbe?: typeof probeModel;
+  models?: Partial<HarnessModelUtilities>;
+}
+
+export function buildCore(config: Config, overrides: CoreOverrides = {}) {
   let backgroundAdmission = () => !config.backgroundDeploymentId;
   let backgroundActive = () => false;
   const admittedWork = createAdmittedWork({
@@ -1420,37 +1330,6 @@ export function buildApp(
           ? { ...directProviderAvailability, modelIds: new Set(Object.keys(gatewayTransport.models)) }
           : undefined),
     );
-  const adapters = new Map<HarnessId, Harness>([
-    [
-      "pi",
-      overrides.harnesses?.pi ??
-        createPiHarness({
-          ...piHarnessConfigOptions(config),
-          modelGateway: gatewayTransport,
-          resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
-          resolveFallbackRuntime: () => configStore.getPurposeRuntime("fallback"),
-          resolveProviderKeys: resolvePiProviderKeys,
-          ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
-          signals: runSignals,
-        }),
-    ],
-    [
-      "claude",
-      overrides.harnesses?.claude ??
-        createClaudeHarness({
-          ...claudeHarnessConfigOptions(config),
-          ...(config.claudeAuthCredential && keychain
-            ? {
-                authEnv: keychainHarnessAuthEnv(keychain, config.claudeAuthCredential, [
-                  "CLAUDE_CODE_OAUTH_TOKEN",
-                  "ANTHROPIC_AUTH_TOKEN",
-                ]),
-              }
-            : {}),
-          signals: runSignals,
-        }),
-    ],
-  ]);
   const fallbackHarness = config.harness as HarnessId;
   const fallback = {
     harnessId: fallbackHarness,
@@ -1458,71 +1337,24 @@ export function buildApp(
       return defaultForHarness(fallbackHarness);
     },
   };
-  const decide = createDecisionHooks(
-    decisions,
-    overrides.decisionBackend ??
-      createDecisionBackend({
-        providers: async (ids) => (await decisions?.providers(ids)) ?? [],
-        ...(config.modelGateway?.apiKey
-          ? {
-              gateway: {
-                url: config.modelGateway.url,
-                apiKey: config.modelGateway.apiKey,
-                ...(config.modelGateway.apiKeyHeader ? { apiKeyHeader: config.modelGateway.apiKeyHeader } : {}),
-              },
-            }
-          : {}),
-        credential: async (slug) => {
-          const rec = keychain
-            ? nonDeploymentCredential(await serviceCreds.getServiceCredentialSecret(scopeId("org", config.orgId), slug))
-            : null;
-          return rec ? { host: rec.host, enabled: rec.enabled, headers: credentialRequestHeaders(rec) } : null;
-        },
-      }),
-    auditLog,
-  );
   const judgeModelId = (): string => config.judgeModelId ?? auxiliaryModelFor(orgBaseModelId() ?? fallback.modelId);
+  const modelUtilities: Partial<HarnessModelUtilities> = overrides.models ?? {
+    ...createPiModelUtilities({
+      ...piModelConfigOptions(config),
+      modelGateway: gatewayTransport,
+      resolveBaseModelId: () => orgBaseModelId() ?? defaultForHarness("pi"),
+      resolveProviderKeys: resolvePiProviderKeys,
+      ...(directProviderAvailability.codexOAuth ? { companyModelId } : {}),
+    }),
+  };
+  if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
+    delete modelUtilities.screenSecurity;
+  }
   const hydrateModelCatalog = async (): Promise<unknown> => {
     await refreshModels();
     if (!(await modelCredentials.availability()).openrouter) return undefined;
     return selectableModelCatalog(overrides.modelCredentialFetch);
   };
-  const harness = createHarnessRouter(adapters, adapters.get(fallbackHarness)!, async (input, routedBy) => {
-    const resolve = (requested: typeof input.runtime) =>
-      resolveRuntimeChoiceDurable(
-        configStore,
-        runtimeOrgScope,
-        input.scopeLabel,
-        fallback,
-        requested,
-        hydrateModelCatalog,
-        input.runtimePurpose,
-      );
-    const decision = await tracePhase("turn.decision", () =>
-      decide("turn_start", turnStartState(input), {
-        ...(input.runtimeActorId ? { actorId: input.runtimeActorId } : {}),
-        scopeLabel: input.scopeLabel,
-        sessionId: input.session.id,
-        ...(input.runId ? { runId: input.runId } : {}),
-        ...(input.cancel ? { cancel: input.cancel } : {}),
-      }),
-    );
-    const routed = await routeTurnRuntime(decision, resolve, async () => {
-      if (input.runtimePinned && input.runtime?.harnessId && input.runtime.modelId) {
-        if (!modelSupportedByHarness(input.runtime.modelId, input.runtime.harnessId))
-          throw new Error(`Unsupported model: ${input.runtime.modelId}`);
-        return { ...input.runtime, harnessId: input.runtime.harnessId, modelId: input.runtime.modelId };
-      }
-      return resolve(input.runtime);
-    });
-    if (routed.routedBy) routedBy(routed.routedBy);
-    return routed.choice;
-  });
-
-  if (config.securityScreen === "off" || config.securityScreenClassifier !== "model") {
-    delete harness.models.screenSecurity;
-  }
-
   const leaseTtlMs = config.leaseTtlMs;
   const maxAttempts = config.maxAttempts;
   const runStore = createPostgresRunStore(databaseUrl, { maxClaims: config.maxClaims });
@@ -1780,7 +1612,7 @@ export function buildApp(
   });
   const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
-    harness: harness.models,
+    harness: modelUtilities,
     memory: baseMemory,
     captureQuietMs: config.memoryCaptureQuietMs,
     ...(config.memoryCaptureMaxTurns !== undefined ? { captureMaxTurns: config.memoryCaptureMaxTurns } : {}),
@@ -1895,7 +1727,9 @@ export function buildApp(
     publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
   );
   const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
-  const cronChanged: { notify?: (id: string) => void } = {};
+  const cronChanged = createPostgresNotifyBus<string>(databaseUrl, "cron_changed", "cron-changed");
+  const cronNotifier = { notifyChanged: (id: string) => cronChanged.emit(id) };
+  const cronQueue = createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency);
   const cronFires = createPostgresCronFireStore(databaseUrl);
   const cronsBase = createCronStore(artifactMap<Cron>("crons", ["ownerScopeId"]), {
     staleRunningMs: config.runMaxAgeMs,
@@ -1905,17 +1739,17 @@ export function buildApp(
     ...cronsBase,
     async create(input) {
       const cron = await cronsBase.create(input);
-      cronChanged.notify?.(cron.id);
+      cronChanged.emit(cron.id);
       return cron;
     },
     async update(id, patch) {
       const cron = await cronsBase.update(id, patch);
-      cronChanged.notify?.(id);
+      cronChanged.emit(id);
       return cron;
     },
     async setEnabled(id, enabled) {
       await cronsBase.setEnabled(id, enabled);
-      cronChanged.notify?.(id);
+      cronChanged.emit(id);
     },
   };
   pgArtifactMap.pool.registerMigration(DROP_RUN_AS_MIGRATION);
@@ -2069,117 +1903,6 @@ export function buildApp(
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
-  const orchestratorDeps: OrchestratorDeps = {
-    installSharedCanvas: async (actorId, fileId, where) => {
-      const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
-      if (typeof canvas === "string") return canvas;
-      auditLog.record({
-        at: Date.now(),
-        principalId: actorId,
-        action: "ui.canvas.install",
-        resource: `file:${fileId}`,
-        scopeLabel: personalScope(actorId),
-        detail: `rev ${canvas.rev}`,
-      });
-      sessionStateBus.emit({ ...where, participants: [actorId], state: "ui", at: Date.now(), ui: { kind: "canvas" } });
-      return null;
-    },
-    sessionStateBus,
-    externalSlackPolicies: config.externalSlackPolicies,
-    sessionSyscalls,
-    refreshModels,
-    identity,
-    resolution,
-    config: configStore,
-    defaultHarness: fallbackHarness,
-    defaultTurnWallClockMs: config.turnWallClockMs,
-    userModelCredentials,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    sessions,
-    workspace,
-    files,
-    toolOutput,
-    sandbox,
-    sandboxResources,
-    swarms,
-    connectorTokens,
-    modelGateway,
-    auditLog,
-    rateLimiter,
-    budget,
-    harness,
-    memory,
-    deploy: deployService,
-    acl,
-    admin,
-    mcp: mcpToolService,
-    ...(config.maxContextTokens !== undefined ? { maxContextTokens: config.maxContextTokens } : {}),
-    execTimeoutMs: config.execTimeoutDefaultMs,
-    execTimeoutCeilingMs: config.execTimeoutMaxMs,
-    approvalSummaryTimeoutMs: config.approvalSummaryTimeoutMs,
-    turnLeaseWaitMs: config.turnLeaseWaitMs,
-    securityScreenTimeoutMs: config.securityScreenTimeoutMs,
-    ...(securityScreener ? { securityScreener } : {}),
-    backgroundJobTtlMs: config.backgroundJobTtlMs,
-    backgroundJobTtlMaxMs: config.backgroundJobTtlMaxMs,
-    sandboxCapabilityTtlMs: config.sandboxCapabilityTtlMs,
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(gatewayTransport ? { sandboxModels: true } : {}),
-    ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
-    ...(config.deployAppsDomain ? { deployAppsDomain: config.deployAppsDomain } : {}),
-    ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
-      : {}),
-    ...(config.publicUrl ? { webhookPublicUrl: config.publicUrl } : {}),
-    memoryPolicy: { recall: config.memoryRecall, capture: config.memoryCapture },
-    memoryStrategy,
-    skills,
-    skillBundles,
-    skillsReady,
-    advisoryLock,
-    errors,
-    signals: runSignals,
-    turnStream,
-    runActivity,
-    runs,
-    blobTransfer,
-    featureFlags,
-    teams,
-    credentialUsage,
-    resolveConnectorClient: resolveClient,
-    ...(keychain ? { keychain } : {}),
-    serviceCreds,
-    deliveries,
-    approvals,
-    approvalGrants: artifactMap<CommandApprovalGrant>("approval_grants", ["actorId"]),
-    ...(processes ? { processes } : {}),
-    monitors,
-    crons,
-    webhooks,
-    resolveBaseModelId: () => orgBaseModelId() ?? fallback.modelId,
-    directory,
-    isCurrentSharedScopeMember,
-    currentScopeMembers: createCurrentScopeMembers({ managedGroups: projects, directory, identity }, true),
-    managedGroups: projects,
-    projects,
-    ...(config.reachExecEnabled ? { reachExec: true } : {}),
-    ...(config.surfaceDebugFooter ? { surfaceDebugFooter: true } : {}),
-    environments,
-    brokeredTools,
-    deploymentLayer,
-    layerBrokerFor,
-  };
-  const orchestrator = createOrchestrator(orchestratorDeps);
-
-  const recoveryAdminBase = config.publicWebUrl?.replace(/\/$/, "");
-  const recoveryAdminUrlFor = recoveryAdminBase
-    ? (sessionId: string): string | undefined =>
-        uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
-    : undefined;
-  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions);
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const skillFetcher = createGitFetcher(
     keychain
@@ -2202,27 +1925,6 @@ export function buildApp(
         }
       : { allowLocalRepos: !config.production },
   );
-  const reaper: Reaper = createReaper(runs, sessions, {
-    intervalMs: config.reaperIntervalMs,
-    leaderLease,
-    maxAgeMs: config.runMaxAgeMs,
-    errors,
-  });
-  const engaged = createEngagedRegistry();
-  let reapInFlight = false;
-  let lastReapAt = 0;
-  const REAP_POKE_COOLDOWN_MS = 1_000;
-  const pokeReaper = (): void => {
-    if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
-    reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
-      .catch(swallowAs("wake: reaper poke", null))
-      .finally(() => {
-        reapInFlight = false;
-        lastReapAt = Date.now();
-      });
-  };
   const liveFallback = async (
     container: string,
     opts?: { limit?: number },
@@ -2234,7 +1936,7 @@ export function buildApp(
     text: string;
     createdAt: number;
   }> | null> => {
-    const puller = orchestratorDeps.surfaceContext;
+    const puller = surfaceContext;
     if (!puller) return null;
     const result = await puller.pull("slack", {
       conversationTarget: container,
@@ -2255,9 +1957,9 @@ export function buildApp(
   const ambientJudgments: AmbientJudgmentStore = createPostgresAmbientJudgmentStore(databaseUrl);
   const ackEmojiPicks: AckEmojiPickStore = createPostgresAckEmojiPickStore(databaseUrl);
   const providerKeys = directProviderAvailability;
-  const screenSecurity: SecurityScreenProbe | undefined = harness.models.screenSecurity
+  const screenSecurity: SecurityScreenProbe | undefined = modelUtilities.screenSecurity
     ? ({ payload, harnessId, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
-        harness.models.screenSecurity!({
+        modelUtilities.screenSecurity!({
           payload,
           harnessId,
           modelId,
@@ -2269,7 +1971,28 @@ export function buildApp(
           },
         })
     : undefined;
+  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
+  const cronRuns = createCronRunRequests({ crons, queue: cronQueue });
+  const harnessNudges = createHarnessNudges(databaseUrl);
+  const screenSecuritySteer = createSteerScreen({
+    ...(securityScreener ? { securityScreener } : {}),
+    models: modelUtilities,
+    securityScreenTimeoutMs: config.securityScreenTimeoutMs,
+    auditLog,
+    config: configStore,
+    modelGateway,
+    budget,
+    resolution,
+    rateLimiter,
+    sessions,
+  });
+  const regenerateTitle = createTitleRegenerator({
+    sessions,
+    titles: createSessionTitles({ sessions, models: modelUtilities, sessionStateBus, errors }),
+  });
   const app = createApp({
+    screenSecuritySteer,
+    regenerateTitle,
     teams,
     externalSlackPolicies: config.externalSlackPolicies,
     admittedWork,
@@ -2279,7 +2002,6 @@ export function buildApp(
     identity,
     ...(config.publicWebUrl ? { publicWebUrl: config.publicWebUrl } : {}),
     sessions,
-    orchestrator,
     runs,
     leaseTtlMs,
     maxAttempts,
@@ -2333,12 +2055,12 @@ export function buildApp(
     sessionStateBus,
     ledgerEventBus,
     contextRequests: artifactMap<SurfaceContextRequest>("context_requests"),
-    engaged,
-    reaperPoke: pokeReaper,
+    engaged: harnessNudges,
+    reaperPoke: () => harnessNudges.pokeReaper(),
     surfaceCache,
     channelPolicy,
-    ...(harness.models.judge
-      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => harness.models.judge!(s, pr, signal) }
+    ...(modelUtilities.judge
+      ? { ambientJudge: (s: string, pr: string, signal?: AbortSignal) => modelUtilities.judge!(s, pr, signal) }
       : {}),
     ...(screenSecurity ? { screenSecurity } : {}),
     ambientCursors: artifactMap<{ lastJudgedTs: string; lastJudgedAt?: number }>("ambient_cursors"),
@@ -2351,178 +2073,7 @@ export function buildApp(
     modelProviders: modelProviderAvailabilityFor(config.harness, providerKeys),
     runWaitMs: config.runWaitMs,
   });
-  const inboxRealtime = createInboxRealtime({
-    loops: loopStore,
-    items: loopItems,
-    enqueue: (loop, entries) => loopIngress.enqueueConversation(loop, entries),
-  });
-  const keychainApprovals = keychain
-    ? createKeychainApprovals({
-        keychain,
-        app,
-        identity,
-        sessions,
-        audit: auditLog,
-        deliveries,
-        resume: (ask, grant) => askResolution!(ask, grant),
-      })
-    : undefined;
-  const slackCore = createSlackCoreClient({
-    identity,
-    memory,
-    ...(keychainApprovals ? { keychainApprovals } : {}),
-    surfaceCache,
-    taskAcknowledgements: artifactMap<TaskAckState>("slack_task_acknowledgements"),
-    sessionStatus: artifactMap<SlackSessionStatusState>("slack_session_status"),
-    statusActivity: { processes, monitors, sessions, publicWebUrl: config.publicWebUrl },
-    featureFlags,
-    inboxEvent: (event) => inboxRealtime.onConversationEvent(event),
-    app,
-    leaderLease,
-    stagedEnvelopes: artifactMap<StagedEnvelope>("slack_staged_envelopes"),
-    config: configStore,
-    runtimeFallback: fallback,
-    blobTransfer,
-    deliveries,
-    errors,
-    runs,
-    turnStream,
-    ackPicks: ackEmojiPicks,
-    ackModelId: () => auxiliaryModelForProvider("anthropic"),
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    ...(harness.models.pickAckEmoji ? { pickAckEmoji: (t, c) => harness.models.pickAckEmoji!(t, c) } : {}),
-  });
-  runs.onTerminal((run) => {
-    void runs
-      .activeForThread(run.sessionId)
-      .then((live) => {
-        if (!live) engaged.settle(run.sessionId);
-      })
-      .catch(swallowAs("wake: settle on terminal", undefined));
-  });
-  runs.onTerminal((run) => {
-    void app.replayOrphanedRunSignals(run.id).catch(swallowAs("wake: orphaned-signal replay", undefined));
-  });
-  runs.onTerminal((run) => {
-    void (async () => {
-      const session = await sessions.getByThread(run.sessionId);
-      const at = run.finishedAt ?? Date.now();
-      if (!session) {
-        if (!(await runs.activeForThread(run.sessionId)))
-          sessionStateBus.emit({ threadRef: run.sessionId, state: "idle", at });
-        return;
-      }
-      const settle = async (target: Session): Promise<boolean> => {
-        if (await runs.activeForThread(target.threadRef)) return false;
-        const waiting = (await blockingApprovalSessions([target.id])).has(target.id);
-        if (!waiting && (await sessionTreeWorking(sessions, runs, target))) return false;
-        const participants = await sessions.participantsOf(target.id);
-        sessionStateBus.emit({
-          threadRef: target.threadRef,
-          sessionId: target.id,
-          state: waiting ? "awaiting_approval" : "idle",
-          at,
-          ...(participants.length ? { participants } : {}),
-        });
-        return true;
-      };
-      if (!(await settle(session))) return;
-      for (const ancestor of await stoppableAncestors(sessions, session)) if (!(await settle(ancestor))) return;
-    })().catch(swallowAs("session-state: terminal emit", undefined));
-  });
-  let lastSignalPrune = 0;
-  const returnSessionRun = (run: Run) =>
-    advisoryLock
-      .withLock("session-tree-admission", async () => {
-        const settled = await deliverSubagentMail(
-          {
-            sessions,
-            runs,
-            maxAttempts,
-            mailbox: sessionMailbox,
-            prepareRequest: prepareSessionRequest,
-            delegationEnabled: (actorId) => featureFlags.enabled("responsive_spine", scopeId("personal", actorId)),
-            deliveries,
-            signals: runSignals,
-          },
-          run,
-        );
-        if (settled) await runs.markReturned(run.id);
-      })
-      .catch(async (error: unknown) => {
-        await runs.deferReturn(run.id, 60_000);
-        throw error;
-      });
-  runs.onTerminal((run) => {
-    if (run.sessionId.startsWith("agent:main:subagent:"))
-      void returnSessionRun(run).catch(swallowAs("sessions: return", undefined));
-  });
-  const sweepSessionReturns = async () => {
-    let afterId: string | undefined;
-    for (;;) {
-      const batch = await runs.pendingReturns(100, afterId);
-      if (!batch.length) return;
-      for (const run of batch) await returnSessionRun(run).catch(swallowAs("sessions: recover return", undefined));
-      afterId = batch.at(-1)!.id;
-    }
-  };
-  const approvalDeliverySweeper = createSweeper(
-    () => advisoryLock.withLock("approval-deliveries", () => approvals.deliverPending()),
-    30_000,
-    {
-      label: "approval-deliveries",
-      immediate: true,
-    },
-  );
-  const sessionReturnSweeper = createSweeper(
-    () =>
-      advisoryLock.tryWithLock
-        ? advisoryLock.tryWithLock("session-return-sweep", sweepSessionReturns)
-        : advisoryLock.withLock("session-return-sweep", sweepSessionReturns),
-    1_000,
-    { label: "session-returns", immediate: true },
-  );
-  const runResultSweeper = createSweeper(
-    () =>
-      advisoryLock.tryWithLock
-        ? advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep())
-        : advisoryLock.withLock("run-result-sweep", () => runResultRecovery.sweep()),
-    60_000,
-    { label: "run-results" },
-  );
-  const orphanedSignalSweeper = createSweeper(
-    async () => {
-      for (const runId of await runSignals.pendingRunIds()) {
-        const run = await runs.get(runId);
-        if (!run || isTerminal(run.status))
-          await app.replayOrphanedRunSignals(runId).catch(swallowAs("sessions: recover signal", undefined));
-      }
-      if (Date.now() - lastSignalPrune > 60 * 60_000) {
-        lastSignalPrune = Date.now();
-        await runSignals.prune(7 * 24 * 60 * 60_000);
-      }
-    },
-    config.reaperIntervalMs,
-    { label: "orphaned-signals" },
-  );
-  const wakeSweep: WakeSweep = createWakeSweep(
-    {
-      async engagedSessions() {
-        return engaged.list();
-      },
-      async sweepSession(threadRef) {
-        const live = await runs.activeForThread(threadRef);
-        if (!live) {
-          pokeReaper();
-          engaged.settle(threadRef);
-          return 1;
-        }
-        return 0;
-      },
-    },
-    { intervalMs: config.reaperIntervalMs, leaderLease },
-  );
-  orchestratorDeps.surfaceContext = createSurfaceContextPuller(
+  const surfaceContext = createSurfaceContextPuller(
     app,
     keychain
       ? {
@@ -2535,8 +2086,6 @@ export function buildApp(
         }
       : {},
   );
-  orchestratorDeps.channelPolicy = channelPolicy;
-  orchestratorDeps.surfaceCache = surfaceCache;
   const resolveRecipient = (query: string) => app.resolveRecipient(query);
   const runTriggered = async (req: TurnRequest): Promise<TurnResult> => {
     const slackSource =
@@ -2615,85 +2164,21 @@ export function buildApp(
   };
   const sweepAsks =
     keychain && askResolution ? createAskExpirySweep({ keychain, fire: askResolution, auditLog }) : undefined;
-  let ingressMaintenance: Promise<void> | undefined;
   const suggestedActivityProfiles = artifactMap<SuggestedActivityProfile>("suggested_activity_profiles");
   const memoryTidy = createMemoryTidyService({
     store: artifactMap<MemoryTidyProfile>("memory_tidy_profiles"),
     memory: baseMemory,
     timezone: async (principalId) => (await suggestedActivityProfiles.get(principalId))?.timezone,
     crons,
-    scheduler: { notifyChanged: (id) => scheduler.notifyChanged(id) },
-  });
-  const scheduler = createScheduler({
-    admittedWork,
-    skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
-    runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
-    deleteCron: (id) => app.deleteCron(id),
-    requireQueueStart: Boolean(config.backgroundDeploymentId),
-    advisoryLock,
-    crons,
-    deliveries,
-    idempotency,
-    identity,
-    run: runTriggered,
-    leaderLease,
-    directory,
-    currentScopeMembers,
-    sessions,
-    resolveRecipient,
-    fireLoop: (loopId, fireKey, cronId) => loopFire.fire(loopId, fireKey, cronId),
-    jobQueue: createPgBossCronQueue(databaseUrl, undefined, config.cronFireConcurrency),
-    sweepAsks: async (now) => {
-      if (!ingressMaintenance)
-        ingressMaintenance = admittedWork
-          .run(() => loopIngress.maintain())
-          .catch(swallowAs("Loop ingress maintenance", undefined))
-          .finally(() => {
-            ingressMaintenance = undefined;
-          });
-      await Promise.all([sweepAsks?.(now), loopFire.sweepStale(now)]);
-    },
+    scheduler: cronNotifier,
   });
   const suggestedActivities = createSuggestedActivityService({
     store: suggestedActivityProfiles,
     sessions,
     crons,
-    scheduler,
+    scheduler: { ...cronNotifier, ...cronRuns },
     enabled: config.suggestedActivitiesEnabled === true,
     ...(config.suggestedActivitiesContext ? { context: config.suggestedActivitiesContext } : {}),
-  });
-  cronChanged.notify = (id) => scheduler.notifyChanged(id);
-  orchestratorDeps.control = createControlService(app, scheduler, admin);
-  orchestratorDeps.validateScheduledRuntime = (scope, choice, purpose) =>
-    availableRuntimeError({ deps: runtimeDeps }, scope, choice, purpose);
-  orchestratorDeps.runtime = createRuntimeService(runtimeDeps, app);
-  const finishCredentials = (handle: SandboxHandle, processId: string) =>
-    finishProcessCredentials({ sandbox, processes: processes!, ...(keychain ? { keychain } : {}) }, handle, processId);
-  const monitorPoller: MonitorPoller | null =
-    processes && supportsProcessSessions(sandbox)
-      ? createMonitorPoller({
-          admittedWork,
-          monitors,
-          processes,
-          sandbox,
-          deliveries,
-          idempotency,
-          identity,
-          run: runTriggered,
-          directory,
-          currentScopeMembers,
-          sessions,
-          resolveRecipient,
-          leaderLease,
-          onProcessExit: finishCredentials,
-          heartbeatMs: config.monitorHeartbeatMs,
-        })
-      : null;
-  const skillSyncEngine = createSkillSyncEngine({
-    packs: skillPacks,
-    fetcher: skillFetcher,
-    reconcile: (id) => app.syncSkillPack(id),
-    leaderLease,
   });
   const webhookReceiver = createWebhookReceiver({
     webhooks,
@@ -2713,257 +2198,78 @@ export function buildApp(
         active: () => backgroundActive(),
       }
     : undefined;
-  const instanceRegistry: InstanceRegistry =
-    pgArtifactMap && !backgroundOwnership && config.buildSha && config.backgroundWorkEnabled
-      ? createPostgresInstanceRegistry(pgArtifactMap.pool, {
-          instanceId: randomUUID(),
-          buildSha: config.buildSha,
-          startedAt: Date.now(),
-        })
-      : createNoopInstanceRegistry();
-  const drain: DrainController = createDrainController({ registry: instanceRegistry });
-  const canClaimRuns = () => backgroundAdmission() && drain.canClaim();
-  const workers: Worker[] = Array.from({ length: Math.max(1, config.workers) }, () =>
-    createWorker({
-      admittedWork,
-      runs,
-      orchestrator,
-      leaseTtlMs,
-      heartbeatIntervalMs: config.heartbeatIntervalMs,
-      errors,
-      pollMs: 250,
-      canClaim: canClaimRuns,
-    }),
-  );
-  const preemption = createRunPreemption({ runs, workers, canClaim: canClaimRuns });
-  const preemptionSweeper = createSweeper(() => preemption.sweep(), 1_000, { label: "run-preemption" });
-  const processReaper: ProcessReaper | null = processes
-    ? createProcessReaper(processes, {
-        intervalMs: config.processReaperIntervalMs,
-        ...(supportsProcessSessions(sandbox)
-          ? {
-              kill: createReaperKillHook(sandbox, { onExit: finishCredentials }),
-              afterSweep: createJobComputerSweep({
-                resources: sandboxResources,
-                sandbox,
-                processes: processes!,
-                finish: finishCredentials,
-                onError: (error, scopeId) =>
-                  errors.record(
-                    {
-                      category: "process_session",
-                      code: "job_computer_retire_failed",
-                      message: errMessage(error),
-                      scopeLabel: scopeId,
-                    },
-                    error,
-                  ),
-              }),
-            }
-          : {}),
-        leaderLease,
-      })
-    : null;
-  const MONITOR_RETENTION_SWEEP_MS = 24 * 60 * 60_000;
-  const LLM_CAPTURE_SWEEP_MS = 5 * 60_000;
-  const LLM_CAPTURE_SWEEP_BUDGET_MS = 30_000;
-  const spendSweeper = sessions.refreshSpendRollup
-    ? createSweeper(() => leaderLease.hold("spend:refresh", () => sessions.refreshSpendRollup!()), 60_000, {
-        label: "spend-refresh",
-        immediate: true,
-      })
-    : null;
-  const llmCaptureSweeper = sessions.purgeLlmCaptures
-    ? createSweeper(
-        () =>
-          leaderLease.hold("llm-capture:retention", async (lost) => {
-            let leaseLost = false;
-            void lost.then(() => (leaseLost = true));
-            const purged = await sessions.purgeLlmCaptures!(Date.now() - LLM_CAPTURE_RETENTION_MS, {
-              deadline: Date.now() + LLM_CAPTURE_SWEEP_BUDGET_MS,
-              stop: () => leaseLost,
-            });
-            if (purged) console.log(`[llm-capture] purged ${purged} prompt envelope(s) past retention`);
-          }),
-        LLM_CAPTURE_SWEEP_MS,
-        { label: "llm-capture-retention" },
-      )
-    : null;
-  const monitorRetentionSweeper = createSweeper(
-    () => leaderLease.hold("monitor:retention:sweep", () => monitors.deleteDefunct(Date.now())),
-    MONITOR_RETENTION_SWEEP_MS,
-    { label: "monitor-retention", immediate: true },
-  );
-  const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
-  const BLOB_TTL_MS = 6 * 60 * 60_000;
-  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
-  const composioReturnSweeper = createSweeper(
-    async () => {
-      for (const [id, entry] of await composioReturns.entries())
-        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-    },
-    30 * 60_000,
-    { label: "Composio consent returns", immediate: true },
-  );
-  const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
-  const BLOB_TRANSFER_EXPIRY_DAYS = 1;
-  void blobTransfer
-    .ensureExpiry?.(BLOB_TRANSFER_EXPIRY_DAYS)
-    .catch((e) =>
-      console.error("[blob-transfer] S3 lifecycle expiry install failed (sweep remains the fallback):", errMessage(e)),
-    );
-  const idleSweeper =
-    deployIdleTtlMs && deployIdleTtlMs > 0
-      ? createSweeper(() => app.reapIdleDeployments(deployIdleTtlMs), Math.max(5_000, Math.floor(deployIdleTtlMs / 4)))
-      : null;
-  const DEPLOY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
-  const deployMaintenanceSweeper = createSweeper(() => app.maintainDeployments(), DEPLOY_MAINTENANCE_INTERVAL_MS);
-  const deepIdleMachineMs = config.deepIdleMachineMs;
-  const devIdleMachineMs = config.devIdleMachineMs;
-  const SANDBOX_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
-  const deepIdleSweeper = sandbox.reapDeepIdle
-    ? createSweeper(
-        () =>
-          leaderLease.hold("sandbox:deep-idle-reaper", () =>
-            sandbox.reapDeepIdle!(deepIdleMachineMs, devIdleMachineMs),
-          ),
-        SANDBOX_MAINTENANCE_INTERVAL_MS,
-        { immediate: true },
-      )
-    : null;
-  let backgroundRunning = false;
-  let backgroundStopping: Promise<void> | null = null;
-  let backgroundClaimsStopping: Promise<void> = Promise.resolve();
-  let monitorDrained: Promise<void> = Promise.resolve();
-  let backgroundGeneration = 0;
-  function startBackground(): void {
-    if (backgroundRunning) return;
-    backgroundRunning = true;
-    admittedWork.resume();
-    drain.start();
-    const generation = ++backgroundGeneration;
-    for (const worker of workers) {
-      const drained = worker.drained();
-      worker.start();
-      void drained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) worker.start();
-        })
-        .catch(swallowAs("wiring: worker resume failed", undefined));
-    }
-    preemptionSweeper.start();
-    const startPeriodic = () => {
-      if (!backgroundRunning || generation !== backgroundGeneration) return;
-      reaper.start();
-      processReaper?.start();
-      monitorPoller?.start(config.monitorPollMs);
-      void monitorDrained
-        .then(() => {
-          if (backgroundRunning && generation === backgroundGeneration) monitorPoller?.start(config.monitorPollMs);
-        })
-        .catch(swallowAs("wiring: monitor resume failed", undefined));
-      monitorRetentionSweeper.start();
-      spendSweeper?.start();
-      llmCaptureSweeper?.start();
-      semanticMemory.start();
-      if (config.skillSyncPollMs > 0) skillSyncEngine.start(config.skillSyncPollMs);
-      blobSweeper.start();
-      composioReturnSweeper.start();
-      fileUploads?.start();
-      idleSweeper?.start();
-      deployMaintenanceSweeper.start();
-      deepIdleSweeper?.start();
-      wakeSweep.start();
-      swarms?.start();
-      orphanedSignalSweeper.start();
-      sessionReturnSweeper.start();
-      runResultSweeper.start();
-      approvalDeliverySweeper.start();
-    };
-    if (backgroundStopping)
-      void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
-    else startPeriodic();
-  }
-  function stopBackground(): Promise<void> {
-    admittedWork.pause();
-    backgroundRunning = false;
-    const previous = backgroundStopping;
-    backgroundGeneration++;
-    const monitorStopping = monitorPoller?.stop();
-    monitorDrained = monitorStopping ?? Promise.resolve();
-    const stopping = [
-      reaper.stop(),
-      processReaper?.stop(),
-      monitorRetentionSweeper.stop(),
-      spendSweeper?.stop(),
-      llmCaptureSweeper?.stop(),
-      semanticMemory.stop(),
-      skillSyncEngine.stop(),
-      idleSweeper?.stop(),
-      deployMaintenanceSweeper.stop(),
-      deepIdleSweeper?.stop(),
-      blobSweeper.stop(),
-      composioReturnSweeper.stop(),
-      fileUploads?.stop(),
-      wakeSweep.stop(),
-      swarms?.stop(),
-      orphanedSignalSweeper.stop(),
-      sessionReturnSweeper.stop(),
-      runResultSweeper.stop(),
-      approvalDeliverySweeper.stop(),
-      preemptionSweeper.stop(),
-      ...workers.map((worker) => worker.stopClaims()),
-    ];
-    backgroundClaimsStopping = Promise.all(stopping).then(() => {});
-    const draining = Promise.all([previous, backgroundClaimsStopping, monitorStopping])
-      .then(() => {})
-      .finally(() => {
-        if (backgroundStopping === draining) backgroundStopping = null;
-      });
-    backgroundStopping = draining;
-    return draining;
-  }
-  async function releaseInFlightRuns(): Promise<void> {
-    inlineShutdown.abort();
-    await Promise.all([
-      withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
-        swallowAs("wiring: inline turn handback failed", undefined),
-      ),
-      ...workers.map((w) => w.releaseInFlight()),
-    ]);
-  }
-  const runtime: Runtime = {
-    start() {
-      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
-      flyTunnel?.monitor();
-      drain.start();
-      if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
-    },
-    startBackground,
-    setBackgroundAdmission(canClaim, active) {
+  return {
+    askResolution,
+    surfaceContext,
+    skillsReady,
+    securityScreener,
+    admittedWork,
+    approvals,
+    artifactMap,
+    blockingApprovalSessions,
+    companyModelId,
+    configStore,
+    createSweeper,
+    cronChanged,
+    currentScopeMembers,
+    databaseUrl,
+    defaultForHarness,
+    deployProvider,
+    deployService,
+    directProviderAvailability,
+    fallback,
+    fallbackHarness,
+    flyTunnel,
+    gatewayTransport,
+    hydrateModelCatalog,
+    idempotency,
+    isCurrentSharedScopeMember,
+    layerBrokerFor,
+    leaderLease,
+    leaseTtlMs,
+    loopFire,
+    loopItems,
+    loopStore,
+    maxAttempts,
+    memoryStrategy,
+    memoryTidy,
+    orgBaseModelId,
+    pgArtifactMap,
+    prepareSessionRequest,
+    resolution,
+    resolvePiProviderKeys,
+    resolveRecipient,
+    runActivity,
+    runSignals,
+    runStreamEvents,
+    runTriggered,
+    runtimeDeps,
+    runtimeOrgScope,
+    semanticMemory,
+    sessionMailbox,
+    skillPacks,
+    stopStreamSync,
+    suggestedActivityService: suggestedActivities,
+    swarms,
+    sweepAsks,
+    toolOutput,
+    turnStream,
+    webhooks,
+    modelUtilities,
+    cronRuns,
+    cronQueue,
+    harnessNudges,
+    canClaimBackground: () => backgroundAdmission(),
+    setBackgroundAdmission(canClaim: () => boolean, active: () => boolean) {
       backgroundAdmission = canClaim;
       backgroundActive = active;
     },
-    async stopBackgroundClaims() {
-      void stopBackground().catch(swallowAs("wiring: background drain failed", undefined));
-      await Promise.all([backgroundClaimsStopping, ...workers.map((worker) => worker.stopClaims())]);
+    releaseWaiters: () => inlineShutdown.abort(),
+    start() {
+      if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      flyTunnel?.monitor();
     },
-    stopBackground,
-    async backgroundDrained() {
-      await backgroundStopping;
-      await Promise.all([admittedWork.drained(), ...workers.map((worker) => worker.drained())]);
-    },
-    releaseInFlightRuns,
-    async stop() {
-      await stopBackground();
-      await Promise.all([
-        withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
-          swallowAs("wiring: admitted work drain failed", undefined),
-        ),
-        ...workers.map((w) => w.stop(config.shutdownDrainMs)),
-      ]).catch(swallowAs("wiring: worker drain failed", undefined));
-      await releaseInFlightRuns();
-      await drain.stop();
+    async close() {
       stopStreamSync();
       await Promise.all(
         [
@@ -2973,18 +2279,17 @@ export function buildApp(
           ledgerEventBus.close?.(),
           runActivity.close?.(),
           runStreamEvents.close?.(),
+          cronChanged.close?.(),
+          harnessNudges.close(),
+          cronQueue.stop(),
         ].map((closing) => closing?.catch(reportFailureAs("shutdown: close event stores", undefined))),
       );
-      await harness.turns.close?.();
       await semanticMemory.close();
       await flyTunnel?.stop();
       await errors.flush();
     },
-  };
-
-  return {
     app,
-    checkReadiness: async (signal) => {
+    checkReadiness: async (signal: AbortSignal) => {
       await pgArtifactMap.pool.q("SELECT 1", [], { signal });
     },
     ...(screenSecurity ? { screenSecurity } : {}),
@@ -3000,7 +2305,6 @@ export function buildApp(
     sessionSyscalls,
     ledgerEventBus,
     surfaceCache,
-    runtime,
     config: configStore,
     connectorTokens,
     slackInstallation,
@@ -3026,7 +2330,6 @@ export function buildApp(
     skillBundles,
     skillFetcher,
     auditLog,
-    scheduler,
     loops,
     webhookReceiver,
     loopIngress,
@@ -3045,7 +2348,6 @@ export function buildApp(
     ...(keychain ? { keychain } : {}),
     serviceCreds,
     deliveries,
-    ...(keychainApprovals ? { keychainApprovals } : {}),
     ...(askResolution ? { fireAskResolution: askResolution } : {}),
     ...(dropResolution ? { fireDropResolution: dropResolution } : {}),
     sandbox,
@@ -3066,7 +2368,6 @@ export function buildApp(
     ...(appPageViews ? { appPageViews } : {}),
     monitors,
     ...(browserSessionStore ? { browserSessionStore } : {}),
-    ...(monitorPoller ? { monitorPoller } : {}),
     ...(ambientJudgments ? { ambientJudgments } : {}),
     ...(ackEmojiPicks ? { ackEmojiPicks } : {}),
     channelPolicy,
@@ -3085,154 +2386,7 @@ export function buildApp(
             prefix: `${config.s3Prefix ?? ""}session-shares/`,
           })
         : createLocalDurableByteStore(join(config.dataDir, "session-shares")),
-    skillSyncEngine,
-    slackCore,
   };
 }
 
-export function serverDeps(
-  config: Config,
-  built: BuiltApp,
-  slackEnvironmentState: "absent" | "configured" | "partial" = "absent",
-  slackEnvBotToken?: string,
-): Omit<ServerDeps, "control"> {
-  const configuredModel = configuredModelForHarness(config, config.harness);
-  const carriedModelAuth = harnessCarriedModelAuth(config);
-  return {
-    externalSlackPolicies: config.externalSlackPolicies,
-    modelGatewayTransport: built.modelGatewayTransport,
-    resolveBrowserCompanyKeys: built.resolveBrowserCompanyKeys,
-    production: config.production,
-    checkReadiness: built.checkReadiness,
-    ...(built.backgroundOwnership
-      ? {
-          backgroundOwnership: built.backgroundOwnership,
-          deploymentControlSecret: config.deploymentControlSecret,
-          deploymentLiveSmoke: () => runSessionSmoke(config, `http://127.0.0.1:${config.port}`),
-        }
-      : {}),
-    allowUnauthenticatedCore: config.allowUnauthenticatedCore,
-    ...(config.spendExportToken ? { spendExportToken: config.spendExportToken } : {}),
-    ...(config.signingSecret ? { signingSecret: config.signingSecret } : {}),
-    ...(config.capabilitySecret ? { capabilitySecret: config.capabilitySecret } : {}),
-    capabilityTokenCompression: config.capabilityTokenCompression,
-    ...(config.portalIdentitySecret ? { portalIdentitySecret: config.portalIdentitySecret } : {}),
-    ...(config.requireSignedPortalIdentity ? { requireSignedPortalIdentity: true } : {}),
-    replayDedupe: built.replayDedupe,
-    ...(built.brokerSessions ? { brokerSessions: built.brokerSessions } : {}),
-    config: built.config,
-    ...(built.screenSecurity ? { screenSecurity: built.screenSecurity } : {}),
-    ...(configuredModel ? { baseModelDefault: configuredModel } : {}),
-    modelProviders: modelProviderAvailabilityFor(config.harness, providerKeysPresent(config)),
-    providerKeys: providerKeysPresent(config),
-    modelCredentials: built.modelCredentials,
-    userModelCredentials: built.userModelCredentials,
-    modelRegistry: built.modelRegistry,
-    modelVerifier: built.modelVerifier,
-    refreshModels: built.refreshModels,
-    customProviders: built.customProviders,
-    refreshCustomProviders: built.refreshCustomProviders,
-    mcpServers: built.mcpServers,
-    mcpToolService: built.mcpToolService,
-    ...(config.brandingDefault ? { brandingDefault: config.brandingDefault } : {}),
-    ...(carriedModelAuth ? { harnessCarriedModelAuth: carriedModelAuth } : {}),
-    harnessId: config.harness,
-    connectorTokens: built.connectorTokens,
-    slackInstallation: built.slackInstallation,
-    slackEnvironmentState,
-    ...(config.slackEventsPort ? { slackEventsPort: config.slackEventsPort } : {}),
-    ...(slackEnvBotToken ? { slackEnvBotToken } : {}),
-    resolveClient: built.resolveClient,
-    consentLinks: built.consentLinks,
-    oauthFlows: built.oauthFlows,
-    secretDrops: built.secretDrops,
-    ...(built.fireDropResolution ? { fireDropResolution: built.fireDropResolution } : {}),
-    ...(config.apiBaseUrl ? { apiBaseUrl: config.apiBaseUrl } : {}),
-    ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
-    ...(config.publicWebUrl ? { portalUrl: config.publicWebUrl } : {}),
-    admin: built.admin,
-    ...(config.emailAuthPrincipals ? { emailAuthPrincipals: config.emailAuthPrincipals } : {}),
-    ...(config.emailAuthDomain ? { emailAuthDomain: config.emailAuthDomain } : {}),
-    ...(config.slack ? { slackAllowFrom: config.slack.allowFrom ?? [] } : {}),
-    ...(config.resendApiKey && config.emailFrom
-      ? { inviteMailer: resendMailer(config.resendApiKey, config.emailFrom) }
-      : {}),
-    rateLimiter: built.rateLimiter,
-    budget: built.budget,
-    acl: built.acl,
-    credentialUsage: built.credentialUsage,
-    featureFlags: built.featureFlags,
-    ...(built.decisions ? { decisions: built.decisions } : {}),
-    ...(built.teams ? { teams: built.teams } : {}),
-    egressAudit: built.egressAudit,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    errors: built.errors,
-    crons: built.crons,
-    loops: built.loops,
-    deploymentLayer: built.deploymentLayerStore,
-    deployDialTimeoutMs: config.deployDialTimeoutMs,
-    ...(config.awsDeploy.appsDomain ? { deployAppsDomain: config.awsDeploy.appsDomain } : {}),
-    ...(config.awsDeploy.gateSecret ? { deployGateSecret: config.awsDeploy.gateSecret } : {}),
-    ...(config.deployAppsSessionSecret ? { deployAppsSessionSecret: config.deployAppsSessionSecret } : {}),
-    ...(config.deployAppsLoginUrl ? { deployAppsLoginUrl: config.deployAppsLoginUrl } : {}),
-    ...(config.deployAppsLoginPath ? { deployAppsLoginPath: config.deployAppsLoginPath } : {}),
-    ...(built.appPageViews ? { appPageViews: built.appPageViews } : {}),
-    scheduler: built.scheduler,
-    webhookReceiver: built.webhookReceiver,
-    loopIngress: built.loopIngress,
-    identity: built.identity,
-    principalLinks: built.principalLinks,
-    slackAccounts: built.slackAccounts,
-    composioReturns: built.composioReturns,
-    ...(built.keychain ? { keychain: built.keychain } : {}),
-    serviceCreds: built.serviceCreds,
-    deliveries: built.deliveries,
-    ...(built.keychainApprovals ? { keychainApprovals: built.keychainApprovals } : {}),
-    ...(built.fireAskResolution ? { fireAskResolution: built.fireAskResolution } : {}),
-    runs: built.runs,
-    signals: built.signals,
-    sessionStateBus: built.sessionStateBus,
-    workspace: built.workspace,
-    files: built.files,
-    ...(built.fileUploads ? { fileUploads: built.fileUploads } : {}),
-    memory: built.memory,
-    blobTransfer: built.blobTransfer,
-    sandboxBackend: built.sandbox.profile.backend,
-    egressDeclaredEnforcement: built.sandbox.profile.egressEnforcement ?? "none",
-    egressEnforcement: effectiveEgressEnforcement(built.sandbox.profile, {
-      signingSecret: config.signingSecret,
-      apiBaseUrl: config.apiBaseUrl,
-    }),
-    egressControlPlaneConfigured: Boolean(config.signingSecret && config.apiBaseUrl),
-    sandbox: built.sandbox,
-    advisoryLock: built.advisoryLock,
-    ...(built.processes ? { processes: built.processes } : {}),
-    ...(built.browserSessionStore ? { browserSessionStore: built.browserSessionStore } : {}),
-    directory: built.directory,
-    ...(built.ambientJudgments ? { ambientJudgments: built.ambientJudgments } : {}),
-    ...(built.ackEmojiPicks ? { ackEmojiPicks: built.ackEmojiPicks } : {}),
-    channelPolicy: built.channelPolicy,
-    ...(built.suggestedActivities ? { suggestedActivities: built.suggestedActivities } : {}),
-    uiState: built.uiState,
-    ...(built.keychain
-      ? {
-          loopSourceTokens: built.keychain,
-          inboxSourceRefresh: createInboxSourceRefresh({
-            featureFlags: built.featureFlags,
-            items: built.loops.items,
-            errors: built.errors,
-            enqueue: (loop, entries) => built.loopIngress.enqueueConversation(loop, entries),
-            tokens: built.keychain,
-            directory: built.directory,
-            ...(config.slack?.apiUrl ? { slackApiUrl: config.slack.apiUrl } : {}),
-          }),
-        }
-      : {}),
-    loopSlackClient: slackUserClientFactory(config.slack?.apiUrl),
-    sessionShares: built.sessionShares,
-    sessionShareBytes: built.sessionShareBytes,
-    environments: built.environments,
-    sandboxResources: built.sandboxResources,
-  };
-}
+export type Core = ReturnType<typeof buildCore>;

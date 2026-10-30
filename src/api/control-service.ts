@@ -9,8 +9,8 @@ import {
   describeRunNowRefusal,
   echoesCronContextMarkers,
   flattenFireNote,
-  type Scheduler,
-} from "../cron/scheduler.ts";
+  type CronRunRequests,
+} from "../cron/fires.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { resolveCapabilityDestination } from "./capability-destination.ts";
 import { withSlackUnfurlOption, principalDestination } from "../reach/reach.ts";
@@ -333,7 +333,7 @@ function validateUnattendedGrants(grants: string[]): string | null {
   return null;
 }
 
-export function createControlService(app: App, scheduler?: Scheduler, admin?: AdminService): ControlService {
+export function createControlService(app: App, cronRuns?: CronRunRequests, admin?: AdminService): ControlService {
   const notifyEdit = (
     cron: Cron,
     cap: CapabilityClaims,
@@ -660,7 +660,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
         const refusal = await unattendedGrantRefusal(app, admin, cron, capability);
         if (refusal) return { ok: false, code: "forbidden", message: refusal.message };
       }
-      if (!scheduler)
+      if (!cronRuns)
         return {
           ok: false,
           code: "unavailable",
@@ -672,7 +672,7 @@ export function createControlService(app: App, scheduler?: Scheduler, admin?: Ad
           code: "bad_request",
           message: `cron ${id} is ${cron.archived ? "archived" : "paused"} — enable it before firing it on demand`,
         };
-      const result = await scheduler.runNow(id);
+      const result = await cronRuns.runNow(id);
       if (!result.started) {
         const refusal = describeRunNowRefusal(id, result)!;
         return { ok: false, code: refusal.error, message: refusal.message };
