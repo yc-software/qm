@@ -16,6 +16,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
   const removed: Array<[string, string]> = [];
   const failNext: Array<Error> = [];
   const gates: Array<Promise<void>> = [];
+  const teardownGates: Array<Promise<void>> = [];
   let n = 0;
   const sandbox: Partial<Sandbox> = {
     profile: { processSessions: false } as Sandbox["profile"],
@@ -39,6 +40,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
     async teardown(handle, opts) {
       teardowns.push([handle.id, opts ?? {}]);
       tornDown.push(handle);
+      await teardownGates.shift();
       if (over.teardownFails?.includes(handle.id)) throw new Error(`teardown failed: ${handle.id}`);
     },
     async removeDir(handle, dir) {
@@ -112,6 +114,7 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
     clearedTurnFiles,
     failNext,
     gates,
+    teardownGates,
     holdFailures,
     errors,
     liveLookups: () => liveLookups,
@@ -231,6 +234,19 @@ test("a computer opened while reclaim waits on another is released too", async (
   await opening;
   second.resolve();
   await Promise.all([late, reclaim]);
+  assert.deepEqual(Object.keys(f.released()).sort(), ["channel:C1", "job-box"]);
+});
+
+test("a computer opened while reclaim is tearing down another is released too", async () => {
+  const f = fixture();
+  const tearing = Promise.withResolvers<void>();
+  f.teardownGates.push(tearing.promise);
+  await f.turn.provisionResource("job-box");
+  const reclaim = f.turn.reclaimBox();
+  while (!f.teardowns.length) await new Promise((resolve) => setImmediate(resolve));
+  await f.turn.provisionForReach("channel:C1");
+  tearing.resolve();
+  await reclaim;
   assert.deepEqual(Object.keys(f.released()).sort(), ["channel:C1", "job-box"]);
 });
 

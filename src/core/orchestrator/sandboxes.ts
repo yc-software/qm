@@ -532,7 +532,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       throw failure;
     }
   };
-  const reclaimBox = async (): Promise<void> => {
+  const releasePool = async (): Promise<void> => {
     const opening = () => [...pool.values()].flatMap((slot) => (slot.opening && !slot.ready ? [slot.opening] : []));
     for (let waiting = opening(); waiting.length; waiting = opening())
       await Promise.all(waiting.map((open) => open.catch(swallowAs("orchestrator: provision", undefined))));
@@ -558,6 +558,9 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       ),
     ]);
     if (destroyed?.status === "rejected") throw destroyed.reason;
+  };
+  const reclaimBox = async (): Promise<void> => {
+    while (pool.size) await releasePool();
   };
 
   return {
