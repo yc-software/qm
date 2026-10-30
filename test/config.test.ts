@@ -422,9 +422,8 @@ test("the sandbox backend and provider keys are not read from the environment", 
   const config = loadConfig(env);
   assert.ok(!("sandboxBackend" in config));
   assert.ok(!("sandboxSecondaryBackend" in config));
-  const { layerEnv: _layerEnv, ...parsed } = config;
   for (const value of ["sprites-env-token", "modal-env-id", "modal-env-secret", "ss_live_k", "e2b-env-key"])
-    assert.ok(!JSON.stringify(parsed).includes(value), value);
+    assert.ok(!JSON.stringify(config).includes(value), value);
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, SANDBOX_BACKEND: undefined }));
   assert.equal(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" }).e2bSandbox.deployApiKey, "e2b-env-key");
   assert.equal(
