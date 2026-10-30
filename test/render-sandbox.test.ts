@@ -19,6 +19,7 @@ import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { createSdkRenderClient } from "../src/sandbox/render-client.ts";
 import { AWS_CLI_ENSURE } from "../src/sandbox/aws-cli.ts";
 import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";
+import { createMemorySandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
 
@@ -342,8 +343,7 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const { make, fake, layers, scope, advisoryLock } = setup(t);
   const render = make();
   const resources = createSandboxResources({
-    records: createMemoryMap(),
-    defaults: createMemoryMap(),
+    ...createMemorySandboxResourceStores(),
     backends: { render },
     defaultBackend: "render",
     lock: advisoryLock,

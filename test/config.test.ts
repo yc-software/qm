@@ -503,23 +503,6 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     ),
     "a stray key without a template must not enable the secondary backend",
   );
-  assert.doesNotThrow(
-    () =>
-      loadConfig({
-        SANDBOX_BACKEND: "local",
-        SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}',
-        SUPERSERVE_API_KEY: "ss_live_k",
-      }),
-    "upgrade-only provider settings do not require live credentials or templates",
-  );
-  assert.doesNotThrow(() =>
-    loadConfig({
-      SANDBOX_BACKEND: "local",
-      SANDBOX_SCOPE_BACKENDS: '{"channel":"superserve"}',
-      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
-      SUPERSERVE_API_KEY: "ss_live_k",
-    }),
-  );
   assert.ok(
     enabledSandboxBackends(
       loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" }),
@@ -908,28 +891,6 @@ test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "false" }).suggestedActivitiesEnabled, false);
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
-});
-
-test("legacy sandbox scope defaults are parsed for upgrade", () => {
-  const credentials = {
-    SPRITES_TOKEN: "unit-test-sprites",
-    MODAL_TOKEN_ID: "unit-test-modal-id",
-    MODAL_TOKEN_SECRET: "unit-test-modal-secret",
-  };
-  assert.deepEqual(
-    loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' })
-      .legacySandboxScopeDefaults,
-    { personal: "modal", channel: "sprites" },
-  );
-  for (const value of [
-    "[]",
-    "null",
-    '{"personal:someone":"modal"}',
-    '{"personal":"missing"}',
-    '{"unknown":"sprites"}',
-    '{"personal":""}',
-  ])
-    assert.throws(() => loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: value }));
 });
 
 test("Fly shared application name is passed to the deployment provider", () => {

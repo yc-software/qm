@@ -77,13 +77,12 @@ test("eligible and forged recipients reject atomically rather than partially sen
 });
 
 test("provider default is pinned before retries and child provisioning, with no Modal fallback", async () => {
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
   const { createSandboxResources } = await import("../src/sandbox/sandbox-resources.ts");
   const { createSwarmService } = await import("../src/swarms/swarm-service.ts");
   const f = await swarmFixture();
   const options: Parameters<typeof createSandboxResources>[0] = {
     records: f.records,
-    defaults: createMemoryMap(),
+    defaults: f.defaults,
     backends: { aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
     defaultBackend: "aws",
     lock: f.serviceOptions.lock,
@@ -105,13 +104,12 @@ test("provider default is pinned before retries and child provisioning, with no 
 });
 
 test("selected scope computer determines new worker provider, but its private disk is not reused", async () => {
-  const { createMemoryMap } = await import("../src/persistence/durable-map.ts");
   const { createSandboxResources } = await import("../src/sandbox/sandbox-resources.ts");
   const { createSwarmService } = await import("../src/swarms/swarm-service.ts");
   const f = await swarmFixture();
   const sandboxes = createSandboxResources({
     records: f.records,
-    defaults: createMemoryMap(),
+    defaults: f.defaults,
     backends: { modal: f.backend, aws: { ...f.backend, profile: { ...f.backend.profile, backend: "aws" } } },
     defaultBackend: "modal",
     lock: f.serviceOptions.lock,
