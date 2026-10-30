@@ -1,7 +1,12 @@
 import { isEmbeddingModel, type EmbeddingModel } from "./model-overlay.ts";
 import { gatewayRoot, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
 import { GATEWAY_MODEL_PREFIX, GATEWAY_PROVIDER, setGatewayModels, type GatewayModel } from "./gateway-models.ts";
-import { modelOfferedInWebui, selectableBaseModels } from "./pi-models.ts";
+import {
+  modelOfferedInWebui,
+  nativeGatewayRoutes,
+  selectableBaseModels,
+  type ModelProviderAvailability,
+} from "./pi-models.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_MODELS = 1_000;
@@ -139,15 +144,38 @@ async function readCatalog(
   return data;
 }
 
+const NATIVE_GROUP_API: Readonly<Partial<Record<string, GatewayModel["api"]>>> = {
+  openai: "openai-responses",
+  anthropic: "anthropic-messages",
+};
+
+function derivedRoutes(
+  models: readonly (GatewayModel | EmbeddingModel)[],
+  explicit: Readonly<Record<string, string>>,
+  direct: Partial<ModelProviderAvailability>,
+): Record<string, string> {
+  const groups = new Map(models.map((model) => [model.id, model]));
+  return Object.fromEntries(
+    nativeGatewayRoutes().flatMap(({ id, provider, upstream }) => {
+      const api = NATIVE_GROUP_API[provider];
+      if (!api || id in explicit || direct[provider as "openai" | "anthropic"] === true) return [];
+      const group = groups.get(`${GATEWAY_MODEL_PREFIX}${provider}/${upstream}`);
+      return group && !isEmbeddingModel(group) && group.api === api ? [[id, `${provider}/${upstream}`]] : [];
+    }),
+  );
+}
+
 export function createGatewayCatalog(
   config: ModelGatewayTransportConfig,
   fetcher: typeof fetch = fetch,
   now: () => number = Date.now,
+  directProviders: () => Promise<Partial<ModelProviderAvailability>> = async () => ({}),
 ) {
   const root = gatewayRoot(config.url);
   const baseUrl = `${root}/v1`;
   let routes: Readonly<Record<string, string>> = { ...config.models };
   let discovered = false;
+  let direct: Partial<ModelProviderAvailability> | undefined;
   let expiresAt = 0;
   let retryAt = 0;
   let lastSuccessAt = 0;
@@ -168,6 +196,10 @@ export function createGatewayCatalog(
         const [listing, metadata] = await Promise.all([
           readCatalog(`${baseUrl}/models`, config, fetcher),
           readCatalog(`${root}/model_group/info`, config, fetcher),
+          directProviders().then(
+            (next) => (direct = next),
+            () => console.warn("[model] Direct provider key lookup failed; keeping last known keys"),
+          ),
         ]);
         const allowed = new Set(
           listing.flatMap((entry) => {
@@ -183,10 +215,12 @@ export function createGatewayCatalog(
         const next: Record<string, string> = Object.fromEntries(
           models.map((model) => [model.id, model.id.slice(GATEWAY_MODEL_PREFIX.length)]),
         );
+        const aliases = direct ? derivedRoutes(models, config.models, direct) : {};
         for (const [id, target] of Object.entries(config.models)) {
           if (allowed.has(target) && !models.some((m) => m.id === GATEWAY_MODEL_PREFIX + target && isEmbeddingModel(m)))
-            next[id] = target;
+            aliases[id] = target;
         }
+        Object.assign(next, aliases);
         routes = next;
         discovered = true;
         expiresAt = now() + TTL_MS;
@@ -199,10 +233,8 @@ export function createGatewayCatalog(
         );
         setGatewayModels(
           models,
-          Object.entries(config.models).flatMap(([id, target]) =>
-            !id.startsWith(GATEWAY_MODEL_PREFIX) && offeredAliases.has(id) && next[id]
-              ? [GATEWAY_MODEL_PREFIX + target]
-              : [],
+          Object.entries(aliases).flatMap(([id, target]) =>
+            !id.startsWith(GATEWAY_MODEL_PREFIX) && offeredAliases.has(id) ? [GATEWAY_MODEL_PREFIX + target] : [],
           ),
         );
       } catch (error) {

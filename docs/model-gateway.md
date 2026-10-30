@@ -8,7 +8,9 @@ Only models listed by both endpoints, marked as chat models with tool support, a
 
 Availability refreshes on demand every five minutes and before inference when expired. Successful refreshes replace the catalog, including an empty catalog. After discovery has succeeded, a failed refresh disables gateway routes until recovery without interrupting independent direct providers, with retries after thirty seconds. In-flight requests are not cancelled; the gateway still enforces its key permissions on every call. Retired selections remain in conversation history but cannot issue a new request through a different provider.
 
-`MODEL_GATEWAY_MODELS` is optional and accepts the existing `local-id=upstream-id` pairs. These provide compatibility aliases using QM's existing native model definitions; they do not limit discovered models. After discovery succeeds, aliases are usable only while their upstream IDs remain advertised. Gateways without the discovery endpoints can continue to use explicit mappings. Before the first successful discovery, failures leave those configured routes available. This compatibility fallback never restores a route removed by a successful discovery.
+QM's own OpenAI and Anthropic models route through the gateway automatically when discovery advertises the matching provider group: `<provider>/<model id>`, served only by that provider (OpenAI or Azure for OpenAI models), so `gpt-6.1-terra` uses `openai/gpt-6.1-terra`. Ultrafast IDs use their base model's group. These routes keep QM's native pricing, labels and Fast support, follow discovery like other gateway models, and hide the duplicate gateway entry from the picker. They are skipped for a provider while the organization has its own key for it, from the environment or the admin credential settings, so direct routing is unchanged; a newly saved key takes effect at the next discovery refresh.
+
+`MODEL_GATEWAY_MODELS` is optional and accepts the existing `local-id=upstream-id` pairs; an explicit pair overrides the automatic route, for example to send a model through a fallback router group. These provide compatibility aliases using QM's existing native model definitions; they do not limit discovered models. After discovery succeeds, aliases are usable only while their upstream IDs remain advertised. Gateways without the discovery endpoints can continue to use explicit mappings. Before the first successful discovery, failures leave those configured routes available. This compatibility fallback never restores a route removed by a successful discovery.
 
 For LiteLLM deployments, allow the two authenticated GET endpoints alongside inference paths. Do not expose administrative `/model/info` or key-management routes to enable discovery. Gateways implementing only the OpenAI model-list endpoint can use explicit mappings or implement the metadata contract below.
 
@@ -86,8 +88,8 @@ priority and fast 2×). An Ultrafast request served at another tier is priced fr
 base model's card at that tier, and a Fast request whose response reports no tier is
 priced at the Fast rate.
 
-Use an OpenAI API key or explicitly map the Ultrafast model ID to your gateway's
-corresponding base-model group in `MODEL_GATEWAY_MODELS`. The gateway must support Responses and
+Use an OpenAI API key, or a gateway that advertises the base model's OpenAI group
+(used automatically); an explicit `MODEL_GATEWAY_MODELS` pair can point elsewhere. The gateway must support Responses and
 forward `service_tier`. The choice is supported in Pi only, and is unavailable
 with ChatGPT subscription authentication. It is never selected as the default
 merely by enabling Fast.

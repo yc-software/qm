@@ -595,6 +595,13 @@ export function registerOpenRouterCatalogModel(definition: OpenRouterCatalogMode
   return model;
 }
 
+export function nativeGatewayRoutes(): Array<{ id: string; provider: string; upstream: string }> {
+  return MODEL_REGISTRY.flatMap(({ id, request }) => {
+    const provider = resolveBaseModel(id)?.provider;
+    return provider ? [{ id, provider: String(provider), upstream: request?.model ?? id }] : [];
+  });
+}
+
 export function modelRequestOverrides(id: string): ModelEntry["request"] {
   const request = REGISTRY_BY_ID.get(id)?.request;
   return request ? { ...request } : undefined;

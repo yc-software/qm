@@ -38,7 +38,7 @@ const group = (id = "vendor/new-model", extra: object = {}) => ({
   supported_openai_params: ["tools", "max_completion_tokens"],
   ...extra,
 });
-function fixture(models = [group()], aliases = {}) {
+function fixture(models = [group()], aliases = {}, direct: { openai?: boolean; anthropic?: boolean } = {}) {
   let clock = 0;
   let status = 200;
   let metadata = models;
@@ -48,7 +48,12 @@ function fixture(models = [group()], aliases = {}) {
     calls.push({ url: String(url), options });
     return Response.json({ data: String(url).endsWith("/models") ? listing : metadata }, { status });
   };
-  const catalog = createGatewayCatalog({ ...config, models: aliases }, fetcher, () => clock);
+  const catalog = createGatewayCatalog(
+    { ...config, models: aliases },
+    fetcher,
+    () => clock,
+    async () => direct,
+  );
   return {
     catalog,
     calls,
@@ -305,6 +310,98 @@ test("gateway-only fallback retains models hidden by picker aliases", async () =
       modelIds: new Set([`gateway/${target}`]),
     }),
   );
+});
+
+test("registered models route to the gateway's matching provider group without configuration", async () => {
+  const f = fixture([
+    group("openai/gpt-6.1-terra", { providers: ["openai"] }),
+    group("openai/gpt-6.1-sol", { providers: ["openai"] }),
+    group("anthropic/claude-opus-5-5", { providers: ["anthropic"] }),
+  ]);
+  await f.catalog.refresh();
+  assert.equal(f.catalog.transport.models["gpt-6.1-terra"], "openai/gpt-6.1-terra");
+  assert.equal(f.catalog.transport.models["gpt-6.1-sol-ultrafast"], "openai/gpt-6.1-sol");
+  assert.equal(f.catalog.transport.models["claude-opus-5-5"], "anthropic/claude-opus-5-5");
+  assert.equal(
+    modelGatewayRequest(f.catalog.transport, resolveModel("gpt-6.1-terra")!)?.target,
+    "openai/gpt-6.1-terra",
+  );
+  assert.ok(!builtInModelCatalog().some((model) => model.id === "gateway/openai/gpt-6.1-terra"));
+  assert.equal(
+    validateWebTurnModelOptions({ model: "gpt-6.1-terra" }, null, {
+      anthropic: false,
+      openai: false,
+      openrouter: false,
+      modelIds: new Set(Object.keys(f.catalog.transport.models)),
+    }),
+    null,
+  );
+  f.listing([]);
+  f.tick();
+  await f.catalog.refresh();
+  assert.equal(f.catalog.transport.models["gpt-6.1-terra"], undefined);
+});
+
+test("derived gateway routes defer to explicit mappings, direct keys and protocol mismatches", async () => {
+  const explicit = fixture(
+    [
+      group("openai/gpt-6.1-terra", { providers: ["openai"] }),
+      group("router/gpt-6.1-terra", { providers: ["openai", "azure"] }),
+    ],
+    { "gpt-6.1-terra": "router/gpt-6.1-terra" },
+  );
+  await explicit.catalog.refresh();
+  assert.equal(explicit.catalog.transport.models["gpt-6.1-terra"], "router/gpt-6.1-terra");
+
+  const keys: { openai?: boolean } = {};
+  const direct = fixture([group("openai/gpt-6.1-terra", { providers: ["openai"] })], {}, keys);
+  await direct.catalog.refresh();
+  assert.equal(direct.catalog.transport.models["gpt-6.1-terra"], "openai/gpt-6.1-terra");
+  keys.openai = true;
+  direct.tick();
+  await direct.catalog.refresh();
+  assert.equal(direct.catalog.transport.models["gpt-6.1-terra"], undefined);
+  assert.equal(modelGatewayRequest(direct.catalog.transport, resolveModel("gpt-6.1-terra")!), undefined);
+
+  const mismatch = fixture([
+    group("openai/gpt-6.1-terra", { providers: ["vertex_ai"] }),
+    group("anthropic/claude-opus-5-5"),
+  ]);
+  await mismatch.catalog.refresh();
+  assert.equal(mismatch.catalog.transport.models["gpt-6.1-terra"], undefined);
+  assert.equal(mismatch.catalog.transport.models["claude-opus-5-5"], undefined);
+});
+
+test("a failed provider key lookup keeps the last known keys, and derives nothing before one succeeds", async () => {
+  let lookup = async () => ({ openai: true });
+  let clock = 0;
+  const models = [group("openai/gpt-6.1-terra", { providers: ["openai"] }), group()];
+  const catalog = createGatewayCatalog(
+    config,
+    async (url) =>
+      Response.json({ data: String(url).endsWith("/models") ? models.map((m) => ({ id: m.model_group })) : models }),
+    () => clock,
+    () => lookup(),
+  );
+  await catalog.refresh();
+  lookup = async () => {
+    throw new Error("database unavailable");
+  };
+  clock += 300001;
+  await catalog.refresh();
+  assert.ok(catalog.transport.models["gateway/vendor/new-model"]);
+  assert.equal(catalog.transport.models["gpt-6.1-terra"], undefined);
+
+  const unknown = createGatewayCatalog(
+    config,
+    async (url) =>
+      Response.json({ data: String(url).endsWith("/models") ? models.map((m) => ({ id: m.model_group })) : models }),
+    () => clock,
+    () => lookup(),
+  );
+  await unknown.refresh();
+  assert.ok(unknown.transport.models["gateway/vendor/new-model"]);
+  assert.equal(unknown.transport.models["gpt-6.1-terra"], undefined);
 });
 
 test("gateway document support uses provider metadata rather than vision alone", async () => {

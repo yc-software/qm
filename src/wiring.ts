@@ -635,11 +635,6 @@ export function buildApp(
   if (unknownGatewayModels.length) {
     throw new Error(`MODEL_GATEWAY_MODELS contains unsupported models: ${unknownGatewayModels.join(", ")}`);
   }
-  const gatewayCatalog = config.modelGateway
-    ? createGatewayCatalog(config.modelGateway, overrides.modelCredentialFetch)
-    : undefined;
-  const gatewayTransport = gatewayCatalog?.transport;
-  const directProviderAvailability = providerKeysPresent(config);
   const directModelCredentials = createModelCredentialStore({
     backing: artifactMap("model_credentials"),
     keyMaterial: config.connectorSecretKey ?? randomBytes(32),
@@ -649,6 +644,13 @@ export function buildApp(
       ...(config.openrouterApiKey ? { openrouter: config.openrouterApiKey } : {}),
     },
   });
+  const gatewayCatalog = config.modelGateway
+    ? createGatewayCatalog(config.modelGateway, overrides.modelCredentialFetch, Date.now, () =>
+        directModelCredentials.availability(),
+      )
+    : undefined;
+  const gatewayTransport = gatewayCatalog?.transport;
+  const directProviderAvailability = providerKeysPresent(config);
   const modelCredentials: ModelCredentialStore = {
     ...directModelCredentials,
     async availability() {
