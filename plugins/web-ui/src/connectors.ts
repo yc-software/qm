@@ -4,14 +4,14 @@ import { api } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
 import { icon } from "./icons";
 import { connectorLogo } from "./connector-logo";
-import { CONNECTOR_LABELS } from "./connector-link";
+import { connectorDescription, connectorName, rememberConnectors, type ConnectorInfo } from "./connector-link";
 import { appState, replacePanePreservingFocus } from "./shell";
 import { scopedSession, scopedViewTopbar } from "./session-scope";
 import { focusDialogCancel, restoreDialogFocus, trapDialogFocus } from "./dialog-focus";
 import { isActiveGrant, isExpiredCredential, KeychainOperations } from "./keychain-state";
 import { listPageTpl } from "./list-page";
 
-interface ConnectorProvider {
+interface ConnectorProvider extends ConnectorInfo {
   mcpLabel?: string;
   connected?: boolean;
   needsReconnect?: boolean;
@@ -67,7 +67,7 @@ let keychainConnectorCredentials: KeychainConnectorCredential[] = [];
 let keychainGrants: KeychainGrant[] = [];
 let keychainAsks: KeychainAsk[] = [];
 let keychainScopeNames: Record<string, string> = {};
-let connectorNotice = "";
+let connectorNotice: string | (() => string) = "";
 let loadNotice = "";
 let addingCredential: { service: string; envKey: string; purpose: string } | null = null;
 let secureDropUrl: string | null = null;
@@ -355,8 +355,10 @@ export function clearConnectorNotice(): void {
 }
 
 export function noteConnectorResult(provider: string, status: string): void {
-  const name = CONNECTOR_LABELS[provider]?.name ?? provider;
-  connectorNotice = status === "connected" ? `${name}: connected.` : `${name}: connection failed.`;
+  connectorNotice = () =>
+    status === "connected"
+      ? `${connectorName(provider)}: connected.`
+      : `${connectorName(provider)}: connection failed.`;
 }
 
 function loadingPlaceholder(label: string): TemplateResult {
@@ -370,7 +372,7 @@ function drawConnectors(): void {
   const loading = accountsLoading || keysLoadingFresh;
   const entries = Object.entries(connectorProviders);
   const connectorCards = entries.map(([id, p]) => {
-    const meta = CONNECTOR_LABELS[id] ?? { name: p.mcpLabel ?? id, hosts: "" };
+    const description = connectorDescription(id);
     const connected = Boolean(p.connected);
     const needsReconnect = Boolean(p.needsReconnect);
     const available = Boolean(p.available);
@@ -393,10 +395,10 @@ function drawConnectors(): void {
           ${connectorLogo(id)}
           <div class="kc-resource-copy">
             <div class="kc-resource-title-row">
-              <h3>${meta.name}</h3>
+              <h3>${connectorName(id)}</h3>
               ${connectionState}
             </div>
-            ${meta.hosts ? html`<div class="kc-resource-meta">${meta.hosts}</div>` : ""}
+            ${description ? html`<div class="kc-resource-meta">${description}</div>` : ""}
           </div>
           <div class="kc-resource-actions">
             ${available ? html`<button class="btn" type="button" @click=${() => void startConnector(id)}>${connected || needsReconnect ? "Reconnect" : "Connect account"}</button>` : ""}
@@ -480,7 +482,9 @@ function drawConnectors(): void {
       <div class="kc-resource-list">${content}</div>
     </section>`;
   const rows: TemplateResult[] = [];
-  const notice = [connectorNotice, loadNotice].filter(Boolean).join(" ");
+  const notice = [typeof connectorNotice === "function" ? connectorNotice() : connectorNotice, loadNotice]
+    .filter(Boolean)
+    .join(" ");
   if (notice || loading)
     rows.push(html`<div class="status" role="status">${loading ? "Loading your keychain…" : notice}</div>`);
   if (addingCredential) rows.push(addCredentialCard());
@@ -540,6 +544,7 @@ export async function renderConnectors(): Promise<void> {
   const connDone = api<{ providers?: Record<string, ConnectorProvider> }>("/api/connectors").then(
     (value) => {
       if (!fresh()) return;
+      rememberConnectors(value.providers ?? {});
       connectorProviders = Object.fromEntries(
         Object.entries(value.providers ?? {}).filter(([, p]) => p.available || p.connected || p.needsReconnect),
       );
@@ -738,7 +743,7 @@ async function revokeConnector(provider: string): Promise<void> {
     : "";
   confirmationOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   confirmation = {
-    title: `Disconnect ${CONNECTOR_LABELS[provider]?.name ?? provider}?`,
+    title: `Disconnect ${connectorName(provider)}?`,
     body: `${impact} Automations using this account may stop working.`.trim(),
     action: "Disconnect account",
     run: async () => {
