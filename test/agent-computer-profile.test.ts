@@ -43,7 +43,7 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
     const sprites = createSpritesSandbox(workspace, {
       initializationStore: createMemoryMap(),
       advisoryLock: createMemoryAdvisoryLock(),
-      token: "test-token",
+      token: async () => "test-token",
     });
 
     const { spec, ...contract } = sprites.profile;
@@ -82,7 +82,7 @@ test("egress enforcement is effective only when core can mint a reachable proxy 
     const sprites = createSpritesSandbox(createLocalWorkspaceStore(dir), {
       initializationStore: createMemoryMap(),
       advisoryLock: createMemoryAdvisoryLock(),
-      token: "test-token",
+      token: async () => "test-token",
       egressProxyUrl: "https://egress-proxy.example.com",
     });
     assert.equal(sprites.profile.egressEnforcement, "domain", "the backend declares its configured capability");

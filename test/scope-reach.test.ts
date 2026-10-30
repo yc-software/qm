@@ -313,7 +313,7 @@ async function roomApp() {
   await built.directory.replaceChannels([{ channelId: "C-ph", name: "project-alpha" }]);
   const room = scopeId("channel", "C-ph");
   const resources = built.sandboxResources.forTurn({ actorId: "U1", scopeId: room, isCurrent: async () => true });
-  const record = await resources.create("U1", room, resources.defaultBackend(), "project-alpha", "room-ph");
+  const record = await resources.create("U1", room, await resources.defaultBackend(), "project-alpha", "room-ph");
   await resources.setDefault("U1", room, record.id);
   return built;
 }

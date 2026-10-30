@@ -24,11 +24,11 @@ export interface LegacyRoute {
 
 export function legacySandboxBackendForScope(
   scope: string,
-  fallback: SandboxBackendName,
+  fallback: () => SandboxBackendName,
   defaults?: LegacySandboxScopeDefaults,
 ): SandboxBackendName {
   const kind = parseScopeId(scope).kind;
-  return (kind && defaults?.[kind]) || fallback;
+  return (kind && defaults?.[kind]) || fallback();
 }
 
 export const legacySandboxId = (scopeId: string, backend: SandboxBackendName): string =>

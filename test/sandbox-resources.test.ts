@@ -82,13 +82,13 @@ function fixture(configure?: (backend: Sandbox) => void, legacyScopes = ["person
     records,
     defaults,
     backends: { local: backend },
-    defaultBackend: "local",
+    defaultBackend: async () => "local",
     lock,
     canUseScope: async (actor: string, scope: string) =>
       actor === "admin" || scope === `personal:${actor}` || (actor === "alice" && scope === "channel:team"),
   } satisfies Parameters<typeof createSandboxResources>[0];
   const resources = createSandboxResources(options);
-  const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: "local", resources });
+  const router = createSandboxRouter({ backends: { local: backend }, defaultBackend: async () => "local", resources });
   const layers = [{ scopeId: "personal:alice", mode: "rw" as const, mountPath: "/" }];
   return { records, defaults, routes, resources, router, provisioned, layers, backend, options, marker, upgrade };
 }
@@ -145,7 +145,7 @@ test("explicit sandbox profiles follow selected storage rather than the parent's
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
   const backends = { local: backend, modal };
   const resources = createSandboxResources({ ...options, backends });
-  const router = createSandboxRouter({ backends, defaultBackend: "local", resources });
+  const router = createSandboxRouter({ backends, defaultBackend: async () => "local", resources });
   const worker = await resources.create("alice", "personal:alice", "modal", "Worker");
   assert.equal((await router.profileFor!("personal:alice")).backend, "local");
   assert.equal((await router.profileFor!("personal:alice", worker.id)).backend, "modal");
@@ -584,7 +584,7 @@ test("retirement waits for background startup to commit its live registry row", 
         throw new Error("live background work");
     },
   });
-  const router = createSandboxRouter({ resources, backends: { local: backend }, defaultBackend: "local" });
+  const router = createSandboxRouter({ resources, backends: { local: backend }, defaultBackend: async () => "local" });
   assert.ok(supportsProcessSessions(router));
   const record = await resources.create("alice", "personal:alice", "local");
   const handle = await router.provision(layers, { sandboxId: record.id });
@@ -649,17 +649,20 @@ test("resource activation honors scope defaults and preserves explicit legacy pr
     ...options,
     upgrade: upgrade({
       availableBackends: ["aws", "modal", "sprites"],
-      legacyBackend: (scope) => legacySandboxBackendForScope(scope, "sprites", scopeDefaults),
+      legacyBackend: (scope) => legacySandboxBackendForScope(scope, () => "sprites", scopeDefaults),
     }),
     backends: { modal: backend, sprites: backend, aws: backend },
-    defaultBackend: "sprites",
+    defaultBackend: async () => "sprites",
   });
   assert.equal((await resources.resolve("personal:alice"))?.backend, "modal");
   assert.equal((await resources.resolve("channel:room"))?.backend, "sprites");
   assert.equal((await resources.resolve("personal:existing"))?.backend, "aws");
   assert.equal(await resources.resolve("personal:new"), null);
-  assert.equal(resources.defaultBackend(), "sprites");
-  assert.equal(legacySandboxBackendForScope("org", "sprites", scopeDefaults), "sprites");
+  assert.equal(await resources.defaultBackend(), "sprites");
+  assert.equal(
+    legacySandboxBackendForScope("org", () => "sprites", scopeDefaults),
+    "sprites",
+  );
 });
 
 for (const [kind, waiting] of [
@@ -670,8 +673,12 @@ for (const [kind, waiting] of [
 ] as const) {
   test(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
     const { options, backend, layers } = fixture();
-    const resources = createSandboxResources({ ...options, backends: { [kind]: backend }, defaultBackend: kind });
-    const router = createSandboxRouter({ backends: { [kind]: backend }, defaultBackend: kind, resources });
+    const resources = createSandboxResources({
+      ...options,
+      backends: { [kind]: backend },
+      defaultBackend: async () => kind,
+    });
+    const router = createSandboxRouter({ backends: { [kind]: backend }, defaultBackend: async () => kind, resources });
     const record = await resources.create("alice", "personal:alice", kind);
     await resources.setDefault("alice", "personal:alice", record.id);
     const handle = await router.provision(layers);
@@ -722,8 +729,12 @@ for (const [kind, waiting] of [
 
 test("Modal provisioning and destructive cleanup wait for active operations", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
-  const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
-  const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: "modal", resources });
+  const resources = createSandboxResources({
+    ...options,
+    backends: { modal: backend },
+    defaultBackend: async () => "modal",
+  });
+  const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: async () => "modal", resources });
   const record = await resources.create("alice", "personal:alice", "modal");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const entered = Promise.withResolvers<void>();
@@ -760,8 +771,16 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
 
 test("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
-  const resources = createSandboxResources({ ...options, backends: { sprites: backend }, defaultBackend: "sprites" });
-  const router = createSandboxRouter({ backends: { sprites: backend }, defaultBackend: "sprites", resources });
+  const resources = createSandboxResources({
+    ...options,
+    backends: { sprites: backend },
+    defaultBackend: async () => "sprites",
+  });
+  const router = createSandboxRouter({
+    backends: { sprites: backend },
+    defaultBackend: async () => "sprites",
+    resources,
+  });
   const record = await resources.create("alice", "personal:alice", "sprites");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const release = Promise.withResolvers<void>();
@@ -785,8 +804,12 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
 test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
   const { options, backend, layers } = fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
-  const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
-  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
+  const resources = createSandboxResources({
+    ...options,
+    backends: { e2b: parking },
+    defaultBackend: async () => "e2b",
+  });
+  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: async () => "e2b", resources });
   const record = await resources.create("alice", "personal:alice", "e2b");
   const handle = await router.provision(layers, { sandboxId: record.id });
   const entered = Promise.withResolvers<void>();
@@ -874,8 +897,12 @@ test("a computer stays held until its last live run releases it, and ended runs 
 test("two concurrent turns on one parking computer: only the last turn to finish parks it", async () => {
   const { options, backend, layers } = fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
-  const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
-  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
+  const resources = createSandboxResources({
+    ...options,
+    backends: { e2b: parking },
+    defaultBackend: async () => "e2b",
+  });
+  const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: async () => "e2b", resources });
   const record = await resources.create("alice", "personal:alice", "e2b");
   await resources.setDefault("alice", "personal:alice", record.id);
   const teardowns: unknown[] = [];

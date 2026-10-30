@@ -57,6 +57,7 @@ print("PHASE: image saved diffusion-out.png", flush=True)
 const ws = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "monitor-smoke-")));
 const sb = createSpritesSandbox(ws, {
   ...loadConfig().spritesSandbox,
+  token: async () => process.env.SPRITES_TOKEN ?? "",
   initializationStore: createMemoryMap(),
   advisoryLock: createMemoryAdvisoryLock(),
 });
