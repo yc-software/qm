@@ -309,9 +309,13 @@ test("the framed session twin falls back to Lax on a non-https origin", () => {
 test("openSession preserves signed app-only authority and rejects malformed markers", () => {
   const now = Math.floor(Date.now() / 1000);
   const claims = { k: "session", sub: "guest@partner.test", tenant: TENANT, iat: now, exp: now + 3600 };
-  assert.equal(openSession(seal({ ...claims, appOnly: true }, sessionKey), sessionKey, Date.now())?.appOnly, true);
-  assert.equal(openSession(seal(claims, sessionKey), sessionKey, Date.now())?.appOnly, undefined);
+  assert.equal(
+    openSession(seal({ ...claims, appOnly: true }, sessionKey), sessionKey, Date.now(), TENANT)?.appOnly,
+    true,
+  );
+  assert.equal(openSession(seal(claims, sessionKey), sessionKey, Date.now(), TENANT)?.appOnly, undefined);
+  assert.equal(openSession(seal(claims, sessionKey), sessionKey, Date.now(), TENANT)?.sub, "guest@partner.test");
   for (const appOnly of ["true", "false", 1, 0, null, {}]) {
-    assert.equal(openSession(seal({ ...claims, appOnly }, sessionKey), sessionKey, Date.now()), null);
+    assert.equal(openSession(seal({ ...claims, appOnly }, sessionKey), sessionKey, Date.now(), TENANT), null);
   }
 });

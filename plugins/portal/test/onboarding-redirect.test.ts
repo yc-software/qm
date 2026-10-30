@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 let providerConfigured = false;
 
 const upstream = createServer((req: IncomingMessage, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   if (req.url?.startsWith("/v1/surface-config")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(
@@ -39,7 +42,7 @@ const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 const sessionKey = deriveKey("onboarding-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string): string {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat: now, exp: now + 28800 }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, tenant: TENANT, iat: now, exp: now + 28800 }, sessionKey))}`;
 }
 
 test.after(() => {
