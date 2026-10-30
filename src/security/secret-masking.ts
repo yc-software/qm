@@ -11,6 +11,7 @@ const NON_SECRET_ENV_KEYS = new Set([
   "NO_PROXY",
   "no_proxy",
   "GIT_HTTP_PROXY_AUTHMETHOD",
+  "NODE_USE_ENV_PROXY",
 ]);
 
 const MIN_MASKABLE_LENGTH = 8;
