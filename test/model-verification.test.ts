@@ -161,7 +161,7 @@ import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
-import { probeModel } from "../src/harness/pi-harness.ts";
+import { probeModel } from "../src/model/pi-runtime.ts";
 import { modelFromOverlay } from "../src/model/pi-models.ts";
 import { parseModelOverlay } from "../src/model/model-overlay.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";

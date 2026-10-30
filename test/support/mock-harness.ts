@@ -6,11 +6,11 @@ import {
   type HarnessDetectResult,
   type HarnessTurnInput,
   type HarnessTurnResult,
-} from "../../src/harness/harness.ts";
+} from "../../src/agent/harness.ts";
 import { NonRetryableTurnError, ProviderTurnError, TitleRejected } from "../../src/core/turn-error.ts";
 import { NeedsApproval } from "../../src/tools/primitives.ts";
 import { toolCallApprovalKey } from "../../src/core/approval-id.ts";
-import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/harness/context-compaction.ts";
+import { deterministicCompactSummary, estimateHistoryTokens } from "../../src/agent/context-compaction.ts";
 import { countTokens } from "../../src/util/tokens.ts";
 import { recordStoppedTurn } from "../../src/harness/harness-shared.ts";
 import {

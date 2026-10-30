@@ -4,7 +4,7 @@ import { Worker } from "node:worker_threads";
 import type { AttachmentMeta, SessionEntry } from "../types.ts";
 import type { FileArtifact, FileArtifactStore } from "../files/file-artifact-store.ts";
 import { cachedArtifactData } from "../files/artifact-data-cache.ts";
-import { forModelContext } from "../harness/context-compaction.ts";
+import { forModelContext } from "../agent/context-compaction.ts";
 import { collectBytes } from "../util/bytes.ts";
 import {
   MAX_DOCUMENT_BYTES,

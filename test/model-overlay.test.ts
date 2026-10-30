@@ -306,7 +306,8 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
 });
 
 import { createServer } from "node:http";
-import { oneShot, createPiHarness, wantsFastMode } from "../src/harness/pi-harness.ts";
+import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { oneShot, wantsFastMode } from "../src/model/pi-runtime.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 
@@ -360,16 +361,16 @@ test("Pi serves an overlay via the inherited provider endpoint and metadata driv
     assert.equal(authorized, true);
     const harness = createPiHarness({ apiKey: "local-test-key", captureRequests: false });
     const turn = {
-      session: { id: "overlay-runtime" } as import("../src/harness/harness.ts").HarnessTurnInput["session"],
+      session: { id: "overlay-runtime" } as import("../src/agent/harness.ts").HarnessTurnInput["session"],
       input: "Hello",
       systemPrompt: "Be brief",
       history: [],
       runtime: { harnessId: "pi" as const, modelId: MODEL_ID },
       recordModelCall: () => {},
-      tools: {} as import("../src/harness/harness.ts").HarnessTurnInput["tools"],
+      tools: {} as import("../src/agent/harness.ts").HarnessTurnInput["tools"],
       scopeLabel: "personal:alice" as const,
       orgScopeId: "org:default-org" as const,
-      emit: async (entry: Parameters<import("../src/harness/harness.ts").HarnessTurnInput["emit"]>[0]) => ({
+      emit: async (entry: Parameters<import("../src/agent/harness.ts").HarnessTurnInput["emit"]>[0]) => ({
         ...entry,
         seq: 1,
         sessionId: "overlay-runtime",
@@ -495,7 +496,7 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
   }
 });
 
-import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
+import { resolveRuntimeChoice } from "../src/model/runtime-choice.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {

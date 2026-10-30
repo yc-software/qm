@@ -1,11 +1,11 @@
 import { test } from "node:test";
-import { createGoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord } from "../src/agent/goal.ts";
 import assert from "node:assert/strict";
 import { Check } from "typebox/value";
 import { fromJSONSchema, z, type ZodObject } from "zod";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
 import { resumeStrategy } from "../src/core/turn-resume.ts";
-import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { waitForClientResult } from "../src/runs/run-signal-store.ts";
 import { CommandDenied, NeedsApproval, type ToolContext } from "../src/tools/primitives.ts";
 import { createPostgresToolOutputStore, parkedOutputKey } from "../src/sessions/tool-output.ts";

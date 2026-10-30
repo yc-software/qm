@@ -23,12 +23,13 @@ import {
 import { safeSkillFilePath, type SkillResolution } from "../../skills/skill-store.ts";
 import { isSafeSkillName } from "../../skills/skill-name.ts";
 import type { SkillResult } from "../../tools/primitives.ts";
-import { TURN_FILES_DIR } from "../attachments.ts";
+import { TURN_FILES_DIR } from "../../core/attachments.ts";
 import { errMessage, swallow, swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
-import { loadActiveBundles } from "./turn-helpers.ts";
-import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import { loadActiveBundles } from "../../core/turn-helpers.ts";
+import type { OrchestratorDeps } from "./types.ts";
+import type { OrchestratorInput } from "../../core/turn-input.ts";
 
 const TURN_FILES_MAX_AGE_MS = 24 * 60 * 60_000;
 

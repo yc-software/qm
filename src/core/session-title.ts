@@ -1,11 +1,11 @@
 import type { ErrorLog } from "../admin/error-log.ts";
-import type { Harness } from "../harness/harness.ts";
+import type { Harness } from "../agent/harness.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { ScopeId } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { headSlice } from "../util/text.ts";
-import { stripTurnBoilerplate } from "./orchestrator/turn-helpers.ts";
+import { stripTurnBoilerplate } from "./turn-helpers.ts";
 import { TitleRejected } from "./turn-error.ts";
 
 function fallbackSessionTitle(text: string): string | undefined {

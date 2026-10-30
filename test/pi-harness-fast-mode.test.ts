@@ -1,19 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createPiHarness } from "../src/harness/pi-harness.ts";
+import { piUsageToCallUsage } from "../src/model/pi-runtime.ts";
 import {
   applyTurnEffort,
   applyFastSpeed,
   applyThinkingBinding,
-  piUsageToCallUsage,
   scaleCost,
   withRequestHeaders,
   FAST_COST_MULTIPLIER,
   modelSupportsFastMode,
   wantsFastMode,
-  createPiHarness,
-} from "../src/harness/pi-harness.ts";
+} from "../src/model/pi-runtime.ts";
 import type { PiHarnessOptions } from "../src/harness/pi-harness.ts";
-import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/agent/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";

@@ -2,7 +2,7 @@ import { availableRuntimeError } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { type PersistedApprovedHarnesses, type PersistedBaseModel } from "../src/resolution/config-store.ts";
-import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
+import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/model/runtime-choice.ts";
 import { registerOpenRouterCatalogModel } from "../src/model/pi-models.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 

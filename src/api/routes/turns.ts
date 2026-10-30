@@ -1,7 +1,7 @@
 import { fromJSONSchema, z, ZodObject } from "zod";
 import type { ClientToolDeclaration, TurnOrigin, TurnRequest } from "../../types.ts";
 import { resolveTurnOrigin } from "../../core/turn-origin.ts";
-import { renderSurfaceBriefing } from "../../core/orchestrator/prompt-blocks.ts";
+import { renderSurfaceBriefing } from "../../core/prompt-blocks.ts";
 import { samePerson } from "../../directory/person.ts";
 import { sendJson } from "../http.ts";
 import { isObj } from "./shared.ts";

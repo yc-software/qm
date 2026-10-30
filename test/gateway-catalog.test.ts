@@ -1,7 +1,7 @@
 import { nativeDocumentFormat } from "../src/harness/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
 import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
-import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
+import { resolveRuntimeChoice } from "../src/model/runtime-choice.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";

@@ -8,7 +8,7 @@ import { orgId as orgIdOf } from "../config.ts";
 import { scopeId } from "../types.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
@@ -27,7 +27,7 @@ import {
   resolveModel,
 } from "../model/pi-models.ts";
 import { selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
-import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
+import { resolveRuntimeChoiceDurable } from "../model/runtime-choice.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { pgTextSafe } from "../util/text.ts";

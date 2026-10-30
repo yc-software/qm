@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
-import { createGoalRecord, type GoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 

@@ -9,7 +9,7 @@ import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { resolveBrowserModel } from "../src/model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
-import { zeroUsage } from "../src/harness/replay.ts";
+import { zeroUsage } from "../src/agent/replay.ts";
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { stopAtEnd } from "./support/build-app.ts";
 

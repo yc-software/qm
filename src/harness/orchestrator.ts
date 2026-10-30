@@ -1,6 +1,6 @@
 import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { countTokens } from "../util/tokens.ts";
-import { SIDE_CHAT_GUIDANCE, sideChatContext } from "./side-chat-context.ts";
+import { SIDE_CHAT_GUIDANCE, sideChatContext } from "../core/side-chat-context.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE } from "../audit/audit-log.ts";
 import { createAdminCall } from "../tools/admin.ts";
@@ -20,13 +20,18 @@ import {
   type ExtractedDocumentText,
   historicalDocumentMetas,
   loadDocumentInputs,
-} from "./document-inputs.ts";
-import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment, isTextDocument } from "./document-kinds.ts";
-import { recoveredRuntime } from "../harness/runtime-recovery.ts";
+} from "../core/document-inputs.ts";
+import {
+  MAX_DOCUMENT_BYTES,
+  estimateDocumentTokens,
+  isDocumentAttachment,
+  isTextDocument,
+} from "../core/document-kinds.ts";
+import { recoveredRuntime } from "./runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
-import { assignedGoal, type GoalRecord, openGoal } from "../harness/goal.ts";
-import { connectorToolsNote, deferredMcpTools } from "../harness/deferred-tools.ts";
+import { assignedGoal, type GoalRecord, openGoal } from "../agent/goal.ts";
+import { connectorToolsNote, deferredMcpTools } from "./deferred-tools.ts";
 import { createSwarmGoalInbox, openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
 import type {
   CommandApprovalGrant,
@@ -42,11 +47,11 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
-import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
+import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "../core/turn-origin.ts";
+import { resolveTurnFastMode, turnRuntimePurpose } from "../core/turn-options.ts";
 import { orgId } from "../config.ts";
-import { renderGatewayContext } from "./gateway-context.ts";
-import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
+import { renderGatewayContext } from "../core/gateway-context.ts";
+import { deriveTurnOutcome, approvalBlocksInput } from "../core/turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
 import { resolveTurnContext } from "../resolution/turn-context.ts";
@@ -56,7 +61,7 @@ import { turnDeliveryProvenance } from "../delivery/delivery-store.ts";
 import type { DirectoryStore, DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 import { resolveEnvironmentId } from "../environments/environment-store.ts";
 import type { Lease, LeaseAttempt } from "../sessions/session-store.ts";
-import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "./failure-copy.ts";
+import { SESSION_BUSY_FIRE_TEXT, SESSION_BUSY_USER_TEXT } from "../core/failure-copy.ts";
 import { CONFIG_DEFAULTS } from "../config.ts";
 import { acquireLeaseWithin, isOverheardEntry } from "../sessions/session-store.ts";
 import { supportsProcessSessions, supportsScopeProfile } from "../sandbox/sandbox.ts";
@@ -77,7 +82,7 @@ import {
 } from "../credentials/keychain.ts";
 import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
-import { membershipEvent, renderSandboxProviders } from "./environment-facts.ts";
+import { membershipEvent, renderSandboxProviders } from "../core/environment-facts.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
@@ -100,8 +105,8 @@ import type {
   HarnessTurnInput,
   HarnessTurnResult,
   RuntimeChoice,
-} from "../harness/harness.ts";
-import { forModelContext, forSearchView } from "../harness/context-compaction.ts";
+} from "../agent/harness.ts";
+import { forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
   quarantineReleaseKey,
   securityScreenChunks,
@@ -113,7 +118,7 @@ import {
   type ToolResultScreen,
   type ToolResultScreenInput,
 } from "../security/security-posture.ts";
-import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
+import { commandApprovalId, inputApprovalId } from "../core/approval-id.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
@@ -121,7 +126,7 @@ import { skillsIndex } from "../skills/materialize.ts";
 import { isIdeasConversation, PROACTIVE_OPENER_PROMPT } from "../onboarding/onboarding.ts";
 import { createToolContext, NeedsApproval, CommandDenied, type CommandCredential } from "../tools/primitives.ts";
 import type { FileArtifact } from "../files/file-artifact-store.ts";
-import { artifactImageLoader } from "../harness/replay-images.ts";
+import { artifactImageLoader } from "../agent/replay-images.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
 import { openSessionEntry, searchSessionEntries } from "../sessions/history-search.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
@@ -141,7 +146,7 @@ import {
   turnFileId,
   type ArtifactRegistration,
   withoutAlreadyIngested,
-} from "./attachments.ts";
+} from "../core/attachments.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import {
   findTrailingPartialTurn,
@@ -149,14 +154,14 @@ import {
   runtimeSwitchNote,
   turnAtSeq,
   unrecordedResultEntries,
-} from "./turn-resume.ts";
-import type { RecordedTurn } from "./turn-resume.ts";
+} from "../core/turn-resume.ts";
+import type { RecordedTurn } from "../core/turn-resume.ts";
 import {
   recordedMessageTimestamps,
   renderOverheard,
   selectOverheardToImport,
   type OverheardEntryPayload,
-} from "../harness/replay.ts";
+} from "../agent/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { headSlice, jsonbSafeStringify } from "../util/text.ts";
@@ -168,7 +173,7 @@ import {
   ProviderTurnError,
   turnFailureMessage,
   type TurnFailurePayload,
-} from "./turn-error.ts";
+} from "../core/turn-error.ts";
 import { personKey, rosterIds, samePerson } from "../directory/person.ts";
 import type { FeatureName } from "../feature-flags.ts";
 import { sleep } from "../util/async.ts";
@@ -176,11 +181,12 @@ import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { SkillResolution } from "../skills/skill-store.ts";
-import type { Orchestrator, OrchestratorDeps, OrchestratorInput } from "./orchestrator/types.ts";
+import type { Orchestrator, OrchestratorDeps } from "./orchestrator/types.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import { codexSubscriptionModelId, isHarnessId, CODEX_SUBSCRIPTION_PROVIDER } from "../model/pi-models.ts";
-import type { ProviderKeys } from "../harness/pi-harness.ts";
-import { resolveIndividualAuthRouting } from "./individual-auth-routing.ts";
-import { createSessionTitles } from "./session-title.ts";
+import type { ProviderKeys } from "../model/pi-runtime.ts";
+import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
+import { createSessionTitles } from "../core/session-title.ts";
 import {
   MAX_AUTO_ATTACHMENT_SCREEN_BYTES,
   approvalGrantId,
@@ -196,7 +202,7 @@ import {
   stripAckPrefix,
   turnPostKeys,
   visibleTitleEntryText,
-} from "./orchestrator/turn-helpers.ts";
+} from "../core/turn-helpers.ts";
 import {
   currentTimeBlock,
   deliveryMenu,
@@ -206,7 +212,7 @@ import {
   renderStandingObligations,
   renderSystemContext,
   type SystemContextBlocks,
-} from "./orchestrator/prompt-blocks.ts";
+} from "../core/prompt-blocks.ts";
 import { createCompaction } from "./orchestrator/compaction.ts";
 import { startLeaseKeepalive } from "./orchestrator/lease-keepalive.ts";
 import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
@@ -215,10 +221,10 @@ import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
-import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
+import { reconcileMessageRevisions, revisionAnchorAt } from "../core/message-revisions.ts";
 
-export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
-export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
+export { egressClaimAllowingControlPlane, filterConnectorSkills } from "../core/turn-helpers.ts";
+export type { Orchestrator, OrchestratorDeps } from "./orchestrator/types.ts";
 
 class ProjectRosterChanged extends Error {}
 
@@ -3472,7 +3478,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? {
                   runtimeControl: (
                     active: RuntimeChoice,
-                    request: import("../harness/runtime-types.ts").RuntimeRequest,
+                    request: import("../agent/runtime-types.ts").RuntimeRequest,
                     signal?: AbortSignal,
                   ) =>
                     deps.runtime!(

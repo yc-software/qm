@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { randomUUID } from "node:crypto";
 import { createMockHarness } from "./support/mock-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
 import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";

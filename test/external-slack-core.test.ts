@@ -7,7 +7,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { externalTools } from "../src/core/orchestrator/external-tools.ts";
+import { externalTools } from "../src/harness/orchestrator/external-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";

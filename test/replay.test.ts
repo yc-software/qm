@@ -10,7 +10,7 @@ import {
   replayPreamble,
   seedPriorTurns,
   selectOverheardToImport,
-} from "../src/harness/replay.ts";
+} from "../src/agent/replay.ts";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
 
 function entry(type: SessionEntry["type"], text: string): SessionEntry {

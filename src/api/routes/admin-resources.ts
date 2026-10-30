@@ -24,7 +24,7 @@ import {
   ALL_PROVIDERS_AVAILABLE,
   type HarnessId,
 } from "../../model/pi-models.ts";
-import { resolveRuntimeChoiceDurable } from "../../harness/harness-router.ts";
+import { resolveRuntimeChoiceDurable } from "../../model/runtime-choice.ts";
 import { sanitizeBranding } from "../../resolution/branding.ts";
 import {
   credentialInjectionError,

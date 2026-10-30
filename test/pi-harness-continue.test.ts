@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { continuableContext, createPiHarness } from "../src/harness/pi-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import { INTERRUPTED_TOOL_RESULT } from "../src/harness/context-compaction.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
+import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";

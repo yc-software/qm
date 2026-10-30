@@ -33,7 +33,7 @@ import { startSignalPoll, type RunSignalStore } from "../runs/run-signal-store.t
 import type { ScopeId } from "../types.ts";
 import { swallow, swallowAs } from "../util/errors.ts";
 import { summarizeHistory } from "./history-summary.ts";
-import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "./harness.ts";
+import { defineHarness, type Harness, type HarnessTurnInput, type HarnessTurnResult } from "../agent/harness.ts";
 import { buildDetectionPrompt, parseDetectVerdict, renderDetectPrompt } from "./pi-harness.ts";
 import { coreToolOptions, endedOnPurpose } from "./agent-tools.ts";
 import {
@@ -58,7 +58,7 @@ import {
   zeroUsage,
   OMITTED_IMAGE_TEXT,
   type PiReplayMessage,
-} from "./replay.ts";
+} from "../agent/replay.ts";
 
 export interface ClaudeHarnessOptions extends HarnessToolPlumbing {
   modelId?: string | ((scope?: ScopeId) => string | undefined);

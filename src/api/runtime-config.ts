@@ -1,7 +1,7 @@
 import { errMessage } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { RuntimePurpose } from "../resolution/config-store.ts";
-import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
+import { resolveRuntimeChoiceDurable } from "../model/runtime-choice.ts";
 import { resolveIndividualAuthRouting } from "../core/individual-auth-routing.ts";
 import { gatewayModelCatalog } from "../model/gateway-models.ts";
 import type { AppDeps } from "./app-types.ts";
@@ -26,7 +26,7 @@ import {
   type HarnessId,
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalogForHarness, selectableModelCatalog } from "../model/model-catalog.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
+import type { RuntimeChoice } from "../agent/harness.ts";
 
 export type RuntimeDeps = Partial<
   Pick<

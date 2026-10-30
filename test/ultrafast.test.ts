@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { calculateCost } from "@earendil-works/pi-ai";
-import { zeroUsage } from "../src/harness/replay.ts";
+import { zeroUsage } from "../src/agent/replay.ts";
 import { zstdDecompressSync } from "node:zlib";
-import { buildModelRuntime, piUsageToCallUsage, wantsFastMode } from "../src/harness/pi-harness.ts";
+import { piUsageToCallUsage } from "../src/model/pi-runtime.ts";
+import { buildModelRuntime, wantsFastMode } from "../src/model/pi-runtime.ts";
 import { getRequiredModel, modelSupportedByHarness, resolveModel } from "../src/model/pi-models.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
 

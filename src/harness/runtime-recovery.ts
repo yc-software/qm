@@ -1,4 +1,4 @@
-import type { RuntimeChoice } from "./harness.ts";
+import type { RuntimeChoice } from "../agent/harness.ts";
 import type { SessionEntry } from "../types.ts";
 import { isHarnessId } from "../model/pi-models.ts";
 import { isObj } from "../util/objects.ts";

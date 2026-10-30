@@ -8,28 +8,26 @@ import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 import {
   buildDetectionPrompt,
   createPiHarness,
-  oneShot,
   parseDetectVerdict,
   piHarnessConfigOptions,
-  piLastAssistantTextOrThrow,
-  piTurnError,
   providerRefusalError,
   refusalFallbackNote,
   refusalFallbackModelId,
   REFUSAL_FALLBACK_MODEL_IDS,
   renderDetectPrompt,
-  resolveConfiguredModelId,
   sanitizeLlmPayload,
   trimPayloadToByteBudget,
   seedRawMessagesIntoSession,
   toPiMessage,
   transportFromModel,
 } from "../src/harness/pi-harness.ts";
+import { piLastAssistantTextOrThrow, piTurnError } from "../src/model/pi-runtime.ts";
+import { oneShot, resolveConfiguredModelId } from "../src/model/pi-runtime.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
-import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
-import type { HarnessDetectInput, HarnessLlmRequestRecord } from "../src/harness/harness.ts";
+import type { HarnessDetectInput, HarnessLlmRequestRecord } from "../src/agent/harness.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
 

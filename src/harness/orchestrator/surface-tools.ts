@@ -1,4 +1,4 @@
-import { isSessionTurn } from "../turn-origin.ts";
+import { isSessionTurn } from "../../core/turn-origin.ts";
 import type {
   Conversation,
   DeliveryProvenance,
@@ -34,13 +34,14 @@ import {
   type OutboundFile,
   type OpenStoredFile,
   type ArtifactRegistration,
-} from "../attachments.ts";
+} from "../../core/attachments.ts";
 import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
 import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { adminSessionUrl } from "../../util/admin-links.ts";
-import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
-import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "../../core/turn-helpers.ts";
+import type { OrchestratorDeps } from "./types.ts";
+import type { OrchestratorInput } from "../../core/turn-input.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;

@@ -1,5 +1,5 @@
 import { isSessionTurn } from "../core/turn-origin.ts";
-import { replayableRequest } from "../core/orchestrator/turn-helpers.ts";
+import { replayableRequest } from "../core/turn-helpers.ts";
 import {
   createSlackSessionStatus,
   type SlackStatusActivity,
@@ -43,8 +43,8 @@ import { isTerminal } from "../runs/run-store.ts";
 import type { GoalView, TurnStream } from "../runs/turn-stream.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { swallowAs } from "../util/errors.ts";
-import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
+import { resolveRuntimeChoiceDurable } from "../model/runtime-choice.ts";
+import type { RuntimeChoice } from "../agent/harness.ts";
 import { modelDisplayName } from "../model/pi-models.ts";
 import type { ConversationEvent } from "../loops/sources/adapter.ts";
 import { slackConversationRef } from "../loops/sources/slack.ts";

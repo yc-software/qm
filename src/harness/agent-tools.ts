@@ -7,8 +7,8 @@ import { MAX_OUTBOUND_FILES, type OutboundFile } from "../core/attachments.ts";
 import { MaskedExecutionError } from "../security/secret-masking.ts";
 import type { DocumentInput } from "../core/document-inputs.ts";
 import { createKeyedQueue } from "../util/async.ts";
-import { createGrindMeter, grindState } from "./grind.ts";
-import type { HarnessHandoff, RuntimeRequest } from "./runtime-types.ts";
+import { createGrindMeter, grindState } from "../agent/grind.ts";
+import type { HarnessHandoff, RuntimeRequest } from "../agent/runtime-types.ts";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
@@ -53,7 +53,7 @@ import {
   resumeGoal,
   takeGoalMessages,
   waitForGoalMessages,
-} from "./goal.ts";
+} from "../agent/goal.ts";
 import {
   toolLabelOf,
   toolResultProvenance,
@@ -128,7 +128,7 @@ export interface ToolContextRef {
 
   goalRound?: number;
 
-  goalMeter?: import("./grind.ts").GrindMeter;
+  goalMeter?: import("../agent/grind.ts").GrindMeter;
   goalInbox?: GoalInbox;
   modelHasPrices?: () => boolean;
   governGoal?: GoalGovernor;
@@ -205,7 +205,7 @@ function fmtCronSchedule(c: {
 }
 
 interface CronLike {
-  runtime?: import("./harness.ts").RuntimeChoice | null;
+  runtime?: import("../agent/harness.ts").RuntimeChoice | null;
   id: string;
   title?: string;
   enabled: boolean;

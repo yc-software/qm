@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { harnessToolContext, oneShotModelUtilities, oneShotRunner } from "../src/harness/harness-shared.ts";
 import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../src/security/security-posture.ts";
-import type { HarnessLlmRequestRecord, HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
+import type { HarnessLlmRequestRecord, HarnessTurnInput, HarnessTurnResult } from "../src/agent/harness.ts";
 
 function capturingRunPrompt(reply = "one-shot reply"): {
   turns: HarnessTurnInput[];
@@ -148,7 +148,7 @@ test("shared harness security screens use auxiliary coordinates", async () => {
 });
 
 test("harness adapters hand the session goal and its saver to the tool context, ignoring legacy snapshots", async () => {
-  const { createGoalRecord } = await import("../src/harness/goal.ts");
+  const { createGoalRecord } = await import("../src/agent/goal.ts");
   const goal = createGoalRecord({ objective: "carry the goal across turns" });
   const history = [
     { type: "system", payload: { kind: "goal", goal }, seq: 0 },

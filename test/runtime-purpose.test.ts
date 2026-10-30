@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { type PersistedBaseModel } from "../src/resolution/config-store.ts";
-import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
+import { resolveRuntimeChoice, resolveRuntimeChoiceDurable } from "../src/model/runtime-choice.ts";
 import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../src/core/turn-options.ts";
-import type { RuntimeChoice } from "../src/harness/harness.ts";
+import type { RuntimeChoice } from "../src/agent/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { testConfigStore, testMap } from "./support/test-database.ts";
 

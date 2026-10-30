@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createContextSummaryPayload, type SessionStore } from "../src/sessions/session-store.ts";
-import { forModelContext } from "../src/harness/context-compaction.ts";
+import { forModelContext } from "../src/agent/context-compaction.ts";
 import { scopeId } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 

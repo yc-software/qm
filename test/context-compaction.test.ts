@@ -1,11 +1,13 @@
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { createHarnessRouter, resolveRuntimeChoiceDurable } from "../src/harness/harness-router.ts";
+import { createHarnessRouter } from "../src/harness/harness-router.ts";
+import { resolveRuntimeChoiceDurable } from "../src/model/runtime-choice.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createOrchestrator } from "../src/harness/orchestrator.ts";
+import { type OrchestratorInput } from "../src/core/turn-input.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
@@ -27,9 +29,9 @@ import {
   forModelContext,
   overBudgetFraction,
   planCompaction,
-} from "../src/harness/context-compaction.ts";
+} from "../src/agent/context-compaction.ts";
 import { countTokens } from "../src/util/tokens.ts";
-import type { Harness, HarnessCompactInput } from "../src/harness/harness.ts";
+import type { Harness, HarnessCompactInput } from "../src/agent/harness.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { TeamStore } from "../src/teams/teams.ts";
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
@@ -1045,7 +1047,7 @@ test("the token estimate counts the environment note persisted on a user entry",
 
 test("runtime handoff continues once with saved results under the original run and remaining deadline", async () => {
   const base = createMockHarness();
-  const seen: import("../src/harness/harness.ts").HarnessTurnInput[] = [];
+  const seen: import("../src/agent/harness.ts").HarnessTurnInput[] = [];
   let resets = 0;
   const choice = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "high", fastMode: false };
   const harness: Harness = {
@@ -1225,7 +1227,7 @@ test("cron and loop dispatch use purpose defaults while task handoffs and later 
   const base = createMockHarness();
   const category = { harnessId: "pi" as const, modelId: "gpt-6-astra", effortLevel: "low", fastMode: true };
   const handoff = { ...category, modelId: "gpt-6-sol", fastMode: false };
-  const seen: import("../src/harness/harness.ts").RuntimeChoice[] = [];
+  const seen: import("../src/agent/harness.ts").RuntimeChoice[] = [];
   const adapter: Harness = {
     ...base,
     turns: {

@@ -3,7 +3,7 @@ import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as mockHarness from "./support/mock-harness.ts";
 import { recordSteerIntake } from "../src/harness/harness-shared.ts";
-import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
+import type { HarnessTurnInput, HarnessTurnResult } from "../src/agent/harness.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 

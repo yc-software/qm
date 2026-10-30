@@ -1,5 +1,5 @@
-import type { RuntimeChoice } from "./harness.ts";
-import type { RuntimeService } from "./runtime-types.ts";
+import type { RuntimeChoice } from "../agent/harness.ts";
+import type { RuntimeService } from "../agent/runtime-types.ts";
 import type { App } from "../api/app.ts";
 import {
   runtimeConfigBody,

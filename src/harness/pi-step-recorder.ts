@@ -2,14 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { AssistantMessage, TextContent, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolContextRef } from "./agent-tools.ts";
-import type { HarnessTurnInput } from "./harness.ts";
+import type { HarnessTurnInput } from "../agent/harness.ts";
 import {
   recordedToolArguments,
   type ReplayStep,
   type StoredResultContent,
   type ToolCallWire,
   type ToolResultWire,
-} from "./replay.ts";
+} from "../agent/replay.ts";
 
 type RecordedEntry = Parameters<NonNullable<ToolContextRef["emit"]>>[0];
 type TurnEntry = Parameters<HarnessTurnInput["emit"]>[0];

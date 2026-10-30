@@ -17,7 +17,7 @@ import {
   overBudgetFraction,
   planCompaction,
   recentEntryCountWithinBudget,
-} from "../../harness/context-compaction.ts";
+} from "../../agent/context-compaction.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import { errMessage } from "../../util/errors.ts";
 import { createKeyedQueue } from "../../util/async.ts";

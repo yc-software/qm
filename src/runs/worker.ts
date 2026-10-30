@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { ErrorLog } from "../admin/error-log.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import type { TurnResult } from "../types.ts";
-import type { Orchestrator } from "../core/orchestrator.ts";
+import type { Orchestrator } from "../harness/orchestrator.ts";
 import { isNonRetryable, NonRetryableTurnError, ProviderTurnError, turnFailureMessage } from "../core/turn-error.ts";
 import { resolveTurnOrigin } from "../core/turn-origin.ts";
 import {

@@ -35,7 +35,7 @@ export interface TriggerDeps {
 }
 
 export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fastMode" | "attachments"> {
-  runtime?: import("../harness/harness.ts").RuntimeChoice | null;
+  runtime?: import("../agent/harness.ts").RuntimeChoice | null;
   title?: string;
   owner: string;
   ownerScopeId: ScopeId;

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import { getRequiredModel, modelRequestOverrides } from "../src/model/pi-models.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
 
 // Exercise the real AgentSession and SDK serializer, not just the effort setter.
 for (const [modelId, upper, allowed, off, minimal] of [

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import type { RuntimeChoice } from "../src/harness/harness.ts";
+import type { RuntimeChoice } from "../src/agent/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { testConfigStore } from "./support/test-database.ts";
 

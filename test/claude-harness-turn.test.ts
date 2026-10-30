@@ -2,11 +2,11 @@ import { readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
-import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/agent/harness.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
-import { createGoalRecord } from "../src/harness/goal.ts";
+import { createGoalRecord } from "../src/agent/goal.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 

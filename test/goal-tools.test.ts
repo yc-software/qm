@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createAgentTools, pauseStampAfterToolCall, type ToolContextRef } from "../src/harness/agent-tools.ts";
-import { createGrindMeter } from "../src/harness/grind.ts";
+import { createGrindMeter } from "../src/agent/grind.ts";
 import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import { emptyEndingNote } from "../src/harness/pi-harness.ts";
 import {
@@ -12,7 +12,7 @@ import {
   goalFloorUnmet,
   openGoal,
   type GoalRecord,
-} from "../src/harness/goal.ts";
+} from "../src/agent/goal.ts";
 import type { ScopeId } from "../src/types.ts";
 
 function toolbox(screenToolResult?: ToolContextRef["screenToolResult"]) {

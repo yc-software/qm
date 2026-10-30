@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import * as mockHarness from "./support/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
 import { recorded } from "./support/recorded.ts";
 
 let exercise: (turn: HarnessTurnInput) => Promise<void>;

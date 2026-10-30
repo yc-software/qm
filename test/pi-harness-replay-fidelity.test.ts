@@ -1,14 +1,14 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness, EMPTY_ENDING_NOTE } from "../src/harness/pi-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
-import { forModelContext } from "../src/harness/context-compaction.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
+import { forModelContext } from "../src/agent/context-compaction.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { type RunSignalStore } from "../src/runs/run-signal-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { artifactImageLoader } from "../src/harness/replay-images.ts";
+import { artifactImageLoader } from "../src/agent/replay-images.ts";
 import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sessions/tool-output.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";

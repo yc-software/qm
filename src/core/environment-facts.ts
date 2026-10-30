@@ -1,4 +1,4 @@
-import { retainedSnapshot } from "../harness/context-snapshot.ts";
+import { retainedSnapshot } from "../agent/context-snapshot.ts";
 import type { SessionEntry } from "../types.ts";
 
 export const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>

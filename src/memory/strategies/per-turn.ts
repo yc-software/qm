@@ -1,4 +1,4 @@
-import type { HarnessModelUtilities } from "../../harness/harness.ts";
+import type { HarnessModelUtilities } from "../../agent/harness.ts";
 import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";

@@ -8,7 +8,7 @@ import {
   claudeReplayTranscript,
   spawnClaudeProcess,
 } from "../src/harness/claude-harness.ts";
-import { zeroUsage, type PiReplayMessage } from "../src/harness/replay.ts";
+import { zeroUsage, type PiReplayMessage } from "../src/agent/replay.ts";
 
 test("Claude replay preserves paired tool calls and results as untrusted history", () => {
   const messages: PiReplayMessage[] = [

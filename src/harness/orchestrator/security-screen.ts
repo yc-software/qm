@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../../types.ts";
-import type { TurnOrigin } from "../turn-origin.ts";
+import type { TurnOrigin } from "../../core/turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
 import {
   securityScreenSystemPrompt,
@@ -8,7 +8,7 @@ import {
   type SecurityScreenVerdict,
 } from "../../security/security-posture.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
-import type { HarnessLlmRequestRecord } from "../../harness/harness.ts";
+import type { HarnessLlmRequestRecord } from "../../agent/harness.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { sleep } from "../../util/async.ts";
 import { headSlice } from "../../util/text.ts";

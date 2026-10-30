@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { membershipEvent, renderSandboxProviders } from "../src/core/environment-facts.ts";
-import { currentTimeBlock, renderStandingObligations } from "../src/core/orchestrator/prompt-blocks.ts";
+import { currentTimeBlock, renderStandingObligations } from "../src/core/prompt-blocks.ts";
 import type { Cron, SessionEntry } from "../src/types.ts";
 
 const member = (principalId: string, displayName = principalId.toLowerCase(), slackId?: string) => ({

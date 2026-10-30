@@ -1,4 +1,4 @@
-import { TURN_STOPPED_KIND, type ReplayImageRef } from "./replay.ts";
+import { TURN_STOPPED_KIND, type ReplayImageRef } from "../agent/replay.ts";
 import { randomBytes } from "node:crypto";
 import {
   parseSecurityScreenVerdict,
@@ -7,11 +7,16 @@ import {
 } from "../security/security-posture.ts";
 import type { ScopeId, SessionEntry } from "../types.ts";
 import { createAgentTools, type AgentToolsOptions, type ToolContextRef } from "./agent-tools.ts";
-import { goalWorkFromEntries } from "./goal.ts";
-import type { HarnessLlmRequestRecord, HarnessModelUtilities, HarnessTurnInput, HarnessTurnResult } from "./harness.ts";
+import { goalWorkFromEntries } from "../agent/goal.ts";
+import type {
+  HarnessLlmRequestRecord,
+  HarnessModelUtilities,
+  HarnessTurnInput,
+  HarnessTurnResult,
+} from "../agent/harness.ts";
 import { sanitizeTitle, TITLE_GENERATION_PROMPT, titleUserPrompt } from "./pi-harness.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
-import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
+import { INTERRUPTED_TOOL_RESULT } from "../agent/context-compaction.ts";
 
 export interface HarnessToolPlumbing {
   reachExec?: boolean;

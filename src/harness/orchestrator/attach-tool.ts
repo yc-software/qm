@@ -10,7 +10,7 @@ import {
   discardOutbound,
   MAX_OUTBOUND_FILES,
   type ArtifactRegistration,
-} from "../attachments.ts";
+} from "../../core/attachments.ts";
 
 export interface AttachToolsContext {
   sandbox: Sandbox;

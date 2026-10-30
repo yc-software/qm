@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openSessionEntry, searchSessionEntries } from "../src/sessions/history-search.ts";
-import { forModelContext, forSearchView } from "../src/harness/context-compaction.ts";
+import { forModelContext, forSearchView } from "../src/agent/context-compaction.ts";
 import { createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import { createAgentTools } from "../src/harness/agent-tools.ts";
 import type { SessionEntry } from "../src/types.ts";

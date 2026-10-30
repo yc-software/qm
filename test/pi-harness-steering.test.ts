@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
-import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessLlmRequestRecord, HarnessTurnInput } from "../src/agent/harness.ts";
 import { promptEnvelopeBody, type NewEntry } from "../src/sessions/session-store.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";

@@ -7,7 +7,7 @@ import { gunzipSync } from "node:zlib";
 import * as Sentry from "@sentry/node";
 import { flushErrorReporting, initializeErrorReporting, traceQueued } from "../plugins/chassis/src/error-reporting.ts";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";

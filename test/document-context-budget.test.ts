@@ -5,7 +5,7 @@ import {
   overBudgetFraction,
   planCompaction,
   compactTranscript,
-} from "../src/harness/context-compaction.ts";
+} from "../src/agent/context-compaction.ts";
 import { estimateDocumentTokens } from "../src/core/document-kinds.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 

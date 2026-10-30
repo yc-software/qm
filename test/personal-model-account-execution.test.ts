@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { mock, test } from "node:test";
 import * as piHarness from "../src/harness/pi-harness.ts";
 import * as mockHarness from "./support/mock-harness.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
 

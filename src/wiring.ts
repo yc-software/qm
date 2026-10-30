@@ -67,7 +67,7 @@ import {
   type SandboxResources,
 } from "./sandbox/sandbox-resources.ts";
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
-import type { probeModel } from "./harness/pi-harness.ts";
+import type { probeModel } from "./model/pi-runtime.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
 import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
@@ -308,13 +308,15 @@ import {
 } from "./model/company-chatgpt-auth.ts";
 import { keychainHarnessAuthEnv } from "./credentials/harness-auth-env.ts";
 import { createClaudeHarness, claudeHarnessConfigOptions } from "./harness/claude-harness.ts";
-import { createPiHarness, piHarnessConfigOptions, type ProviderKeys } from "./harness/pi-harness.ts";
-import { createHarnessRouter, resolveRuntimeChoiceDurable } from "./harness/harness-router.ts";
+import { createPiHarness, piHarnessConfigOptions } from "./harness/pi-harness.ts";
+import { type ProviderKeys } from "./model/pi-runtime.ts";
+import { createHarnessRouter } from "./harness/harness-router.ts";
+import { resolveRuntimeChoiceDurable } from "./model/runtime-choice.ts";
 import { selectableModelCatalog } from "./model/model-catalog.ts";
-import type { Harness } from "./harness/harness.ts";
+import type { Harness } from "./agent/harness.ts";
 import { createSecurityScreenProxy, type SecurityScreener } from "./security/security-screener.ts";
 import { createMemoryStrategy } from "./memory/strategy.ts";
-import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./core/orchestrator.ts";
+import { createOrchestrator, egressClaimAllowingControlPlane, type OrchestratorDeps } from "./harness/orchestrator.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,

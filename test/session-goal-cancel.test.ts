@@ -6,10 +6,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import { createGoalRecord, openGoal } from "../src/harness/goal.ts";
-import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
+import { createGoalRecord, openGoal } from "../src/agent/goal.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { Principal } from "../src/types.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { testConfig } from "./support/test-config.ts";
 
 function freshApp() {

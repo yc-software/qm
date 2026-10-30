@@ -1,4 +1,4 @@
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import {
   modelSupportedByHarness,
   modelUnavailableReason,

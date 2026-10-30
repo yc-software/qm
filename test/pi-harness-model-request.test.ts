@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createPiHarness } from "../src/harness/pi-harness.ts";
 import { modelRequestOverrides } from "../src/model/pi-models.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
 
 const modelId = "gpt-5.4";
 

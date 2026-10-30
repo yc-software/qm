@@ -11,7 +11,7 @@ import { sideChatContext } from "../src/core/side-chat-context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
-import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import type { HarnessTurnInput } from "../src/agent/harness.ts";
 
 function discussions(text: string) {
   const json = text.split("```untrusted-data\n")[1]?.split("\n```")[0];

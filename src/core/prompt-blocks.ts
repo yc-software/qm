@@ -1,10 +1,10 @@
 import cronstrue from "cronstrue";
 import { CronPattern } from "croner";
-import { memberLabel } from "../environment-facts.ts";
-import { DEFAULT_CRON_TIMEZONE } from "../../cron/schedule.ts";
-import type { CandidateDestination, Cron, Monitor, SurfaceBriefing, Webhook } from "../../types.ts";
-import { promptText } from "../../util/text.ts";
-import type { DirectoryChannel, DirectoryMember } from "../../directory/directory-store.ts";
+import { memberLabel } from "./environment-facts.ts";
+import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
+import type { CandidateDestination, Cron, Monitor, SurfaceBriefing, Webhook } from "../types.ts";
+import { promptText } from "../util/text.ts";
+import type { DirectoryChannel, DirectoryMember } from "../directory/directory-store.ts";
 
 export function deliveryMenu(candidates: CandidateDestination[], defaultKey: string | undefined): string {
   const lines = candidates

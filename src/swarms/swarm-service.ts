@@ -2,7 +2,7 @@ import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
 import { createHash, randomUUID } from "node:crypto";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { RunStore } from "../runs/run-store.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
@@ -15,7 +15,7 @@ import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
 import { errMessage, swallow, swallowAs } from "../util/errors.ts";
-import { goalFromParams, GoalCreateParams, type GoalCreateInput } from "../harness/goal.ts";
+import { goalFromParams, GoalCreateParams, type GoalCreateInput } from "../agent/goal.ts";
 import { Check } from "typebox/value";
 import {
   assertSwarmOpen,

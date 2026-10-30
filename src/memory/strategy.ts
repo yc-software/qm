@@ -1,7 +1,7 @@
 import type { ScopeId } from "../types.ts";
 import type { MemoryCaptureMetadata } from "./facts.ts";
 import { classifiedMemory } from "./classification.ts";
-import type { HarnessModelUtilities } from "../harness/harness.ts";
+import type { HarnessModelUtilities } from "../agent/harness.ts";
 import type { MemoryService } from "./memory-service.ts";
 import { createPerTurnStrategy } from "./strategies/per-turn.ts";
 import { createAgentOnlyStrategy } from "./strategies/agent-only.ts";
