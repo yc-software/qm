@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { createS3DurableByteStore } from "../src/files/durable-byte-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("S3 fallback streams large parts and aborts on transfer failure", async () => {
   let fail = false;
@@ -10,6 +13,7 @@ test("S3 fallback streams large parts and aborts on transfer failure", async () 
   const received: Buffer[] = [];
   const bytes = createS3DurableByteStore({
     bucket: "test",
+    area: "docstore",
     _client: {
       async send(command: any) {
         const name = command.constructor.name;

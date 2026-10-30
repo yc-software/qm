@@ -14,6 +14,9 @@ import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.t
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-remote-secret".repeat(3);

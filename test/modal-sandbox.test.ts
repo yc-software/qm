@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
@@ -20,6 +21,9 @@ import { ModalSandboxGoneError, type ModalClient, type ModalSession } from "../s
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -980,6 +984,7 @@ test("scope and scratch sandboxes carry ownership tags", async () => {
   const h = await sandbox.provision(layers);
   assert.deepEqual(fake.tagsOf(fake.current(h.id)!.sandboxId), {
     "qm-org": orgId(),
+    "qm-tenant": TEST_TENANT,
     "qm-prefix": "qmt",
     "qm-kind": "scope",
   });
@@ -987,7 +992,12 @@ test("scope and scratch sandboxes carry ownership tags", async () => {
   const scratchIds: string[] = [];
   for await (const id of fake.client.listRunning!({ "qm-kind": "scratch" })) scratchIds.push(id);
   assert.equal(scratchIds.length, 1);
-  assert.deepEqual(fake.tagsOf(scratchIds[0]!), { "qm-org": orgId(), "qm-prefix": "qmt", "qm-kind": "scratch" });
+  assert.deepEqual(fake.tagsOf(scratchIds[0]!), {
+    "qm-org": orgId(),
+    "qm-tenant": TEST_TENANT,
+    "qm-prefix": "qmt",
+    "qm-kind": "scratch",
+  });
   await sandbox.teardown(scratch);
 });
 
@@ -1052,21 +1062,23 @@ test("a sandbox approaching Modal's lifetime limit is checkpointed and retired e
   assert.ok((await store.get(scope))!.expiresAtMs! > Date.now() + 23 * 3600_000);
 });
 
-test("untracked scope sandboxes are terminated after a grace period while scratch and other deployments are kept", async () => {
+test("untracked scope sandboxes are terminated after a grace period while scratch, other deployments and other tenants are kept", async () => {
   const store = createMemoryMap<StoredModalSandbox>();
   const s = make({ store, orphanGraceMs: 40 });
   const handle = await s.provision(layers);
   const tracked = fake.current(handle.id)!.sandboxId;
-  const orphan = fake.createUntracked({ "qm-org": orgId(), "qm-prefix": "qmt", "qm-kind": "scope" });
-  const scratch = fake.createUntracked({ "qm-org": orgId(), "qm-prefix": "qmt", "qm-kind": "scratch" });
-  const foreign = fake.createUntracked({ "qm-org": orgId(), "qm-prefix": "other", "qm-kind": "scope" });
+  const owned = { "qm-org": orgId(), "qm-tenant": TEST_TENANT, "qm-prefix": "qmt" };
+  const orphan = fake.createUntracked({ ...owned, "qm-kind": "scope" });
+  const scratch = fake.createUntracked({ ...owned, "qm-kind": "scratch" });
+  const foreign = fake.createUntracked({ ...owned, "qm-prefix": "other", "qm-kind": "scope" });
+  const otherTenant = fake.createUntracked({ ...owned, "qm-tenant": randomUUID(), "qm-kind": "scope" });
   assert.equal((await s.reapDeepIdle!(72 * 3600_000)).reaped, 0, "first sighting starts the grace period");
-  assert.equal(fake.runningCount(), 4);
+  assert.equal(fake.runningCount(), 5);
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal((await s.reapDeepIdle!(72 * 3600_000)).reaped, 1);
   const running = new Set<string>();
   for await (const id of fake.client.listRunning!({})) running.add(id);
-  assert.deepEqual(running, new Set([tracked, scratch, foreign]));
+  assert.deepEqual(running, new Set([tracked, scratch, foreign, otherTenant]));
   assert.equal(running.has(orphan), false);
 });
 

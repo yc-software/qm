@@ -250,42 +250,6 @@ if (app === "acme-signer") process.stdout.write("CORE_API_URL\\nCORE_SIGNING_SEC
   }
 });
 
-test("Fly doctor demands the plain name too for a dual-role (core + sandbox) secret", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-dual-"));
-  const bin = join(dir, "fake-fly.cjs");
-  const prior = process.env.FLY_BIN;
-  writeFileSync(
-    bin,
-    `#!/usr/bin/env node
-const args = process.argv.slice(2);
-const app = args[args.indexOf("-a") + 1];
-if (app === "acme-core") process.stdout.write("CAPABILITY_SECRET\\nCONNECTOR_SECRET_KEY\\nCORE_SIGNING_SECRET\\nPORTAL_IDENTITY_SECRET\\nSKILL_SIGNING_SECRET\\nFLY_API_TOKEN\\nFLY_DEPLOY_API_TOKEN\\nFLY_RESIDENT_ENV_ANTHROPIC_API_KEY\\n");
-`,
-  );
-  chmodSync(bin, 0o755);
-  process.env.FLY_BIN = bin;
-  try {
-    await assert.rejects(
-      flyDoctor(
-        {
-          ...config,
-          target: "fly",
-          appPrefix: "acme",
-          region: "sjc",
-          flyOrg: "personal",
-          sandbox: { app: "acme-sandboxes", secretEnv: ["ANTHROPIC_API_KEY"] },
-        },
-        dir,
-      ),
-      /acme-core: missing ANTHROPIC_API_KEY/,
-    );
-  } finally {
-    if (prior === undefined) delete process.env.FLY_BIN;
-    else process.env.FLY_BIN = prior;
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("Fly doctor reports apps that are not created yet as pending, not missing secrets", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-doctor-predeploy-"));
   const bin = join(dir, "fake-fly.cjs");

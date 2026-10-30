@@ -5,6 +5,9 @@ import * as mockHarness from "./support/mock-harness.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let exercise: (turn: HarnessTurnInput) => Promise<void>;
 mock.module("./support/mock-harness.ts", {

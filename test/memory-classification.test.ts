@@ -9,6 +9,9 @@ import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { UNTRACKED_PROVENANCE, type MemoryProvenance } from "../src/memory/facts.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function fixture() {
   const memory = createMemoryService(createLocalWorkspaceStore(await mkdtemp(join(tmpdir(), "classification-"))));

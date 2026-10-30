@@ -99,7 +99,7 @@ const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => b
   "model-openrouter": (env) => env.MODEL_PROVIDER?.trim() === "openrouter",
 };
 
-export const SANDBOX_WIDE_SECRET_PREFIX = "FLY_RESIDENT_ENV_";
+const SANDBOX_WIDE_SECRET_PREFIX = "FLY_RESIDENT_ENV_";
 
 export function validateCoreSecretEnv(env: NodeJS.ProcessEnv): string[] {
   const sandboxWide = Object.keys(env).filter((name) => name.startsWith(SANDBOX_WIDE_SECRET_PREFIX));

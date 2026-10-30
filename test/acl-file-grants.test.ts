@@ -5,6 +5,9 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createMemoryFileArtifactStore, type FileArtifactRef } from "../src/files/file-artifact-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import type { Grant, Principal } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const owner = "personal:alice";
 const recipient = "personal:bob";

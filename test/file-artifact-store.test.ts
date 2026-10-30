@@ -12,6 +12,9 @@ import {
 } from "../src/files/durable-byte-store.ts";
 import { createMemoryFileArtifactStore, fileArtifactId, type PutFileInput } from "../src/files/file-artifact-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const owner = scopeId("channel", "C1");
 const other = scopeId("personal", "U9");
@@ -85,7 +88,7 @@ test("DurableByteStore (local-fs) accepts concurrent identical writes", async ()
     const results = await Promise.all(Array.from({ length: 8 }, () => bytes.put(big)));
     for (const r of results) assert.equal(r.blobKey, results[0]!.blobKey);
     assert.deepEqual(await drain(bytes as never, results[0]!.blobKey), big);
-    const leftovers = (await readdir(join(dir, "files"))).filter((name) => name.endsWith(".part"));
+    const leftovers = (await readdir(join(dir, TEST_TENANT, "files"))).filter((name) => name.endsWith(".part"));
     assert.deepEqual(leftovers, [], "no orphaned partial files survive the race");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -234,7 +237,7 @@ test("local stream failure removes partial bytes and publishes nothing", async (
       throw new Error("source disconnected");
     }
     await assert.rejects(bytes.put(failing()), /source disconnected/);
-    assert.deepEqual(await readdir(join(dir, "files")), []);
+    assert.deepEqual(await readdir(join(dir, TEST_TENANT, "files")), []);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

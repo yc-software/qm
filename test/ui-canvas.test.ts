@@ -14,6 +14,9 @@ import { uiStateId } from "../src/surfaces/ui-state.ts";
 import { installSharedCanvas, readUiCanvas } from "../src/surfaces/ui-canvas.ts";
 import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 

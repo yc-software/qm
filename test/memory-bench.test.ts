@@ -19,6 +19,9 @@ import {
   type BenchConversation,
   type BenchResult,
 } from "../src/memory/bench.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const FIXTURE_DIR = fileURLToPath(new URL("./memory-bench/conversations/", import.meta.url));
 

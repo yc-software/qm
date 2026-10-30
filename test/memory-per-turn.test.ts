@@ -8,6 +8,9 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ACTOR = "U1";
 const CHANNEL = scopeId("channel", "C9");

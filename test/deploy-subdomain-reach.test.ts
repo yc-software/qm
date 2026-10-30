@@ -20,6 +20,9 @@ import { verifyPortalIdentity, PORTAL_IDENTITY_HEADER } from "../src/auth/portal
 import { viewerIdentityKey } from "../src/deploy/access-token.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();

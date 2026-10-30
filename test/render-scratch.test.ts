@@ -15,6 +15,9 @@ import {
 import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createFakeRender } from "./support/fake-render.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function setup(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "render-scratch-"));

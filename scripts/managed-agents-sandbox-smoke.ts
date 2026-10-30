@@ -10,6 +10,10 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
+import { randomUUID } from "node:crypto";
+import { enterTenant } from "../src/tenants/context.ts";
+
+enterTenant(randomUUID());
 
 const apiToken = process.env.DO_AGENTS_API_TOKEN;
 const apiBaseUrl = process.env.DO_AGENTS_API_BASE_URL;

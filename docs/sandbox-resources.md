@@ -72,3 +72,15 @@ Before upgrading from a release without resource-aware readers, drain its cores 
 Scoped commands require an explicit target or selected default. Disposable scratch computers use the selected computer's provider without reusing its disk or resource identity; with no selection they use the installation provider, without creating a default. An unavailable selected provider fails explicitly rather than substituting another provider.
 
 To move work between providers, create a computer, restore the required work from git or Files, verify it, and select it as the new default. Selection does not copy files or migrate running jobs.
+
+## Tenant isolation
+
+Every stored byte and provider object is keyed by the tenant bound to the request or job; nothing resolves without one.
+
+- Object storage keys are `<S3_PREFIX><area>/<tenant>/<key>`: `transfer`, `docstore` (files and direct uploads), `session-shares`, `deploy-git`, `tool-output`, `app-data`. Home snapshots are `<area>/<tenant>/<scope>.tar` in each provider's snapshot bucket (`sprites-home`, `smolmachines-home`, `e2b-home`, `managed-agents-home`, `modal-home`, and the AWS sandbox prefix); AWS app data is `<data prefix>/<tenant>/<deployment>`.
+- Local disk uses the same shape under `DATA_DIR`: `transfer/<tenant>`, `docstore/<tenant>`, `session-shares/<tenant>`, `tool-output/<tenant>`, `workspaces/<tenant>/<scope>`, and `<DEPLOY_GIT_DIR>/<tenant>/<deployment>.git`.
+- Provider names are `<prefix>-<first 8 tenant hex>-<scope slug>-<hash of prefix, tenant and scope>`, so two tenants with the same scope id never share a machine. Modal sandboxes also carry a `qm-tenant` tag, and the orphan sweep only lists the bound tenant's sandboxes. Deployment app names and public subdomains stay globally unique and are reached only through the tenant's own deployment rows.
+- The local Docker backend hands core the host Docker socket and shares the host network, so it serves single-tenant installs only and refuses to provision when the `tenants` table has more than one row.
+- Deployment-wide sandbox secrets (`FLY_RESIDENT_ENV_*`, `sandbox.env`, `sandbox.secretEnv`) are refused; a credential that a computer needs lives in the keychain of the scope that owns it.
+
+The release migration (`node src/migrate-main.ts`) moves storage written before tenant prefixes under the database's only tenant: it copies each object to its tenant key (keeping a newer copy already there), deletes the original, merges legacy `DATA_DIR` directories, and refuses when legacy data exists and the database has more than one tenant. Provider machines cannot be renamed, so after the upgrade each scope provisions a new machine under its tenant name and restores its home from the moved snapshot; snapshot every computer before upgrading, then retire the old-named machines with the provider's own tools. Running AWS and Render apps pick up their tenant data prefix on the next redeploy.

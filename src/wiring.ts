@@ -872,6 +872,10 @@ export function buildApp(
     createLocalSandbox(workspace, {
       ...config.localSandbox,
       onError: sandboxOnError,
+      tenantCount: async () => {
+        if (!pgArtifactMap) throw new Error("The local Docker sandbox requires the QM database");
+        return Number((await pgArtifactMap.pool.q("SELECT count(*) AS n FROM tenants"))[0]?.n);
+      },
     });
   const buildSprites = (): Sandbox => {
     const { snapshotS3Bucket, ...sprites } = config.spritesSandbox;

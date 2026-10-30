@@ -11,6 +11,9 @@ import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolu
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const org = scopeId("org", "default-org");
 const internalActor = { externalId: "U1" };

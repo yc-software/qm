@@ -235,28 +235,21 @@ export const localSandboxActive = (config: QmConfig): boolean =>
     ? effectiveSandboxBackend(config) === "local"
     : config.sandbox?.backend === "local" && effectiveSandboxBackend(config) !== "superserve");
 
-export function sandboxCoreEnv(
-  config: QmConfig,
-  lookup?: (name: string) => string | undefined,
-): { env: Record<string, string>; missingSecrets: string[] } {
+export function sandboxCoreEnv(config: QmConfig): { env: Record<string, string> } {
   const env: Record<string, string> = {};
-  const missingSecrets: string[] = [];
   const sb = config.sandbox;
-  if (!sb) return { env, missingSecrets };
+  if (!sb) return { env };
   if (localSandboxActive(config)) {
     env.SANDBOX_BACKEND = "local";
     if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
-    return { env, missingSecrets };
+    return { env };
   }
   const backend =
     sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
       ? effectiveSandboxBackend(config)
       : sb.backend;
-  if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
-    env.SANDBOX_BACKEND = backend;
-    return { env, missingSecrets };
-  }
-  return { env, missingSecrets };
+  if (backend === "agent37" || backend === "superserve" || backend === "e2b") env.SANDBOX_BACKEND = backend;
+  return { env };
 }
 
 function stripJsonComments(text: string): string {

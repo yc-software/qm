@@ -15,6 +15,9 @@ import { installFakeAgent37, FAKE_AGENT37_API_KEY, type FakeAgent37 } from "./su
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let fake: FakeAgent37;
 let sandbox: Sandbox;

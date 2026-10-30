@@ -33,7 +33,7 @@ interface Listed {
   LastModified: Date;
 }
 
-export function storageAreas(config: Config, clientFor: (region?: string, endpoint?: string) => S3Send) {
+function storageAreas(config: Config, clientFor: (region?: string, endpoint?: string) => S3Send) {
   const objects: ObjectArea[] = [];
   const add = (client: S3Send, bucket: string | undefined, from: string, to = from, under?: string): void => {
     const slash = (path: string): string => `${path.replace(/\/+$/, "")}/`;
