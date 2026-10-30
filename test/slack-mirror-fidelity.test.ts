@@ -320,14 +320,26 @@ test(
       assert.deepEqual(await storedRaw(), edited);
 
       await cache.ingest([
-        toEvent(slackMessageToIngestEvent({ ...original, ts: "2000", text: "broken \ud800 emoji" }, ids))!,
+        toEvent(
+          slackMessageToIngestEvent(
+            {
+              ...original,
+              ts: "2000",
+              text: "broken \ud800 emoji",
+              metadata: { event_type: "alarm", event_payload: { "key\udc00": "value" } },
+            } as Parameters<typeof slackMessageToIngestEvent>[0],
+            ids,
+          ),
+        )!,
       ]);
       const [lone] = (
-        await db.query("SELECT raw->>'text' AS text FROM channel_messages WHERE container = $1 AND ts = '2000'", [
-          container,
-        ])
+        await db.query(
+          "SELECT raw->>'text' AS text, raw->'metadata'->'event_payload' AS payload FROM channel_messages WHERE container = $1 AND ts = '2000'",
+          [container],
+        )
       ).rows;
       assert.equal(lone?.text, "broken \ufffd emoji");
+      assert.deepEqual(lone?.payload, { "key\ufffd": "value" });
     } finally {
       await db.end();
       await cache.close();

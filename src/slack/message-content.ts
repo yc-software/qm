@@ -70,11 +70,12 @@ export function slackMessageContent(message: object): { text: string; files: Sla
   const visit = (current: SlackNode, nested: boolean): void => {
     for (const attachment of nodes(current.attachments)) {
       if (attachment.is_msg_unfurl !== true && attachment.is_share !== true) {
-        const text = nested || attachment.from_url ? "" : attachmentText(attachment);
+        const preview = Boolean(attachment.from_url) || attachment.is_app_unfurl === true;
+        const text = nested || preview ? "" : attachmentText(attachment);
         if (text) rendered.push(text);
         continue;
       }
-      const body = attachmentText(attachment);
+      const body = (str(attachment.text) || str(attachment.fallback)).trim();
       rendered.push(body ? `[${forwardLabel(attachment)}] ${body}` : `[${forwardLabel(attachment)}]`);
       for (const file of nodes(attachment.files)) addFile(file, str(attachment.author_id) || undefined);
       for (const inner of nestedMessages(attachment)) visit(inner, true);

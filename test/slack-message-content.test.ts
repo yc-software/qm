@@ -144,6 +144,7 @@ test("slackMessageContent leaves link previews out of the text", () => {
         text: "A long page description",
         fallback: "Example post",
       },
+      { is_app_unfurl: true, app_unfurl_url: "https://tracker.example.com/T-1", title: "T-1", fallback: "Tracker" },
     ],
   });
 
