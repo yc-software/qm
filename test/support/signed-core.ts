@@ -34,3 +34,24 @@ export function inChassisTenant<A extends unknown[], R>(
 ): (...args: A) => R {
   return (...args) => withChassisTenant(tenant, () => fn(...args));
 }
+
+let clock = 0;
+
+export function signedFetcher(secret: string, tenant = TEST_TENANT): typeof fetch {
+  return (input, init = {}) => {
+    const headers = { ...(init.headers as Record<string, string> | undefined) };
+    if (headers["x-signature"]) return fetch(input, init);
+    const url = new URL(String(input));
+    const body = typeof init.body === "string" ? init.body : "";
+    const nowSec = Math.floor(Date.now() / 1000) - 240 + (clock++ % 480);
+    const signed = signedRequestHeaders(
+      secret,
+      init.method ?? "GET",
+      url.pathname + url.search,
+      body,
+      { [TENANT_HEADER]: tenant, ...headers },
+      nowSec,
+    );
+    return fetch(input, { ...init, headers: signed });
+  };
+}

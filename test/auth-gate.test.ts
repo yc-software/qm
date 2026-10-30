@@ -9,9 +9,10 @@ import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, OTHER_TENANT, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -40,8 +41,9 @@ function sign(method: string, pathWithQuery: string, body: string): Record<strin
   const ts = Math.floor(Date.now() / 1000);
   return {
     "content-type": "application/json",
+    ...TENANT_HEADERS,
     "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${pathWithQuery}\n${body}`),
+    "x-signature": signRequest(SECRET, ts, canonicalPayload(method, pathWithQuery, body, TEST_TENANT)),
   };
 }
 
@@ -84,8 +86,9 @@ test("a non-numeric x-timestamp is rejected even when the signature matches the 
     const body = turnBody("U1");
     const headers = {
       "content-type": "application/json",
+      ...TENANT_HEADERS,
       "x-timestamp": "not-a-number",
-      "x-signature": signRequest(SECRET, Number.NaN, `POST\n/v1/turns\n${body}`),
+      "x-signature": signRequest(SECRET, Number.NaN, canonicalPayload("POST", "/v1/turns", body, TEST_TENANT)),
     };
     const res = await fetch(`${srv.base}/v1/turns`, { method: "POST", headers, body });
     assert.equal(res.status, 401);
@@ -101,6 +104,35 @@ test("a correctly-signed turn is accepted", async () => {
     const res = await fetch(`${srv.base}/v1/turns`, { method: "POST", headers: sign("POST", "/v1/turns", body), body });
     assert.equal(res.status, 200);
     assert.equal(((await res.json()) as { status: string }).status, "ok");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the tenant header is signed: rebinding a signed request to another tenant is refused", async () => {
+  const srv = start(SECRET);
+  try {
+    const body = turnBody("U1");
+    const headers = { ...sign("POST", "/v1/turns", body), "x-qm-tenant": OTHER_TENANT };
+    assert.equal((await fetch(`${srv.base}/v1/turns`, { method: "POST", headers, body })).status, 401);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a signed request without a tenant is refused", async () => {
+  const srv = start(SECRET);
+  try {
+    const body = turnBody("U1");
+    const ts = Math.floor(Date.now() / 1000);
+    const headers = {
+      "content-type": "application/json",
+      "x-timestamp": String(ts),
+      "x-signature": signRequest(SECRET, ts, canonicalPayload("POST", "/v1/turns", body)),
+    };
+    const res = await fetch(`${srv.base}/v1/turns`, { method: "POST", headers, body });
+    assert.equal(res.status, 401);
+    assert.equal(((await res.json()) as { message: string }).message, "this request carries no verifiable tenant");
   } finally {
     await srv.close();
   }
@@ -179,7 +211,11 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
     const tsA = Math.floor(Date.now() / 1000);
     const noSha = await fetch(`${base}/v1/blobs`, {
       method: "POST",
-      headers: { "x-timestamp": String(tsA), "x-signature": signRequest(SECRET, tsA, "POST\n/v1/blobs\n") },
+      headers: {
+        ...TENANT_HEADERS,
+        "x-timestamp": String(tsA),
+        "x-signature": signRequest(SECRET, tsA, canonicalPayload("POST", "/v1/blobs", "", TEST_TENANT)),
+      },
       body,
     });
     assert.equal(noSha.status, 400);
@@ -187,9 +223,10 @@ test("POST /v1/blobs requires x-content-sha256 when authed, then binds the body 
     const ok = await fetch(`${base}/v1/blobs`, {
       method: "POST",
       headers: {
+        ...TENANT_HEADERS,
         "x-content-sha256": sha,
         "x-timestamp": String(tsB),
-        "x-signature": signRequest(SECRET, tsB, `POST\n/v1/blobs\n${sha}`),
+        "x-signature": signRequest(SECRET, tsB, canonicalPayload("POST", "/v1/blobs", sha, TEST_TENANT)),
       },
       body,
     });
@@ -204,7 +241,6 @@ test("egress-audit ingest requires source auth: unsigned is 401, signed lands â€
   const server = createServer(built.app, {
     signingSecret: SECRET,
     egressAudit: built.egressAudit,
-    requireSignedPortalIdentity: true,
     capabilitySecret: `${SECRET}-cap`,
     portalIdentitySecret: `${SECRET}-portal`,
   });

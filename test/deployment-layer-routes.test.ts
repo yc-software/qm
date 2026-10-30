@@ -8,12 +8,13 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -42,8 +43,9 @@ function start(overrides: { deploymentLayerDir?: string } = {}, serverDeps: Reco
 function signed(method: string, body: string, ts = Math.floor(Date.now() / 1000)): Record<string, string> {
   return {
     "content-type": "application/json",
+    ...TENANT_HEADERS,
     "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${PATH}\n${body}`),
+    "x-signature": signRequest(SECRET, ts, canonicalPayload(method, PATH, body, TEST_TENANT)),
   };
 }
 
@@ -90,10 +92,7 @@ test("a baked filesystem layer with no durable record GETs source=filesystem and
 });
 
 test("a signed PUT lands under portal-identity enforcement (deploy-time sync is a SYSTEM write)", async () => {
-  const srv = start(
-    {},
-    { requireSignedPortalIdentity: true, capabilitySecret: `${SECRET}-cap`, portalIdentitySecret: `${SECRET}-portal` },
-  );
+  const srv = start({}, { capabilitySecret: `${SECRET}-cap`, portalIdentitySecret: `${SECRET}-portal` });
   try {
     const unsigned = await fetch(`${srv.base}${PATH}`, {
       method: "PUT",
