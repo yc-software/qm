@@ -195,3 +195,15 @@ test("a data response that lands after switching to General is dropped", async (
   assert.doesNotMatch(admin.document.getElementById("view-data")?.textContent ?? "", /late/);
   admin.close();
 });
+
+test("a section's own name is left to the nav, while drilled-in pages keep their title", async () => {
+  const admin = await mountAdmin("/settings/files", routes);
+  await admin.settle();
+  assert.equal(admin.document.querySelector("#shellbar .shell-title"), null);
+  admin.close();
+  const scoped = await mountAdmin(`/settings/files?scope=${SCOPE_ENC}`, routes);
+  await scoped.settle();
+  assert.ok(scoped.document.querySelector("#shellbar .back"));
+  assert.ok(scoped.document.querySelector("#shellbar .shell-title")?.textContent);
+  scoped.close();
+});

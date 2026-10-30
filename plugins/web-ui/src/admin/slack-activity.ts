@@ -191,7 +191,7 @@ export class SlackActivity {
   async mirror(st: Row) {
     const generation = this.begin(st);
     if (!st.container) {
-      context.pageShell({ title: "Slack", search: this.searchBox(null) });
+      context.pageShell({ search: this.searchBox(null) });
       this.draw(loading("Loading Slack mirror..."));
       const result = await context.loadSlackContainers();
       if (!this.current("slack", generation)) return;
@@ -206,7 +206,6 @@ export class SlackActivity {
       context.loaded();
       const containers = context.containers() || [];
       context.pageShell({
-        title: "Slack",
         count: (context.truncated() ? containers.length.toLocaleString() + "+" : containers.length) + " conversations",
         search: this.searchBox(null),
       });

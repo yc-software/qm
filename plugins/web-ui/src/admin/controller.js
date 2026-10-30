@@ -878,7 +878,7 @@ export function startAdmin(host, env) {
       row.appendChild(b);
       bar.appendChild(row);
     }
-    if (opts.title) {
+    if (opts.title && (opts.back || opts.title !== (VIEW_TITLE[view] || titleCase(view)))) {
       const h = document.createElement("h2");
       h.className = "shell-title";
       h.textContent = opts.title;

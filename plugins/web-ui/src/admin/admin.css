@@ -241,6 +241,9 @@
   overflow-x: auto;
   white-space: nowrap;
 }
+#app-view #shellbar:not(:has(> :not(.shell-spacer))) {
+  display: none;
+}
 #app-view .shellbar .back {
   display: inline-flex;
   align-items: center;

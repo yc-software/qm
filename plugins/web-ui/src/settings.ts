@@ -632,7 +632,6 @@ function settingsNav(): TemplateResult {
 
 function generalPane(): TemplateResult {
   return html`
-    ${can("admin") ? html`<h2 class="settings-section-title">General</h2>` : nothing}
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
       ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}
@@ -656,9 +655,7 @@ function settingsPane(): TemplateResult {
   const general = section === "general";
   if (adminHost) adminHost.hidden = general;
   return html`
-    <div class="list-page-head">
-      <h1 class="pane-title">Settings</h1>
-    </div>
+    <h1 class="settings-page-title">Settings</h1>
     <div class="settings-layout ${can("admin") ? "with-nav" : ""}">
       ${can("admin") ? settingsNav() : nothing}
       <div class="settings-content">${general || !adminHost ? generalPane() : nothing} ${adminHost ?? nothing}</div>
