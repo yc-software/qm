@@ -346,7 +346,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const cached = pool.get(key);
     if (cached?.pending) {
       await cached.opening;
-      return provisionResource(resource.id, authorize);
+      return provisionResource(access, authorize);
     }
     authorize?.(access);
     const policy = JSON.stringify({ egress, credentialScopeId });
@@ -482,8 +482,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     await Promise.all([pruneSkills(handle), clearStaleTurnFiles(handle)]);
   };
   const releaseHandle = async (
-    handle: SandboxHandle,
-    scoped: boolean,
+    { handle, scoped, unchanged }: { handle: SandboxHandle; scoped: boolean; unchanged: boolean },
     hasLiveJob: (handle: SandboxHandle) => Promise<boolean>,
   ): Promise<void> => {
     if (scoped || handle.scopeId === undefined || handle.scopeId === writableScopeId || handle.scopeId === scopeId)
@@ -494,7 +493,7 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     await deps.sandbox
       .teardown(handle, {
         ...(keepWarm ? { keepWarm: true } : {}),
-        ...(scoped && !scopedUsed ? { homeUnchanged: true } : {}),
+        ...(unchanged ? { homeUnchanged: true } : {}),
       })
       .catch((error: unknown) => {
         const message = `${handle.backend}:${handle.id}: ${errMessage(error)}`;
@@ -539,11 +538,17 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
       await Promise.all(waiting.map((open) => open.catch(swallowAs("orchestrator: provision", undefined))));
     const slots = [...pool];
     pool.clear();
-    const targets = new Map<string, { handle: SandboxHandle; scoped: boolean }>();
+    const targets = new Map<string, { handle: SandboxHandle; scoped: boolean; unchanged: boolean }>();
     for (const [key, slot] of slots)
       for (const handle of key === SCRATCH ? [] : slot.handles) {
         const id = `${handle.backend}:${handle.id}`;
-        if (!targets.get(id)?.scoped) targets.set(id, { handle, scoped: key === SCOPED });
+        const seen = targets.get(id);
+        const scoped = key === SCOPED;
+        targets.set(id, {
+          handle: seen?.scoped ? seen.handle : handle,
+          scoped: scoped || !!seen?.scoped,
+          unchanged: (seen?.unchanged ?? true) && scoped && !scopedUsed,
+        });
       }
     let live: Promise<Set<string | undefined>> | undefined;
     const hasLiveJob = async (handle: SandboxHandle): Promise<boolean> => {
@@ -554,8 +559,8 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     const scratch = slots.find(([key]) => key === SCRATCH)?.[1];
     const [destroyed] = await Promise.allSettled([
       scratch && destroyScratch(scratch),
-      ...[...targets.values()].map(({ handle, scoped }) =>
-        releaseHandle(handle, scoped, hasLiveJob).catch(swallowAs("orchestrator: release", undefined)),
+      ...[...targets.values()].map((target) =>
+        releaseHandle(target, hasLiveJob).catch(swallowAs("orchestrator: release", undefined)),
       ),
     ]);
     if (destroyed?.status === "rejected") throw destroyed.reason;

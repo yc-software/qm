@@ -141,6 +141,14 @@ test("an eagerly warmed default box the turn never used is released as unchanged
   assert.deepEqual(f.released(), { [box.id]: { homeUnchanged: true } });
 });
 
+test("an eagerly warmed default box the turn opened by its id is released as used", async () => {
+  const f = fixture();
+  const box = await f.turn.provision(true);
+  await f.turn.provisionResource(box.id);
+  await f.turn.reclaimBox();
+  assert.deepEqual(f.released(), { [box.id]: {} });
+});
+
 const kinds = {
   scoped: { id: "box-1", open: (f: ReturnType<typeof fixture>) => f.turn.provision() },
   resource: { id: "job-box", open: (f: ReturnType<typeof fixture>) => f.turn.provisionResource("job-box") },
@@ -310,4 +318,19 @@ test("reopening a computer under a different egress policy releases it once", as
   await f.turn.reclaimBox();
   assert.equal(f.tornDown.length, 1);
   assert.equal(f.tornDown[0], narrowed);
+});
+
+test("a caller waiting on another's open of the same computer keeps its own egress policy", async () => {
+  const f = fixture();
+  const access = await f.turn.accessResource("job-box");
+  const narrow = { allowedHosts: ["only.test"], deniedHosts: [] };
+  const [broad, narrowed] = await Promise.all([
+    f.turn.provisionResource(access),
+    f.turn.provisionResource({ ...access, egress: narrow }),
+  ]);
+  assert.notEqual(narrowed, broad);
+  assert.deepEqual(
+    f.provisions.map((opts) => opts?.egress),
+    [access.egress, narrow],
+  );
 });
