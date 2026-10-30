@@ -1,8 +1,8 @@
 import type { SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { pgJsonText, pgTextSafe } from "../util/text.ts";
 
 export type ContextRequestOutcome =
@@ -24,7 +24,7 @@ export interface ContextRequestStore {
   close?(): Promise<void>;
 }
 
-export const CONTEXT_REQUESTS_MIGRATION = keyValueConversion({
+const CONTEXT_REQUESTS_MIGRATION = typedTableMigration({
   table: "context_requests",
   columns: [
     "id TEXT NOT NULL",
@@ -93,7 +93,7 @@ function fromRow(row: Rows[number]): SurfaceContextRequest {
 }
 
 export function createPostgresContextRequestStore(connectionString: string): ContextRequestStore {
-  const { q, query, close } = createPgPool(connectionString, [CONTEXT_REQUESTS_MIGRATION]);
+  const { q, query, close } = createPgPool(connectionString, [TENANCY_BASE, CONTEXT_REQUESTS_MIGRATION]);
   return {
     async create(r) {
       await q(

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresContextRequestStore } from "../src/api/context-request-store.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import type { SurfaceContextRequest } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
@@ -78,3 +79,23 @@ test("the conversion backfills context requests into the instance tenant", { ski
       }),
   );
 });
+
+test(
+  "row security alone hides other tenants' context requests from the app role and fails closed unbound",
+  { skip },
+  async () => {
+    await withTypedTableDb(createPostgresContextRequestStore, async ({ store, url, tenant, otherTenant }) => {
+      await withTenant(tenant, () => store.create(request("r1", "slack", 1)));
+      const app = createPgPool(url);
+      try {
+        const rows = (bound: string) => withTenant(bound, () => app.q(`SELECT id FROM context_requests`));
+        assert.deepEqual(await rows(tenant), [{ id: "r1" }]);
+        assert.deepEqual(await rows(otherTenant), []);
+        await assert.rejects(app.q(`SELECT id FROM context_requests`), /No tenant is bound/);
+        await assert.rejects(store.pending("slack", 0), /No tenant is bound/);
+      } finally {
+        await app.close();
+      }
+    });
+  },
+);

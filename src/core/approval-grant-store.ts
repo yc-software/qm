@@ -1,8 +1,8 @@
 import type { CommandApprovalGrant } from "../types.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { pgTextSafe } from "../util/text.ts";
 
 export interface ApprovalGrantStore {
@@ -11,7 +11,7 @@ export interface ApprovalGrantStore {
   close?(): Promise<void>;
 }
 
-export const APPROVAL_GRANTS_MIGRATION = keyValueConversion({
+const APPROVAL_GRANTS_MIGRATION = typedTableMigration({
   table: "approval_grants",
   columns: [
     "id TEXT NOT NULL",
@@ -60,7 +60,7 @@ function fromRow(row: Rows[number]): CommandApprovalGrant {
 }
 
 export function createPostgresApprovalGrantStore(connectionString: string): ApprovalGrantStore {
-  const { q, close } = createPgPool(connectionString, [APPROVAL_GRANTS_MIGRATION]);
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, APPROVAL_GRANTS_MIGRATION]);
   return {
     async forActors(actorIds) {
       if (!actorIds.length) return [];

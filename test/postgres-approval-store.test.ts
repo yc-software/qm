@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPostgresApprovalStore, type ApprovalStore } from "../src/core/approval-store.ts";
 import { createDeliveryStore, type DeliveryStore } from "../src/delivery/delivery-store.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { seedKeyValueTable, skipWithoutPg, withTypedTableDb, type TypedTableDb } from "./support/typed-table.ts";
@@ -207,3 +208,26 @@ test("the conversion backfills approvals into the instance tenant and drops the 
     (admin) => seedKeyValueTable(admin, "approvals", { A1: kept, broken: { command: "no session" } }),
   );
 });
+
+test(
+  "row security alone hides other tenants' approvals from the app role and fails closed unbound",
+  { skip },
+  async () => {
+    await withTypedTableDb(
+      (url) => createPostgresApprovalStore(url, createDeliveryStore()),
+      async ({ store, url, tenant, otherTenant }) => {
+        await withTenant(tenant, () => store.put("A1", { sessionId: "s1", command: "ls" }));
+        const app = createPgPool(url);
+        try {
+          const rows = (bound: string) => withTenant(bound, () => app.q(`SELECT id FROM approvals`));
+          assert.deepEqual(await rows(tenant), [{ id: "A1" }]);
+          assert.deepEqual(await rows(otherTenant), []);
+          await assert.rejects(app.q(`SELECT id FROM approvals`), /No tenant is bound/);
+          await assert.rejects(store.get("A1"), /No tenant is bound/);
+        } finally {
+          await app.close();
+        }
+      },
+    );
+  },
+);

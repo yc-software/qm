@@ -3,8 +3,8 @@ import { pgJsonText, pgTextSafe } from "../util/text.ts";
 import type { PendingApprovalRecord } from "../types.ts";
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import { principalDestination } from "../reach/reach.ts";
 
@@ -22,7 +22,7 @@ type ApprovalRows = Omit<ApprovalStore, "deliverPending"> & {
   slackPending(): Promise<Array<[string, PendingApprovalRecord]>>;
 };
 
-export const APPROVALS_MIGRATION = keyValueConversion({
+const APPROVALS_MIGRATION = typedTableMigration({
   table: "approvals",
   columns: [
     "id TEXT NOT NULL",
@@ -188,7 +188,7 @@ export function createPostgresApprovalStore(
   connectionString: string,
   deliveries: Pick<DeliveryStore, "enqueue">,
 ): ApprovalStore {
-  const { q, close } = createPgPool(connectionString, [APPROVALS_MIGRATION]);
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, APPROVALS_MIGRATION]);
   const entries = (rows: Rows): Array<[string, PendingApprovalRecord]> =>
     rows.map((row) => [String(row.id), fromRow(row)]);
   const store = withDelivery(

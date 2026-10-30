@@ -1,7 +1,7 @@
 import { createMemoryMap } from "../persistence/durable-map.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 
 export interface AmbientCursor {
   lastJudgedTs: string;
@@ -18,7 +18,7 @@ const surfaceOf = (row: string) => `split_part(${row}.id, ':', 2)`;
 const containerOf = (row: string) => `regexp_replace(${row}.id, '^[^:]*:[^:]*:', '')`;
 const OLD = "ambient_cursors_kv";
 
-export const AMBIENT_CURSORS_MIGRATION = keyValueConversion({
+const AMBIENT_CURSORS_MIGRATION = typedTableMigration({
   table: "ambient_cursors",
   columns: [
     "surface TEXT NOT NULL",
@@ -51,7 +51,7 @@ export function createAmbientCursorStore(): AmbientCursorStore {
 }
 
 export function createPostgresAmbientCursorStore(connectionString: string): AmbientCursorStore {
-  const { q, close } = createPgPool(connectionString, [AMBIENT_CURSORS_MIGRATION]);
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, AMBIENT_CURSORS_MIGRATION]);
   return {
     async get(surface, container) {
       const rows = await q(
