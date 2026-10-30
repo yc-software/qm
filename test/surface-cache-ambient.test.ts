@@ -1062,8 +1062,6 @@ test("a bot post whose content lives only in attachment blocks reaches the ambie
     });
     await mirror.mirrorMessageEvent({ ...amazonQAlarm, channel: container, channel_type: "channel", files: [] }, {});
 
-    const [stored] = await built.app.readSurfaceMessages(container, { noFallback: true });
-    assert.deepEqual(stored!.raw?.attachments, amazonQAlarm.attachments);
     const deadline = Date.now() + 5_000;
     let rows: any[] = [];
     while (Date.now() < deadline && !rows.length) {

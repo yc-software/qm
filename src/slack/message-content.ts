@@ -1,80 +1,18 @@
 import type { SlackFile } from "./attachments.ts";
 
-const MAX_RENDERED_FORWARDS = 5;
-const MAX_FORWARD_DEPTH = 4;
+type SlackNode = Record<string, unknown>;
 
-interface SlackMessageContent {
-  text?: string;
-  files?: SlackFile[];
-  blocks?: unknown[];
-  attachments?: SlackMessageAttachment[];
-}
+const isNode = (value: unknown): value is SlackNode =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-interface SlackMessageBlock {
-  message?: SlackMessageContent;
-}
-
-interface SlackMessageAttachment extends SlackMessageContent {
-  fallback?: string;
-  pretext?: string;
-  title?: string;
-  fields?: Array<{ title?: string; value?: string }>;
-  author_name?: string;
-  author_subname?: string;
-  author_id?: string;
-  channel_name?: string;
-  channel_id?: string;
-  is_msg_unfurl?: boolean;
-  is_share?: boolean;
-  ts?: string | number;
-  message_blocks?: SlackMessageBlock[];
-}
-
-type Node = Record<string, unknown>;
-
-const isNode = (value: unknown): value is Node => Boolean(value) && typeof value === "object" && !Array.isArray(value);
-
-const nodes = (value: unknown): Node[] => (Array.isArray(value) ? value.filter(isNode) : []);
+const nodes = (value: unknown): SlackNode[] => (Array.isArray(value) ? value.filter(isNode) : []);
 
 const str = (value: unknown): string => (typeof value === "string" ? value : "");
 
-function textObject(value: unknown): string {
-  if (typeof value === "string") return value;
-  return isNode(value) ? str(value.text) : "";
-}
+const textObject = (value: unknown): string => (isNode(value) ? str(value.text) : str(value));
 
-function richTextLeaf(element: Node): string {
-  switch (element.type) {
-    case "text":
-      return str(element.text);
-    case "link":
-      return str(element.text) || str(element.url);
-    case "user":
-      return `<@${str(element.user_id)}>`;
-    case "usergroup":
-      return `<!subteam^${str(element.usergroup_id)}>`;
-    case "channel":
-      return `<#${str(element.channel_id)}>`;
-    case "broadcast":
-      return `<!${str(element.range)}>`;
-    case "emoji":
-      return `:${str(element.name)}:`;
-    case "date":
-      return str(element.fallback);
-    default:
-      return nodes(element.elements).map(richTextLeaf).join("");
-  }
-}
-
-function richText(element: Node): string {
-  if (element.type === "rich_text_list") return nodes(element.elements).map(richText).join("\n");
-  return nodes(element.elements).map(richTextLeaf).join("");
-}
-
-function blockText(block: Node): string {
+function blockText(block: SlackNode): string {
   switch (block.type) {
-    case "rich_text":
-      return nodes(block.elements).map(richText).join("\n");
     case "section":
       return [textObject(block.text), ...nodes(block.fields).map(textObject)].filter(Boolean).join("\n");
     case "context":
@@ -92,7 +30,7 @@ const blocksText = (blocks: unknown): string[] =>
     .map((block) => blockText(block).trim())
     .filter(Boolean);
 
-function attachmentText(attachment: SlackMessageAttachment): string {
+function attachmentText(attachment: SlackNode): string {
   const parts = [
     str(attachment.pretext),
     str(attachment.title),
@@ -105,60 +43,49 @@ function attachmentText(attachment: SlackMessageAttachment): string {
   return (parts.length ? parts : [str(attachment.fallback).trim()]).filter(Boolean).join("\n");
 }
 
-function isForwardedAttachment(attachment: SlackMessageAttachment): boolean {
-  return attachment.is_msg_unfurl === true || attachment.is_share === true;
+function forwardLabel(attachment: SlackNode): string {
+  const author = str(attachment.author_subname) || str(attachment.author_name) || str(attachment.author_id);
+  let channel = "";
+  if (str(attachment.channel_name)) channel = `#${str(attachment.channel_name)}`;
+  else if (str(attachment.channel_id)) channel = `channel ${str(attachment.channel_id)}`;
+  return `forwarded message${author ? ` from ${author}` : ""}${channel ? ` in ${channel}` : ""}`;
 }
 
-function nestedMessages(attachment: SlackMessageAttachment): SlackMessageContent[] {
-  const messages = (attachment.message_blocks ?? []).flatMap((block) =>
-    block?.message && typeof block.message === "object" ? [block.message] : [],
-  );
-  return attachment.attachments?.length ? [...messages, { attachments: attachment.attachments }] : messages;
+function nestedMessages(attachment: SlackNode): SlackNode[] {
+  const messages = nodes(attachment.message_blocks).flatMap((block) => (isNode(block.message) ? [block.message] : []));
+  return nodes(attachment.attachments).length ? [...messages, { attachments: attachment.attachments }] : messages;
 }
 
-export function slackMessageContent(message: SlackMessageContent): { text: string; files: SlackFile[] } {
+export function slackMessageContent(message: object): { text: string; files: SlackFile[] } {
   const rendered: string[] = [];
   const files: SlackFile[] = [];
   const seenFiles = new Set<string>();
-  let renderedForwards = 0;
 
   const addFile = (file: SlackFile, authorId?: string): void => {
-    if (!file || typeof file !== "object") return;
     if (file.id && seenFiles.has(file.id)) return;
     if (file.id) seenFiles.add(file.id);
     files.push(file.user || !authorId ? file : { ...file, user: authorId });
   };
 
-  const visit = (current: SlackMessageContent, depth: number): void => {
-    if (depth > MAX_FORWARD_DEPTH) return;
-    for (const attachment of Array.isArray(current.attachments) ? current.attachments : []) {
-      if (!attachment || typeof attachment !== "object") continue;
-      if (!isForwardedAttachment(attachment)) {
-        const text = attachmentText(attachment);
+  const visit = (current: SlackNode, nested: boolean): void => {
+    for (const attachment of nodes(current.attachments)) {
+      if (attachment.is_msg_unfurl !== true && attachment.is_share !== true) {
+        const text = nested || attachment.from_url ? "" : attachmentText(attachment);
         if (text) rendered.push(text);
         continue;
       }
-      if (renderedForwards >= MAX_RENDERED_FORWARDS) return;
-      renderedForwards += 1;
-
-      const author = attachment.author_subname || attachment.author_name || attachment.author_id;
-      let channel: string | undefined;
-      if (attachment.channel_name) channel = `#${attachment.channel_name}`;
-      else if (attachment.channel_id) channel = `channel ${attachment.channel_id}`;
-      const label = `forwarded message${author ? ` from ${author}` : ""}${channel ? ` in ${channel}` : ""}`;
-      const body = String(attachment.text || attachment.fallback || "").trim();
-      rendered.push(body ? `[${label}] ${body}` : `[${label}]`);
-
-      for (const file of Array.isArray(attachment.files) ? attachment.files : []) addFile(file, attachment.author_id);
-      for (const nested of nestedMessages(attachment)) visit(nested, depth + 1);
+      const body = attachmentText(attachment);
+      rendered.push(body ? `[${forwardLabel(attachment)}] ${body}` : `[${forwardLabel(attachment)}]`);
+      for (const file of nodes(attachment.files)) addFile(file, str(attachment.author_id) || undefined);
+      for (const inner of nestedMessages(attachment)) visit(inner, true);
     }
   };
 
-  for (const file of Array.isArray(message.files) ? message.files : []) addFile(file);
-  visit(message, 0);
+  const root = message as SlackNode;
+  for (const file of nodes(root.files)) addFile(file);
+  visit(root, false);
 
-  const base = String(message.text ?? "") || blocksText(message.blocks).join("\n");
-  let text = base;
-  if (rendered.length) text = base ? `${base}\n${rendered.join("\n")}` : rendered.join("\n");
+  const base = String(root.text ?? "") || blocksText(root.blocks).join("\n");
+  const text = rendered.length ? [base, ...rendered].filter(Boolean).join("\n") : base;
   return { text, files };
 }

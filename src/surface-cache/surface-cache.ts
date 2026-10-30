@@ -29,7 +29,9 @@ const DEFAULT_THREADS_LIMIT = 50;
 
 function normalizeEvent(event: IngestEvent): IngestEvent {
   return JSON.parse(
-    JSON.stringify(event, (_key, value) => (typeof value === "string" ? value.replace(/\u0000/g, "") : value)),
+    JSON.stringify(event, (_key, value) =>
+      typeof value === "string" ? value.replace(/\u0000/g, "").toWellFormed() : value,
+    ),
   ) as IngestEvent;
 }
 
@@ -38,6 +40,9 @@ function clampLimit(limit: number | undefined, fallback: number): number {
 }
 
 const REVISION_SCAN_LIMIT = 500;
+
+const MESSAGE_COLUMNS =
+  "container, ts, sub, subtype, broadcast, bot_id, author_id, author_name, text, mentions, self, bot, mentions_self, edited_at, deleted, deleted_at, handled, created_at";
 
 function revisedAt(m: { editedAt?: number; deletedAt?: number }): number {
   return Math.max(m.editedAt ?? 0, m.deletedAt ?? 0);
@@ -152,7 +157,6 @@ export function createPostgresSurfaceCache(
       text: (r.text as string) ?? "",
       ...(r.reply_count != null ? { replyCount: Number(r.reply_count) } : {}),
       ...(r.mentions != null ? { mentions: r.mentions as Record<string, string> } : {}),
-      ...(r.raw != null ? { raw: r.raw as Record<string, unknown> } : {}),
       ...(r.self ? { self: true } : {}),
       ...(r.bot ? { bot: true } : {}),
       ...(r.mentions_self ? { mentionsSelf: true } : {}),
@@ -308,7 +312,7 @@ export function createPostgresSurfaceCache(
       if (!opts.includeDeleted) conds.push("deleted = FALSE");
       args.push(limit);
       const rows = await q(
-        `SELECT channel_messages.*, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.org_id = channel_messages.org_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
+        `SELECT ${MESSAGE_COLUMNS}, (SELECT COUNT(*) FROM channel_messages replies WHERE replies.org_id = channel_messages.org_id AND replies.container = channel_messages.container AND replies.sub = channel_messages.ts AND replies.ts <> channel_messages.ts AND replies.deleted = FALSE) AS reply_count, (SELECT json_agg(json_build_object('fileId', f.file_id, 'name', f.name, 'mimetype', f.mimetype, 'title', f.title, 'size', f.size)) FROM channel_files f WHERE f.org_id = channel_messages.org_id AND f.container = channel_messages.container AND f.ts = channel_messages.ts) AS files FROM channel_messages WHERE ${conds.join(" AND ")} ORDER BY ts ${opts.oldestFirst ? "ASC" : "DESC"} LIMIT $${args.length}`,
         args,
       );
       const hit = rows.map(rowToMessage);
@@ -333,7 +337,7 @@ export function createPostgresSurfaceCache(
       }
       args.push(REVISION_SCAN_LIMIT);
       const rows = await q(
-        `SELECT * FROM channel_messages WHERE ${conds.join(" AND ")}
+        `SELECT ${MESSAGE_COLUMNS} FROM channel_messages WHERE ${conds.join(" AND ")}
           ORDER BY GREATEST(COALESCE(edited_at, 0), COALESCE(deleted_at, 0)) DESC, ts DESC LIMIT $${args.length}`,
         args,
       );
@@ -352,7 +356,7 @@ export function createPostgresSurfaceCache(
       }
       args.push(limit);
       const rows = await q(
-        `SELECT * FROM channel_messages WHERE ${conds.join(" AND ")}
+        `SELECT ${MESSAGE_COLUMNS} FROM channel_messages WHERE ${conds.join(" AND ")}
          ORDER BY ts_rank(tsv, plainto_tsquery('english', $2)) DESC, ts DESC LIMIT $${args.length}`,
         args,
       );
@@ -491,7 +495,6 @@ export function createMemorySurfaceCache(opts: { liveFallback?: LiveFallback } =
               ? { authorName: (e.authorName ?? existing?.authorName) as string }
               : {}),
             text: e.deleted ? (existing?.text ?? "") : (e.text ?? ""),
-            ...((e.deleted ? existing?.raw : e.raw) ? { raw: (e.deleted ? existing?.raw : e.raw)! } : {}),
             ...(() => {
               const mentions = e.deleted ? existing?.mentions : (e.mentions ?? existing?.mentions);
               return mentions ? { mentions } : {};

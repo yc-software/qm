@@ -29,7 +29,6 @@ export function slackMessageToIngestEvent(
   ids: BotIdentity,
   opts: {
     partial?: boolean;
-    mentions?: Record<string, string>;
     editedAt?: number;
     handled?: boolean;
     containerName?: string;
@@ -64,9 +63,8 @@ export function slackMessageToIngestEvent(
         ...(file.size !== undefined ? { size: file.size } : {}),
         mimetype: file.mimetype,
       })),
-    ...(Object.keys(opts.mentions ?? {}).length ? { mentions: opts.mentions } : {}),
     ...(m.bot_id || m.bot_profile ? { bot: true } : {}),
-    ...(mentionsBot(content.text, ids.botUserId) ? { mentionsSelf: true } : {}),
+    ...(mentionsBot(String(m.text ?? ""), ids.botUserId) ? { mentionsSelf: true } : {}),
     ...((opts.editedAt ?? Number(m.edited?.ts) * 1000) > 0
       ? { editedAt: Math.round(opts.editedAt ?? Number(m.edited?.ts) * 1000) }
       : {}),
@@ -140,8 +138,9 @@ export function createMirror(deps: {
       }
       if (!gate.allowed) return;
     }
-    const mentions = await resolveMentionNames(client, decodeSlackEntities(slackMessageContent(m).text));
-    await pushSurfaceEvents([slackMessageToIngestEvent(m, ids, { ...opts, mentions, kind })]);
+    const event = slackMessageToIngestEvent(m, ids, { ...opts, kind });
+    const mentions = await resolveMentionNames(client, event.text ?? "");
+    await pushSurfaceEvents([Object.keys(mentions).length ? { ...event, mentions } : event]);
   }
 
   return { pushSurfaceEvents, mirrorMessageEvent };

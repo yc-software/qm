@@ -115,38 +115,37 @@ test("slackMessageContent renders top-level blocks only when the message has no 
   const blocks = [
     { type: "header", text: { type: "plain_text", text: "Deploy report" } },
     {
-      type: "rich_text",
-      elements: [
-        {
-          type: "rich_text_section",
-          elements: [
-            { type: "text", text: "shipped by " },
-            { type: "user", user_id: "U1" },
-            { type: "text", text: " " },
-            { type: "emoji", name: "tada" },
-          ],
-        },
-        {
-          type: "rich_text_list",
-          elements: [
-            { type: "rich_text_section", elements: [{ type: "link", url: "https://example.com/a" }] },
-            { type: "rich_text_section", elements: [{ type: "text", text: "second" }] },
-          ],
-        },
-      ],
+      type: "section",
+      text: { type: "mrkdwn", text: "shipped by <@U1>" },
+      fields: [{ type: "mrkdwn", text: "*env* prod" }],
     },
     {
       type: "context",
       elements: [
-        { type: "image", image_url: "https://example.com/i.png" },
+        { type: "image", image_url: "https://example.com/i.png", alt_text: "logo" },
         { type: "mrkdwn", text: "via CI" },
       ],
     },
+    { type: "rich_text", elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "shipped" }] }] },
   ];
 
-  assert.equal(
-    slackMessageContent({ text: "", blocks }).text,
-    "Deploy report\nshipped by <@U1> :tada:\nhttps://example.com/a\nsecond\nvia CI",
-  );
-  assert.equal(slackMessageContent({ text: "shipped by <@U1> :tada:", blocks }).text, "shipped by <@U1> :tada:");
+  assert.equal(slackMessageContent({ text: "", blocks }).text, "Deploy report\nshipped by <@U1>\n*env* prod\nvia CI");
+  assert.equal(slackMessageContent({ text: "shipped", blocks }).text, "shipped");
+});
+
+test("slackMessageContent leaves link previews out of the text", () => {
+  const result = slackMessageContent({
+    text: "see <https://example.com/post>",
+    attachments: [
+      {
+        from_url: "https://example.com/post",
+        original_url: "https://example.com/post",
+        title: "Example post",
+        text: "A long page description",
+        fallback: "Example post",
+      },
+    ],
+  });
+
+  assert.equal(result.text, "see <https://example.com/post>");
 });

@@ -9,6 +9,7 @@ import { conversationEvent, type IngressEntry } from "./ingress.ts";
 import { isResolved } from "./ledger-view.ts";
 import { isObj, tokenFor, type ConnectorTokenSource } from "./sources/adapter.ts";
 import { normalizeSlackApiUrl } from "../slack/config.ts";
+import { slackMessageContent } from "../slack/message-content.ts";
 import { GmailApiError, gmailApi } from "../connectors/gmail-api.ts";
 import type { DirectoryStore } from "../directory/directory-store.ts";
 
@@ -273,7 +274,7 @@ export function createInboxSourceRefresh(deps: RefreshDeps): InboxSourceRefresh 
         author: person?.name ?? String(m.user ?? m.username ?? "Slack"),
         ...(person ? { authorId: person.id } : {}),
         ...(person?.avatarUrl ? { avatarUrl: person.avatarUrl } : {}),
-        text: typeof m.text === "string" ? m.text : "",
+        text: slackMessageContent(m).text,
         at: Math.round(Number(m.ts) * 1000),
         ts: m.ts,
         ...(root && m.ts !== root ? { reply: true } : {}),

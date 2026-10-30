@@ -205,12 +205,13 @@ export function registerSlackEvents(
       }
       const ackGate = context.ackGate;
       if (m.channel && m.ts && !m.hidden && !m.subtype && !(m.bot_id || m.subtype === "bot_message")) {
+        const text = slackMessageContent(m).text;
         deps.inboxMessage?.(client, {
           channel: m.channel,
           ts: m.ts,
           isDirectMessage: isDirectChannelType(m.channel_type),
           ...(m.thread_ts ? { threadTs: m.thread_ts } : {}),
-          ...(typeof m.text === "string" && m.text ? { text: m.text } : {}),
+          ...(text ? { text } : {}),
           ...(m.user ? { senderSlackId: m.user } : {}),
         });
       }
