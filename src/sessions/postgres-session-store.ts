@@ -37,7 +37,7 @@ import type {
   StoreOptions,
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
-import { SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
+import { DROP_ITEMS_TARGET_SEQ, SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
 import {
   cronIdOf,
   promptEnvelopeBody,
@@ -404,7 +404,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA]);
+  const { pool, q, query } = createPgPool(connectionString, [
+    ...DIRECTORY_MIGRATIONS,
+    SESSION_SCHEMA,
+    DROP_ITEMS_TARGET_SEQ,
+  ]);
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);

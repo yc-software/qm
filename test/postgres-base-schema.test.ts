@@ -49,7 +49,7 @@ test("a fresh database gets the base schema without items.target_seq", { skip },
   });
 });
 
-test("a fully migrated database skips the base schema and drops only the retired objects", { skip }, async () => {
+test("a fully migrated database skips the base schema and drops the retired objects", { skip }, async () => {
   await withDatabase(async (url, admin) => {
     await admin.query(`CREATE TABLE qm_schema_migrations(
       id TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
@@ -67,7 +67,7 @@ test("a fully migrated database skips the base schema and drops only the retired
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ["seq", "kind", "target_seq"],
+      ["seq", "kind"],
     );
     assert.equal(await present(admin, "to_regclass('blobs') IS NULL"), true);
     assert.equal(await present(admin, "to_regclass('tool_calls') IS NULL"), true);
