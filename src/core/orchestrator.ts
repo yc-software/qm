@@ -115,6 +115,7 @@ import {
   type ToolResultScreenInput,
 } from "../security/security-posture.ts";
 import { commandApprovalId, inputApprovalId } from "./approval-id.ts";
+import { approvalView, grantModesWithin } from "./orchestrator/approvals.ts";
 import { createPerTurnStrategy } from "../memory/strategies/per-turn.ts";
 import { DEFAULT_MEMORY_POLICY } from "../memory/policy.ts";
 import { collectBlob } from "../persistence/blob-transfer.ts";
@@ -677,9 +678,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (step) deps.turnStream?.settleReasoning(input.runId, step.id, step.index);
         }
       };
-      if (!(await managedRosterIsCurrent())) {
-        return { status: "refused", reason: "project membership changed; retry from the current project" };
-      }
+      const rosterChanged = (sessionId?: string): TurnResult => ({
+        status: "refused",
+        ...(sessionId ? { sessionId } : {}),
+        reason: "project membership changed; retry from the current project",
+      });
+      if (!(await managedRosterIsCurrent())) return rosterChanged();
       if (conversation.kind !== "dm" && !deps.identity.audienceIsAllInternal(conversation.audience)) {
         const externalAllowed =
           external ||
@@ -716,6 +720,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const scopeId = deps.resolution.scopeFor(conversation, actor);
       const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
         deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
+      const issueApproval = async (
+        requestId: string,
+        fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
+      ): Promise<PendingApproval> => {
+        const { grantModes, ...rest } = fields;
+        const record: PendingApprovalRecord = {
+          ...(Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as typeof rest),
+          createdAt: Date.now(),
+          request: replayableRequest(input),
+          ...grantModesWithin(resolution.approvalGrantModes, grantModes),
+        };
+        await pending.put(requestId, record);
+        return approvalView(requestId, record);
+      };
       const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
         actorId: actor.id,
         scopeId,
@@ -960,59 +978,27 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         if (!acquired.lease) return acquired.refusal;
         const lease = acquired.lease;
+        let approval: PendingApproval;
         try {
-          await withManagedRosterVersion(async () => {
+          approval = await withManagedRosterVersion(async () => {
             await reconcileSessionParticipants(session.id);
             await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
-            const command = "security-screen";
-            const requestId = inputApprovalId(session.id, replayableRequest(input));
-            const grantModesField =
-              resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
-                ? {}
-                : { grantModes: resolution.approvalGrantModes };
-            const reason = `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`;
-            await pending.put(requestId, {
+            return issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
-              command,
-              createdAt: Date.now(),
-              reason,
-              request: replayableRequest(input),
-              blocksInput: true,
-              kind: "input",
-              approvalKey: `security-screen:${input.surface ?? "unknown"}`,
-              ...grantModesField,
-            });
-            return true;
-          });
-        } catch (err) {
-          if (err instanceof ProjectRosterChanged) {
-            return {
-              status: "refused",
-              sessionId: session.id,
-              reason: "project membership changed; retry from the current project",
-            };
-          }
-          throw err;
-        } finally {
-          await deps.sessions.releaseLease(lease);
-        }
-        return {
-          status: "pending_approval",
-          sessionId: session.id,
-          pendingApprovals: [
-            {
-              requestId: inputApprovalId(session.id, replayableRequest(input)),
               command: "security-screen",
               reason: `${flaggedScreenedInput.reason}; flagged sources: ${flaggedScreenedInput.sources.join(", ") || "message"}`,
               blocksInput: true,
               kind: "input",
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
-              ...(resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
-                ? {}
-                : { grantModes: resolution.approvalGrantModes }),
-            },
-          ],
-        };
+            });
+          });
+        } catch (err) {
+          if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
+          throw err;
+        } finally {
+          await deps.sessions.releaseLease(lease);
+        }
+        return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
       }
       const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
       const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
@@ -2096,19 +2082,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 sessionId: session.id,
                 reason,
                 pendingApprovals: [
-                  {
-                    requestId: input.approval.requestId,
-                    command: p.command,
-                    reason: p.reason ?? "requires approval",
-                    blocksInput: p.blocksInput !== false,
-                    grantModes: p.grantModes ?? resolution.approvalGrantModes,
-                    ...(p.matched ? { matched: p.matched } : {}),
-                    ...(p.purpose ? { purpose: p.purpose } : {}),
-                    ...(p.summary ? { summary: p.summary } : {}),
-                    ...(p.summaryDetail ? { summaryDetail: p.summaryDetail } : {}),
-                    ...(p.approvalKey ? { approvalKey: p.approvalKey } : {}),
-                    ...(p.kind ? { kind: p.kind } : {}),
-                  },
+                  approvalView(input.approval.requestId, {
+                    ...p,
+                    grantModes: undefined,
+                    ...grantModesWithin(resolution.approvalGrantModes, p.grantModes),
+                  }),
                 ],
               };
             }
@@ -3813,13 +3791,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         } else if (isPollFire && result.silent && !stagedAttachments.length && result.pausedOnApproval !== true) {
           finalResult = { status: "silent", sessionId: session.id };
         } else if (result.pendingApprovals?.length || quarantineReleaseApprovals.length) {
-          const approvals: PendingApproval[] = [];
-          const grantModesField =
-            resolution.approvalGrantModes.session && resolution.approvalGrantModes.always
-              ? {}
-              : { grantModes: resolution.approvalGrantModes };
-          const request = replayableRequest(input);
-          const prepared: Array<{ requestId: string; record: PendingApprovalRecord; approval: PendingApproval }> = [];
+          const issued: Array<[string, Omit<PendingApprovalRecord, "createdAt" | "request">]> = [];
           const turnApprovals: Array<
             NonNullable<AgentTurnResult["pendingApprovals"]>[number] & {
               summary?: string;
@@ -3829,63 +3801,35 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             }
           > = [...(result.pendingApprovals ?? []), ...quarantineReleaseApprovals];
           for (const pa of turnApprovals) {
-            const blocks = approvalBlocksInput(pa.kind, outcome);
-            const grantModes = pa.grantModes
-              ? {
-                  grantModes: {
-                    session: resolution.approvalGrantModes.session && pa.grantModes.session,
-                    always: resolution.approvalGrantModes.always && pa.grantModes.always,
-                  },
-                }
-              : grantModesField;
-            const command = pa.command;
             const requestId = commandApprovalId(
               session.id,
               pa.screenedOutput
-                ? `${command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
-                : command,
+                ? `${pa.command}:${hashId([pa.screenedOutput.tool, pa.screenedOutput.text, pa.screenedOutput.sourceScopeId ?? scopeId], 64)}`
+                : pa.command,
               pa.approvalKey,
             );
-            const summary = pa.summary ?? (await approvalSummary(scopeId, command, pa.reason, pa.purpose));
-            prepared.push({
+            issued.push([
               requestId,
-              record: {
+              {
                 sessionId: session.id,
-                command,
-                createdAt: Date.now(),
+                command: pa.command,
                 reason: pa.reason,
-                request,
-                blocksInput: blocks,
-                ...grantModes,
-                ...(pa.matched ? { matched: pa.matched } : {}),
-                ...(pa.purpose ? { purpose: pa.purpose } : {}),
-                ...(summary ? { summary } : {}),
-                ...(pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
-                ...(pa.screenedOutput ? { screenedOutput: pa.screenedOutput } : {}),
-                ...(pa.approvalKey ? { approvalKey: pa.approvalKey } : {}),
-                ...(pa.kind ? { kind: pa.kind } : {}),
+                blocksInput: approvalBlocksInput(pa.kind, outcome),
+                grantModes: pa.grantModes,
+                matched: pa.matched,
+                purpose: pa.purpose,
+                summary: pa.summary ?? (await approvalSummary(scopeId, pa.command, pa.reason, pa.purpose)),
+                summaryDetail: pa.summaryDetail,
+                screenedOutput: pa.screenedOutput,
+                approvalKey: pa.approvalKey,
+                kind: pa.kind,
               },
-              approval: {
-                requestId,
-                command,
-                reason: pa.reason,
-                blocksInput: blocks,
-                ...grantModes,
-                ...(pa.matched ? { matched: pa.matched } : {}),
-                ...(pa.purpose ? { purpose: pa.purpose } : {}),
-                ...(summary ? { summary } : {}),
-                ...(pa.summaryDetail ? { summaryDetail: pa.summaryDetail } : {}),
-                ...(pa.approvalKey ? { approvalKey: pa.approvalKey } : {}),
-                ...(pa.kind ? { kind: pa.kind } : {}),
-              },
-            });
+            ]);
           }
-          await withManagedRosterVersion(async () => {
-            for (const item of prepared) {
-              await pending.put(item.requestId, item.record);
-              approvals.push(item.approval);
-            }
-            return true;
+          const approvals = await withManagedRosterVersion(async () => {
+            const issuedApprovals: PendingApproval[] = [];
+            for (const [requestId, fields] of issued) issuedApprovals.push(await issueApproval(requestId, fields));
+            return issuedApprovals;
           });
           finalResult = turnCompleted
             ? {
@@ -3930,60 +3874,28 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         await deps.errors?.flush();
         return finalResult;
       } catch (err) {
-        if (err instanceof ProjectRosterChanged) {
-          return {
-            status: "refused",
-            sessionId: session.id,
-            reason: "project membership changed; retry from the current project",
-          };
-        }
+        if (err instanceof ProjectRosterChanged) return rosterChanged(session.id);
         if (err instanceof NeedsApproval) {
-          const requestId = commandApprovalId(session.id, err.command);
-          const grantModesField = {
-            grantModes: {
-              session: resolution.approvalGrantModes.session && (err.grantModes?.session ?? true),
-              always: resolution.approvalGrantModes.always && (err.grantModes?.always ?? true),
-            },
-          };
           const summary = await approvalSummary(scopeId, err.command, err.approvalReason);
+          let approval: PendingApproval;
           try {
-            await withManagedRosterVersion(async () => {
-              await pending.put(requestId, {
+            approval = await withManagedRosterVersion(() =>
+              issueApproval(commandApprovalId(session.id, err.command), {
                 sessionId: session.id,
                 command: err.command,
-                createdAt: Date.now(),
                 reason: err.approvalReason,
-                ...grantModesField,
-                ...(err.matched ? { matched: err.matched } : {}),
-                ...(summary ? { summary } : {}),
-                ...(err.approvalKey ? { approvalKey: err.approvalKey } : {}),
-                request: replayableRequest(input),
+                grantModes: err.grantModes,
+                matched: err.matched,
+                summary,
+                approvalKey: err.approvalKey,
                 blocksInput: true,
                 kind: err.kind,
-              });
-              return true;
-            });
+              }),
+            );
           } catch (writeErr) {
-            if (writeErr instanceof ProjectRosterChanged) {
-              return {
-                status: "refused",
-                sessionId: session.id,
-                reason: "project membership changed; retry from the current project",
-              };
-            }
+            if (writeErr instanceof ProjectRosterChanged) return rosterChanged(session.id);
             throw writeErr;
           }
-          const approval: PendingApproval = {
-            requestId,
-            command: err.command,
-            reason: err.approvalReason,
-            ...grantModesField,
-            ...(err.matched ? { matched: err.matched } : {}),
-            ...(summary ? { summary } : {}),
-            ...(err.approvalKey ? { approvalKey: err.approvalKey } : {}),
-            ...(err.kind ? { kind: err.kind } : {}),
-            blocksInput: true,
-          };
           return { status: "pending_approval", sessionId: session.id, pendingApprovals: [approval] };
         }
         if (err instanceof CommandDenied) {

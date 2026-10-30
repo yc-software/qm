@@ -2753,6 +2753,25 @@ test("an admin-removed grant mode is refused, filters the offer, and leaves the 
   assert.equal(once.status, "ok", "the pending approval survives the refused mode and still resolves once");
 });
 
+test("a grant mode disabled after an approval was issued is filtered from the re-presented card", async () => {
+  const { app, config } = freshApp();
+  const org = scopeId("org", "default-org");
+
+  const first = await app.turn(dm("!run git push --force origin main"));
+  assert.equal(first.status, "pending_approval");
+  const pending = first.pendingApprovals![0]!;
+  assert.equal(pending.grantModes, undefined, "every mode is on, so the card offers every button");
+
+  await config.setApprovalGrantModes(org, { session: false, always: true });
+  const refused = await app.turn(
+    dm("!run git push --force origin main", {
+      approval: { requestId: pending.requestId, approved: true, scope: "session" },
+    }),
+  );
+  assert.equal(refused.status, "pending_approval");
+  assert.deepEqual(refused.pendingApprovals?.[0]?.grantModes, { session: false, always: true });
+});
+
 test("disabling a grant mode suspends existing grants until it is re-enabled", async () => {
   const { app, config } = freshApp();
   const org = scopeId("org", "default-org");
