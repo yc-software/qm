@@ -1840,7 +1840,7 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
 test("a failing cron posts one notice to its destination, then stays quiet until a fire succeeds", async () => {
   let result: TurnResult = {
     status: "refused",
-    reason: "pi/claude-sonnet-5 can't run here (runtime is no longer available)",
+    reason: "pi/claude-sonnet-5 can't run here (runtime is no longer available).",
   };
   let clock = 1_000_000;
   const { crons, deliveries, scheduler } = harness(

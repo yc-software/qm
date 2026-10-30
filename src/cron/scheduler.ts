@@ -297,7 +297,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             ? {}
             : {
                 errorNotice: (reason: string) =>
-                  `⚠️ Scheduled task “${cron.title ?? cron.id}” did not run: ${reason}. Later failures go only to its run log until it runs successfully again.`,
+                  `⚠️ Scheduled task “${cron.title ?? cron.id}” did not run: ${reason.endsWith(".") ? reason.slice(0, -1) : reason}. Later failures go only to its run log until it runs successfully again.`,
               }),
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
