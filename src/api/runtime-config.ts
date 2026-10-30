@@ -248,35 +248,23 @@ export async function webuiModelEnabled(
   return modelId === orgModel || modelId === purposeModel;
 }
 
-const RUNTIME_UNAVAILABLE = "runtime is no longer available or enabled on this deployment";
-
-async function runtimeAvailability(
-  ctx: { deps: RuntimeDeps },
-  scope: ScopeId,
-  choice: RuntimeChoice,
-  purpose?: RuntimePurpose,
-) {
-  await ctx.deps.refreshModels?.();
-  const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
-  const enabled = (modelId: string) => webuiModelEnabled(ctx, modelId, purpose);
-  const error =
-    !choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) || !(await enabled(choice.modelId))
-      ? RUNTIME_UNAVAILABLE
-      : validateRuntimeChoice({
-          ...choice,
-          effortLevel:
-            choice.effortLevel === "adaptive" || choice.effortLevel === "default" ? choice.effortLevel : undefined,
-        });
-  return { error, choices, enabled };
-}
-
 export async function availableRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   choice: RuntimeChoice,
   purpose?: RuntimePurpose,
 ): Promise<string | null> {
-  return (await runtimeAvailability(ctx, scope, choice, purpose)).error;
+  await ctx.deps.refreshModels?.();
+  const choices = await runtimeConfigBody(ctx, scope, undefined, purpose, choice);
+  if (
+    !choices.modelsByHarness[choice.harnessId]?.includes(choice.modelId) ||
+    !(await webuiModelEnabled(ctx, choice.modelId, purpose))
+  )
+    return "runtime is no longer available or enabled on this deployment";
+  return validateRuntimeChoice({
+    ...choice,
+    effortLevel: choice.effortLevel === "adaptive" || choice.effortLevel === "default" ? choice.effortLevel : undefined,
+  });
 }
 
 export async function subagentRuntimeError(
@@ -284,22 +272,23 @@ export async function subagentRuntimeError(
   scope: ScopeId,
   choice: RuntimeChoice,
 ): Promise<string | null> {
-  const { error, choices, enabled } = await runtimeAvailability(ctx, scope, choice, "subagent");
+  const error = await availableRuntimeError(ctx, scope, choice, "subagent");
   if (!error) return null;
-  const reason =
-    error === RUNTIME_UNAVAILABLE
-      ? "its provider isn't configured here, or it isn't enabled or approved for that harness"
-      : error;
-  const head = `model ${choice.modelId} on harness ${choice.harnessId} can't run subagents on this deployment: ${reason}. Don't retry with other guessed models or providers. Omit model and harness to use the default`;
+  const head = `${choice.harnessId}/${choice.modelId} can't run subagents here (${error}). Don't guess another model. Omit model and harness to use the default`;
   try {
-    const { effective } = await runtimeConfigBody(ctx, scope, undefined, "subagent");
+    const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(
+      ctx,
+      scope,
+      undefined,
+      "subagent",
+    );
     const usable: string[] = [];
-    for (const harnessId of choices.approvedHarnesses)
-      for (const modelId of choices.modelsByHarness[harnessId] ?? [])
-        if (modelId !== choice.modelId && (await enabled(modelId))) usable.push(`${modelId} (harness ${harnessId})`);
-    const fallback = `${head}, ${effective.modelId} (harness ${effective.harnessId})`;
-    return usable.length ? `${fallback}, or choose one of: ${usable.join(", ")}.` : `${fallback}.`;
+    for (const harnessId of approvedHarnesses)
+      for (const modelId of modelsByHarness[harnessId] ?? [])
+        if (await webuiModelEnabled(ctx, modelId, "subagent")) usable.push(`${harnessId}/${modelId}`);
+    const options = usable.length ? `, or pick one of: ${usable.join(", ")}` : "";
+    return `${head}, ${effective.harnessId}/${effective.modelId}${options}.`;
   } catch (listError) {
-    return `${head}, or use runtime get to list usable models (listing them here failed: ${errMessage(listError)}).`;
+    return `${head}, or pick one runtime get lists (listing them failed: ${errMessage(listError)}).`;
   }
 }

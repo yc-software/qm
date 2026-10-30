@@ -1,4 +1,4 @@
-import { availableRuntimeError, subagentRuntimeError } from "../src/api/runtime-config.ts";
+import { availableRuntimeError } from "../src/api/runtime-config.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -231,24 +231,4 @@ test("runtime availability preserves the existing harness normalization of inher
   const resolved = resolveRuntimeChoice(config, ORG, PERSONAL, choice, choice);
   assert.equal(resolved.modelId, choice.modelId);
   assert.equal(resolved.effortLevel, undefined);
-});
-
-test("subagent runtime overrides on an unconfigured provider are rejected with the models that do work", async () => {
-  const config = createMemoryConfigStore("default-org");
-  await config.setApprovedHarnesses(["pi"]);
-  await config.setRuntimeSelection(ORG, { harnessId: "pi", modelId: "claude-sonnet-5" });
-  const ctx = {
-    deps: {
-      config,
-      harnessId: "pi",
-      providerKeys: { anthropic: true, openai: false, openrouter: false, codexOAuth: false },
-    },
-  };
-  const error = await subagentRuntimeError(ctx, PERSONAL, { harnessId: "pi", modelId: "gpt-6-astra" });
-  assert.match(error!, /gpt-6-astra on harness pi can't run subagents/);
-  assert.match(error!, /provider isn't configured/);
-  assert.match(error!, /Don't retry with other guessed models/);
-  assert.match(error!, /default, claude-sonnet-5 \(harness pi\)/);
-  assert.doesNotMatch(error!.split("choose one of:")[1] ?? "", /gpt-/);
-  assert.equal(await subagentRuntimeError(ctx, PERSONAL, { harnessId: "pi", modelId: "claude-sonnet-5" }), null);
 });
