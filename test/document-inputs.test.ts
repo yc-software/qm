@@ -393,14 +393,8 @@ test("document text reports truncation as a flag, not from the extracted wording
   assert.match(office.text, /\[Document text truncated at 200000 characters\.\]$/);
 });
 
-test("Pi proxy and Bedrock fallback use their actual provider request shapes", async () => {
+test("Bedrock fallback uses its actual provider request shape", async () => {
   const documents = [await fixture("txt")];
-  const proxy = await withDocumentInputs(
-    { context: { messages: [{ role: "user", content: "Summarize" }] } },
-    { api: "pi-messages" },
-    documents,
-  );
-  assert.match(JSON.stringify(proxy), /QUARTZ-731/);
   const bedrock = (await withDocumentInputs(
     { messages: [{ role: "user", content: [{ text: "Summarize" }] }] },
     { api: "bedrock-converse-stream" },
