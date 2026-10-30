@@ -27,7 +27,7 @@ if (!existsSync(distIndex)) {
   mkdirSync(distDir, { recursive: true });
   writeFileSync(
     distIndex,
-    '<!doctype html><html><head><meta name="brand-self-label" content="Agent" /></head><body></body></html>',
+    '<!doctype html><html><head><link rel="apple-touch-icon" href="/brand-mark.svg" /><meta name="brand-self-label" content="Agent" /></head><body></body></html>',
   );
 }
 

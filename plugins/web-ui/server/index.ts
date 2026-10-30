@@ -126,7 +126,9 @@ async function serveWebManifest(res: ServerResponse): Promise<void> {
 
 async function brandIndexHtml(html: string): Promise<string> {
   const branding = await brandingCache.forRender();
-  return injectBranding(html, branding, { titleSuffix: "· Web" });
+  const branded = injectBranding(html, branding, { titleSuffix: "· Web" });
+  if (!process.env.WEB_UI_FAVICON_SVG) return branded;
+  return branded.replace(/(<link rel="apple-touch-icon" href=")[^"]*(")/, "$1/favicon.svg$2");
 }
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
