@@ -231,6 +231,29 @@ Not available through you: who governs the org changes only in the admin dashboa
 where the admin acts directly. If asked, point them there — don't try the API
 (`POST/DELETE /v1/admin/grants` refuses agent tokens).
 
+## Offboarding a user
+
+When someone leaves, the admin tool's `offboard_user` action (`POST /v1/admin/users/<principal>/offboard`)
+cleans up after them in one call. It reads private inventory, so run it from a DM with the admin.
+
+1. Preview first: call it without `apply`. The response lists `changes` (what applying will do:
+   turn off sign-in, disable and archive crons they own anywhere, disable their webhooks, revoke
+   their active keychain grants, archive apps and skills in their personal scope, clear the default
+   and retire their personal computers) and `kept` (left alone, each with a reason: apps or skills
+   they made in shared scopes, their stored credentials, an admin grant).
+2. Show the admin the preview in plain words and get a yes. Retiring a computer destroys its disk;
+   if they want its workspace saved, back it up before applying.
+3. Apply with `value: {"apply": true}`. Each change comes back `done` or `failed` with the error, and
+   each is audited as the admin. Re-running is safe: finished items drop out of the plan, so retry
+   picks up only what failed or appeared since.
+4. Report what changed and what was kept. For `kept` items in shared scopes, ask whether the team
+   still needs them; `archive_skill` handles a skill, and someone who manages the scope can
+   archive an app. An admin grant is revoked under Admins in the dashboard.
+
+Conversations, memory and files stay as the record. `reactivate_user` turns sign-in back on; it
+does not restore anything else (the owner or an admin restores apps, crons and skills through
+their usual controls).
+
 ## Scheduling admin-reading work
 
 Cron fires are autonomous, so the admin plane refuses them unless the cron carries

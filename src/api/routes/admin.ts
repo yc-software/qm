@@ -57,6 +57,7 @@ import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-server
 import { listSecurityFlags } from "./admin/security.ts";
 import { spend } from "./admin/spend.ts";
 import { listUnattendedGrants } from "./admin/unattended-grants.ts";
+import { offboardUser, reactivateUser } from "./admin/offboard.ts";
 import { createPrincipalLink, deletePrincipalLink, listPrincipalLinks } from "./admin/principal-links.ts";
 
 const timed =
@@ -358,6 +359,14 @@ const routes: Route<ApiCtx>[] = [
     },
     { method: "PUT", path: "/v1/admin/users/:principalId/onboarding", auth: "either", handle: setUserOnboarding },
     { method: "POST", path: "/v1/admin/users/:principalId/reset", auth: "either", handle: resetUserToBrandNew },
+    {
+      method: "POST",
+      path: "/v1/admin/users/:principalId/offboard",
+      auth: "either",
+      admin: { privateRead: "always" },
+      handle: offboardUser,
+    },
+    { method: "POST", path: "/v1/admin/users/:principalId/reactivate", auth: "either", handle: reactivateUser },
     {
       method: "GET",
       path: "/v1/admin/principal-links",

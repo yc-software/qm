@@ -152,6 +152,15 @@ export const adminOperations = {
     value: object,
   }),
   reset_user: operation("Reset a user's onboarding data (destructive).", "POST", "/users/:id/reset", { id: string }),
+  offboard_user: operation(
+    "Offboard a departed person: without value.apply it previews what would change; value.apply true disables and archives their crons and webhooks, revokes keychain grants, archives personal apps and skills, retires personal computers, and turns off sign-in. The admin skill's Offboarding section explains the report.",
+    "POST",
+    "/users/:id/offboard",
+    { id: string, value: Type.Optional(Type.Object({ apply: Type.Boolean() }, { additionalProperties: false })) },
+  ),
+  reactivate_user: operation("Turn a deactivated person's sign-in back on.", "POST", "/users/:id/reactivate", {
+    id: string,
+  }),
   sandboxes: operation("List a scope's sandboxes.", "GET", "/sandboxes/:scope", scope),
   create_sandbox: operation("Create a sandbox in a scope.", "POST", "/sandboxes/:scope", {
     ...scope,

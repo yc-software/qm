@@ -362,7 +362,7 @@ export async function listKeychainStatus(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, { scopeId: scope, people, credentials, grants, asks, enabled: true });
 }
 
-async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
+export async function resolveAdminUser(deps: ApiCtx["deps"], requestedPrincipal: string) {
   const member = await deps.directory?.get(requestedPrincipal);
   return { member, principalId: member?.principalId ?? personKey(requestedPrincipal) };
 }
@@ -398,6 +398,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     scopeId: personal,
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
+    deactivated: deps.identity?.deactivationSource(principalId) === "manual",
     stats: { sessions: stats ?? 0 },
     config,
     onboarding,
