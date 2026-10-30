@@ -489,7 +489,9 @@ export async function followLoopState(deps: LoopServiceDeps, loop: Loop, state: 
   try {
     await deps.crons.setEnabled(loop.cronId, state === "enabled");
   } catch (e) {
-    await deps.store.update(loop.id, { restore: loop });
+    await deps.store
+      .update(loop.id, { restore: loop })
+      .catch((restoreError: unknown) => swallow("loop state restore", restoreError));
     throw e;
   }
 }

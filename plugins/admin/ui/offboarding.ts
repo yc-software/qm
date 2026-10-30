@@ -2,6 +2,14 @@ import { html, nothing } from "lit";
 import { badge, card, muted, stacked, table } from "./shared.ts";
 
 const COLS = ["16%", "30%", "22%", "32%"];
+const NOUN: Record<string, string> = {
+  principal: "sign-in",
+  deployment: "app",
+  sandbox: "computer",
+  keychain: "keychain grant",
+  admin_grant: "admin grant",
+};
+const noun = (kind: string) => NOUN[kind] ?? kind;
 
 export function offboardingCard(
   principal: string,
@@ -85,7 +93,7 @@ export function offboardingCard(
             ? table(
                 ["Change", "Item", "Scope", "Result"],
                 changes.map((c: any) => [
-                  { node: stacked(c.action.replaceAll("_", " "), c.kind) },
+                  { node: stacked(c.action.replaceAll("_", " "), noun(c.kind)) },
                   { node: stacked(c.label, c.id), cls: "mono" },
                   { node: muted(c.scopeId) },
                   { node: result(c) },
@@ -102,7 +110,7 @@ export function offboardingCard(
                 ${table(
                   ["Kept", "Item", "Scope", "Why"],
                   kept.map((k: any) => [
-                    { node: muted(k.kind.replaceAll("_", " ")) },
+                    { node: muted(noun(k.kind)) },
                     { node: stacked(k.label, k.id), cls: "mono" },
                     { node: muted(k.scopeId) },
                     { node: muted(k.reason) },
