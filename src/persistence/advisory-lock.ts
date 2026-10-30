@@ -1,12 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PgPool, PoolClient } from "./pg-pool.ts";
 import { sleep } from "../util/async.ts";
-import { boundTenant } from "../tenants/context.ts";
-
-function tenantKey(key: string): string {
-  const tenant = boundTenant();
-  return tenant ? `${tenant}:${key}` : key;
-}
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
@@ -72,8 +66,7 @@ export function createNoopAdvisoryLock(): AdvisoryLock {
 
 export function createMemoryAdvisoryLock(): AdvisoryLock {
   const states = new Map<string, { tail: Promise<void>; readers: Set<Promise<void>>; pending: number }>();
-  const run = async <T>(name: string, fn: () => Promise<T>, shared: boolean): Promise<T> => {
-    const key = tenantKey(name);
+  const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean): Promise<T> => {
     let state = states.get(key);
     if (!state) {
       state = { tail: Promise.resolve(), readers: new Set(), pending: 0 };
@@ -98,7 +91,7 @@ export function createMemoryAdvisoryLock(): AdvisoryLock {
     withLock: (key, fn) => run(key, fn, false),
     withSharedLock: (key, fn) => run(key, fn, true),
     async tryWithLock(key, fn) {
-      if (states.has(tenantKey(key))) return null;
+      if (states.has(key)) return null;
       return run(key, fn, false);
     },
   });
@@ -131,8 +124,7 @@ export function createPostgresAdvisoryLock(
       if (--context.references === 0) context.client.release();
     }
   };
-  const run = async <T>(name: string, fn: () => Promise<T>, shared: boolean, wait: boolean): Promise<T | null> => {
-    const key = tenantKey(name);
+  const run = async <T>(key: string, fn: () => Promise<T>, shared: boolean, wait: boolean): Promise<T | null> => {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const attempt = await withClient(async (context): Promise<{ acquired: false } | { acquired: true; value: T }> => {

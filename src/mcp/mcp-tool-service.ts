@@ -14,6 +14,8 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import { eachTenant, type EachTenant } from "../tenants/claim.ts";
+import { memoryTenants } from "../tenants/resolver.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -172,6 +174,7 @@ export function createMcpToolService(opts: {
   now?: () => number;
   refreshIntervalMs?: number;
   signInUrl?: (serverId: string) => string;
+  tenants?: EachTenant;
 }): McpToolService {
   const now = opts.now ?? (() => Date.now());
   const clients = new Map<string, { client: McpClient; server: McpServer }>();
@@ -366,9 +369,11 @@ export function createMcpToolService(opts: {
     if (!closed) void refresh().catch(reportFailureAs("mcp: refresh tools", undefined));
   };
   const unsubscribe = opts.servers.onChange(refreshInBackground);
-  const timer = setInterval(refreshInBackground, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
+  const refreshEachTenant = opts.tenants ?? eachTenant(memoryTenants);
+  const timer = setInterval(() => {
+    if (!closed) void refreshEachTenant(refresh).catch(reportFailureAs("mcp: refresh tools", undefined));
+  }, opts.refreshIntervalMs ?? REFRESH_INTERVAL_MS);
   timer.unref?.();
-  refreshInBackground();
 
   return {
     toolDefs: () => snapshot,

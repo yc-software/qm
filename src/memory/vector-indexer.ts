@@ -1,7 +1,7 @@
 import { unitVector, type MemoryEmbedder } from "../model/embeddings.ts";
 import type { LeaderLease } from "../persistence/leader-lease.ts";
 import { reportFailure } from "../util/errors.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import type { MemoryVectorStore } from "./postgres-vector-store.ts";
 
 export function createMemoryVectorIndexer(opts: {
@@ -24,7 +24,7 @@ export function createMemoryVectorIndexer(opts: {
     await opts.leaderLease.hold("memory:vector-index", async (lost) => {
       const current = await opts.resolve();
       if (!current) return;
-      const tenant = boundTenant() ?? "";
+      const tenant = currentTenant();
       void lost.then(() => controller.abort());
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]);
       signal.throwIfAborted();

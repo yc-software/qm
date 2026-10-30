@@ -37,6 +37,9 @@ export function tenantColumn(table: string): PgMigrationDefinition {
     statements: [
       `SET LOCAL lock_timeout = '5s'`,
       `DO $tenant_column$ BEGIN
+         IF EXISTS (SELECT 1 FROM ${table}) AND (SELECT count(*) FROM tenants) <> 1 THEN
+           RAISE 'Cannot backfill ${table}.tenant_id: existing rows need exactly one tenant';
+         END IF;
          EXECUTE format('ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS tenant_id UUID NOT NULL DEFAULT %L REFERENCES tenants',
            CASE WHEN EXISTS (SELECT 1 FROM ${table}) THEN (SELECT id FROM tenants) END);
        END $tenant_column$`,

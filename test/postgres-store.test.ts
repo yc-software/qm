@@ -2481,9 +2481,9 @@ test(
       await raw.query("DROP INDEX IF EXISTS idx_runs_one_running_per_session");
       const req = JSON.stringify(turn("dup"));
       await raw.query(
-        `INSERT INTO runs(id, session_id, status, request, created_at, started_at)
-       VALUES ('dup-keep', 'sDup', 'running', $1, 1, 1), ('dup-demote', 'sDup', 'running', $1, 2, 2)`,
-        [req],
+        `INSERT INTO runs(tenant_id, id, session_id, status, request, created_at, started_at)
+       VALUES ($2, 'dup-keep', 'sDup', 'running', $1, 1, 1), ($2, 'dup-demote', 'sDup', 'running', $1, 2, 2)`,
+        [req, TEST_TENANT],
       );
       await raw.query("DELETE FROM qm_schema_migrations WHERE id = 'runs/store/0001'");
 

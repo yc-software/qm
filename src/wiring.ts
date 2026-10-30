@@ -109,7 +109,8 @@ import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from 
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { eachTenant, inTenantOf, type EachTenant } from "./tenants/claim.ts";
-import { boundTenant } from "./tenants/context.ts";
+import { boundTenant, currentTenant, tenantKey, withoutTenant } from "./tenants/context.ts";
+import { memoryTenants, pgTenants } from "./tenants/resolver.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
@@ -676,10 +677,14 @@ export function buildApp(
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
-  const tenants = eachTenant(config.sessionStore === "postgres" ? pgArtifactMap?.pool : undefined);
+  const tenants = eachTenant(pgArtifactMap ? pgTenants(pgArtifactMap.pool) : memoryTenants);
   const tenantLease: LeaderLease = {
     async hold(key, fn) {
-      await leaderLease.hold(key, (lost) => tenants(() => fn(lost)));
+      await leaderLease.hold(key, (lost) => {
+        let held = true;
+        void lost.then(() => (held = false));
+        return tenants(async () => held && fn(lost));
+      });
       return null;
     },
   };
@@ -1345,6 +1350,7 @@ export function buildApp(
   const mcpToolService = createMcpToolService({
     servers: mcpServers,
     audit: auditLog,
+    tenants,
     ...(keychain ? { userTokens: keychain } : {}),
     ...(config.publicWebUrl
       ? {
@@ -1652,7 +1658,7 @@ export function buildApp(
           });
         return result;
       };
-      return advisoryLock.withLock("session-run-admission", enqueue);
+      return advisoryLock.withLock(tenantKey("session-run-admission"), enqueue);
     },
   };
   const swarmStoreKind = config.databaseUrl ? "postgres" : "memory";
@@ -2294,8 +2300,7 @@ export function buildApp(
   const pokeReaper = (): void => {
     if (reapInFlight || Date.now() - lastReapAt < REAP_POKE_COOLDOWN_MS) return;
     reapInFlight = true;
-    void leaderLease
-      .hold(REAPER_LEASE_KEY, () => reaper.sweep())
+    void withoutTenant(() => leaderLease.hold(REAPER_LEASE_KEY, () => reaper.sweep()))
       .catch(swallowAs("wake: reaper poke", null))
       .finally(() => {
         reapInFlight = false;
@@ -2520,7 +2525,7 @@ export function buildApp(
   let lastSignalPrune = 0;
   const returnSessionRun = (run: Run) =>
     advisoryLock
-      .withLock("session-tree-admission", async () => {
+      .withLock(tenantKey("session-tree-admission"), async () => {
         const settled = await deliverSubagentMail(
           {
             sessions,
@@ -2738,7 +2743,7 @@ export function buildApp(
       : {}),
     tenants,
     sweepAsks: async (now) => {
-      const tenant = boundTenant() ?? "";
+      const tenant = currentTenant();
       if (!ingressMaintenance.has(tenant))
         ingressMaintenance.set(
           tenant,
@@ -3129,6 +3134,7 @@ export function buildApp(
         await configStore.hydrate?.();
         await identity.hydrate();
         await refreshCustomProviders();
+        await mcpToolService.refresh();
         await skillsReady();
         await checkBrokerCredentials();
       }),

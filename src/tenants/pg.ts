@@ -33,6 +33,8 @@ interface ClientInternals extends Queryable {
 
 const BIND_TENANT = "SELECT set_config('qm.tenant_id', $1, true)";
 
+const submittableTenants = new WeakMap<Submittable, string>();
+
 function guardSubmittable(client: ClientInternals, config: Submittable, tenant: string | undefined): void {
   if (!tenant) return;
   const submit = config.submit.bind(config);
@@ -62,13 +64,15 @@ function tenantPgPoolClass(pg: PgModule): new (config: PoolConfig) => PgPoolInst
     }
     override submit(connection: Connection): Error | null {
       const client = this.client;
-      const idle = client?.getTransactionStatus() === "I";
+      const status = client?.getTransactionStatus();
+      const idle = status === "I";
       if (client && idle) client.transactionTenant = this.tenant;
       if (this.tenant && !idle && client?.transactionTenant && client.transactionTenant !== this.tenant) {
         return new Error("This transaction is bound to another tenant");
       }
-      this.bound = Boolean(this.tenant) && typeof this.text === "string" && (idle || !client?.transactionTenant);
-      if (this.bound && client && !idle) client.transactionTenant = this.tenant;
+      const unboundTransaction = status === "T" && !client?.transactionTenant;
+      this.bound = Boolean(this.tenant) && typeof this.text === "string" && (idle || unboundTransaction);
+      if (this.bound && client && unboundTransaction) client.transactionTenant = this.tenant;
       this.binding = this.bound;
       if (!this.bound || this.requiresPreparation()) return super.submit(connection);
       connection.query(`SELECT set_config('qm.tenant_id', '${this.tenant}', true);${this.text}`);
@@ -110,7 +114,7 @@ function tenantPgPoolClass(pg: PgModule): new (config: PoolConfig) => PgPoolInst
         return super.query(config, values, callback);
       }
       if (!plainQuery(config)) {
-        guardSubmittable(this, config as Submittable, boundTenant());
+        guardSubmittable(this, config as Submittable, submittableTenants.get(config as Submittable) ?? boundTenant());
         return super.query(config, values, callback);
       }
       const done = (typeof values === "function" ? values : callback) as Callback | undefined;
@@ -133,7 +137,11 @@ function tenantPgPoolClass(pg: PgModule): new (config: PoolConfig) => PgPoolInst
       super({ ...config, Client: TenantClient });
     }
     override query(config: unknown, values?: unknown, callback?: unknown): unknown {
-      if (!plainQuery(config)) return super.query(config, values, callback);
+      if (!plainQuery(config)) {
+        const tenant = boundTenant();
+        if (tenant) submittableTenants.set(config as Submittable, tenant);
+        return super.query(config, values, callback);
+      }
       const done = typeof values === "function" ? values : callback;
       const query = new TenantQuery(boundTenant(), config, typeof values === "function" ? undefined : values);
       return done ? super.query(query, done) : super.query(query);

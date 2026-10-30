@@ -15,7 +15,8 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { createWakeSweep } from "../src/wake/sweep.ts";
 import { claimAcrossTenants, eachTenant, inTenantOf, type EachTenant } from "../src/tenants/claim.ts";
-import { boundTenant, withTenant } from "../src/tenants/context.ts";
+import { boundTenant, tenantKey, withTenant } from "../src/tenants/context.ts";
+import { pgTenants } from "../src/tenants/resolver.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { scopeId, type TurnResult } from "../src/types.ts";
@@ -131,7 +132,7 @@ test("the cross-tenant claim path requires every row to carry its tenant", { ski
   try {
     await assert.rejects(claimAcrossTenants(db, "SELECT 1 AS n"), /must return each row's tenant_id/);
     const seen: Array<string | undefined> = [];
-    await eachTenant(db)(async () => void seen.push(boundTenant()));
+    await eachTenant(pgTenants(db))(async () => void seen.push(boundTenant()));
     assert.ok(seen.includes(TEST_TENANT) && seen.includes(OTHER_TENANT));
     assert.ok(seen.every((tenant) => tenant !== undefined));
   } finally {
@@ -227,7 +228,7 @@ test("the scheduler ticks each tenant bound and cron-fire jobs carry and rebind 
   await scheduler.stop();
 });
 
-test("engaged sessions and advisory locks are keyed by tenant", async () => {
+test("engaged sessions and session admission locks are keyed by tenant", async () => {
   const engaged = createEngagedRegistry();
   withTenant(TEST_TENANT, () => engaged.engage("thread"));
   withTenant(OTHER_TENANT, () => engaged.engage("thread"));
@@ -245,10 +246,11 @@ test("engaged sessions and advisory locks are keyed by tenant", async () => {
   assert.deepEqual(swept, [OTHER_TENANT]);
 
   const lock = createMemoryAdvisoryLock();
+  const admission = () => tenantKey("session-run-admission");
   const held = Promise.withResolvers<void>();
-  const holding = withTenant(TEST_TENANT, () => lock.withLock("k", () => held.promise));
-  assert.equal(await withTenant(OTHER_TENANT, () => lock.tryWithLock!("k", async () => "free")), "free");
-  assert.equal(await withTenant(TEST_TENANT, () => lock.tryWithLock!("k", async () => "free")), null);
+  const holding = withTenant(TEST_TENANT, () => lock.withLock(admission(), () => held.promise));
+  assert.equal(await withTenant(OTHER_TENANT, () => lock.tryWithLock!(admission(), async () => "free")), "free");
+  assert.equal(await withTenant(TEST_TENANT, () => lock.tryWithLock!(admission(), async () => "free")), null);
   held.resolve();
   await holding;
 });

@@ -11,7 +11,6 @@ import { swarmFixture } from "./support/swarm-fixture.ts";
 import { bindTestTenant, provisionTestTenants } from "./support/tenant.ts";
 
 bindTestTenant();
-before(() => (process.env.DATABASE_URL ? provisionTestTenants(process.env.DATABASE_URL) : undefined));
 
 const baseUrl = process.env.DATABASE_URL;
 const schema = `swarm_test_${process.pid}`;
@@ -27,6 +26,7 @@ before(async () => {
   } finally {
     await pool.end();
   }
+  await provisionTestTenants(databaseUrl!);
 });
 after(async () => {
   if (!baseUrl) return;

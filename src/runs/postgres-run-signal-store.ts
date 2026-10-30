@@ -4,6 +4,7 @@ import { pgTextSafe } from "../util/text.ts";
 import { subscribePostgresChannel } from "../persistence/postgres-listener.ts";
 import type { RunSignal, RunSignalKind, RunSignalStore } from "./run-signal-store.ts";
 import { claimAcrossTenants } from "../tenants/claim.ts";
+import { tenantColumn } from "../tenants/migrations.ts";
 
 const CHANNEL = "run_signals";
 
@@ -45,6 +46,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
         `CREATE UNIQUE INDEX IF NOT EXISTS run_signals_by_dedupe_key ON run_signals(dedupe_key) WHERE dedupe_key IS NOT NULL`,
       ],
     },
+    tenantColumn("run_signals"),
   ]);
   const q = pg.query;
 
@@ -134,8 +136,7 @@ export function createPostgresRunSignalStore(connectionString: string): RunSigna
     async pendingRuns() {
       const rows = await claimAcrossTenants(
         pg,
-        `SELECT DISTINCT s.run_id, r.tenant_id::text AS tenant_id FROM run_signals s JOIN runs r ON r.id = s.run_id
-          WHERE s.consumed_at IS NULL`,
+        `SELECT DISTINCT run_id, tenant_id::text AS tenant_id FROM run_signals WHERE consumed_at IS NULL`,
       );
       return rows.map((r) => ({ runId: r.run_id as string, tenantId: r.tenant_id }));
     },

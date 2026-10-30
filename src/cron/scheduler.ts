@@ -19,6 +19,7 @@ import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { eachTenant, inTenantOf, type EachTenant } from "../tenants/claim.ts";
+import { memoryTenants } from "../tenants/resolver.ts";
 import { boundTenant } from "../tenants/context.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";
@@ -192,7 +193,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const withWork = <T>(work: () => Promise<T>): Promise<T> => deps.admittedWork?.run(work) ?? work();
   const maxFiresPerTick = deps.maxFiresPerTick ?? 100;
   const leaderLease = deps.leaderLease;
-  const tenants = deps.tenants ?? eachTenant(undefined);
+  const tenants = deps.tenants ?? eachTenant(memoryTenants);
 
   async function withCronLifecycle<T>(cronId: string, scheduled: boolean, run: () => Promise<T>): Promise<T | null> {
     if (scheduled && deps.advisoryLock.tryWithLock) {

@@ -31,3 +31,8 @@ export function currentTenant(): string {
   if (!id) throw new Error("No tenant is bound to this operation");
   return id;
 }
+
+export function tenantKey(key: string): string {
+  const tenant = boundTenant();
+  return tenant ? `${tenant}:${key}` : key;
+}

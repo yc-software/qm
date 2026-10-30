@@ -8,6 +8,9 @@ import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import { bindTestTenant, provisionTestTenants, TEST_TENANT } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -31,6 +34,7 @@ async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanu
   const url = new URL(process.env.DATABASE_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
   url.searchParams.set("application_name", schema);
+  await provisionTestTenants(url.toString());
   return {
     url: url.toString(),
     admin,
@@ -301,8 +305,8 @@ test(
       );
       const insertedAt = Date.now();
       await direct.query(
-        "INSERT INTO runs(id, session_id, status, request, created_at) VALUES($1,$2,'pending',$3,$4)",
-        [randomUUID(), "missed", JSON.stringify({ ...request, text: "missed" }), insertedAt],
+        "INSERT INTO runs(id, session_id, status, request, created_at, tenant_id) VALUES($1,$2,'pending',$3,$4,$5)",
+        [randomUUID(), "missed", JSON.stringify({ ...request, text: "missed" }), insertedAt, TEST_TENANT],
       );
       await until(() => observed.length === 3);
       assert.equal(observed[2]!.id, "missed");

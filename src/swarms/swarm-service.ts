@@ -12,7 +12,8 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import { sleep, withTimeout } from "../util/async.ts";
 import { createSweeper } from "../util/sweeper.ts";
 import { eachTenant, type EachTenant } from "../tenants/claim.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { memoryTenants } from "../tenants/resolver.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import { resolveSwarmSettings, type SwarmSettings } from "./swarm-settings.ts";
 import { inheritRuntime, spawnRuntime, type SpawnRuntimeFields, type SwarmTemplate } from "./swarm-runtime.ts";
@@ -553,7 +554,7 @@ export function createSwarmService(deps: {
   }
 
   let sweeping: Promise<void> | undefined;
-  let selecting: Promise<Swarm[]> | undefined;
+  const selecting = new Map<string, Promise<Swarm[]>>();
   const afterIds = new Map<string, string>();
   const reconciling = {
     resources: new Map<string, Promise<void>>(),
@@ -586,13 +587,14 @@ export function createSwarmService(deps: {
     );
   }
   const sweep = (): Promise<void> => {
-    sweeping ??= (deps.tenants ?? eachTenant(undefined))(async () => {
-      selecting ??= store.pending(afterIds.get(boundTenant() ?? "")).finally(() => {
-        selecting = undefined;
-      });
-      const batch = await withTimeout(() => selecting!, SWARM_LIMITS.reconcileMs, "swarm pending batch");
-      if (batch.length === SWARM_LIMITS.sweepBatch) afterIds.set(boundTenant() ?? "", batch.at(-1)!.id);
-      else afterIds.delete(boundTenant() ?? "");
+    sweeping ??= (deps.tenants ?? eachTenant(memoryTenants))(async () => {
+      const tenant = currentTenant();
+      const pending =
+        selecting.get(tenant) ?? store.pending(afterIds.get(tenant)).finally(() => selecting.delete(tenant));
+      selecting.set(tenant, pending);
+      const batch = await withTimeout(() => pending, SWARM_LIMITS.reconcileMs, "swarm pending batch");
+      if (batch.length === SWARM_LIMITS.sweepBatch) afterIds.set(tenant, batch.at(-1)!.id);
+      else afterIds.delete(tenant);
       await reconcileBatch(batch, "resources");
       await reconcileBatch(batch, "delivery");
     }).finally(() => {

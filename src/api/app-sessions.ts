@@ -38,6 +38,7 @@ import {
   type SessionSearchHit,
 } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { tenantKey } from "../tenants/context.ts";
 
 const MAX_SESSION_PINS = 50;
 const MAX_PIN_TEXT_CHARS = 2000;
@@ -1010,8 +1011,8 @@ export function createSessionMethods(
         return { detached: true as const };
       };
       return deps.advisoryLock
-        ? deps.advisoryLock.withLock("session-tree-admission", () =>
-            deps.advisoryLock!.withLock("session-run-admission", detach),
+        ? deps.advisoryLock.withLock(tenantKey("session-tree-admission"), () =>
+            deps.advisoryLock!.withLock(tenantKey("session-run-admission"), detach),
           )
         : detach();
     },
