@@ -19,16 +19,12 @@ export function offboardingCard(
     busy = true;
     hint = label;
     draw();
-    try {
-      const result = await send();
-      if (!result.ok) hint = result.data?.message || "Failed (" + result.status + ").";
-      else done(result.data);
-    } catch {
-      hint = "Network error. Try again.";
-    } finally {
-      busy = false;
-      draw();
-    }
+    const result = await send().catch(() => null);
+    busy = false;
+    if (!result) hint = "Network error. Try again.";
+    else if (!result.ok) hint = result.data?.message || "Failed (" + result.status + ").";
+    else done(result.data);
+    draw();
   }
   const run = (apply: boolean) =>
     request(

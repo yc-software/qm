@@ -6,6 +6,7 @@ import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
+import { followLoopState } from "../loops.ts";
 
 type Kind = "principal" | "cron" | "loop" | "webhook" | "keychain" | "deployment" | "skill" | "sandbox";
 
@@ -28,6 +29,10 @@ interface Kept {
 }
 
 type Step = Change & { run: () => Promise<unknown> };
+
+async function present(found: Promise<unknown>, what: string): Promise<void> {
+  if (!(await found)) throw new Error(`${what} no longer exists`);
+}
 
 const firstLine = (text: string | undefined): string => text?.trim().split("\n", 1)[0] ?? "";
 
@@ -73,11 +78,11 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
       label: cron.title || firstLine(cron.action ?? cron.message) || cron.id,
       scopeId: cron.ownerScopeId,
       action: "disable_and_archive",
-      run: () => app.updateCron(cron.id, { enabled: false, archived: true }),
+      run: () => present(app.updateCron(cron.id, { enabled: false, archived: true }), "the cron"),
     });
   }
-  const loops = deps.loops?.store;
-  for (const loop of (await loops?.list()) ?? []) {
+  const loops = deps.loops;
+  for (const loop of (await loops?.store.list()) ?? []) {
     if (loop.state !== "enabled" || !(await owns(loop.owner, loop.ownerScopeId))) continue;
     steps.push({
       kind: "loop",
@@ -86,9 +91,8 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
       scopeId: loop.ownerScopeId,
       action: "pause",
       run: async () => {
-        const paused = await loops!.setState(loop.id, "paused");
-        if (paused && loop.cronId) await app.setCronEnabled(loop.cronId, false);
-        return paused;
+        await present(loops!.store.setState(loop.id, "paused"), "the loop");
+        await followLoopState(loops!, loop, "paused");
       },
     });
   }
@@ -118,7 +122,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
         label: `${service.get(grant.credentialId) ?? grant.credentialId}: ${grant.purpose}`,
         scopeId: grant.audienceScopeId,
         action: "revoke",
-        run: () => keychain.revokeGrant(grant.ownerId, grant.id),
+        run: () => present(keychain.revokeGrant(grant.ownerId, grant.id), "the grant"),
       });
     }
     for (const credential of credentials)
@@ -257,8 +261,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   for (const step of steps) {
     const change = view(step);
     try {
-      const outcome = await step.run();
-      if (outcome === null || outcome === false) throw new Error("it no longer exists");
+      await step.run();
       changes.push({ ...change, result: "done" });
     } catch (error) {
       changes.push({ ...change, result: "failed", error: errMessage(error) });
