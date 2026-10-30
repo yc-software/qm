@@ -131,7 +131,6 @@ async function brandIndexHtml(html: string): Promise<string> {
 
 const portalTokenStore = new AsyncLocalStorage<string | undefined>();
 
-const runOwners = new Map<string, string>();
 const runThreadKeys = new Map<string, string>();
 const activeRunsByThread = new Map<string, string[]>();
 
@@ -140,7 +139,6 @@ function threadKey(user: string, threadRef: string): string {
 }
 
 function forgetRun(runId: string): void {
-  runOwners.delete(runId);
   const key = runThreadKeys.get(runId);
   if (key) {
     const remaining = (activeRunsByThread.get(key) ?? []).filter((id) => id !== runId);
@@ -151,11 +149,10 @@ function forgetRun(runId: string): void {
 }
 
 function rememberRun(runId: string, user: string, threadRef: string): void {
-  if (runOwners.size > 5000) {
-    const oldest = runOwners.keys().next().value;
+  if (runThreadKeys.size > 5000) {
+    const oldest = runThreadKeys.keys().next().value;
     if (oldest !== undefined) forgetRun(oldest);
   }
-  runOwners.set(runId, user);
   const key = threadKey(user, threadRef);
   runThreadKeys.set(runId, key);
   activeRunsByThread.set(key, [...(activeRunsByThread.get(key) ?? []), runId]);
