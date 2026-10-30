@@ -73,16 +73,6 @@ export function startAdmin(host, env) {
     ].forEach((card) => content.appendChild(card));
 
     const connectorView = $("view-connectors");
-    const connectorTip = document.createElement("aside");
-    connectorTip.className = "connector-dm-tip admin-notice hidden";
-    connectorTip.id = "connector-dm-tip";
-    connectorTip.setAttribute("role", "note");
-    connectorTip.appendChild(document.createElement("p"));
-    connectorTip.querySelector("p").textContent =
-      "Tip: the easiest way to change these settings is to ask " +
-      env.productName +
-      " in a DM. It can make the edit for you and confirm what changed.";
-    connectorView.before(connectorTip);
     const builtIns = document.createElement("section");
     builtIns.className = "card";
     builtIns.id = "card-built-in-connectors";
@@ -643,7 +633,6 @@ export function startAdmin(host, env) {
     env.onView(view);
     $("view-governance").classList.toggle("hidden", !isGovLike(view));
     $("view-onboarding").classList.toggle("hidden", view !== "onboarding");
-    $("connector-dm-tip").classList.toggle("hidden", view !== "connectors");
     $("view-connectors").classList.toggle("hidden", view !== "connectors");
     $("view-data").classList.toggle(
       "hidden",

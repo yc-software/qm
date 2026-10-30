@@ -656,6 +656,14 @@ function settingsPane(): TemplateResult {
   if (adminHost) adminHost.hidden = general;
   return html`
     <h1 class="settings-page-title">Settings</h1>
+    ${
+      can("admin")
+        ? html`<p class="settings-tip">
+            Tip: the easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for
+            you and confirm what changed.
+          </p>`
+        : nothing
+    }
     <div class="settings-layout ${can("admin") ? "with-nav" : ""}">
       ${can("admin") ? settingsNav() : nothing}
       <div class="settings-content">${general || !adminHost ? generalPane() : nothing} ${adminHost ?? nothing}</div>

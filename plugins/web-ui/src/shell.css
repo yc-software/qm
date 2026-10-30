@@ -1151,6 +1151,12 @@ a.chat-row-open {
 .settings-content {
   min-width: 0;
 }
+.settings-tip {
+  max-width: 1180px;
+  margin: 0 auto;
+  color: var(--muted-foreground);
+  font-size: var(--font-13);
+}
 .settings-page-title {
   position: absolute;
   width: 1px;

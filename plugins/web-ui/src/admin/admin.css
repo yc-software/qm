@@ -4905,14 +4905,6 @@
   outline-offset: 3px;
   border-radius: 2px;
 }
-#app-view .connector-dm-tip {
-  margin: 0 0 10px;
-  color: var(--muted);
-  font-size: 12.5px;
-}
-#app-view .connector-dm-tip p {
-  margin: 0;
-}
 #app-view[data-subview="connectors"] .shellbar {
   display: flex;
 }
@@ -4940,8 +4932,7 @@
   font-weight: 500;
 }
 #app-view #view-connectors .card > .head p,
-#app-view #view-connectors .hint,
-#app-view .connector-dm-tip {
+#app-view #view-connectors .hint {
   color: var(--muted);
   font-size: 13px;
   font-weight: 400;
@@ -4996,9 +4987,6 @@
   display: block;
   margin-bottom: 4px;
   font-weight: 600;
-}
-#app-view .connector-dm-tip {
-  margin-bottom: 16px;
 }
 #app-view #view-connectors .card > .head p {
   margin: 4px 0 0;
