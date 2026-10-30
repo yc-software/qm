@@ -9,19 +9,27 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createHmac } from "node:crypto";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
+import { signedCoreHeaders } from "./support/signed-core.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";
 
-function start(signingSecret?: string, publicUrl?: string): { base: string; close: () => Promise<void> } {
+function start(
+  signingSecret?: string,
+  publicUrl?: string,
+  rowTenants: string[] = [TEST_TENANT],
+): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "wh-")) }));
-  const deps = { ...(publicUrl ? { publicUrl } : {}), webhookReceiver: built.webhookReceiver };
+  const deps = {
+    ...(publicUrl ? { publicUrl } : {}),
+    webhookReceiver: built.webhookReceiver,
+    rowTenants: async () => rowTenants,
+  };
   const server = signingSecret
     ? createServer(built.app, { ...deps, signingSecret })
     : createInsecureTestServer(TEST_TENANT, built.app, deps);
@@ -32,13 +40,12 @@ function start(signingSecret?: string, publicUrl?: string): { base: string; clos
   };
 }
 
-function sign(method: string, pathWithQuery: string, body: string): Record<string, string> {
-  const ts = Math.floor(Date.now() / 1000);
-  return {
-    "content-type": "application/json",
-    "x-timestamp": String(ts),
-    "x-signature": signRequest(SECRET, ts, `${method}\n${pathWithQuery}\n${body}`),
-  };
+function sign(method: string, pathWithQuery: string, body: string): Promise<Record<string, string>> {
+  const actor = new URLSearchParams(pathWithQuery.split("?")[1] ?? "").get("viewer") ?? "U1";
+  return signedCoreHeaders(SECRET, method, pathWithQuery, body, {
+    actor,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 const githubSig = (rawBody: string) => "sha256=" + createHmac("sha256", HOOK_SECRET).update(rawBody).digest("hex");
@@ -58,7 +65,7 @@ test("register → list elides the secret; the inbound URL is returned", async (
     const body = regBody();
     const created = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
-      headers: sign("POST", "/v1/webhooks", body),
+      headers: await sign("POST", "/v1/webhooks", body),
       body,
     });
     assert.equal(created.status, 200);
@@ -70,7 +77,7 @@ test("register → list elides the secret; the inbound URL is returned", async (
     assert.equal(webhook.verification.secret, HOOK_SECRET);
 
     const listPath = "/v1/webhooks?viewer=U1";
-    const listed = await fetch(`${srv.base}${listPath}`, { headers: sign("GET", listPath, "") });
+    const listed = await fetch(`${srv.base}${listPath}`, { headers: await sign("GET", listPath, "") });
     const { webhooks } = (await listed.json()) as { webhooks: Array<{ verification: { secret: string } }> };
     assert.equal(webhooks[0]?.verification.secret, "***");
   } finally {
@@ -84,7 +91,7 @@ test("with a public base configured, the inbound URL is ABSOLUTE (publicly reach
     const body = regBody();
     const created = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
-      headers: sign("POST", "/v1/webhooks", body),
+      headers: await sign("POST", "/v1/webhooks", body),
       body,
     });
     assert.equal(created.status, 200);
@@ -101,7 +108,7 @@ test("registration is anti-escalation gated (different owner needs consent)", as
     const body = regBody("U2", "U1");
     const res = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
-      headers: sign("POST", "/v1/webhooks", body),
+      headers: await sign("POST", "/v1/webhooks", body),
       body,
     });
     assert.equal(res.status, 400);
@@ -137,7 +144,7 @@ test("registration rejects webhook configurations without a verifiable signature
       });
       const res = await fetch(`${srv.base}/v1/webhooks`, {
         method: "POST",
-        headers: sign("POST", "/v1/webhooks", body),
+        headers: await sign("POST", "/v1/webhooks", body),
         body,
       });
       assert.equal(res.status, 400);
@@ -153,7 +160,7 @@ test("inbound ingress is gated by the per-webhook signature, NOT core source-aut
     const reg = regBody();
     const created = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
-      headers: sign("POST", "/v1/webhooks", reg),
+      headers: await sign("POST", "/v1/webhooks", reg),
       body: reg,
     });
     const { webhook } = (await created.json()) as { webhook: { id: string } };
@@ -195,7 +202,7 @@ test("an over-cap inbound body is rejected 413 by the upstream readRawBody, befo
     const reg = regBody();
     const created = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
-      headers: sign("POST", "/v1/webhooks", reg),
+      headers: await sign("POST", "/v1/webhooks", reg),
       body: reg,
     });
     const { webhook } = (await created.json()) as { webhook: { id: string } };
@@ -250,17 +257,17 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     const body = regBody();
     const created = await fetch(`${srv.base}/v1/webhooks`, {
       method: "POST",
-      headers: sign("POST", "/v1/webhooks", body),
+      headers: await sign("POST", "/v1/webhooks", body),
       body,
     });
     const { webhook } = (await created.json()) as { webhook: { id: string } };
     for (const [suffix, status] of [
       ["?viewer=U1", 200],
       ["?viewer=U2", 404],
-      ["", 404],
+      ["", 403],
     ] as const) {
       const path = `/v1/webhooks/${webhook.id}/events${suffix}`;
-      const res = await fetch(`${srv.base}${path}`, { headers: sign("GET", path, "") });
+      const res = await fetch(`${srv.base}${path}`, { headers: await sign("GET", path, "") });
       assert.equal(res.status, status);
       if (status === 200) assert.deepEqual(await res.json(), { events: [] });
     }
@@ -275,7 +282,7 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     const historyPath = `/v1/webhooks/${webhook.id}/events?viewer=U1`;
     let events: Array<{ sessionId?: string; payload: string }> = [];
     for (let i = 0; i < 100; i++) {
-      const history = await fetch(`${srv.base}${historyPath}`, { headers: sign("GET", historyPath, "") });
+      const history = await fetch(`${srv.base}${historyPath}`, { headers: await sign("GET", historyPath, "") });
       ({ events } = (await history.json()) as { events: typeof events });
       if (events[0]?.sessionId) break;
       await new Promise((r) => setTimeout(r, 10));
@@ -286,14 +293,43 @@ test("signed webhook history enforces viewer permissions and links to an owner-r
     const sessionPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U1`;
     let worklog = "";
     await settle(async () => {
-      const res = await fetch(`${srv.base}${sessionPath}`, { headers: sign("GET", sessionPath, "") });
+      const res = await fetch(`${srv.base}${sessionPath}`, { headers: await sign("GET", sessionPath, "") });
       assert.equal(res.status, 200);
       worklog = JSON.stringify(await res.json());
       return /agent message for worklog/.test(worklog);
     });
     assert.match(worklog, /agent message for worklog/);
     const otherPath = `/v1/sessions/${events[0]!.sessionId}?viewer=U2`;
-    assert.equal((await fetch(`${srv.base}${otherPath}`, { headers: sign("GET", otherPath, "") })).status, 404);
+    assert.equal((await fetch(`${srv.base}${otherPath}`, { headers: await sign("GET", otherPath, "") })).status, 404);
+  } finally {
+    await srv.close();
+  }
+});
+
+test("inbound ingress for a webhook no single tenant owns is a 404 even when correctly signed", async () => {
+  const owners = [TEST_TENANT];
+  const srv = start(SECRET, undefined, owners);
+  try {
+    const reg = regBody();
+    const created = await fetch(`${srv.base}/v1/webhooks`, {
+      method: "POST",
+      headers: await sign("POST", "/v1/webhooks", reg),
+      body: reg,
+    });
+    const { webhook } = (await created.json()) as { webhook: { id: string } };
+    const eventBody = JSON.stringify({ action: "opened" });
+    const deliver = () =>
+      fetch(`${srv.base}/v1/webhooks/incoming/${webhook.id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-hub-signature-256": githubSig(eventBody) },
+        body: eventBody,
+      });
+    for (const ambiguous of [[], [TEST_TENANT, OTHER_TENANT]]) {
+      owners.splice(0, owners.length, ...ambiguous);
+      assert.equal((await deliver()).status, 404, JSON.stringify(ambiguous));
+    }
+    owners.splice(0, owners.length, TEST_TENANT);
+    assert.equal((await deliver()).status, 202);
   } finally {
     await srv.close();
   }
