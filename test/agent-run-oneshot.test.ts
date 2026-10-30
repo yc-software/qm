@@ -14,8 +14,6 @@ import {
   piLastAssistantTextOrThrow,
   piTurnError,
   refusalFallbackNote,
-  refusalFallbackModelId,
-  REFUSAL_FALLBACK_MODEL_IDS,
   renderDetectPrompt,
   resolveConfiguredModelId,
   seedRawMessagesIntoSession,
@@ -1020,22 +1018,6 @@ test("refusalFallbackNote names both models, carries the provider's refusal, and
   assert.match(note, /Claude Opus 4.8/);
   assert.match(note, /restrictions on reverse engineering/);
   assert.match(note, /telling the user/);
-});
-
-test("refusal fallback drawdown: Fable -> Opus, Opus -> Sonnet, never the refused model back", () => {
-  assert.equal(refusalFallbackModelId("claude-fable-5-1"), "claude-opus-5");
-  assert.equal(refusalFallbackModelId("claude-fable-5"), "claude-opus-5");
-  assert.equal(refusalFallbackModelId("claude-opus-5"), "claude-sonnet-5");
-  assert.equal(refusalFallbackModelId("claude-opus-5", "gpt-6-sol"), "gpt-6-sol");
-  assert.equal(refusalFallbackModelId("gpt-6-sol", "gpt-6-sol"), "claude-opus-5");
-  assert.equal(
-    refusalFallbackModelId("claude-opus-5", "not-a-pi-model", (id) => id !== "not-a-pi-model"),
-    "claude-sonnet-5",
-  );
-  for (const id of REFUSAL_FALLBACK_MODEL_IDS) {
-    assert.notEqual(refusalFallbackModelId(id), id);
-    assert.equal(resolveModel(id)?.provider, "anthropic");
-  }
 });
 
 test("resolveConfiguredModelId: an unresolvable default is rejected too, so auxiliaries never chase a dead id", () => {

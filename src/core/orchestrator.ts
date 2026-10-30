@@ -106,6 +106,7 @@ import type {
   AgentTurnInput,
   AgentTurnResult,
   RuntimeChoice,
+  SessionRoute,
 } from "../agent/agent.ts";
 import { forModelContext, forSearchView } from "../agent/context-compaction.ts";
 import {
@@ -1971,6 +1972,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       let tailOwnsCleanup = false;
       let leaseReleased = false;
       let contextRecovered = false;
+      let compactionRoute: SessionRoute | undefined;
       let turnProgress = 0;
       const turnAbort = new AbortController();
       if (input.cancel?.aborted) turnAbort.abort();
@@ -2306,7 +2308,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ...(input.sessionParticipantIds ?? []),
             ]),
           ],
-          documentTokenBudget(scopeId, input.model),
+          documentTokenBudget(input.model),
         );
         if (sideDiscussions) systemPrompt += `\n\n${sideDiscussions}`;
         systemPrompt += `\n\n${USER_REPLY_RULES_MD.trim()}`;
@@ -2814,7 +2816,77 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resumePlan = resumeStrategy(visibleHistory, partial);
         }
         const resume = resumePlan && resumePlan.kind !== "restart" ? partial : null;
-        const documentBudget = documentTokenBudget(scopeId, input.model);
+        const runtimePurpose = turnRuntimePurpose(
+          { surface: input.surface, triggered: automatedTurn },
+          !!session.parentSessionId || !!swarmBinding?.member.parentId,
+        );
+        const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
+        const wantsOrgFastMode =
+          typeof input.fastMode !== "boolean" &&
+          !purposeDefault &&
+          humanInput &&
+          (await deps.config?.getInteractiveFastModeDurable());
+        const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
+        const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
+          let userProviderKeys: ProviderKeys | undefined;
+          let userModelOverride: string | undefined;
+          let personalAuth = false;
+          let authLabel = "api-key";
+          const userCredStore = external ? undefined : deps.userModelCredentials;
+          const account = external
+            ? "company"
+            : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
+          if (userCredStore && humanInput && account !== "company") {
+            const [anthCred, oaiCred] = await Promise.all([
+              account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
+              account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
+            ]);
+            const routing = resolveIndividualAuthRouting(
+              anthCred ?? null,
+              oaiCred ?? null,
+              account === "personal" || input.surface === "web"
+                ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
+                : (runtime.modelId ?? purposeDefault?.modelId),
+            );
+            if (routing?.kind === "apikey") {
+              personalAuth = true;
+              userProviderKeys = { [routing.provider]: routing.apiKey };
+              userModelOverride = routing.model;
+            } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
+              const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
+              if (derived) {
+                userProviderKeys = { anthropic: derived.accessToken };
+                authLabel = "claude-oauth-pi";
+                personalAuth = true;
+                userModelOverride = routing.model;
+              }
+            } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
+              const derived = await userCredStore.derivedOAuth(actor.id, "openai");
+              if (derived) {
+                userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
+                authLabel = "codex-oauth-pi";
+                personalAuth = true;
+                userModelOverride = routing.model;
+              }
+            }
+            if (!personalAuth) {
+              throw new NonRetryableTurnError(
+                "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
+              );
+            }
+          }
+          return { userProviderKeys, userModelOverride, personalAuth, authLabel };
+        };
+        const initialRuntimeAuth = loadRuntimeAuth({});
+        const sessionAuth = await initialRuntimeAuth.catch(() => undefined);
+        const sessionModel = sessionAuth?.userModelOverride ?? input.model;
+        const preTurnRoute: SessionRoute = {
+          ...(sessionModel ? { runtime: { modelId: sessionModel } } : {}),
+          ...(sessionAuth?.userProviderKeys ? { providerKeys: sessionAuth.userProviderKeys, runtimePinned: true } : {}),
+          ...(runtimePurpose ? { runtimePurpose } : {}),
+        };
+        compactionRoute = preTurnRoute;
+        const documentBudget = documentTokenBudget(sessionModel);
         const history = await withManagedRosterVersion(() =>
           compactContextIfNeeded({
             cancel: turnAbort.signal,
@@ -2823,7 +2895,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             visibleHistory,
             scopeId,
             actorId: actor.id,
-            ...(input.model ? { model: input.model } : {}),
+            route: preTurnRoute,
             reservedTokens:
               countTokens(sideDiscussions) +
               (strictReadOnly
@@ -3029,71 +3101,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           typeof input.turnWallClockMs === "number" && input.turnWallClockMs > 0 && !swarmGoalTurn
             ? input.turnWallClockMs
             : (deps.defaultTurnWallClockMs ?? CONFIG_DEFAULTS.turnWallClockSec * 1000);
-        const runtimePurpose = turnRuntimePurpose(
-          { surface: input.surface, triggered: automatedTurn },
-          !!session.parentSessionId || !!swarmBinding?.member.parentId,
-        );
-        const purposeDefault = runtimePurpose ? await deps.config?.getPurposeRuntimeDurable(runtimePurpose) : undefined;
-        const wantsOrgFastMode =
-          typeof input.fastMode !== "boolean" &&
-          !purposeDefault &&
-          humanInput &&
-          (await deps.config?.getInteractiveFastModeDurable());
-        const effectiveFastMode = resolveTurnFastMode(input.fastMode, humanInput, wantsOrgFastMode === true);
-        const loadRuntimeAuth = async (runtime: Partial<RuntimeChoice>) => {
-          let userProviderKeys: ProviderKeys | undefined;
-          let userModelOverride: string | undefined;
-          let personalAuth = false;
-          let authLabel = "api-key";
-          const userCredStore = external ? undefined : deps.userModelCredentials;
-          const account = external
-            ? "company"
-            : (input.modelAccount ?? (await deps.config?.getModelAccountDurable(actor.id)) ?? "company");
-          if (userCredStore && humanInput && account !== "company") {
-            const [anthCred, oaiCred] = await Promise.all([
-              account === "openai" ? null : userCredStore.get(actor.id, "anthropic"),
-              account === "anthropic" ? null : userCredStore.get(actor.id, "openai"),
-            ]);
-            const routing = resolveIndividualAuthRouting(
-              anthCred ?? null,
-              oaiCred ?? null,
-              account === "personal" || input.surface === "web"
-                ? (runtime.modelId ?? input.model ?? purposeDefault?.modelId)
-                : (runtime.modelId ?? purposeDefault?.modelId),
-            );
-            if (routing?.kind === "apikey") {
-              personalAuth = true;
-              userProviderKeys = { [routing.provider]: routing.apiKey };
-              userModelOverride = routing.model;
-            } else if (routing?.kind === "oauth" && routing.provider === "anthropic" && anthCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "anthropic");
-              if (derived) {
-                userProviderKeys = { anthropic: derived.accessToken };
-                authLabel = "claude-oauth-pi";
-                personalAuth = true;
-                userModelOverride = routing.model;
-              }
-            } else if (routing?.kind === "oauth" && routing.provider === "openai" && oaiCred?.oauth) {
-              const derived = await userCredStore.derivedOAuth(actor.id, "openai");
-              if (derived) {
-                userProviderKeys = { [CODEX_SUBSCRIPTION_PROVIDER]: derived.accessToken };
-                authLabel = "codex-oauth-pi";
-                personalAuth = true;
-                userModelOverride = routing.model;
-              }
-            }
-            if (!personalAuth) {
-              throw new NonRetryableTurnError(
-                "Your personal AI account is unavailable. Open Settings → AI access to reconnect Claude or ChatGPT / Codex, or choose company access. The chat cannot continue on company access.",
-              );
-            }
-          }
-          return { userProviderKeys, userModelOverride, personalAuth, authLabel };
-        };
         const servesModel = (requested: string, routed: string | undefined, keys: ProviderKeys | undefined) =>
           (keys?.[CODEX_SUBSCRIPTION_PROVIDER] ? codexSubscriptionModelId(requested) : requested) === routed;
         const requestedModel = input.model ?? purposeDefault?.modelId;
-        let { userProviderKeys, userModelOverride, personalAuth, authLabel } = await loadRuntimeAuth({});
+        let { userProviderKeys, userModelOverride, personalAuth, authLabel } = await initialRuntimeAuth;
         if (
           (input.surface === "web" || purposeDefault) &&
           personalAuth &&
@@ -3344,6 +3355,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             onRuntime: (reported: TurnRuntime) => {
               const runtime: TurnRuntime = agentSwitch ? { ...reported, change: { agent: agentSwitch } } : reported;
               turnRuntime = runtime;
+              compactionRoute = {
+                runtime: { modelId: runtime.modelId },
+                runtimePinned: true,
+                ...(userProviderKeys ? { providerKeys: userProviderKeys } : {}),
+              };
               if (input.runId) deps.turnStream?.noteRuntime(input.runId, runtime);
             },
             ...(runtimePurpose ? { runtimePurpose } : {}),
@@ -3590,7 +3606,11 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   visibleHistory: resumedHistory,
                   scopeId,
                   actorId: actor.id,
-                  ...(requestedRuntime.modelId ? { model: requestedRuntime.modelId } : {}),
+                  route: {
+                    ...(requestedRuntime.modelId ? { runtime: { modelId: requestedRuntime.modelId } } : {}),
+                    ...(userProviderKeys ? { providerKeys: userProviderKeys, runtimePinned: true } : {}),
+                    ...(runtimePurpose ? { runtimePurpose } : {}),
+                  },
                   cancel: turnAbort.signal,
                 }),
               );
@@ -3928,7 +3948,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             sessionId: session.id,
             scopeId,
             actorId: actor.id,
-            ...(input.model ? { model: input.model } : {}),
+            ...(compactionRoute ? { route: compactionRoute } : {}),
           });
       }
     },

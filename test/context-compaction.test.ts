@@ -558,8 +558,7 @@ test("a model-overridden session's background pass sizes against the override's 
   const { agent, compactCalls } = spyAgent();
   const OVERRIDE = "tiny-context-model";
   const overrideBudget = budgetBetweenSoftAndHard(tokensOf(...msgTexts(8)));
-  agent.contextTokenBudget = (_scopeLabel?: string, model?: string) =>
-    model === OVERRIDE ? overrideBudget : 1_000_000;
+  agent.contextTokenBudget = (model?: string) => (model === OVERRIDE ? overrideBudget : 1_000_000);
   const { orch, sessions } = buildOrchestrator(agent);
   const sid = await seed(
     sessions,

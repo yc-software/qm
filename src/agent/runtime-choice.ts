@@ -9,7 +9,7 @@ import {
   modelUnavailableReason,
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
-import type { Agent, AgentTurnInput, RuntimeChoice } from "./agent.ts";
+import type { Agent, AgentTurnInput, CompactInput, RuntimeChoice, SessionRoute } from "./agent.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { governGoal, type GoalGovernorInput } from "./goal.ts";
 import { turnRuntimePurpose } from "../core/turn-options.ts";
@@ -116,9 +116,19 @@ export async function resolveRuntimeChoice(
 export function withResolvedRuntime(
   agent: Agent,
   resolve: (input: AgentTurnInput, routedBy: (ruleId: string) => void) => RuntimeChoice | Promise<RuntimeChoice>,
+  resolveSession?: (route: SessionRoute) => Promise<RuntimeChoice>,
 ): Agent {
+  const compactHistory = agent.compactHistory?.bind(agent);
   return {
     ...agent,
+    ...(compactHistory && resolveSession
+      ? {
+          async compactHistory(input: CompactInput) {
+            const runtime = input.runtimePinned && input.runtime?.modelId ? input.runtime : await resolveSession(input);
+            return compactHistory({ ...input, runtime });
+          },
+        }
+      : {}),
     async runTurn(input) {
       let routedBy: string | undefined;
       const choice = await resolve(input, (ruleId) => {
