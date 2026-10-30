@@ -13,7 +13,6 @@ import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import { encodeTs } from "../src/slack/reactions.ts";
 import { textPng } from "./live-slack/text-png.ts";
 import { visionImage } from "../src/core/attachments.ts";
-import { messageTag } from "../src/util/message-tag.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -88,7 +87,7 @@ test("read_file opens a file on another message by its ts and returns an image t
 
     await built.app.turn(mention(`!read_file ${encodeTs("1700000000.000042")} image.png`, "C21", "2100.1"));
     assert.match(await reply(built, "C21:2100.1"), /^file-image:/);
-    assert.deepEqual(surface.queries[1].file, { ts: "1700000000.000042", name: "image.png" });
+    assert.deepEqual(surface.queries[1].file, { ts: encodeTs("1700000000.000042"), name: "image.png" });
 
     await built.app.turn(mention("!read_file 1700000000.000099", "C26", "2600.1"));
     assert.match(
@@ -96,12 +95,6 @@ test("read_file opens a file on another message by its ts and returns an image t
       /^file-pointer:.*image\/png/,
       "bytes labelled image/png that aren't an image never go to the model as one",
     );
-
-    await built.app.turn(mention(`!read_file ${png.blobId}`, "C22", "2200.1"));
-    assert.match(await reply(built, "C22:2200.1"), /couldn't read file/, "a raw blob id is not a file reference");
-
-    await built.app.turn(mention("!read_file image.png", "C23", "2300.1"));
-    assert.match(await reply(built, "C23:2300.1"), /couldn't read file\] pass the `ts`.*\/v1\/surface-file/);
   } finally {
     await surface.stop();
     await built.runtime.stop();
@@ -133,21 +126,6 @@ test("read_file passes a surface error through instead of claiming success", asy
   }
 });
 
-test("read_thread tells the model how to open files it sees", async () => {
-  const built = freshApp();
-  built.runtime.start();
-  const surface = fulfill(built.app, () => ({
-    messages: [{ ts: "2500.1", author: "Ada", text: ":thinking:", files: ["image.png", "image.png"] }],
-  }));
-  try {
-    await built.app.turn(mention("!read_thread", "C25", "2500.1"));
-    assert.match(await reply(built, "C25:2500.1"), /read 1 message\(s\) — .*read_file: ref = that message's ts/);
-  } finally {
-    await surface.stop();
-    await built.runtime.stop();
-  }
-});
-
 test("the slack tool returns an image block for an image file and forwards name", async () => {
   const calls: unknown[][] = [];
   const tc = {
@@ -173,7 +151,7 @@ describe("the Slack surface fetching a file from a message", () => {
     };
     const client = {
       conversations: {
-        replies: async () => ({ messages: [{ ts: "100.000001", files }] }),
+        replies: async () => ({ messages: [{ ts: "1700000100.000001", files }] }),
         history: async () => ({ messages: [] }),
       },
     };
@@ -195,7 +173,7 @@ describe("the Slack surface fetching a file from a message", () => {
         source: "slack",
         createdAt: Date.now(),
         status: "pending",
-        query: { count: 1, conversationTarget: "C1:100.000001", file: { ts: "100.000001", ...file } },
+        query: { count: 1, conversationTarget: "C1:1700000100.000001", file: { ts: "1700000100.000001", ...file } },
       } as never);
     return { run, fulfilled, fetched, restore: () => void (globalThis.fetch = realFetch) };
   }
@@ -210,6 +188,20 @@ describe("the Slack surface fetching a file from a message", () => {
       await t.run({ index: 2 });
       assert.deepEqual(t.fetched, ["https://files.slack.com/b"]);
       assert.equal(t.fulfilled[0]!.outcome.result.file.blobId, "blob-7");
+    } finally {
+      t.restore();
+    }
+  });
+
+  it("takes a ~id ref and refuses anything that isn't a message ref", async () => {
+    const t = fulfiller(twins);
+    try {
+      await t.run({ ts: encodeTs("1700000100.000001"), index: 1 });
+      assert.deepEqual(t.fetched, ["https://files.slack.com/a"]);
+      await t.run({ ts: "0123456789abcdef0123456789abcdef" });
+      await t.run({ ts: "image.png" });
+      assert.match(t.fulfilled[1]!.outcome.error, /isn't a message ref/);
+      assert.match(t.fulfilled[2]!.outcome.error, /isn't a message ref/);
     } finally {
       t.restore();
     }
@@ -291,9 +283,4 @@ test("only real images in a supported format are shown to the model, and refusal
     ok: false,
     reason: "not an image",
   });
-});
-
-test("a message shown with files says how to open them, and one without files doesn't", () => {
-  assert.match(messageTag({ id: "1700000000.000042" }, "look", ["image.png"]), /open-files-with="read_file"/);
-  assert.doesNotMatch(messageTag({ id: "1700000000.000042" }, "look"), /open-files-with/);
 });

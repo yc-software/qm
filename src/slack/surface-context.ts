@@ -17,6 +17,7 @@ import {
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
+import { decodeTs } from "./reactions.ts";
 import {
   type ConversationSerializer,
   RECENT_HISTORY_LIMIT,
@@ -129,8 +130,14 @@ export function createSurfaceContextFulfiller(deps: {
     conversationThreadTs: string | undefined,
     ref: { ts: string; threadTs?: string; name?: string; index?: number },
   ): Promise<Record<string, unknown>> {
+    const ts = decodeTs(ref.ts) ?? ref.ts.trim();
+    if (!ts.includes(".") || !Number.isFinite(Number(ts)))
+      return {
+        error:
+          "that isn't a message ref — pass the ts (or ~id) of the message carrying the file, plus name or index when it carries several",
+      };
     const threadTs = typeof ref.threadTs === "string" && ref.threadTs ? ref.threadTs : conversationThreadTs;
-    const msg = await findMessageAt(client, channel, ref.ts, threadTs);
+    const msg = await findMessageAt(client, channel, ts, threadTs);
     if (!msg) {
       return {
         error: "I couldn't find that message — if it's a thread reply, pass its threadTs (the parent message's ts) too",

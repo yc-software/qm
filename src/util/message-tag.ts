@@ -34,7 +34,6 @@ export function messageTag(attrs: MessageTagAttrs, body: string, files?: readonl
     attrs.via ? `via="${xmlAttrEscape(attrs.via)}"` : "",
     attrs.sentAt ? `sent-at="${attrs.sentAt}"` : "",
     files?.length ? `files="${xmlAttrEscape(files.join(", "))}"` : "",
-    files?.length && attrs.id ? `open-files-with="read_file"` : "",
     attrs.mentions && Object.keys(attrs.mentions).length
       ? `mentions="${xmlAttrEscape(
           Object.entries(attrs.mentions)

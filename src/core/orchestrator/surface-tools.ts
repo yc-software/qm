@@ -40,7 +40,6 @@ import { isoFromTs } from "../../util/message-tag.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { adminSessionUrl } from "../../util/admin-links.ts";
 import { MAX_VISION_IMAGE_BYTES, visionImage } from "../attachments.ts";
-import { decodeTs } from "../../slack/reactions.ts";
 import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 
@@ -48,10 +47,6 @@ const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
 const SURFACE_SEARCH_MAX = 40;
 const SURFACE_FILE_MAX_CHARS = 100_000;
-const READ_FILE_REF_HELP =
-  "pass the `ts` (or `~id`) of the message carrying the file, as shown by read_thread and the conversation context, plus `name` or `index` when it carries several. From your computer, POST $AGENT_API_URL/v1/surface-file fetches the same files.";
-const FILE_HINT =
-  "A message's `files` can be opened with read_file: ref = that message's ts, plus name or index when it carries several.";
 
 export interface SpineState {
   surfaceOutboundCount: number;
@@ -321,11 +316,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       });
       if (!result) return { ok: false, message: "the surface didn't answer in time" };
       if (result.note && !result.messages?.length) return { ok: false, message: result.note };
-      const hasFiles = (result.messages ?? []).some(
-        (m) => Array.isArray((m as { files?: unknown[] })?.files) && (m as { files: unknown[] }).files.length > 0,
-      );
-      const message = [result.note, hasFiles ? FILE_HINT : undefined].filter(Boolean).join(" ");
-      return { ok: true, messages: result.messages, ...(message ? { message } : {}) };
+      return { ok: true, messages: result.messages, ...(result.note ? { message: result.note } : {}) };
     },
     whatsNew: async (opts?: { since?: string }) => {
       if (!deps.surfaceContext) return { ok: false, message: "the surface can't be read from this turn" };
@@ -472,8 +463,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       return { ok: true, members: roster.map((p) => ({ displayName: p.displayName ?? p.id })) };
     },
     readFile: async (ref: string, pick?: { name?: string; index?: number }) => {
-      const ts = decodeTs(ref) ?? ref.trim();
-      if (!ts.includes(".") || !Number.isFinite(Number(ts))) return { ok: false, message: READ_FILE_REF_HELP };
+      const ts = ref.trim();
+      if (!ts) return { ok: false, message: "pass the ts (or ~id) of the message carrying the file" };
       if (!deps.surfaceContext) return { ok: false, message: "files can't be fetched from this turn" };
       if (!currentDestination.target)
         return { ok: false, message: "this conversation has no messages to read files from" };
