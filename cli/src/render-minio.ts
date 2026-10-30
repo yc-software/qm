@@ -11,6 +11,7 @@ export const renderMinioSecretNames = ["MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD",
 export function renderMinioWorkload(render: RenderConfig): RenderWorkload {
   return {
     name: "minio",
+    workload: "minio",
     source: render.source,
     dockerfile: "deploy/render-minio/Dockerfile",
     command: renderMinioCommand,
