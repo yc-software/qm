@@ -33,6 +33,8 @@ export interface FakeManagedAgentsService {
   setStatus(name: string, status: string): void;
   rejectPortForward(body: string | null): void;
   failNextLifecycleCalls(count: number, status: number): void;
+  stallExec(fragment: string | null): void;
+  cancelledExecCount(): number;
   tunnelCount(): number;
   pingCount(): number;
   close(): Promise<void>;
@@ -65,6 +67,8 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
   const execScripts: string[] = [];
   let tunnels = 0;
   let pings = 0;
+  let stalledFragment: string | null = null;
+  let cancelledExecs = 0;
   let lifecycleFailures = 0;
   let lifecycleFailureStatus = 403;
 
@@ -76,6 +80,10 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
         const argv = frame.start.argv ?? [];
         const script = argv[argv.length - 1] ?? "";
         execScripts.push(script);
+        if (stalledFragment !== null && script.includes(stalledFragment)) {
+          call.on("cancelled", () => cancelledExecs++);
+          return;
+        }
         try {
           const cwd = (frame.start.workdir || root).replace(/^\/home\/user/, root);
           mkdirSync(cwd, { recursive: true });
@@ -334,6 +342,10 @@ export async function startFakeManagedAgentsService(): Promise<FakeManagedAgents
       lifecycleFailures = count;
       lifecycleFailureStatus = status;
     },
+    stallExec: (fragment) => {
+      stalledFragment = fragment;
+    },
+    cancelledExecCount: () => cancelledExecs,
     tunnelCount: () => tunnels,
     pingCount: () => pings,
     close: async () => {

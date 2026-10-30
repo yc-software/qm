@@ -123,6 +123,7 @@ const UPLOAD_CHUNK_BYTES = 256 * 1024;
 const DOWNLOAD_CHUNK_BYTES = 256 * 1024;
 const MAX_EXEC_OUTPUT_BYTES = 16 * 1024 * 1024;
 const CONNECT_TIMEOUT_MS = 30_000;
+const GRPC_DEADLINE_EXCEEDED = 4;
 const GRPC_NOT_FOUND = 5;
 const GRPC_INTERNAL = 13;
 const GRPC_UNAVAILABLE = 14;
@@ -242,7 +243,7 @@ type GrpcWritable = Pick<GrpcDuplex, "write" | "end" | "on">;
 type GrpcReadable = Pick<GrpcDuplex, "on" | "cancel">;
 
 interface SandboxAgent {
-  Exec(): GrpcDuplex;
+  Exec(options?: import("@grpc/grpc-js").CallOptions): GrpcDuplex;
   Upload(cb: (err: unknown, res?: { bytes_written?: string }) => void): GrpcWritable;
   Download(req: unknown): GrpcReadable;
   waitForReady(deadline: Date, cb: (err?: Error) => void): void;
@@ -529,7 +530,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
         const { agent } = await connect();
         const timeoutMs = Math.min(runOpts?.timeoutMs ?? maxCommandMs, maxCommandMs);
         return new Promise<ManagedAgentsCommandResult>((resolve, reject) => {
-          const stream = agent.Exec();
+          const stream = agent.Exec({ deadline: Date.now() + timeoutMs });
           const out: Buffer[] = [];
           const errOut: Buffer[] = [];
           let outBytes = 0;
@@ -580,7 +581,7 @@ export function createSdkManagedAgentsClient(opts: SdkManagedAgentsClientOptions
           stream.on("error", ((err: unknown) => {
             settle(() => {
               const detail = guestDetail(err);
-              void disconnect();
+              if (grpcCode(err) !== GRPC_DEADLINE_EXCEEDED) void disconnect();
               reject(
                 isGuestGone(err)
                   ? new ManagedAgentsCommandLostError(sessionId, detail)
