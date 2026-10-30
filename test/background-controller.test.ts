@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
 import { createBackgroundController } from "../src/runs/background-controller.ts";
 
 function setup() {
-  const store = createBackgroundOwnershipStore(createMemoryMap<BackgroundOwnership>());
+  const store = createBackgroundOwnershipStore(memoryRows<BackgroundOwnership>(true));
   const errors: unknown[] = [];
   function replica(deploymentId: string) {
     let starts = 0;

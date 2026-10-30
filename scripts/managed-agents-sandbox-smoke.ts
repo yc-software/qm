@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
@@ -8,7 +9,6 @@ import { createManagedAgentsSandbox } from "../src/sandbox/managed-agents-sandbo
 import { createSdkManagedAgentsClient } from "../src/sandbox/managed-agents-client.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { scopeId } from "../src/types.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 
 const apiToken = process.env.DO_AGENTS_API_TOKEN;
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     {
       client,
       namePrefix: prefix,
-      store: createMemoryMap(),
+      store: memoryRows(true),
       snapshots: createMemorySnapshotStore(),
     },
   );

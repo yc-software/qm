@@ -6,6 +6,10 @@ const RESOURCES: TableSpec<SandboxResource, "id"> = {
   table: "sandbox_resources",
   fieldKey: "id",
   required: ["backend", "ownerScopeId", "backingScopeId", "name", "createdBy", "createdAt", "legacy", "state"],
+  indexes: [
+    "CREATE INDEX sandbox_resources_owner ON sandbox_resources (tenant_id, owner_scope_id) WHERE job_only IS NOT TRUE",
+    "CREATE INDEX sandbox_resources_job_only ON sandbox_resources (tenant_id) WHERE job_only",
+  ],
   columns: {
     backend: "text",
     ownerScopeId: "text",
@@ -30,15 +34,7 @@ const DEFAULTS: TableSpec<SandboxDefault> = {
   columns: { sandboxId: "text" },
 };
 
-export const SANDBOX_RESOURCE_MIGRATIONS = [
-  tableConversion(RESOURCES, {
-    indexes: [
-      "CREATE INDEX sandbox_resources_owner ON sandbox_resources (tenant_id, owner_scope_id) WHERE job_only IS NOT TRUE",
-      "CREATE INDEX sandbox_resources_job_only ON sandbox_resources (tenant_id) WHERE job_only",
-    ],
-  }),
-  tableConversion(DEFAULTS),
-] as const;
+export const SANDBOX_RESOURCE_MIGRATIONS = [tableConversion(RESOURCES), tableConversion(DEFAULTS)] as const;
 
 export interface SandboxResourceRecords {
   get(id: string): Promise<SandboxResource | null>;

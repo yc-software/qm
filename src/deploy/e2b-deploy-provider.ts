@@ -16,7 +16,7 @@ import {
 } from "./shared-deploy-provider.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import { E2bSandboxGoneError, runE2bScript, type E2bClient, type E2bSession } from "../sandbox/e2b-client.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { memoryRows, type KeyedRows, type TableSpec } from "../persistence/typed-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -43,6 +43,13 @@ export interface StoredE2bDeployBody {
   createdAtMs: number;
 }
 
+export const E2B_DEPLOY_BODIES: TableSpec<StoredE2bDeployBody, "deploymentId"> = {
+  table: "e2b_deploy_bodies",
+  fieldKey: "deploymentId",
+  required: ["sandboxId", "host", "createdAtMs"],
+  columns: { sandboxId: "text", host: "text", trafficAccessToken: "text", createdAtMs: "bigint" },
+};
+
 export interface E2bDeployProviderOptions {
   client: E2bClient;
   namePrefix?: string;
@@ -50,7 +57,7 @@ export interface E2bDeployProviderOptions {
   readyWindowSec?: number;
   idleTimeoutSec?: number;
   resolveCacheMs?: number;
-  store?: DurableMap<StoredE2bDeployBody>;
+  store?: Pick<KeyedRows<StoredE2bDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }
@@ -62,7 +69,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
   const readyWindowSec = opts.readyWindowSec ?? READY_WINDOW_SEC_DEFAULT;
   const idleTimeoutMs = (opts.idleTimeoutSec ?? E2B_DEPLOY_IDLE_TIMEOUT_SEC) * 1000;
   const resolveCacheMs = opts.resolveCacheMs ?? RESOLVE_CACHE_MS_DEFAULT;
-  const store = opts.store ?? createMemoryMap<StoredE2bDeployBody>();
+  const store = opts.store ?? memoryRows<StoredE2bDeployBody>();
   const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
   const resolveCache = new LRUCache<string, DeployEndpoint>({

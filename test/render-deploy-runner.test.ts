@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { chmod, chown, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
@@ -15,7 +16,6 @@ import {
   createRenderDeployArtifacts,
   type StoredRenderDeployCredential,
 } from "../src/deploy/render-deploy-artifacts.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
@@ -44,7 +44,7 @@ async function fixture(t: TestContext, appSource?: string, entrypoint = "node ap
   await chmod(root, 0o755);
   const deployments = createMemoryDeploymentRows();
   const archiveStore = memoryArchives();
-  const credentials = createMemoryMap<StoredRenderDeployCredential>();
+  const credentials = memoryRows<StoredRenderDeployCredential>();
   const gitDir = join(root, "writer");
   const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore } });
   const d = await deployStore.create({

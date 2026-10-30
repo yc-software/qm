@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { KeyedRows, TableSpec } from "../persistence/typed-table.ts";
 import { fetchWithRetry, sleep } from "../util/async.ts";
 import { httpFailure, errMessage, swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -65,6 +65,12 @@ export interface StoredSmolmachinesSandbox {
   snapshotError?: string;
 }
 
+export const SMOLMACHINES_SANDBOX_BODIES: TableSpec<StoredSmolmachinesSandbox> = {
+  table: "smolmachines_sandbox_bodies",
+  key: "scopeId",
+  columns: { initializationPending: "boolean", lastSnapshotMs: "bigint", homeDirty: "boolean", snapshotError: "text" },
+};
+
 export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   token?: string;
   baseUrl?: string;
@@ -77,7 +83,7 @@ export interface SmolmachinesSandboxOptions extends BlobStagingOptions {
   defaultTimeoutSec?: number;
   egressProxyUrl?: string;
   snapshotIntervalMs?: number;
-  store: DurableMap<StoredSmolmachinesSandbox>;
+  store: Pick<KeyedRows<StoredSmolmachinesSandbox>, "get" | "putIfAbsent" | "merge" | "delete">;
   advisoryLock: AdvisoryLock;
   snapshots?: HomeSnapshotStore;
   extraTools?: string[];

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
-import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 
 export const PG_URL = process.env.DATABASE_URL;
 export const skipWithoutPg = PG_URL ? false : "set DATABASE_URL (a Postgres) to run typed-table tests";
@@ -31,20 +30,17 @@ export async function withTypedTableDb<S extends Closable>(
   appUrl.password = "app";
   const admin = new pg.Pool({ connectionString: ownerUrl.toString() });
   await admin.query(`CREATE SCHEMA ${schema}`);
-  createPostgresSessionStore(ownerUrl.toString());
   const owner = make(ownerUrl.toString());
   let store: S | undefined;
   try {
     await seed?.(admin);
     await migrateRegisteredPgSchemas(ownerUrl.toString());
-    await admin.query(
-      `INSERT INTO tenants(id, slug, name) SELECT gen_random_uuid(), 'main', 'Main' WHERE NOT EXISTS (SELECT 1 FROM tenants)`,
-    );
     await owner.close?.();
     await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS IN ROLE qm_app`);
     await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${role}`);
-    await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO qm_app`);
-    const tenant = String((await admin.query(`SELECT id::text AS id FROM tenants`)).rows[0].id);
+    const existing = (await admin.query(`SELECT id::text AS id FROM tenants`)).rows[0]?.id as string | undefined;
+    const tenant = existing ?? randomUUID();
+    if (!existing) await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'main', 'Main')`, [tenant]);
     const otherTenant = randomUUID();
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'other', 'Other')`, [otherTenant]);
     store = make(appUrl.toString());

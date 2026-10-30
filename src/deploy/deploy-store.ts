@@ -151,6 +151,11 @@ const DEPLOYMENTS: TableSpec<Deployment, "id"> = {
   fieldKey: "id",
   required: ["ownerScopeId", "createdBy", "currentVersion", "status", "versions"],
   preserve: ["lastAccessAt"],
+  indexes: [
+    `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (name)`,
+    `CREATE INDEX deployments_resource_search_gin ON deployments USING GIN
+       (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
+  ],
   columns: {
     ownerScopeId: "text",
     createdBy: "text",
@@ -188,13 +193,7 @@ export const DEPLOYMENT_MIGRATIONS = [
        END $prep$`,
     ],
   },
-  tableConversion(DEPLOYMENTS, {
-    indexes: [
-      `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (name)`,
-      `CREATE INDEX deployments_resource_search_gin ON deployments USING GIN
-         (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
-    ],
-  }),
+  tableConversion(DEPLOYMENTS),
 ];
 
 const withEndpoint = (d: Deployment): Deployment => ({ ...d, endpoint: d.endpoint ?? null });

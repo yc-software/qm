@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { memoryRows, tableConversion, typedTable } from "../src/persistence/typed-table.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { createMemoryAdvisoryLock, createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 import {
   createRenderSandbox,
+  RENDER_SCRATCH_BODIES,
   type StoredRenderSandbox,
   type StoredRenderCleanup,
   type StoredRenderScratch,
@@ -29,9 +31,9 @@ function setup(t: TestContext) {
     }
   });
   const workspace = createLocalWorkspaceStore(dir);
-  const store = createMemoryMap<StoredRenderSandbox>();
-  const scratchStore = createMemoryMap<StoredRenderScratch>();
-  const cleanupStore = createMemoryMap<StoredRenderCleanup>();
+  const store = memoryRows<StoredRenderSandbox>();
+  const scratchStore = memoryRows<StoredRenderScratch>();
+  const cleanupStore = memoryRows<StoredRenderCleanup>();
   const advisoryLock = createMemoryAdvisoryLock();
   const errors: string[] = [];
   const make = (backing = scratchStore, lock = advisoryLock) =>
@@ -298,34 +300,28 @@ test("A failed Render initialization cannot later delete a replacement allocatio
 
 test(
   "Render recovers disposable cleanup after Postgres connections are replaced",
-  { skip: !process.env.DATABASE_URL },
+  { skip: skipWithoutPg },
   async (t) => {
     const { make, fake } = setup(t);
-    const first = createPostgresMapFactory(process.env.DATABASE_URL!);
-    const second = createPostgresMapFactory(process.env.DATABASE_URL!);
-    const table = `render_scratch_test_${randomUUID().replaceAll("-", "")}`;
-    const initial = first.map<StoredRenderScratch>(table);
-    const recovered = second.map<StoredRenderScratch>(table);
-    fake.failTerminate(new Error("termination refused"));
-    try {
-      const owner = make(initial, createPostgresAdvisoryLock(first.pool));
-      const handle = await owner.provision([], options);
-      await assert.rejects(owner.teardown(handle, { destroy: true }), /termination refused/);
-      await first.pool.close();
-      assert.equal((await recovered.get(handle.id))?.cleanupPending, true);
-      const applied = await second.pool.q("SELECT id FROM qm_schema_migrations WHERE id=$1", [
-        `durable-map/${table}/0001`,
-      ]);
-      assert.equal(applied.length, 1);
-      fake.failTerminate();
-      assert.deepEqual(await make(recovered, createPostgresAdvisoryLock(second.pool)).reapDeepIdle!(0), { reaped: 1 });
-      assert.equal(fake.sandboxes.get(handle.providerSandboxId!)?.status, "terminated");
-      assert.deepEqual(await recovered.entries(), []);
-    } finally {
-      await second.pool.q(`DROP TABLE IF EXISTS ${table}`);
-      await second.pool.q("DELETE FROM durable_map_versions WHERE tbl=$1", [table]);
-      await second.pool.q("DELETE FROM qm_schema_migrations WHERE id=$1", [`durable-map/${table}/0001`]);
-      await Promise.all([first.pool.close(), second.pool.close()]);
-    }
+    const tables = (url: string) => {
+      const conversion = tableConversion(RENDER_SCRATCH_BODIES);
+      const first = typedTable(url, RENDER_SCRATCH_BODIES, conversion);
+      const second = typedTable(url, RENDER_SCRATCH_BODIES, conversion);
+      return { first, second, close: () => second.close() };
+    };
+    await withTypedTableDb(tables, async ({ store: { first, second }, tenant }) => {
+      await withTenant(tenant, async () => {
+        fake.failTerminate(new Error("termination refused"));
+        const owner = make(first, createPostgresAdvisoryLock(first.db));
+        const handle = await owner.provision([], options);
+        await assert.rejects(owner.teardown(handle, { destroy: true }), /termination refused/);
+        await first.close();
+        assert.equal((await second.get(handle.id))?.cleanupPending, true);
+        fake.failTerminate();
+        assert.deepEqual(await make(second, createPostgresAdvisoryLock(second.db)).reapDeepIdle!(0), { reaped: 1 });
+        assert.equal(fake.sandboxes.get(handle.providerSandboxId!)?.status, "terminated");
+        assert.deepEqual(await second.entries(), []);
+      });
+    });
   },
 );

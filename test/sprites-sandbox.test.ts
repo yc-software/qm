@@ -1,5 +1,5 @@
 import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
@@ -33,7 +33,7 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
-    initializationStore: createMemoryMap(),
+    initializationStore: memoryRows(),
     advisoryLock: createMemoryAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
@@ -825,7 +825,7 @@ for (const outcome of ["healthy", "unknown", "403", "503"]) {
 
 test("failed hydration and failed deletion remain pending across adapters without overwriting the saved home", async () => {
   const snapshots = createMemorySnapshotStore();
-  const initializationStore = createMemoryMap<{ pending: boolean }>();
+  const initializationStore = memoryRows<{ pending: boolean }>();
   const advisoryLock = createMemoryAdvisoryLock();
   let failOpen = false;
   let opens = 0;

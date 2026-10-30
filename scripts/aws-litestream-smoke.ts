@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { memoryRows } from "../src/persistence/typed-table.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +8,6 @@ import { randomUUID } from "node:crypto";
 import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { createAwsDeployProvider, type StoredDeployBody } from "../src/deploy/aws-deploy-provider.ts";
 import { createMicrovmApi, createMicrovmClient } from "../src/sandbox/aws-microvm-api.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import { loadConfig } from "../src/config.ts";
 import { sleep } from "../src/util/async.ts";
@@ -24,7 +24,7 @@ const api = createMicrovmApi({
   ...(awsDeploy.profile ? { profile: awsDeploy.profile } : {}),
 });
 const client = createMicrovmClient(api, { agentPort: awsDeploy.agentPort ?? 8080, tokenTtlMinutes: 30 });
-const store = createMemoryMap<StoredDeployBody>();
+const store = memoryRows<StoredDeployBody>(true);
 const provider = createAwsDeployProvider({ advisoryLock: createNoopAdvisoryLock(), ...awsDeploy, store, api });
 const s3 = new S3Client({ region: awsDeploy.region, ...(awsDeploy.profile ? { profile: awsDeploy.profile } : {}) });
 
