@@ -10,7 +10,7 @@ import { reportBackendError } from "../../chassis/src/error-reporting.ts";
 import "./instrument.ts";
 import { provisionTrustedAdmin } from "./trusted-admin.ts";
 import { createHash } from "node:crypto";
-import { createServer, METHODS, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, METHODS, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { ADMIN_LOGIN_SCRIPT, ADMIN_LOGIN_SCRIPT_HASH, openAdminLogin } from "./admin-login.ts";
 import { LRUCache } from "lru-cache";
@@ -1902,7 +1902,7 @@ function validEmailDomain(value: string): boolean {
     );
 }
 
-export async function startServer(): Promise<void> {
+export async function startServer(port = PORT, host?: string): Promise<Server> {
   bootChecks();
   if (process.env.AUTH_EMBEDDED === "1") {
     if (AUTH_BROKER_UPSTREAM !== "http://127.0.0.1:8099") {
@@ -1919,10 +1919,10 @@ export async function startServer(): Promise<void> {
   }
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(PORT, () => {
+    server.listen(port, host, () => {
       server.off("error", reject);
       resolve();
-      console.log(`[portal] public front door on http://localhost:${PORT} → web-ui/admin over 6PN (org ${ORG})`);
+      console.log(`[portal] public front door on http://localhost:${port} → web-ui/admin over 6PN (org ${ORG})`);
       if (!SESSION_SECRET)
         console.warn("[portal] PORTAL_SESSION_SECRET unset, using an INSECURE dev key (dev/test only)");
       if (!SECURE_COOKIES)
@@ -1944,6 +1944,7 @@ export async function startServer(): Promise<void> {
       );
     });
   });
+  return server;
 }
 
 export { handle, server };

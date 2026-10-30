@@ -64,8 +64,7 @@ test("slotPorts derive the full port block from the slot number", () => {
   const ports = slotPorts("pool3", 8080);
   assert.deepEqual(ports, {
     core: 8083,
-    web: 8099,
-    admin: 8115,
+    harness: 8099,
     portal: 8131,
     prodProxy: 8147,
     slackHealth: 8163,
@@ -74,16 +73,17 @@ test("slotPorts derive the full port block from the slot number", () => {
 });
 
 test("port blocks preserve legacy slots and stay disjoint through the port ceiling", () => {
+  const legacyBlock = { core: 0, harness: 1, portal: 3, prodProxy: 4, slackHealth: 5, supervisor: 6 };
   for (const base of [0, 8080, 20000, 65423, 65424, 65535]) {
     const used = new Set<number>();
     const count = portSlotCount(base);
     for (let num = 1; num <= count; num++) {
-      const ports = Object.values(slotPorts(`pool${num}`, base));
-      for (const [index, port] of ports.entries()) {
+      const ports = slotPorts(`pool${num}`, base);
+      for (const [name, port] of Object.entries(ports)) {
         assert.ok(port > base && port <= 65535);
         assert.ok(!used.has(port), `port ${port} overlaps at slot ${num}`);
         used.add(port);
-        if (num <= 16) assert.equal(port, base + num + index * 16);
+        if (num <= 16) assert.equal(port, base + num + legacyBlock[name as keyof typeof ports] * 16);
       }
     }
     assert.throws(() => slotPorts(`pool${count + 1}`, base), /No valid port block/);
@@ -491,36 +491,68 @@ test("supervised children share the selected dev org", () => {
   const inputs: SpecInputs = {
     worktree: "/tmp/worktree",
     ports: slotPorts("pool1"),
-    baseEnv: {
-      DEV_INSTANCE_ORG_ID: "beta",
-      CODEX_AUTH_FILE: "/tmp/codex-auth.json",
-      HOME: "/tmp/home",
-      CODEX_HOME: "/tmp/home/.codex",
-    },
+    baseEnv: { DEV_INSTANCE_ORG_ID: "beta", CODEX_AUTH_FILE: "/tmp/codex-auth.json" },
     watch: false,
     webUiBasePath: "/",
     slack: { botToken: "xoxb-test", appToken: "xapp-test" },
     databaseUrl: "postgres://localhost/qm",
     adminGrantsSeed: "",
-    coreSigningSecret: "",
     portalSessionSecret: "secret",
     portalDevPrincipal: "U1",
     sandboxEnv: {},
   };
   const specs = buildChildSpecs(inputs);
-  assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
-  assert.equal(specs.find((spec) => spec.name === "core")!.env.CODEX_AUTH_FILE, "/tmp/codex-auth.json");
-  for (const spec of specs.filter((spec) => spec.name !== "core")) {
-    assert.equal(spec.env.CODEX_AUTH_FILE, "");
-    assert.equal(spec.env.HOME, undefined);
-    assert.equal(spec.env.CODEX_HOME, undefined);
+  for (const spec of specs) {
+    assert.equal(spec.env.ORG_ID, "beta");
+    assert.equal(spec.env.CORE_ORG_ID, "beta");
+    assert.equal(spec.env.CODEX_AUTH_FILE, "/tmp/codex-auth.json");
+    assert.equal(spec.env.DATABASE_URL, "postgres://localhost/qm");
   }
-  for (const spec of specs) assert.equal(spec.env.CORE_ORG_ID, "beta");
-  assert.equal(specs.find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
+  assert.equal(specs.find((spec) => spec.name === "edge")!.env.PORTAL_LOCAL_AUTH_BYPASS, "1");
   inputs.baseEnv.PORTAL_LOCAL_AUTH_BYPASS = "0";
-  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "portal")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
+  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "edge")!.env.PORTAL_LOCAL_AUTH_BYPASS, "0");
   inputs.baseEnv = {};
-  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "core")!.env.ORG_ID, "acme");
+  assert.equal(buildChildSpecs(inputs).find((spec) => spec.name === "edge")!.env.ORG_ID, "acme");
+});
+
+test("a dev instance runs exactly an edge that hosts the front door and a Slack-free harness", () => {
+  const inputs: SpecInputs = {
+    worktree: "/tmp/worktree",
+    ports: slotPorts("pool1"),
+    baseEnv: {},
+    watch: true,
+    webUiBasePath: "/",
+    slack: { botToken: "xoxb-test", appToken: "xapp-test" },
+    databaseUrl: "postgres://localhost/dev",
+    adminGrantsSeed: "",
+    portalSessionSecret: "secret",
+    portalDevPrincipal: "U1",
+    sandboxEnv: {},
+  };
+  const [edge, harness, ...rest] = buildChildSpecs(inputs);
+  assert.equal(rest.length, 0);
+  assert.equal(edge!.name, "edge");
+  assert.deepEqual(edge!.argv, ["node", "--env-file-if-exists=.env", "--watch", "src/edge/main.ts"]);
+  assert.equal(edge!.env.PORT, String(inputs.ports.core));
+  assert.equal(edge!.env.PUBLIC_PORT, String(inputs.ports.portal));
+  assert.equal(edge!.env.PORTAL_PUBLIC_URL, `http://localhost:${inputs.ports.portal}`);
+  assert.equal(edge!.env.PORTAL_SESSION_SECRET, "secret");
+  assert.equal(edge!.env.WEB_UI_DEV, "1");
+  assert.equal(edge!.env.SLACK_BOT_TOKEN, "xoxb-test");
+  assert.equal(edge!.env.DEV_HEALTH_PORT, String(inputs.ports.slackHealth));
+  assert.deepEqual(edge!.readiness, {
+    kind: "log",
+    pattern: `public front door on http://localhost:${inputs.ports.portal}`,
+  });
+  assert.equal(harness!.name, "harness");
+  assert.deepEqual(harness!.argv, ["node", "--env-file-if-exists=.env", "--watch", "src/harness/main.ts"]);
+  assert.equal(harness!.env.PORT, String(inputs.ports.harness));
+  assert.equal(harness!.env.PUBLIC_PORT, undefined);
+  assert.equal(harness!.env.PORTAL_SESSION_SECRET, undefined);
+  assert.equal(harness!.env.SLACK_BOT_TOKEN, "");
+  assert.equal(harness!.env.SLACK_APP_TOKEN, "");
+  assert.equal(harness!.env.DEV_INTROSPECTION, undefined);
+  assert.equal(harness!.env.DATABASE_URL, "postgres://localhost/dev");
 });
 
 test("child specs disable environment Slack tokens when no Slack tokens are supplied", () => {
@@ -532,33 +564,32 @@ test("child specs disable environment Slack tokens when no Slack tokens are supp
     webUiBasePath: "/",
     databaseUrl: "postgres://localhost/qm",
     adminGrantsSeed: "",
-    coreSigningSecret: "",
     portalSessionSecret: "secret",
     portalDevPrincipal: "U1",
     sandboxEnv: {},
   };
-  const core = buildChildSpecs(inputs).find((spec) => spec.name === "core")!;
-  assert.equal(core.env.DEV_INSTANCE_NO_SLACK, "1");
-  assert.equal(core.env.SLACK_BOT_TOKEN, "");
-  assert.equal(core.env.SLACK_APP_TOKEN, "");
-  assert.equal(core.env.DEV_INTROSPECTION, undefined);
-  assert.equal(core.env.DEV_HEALTH_PORT, undefined);
-  assert.equal(core.env.CORE_ORG_ID, "acme");
+  for (const spec of buildChildSpecs(inputs)) {
+    assert.equal(spec.env.DEV_INSTANCE_NO_SLACK, "1");
+    assert.equal(spec.env.SLACK_BOT_TOKEN, "");
+    assert.equal(spec.env.SLACK_APP_TOKEN, "");
+    assert.equal(spec.env.DEV_INTROSPECTION, undefined);
+    assert.equal(spec.env.DEV_HEALTH_PORT, undefined);
+    assert.equal(spec.env.CORE_ORG_ID, "acme");
+  }
   inputs.web = false;
   inputs.slack = { botToken: "xoxb-test", appToken: "xapp-test" };
   const slackOnly = buildChildSpecs(inputs);
   assert.deepEqual(
     slackOnly.map((spec) => spec.name),
-    ["core"],
+    ["edge", "harness"],
   );
-  assert.equal(slackOnly[0]!.env.SLACK_BOT_TOKEN, "xoxb-test");
-  assert.equal(slackOnly[0]!.env.DEV_INSTANCE_NO_SLACK, "0");
-  assert.equal(slackOnly[0]!.env.PUBLIC_WEB_URL, "");
-  inputs.web = true;
-  assert.deepEqual(
-    buildChildSpecs(inputs).map((spec) => spec.name),
-    ["core", "web", "portal"],
-  );
+  const edge = slackOnly[0]!;
+  assert.equal(edge.env.SLACK_BOT_TOKEN, "xoxb-test");
+  assert.equal(edge.env.DEV_INSTANCE_NO_SLACK, "0");
+  assert.equal(edge.env.PUBLIC_WEB_URL, "");
+  assert.equal(edge.env.PUBLIC_PORT, undefined);
+  assert.deepEqual(edge.readiness, { kind: "log", pattern: `listening on :${inputs.ports.core}` });
+  assert.equal(slackOnly[1]!.env.SLACK_BOT_TOKEN, "");
 });
 
 test("formatAge renders the bash-compatible shapes", () => {
