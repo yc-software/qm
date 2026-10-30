@@ -128,7 +128,6 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
           : {}),
         signal,
         recordModelCall: (rec) => {
-          deps.modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
           if (!observe) void deps.budget?.record(actorId, estimateCostUsd(rec.inputTokens));
         },
         ...(recordLlmRequest && !observe ? { recordLlmRequest } : {}),

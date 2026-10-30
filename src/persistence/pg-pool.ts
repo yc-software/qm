@@ -106,10 +106,6 @@ export interface PgMigration extends PgMigrationDefinition {
   checksum: string;
 }
 
-export interface PgMaintenanceDefinition extends PgMigrationDefinition {
-  beforeMigrations?: boolean;
-}
-
 export interface PgQueryOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -339,17 +335,6 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
   }
 }
 
-/**
- * Extra root-CA trust for the Postgres connection, with full verification
- * semantics kept. Managed providers (Supabase's pooler, RDS, …) often pin a
- * private root the container's trust store doesn't carry; without a supported
- * way to add it, operators were left choosing between sslmode=no-verify and
- * forking the image. DATABASE_CA_CERT carries PEM content (a secret-store
- * value); DATABASE_CA_CERT_FILE points at a mounted file. Parsed once at the
- * process boundary (config.ts / a script's own env read), installed here, and
- * applied to every pg pool and client this process opens — database CA trust
- * is inherently process-global, like NODE_EXTRA_CA_CERTS.
- */
 export function resolvePgCaTrust(opts: { cert?: string; certFile?: string }): { ssl?: { ca: string } } {
   if (opts.cert?.trim()) return { ssl: { ca: opts.cert } };
   if (opts.certFile?.trim()) {
@@ -381,13 +366,12 @@ export function pgConnectionOptions(connectionString: string, ca = installedCaTr
 }
 
 const registeredMigrations = new Map<string, Map<string, PgMigration>>();
-const registeredPreMigrationMaintenance = new Map<string, Map<string, PgMigration>>();
 
-function registerPgMigration(connectionString: string, migration: PgMigration, registry = registeredMigrations): void {
-  let database = registry.get(connectionString);
+function registerPgMigration(connectionString: string, migration: PgMigration): void {
+  let database = registeredMigrations.get(connectionString);
   if (!database) {
     database = new Map();
-    registry.set(connectionString, database);
+    registeredMigrations.set(connectionString, database);
   }
   const existing = database.get(migration.id);
   if (existing && existing.checksum !== migration.checksum) {
@@ -434,7 +418,6 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
       const pg = (await import("pg")).default;
       const pool = guardedPool(new pg.Pool(pgConnectionOptions(databaseUrl)));
       try {
-        await applyPgMaintenance(pool, [...(registeredPreMigrationMaintenance.get(databaseUrl)?.values() ?? [])]);
         await applyPgMigrations(
           pool,
           [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
@@ -451,18 +434,18 @@ export function createPgPool(
   connectionString: string,
   migrationId: string,
   statements: readonly string[],
-  maintenance?: readonly PgMaintenanceDefinition[],
+  maintenance?: readonly PgMigrationDefinition[],
 ): PgPool;
 export function createPgPool(
   connectionString: string,
   definitions: readonly PgMigrationDefinition[],
-  maintenance?: readonly PgMaintenanceDefinition[],
+  maintenance?: readonly PgMigrationDefinition[],
 ): PgPool;
 export function createPgPool(
   connectionString: string,
   idOrDefinitions: string | readonly PgMigrationDefinition[] = [],
-  statementsOrMaintenance: readonly string[] | readonly PgMaintenanceDefinition[] = [],
-  maintenanceDefinitions: readonly PgMaintenanceDefinition[] = [],
+  statementsOrMaintenance: readonly string[] | readonly PgMigrationDefinition[] = [],
+  maintenanceDefinitions: readonly PgMigrationDefinition[] = [],
 ): PgPool {
   const definitions =
     typeof idOrDefinitions === "string"
@@ -481,16 +464,8 @@ export function createPgPool(
   const maintenanceSource =
     typeof idOrDefinitions === "string"
       ? maintenanceDefinitions
-      : (statementsOrMaintenance as readonly PgMaintenanceDefinition[]);
-  const preMigrationMaintenance = maintenanceSource
-    .filter((definition) => definition.beforeMigrations)
-    .map((definition) => definePgMigration(definition.id, definition.statements));
-  for (const maintenance of preMigrationMaintenance) {
-    registerPgMigration(connectionString, maintenance, registeredPreMigrationMaintenance);
-  }
-  const postMigrationMaintenance = maintenanceSource
-    .filter((definition) => !definition.beforeMigrations)
-    .map((definition) => definePgMigration(definition.id, definition.statements));
+      : (statementsOrMaintenance as readonly PgMigrationDefinition[]);
+  const maintenance = maintenanceSource.map((definition) => definePgMigration(definition.id, definition.statements));
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
@@ -509,9 +484,8 @@ export function createPgPool(
   async function ready(): Promise<void> {
     if (closed) throw new Error("Postgres store is closed");
     await (readyP ??= withMigrationPool(async (instance) => {
-      await applyPgMaintenance(instance, preMigrationMaintenance);
       await applyPgMigrations(instance, migrations);
-      await applyPgMaintenance(instance, postMigrationMaintenance);
+      await applyPgMaintenance(instance, maintenance);
     }).catch((error) => {
       readyP = null;
       throw error;

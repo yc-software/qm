@@ -20,7 +20,6 @@ export interface ItemRow {
   hidden: boolean | null;
   externalId: string | null;
   throughSeq: number | null;
-  targetSeq: number | null;
   approved: boolean | null;
   blobSha: string | null;
   body: Record<string, unknown>;
@@ -42,7 +41,6 @@ export const ITEM_COLUMNS = [
   ["hidden", "hidden", "boolean"],
   ["external_id", "externalId", "text"],
   ["through_seq", "throughSeq", "bigint"],
-  ["target_seq", "targetSeq", "bigint"],
   ["approved", "approved", "boolean"],
   ["blob_sha", "blobSha", "text"],
   ["body", "body", "jsonb"],
@@ -118,7 +116,6 @@ export function itemFromEntry(type: EntryType, payload: unknown, context: ItemCo
     hidden: null,
     externalId: null,
     throughSeq: null,
-    targetSeq: null,
     approved: null,
     blobSha: null,
     body,

@@ -93,7 +93,7 @@ function sameGrantTuple(a: Grant, b: Grant): boolean {
   return sameGrant(a, b) && a.grantedBy === b.grantedBy;
 }
 
-function sameGrantSet(a: readonly Grant[], b: readonly Grant[]): boolean {
+export function sameGrantSet(a: readonly Grant[], b: readonly Grant[]): boolean {
   return a.length === b.length && a.every((grant) => b.some((candidate) => sameGrantTuple(grant, candidate)));
 }
 

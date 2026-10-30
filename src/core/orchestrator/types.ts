@@ -38,7 +38,6 @@ import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../.
 import type { FeatureFlagStore } from "../../feature-flags.ts";
 import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
-import type { ModelGateway } from "../../model/model-gateway.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
@@ -57,7 +56,6 @@ import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
 import type { DurableMap } from "../../persistence/durable-map.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
-import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
 import type { SkillBundleStore } from "../../skills/skill-bundle-store.ts";
@@ -131,7 +129,6 @@ export interface OrchestratorDeps {
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
-  modelGateway: ModelGateway;
   auditLog: AuditLog;
   rateLimiter: RateLimiter;
   budget?: BudgetTracker;
@@ -152,8 +149,6 @@ export interface OrchestratorDeps {
   apiBaseUrl?: string;
   sandboxModels?: boolean;
   publicWebUrl?: string;
-  /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
-   *  tool hands the user to point the sender at; matches the HTTP webhook route's base exactly. */
   webhookPublicUrl?: string;
   deploy: DeployService;
   acl: AclStore;
@@ -165,7 +160,6 @@ export interface OrchestratorDeps {
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
   skillsReady?: Promise<void>;
-  advisoryLock?: AdvisoryLock;
   approvals: DurableMap<PendingApprovalRecord>;
   approvalGrants: DurableMap<CommandApprovalGrant>;
   errors?: ErrorLog;
@@ -209,7 +203,6 @@ export interface OrchestratorDeps {
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
-  surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   surfaceDebugFooter?: boolean;
@@ -218,22 +211,6 @@ export interface OrchestratorDeps {
 export interface SurfaceContextPuller {
   pull(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
   searchLive?(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
-}
-
-interface SurfaceSearchStore {
-  search(query: SurfaceSearchQuery): Promise<SurfaceSearchStoreHit[]>;
-}
-interface SurfaceSearchQuery {
-  surface: string;
-  container: string;
-  query: string;
-  limit: number;
-}
-interface SurfaceSearchStoreHit {
-  ref?: string;
-  author?: string;
-  when?: string;
-  snippet: string;
 }
 
 export interface Orchestrator {

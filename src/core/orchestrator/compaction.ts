@@ -40,7 +40,6 @@ export interface CompactionContext {
     lease: Lease;
     visibleHistory: SessionEntry[];
     scopeId: string;
-    orgScopeId: string;
     actorId: string;
     model?: string;
     cancel?: AbortSignal;
@@ -51,19 +50,12 @@ export interface CompactionContext {
     lease: Lease;
     visibleHistory: SessionEntry[];
     scopeId: string;
-    orgScopeId: string;
     actorId: string;
     model?: string;
     cancel?: AbortSignal;
     reservedTokens?: number;
   }): Promise<SessionEntry[]>;
-  scheduleBackgroundCompaction(input: {
-    sessionId: string;
-    scopeId: string;
-    orgScopeId: string;
-    actorId: string;
-    model?: string;
-  }): void;
+  scheduleBackgroundCompaction(input: { sessionId: string; scopeId: string; actorId: string; model?: string }): void;
   documentTokenBudget(scopeId: string, model?: string): number;
 }
 
@@ -98,7 +90,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
       session: Session;
       visibleHistory: SessionEntry[];
       scopeId: string;
-      orgScopeId: string;
       actorId: string;
       model?: string;
       cancel?: AbortSignal;
@@ -122,7 +113,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
         session: input.session,
         history: plan.toSummarize,
         recordModelCall: (rec) => {
-          deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: summaryLabel, ...rec });
           void deps.budget?.record(input.actorId, estimateCostUsd(rec.inputTokens));
         },
       });
@@ -173,7 +163,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     lease: Lease;
     visibleHistory: SessionEntry[];
     scopeId: string;
-    orgScopeId: string;
     actorId: string;
     model?: string;
     cancel?: AbortSignal;
@@ -193,7 +182,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     lease: Lease;
     visibleHistory: SessionEntry[];
     scopeId: string;
-    orgScopeId: string;
     actorId: string;
     model?: string;
     cancel?: AbortSignal;
@@ -280,7 +268,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   function scheduleBackgroundCompaction(input: {
     sessionId: string;
     scopeId: string;
-    orgScopeId: string;
     actorId: string;
     model?: string;
   }): void {
@@ -301,7 +288,6 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
           session,
           visibleHistory: history,
           scopeId: input.scopeId,
-          orgScopeId: input.orgScopeId,
           actorId: input.actorId,
           ...(input.model ? { model: input.model } : {}),
         });

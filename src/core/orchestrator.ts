@@ -2,7 +2,7 @@ import { commonEntrySeqs } from "../sessions/transcript-source.ts";
 import { countTokens } from "../util/tokens.ts";
 import { SIDE_CHAT_GUIDANCE, sideChatContext } from "./side-chat-context.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
-import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE } from "../audit/audit-log.ts";
+import { SECURITY_FLAGGED, SECURITY_TOOL_RESULT_QUARANTINE, type AuditEvent } from "../audit/audit-log.ts";
 import { createAdminCall } from "../tools/admin.ts";
 import { scopeTeamsToTurn } from "../teams/teams.ts";
 import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolution/external-slack.ts";
@@ -710,6 +710,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       const resolution = await deps.resolution.resolve(conversation, actor, external);
       const scopeId = deps.resolution.scopeFor(conversation, actor);
+      const audit = (event: Omit<AuditEvent, "at" | "principalId" | "scopeLabel">) =>
+        deps.auditLog.record({ at: Date.now(), principalId: actor.id, scopeLabel: scopeId, ...event });
       const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
         actorId: actor.id,
         scopeId,
@@ -895,23 +897,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               reason: verdict.reason ?? "strict security screen verdict",
               sources,
             };
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
+            audit({
               action: SECURITY_FLAGGED,
               resource: input.surface ?? "unknown",
-              scopeLabel: scopeId,
               status: "pending_approval",
               detail: JSON.stringify({ cause: "strict-verdict", reason: flaggedScreenedInput.reason, source: sources }),
             });
           } else if (unscreenableCause || verdict?.unscreened) {
             inputUnscreened = true;
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
+            audit({
               action: "security_posture.input_failed_open",
               resource: input.surface ?? "unknown",
-              scopeLabel: scopeId,
               status: "allowed",
               detail: JSON.stringify({ cause: unscreenableCause ?? UNSCREENED_REASON }),
             });
@@ -925,12 +921,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           if (!resolution.approvalGrantModes[grant.scope]) continue;
           if (grant.scope === "session" && grant.sessionId !== existing?.id) continue;
           if ((grant.approvalKey ?? grant.command) !== flagGrantKey && grant.command !== "security-screen") continue;
-          deps.auditLog.record({
-            at: Date.now(),
-            principalId: actor.id,
+          audit({
             action: "security_posture.flag_allowed_by_grant",
             resource: input.surface ?? "unknown",
-            scopeLabel: scopeId,
             status: "allowed",
             detail: JSON.stringify({ scope: grant.scope, reason: flaggedScreenedInput.reason }),
           });
@@ -1212,24 +1205,18 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const { passed, bundles } = await screenSkill();
           if (passed && bundles) allowed.push({ ...snapshot, screenedBundles: bundles });
           else
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
+            audit({
               action: "sharing.skill_screen_blocked",
               resource: `skill:${skill.id}`,
-              scopeLabel: scopeId,
               status: "refused",
               detail: JSON.stringify({ actor: actor.id, source: skill.scopeId, target: scopeId }),
             });
         }
         for (const entry of allowed) {
           if (!entry.skill || !current.sharingSources.includes(entry.skill.scopeId)) continue;
-          deps.auditLog.record({
-            at: Date.now(),
-            principalId: actor.id,
+          audit({
             action: "sharing.cross_context_read",
             resource: `skill:${entry.skill.id}`,
-            scopeLabel: scopeId,
             detail: JSON.stringify({ actor: actor.id, source: entry.skill.scopeId, target: scopeId }),
           });
         }
@@ -1331,12 +1318,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const recordedTurn = isRetry ? await recordedTurnForRun() : null;
       if (recordedTurn?.answer) {
         const recordedAnswer = recordedTurn.answer;
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
+        audit({
           action: "turn.already_answered",
           resource: conversation.threadRef,
-          scopeLabel: scopeId,
           detail: `attempt ${input.attempt}; replaying the answer the previous attempt recorded at seq ${recordedAnswer.seq}`,
         });
         console.error(
@@ -1353,12 +1337,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : { status: "silent", sessionId: session.id };
       }
 
-      deps.auditLog.record({
-        at: Date.now(),
-        principalId: actor.id,
+      audit({
         action: "turn",
         resource: conversation.threadRef,
-        scopeLabel: scopeId,
       });
 
       let releasedToolOutput: PendingApprovalRecord["screenedOutput"];
@@ -1440,12 +1421,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         ) {
           throw new Error("Open speaker keychain access is no longer authorized");
         }
-        deps.auditLog.record({
-          at: Date.now(),
-          principalId: actor.id,
+        audit({
           action: "keychain.open_speaker_use",
           resource: "scratch execution",
-          scopeLabel: scopeId,
         });
       };
       const resolvedCredential = (materialized: import("../credentials/keychain.ts").MaterializedCred) => {
@@ -1571,8 +1549,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       await tracePhase("turn.credentials", () => registerConnectorCredentials(addCredentialToCatalog));
-      // Service credentials: one read of the org's credential list and one grant scan feed both
-      // the env-delivery gate (below) and the broker token mint (further down). Same grants gate both.
       const aclGrantedServiceCredSlugs = async (): Promise<Set<string>> =>
         new Set(
           (
@@ -1616,9 +1592,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         }
       };
       if (!strictReadOnly && allInternal && deps.serviceCreds) {
-        // Env delivery is gated by the same service-cred grants as the broker: the env var rides
-        // only when every internal participant in this conversation is entitled to the credential.
-
         const browseSteps = deps.config?.getBrowseMaxSteps(toScopeId("org", orgId()));
         if (browseSteps && !("BROWSE_LAB_MAX_STEPS" in connectorEnv))
           connectorEnv.BROWSE_LAB_MAX_STEPS = String(browseSteps);
@@ -2032,12 +2005,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const p = await pending.get(input.approval.requestId);
           const decision = input.approval.approved ? "approve" : "deny";
           if (!p || p.sessionId !== session.id) {
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
+            audit({
               action: `command_approval.${decision}`,
               resource: input.approval.requestId,
-              scopeLabel: scopeId,
               status: "refused",
               detail: JSON.stringify({ approvalOutcome: p ? "foreign_session" : "expired" }),
             });
@@ -2049,12 +2019,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           }
           const requesterId = p.request?.actor.externalId;
           if (!samePerson(requesterId, actor.id)) {
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
+            audit({
               action: `command_approval.${decision}`,
               resource: p.command,
-              scopeLabel: scopeId,
               status: "refused",
               detail: JSON.stringify({ approvalOutcome: "not_requester", requesterId: requesterId ?? null }),
             });
@@ -2089,12 +2056,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 }),
               );
             await pending.delete(input.approval.requestId);
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
+            audit({
               action: "command_approval.deny",
               resource: p.command,
-              scopeLabel: scopeId,
               status: "refused",
               detail: JSON.stringify({ approvalOutcome: "denied" }),
             });
@@ -2117,12 +2081,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ? `quarantined content can only be released once — approve once or deny`
                   : `this approval does not allow the "${scope}" option — approve once or deny`;
               }
-              deps.auditLog.record({
-                at: Date.now(),
-                principalId: actor.id,
+              audit({
                 action: `command_approval.${scope}`,
                 resource: p.command,
-                scopeLabel: scopeId,
                 status: "refused",
                 detail: JSON.stringify({ approvalOutcome: "grant_mode_disabled" }),
               });
@@ -2194,12 +2155,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const useKey = p.approvalKey ?? p.command;
             if (p.screenedOutput && quarantineRelease) {
               releasedToolOutput = p.screenedOutput;
-              deps.auditLog.record({
-                at: Date.now(),
-                principalId: actor.id,
+              audit({
                 action: "security_posture.tool_result_release",
                 resource: input.surface ?? "unknown",
-                scopeLabel: scopeId,
                 status: "allowed",
                 detail: JSON.stringify({
                   reason: "human_release",
@@ -2221,12 +2179,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               };
               await approvalGrants.put(approvalGrantId(grant), grant);
             }
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
+            audit({
               action: `command_approval.${scope}`,
               resource: p.command,
-              scopeLabel: scopeId,
               status: "ok",
             });
             turnEvents.push(
@@ -2388,7 +2343,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 : {}),
               history: detectHistory,
               recordModelCall: (rec) => {
-                deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
                 void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
               },
               recordLlmRequest: recordSessionLlmRequest,
@@ -2408,12 +2362,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             });
           if (!decision.respond) {
             const reactions = decision.reactions?.length ? decision.reactions : undefined;
-            deps.auditLog.record({
-              at: Date.now(),
-              principalId: actor.id,
+            audit({
               action: reactions ? "turn.react" : "turn.silent",
               resource: conversation.threadRef,
-              scopeLabel: scopeId,
               ...(decision.reason ? { detail: decision.reason } : {}),
             });
             console.error(
@@ -2512,10 +2463,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 ownerId: actor.id,
               }).grantees
             : [];
-        // Files posted into a group/DM conversation (e.g. a project web session) get no
-        // per-member grants from defaultPublishAudience ("auto-share deferred"), which left
-        // other members unable to load them. Grant the conversation scope itself read access
-        // so everyone party to the conversation can fetch what was posted into it.
         const fileOwnerScopeId = external ? scopeId : toScopeId("personal", actor.id);
         const fileGrantees = [...fileAudience];
         if ((conversation.kind === "group" || conversation.kind === "dm") && scopeId !== fileOwnerScopeId) {
@@ -2868,7 +2815,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             lease,
             visibleHistory,
             scopeId,
-            orgScopeId: resolution.orgScopeId,
             actorId: actor.id,
             ...(input.model ? { model: input.model } : {}),
             reservedTokens:
@@ -3023,12 +2969,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           spine.surfaceOutboundCount += posted;
         }
         if (partial) {
-          deps.auditLog.record({
-            at: Date.now(),
-            principalId: actor.id,
+          audit({
             action: "turn.resume",
             resource: conversation.threadRef,
-            scopeLabel: scopeId,
             detail: resume
               ? `attempt ${input.attempt}; resuming partial turn at seq ${partial.userSeq} (${partial.workEntries} recorded entries)`
               : `attempt ${input.attempt}; re-running turn at seq ${partial.userSeq} (no recorded work to resume)`,
@@ -3527,12 +3470,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                       return { outcome: "allow" };
                     }
                     if (authorizeCommand(quarantineReleaseKey(tool), quarantineReleaseKey(tool))) {
-                      deps.auditLog.record({
-                        at: Date.now(),
-                        principalId: actor.id,
+                      audit({
                         action: "security_posture.tool_result_released",
                         resource: input.surface ?? "unknown",
-                        scopeLabel: scopeId,
                         status: "allowed",
                         detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
                       });
@@ -3556,23 +3496,17 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                     if (verdict?.decision === "strict") {
                       const releaseKey = `security-screen-release:${toolLabel}`;
                       if (authorizeCommand(releaseKey)) {
-                        deps.auditLog.record({
-                          at: Date.now(),
-                          principalId: actor.id,
+                        audit({
                           action: "security_posture.tool_result_release",
                           resource: input.surface ?? "unknown",
-                          scopeLabel: scopeId,
                           status: "allowed",
                           detail: JSON.stringify({ reason: "human_release", tool: toolLabel }),
                         });
                         return { outcome: "allow" };
                       }
-                      deps.auditLog.record({
-                        at: Date.now(),
-                        principalId: actor.id,
+                      audit({
                         action: SECURITY_TOOL_RESULT_QUARANTINE,
                         resource: input.surface ?? "unknown",
-                        scopeLabel: scopeId,
                         status: "refused",
                         detail: JSON.stringify({
                           reason: "screen_verdict",
@@ -3616,12 +3550,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                         ...(verdict.reason ? { reason: verdict.reason } : {}),
                       };
                     }
-                    deps.auditLog.record({
-                      at: Date.now(),
-                      principalId: actor.id,
+                    audit({
                       action: "security_posture.tool_result_failed_open",
                       resource: input.surface ?? "unknown",
-                      scopeLabel: scopeId,
                       status: "allowed",
                       detail: JSON.stringify({
                         reason: unscreenable ? "unscreenable_payload" : UNSCREENED_REASON,
@@ -3639,7 +3570,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             history: continuation?.history ?? history,
             tools,
             ...(mcpTools ? { mcpTools } : {}),
-            ...(tools.commandCredentialHandles ? { commandCredentialHandles: tools.commandCredentialHandles } : {}),
             ...(resumePlan?.kind === "retry" && !continuation ? { resumeToolCall: resumePlan.call } : {}),
             emit,
             goal: sessionGoal,
@@ -3688,7 +3618,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
             },
             recordModelCall: (rec) => {
-              deps.modelGateway.recordCall({ at: Date.now(), scopeLabel: scopeId, ...rec });
               void deps.budget?.record(actor.id, estimateCostUsd(rec.inputTokens));
             },
             recordLlmRequest: recordSessionLlmRequest,
@@ -3717,7 +3646,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   lease,
                   visibleHistory: resumedHistory,
                   scopeId,
-                  orgScopeId: resolution.orgScopeId,
                   actorId: actor.id,
                   ...(requestedRuntime.modelId ? { model: requestedRuntime.modelId } : {}),
                   cancel: turnAbort.signal,
@@ -3763,9 +3691,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           !result.silent &&
           !result.stopped
         ) {
-          // The model already wrote a reply as plain assistant text — deliver that text
-          // directly instead of nudging it to re-post (a nudge here re-sends near-identical
-          // text, which surfaces that render assistant entries show twice).
           const primaryReply = stripAckPrefix(result.reply ?? "", spineAckText).trim();
           if (primaryReply && defaultDestination && deps.deliveries) {
             try {
@@ -4125,7 +4050,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           scheduleBackgroundCompaction({
             sessionId: session.id,
             scopeId,
-            orgScopeId: resolution.orgScopeId,
             actorId: actor.id,
             ...(input.model ? { model: input.model } : {}),
           });

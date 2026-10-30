@@ -122,7 +122,6 @@ export interface AgentTurnInput {
   goalInbox?: import("./goal.ts").GoalInbox;
   tools: ToolContext;
   mcpTools?: McpToolDescriptor[];
-  commandCredentialHandles?: readonly string[];
   toolApprovalGate?(tool: string, callKey?: string): boolean;
   emit(entry: NewEntry): Promise<SessionEntry>;
   resumeToolCall?: ResumableToolCall;

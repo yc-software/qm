@@ -2758,7 +2758,7 @@ test("only execute advertises command starts and sandbox is lifecycle-only", asy
         );
       }
     }
-    for (const input of [{ scope: "scratch" }, { scope: "#room" }, { durable: false }, { sandbox_id: null }])
+    for (const input of [{ scope: "scratch" }, { scope: "#room" }, { sandbox_id: null }])
       assert.match(
         textOut(
           await call(execute, { command: "forbidden", purpose: "Test invalid routing", background: true, ...input }),
@@ -2785,7 +2785,6 @@ test("execute preserves routing, credentials, abort and external output provenan
     {
       sandboxResources: true,
       reachExec: true,
-      commandCredentialHandles: ["git"],
     },
   ).find((t) => t.name === "execute")!;
   for (const [scope, route] of [
@@ -3677,8 +3676,8 @@ test("files share preserves artifact IDs, recipient resolution and authorization
   assert.equal(requests.length, 1);
 });
 
-test("the retired credential tool is absent and execute accepts credential handles", () => {
-  const tools = createAgentTools({ current: fakeToolContext() }, { commandCredentialHandles: ["kc_test123456"] });
+test("the retired credential tool is absent beside execute", () => {
+  const tools = createAgentTools({ current: fakeToolContext() });
   assert.equal(
     tools.some((tool) => tool.name === "credential_exec"),
     false,

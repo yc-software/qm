@@ -1129,19 +1129,6 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         scopeLabel: entry.scopeLabel as ScopeId,
       };
     });
-    for (const item of items) {
-      if (item.kind !== "Retraction" || typeof item.body.ts !== "string") continue;
-      const inBatch = items.findLast(
-        (other) => other.seq < item.seq && other.kind === "UserMessage" && other.externalId === item.body.ts,
-      );
-      const {
-        rows: [prior],
-      } = await client.query(
-        `SELECT max(seq) AS seq FROM items WHERE tenant_id=${TENANT} AND session_id=$1 AND external_id=$2 AND seq<$3`,
-        [sessionId, item.body.ts, item.seq],
-      );
-      item.targetSeq = inBatch?.seq ?? (prior.seq == null ? null : Number(prior.seq));
-    }
     const full = items.map((item) => entryFromItem({ sessionId, createdAt, ...item }));
     const userTurns = full.filter((entry) => entry.type === "user" && !isOverheardEntry(entry));
     const firstUser = userTurns[0];

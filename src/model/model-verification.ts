@@ -44,7 +44,6 @@ const VERIFICATION_CODES: Record<ProviderErrorCode, keyof typeof VERIFICATION_FA
   unknown: "provider_failure",
 };
 
-/** Maps a probe failure from structured signals only: ProviderTurnError.code or an abort/timeout error's name. */
 export function verificationFailure(error: unknown): ModelVerificationError {
   if (error instanceof ModelVerificationError) return error;
   let code = "provider_failure";

@@ -11,7 +11,6 @@ import { createResolutionService } from "../src/resolution/resolution-service.ts
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createErrorLog } from "../src/admin/error-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
@@ -56,7 +55,6 @@ test("an ambient message whose reply detection fails stays silent and leaves the
     sandbox: {
       profile: { backend: "fake", writablePersistence: "snapshot_to_workspace", processSessions: false },
     } as Sandbox,
-    modelGateway: createModelGateway(),
     auditLog,
     errors,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),

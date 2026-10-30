@@ -15,7 +15,6 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createErrorLog } from "../src/admin/error-log.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
@@ -132,7 +131,6 @@ function buildOrchestrator(
     sandbox: swarm?.sandbox ?? fakeSandbox(),
     ...(swarm ? { swarms: swarm.service, sandboxResources: swarm.sandboxes } : {}),
     ...(teams ? { teams } : {}),
-    modelGateway: createModelGateway(),
     auditLog,
     errors,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),

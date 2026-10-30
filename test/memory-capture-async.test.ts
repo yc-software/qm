@@ -14,7 +14,6 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import type { MemoryStrategy } from "../src/memory/strategy.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
@@ -108,7 +107,6 @@ function buildOrchestrator(agent: Agent, memory?: MemoryService, memoryStrategy?
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
-    modelGateway: createModelGateway(),
     auditLog,
     rateLimiter: createRateLimiter({ maxPerWindow: 1000, windowMs: 60_000 }),
     agent,

@@ -426,17 +426,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
           message: "Search covers stored Slack events only; older or missed messages may be absent.",
         });
       }
-      if (opts?.source === "mirror" && !deps.surfaceSearch) {
+      if (opts?.source === "mirror") {
         return { ok: false, message: "Stored Slack message search is unavailable; no live search was performed." };
-      }
-      if (deps.surfaceSearch) {
-        const hits = await deps.surfaceSearch.search({
-          surface: input.surface ?? "unknown",
-          container,
-          query: q,
-          limit,
-        });
-        return withCoverage({ ok: true, hits, source: "cache" });
       }
       if (!deps.surfaceContext) return { ok: false, message: "search isn't available from this turn" };
       if (!dest.target) return { ok: false, message: "this conversation has nothing to search" };

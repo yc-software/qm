@@ -1,10 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderTurnError, TRANSIENT_ERROR_CODES, type ProviderErrorCode } from "../core/turn-error.ts";
 
-// Classifies a failed pi-ai AssistantMessage from structured fields only: providerError (HTTP status
-// plus the provider's documented error type/code, from our vendored pi-ai, see vendor/pi-ai/) and
-// rawStopReason. errorMessage is never inspected; it is carried as `raw` for the operator log.
-
 const AUTH_TYPES = new Set(["authentication_error", "permission_error", "invalid_api_key"]);
 const TRANSIENT_TYPES = new Set(["overloaded_error", "api_error", "timeout_error"]);
 const CONTEXT_CODES = new Set(["context_length_exceeded"]);
@@ -12,14 +8,11 @@ const QUOTA_CODES = new Set(["insufficient_quota"]);
 const NOT_FOUND_CODES = new Set(["model_not_found"]);
 const RETRYABLE_CODES = new Set<ProviderErrorCode>([...TRANSIENT_ERROR_CODES, "unknown"]);
 
-/** Last known prompt size vs. the model's window, for Anthropic's untyped over-window 400. */
 export interface ContextUsage {
   contextWindow?: number | undefined;
   lastInputTokens?: number | undefined;
 }
 
-// Anthropic documents prompt-too-long only as a generic 400 invalid_request_error; we call it
-// context_too_long when the last known input already filled this share of the window.
 const NEAR_WINDOW_RATIO = 0.9;
 
 function nearWindow(usage: ContextUsage | undefined): boolean {
@@ -62,7 +55,6 @@ export function providerTurnError(failed: ProviderFailure, usage?: ContextUsage)
   const message = bodyMessage
     ? `Model provider API error${type ? ` (${type})` : ""}: ${bodyMessage}`
     : raw || "The agent stopped with an error";
-  // A failure with no HTTP response or stop reason (network drop, stream cut) stays "unknown" but retryable.
   const retryable =
     RETRYABLE_CODES.has(code) && !(code === "unknown" && (status !== undefined || failed.rawStopReason));
   return new ProviderTurnError(message, { code, retryable, status, raw });

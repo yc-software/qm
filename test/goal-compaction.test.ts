@@ -26,7 +26,6 @@ test("compaction leaves the session goal on its row and writes no goal entries",
     sessions,
     maxContextTokens: 400,
     agent: { compactHistory: async () => "Earlier work." },
-    modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   try {
     for (let round = 0; round < 2; round++) {
@@ -35,7 +34,6 @@ test("compaction leaves the session goal on its row and writes no goal entries",
         lease,
         visibleHistory: forModelContext((await sessions.getContextWindow(session.id)).entries),
         scopeId: scope,
-        orgScopeId: "org:test",
         actorId: "test",
       });
       assert.ok(rebuilt.some((entry) => (entry.payload as { kind?: string }).kind === "context_summary"));
@@ -73,12 +71,10 @@ test("background compaction cannot revive an older goal over one closed while it
         return finish.promise;
       },
     },
-    modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   compaction.scheduleBackgroundCompaction({
     sessionId: session.id,
     scopeId: scope,
-    orgScopeId: "org:test",
     actorId: "test",
   });
   await started.promise;

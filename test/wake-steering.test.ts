@@ -842,7 +842,7 @@ test("screening off delivers ambient updates to the existing run without a class
   assert.equal(signals.length, 1);
   assert.equal(signals[0]!.kind, "steer");
   assert.match(signals[0]!.text ?? "", /build finished/);
-  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(built.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("queued web edits require the author and preserve queue identity", async () => {

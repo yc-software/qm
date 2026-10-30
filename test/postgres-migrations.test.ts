@@ -210,30 +210,6 @@ test("repeatable maintenance runs once per store instance after migrations", { s
   }
 });
 
-test("pre-migration maintenance can repair schema before a released migration", { skip }, async () => {
-  const admin = new pg.Pool({ connectionString: databaseUrl });
-  const { id, table } = names();
-  const store = createPgPool(
-    databaseUrl!,
-    [{ id, statements: [`INSERT INTO ${table}(value) VALUES (1)`] }],
-    [
-      {
-        id: `${id}/repair`,
-        beforeMigrations: true,
-        statements: [`CREATE TABLE IF NOT EXISTS ${table}(value INT NOT NULL)`],
-      },
-    ],
-  );
-  try {
-    assert.deepEqual(await store.q(`SELECT value FROM ${table}`), [{ value: 1 }]);
-  } finally {
-    await store.close();
-    await admin.query(`DROP TABLE IF EXISTS ${table}`);
-    await admin.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
-    await admin.end();
-  }
-});
-
 for (const lock of ["qm:schema-maintenance", "qm:schema-migrations"]) {
   test(`waiting for the ${lock} lock does not deadlock a concurrent index build`, { skip }, async () => {
     const admin = new pg.Pool({ connectionString: databaseUrl });
@@ -242,7 +218,7 @@ for (const lock of ["qm:schema-maintenance", "qm:schema-migrations"]) {
     const store = createPgPool(
       databaseUrl!,
       [{ id, statements: [`ALTER TABLE ${table} ADD COLUMN extra INT`] }],
-      [{ id: `${id}/repair`, beforeMigrations: true, statements: ["SELECT 1"] }],
+      [{ id: `${id}/repair`, statements: ["SELECT 1"] }],
     );
     await holder.connect();
     try {

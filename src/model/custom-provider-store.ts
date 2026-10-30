@@ -1,12 +1,3 @@
-/**
- * Durable, encrypted storage for custom model providers.
- *
- * Mirrors model-credential-store: specs live in a DurableMap, API keys
- * are encrypted at rest with a key derived from the connector secret,
- * and the store never hands the plaintext key to anything but the
- * per-call resolver.
- */
-
 import { decryptSecret, deriveConnectorKey, encryptSecret } from "../connectors/connector-client-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { validateCustomProviderSpec, type CustomProviderSpec } from "./custom-providers.ts";
@@ -26,11 +17,8 @@ interface CustomProviderStatus extends CustomProviderSpec {
 }
 
 export interface CustomProviderStore {
-  /** Enabled specs only — what the runtime registry should serve. */
   enabled(): Promise<CustomProviderSpec[]>;
-  /** Everything, for the admin surface (no secrets). */
   statuses(): Promise<CustomProviderStatus[]>;
-  /** Plaintext key for one provider, or null when absent/disabled. */
   resolveKey(id: string): Promise<string | null>;
   upsert(spec: CustomProviderSpec, apiKey: string | undefined, updatedBy: string): Promise<void>;
   delete(id: string, updatedBy: string): Promise<boolean>;

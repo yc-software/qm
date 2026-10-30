@@ -2900,11 +2900,11 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
   const flagged = (await risky.auditLog.events()).find((event) => event.action === "security_posture.flagged");
   assert.match(flagged?.detail ?? "", /"source"/);
   assert.equal(
-    risky.modelGateway.audit().some((call) => call.model === "mock"),
+    risky.modelCalls.some((call) => call.model === "mock"),
     false,
     "flagged input never reaches the main agent before approval",
   );
-  const screensBeforeApproval = risky.modelGateway.audit().filter((call) => call.model === "mock-security").length;
+  const screensBeforeApproval = risky.modelCalls.filter((call) => call.model === "mock-security").length;
   const approved = await risky.app.turn({
     ...request,
     approval: { requestId: blocked.pendingApprovals![0]!.requestId, approved: true },
@@ -2942,10 +2942,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     ],
     "each approved repeat of the same flagged message is its own visible turn",
   );
-  assert.equal(
-    risky.modelGateway.audit().filter((call) => call.model === "mock-security").length,
-    screensBeforeApproval,
-  );
+  assert.equal(risky.modelCalls.filter((call) => call.model === "mock-security").length, screensBeforeApproval);
 
   const deniedApp = freshApp();
   const deniedPending = await deniedApp.app.turn(request);
@@ -2962,7 +2959,7 @@ test("Auto asks for input approval on suspicious data, skips re-screening on app
     "denied flagged input never enters the session log",
   );
   assert.equal(
-    deniedApp.modelGateway.audit().some((call) => call.model === "mock"),
+    deniedApp.modelCalls.some((call) => call.model === "mock"),
     false,
   );
 
@@ -3028,7 +3025,7 @@ test("Concurrent flagged inputs get distinct approval requests that release inde
   });
   assert.equal(crossedAgain.status, "pending_approval", "repeated cross-approval still refuses to release B");
   assert.equal(
-    built.modelGateway.audit().some((call) => call.model === "mock"),
+    built.modelCalls.some((call) => call.model === "mock"),
     false,
     "neither flagged input reached the main agent",
   );
@@ -3068,7 +3065,7 @@ test("Auto screens only the external event envelope and records classifier usage
   assert.ok(classifier, "the security classifier request is persisted beside the turn");
   assert.match(JSON.stringify(classifier.promptEnvelope), /customer asked for a refund/);
   assert.doesNotMatch(JSON.stringify(classifier.promptEnvelope), /provenance-ok/);
-  assert.ok(built.modelGateway.audit().some((rec) => rec.model === "mock-security"));
+  assert.ok(built.modelCalls.some((rec) => rec.model === "mock-security"));
 });
 
 test("an enforced proxy outage fails open and audits the configured provider", async () => {
@@ -3093,7 +3090,7 @@ test("an enforced proxy outage fails open and audits the configured provider", a
     (entry) => entry.action === "security_screen.classify" && entry.status === "error",
   );
   assert.equal(event?.resource, "example-screen");
-  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(built.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("Auto fails open on vision attachments it cannot screen, flagging them unscreened to the model", async () => {
@@ -3348,7 +3345,7 @@ test("Auto treats a fresh authenticated ambient speaker as the initiating human"
   assert.match(result.reply ?? "", /ambient-ok/);
   assert.equal(provisioning.provisioned, 1);
   assert.equal(
-    built.modelGateway.audit().some((call) => call.model === "mock-security"),
+    built.modelCalls.some((call) => call.model === "mock-security"),
     false,
   );
 });
@@ -3408,7 +3405,7 @@ test("Auto screens untrusted prompt metadata before the main agent runs", async 
   );
   assert.equal(result.status, "pending_approval");
   assert.equal(
-    built.modelGateway.audit().some((call) => call.model === "mock"),
+    built.modelCalls.some((call) => call.model === "mock"),
     false,
   );
 
@@ -3420,7 +3417,7 @@ test("Auto screens untrusted prompt metadata before the main agent runs", async 
   );
   assert.equal(headerResult.status, "pending_approval");
   assert.equal(
-    header.modelGateway.audit().some((call) => call.model === "mock"),
+    header.modelCalls.some((call) => call.model === "mock"),
     false,
   );
 
@@ -4234,7 +4231,7 @@ test("default screening does not invoke a model for inbound data or tool results
   assert.equal(built.screenSecurity, undefined);
   const claims = await verifyCapabilityToken(captured!.egressToken!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.egress?.denyPrivateNetworks, true);
-  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(built.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 for (const combined of [true, false]) {
@@ -4381,7 +4378,7 @@ test("enforced screening flags strict-posture inbound data before model executio
   });
   const first = await built.app.turn(request);
   assert.equal(first.status, "pending_approval");
-  assert.equal(built.modelGateway.audit().length, 0);
+  assert.equal(built.modelCalls.length, 0);
   const approved = await built.app.turn({
     ...request,
     approval: { requestId: first.pendingApprovals![0]!.requestId, approved: true },

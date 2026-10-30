@@ -734,7 +734,6 @@ function textFromContent(content: unknown): string {
     .join("");
 }
 
-/** The agent's recent pi messages as governor work lines: what it said, called and got back. */
 function piGoalWork(messages: ReadonlyArray<unknown>): string {
   const lines: string[] = [];
   for (const m of messages as ReadonlyArray<{ role?: string; content?: unknown; toolName?: string }>) {
@@ -778,7 +777,6 @@ function piAssistantFailure(session: AssistantTextSession): ProviderTurnError | 
   return providerTurnError(failed, { contextWindow, lastInputTokens: lastInputTokens(session, failed) });
 }
 
-/** Codes that retry the turn on the configured fallback model. */
 const FALLBACK_CODES = new Set(["refusal", "model_unavailable"]);
 const DOCUMENT_REJECTION_CODES = new Set(["context_too_long", "bad_request"]);
 
@@ -985,7 +983,6 @@ export interface ProviderKeys {
   anthropic?: string;
   openai?: string;
   openrouter?: string;
-  /** Admin-registered custom providers, keyed by provider slug. */
   [provider: string]: string | undefined;
 }
 
@@ -1399,8 +1396,6 @@ export function applyTurnEffort(session: AgentSession, level?: string): void {
     level === "auto" && session.state.model ? defaultInteractiveThinkingLevel(session.state.model) : level;
   const normalizedLevel = effectiveLevel === "auto" ? "medium" : effectiveLevel;
   const providerLevel = normalizedLevel === "ultracode" ? "max" : normalizedLevel;
-  // Normalize UI aliases before Pi clamps to the model's declared capabilities.
-  // Mutating thinkingLevelMap would enable efforts the provider explicitly excludes.
   session.setThinkingLevel(providerLevel as ModelThinkingLevel);
 }
 
@@ -1471,7 +1466,6 @@ export function createAgent(opts?: AgentOptions): Agent {
       reachExec,
       ...(turn.mcpTools?.length ? { mcpTools: turn.mcpTools } : {}),
       controlTools,
-      ...(turn.commandCredentialHandles?.length ? { commandCredentialHandles: turn.commandCredentialHandles } : {}),
       ...(turn.surfaceTools ? { surfaceTools: true } : {}),
       ...(turn.surfaceName ? { surfaceName: turn.surfaceName } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
@@ -2036,9 +2030,8 @@ export function createAgent(opts?: AgentOptions): Agent {
                   }
                 : {}),
               ...(turn.goalInbox ? { inbox: turn.goalInbox } : {}),
-              beforePrompt: async (note) => {
+              beforePrompt: async () => {
                 console.error(`[goal] continuation session=${turn.session.id} round=${(entry.ref.goalRound ?? 0) + 1}`);
-                void note;
                 entry.ref.goalRound = (entry.ref.goalRound ?? 0) + 1;
                 entry.ref.silentRequested = false;
                 await thinkTail;
@@ -2211,7 +2204,6 @@ export function createAgent(opts?: AgentOptions): Agent {
           if (g.status === "complete") entry.ref.goal = null;
         }
         const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-        // A stall auto-waive stays visible even when the final stop attempt was a silent finish.
         const reply = entry.ref.silentRequested ? "" : closingText;
         await turn.emit({
           type: "assistant",
@@ -2397,9 +2389,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         "",
         "Command:",
         command.slice(0, 4000),
-      ]
-        .filter((l) => l !== undefined)
-        .join("\n");
+      ].join("\n");
       const out = (
         await oneShot("pi-approval-summary", model, providerKeys, APPROVAL_SUMMARY_PROMPT, prompt, { modelGateway })
       )?.trim();

@@ -82,26 +82,6 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
   );
 });
 
-test("SOUL snapshot restore preserves the canonical version and history byte-for-byte across cores", async () => {
-  const souls = createMemoryMap<PersistedSoul>();
-  const left = createMemoryConfigStore("default-org", { souls });
-  const right = createMemoryConfigStore("default-org", { souls });
-  const channel = scopeId("channel", "snapshot");
-  await left.setSoul(channel, "one", "alice");
-  await left.setSoul(channel, "two", "bob");
-  const snapshot = await left.captureSoulSnapshot(channel);
-
-  await right.refreshScope(channel);
-  await right.setSoul(channel, "attempted import", "importer");
-  assert.equal(await left.restoreSoulSnapshot(channel, snapshot), true);
-  await right.refreshScope(channel);
-
-  assert.deepEqual(await right.captureSoulSnapshot(channel), snapshot);
-  assert.equal(right.getSoul(channel), "two");
-  assert.equal(right.soulVersion(channel), 2);
-  assert.deepEqual(right.soulHistory(channel), snapshot?.history);
-});
-
 test("setSoul advances the canonical row without trusting a stale instance cache", async () => {
   const souls = createMemoryMap<PersistedSoul>();
   const left = createMemoryConfigStore("default-org", { souls });
@@ -186,37 +166,6 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
     "refresh atomically migrates legacy revisions into the canonical row",
   );
   assert.equal(legacyScans, 1, "legacy history is scanned once at hydration, never per scope refresh or write");
-});
-
-test("embedded history prevents a stale core from re-injecting legacy revisions after restore", async () => {
-  const souls = createMemoryMap<PersistedSoul>();
-  const legacyHistory = createMemoryMap<PersistedSoulRevision>();
-  const restored = scopeId("channel", "legacy-restored");
-  await souls.put(restored, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
-  await legacyHistory.put(`${restored}:4`, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
-  await legacyHistory.put(`${restored}:3`, { scopeId: restored, content: "legacy prior", version: 3, updatedAt: 30 });
-  const left = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
-  const stale = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
-  await Promise.all([left.hydrate?.(), stale.hydrate?.()]);
-
-  const restoredSnapshot: PersistedSoul = {
-    scopeId: restored,
-    content: "restored canonical",
-    version: 1,
-    updatedAt: 50,
-    history: [],
-  };
-  assert.equal(await left.restoreSoulSnapshot(restored, restoredSnapshot), true);
-  await stale.refreshScope(restored);
-  assert.deepEqual((await souls.get(restored))?.history, []);
-  assert.equal(await stale.setSoul(restored, "after restore", "bob"), 2);
-  assert.deepEqual(
-    (await souls.get(restored))?.history?.map(({ version, content }) => ({ version, content })),
-    [
-      { version: 2, content: "after restore" },
-      { version: 1, content: "restored canonical" },
-    ],
-  );
 });
 
 test("legacy migration rechecks the canonical marker inside the atomic update", async () => {
@@ -381,7 +330,7 @@ test("pg config store: settings written on one core reach another core through r
   assert.equal(b.getBrowseModel(ch), "claude-sonnet-4-6");
   assert.deepEqual(b.getBranding(ch), { accent: "#123456" });
   assert.equal(b.getChannelHeaderPin(ch), true);
-  assert.deepEqual(b.getApprovalGrantModes(ch), { session: false, always: true });
+  assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
   assert.equal(b.getOrgAmbient(), false);
   assert.equal(b.getAutoFlaggerConfig()?.rubric, "flag it");
 

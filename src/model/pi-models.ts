@@ -24,12 +24,6 @@ const getModel = getBuiltinModel as unknown as (provider: string, id: string) =>
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-5";
 export const DEFAULT_CODEX_MODEL_ID = "gpt-6.1-sol";
 const PROVIDER_DEFAULT_MODEL_IDS = [DEFAULT_AGENT_MODEL_ID, DEFAULT_CODEX_MODEL_ID, "openrouter/auto"];
-/**
- * pi-ai's ChatGPT-subscription provider: the same model ids as "openai",
- * served from the Codex backend and authenticated with a ChatGPT OAuth
- * access token instead of an API key. Model ids are namespaced "codex/<id>"
- * so an id can never silently flip between metered and subscription serving.
- */
 export const CODEX_SUBSCRIPTION_PROVIDER = "openai-codex";
 const CODEX_SUBSCRIPTION_PREFIX = "codex/";
 

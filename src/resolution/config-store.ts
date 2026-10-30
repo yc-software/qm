@@ -93,18 +93,6 @@ interface AutoFlaggerConfig {
 export interface PersistedAutoFlaggerConfig extends AutoFlaggerConfig {
   scopeId: ScopeId;
 }
-interface ScopeConfigPresence {
-  soul: boolean;
-  commandPolicy: boolean;
-  securityPosture: boolean;
-  sharingPosture: boolean;
-  approvalGrantModes: boolean;
-  egress: boolean;
-  unfulfilledInsights: boolean;
-  externalSlackParticipants: boolean;
-  runtime: boolean;
-  branding: boolean;
-}
 
 export interface PersistedDeploymentIdentity {
   orgId: string;
@@ -117,20 +105,16 @@ export interface ScopedConfigStore {
   soulVersion(id: ScopeId): number;
   soulHistory(id: ScopeId): PersistedSoulRevision[];
   captureSoulSnapshot(id: ScopeId): Promise<SoulSnapshot>;
-  restoreSoulSnapshot(id: ScopeId, snapshot: SoulSnapshot): Promise<boolean>;
   restoreSoulCacheSnapshot(id: ScopeId, snapshot: SoulSnapshot): void;
   getCommandPolicy(id: ScopeId): CommandPolicy | null;
   setCommandPolicy(id: ScopeId, policy: CommandPolicy): Promise<void>;
-  getSecurityPosture(id: ScopeId): SecurityPosture;
   getSecurityPostureDurable(id: ScopeId): Promise<SecurityPosture>;
   setSecurityPosture(id: ScopeId, posture: SecurityPosture): Promise<void>;
-  getSharingPosture(id: ScopeId): SharingPosture;
   getSharingPostureDurable(id: ScopeId): Promise<SharingPosture>;
   getSharingPostureOwnDurable(id: ScopeId): Promise<SharingPosture | null>;
   resolveSharingPostureDurable(personalId: ScopeId, targetId: ScopeId): Promise<SharingPosture>;
   setSharingPosture(id: ScopeId, posture: SharingPosture): Promise<void>;
   clearSharingPosture(id: ScopeId): Promise<void>;
-  getApprovalGrantModes(id: ScopeId): ApprovalGrantModes;
   getApprovalGrantModesDurable(id: ScopeId): Promise<ApprovalGrantModes>;
   setApprovalGrantModes(id: ScopeId, modes: ApprovalGrantModes): Promise<void>;
   getEgress(id: ScopeId): EgressPolicy | null;
@@ -193,7 +177,6 @@ export interface ScopedConfigStore {
   listConnectorClients(id: ScopeId): Promise<PublicConnectorClient[]>;
   deleteConnectorClient(id: ScopeId, provider: string): Promise<void>;
   getConnectorClientSecret(id: ScopeId, provider: string): Promise<DecryptedConnectorClient | null>;
-  scopeConfigPresence(id: ScopeId): Promise<ScopeConfigPresence>;
   refreshScope(id: ScopeId): Promise<void>;
   hydrate?(): Promise<void>;
 }
@@ -455,7 +438,6 @@ export function createMemoryConfigStore(
     else soulHistory.delete(id);
   };
   const cloneSoul = (soul: PersistedSoul | null): SoulSnapshot => (soul ? structuredClone(soul) : null);
-  const sameSoul = (left: SoulSnapshot, right: SoulSnapshot): boolean => isDeepStrictEqual(left, right);
   const mergeSoulHistory = (
     embedded: readonly PersistedSoulRevision[] | undefined,
     legacy: readonly PersistedSoulRevision[],
@@ -494,7 +476,6 @@ export function createMemoryConfigStore(
           }),
           settings.commandPolicies.reload(id),
           settings.egressPolicies.reload(id),
-          settings.sharingPostures.reload(id),
         ]),
       );
     },
@@ -611,29 +592,11 @@ export function createMemoryConfigStore(
     captureSoulSnapshot(id) {
       return writeQueue(`soul:${id}`, async () => cloneSoul(await soulStore.get(id)));
     },
-    restoreSoulSnapshot(id, snapshot) {
-      return writeQueue(`soul:${id}`, async () => {
-        try {
-          if (snapshot) await soulStore.put(id, cloneSoul(snapshot)!);
-          else await soulStore.delete(id);
-          const restored = await soulStore.get(id);
-          loadSoulCache(id, restored);
-          return sameSoul(restored, snapshot);
-        } catch (error) {
-          loadSoulCache(id, await soulStore.get(id));
-          throw error;
-        }
-      });
-    },
     restoreSoulCacheSnapshot(id, snapshot) {
       loadSoulCache(id, cloneSoul(snapshot));
     },
     getCommandPolicy: (id) => settings.commandPolicies.get(id) ?? (id === org ? orgDefaultPolicy : null),
     setCommandPolicy: (id, policy) => settings.commandPolicies.set(id, policy),
-    getSecurityPosture(id) {
-      const orgPosture = settings.securityPostures.get(org) ?? defaultSecurityPosture;
-      return id === org ? orgPosture : composeSecurityPosture(orgPosture, settings.securityPostures.get(id));
-    },
     async getSecurityPostureDurable(id) {
       const orgPosture = (await settings.securityPostures.durable(org)) ?? defaultSecurityPosture;
       if (id === org) return orgPosture;
@@ -645,10 +608,6 @@ export function createMemoryConfigStore(
           ? posture
           : composeSecurityPosture((await settings.securityPostures.durable(org)) ?? defaultSecurityPosture, posture);
       await settings.securityPostures.set(id, effective);
-    },
-    getSharingPosture(id) {
-      const orgPosture = settings.sharingPostures.get(org) ?? defaultSharingPosture;
-      return id === org ? orgPosture : composeSharingPostures(orgPosture, [settings.sharingPostures.get(id)]);
     },
     async getSharingPostureDurable(id) {
       const orgPosture = (await settings.sharingPostures.durable(org)) ?? defaultSharingPosture;
@@ -666,11 +625,6 @@ export function createMemoryConfigStore(
     },
     setSharingPosture: (id, posture) => settings.sharingPostures.set(id, posture),
     clearSharingPosture: (id) => settings.sharingPostures.set(id, null),
-    getApprovalGrantModes(id) {
-      const orgModes = settings.approvalGrantModes.get(org) ?? DEFAULT_APPROVAL_GRANT_MODES;
-      if (id === org) return { ...orgModes };
-      return composeApprovalGrantModes(orgModes, settings.approvalGrantModes.get(id));
-    },
     async getApprovalGrantModesDurable(id) {
       const orgModes = (await settings.approvalGrantModes.durable(org)) ?? DEFAULT_APPROVAL_GRANT_MODES;
       if (id === org) return { ...orgModes };
@@ -844,24 +798,6 @@ export function createMemoryConfigStore(
         ...(rec.hostedDomain ? { hostedDomain: rec.hostedDomain } : {}),
         enabled: rec.enabled,
       };
-    },
-    async scopeConfigPresence(id) {
-      const stores = {
-        soul: soulStore,
-        commandPolicy: settings.commandPolicies.store,
-        securityPosture: settings.securityPostures.store,
-        sharingPosture: settings.sharingPostures.store,
-        approvalGrantModes: settings.approvalGrantModes.store,
-        egress: settings.egressPolicies.store,
-        unfulfilledInsights: settings.unfulfilledInsights.store,
-        externalSlackParticipants: settings.externalSlackParticipants.store,
-        runtime: baseModelStore,
-        branding: settings.branding.store,
-      };
-      const present = await Promise.all(
-        Object.entries(stores).map(async ([key, store]) => [key, !!(await store.get(id))] as const),
-      );
-      return Object.fromEntries(present) as Record<keyof typeof stores, boolean>;
     },
     async refreshScope(id) {
       const [soul, baseModel] = await Promise.all([

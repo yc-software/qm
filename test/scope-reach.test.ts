@@ -244,7 +244,6 @@ test("reachExec ON: scope accepts scoped, scratch, AND a room", async () => {
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
   await call(execute, { command: "x", scope: "scratch", purpose: "Run test command" });
@@ -253,8 +252,6 @@ test("reachExec ON: scope accepts scoped, scratch, AND a room", async () => {
   assert.deepEqual(seen.at(-1)!.opts, { reachTarget: "#ops" });
   await call(execute, { command: "x", purpose: "Run test command" });
   assert.deepEqual(seen.at(-1)!.opts, undefined);
-  const e = textOf(await call(execute, { command: "x", scope: "scratch", durable: true, purpose: "Run test command" }));
-  assert.match(e, /scratch box cannot be made durable/);
 });
 
 test("reachExec ON: the scoped/scratch keywords match case-insensitively, never routed as a room", async () => {

@@ -303,7 +303,6 @@ import { createEgressAuditSink, type EgressAuditSink } from "./admin/egress-audi
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
 import { createConsentLinkStore, type ConsentLinkStore, type ConsentLinkRecord } from "./connectors/consent-link.ts";
 import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
-import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
 import { refreshChatGPTTokens, refreshClaudeTokens } from "./model/subscription-oauth.ts";
 import { createUserModelCredentialStore, type UserModelCredentialStore } from "./model/user-model-credential-store.ts";
@@ -500,7 +499,6 @@ export interface BuiltApp {
   secretDrops: SecretDropStore;
   modelGatewayTransport?: ModelGatewayTransportConfig;
   resolveBrowserCompanyKeys: (includeSubscription?: boolean) => Promise<ProviderKeys>;
-  modelGateway: ModelGateway;
   modelCredentials: ModelCredentialStore;
   userModelCredentials: UserModelCredentialStore;
   modelRegistry: ModelOverlayStore;
@@ -833,7 +831,6 @@ export function buildApp(
     leaderLease,
     createSweeper,
   });
-  // Session storage is built further down; trace-derived providers only read it after the first turn.
   const memorySessions: { store?: SessionStore } = {};
   const baseMemory: MemoryService = withMemoryTidy(
     createConfiguredMemoryService({
@@ -1279,8 +1276,6 @@ export function buildApp(
     lock: advisoryLock,
     refreshConnector: (() => {
       const base = makeRefresh({ resolveClient });
-      // AI subscription logins ride the same connector-refresh machinery:
-      // the keychain calls this single-flight when a token is stale.
       return async (host: string, token: OAuthToken, ctx?: { accountType?: string; clientRef?: string }) => {
         if (token.refreshToken && host === "auth.openai.com") {
           const fresh = await refreshChatGPTTokens(token.refreshToken);
@@ -1307,9 +1302,6 @@ export function buildApp(
     ...(fresh.accountId ? { accountId: fresh.accountId } : {}),
     ...(fresh.expiresAt !== undefined ? { expiresAt: fresh.expiresAt } : {}),
   });
-  // Per-user AI accounts live in the keychain itself (unified custody):
-  // same encryption, ownership, admin visibility, and removal flows as
-  // every other personal credential.
   const userModelCredentials = createUserModelCredentialStore({ keychain: credentialStore });
   const keychain: Keychain | undefined = keychainKeyMaterial ? credentialStore : undefined;
   const serviceCreds = withDeploymentCredentials(
@@ -1347,7 +1339,6 @@ export function buildApp(
   const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
   const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
   const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
-  const modelGateway = createModelGateway();
 
   const sessions: SessionStore =
     config.sessionStore === "postgres"
@@ -1421,8 +1412,6 @@ export function buildApp(
             try {
               return [p.id, await customProviders.resolveKey(p.id)] as const;
             } catch (e) {
-              // A corrupt/undecryptable custom key must degrade that one
-              // provider, never the whole turn (built-ins included).
               console.error(`[model] custom provider ${p.id}: key unreadable: ${errMessage(e)}`);
               return [p.id, null] as const;
             }
@@ -2189,7 +2178,6 @@ export function buildApp(
     sandboxResources,
     swarms,
     connectorTokens,
-    modelGateway,
     auditLog,
     rateLimiter,
     budget,
@@ -2225,7 +2213,6 @@ export function buildApp(
     skills,
     skillBundles,
     skillsReady,
-    advisoryLock,
     errors,
     signals: runSignals,
     turnStream,
@@ -2350,14 +2337,13 @@ export function buildApp(
     : createMemoryAckEmojiPickStore();
   const providerKeys = directProviderAvailability;
   const screenSecurity: SecurityScreenProbe | undefined = agent.screenSecurity
-    ? ({ payload, modelId, systemPrompt, actorId, scopeLabel, signal }) =>
+    ? ({ payload, modelId, systemPrompt, actorId, signal }) =>
         agent.screenSecurity!({
           payload,
           modelId,
           systemPrompt,
           signal,
           recordModelCall: (rec) => {
-            modelGateway.recordCall({ at: Date.now(), scopeLabel, ...rec });
             void budget?.record(actorId, estimateCostUsd(rec.inputTokens));
           },
         })
@@ -2380,7 +2366,6 @@ export function buildApp(
     runStreamEvents,
     runActivity,
     signals: runSignals,
-    modelGateway,
     modelCredentials,
     userModelCredentials,
     modelRegistry,
@@ -3105,7 +3090,6 @@ export function buildApp(
     modelGatewayTransport: gatewayTransport,
     budget,
     resolveBrowserCompanyKeys,
-    modelGateway,
     modelCredentials,
     userModelCredentials,
     modelRegistry,

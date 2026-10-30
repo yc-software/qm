@@ -93,7 +93,6 @@ test("scope defaults to the durable scoped box; scratch is an explicit opt-in", 
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
 
@@ -113,28 +112,10 @@ test("scope defaults to the durable scoped box; scratch is an explicit opt-in", 
   await call(execute, {
     command: "echo hi",
     scope: "scoped",
-    durable: true,
     timeout_seconds: 9,
     purpose: "Run test command",
   });
   assert.deepEqual(seen.at(-1)!.opts, { timeoutSeconds: 9 });
-});
-
-test("unsupported scope/durable pairings return a crisp [error] without executing", async () => {
-  const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc });
-
-  const e1 = textOf(
-    await call(execute, { command: "echo hi", scope: "scratch", durable: true, purpose: "Run test command" }),
-  );
-  assert.match(e1, /\[error\] a scratch box cannot be made durable yet/);
-
-  const e2 = textOf(
-    await call(execute, { command: "echo hi", scope: "scoped", durable: false, purpose: "Run test command" }),
-  );
-  assert.match(e2, /\[error\] the scoped computer is always durable today/);
-
-  assert.equal(seen.length, 0, "invalid pairings never reach the sandbox");
 });
 
 test("the tool_call/tool_result entries record which box ran the command", async () => {
@@ -304,9 +285,9 @@ test("execute refuses a credential that would override the computer's own enviro
   assert.equal(ran, 1);
 });
 
-test("execute schema lists exact command credential handles", async () => {
+test("execute schema lists its parameters", async () => {
   const { tc, seen } = sinkToolContext();
-  const [execute] = createAgentTools({ current: tc }, { commandCredentialHandles: ["kc_github12345"] });
+  const [execute] = createAgentTools({ current: tc });
   assert.deepEqual(schemaProps(execute!), [
     "command",
     "background",
@@ -315,7 +296,6 @@ test("execute schema lists exact command credential handles", async () => {
     "timeout_seconds",
     "credentials",
     "scope",
-    "durable",
     "retrySafe",
   ]);
 
@@ -335,20 +315,17 @@ test("execute masks credential output before model delivery, screening, and tran
     } as unknown as Sandbox,
     commandCredentials: [{ handle: "kc_test123456", env: [{ key: "TOKEN", value: secret }] }],
   });
-  const [execute] = createAgentTools(
-    {
-      current: ctx,
-      scopeLabel: scopeId("personal", "U1"),
-      emit: async (entry) => {
-        emitted.push(entry);
-      },
-      screenToolResult: async (input) => {
-        screened.push(input);
-        return { outcome: "allow" };
-      },
+  const [execute] = createAgentTools({
+    current: ctx,
+    scopeLabel: scopeId("personal", "U1"),
+    emit: async (entry) => {
+      emitted.push(entry);
     },
-    { commandCredentialHandles: ["kc_test123456"] },
-  );
+    screenToolResult: async (input) => {
+      screened.push(input);
+      return { outcome: "allow" };
+    },
+  });
   const result = await call(execute, {
     command: "diagnose",
     credentials: ["kc_test123456"],

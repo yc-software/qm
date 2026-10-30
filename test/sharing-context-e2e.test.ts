@@ -470,7 +470,7 @@ test("sharing e2e: screening off preserves carried skills without model calls", 
     await b.turn("!skill-run unscreened-helper python3 {dir}/scripts/value.py", true),
     "SHARED_SKILL_OK",
   );
-  assert.equal(b.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(b.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("Open speaker keychain uses a disposable computer, follows the speaker, and never grants the room", async (t) => {

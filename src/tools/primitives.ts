@@ -198,10 +198,8 @@ export interface ToolContext extends SurfaceToolDeps {
   runtime?(request: RuntimeRequest, signal?: AbortSignal): Promise<RuntimeResult>;
   attach: AttachFiles;
   sessionSyscalls?: SessionSyscalls;
-  /** True when a person's own message started this turn (not a cron, webhook, ambient or delegated wake). */
   humanTurn?: boolean;
   toolOutput?: Pick<ToolOutputStore, "inlineTokens" | "save">;
-  commandCredentialHandles?: readonly string[];
   execute(
     command: string,
     opts?: {
@@ -735,9 +733,6 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     ...(deps.admin ? { admin: deps.admin } : {}),
     ...(deps.installSharedCanvas ? { installSharedCanvas: deps.installSharedCanvas } : {}),
     ...(deps.toolOutput ? { toolOutput: deps.toolOutput } : {}),
-    ...(deps.commandCredentials?.length
-      ? { commandCredentialHandles: deps.commandCredentials.map((credential) => credential.handle) }
-      : {}),
     ...(deps.sandboxResources && deps.accessSandboxResource
       ? {
           async sandboxResources(

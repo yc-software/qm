@@ -33,7 +33,6 @@ async function fixture() {
     sessions,
     agent,
     maxContextTokens: 500,
-    modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   const input = {
     session,

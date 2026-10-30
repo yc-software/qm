@@ -131,7 +131,6 @@ export interface ToolContextRef {
   goalInbox?: GoalInbox;
   modelHasPrices?: () => boolean;
   governGoal?: GoalGovernor;
-  /** The agent's recent work for the governor, newest last. */
   goalRecentWork?: () => string;
   screenToolResult?: (input: ToolResultScreenInput) => Promise<ToolResultScreen>;
   toolApprovalGate?: (tool: string, callKey?: string) => boolean;
@@ -319,7 +318,6 @@ function fmtCronRunLine(entry: CronFireLogEntry): string {
 
 export interface AgentToolsOptions {
   sessionTools?: boolean;
-  commandCredentialHandles?: readonly string[];
   reachExec?: boolean;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -431,7 +429,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     isError = false,
     sourceScopeId?: ScopeId | null,
     coreAuthored = false,
-    display?: Record<string, unknown>,
     screenAs?: { provenance: ToolResultProvenance; source?: string },
   ): Promise<T> =>
     resultQueue("result", async () => {
@@ -571,7 +568,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         callId,
         isError,
         ...(resultTruncated ? { resultTruncated: true } : {}),
-        ...(display ? { display } : {}),
         result,
         ...(output ? { output } : {}),
       });
@@ -594,7 +590,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     sourceScopeId?: ScopeId | null,
     isError = false,
   ): Promise<T> =>
-    recordResult(callId, summary, ret, isError, sourceScopeId, false, undefined, { provenance: "external", source });
+    recordResult(callId, summary, ret, isError, sourceScopeId, false, { provenance: "external", source });
 
   const EXECUTE_TIMEOUT_GUIDANCE =
     "Commands may run under POSIX sh; wrap bash-only syntax in bash -c. " +
@@ -657,11 +653,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     callId: string,
     params: {
       command: string;
-      computer?: string;
-      sandbox_id?: string | null;
-      backend?: string;
-      name?: string;
-      to?: string;
+      sandbox_id?: string;
       timeout_seconds?: number;
       purpose?: string;
       credentials?: string[];
@@ -670,7 +662,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   ) => {
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
-    if (params.computer) throw new Error("Computer actions moved to the sandbox tool; migrate has been retired.");
     let scopeNote: { scope?: string } = {};
     if (route?.reachTarget !== undefined) {
       scopeNote = { scope: route.reachTarget };
@@ -685,7 +676,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       ...(params.sandbox_id !== undefined ? { sandbox_id: params.sandbox_id } : {}),
     });
     try {
-      if (params.sandbox_id === null) throw new Error("a command requires a sandbox ID; null only clears the default");
       const execOpts = {
         ...(params.sandbox_id !== undefined ? { sandboxId: params.sandbox_id } : {}),
         ...(params.timeout_seconds !== undefined ? { timeoutSeconds: params.timeout_seconds } : {}),
@@ -723,7 +713,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         r.timedOut,
         undefined,
         false,
-        undefined,
         r.reached ? { provenance: "external", source: "reached room" } : undefined,
       );
     } catch (e) {
@@ -753,10 +742,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const invalidExecute = (callId: string, summary: Record<string, unknown>, message: string) =>
     recordResult(callId, summary, text(message), true);
 
-  const SCRATCH_DURABLE_ERROR =
-    '[error] a scratch box cannot be made durable yet — use scope:"scoped" for work that must survive future turns, or drop `durable`.';
-  const SCOPED_EPHEMERAL_ERROR =
-    '[error] the scoped computer is always durable today — re-run with durable:true (or omit `durable`), or use scope:"scratch" for disposable local working files.';
   const outboundFilesSchema = Type.Array(
     Type.Union([
       Type.String({ minLength: 1 }),
@@ -777,7 +762,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const reachScopeDescription =
     '"scoped" (default) | "scratch" | ' +
     'a room like "#project-alpha" (a shared channel): runs on that room\'s computer, read-only by etiquette.';
-  const DURABLE_PARAM_DESC = "Fixed by scope: true on scoped, false elsewhere; omit.";
   const scopedLine =
     '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
   const scratchLine =
@@ -800,31 +784,16 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     callId: string,
     params: {
       command: string;
-      computer?: string;
       timeout_seconds?: number;
       purpose?: string;
       scope?: string;
-      durable?: boolean;
       credentials?: string[];
     },
   ) => {
     const scope = (params.scope ?? "scoped").trim();
     const keyword = scope.toLowerCase();
-    const durable = params.durable;
-    if (keyword === "scoped") {
-      if (durable === false) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
-        return invalidExecute(callId, { tool: "execute", invalid: "scoped_ephemeral" }, SCOPED_EPHEMERAL_ERROR);
-      }
-      return runExecute(callId, params, { scratch: false });
-    }
-    if (keyword === "scratch") {
-      if (durable === true) {
-        await recordCall(callId, { tool: "execute", command: params.command, purpose: params.purpose, scope, durable });
-        return invalidExecute(callId, { tool: "execute", invalid: "scratch_durable" }, SCRATCH_DURABLE_ERROR);
-      }
-      return runExecute(callId, params, { scratch: true });
-    }
+    if (keyword === "scoped") return runExecute(callId, params, { scratch: false });
+    if (keyword === "scratch") return runExecute(callId, params, { scratch: true });
     return runExecute(callId, params, { reachTarget: scope });
   };
 
@@ -833,36 +802,22 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     params: Parameters<typeof runScopedExecute>[1] & { background?: boolean; sandbox_id?: string },
   ) => (params.background ? runBackgroundExecute(callId, params) : runScopedExecute(callId, params));
 
-  let execute: ToolDefinition;
-  if (reachExec) {
-    execute = defineTool({
-      name: "execute",
-      label: "execute",
-      description: reachDescription,
-      parameters: Type.Object({
-        ...executeBaseParams,
-        scope: Type.Optional(Type.String({ description: reachScopeDescription })),
-        durable: Type.Optional(Type.Boolean({ description: `${DURABLE_PARAM_DESC} Ignored for a room.` })),
-      }),
-      execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
-    });
-  } else {
-    execute = defineTool({
-      name: "execute",
-      label: "execute",
-      description: scopeDescription,
-      parameters: Type.Object({
-        ...executeBaseParams,
-        scope: Type.Optional(
-          Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
-            description: "Which computer runs this; see the tool description.",
-          }),
-        ),
-        durable: Type.Optional(Type.Boolean({ description: DURABLE_PARAM_DESC })),
-      }),
-      execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
-    });
-  }
+  const execute = defineTool({
+    name: "execute",
+    label: "execute",
+    description: reachExec ? reachDescription : scopeDescription,
+    parameters: Type.Object({
+      ...executeBaseParams,
+      scope: Type.Optional(
+        reachExec
+          ? Type.String({ description: reachScopeDescription })
+          : Type.Union([Type.Literal("scoped"), Type.Literal("scratch")], {
+              description: "Which computer runs this; see the tool description.",
+            }),
+      ),
+    }),
+    execute: (callId, params) => runCommand(callId, params as Parameters<typeof runCommand>[1]),
+  });
 
   const sandboxActions = [
     "status",
@@ -1103,7 +1058,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         content === null,
         sourceScopeId,
         false,
-        undefined,
         shared ? { provenance: "external", source: "shared file" } : undefined,
       );
     },
@@ -1787,33 +1741,15 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
     const tc = ref.current;
     if (!tc) return text("[error] no active tool context");
     await recordCall(callId, { ...params, tool: "execute", background: true });
-    if (
-      (params.scope ?? "scoped").trim().toLowerCase() !== "scoped" ||
-      params.durable === false ||
-      params.sandbox_id === null
-    )
+    if ((params.scope ?? "scoped").trim().toLowerCase() !== "scoped")
       return invalidExecute(
         callId,
         { tool: "execute", background: true },
         '[error] background jobs require scope:"scoped" with durable storage; use sandbox_id to select their computer.',
       );
     try {
-      if (!params.command)
-        return recordResult(
-          callId,
-          { tool: "execute", background: true, error: "start requires command" },
-          text("[error] execute background:true requires `command`."),
-          true,
-        );
-      if (!params.purpose?.trim())
-        return recordResult(
-          callId,
-          { tool: "execute", background: true, error: "start requires purpose" },
-          text("[error] execute background:true requires `purpose`: a short description of the job, about 5 words."),
-          true,
-        );
       const r = await tc.backgroundStart(params.command, {
-        purpose: params.purpose,
+        purpose: params.purpose!,
         ...(params.timeout_seconds ? { ttlSeconds: params.timeout_seconds } : {}),
         ...(params.sandbox_id ? { sandboxId: params.sandbox_id } : {}),
         ...(params.credentials?.length ? { credentials: params.credentials } : {}),
@@ -1837,7 +1773,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         false,
         undefined,
         false,
-        undefined,
         { provenance: "external" },
       );
     } catch (e) {
@@ -1915,22 +1850,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       });
       try {
         switch (params.action) {
-          default:
-            return recordResult(
-              callId,
-              { tool: "background", action: params.action, invalid: true },
-              text("[error] unsupported background action"),
-              true,
-            );
           case "poll": {
-            if (!params.process_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "poll requires process_id" },
-                text("[error] background poll requires `process_id`."),
-                true,
-              );
-            const r = await tc.backgroundPoll(params.process_id, {
+            const r = await tc.backgroundPoll(params.process_id!, {
               ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
               ...(params.max_bytes !== undefined ? { maxBytes: params.max_bytes } : {}),
               ...(params.wait_seconds !== undefined ? { waitSeconds: params.wait_seconds } : {}),
@@ -1948,19 +1869,11 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               false,
               undefined,
               false,
-              undefined,
               { provenance: "external" },
             );
           }
           case "stop": {
-            if (!params.process_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "stop requires process_id" },
-                text("[error] background stop requires `process_id`."),
-                true,
-              );
-            const r = await tc.backgroundStop(params.process_id, params.signal);
+            const r = await tc.backgroundStop(params.process_id!, params.signal);
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...r },
@@ -1973,15 +1886,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             );
           }
           case "watch": {
-            if (!params.process_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "watch requires process_id" },
-                text("[error] background watch requires `process_id`."),
-                true,
-              );
             try {
-              const r = await tc.backgroundWatch(params.process_id, {
+              const r = await tc.backgroundWatch(params.process_id!, {
                 ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
                 ...(params.pattern !== undefined ? { pattern: params.pattern } : {}),
                 ...(params.since_cursor !== undefined ? { sinceCursor: params.since_cursor } : {}),
@@ -2001,7 +1907,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
                   false,
                   undefined,
                   false,
-                  undefined,
                   { provenance: "external", source: "finished job output" },
                 );
               }
@@ -2033,15 +1938,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             }
           }
           case "unwatch": {
-            if (!params.monitor_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "unwatch requires monitor_id" },
-                text("[error] background unwatch requires `monitor_id`."),
-                true,
-              );
             try {
-              const r = await tc.backgroundUnwatch(params.monitor_id);
+              const r = await tc.backgroundUnwatch(params.monitor_id!);
               return recordResult(
                 callId,
                 { tool: "background", action: params.action, ...r },
@@ -2059,21 +1957,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             }
           }
           case "send_input": {
-            if (!params.process_id)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "send_input requires process_id" },
-                text("[error] background send_input requires `process_id`."),
-                true,
-              );
-            if (params.data === undefined)
-              return recordResult(
-                callId,
-                { tool: "background", action: params.action, error: "send_input requires data" },
-                text("[error] background send_input requires `data` (the text to send to the job's stdin)."),
-                true,
-              );
-            const r = await tc.backgroundWrite(params.process_id, params.data);
+            const r = await tc.backgroundWrite(params.process_id!, params.data!);
             return recordResult(
               callId,
               { tool: "background", action: params.action, ...r },
@@ -2278,6 +2162,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       if (!tc) return text("[error] no active tool context");
       await recordCall(callId, { tool: "cron", action: params.action, ...(params.id ? { id: params.id } : {}) });
       const needId = (): string | null => (typeof params.id === "string" && params.id ? params.id : null);
+      const missingId = () =>
+        recordResult(
+          callId,
+          { tool: "cron", error: "id required" },
+          text(`[error] cron ${params.action} requires \`id\`.`),
+          true,
+        );
       switch (params.action) {
         case "create": {
           if (!params.schedule)
@@ -2358,45 +2249,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             false,
             undefined,
             false,
-            undefined,
             r.visible.length ? { provenance: "external", source: "shared crons" } : undefined,
           );
         }
         case "get": {
           const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron get requires `id`."),
-              true,
-            );
+          if (!id) return missingId();
           const r = await tc.cronGet(id);
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
-          return recordResult(
-            callId,
-            { tool: "cron", id },
-            text(fmtCronLine(r.cron)),
-            false,
-            undefined,
-            false,
-            undefined,
-            {
-              provenance: "external",
-              source: "shared crons",
-            },
-          );
+          return recordResult(callId, { tool: "cron", id }, text(fmtCronLine(r.cron)), false, undefined, false, {
+            provenance: "external",
+            source: "shared crons",
+          });
         }
         case "runs": {
           const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron runs requires `id`."),
-              true,
-            );
+          if (!id) return missingId();
           const r = await tc.cronRuns(id, params.limit !== undefined ? { limit: params.limit } : undefined);
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
@@ -2416,19 +2285,12 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             false,
             undefined,
             false,
-            undefined,
             { provenance: "external", source: "shared crons" },
           );
         }
         case "patch": {
           const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron patch requires `id`."),
-              true,
-            );
+          if (!id) return missingId();
           const r = await tc.cronPatch(id, {
             ...(params.runtime !== undefined ? { runtime: params.runtime } : {}),
             ...(params.title !== undefined ? { title: params.title } : {}),
@@ -2447,13 +2309,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         case "delete": {
           const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron delete requires `id`."),
-              true,
-            );
+          if (!id) return missingId();
           const r = await tc.cronDelete(id);
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
@@ -2461,13 +2317,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         case "disable": {
           const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron disable requires `id`."),
-              true,
-            );
+          if (!id) return missingId();
           const r = await tc.cronSetEnabled(id, false);
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
@@ -2475,13 +2325,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         case "run": {
           const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron run requires `id`."),
-              true,
-            );
+          if (!id) return missingId();
           const r = await tc.cronRun(id);
           if (isUnavailable(r)) return unavailable(callId, "cron");
           if (!r.ok) return recordResult(callId, { tool: "cron", error: r.code }, text(`[error] ${r.message}`), true);
@@ -2493,13 +2337,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         case "note": {
           const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron note requires `id`."),
-              true,
-            );
+          if (!id) return missingId();
           if (typeof params.note !== "string" || !params.note.trim()) {
             return recordResult(
               callId,
@@ -2523,13 +2361,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         case "retarget": {
           const id = needId();
-          if (!id)
-            return recordResult(
-              callId,
-              { tool: "cron", error: "id required" },
-              text("[error] cron retarget requires `id`."),
-              true,
-            );
+          if (!id) return missingId();
           if (typeof params.destinationKey !== "string" || !params.destinationKey) {
             return recordResult(
               callId,
@@ -3809,8 +3641,6 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             true,
           );
         }
-        // Only a person's own message can lift a pause the person put there;
-        // crons, webhooks, ambient and delegated wakes cannot.
         if (ref.current?.humanTurn !== true) {
           return recordCoreAuthoredResult(
             callId,
