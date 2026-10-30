@@ -2152,8 +2152,8 @@ export function buildApp(
       }
       const choice = "error" in resolved ? { ...fallback, ...requested } : resolved;
       const error = await subagentRuntimeError({ deps: runtimeDeps }, scope, choice);
+      if ("error" in resolved) throw error ? new Error(error, { cause: resolved.error }) : resolved.error;
       if (error) throw new Error(error);
-      if ("error" in resolved) throw resolved.error;
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
