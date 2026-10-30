@@ -1393,20 +1393,30 @@ export function buildCore(config: Config, overrides: CoreOverrides = {}) {
   const egressAudit = createPostgresEgressAuditSink(databaseUrl);
   const runStreamEvents = createPostgresNotifyBus<RunStreamEvent>(databaseUrl, "run_stream", "run-stream");
   const refreshRunStream = (runId: string): void => runStreamEvents.emit({ runId, kind: "refresh" });
+  const streamOrigin = randomUUID();
   const turnStream = createTurnStream({
-    onDelta: (runId, text, offset, startOffset) => emitRunText(runStreamEvents, runId, text, offset, startOffset),
-    onReasoning: (runId, block, text, offset) => emitRunReasoning(runStreamEvents, runId, block, text, offset),
+    onDelta: (runId, text, offset, startOffset) =>
+      emitRunText(runStreamEvents, runId, text, offset, startOffset, streamOrigin),
+    onReasoning: (runId, block, text, offset) =>
+      emitRunReasoning(runStreamEvents, runId, block, text, offset, streamOrigin),
+    onState: (runId, change) => runStreamEvents.emit({ runId, kind: "state", origin: streamOrigin, change }),
     onChange: refreshRunStream,
   });
   const stopStreamSync = runStreamEvents.subscribe((event) => {
+    if (event.kind === "delta" || event.kind === "reasoning" || event.kind === "state") {
+      if (event.origin && event.origin !== streamOrigin) turnStream.applyRemote(event.runId, event);
+      return;
+    }
     if (event.kind !== "sync") return;
     const text = turnStream.snapshot(event.runId);
     const startOffset = turnStream.startOffset(event.runId);
     const offset = Math.max(event.offset, startOffset);
-    if (text) emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset);
+    if (text)
+      emitRunText(runStreamEvents, event.runId, text.slice(offset - startOffset), offset, startOffset, streamOrigin);
     for (const block of turnStream.reasoning(event.runId)) {
       const sent = event.reasoning?.[reasoningKey(block)] ?? 0;
-      if (block.text.length > sent) emitRunReasoning(runStreamEvents, event.runId, block, block.text.slice(sent), sent);
+      if (block.text.length > sent)
+        emitRunReasoning(runStreamEvents, event.runId, block, block.text.slice(sent), sent, streamOrigin);
     }
   });
   runs.onTerminal((run) => refreshRunStream(run.id));

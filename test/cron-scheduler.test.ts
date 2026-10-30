@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createCronRunRequests } from "../src/cron/fires.ts";
 import assert from "node:assert/strict";
 import { createScheduler } from "../src/harness/scheduler.ts";
 import { runNowSettled, settle } from "./support/settle.ts";
@@ -927,6 +928,55 @@ test("queue mode: fires claim the slot before running, and stale or lost claims 
 
   await onFire!({ cronId: cron.id, scheduledAt: 1 });
   assert.equal(calls.length, 1, "a duplicate job for a claimed slot does not run the turn");
+  scheduler.stop();
+});
+
+test("queue mode: a requested fire dropped by a stopping scheduler is closed, so run now is not blocked", async () => {
+  const crons = createCronStore(testMap(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
+  const calls: TurnRequest[] = [];
+  let onFire: ((job: CronFireJob) => Promise<void>) | undefined;
+  const enqueued: CronFireJob[] = [];
+  const jobQueue: CronJobQueue = {
+    async start(handlers) {
+      onFire = handlers!.onFire;
+    },
+    async enqueueFire(job) {
+      enqueued.push(job);
+    },
+    healthy: () => true,
+    async stop() {},
+  };
+  const scheduler = createScheduler({
+    ...singleProcessDeps(),
+    crons,
+    deliveries: createDeliveryStore(),
+    idempotency: createIdempotencyStore(testMap()),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    run: async (req) => {
+      calls.push(req);
+      return { status: "ok", reply: "OUT" };
+    },
+    jobQueue,
+  });
+  scheduler.start(1000);
+  await settle(async () => onFire !== undefined);
+  const cron = await crons.create({
+    schedule: { everyMs: 3_600_000, firstFireAt: Date.now() + 3_600_000 },
+    action: "post the standup",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+  });
+  const requests = createCronRunRequests({ crons, queue: jobQueue });
+  const first = await requests.runNow(cron.id);
+  assert.equal(first.started, true);
+  const job = enqueued.find((j) => j.fireKey)!;
+  await scheduler.stopClaims();
+  await onFire!(job);
+  assert.equal(calls.length, 0, "a stopped scheduler does not run the turn");
+  const { runs } = await crons.listFires(cron.id);
+  assert.equal(runs.find((r) => r.fireKey === job.fireKey)?.status, "failed");
+  assert.equal((await requests.runNow(cron.id)).started, true, "a later run now is not refused as already running");
   scheduler.stop();
 });
 

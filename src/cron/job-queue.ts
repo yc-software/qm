@@ -88,7 +88,10 @@ export function createPgBossCronQueue(
       lastErrorAt = 0;
     },
     async enqueueFire(job) {
-      if (!started) return;
+      if (!started) {
+        if (job.fireKey) throw new Error("cron job queue is not running");
+        return;
+      }
       await boss
         .send(FIRE_QUEUE, job, {
           startAfter: new Date(Math.max(job.scheduledAt, job.notBefore ?? 0)),

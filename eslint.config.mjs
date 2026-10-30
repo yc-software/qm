@@ -125,7 +125,7 @@ export default tseslint.config(
     rules: { "no-restricted-imports": seamImports(["edge"]) },
   },
   {
-    files: ["plugins/web-ui/src/**/*.{ts,tsx}"],
+    files: ["plugins/web-ui/src/**/*.{ts,tsx}", "plugins/web-ui/server/**/*.ts", "plugins/portal/src/**/*.ts"],
     rules: { "no-restricted-imports": seamImports(["src/edge", "src/harness"]) },
   },
   {

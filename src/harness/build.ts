@@ -347,7 +347,7 @@ export function buildHarness(config: Config, core: Core, overrides: HarnessOverr
     maxAgeMs: config.runMaxAgeMs,
     errors,
   });
-  const engaged = createEngagedRegistry();
+  const engaged = createEngagedRegistry({ maxAgeMs: config.runMaxAgeMs });
   const stopNudges = harnessNudges.subscribe({
     engage: (threadRef) => engaged.engage(threadRef),
     poke: () => pokeReaper(),

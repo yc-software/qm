@@ -38,7 +38,22 @@ export interface TurnStream {
   isReplyDone(runId: string): boolean;
   end(runId: string): void;
   subscribe(runId: string, listener: TurnStreamListener): () => void;
+  applyRemote(runId: string, event: RemoteTurnEvent): void;
 }
+
+export type TurnStreamChange =
+  | { blockStart: true }
+  | { toolCall: true }
+  | { goal: GoalView }
+  | { runtime: TurnRuntime }
+  | { surfacePosted: true }
+  | { replyDone: true }
+  | { settleReasoning: { step: string; index: number } };
+
+export type RemoteTurnEvent =
+  | { kind: "delta"; offset: number; text: string }
+  | { kind: "reasoning"; step: string; index: number; offset: number; text: string }
+  | { kind: "state"; change: TurnStreamChange };
 
 interface TurnStreamListener {
   onFirstBlock?(text: string): void;
@@ -66,6 +81,7 @@ export interface TurnStreamOptions {
   onDelta?(runId: string, text: string, offset: number, startOffset: number): void;
   onReasoning?(runId: string, block: Omit<ReasoningBlock, "text">, text: string, offset: number): void;
   onChange?(runId: string): void;
+  onState?(runId: string, change: TurnStreamChange): void;
 }
 
 const DEFAULT_MAX_CHARS = 200_000;
@@ -108,13 +124,73 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     return entry;
   };
 
-  const append = (runId: string, entry: Entry, delta: string): void => {
+  const append = (runId: string, entry: Entry, delta: string, local = true): void => {
     const offset = entry.totalChars;
     entry.totalChars += delta.length;
     entry.text += delta;
     if (entry.text.length > maxChars)
       entry.text = entry.text.slice(-Math.max(BLOCK_JOIN.length, Math.floor(maxChars / 2)));
-    opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
+    if (local) opts.onDelta?.(runId, delta, offset, entry.totalChars - entry.text.length);
+  };
+
+  const publishText = (runId: string, delta: string, local: boolean): void => {
+    const entry = ensure(runId);
+    entry.replying = true;
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+      entry.timer = null;
+    }
+    if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
+      entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
+    append(runId, entry, delta, local);
+  };
+
+  const addReasoning = (runId: string, step: string, index: number, delta: string): number | null => {
+    const entry = ensure(runId);
+    let block = entry.reasoning.find((b) => b.step === step && b.index === index);
+    if (!block) {
+      block = { step, index, text: "" };
+      entry.reasoning = [...entry.reasoning, block].slice(-REASONING_MAX_BLOCKS);
+    }
+    const piece = delta.slice(0, Math.max(0, REASONING_MAX_CHARS - block.text.length));
+    if (!piece) return null;
+    const offset = block.text.length;
+    block.text += piece;
+    return offset;
+  };
+
+  const closeFirstBlock = (runId: string): void => {
+    const entry = ensure(runId);
+    if (!entry.firstBlockOpen) return;
+    entry.firstBlockOpen = false;
+    entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
+    if (entry.firstBlockClosed) {
+      for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
+    }
+  };
+
+  const surfacePosted = (runId: string): void => {
+    const entry = ensure(runId);
+    if (entry.surfacePosted) return;
+    entry.surfacePosted = true;
+    for (const l of listeners.get(runId) ?? []) l.onSurfacePosted?.();
+  };
+
+  const settle = (runId: string, step: string, index: number): void => {
+    const entry = runs.get(runId);
+    if (entry) entry.reasoning = entry.reasoning.filter((b) => b.step !== step || b.index !== index);
+  };
+
+  const applyChange = (runId: string, change: TurnStreamChange): void => {
+    if ("blockStart" in change) {
+      const entry = runs.get(runId);
+      if (entry?.firstBlock) entry.firstBlockOpen = false;
+    } else if ("toolCall" in change) closeFirstBlock(runId);
+    else if ("goal" in change) ensure(runId).goal = change.goal;
+    else if ("runtime" in change) ensure(runId).runtime = change.runtime;
+    else if ("surfacePosted" in change) surfacePosted(runId);
+    else if ("replyDone" in change) ensure(runId).replyDone = true;
+    else settle(runId, change.settleReasoning.step, change.settleReasoning.index);
   };
 
   return {
@@ -134,43 +210,30 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     publish(runId, delta) {
-      if (!delta) return;
-      const entry = ensure(runId);
-      entry.replying = true;
-      if (entry.timer) {
-        clearTimeout(entry.timer);
-        entry.timer = null;
-      }
-      if (entry.firstBlockOpen && entry.firstBlock.length < FIRST_BLOCK_MAX_CHARS)
-        entry.firstBlock = (entry.firstBlock + delta).slice(0, FIRST_BLOCK_MAX_CHARS);
-      append(runId, entry, delta);
+      if (delta) publishText(runId, delta, true);
     },
 
     publishBlockStart(runId) {
       const entry = runs.get(runId);
       if (!entry) return;
-      if (entry.firstBlock) entry.firstBlockOpen = false;
+      if (entry.firstBlock) {
+        entry.firstBlockOpen = false;
+        opts.onState?.(runId, { blockStart: true });
+      }
       if (!entry.text || entry.text.endsWith(BLOCK_JOIN)) return;
       append(runId, entry, BLOCK_JOIN);
     },
 
     publishReasoning(runId, step, index, delta) {
-      const entry = ensure(runId);
-      let block = entry.reasoning.find((b) => b.step === step && b.index === index);
-      if (!block) {
-        block = { step, index, text: "" };
-        entry.reasoning = [...entry.reasoning, block].slice(-REASONING_MAX_BLOCKS);
-      }
-      const piece = delta.slice(0, Math.max(0, REASONING_MAX_CHARS - block.text.length));
-      if (!piece) return;
-      const offset = block.text.length;
-      block.text += piece;
-      opts.onReasoning?.(runId, { step, index }, piece, offset);
+      const offset = addReasoning(runId, step, index, delta);
+      if (offset === null) return;
+      const block = ensure(runId).reasoning.find((b) => b.step === step && b.index === index)!;
+      opts.onReasoning?.(runId, { step, index }, block.text.slice(offset), offset);
     },
 
     settleReasoning(runId, step, index) {
-      const entry = runs.get(runId);
-      if (entry) entry.reasoning = entry.reasoning.filter((b) => b.step !== step || b.index !== index);
+      settle(runId, step, index);
+      opts.onState?.(runId, { settleReasoning: { step, index } });
     },
 
     reasoning(runId) {
@@ -178,17 +241,14 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     noteToolCall(runId) {
-      const entry = ensure(runId);
-      if (!entry.firstBlockOpen) return;
-      entry.firstBlockOpen = false;
-      entry.firstBlockClosed = entry.firstBlock.trim().length > 0;
-      if (entry.firstBlockClosed) {
-        for (const l of listeners.get(runId) ?? []) l.onFirstBlock?.(entry.firstBlock);
-      }
+      if (!ensure(runId).firstBlockOpen) return;
+      closeFirstBlock(runId);
+      opts.onState?.(runId, { toolCall: true });
     },
 
     noteGoal(runId, goal) {
       ensure(runId).goal = goal;
+      opts.onState?.(runId, { goal });
     },
 
     goal(runId) {
@@ -197,6 +257,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
 
     noteRuntime(runId, runtime) {
       ensure(runId).runtime = runtime;
+      opts.onState?.(runId, { runtime });
       opts.onChange?.(runId);
     },
 
@@ -211,10 +272,9 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
     },
 
     markSurfacePosted(runId) {
-      const entry = ensure(runId);
-      if (entry.surfacePosted) return;
-      entry.surfacePosted = true;
-      for (const l of listeners.get(runId) ?? []) l.onSurfacePosted?.();
+      if (ensure(runId).surfacePosted) return;
+      surfacePosted(runId);
+      opts.onState?.(runId, { surfacePosted: true });
     },
 
     surfacePosted(runId) {
@@ -235,6 +295,7 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       const entry = runs.get(runId);
       if (entry) entry.replyDone = true;
       else runs.set(runId, makeEntry({ replyDone: true }));
+      opts.onState?.(runId, { replyDone: true });
       opts.onChange?.(runId);
     },
 
@@ -249,6 +310,25 @@ export function createTurnStream(opts: TurnStreamOptions = {}): TurnStream {
       const timer = setTimeout(() => runs.delete(runId), graceMs);
       timer.unref?.();
       entry.timer = timer;
+    },
+
+    applyRemote(runId, event) {
+      if (event.kind === "state") return applyChange(runId, event.change);
+      if (event.kind === "reasoning") {
+        const block = ensure(runId).reasoning.find((b) => b.step === event.step && b.index === event.index);
+        const have = block?.text.length ?? 0;
+        if (event.offset > have) return;
+        const fresh = event.text.slice(have - event.offset);
+        if (fresh) addReasoning(runId, event.step, event.index, fresh);
+        return;
+      }
+      const entry = ensure(runId);
+      if (event.offset > entry.totalChars) {
+        entry.text = "";
+        entry.totalChars = event.offset;
+      }
+      const fresh = event.text.slice(entry.totalChars - event.offset);
+      if (fresh) publishText(runId, fresh, false);
     },
 
     subscribe(runId, listener) {

@@ -474,9 +474,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   async function fireRequested(cronId: string, firedAt: number, fireKey: string): Promise<void> {
     const cron = await deps.crons.get(cronId);
     if (!cron) return;
-    await withWork(() => withCronLifecycle(cron.id, false, () => fire(cron, firedAt, fireKey))).catch(
-      reportFailureAs("scheduler: requested fire", undefined, `cron=${cronId}`),
-    );
+    let started = false;
+    await withWork(() => {
+      started = true;
+      return withCronLifecycle(cron.id, false, () => fire(cron, firedAt, fireKey));
+    }).catch(async (e: unknown) => {
+      if (!started) return abandonRequested({ cronId, scheduledAt: firedAt, fireKey });
+      reportFailureAs("scheduler: requested fire", undefined, `cron=${cronId}`)(e);
+    });
+  }
+
+  async function abandonRequested(job: CronFireJob): Promise<void> {
+    if (!job.fireKey) return;
+    await deps.crons
+      .recordFire(job.cronId, {
+        fireKey: job.fireKey,
+        threadRef: cronFireThreadRef(job.cronId, job.fireKey),
+        firedAt: job.scheduledAt,
+        endedAt: Date.now(),
+        status: "failed",
+      })
+      .catch(reportFailureAs("scheduler: abandon requested fire", undefined, `cron=${job.cronId}`));
   }
 
   async function reconcile(): Promise<void> {
@@ -597,7 +615,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const observed = epoch;
       starting = deps.jobQueue
         .start({
-          onFire: (job) => (observed === epoch ? runQueueTask(() => fireJob(job)) : Promise.resolve()),
+          onFire: (job) => (observed === epoch && !stopped ? runQueueTask(() => fireJob(job)) : abandonRequested(job)),
         })
         .then(
           () => {
