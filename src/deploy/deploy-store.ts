@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { tableConversion, typedTable, type TableSpec } from "../persistence/typed-table.ts";
+import { tenantMap } from "../tenants/context.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -172,21 +173,25 @@ const DEPLOYMENTS: TableSpec<Deployment, "id"> = {
 
 export const DEPLOYMENT_MIGRATIONS = [
   {
-    id: "typed/deployment_access/0001",
+    id: "tenancy/deployment_prep/0001",
     statements: [
-      `DO $access$ BEGIN
+      `DO $prep$ BEGIN
          IF to_regclass('deployment_access') IS NOT NULL THEN
            UPDATE deployments d SET json = d.json || jsonb_build_object('lastAccessAt', a.last_access_at)
              FROM deployment_access a WHERE a.id = d.id;
            DROP TABLE deployment_access;
          END IF;
-       END $access$`,
+         IF to_regclass('deployments') IS NOT NULL THEN
+           UPDATE deployments d SET json = d.json - 'name'
+            WHERE EXISTS (SELECT 1 FROM deployments o WHERE o.json->>'name' = d.json->>'name' AND o.id < d.id);
+         END IF;
+       END $prep$`,
     ],
   },
   tableConversion(DEPLOYMENTS, {
     indexes: [
       `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (name)`,
-      `CREATE INDEX deployments_search ON deployments USING GIN
+      `CREATE INDEX deployments_resource_search_gin ON deployments USING GIN
          (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
     ],
   }),
@@ -217,26 +222,27 @@ export function createPostgresDeploymentRows(databaseUrl: string): DeploymentRow
 }
 
 export function createMemoryDeploymentRows(): DeploymentRows {
-  const rows = new Map<string, Deployment>();
+  const tenantRows = tenantMap<Deployment>();
   const copy = (d: Deployment | undefined) => (d ? structuredClone(d) : null);
   return {
-    get: async (id) => copy(rows.get(id)),
+    get: async (id) => copy(tenantRows().get(id)),
     async put(id, d) {
       const { lastAccessAt, ...rest } = structuredClone(d);
-      const kept = rows.has(id) ? rows.get(id)!.lastAccessAt : lastAccessAt;
-      rows.set(id, kept === undefined ? rest : { ...rest, lastAccessAt: kept });
+      const kept = tenantRows().has(id) ? tenantRows().get(id)!.lastAccessAt : lastAccessAt;
+      tenantRows().set(id, kept === undefined ? rest : { ...rest, lastAccessAt: kept });
     },
     async merge(id, patch) {
-      const current = rows.get(id);
+      const current = tenantRows().get(id);
       if (!current) return;
       for (const [field, value] of Object.entries(patch) as Array<[keyof Deployment, unknown]>)
         if (value === undefined) delete current[field];
         else Object.assign(current, { [field]: structuredClone(value) });
     },
-    list: async () => [...rows.values()].sort((a, b) => a.id.localeCompare(b.id)).map((d) => structuredClone(d)),
-    byName: async (name) => copy([...rows.values()].find((d) => d.name === name)),
+    list: async () =>
+      [...tenantRows().values()].sort((a, b) => a.id.localeCompare(b.id)).map((d) => structuredClone(d)),
+    byName: async (name) => copy([...tenantRows().values()].find((d) => d.name === name)),
     async touch(id, at) {
-      const current = rows.get(id);
+      const current = tenantRows().get(id);
       if (!current) return false;
       current.lastAccessAt = Math.max(current.lastAccessAt ?? 0, at);
       return true;

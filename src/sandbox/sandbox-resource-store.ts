@@ -1,5 +1,6 @@
 import { tableConversion, typedTable, type TableSpec } from "../persistence/typed-table.ts";
 import type { SandboxDefault, SandboxResource } from "./sandbox-resources.ts";
+import { tenantMap } from "../tenants/context.ts";
 
 const RESOURCES: TableSpec<SandboxResource, "id"> = {
   table: "sandbox_resources",
@@ -92,24 +93,25 @@ export function createSandboxResourceStores(databaseUrl: string): {
 }
 
 export function createMemorySandboxResourceStores(): { records: SandboxResourceRecords; defaults: SandboxDefaults } {
-  const records = new Map<string, SandboxResource>();
-  const defaults = new Map<string, SandboxDefault>();
-  const sorted = () => [...records.values()].sort((a, b) => a.id.localeCompare(b.id)).map((r) => structuredClone(r));
+  const tenantRecords = tenantMap<SandboxResource>();
+  const tenantDefaults = tenantMap<SandboxDefault>();
+  const sorted = () =>
+    [...tenantRecords().values()].sort((a, b) => a.id.localeCompare(b.id)).map((r) => structuredClone(r));
   return {
     records: {
-      get: async (id) => structuredClone(records.get(id) ?? null),
+      get: async (id) => structuredClone(tenantRecords().get(id) ?? null),
       async put(id, record) {
-        records.set(id, structuredClone(record));
+        tenantRecords().set(id, structuredClone(record));
       },
       async update(id, fn) {
-        const current = records.get(id);
+        const current = tenantRecords().get(id);
         if (!current) return null;
         const next = fn(structuredClone(current));
-        records.set(id, structuredClone(next));
+        tenantRecords().set(id, structuredClone(next));
         return next;
       },
       async delete(id) {
-        records.delete(id);
+        tenantRecords().delete(id);
       },
       owners: async () =>
         [
@@ -123,9 +125,9 @@ export function createMemorySandboxResourceStores(): { records: SandboxResourceR
       jobComputers: async () => sorted().filter((r) => r.jobOnly),
     },
     defaults: {
-      get: async (scopeId) => structuredClone(defaults.get(scopeId) ?? null),
+      get: async (scopeId) => structuredClone(tenantDefaults().get(scopeId) ?? null),
       async put(scopeId, value) {
-        defaults.set(scopeId, structuredClone(value));
+        tenantDefaults().set(scopeId, structuredClone(value));
       },
     },
   };
