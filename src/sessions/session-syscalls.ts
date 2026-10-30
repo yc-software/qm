@@ -833,7 +833,9 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
               if (binding.request.privateSessionMessage)
                 return leaveMail("a private turn cannot start work in another session");
               if (!target.parentSessionId)
-                return leaveMail("a message cannot start a turn in a top-level conversation");
+                return leaveMail(
+                  "a message cannot start a turn in a top-level conversation; if it is your parent, your final answer reaches it when you finish",
+                );
 
               const dedupKey = input.requestId
                 ? `subagent-followup:${hashId([binding.session.id, binding.request.runId ?? "", input.requestId], 40)}`
@@ -846,7 +848,10 @@ export function createSessionSyscalls(deps: SessionSyscallDeps): SessionSyscalls
                     (existing.request.text !== stamped && existing.request.text !== pgTextSafe(stamped))
                   )
                     return { ok: false, message: "the requestId was already used for different work" };
-                  return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy };
+                  const ahead = (await deps.runs.inFlightForThread(target.threadRef)).filter(
+                    (run) => run.id !== existing.id && run.createdAt <= existing.createdAt,
+                  );
+                  return { ok: true, sessionId: target.id, title, delivered: "queued_turn", busy: ahead.length > 0 };
                 }
               }
               if (

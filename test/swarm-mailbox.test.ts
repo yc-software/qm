@@ -21,6 +21,11 @@ test("a message wakes its recipients unless sent with wake:false, which leaves i
   });
   const peer = await f.service.send(worker, { requestId: "peer", audience: [second!.id], wake: false, text: "fyi" });
   const review = await f.service.send(worker, { requestId: "review", audience: [second!.id], text: "review again" });
+  assert.equal(
+    (await f.service.send(worker, { requestId: "review", audience: [second!.id], wake: true, text: "review again" }))
+      .id,
+    review.id,
+  );
   const done = await f.service.send(worker, { requestId: "done", audience: [f.root.id], text: "done" });
   const quiet = await f.service.send(f.caller, {
     requestId: "quiet",

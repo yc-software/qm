@@ -733,7 +733,11 @@ export function createSwarmService(deps: {
       boundedText(input.requestId, 128, "requestId");
       const { auth, swarm } = await load(caller);
       boundedText(input.text, swarm.settings.textBytes, "text");
-      input = { ...input, audience: canonicalAudience(input.audience, swarm.settings.agents) };
+      input = {
+        ...input,
+        audience: canonicalAudience(input.audience, swarm.settings.agents),
+        wake: input.wake !== false,
+      };
       const goal = swarmGoal(input.goal);
       if (goal && input.wake === false) throw new Error("a goal must wake its recipient; drop wake:false");
       const key = signature([auth.memberId, auth.actorId, caller.kind, input.requestId]);
@@ -799,7 +803,7 @@ export function createSwarmService(deps: {
       return updated.messages.find((message) => message.id === updated.messageRequests[key]!.messageId)!;
     },
     async read(caller, options) {
-      let { swarm } = await load(caller);
+      let { auth, swarm } = await load(caller);
       const waitMs = options.waitMs ?? 0;
       const after = options.after ?? 0;
       if (
@@ -815,9 +819,22 @@ export function createSwarmService(deps: {
         const messages = swarm.messages
           .filter((message) => message.seq > after && (!options.replyTo || message.replyTo === options.replyTo))
           .slice(0, 32);
+        const unread = new Set(
+          options.replyTo
+            ? messages
+                .filter((message) => message.notifications[auth.memberId]?.state === "mailbox")
+                .map((message) => message.id)
+            : [],
+        );
+        if (unread.size)
+          await update(auth, (current) => {
+            for (const message of current.messages)
+              if (unread.has(message.id) && message.notifications[auth.memberId]?.state === "mailbox")
+                message.notifications[auth.memberId] = { state: "handed" };
+          });
         if (messages.length || Date.now() >= deadline) return messages;
         await sleep(Math.min(200, deadline - Date.now()));
-        ({ swarm } = await load(caller));
+        ({ auth, swarm } = await load(caller));
       }
     },
     enabledFor,

@@ -776,8 +776,8 @@ test("explicit forum supplements private worker disks and remains scope-authoriz
   }
 });
 
-test("correlated bounded waits observe wake:false replies without waking anyone", async () => {
-  const { service, caller, workerCaller } = await swarmFixture();
+test("correlated bounded waits observe wake:false replies without waking anyone or handing them over twice", async () => {
+  const { service, caller, workerCaller, store, root } = await swarmFixture();
   const [worker] = await service.spawn(caller, { requestId: "one", text: "Work" });
   await service.sweep();
   const question = await service.send(caller, {
@@ -795,6 +795,8 @@ test("correlated bounded waits observe wake:false replies without waking anyone"
   });
   assert.equal((await waiting)[0]!.id, answer.id);
   assert.deepEqual(answer.notifications, { [caller.claims.sessionId!]: { state: "mailbox" } });
+  const stored = (await store.get(root.id))!.messages.find((message) => message.id === answer.id)!;
+  assert.deepEqual(stored.notifications, { [caller.claims.sessionId!]: { state: "handed" } });
   assert.deepEqual(await service.read(caller, { after: 100, waitMs: 20 }), []);
   for (const waitMs of [-1, 10_001, Number.NaN, Infinity])
     await assert.rejects(service.read(caller, { waitMs }), /bounds/);
