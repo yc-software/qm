@@ -48,13 +48,13 @@ const server = createServer(built.app, {
 await built.config.hydrate?.();
 await built.refreshCustomProviders();
 await built.identity.hydrate();
-await built.deploymentLayerReady;
+await built.deploymentLayerReady();
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 
 server.listen(config.port, () => {
   console.log(
-    `[qm] listening on :${config.port} (org=${config.orgId}, store=${config.sessionStore}, ` +
+    `[qm] listening on :${config.port} (store=${config.sessionStore}, ` +
       `runStore=${config.runStore}, workers=${config.workers}, backgroundWork=${config.backgroundWorkEnabled})`,
   );
 });

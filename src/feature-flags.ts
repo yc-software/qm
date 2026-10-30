@@ -1,6 +1,6 @@
 import type { DurableMap } from "./persistence/durable-map.ts";
-import { orgId as configOrgId } from "./config.ts";
 import { scopeId, type ScopeId } from "./types.ts";
+import { tenantRootScope } from "./tenants/context.ts";
 
 export const FEATURES = {
   app_annotations: {
@@ -51,14 +51,13 @@ export function createFeatureFlagStore(
   backing: DurableMap<FeatureFlagRecord>,
   opts: { now?: () => number } = {},
 ): FeatureFlagStore {
-  const orgScope = scopeId("org", configOrgId());
   const now = opts.now ?? Date.now;
   const key = (featureName: FeatureName) => featureName;
   const list = async () => (await backing.all()).filter((row) => FEATURE_NAMES.includes(row.featureName));
   const enabledFor = async (scope: ScopeId): Promise<ReadonlySet<FeatureName>> =>
     new Set(
       (await list())
-        .filter((row) => row.enabledScopes.includes(orgScope) || row.enabledScopes.includes(scope))
+        .filter((row) => row.enabledScopes.includes(tenantRootScope()) || row.enabledScopes.includes(scope))
         .map((row) => row.featureName),
     );
   return {

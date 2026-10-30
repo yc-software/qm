@@ -545,7 +545,7 @@ function accountRow(): TemplateResult {
       <div class="settings-row-copy">
         <div class="settings-row-title">Account</div>
         <div class="settings-row-note">
-          ${me?.displayName?.trim() || me?.user || "Not signed in"}${me?.org ? ` · ${me.org}` : ""}
+          ${me?.displayName?.trim() || me?.user || "Not signed in"}${me?.companyName ? ` · ${me.companyName}` : ""}
         </div>
       </div>
       <button class="btn settings-row-action" type="button" @click=${() => void signOut()}>

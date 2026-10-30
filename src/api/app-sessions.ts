@@ -6,7 +6,6 @@ import { deploymentShareScope } from "../deploy/email-access.ts";
 import { workingSessionThreadRefs } from "../sessions/session-syscalls.ts";
 import type { ParticipantPageQuery } from "../sessions/session-store.ts";
 import type { PendingApprovalRecord, Session } from "../types.ts";
-import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
 import { acquireLeaseWithin, entryWithinTenure, windowedTranscript } from "../sessions/session-store.ts";
@@ -38,6 +37,7 @@ import {
   type SessionSearchHit,
 } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 
 const MAX_SESSION_PINS = 50;
 const MAX_PIN_TEXT_CHARS = 2000;
@@ -786,7 +786,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const directoryMember = await h.directoryMember(memberId);
       const principal = deps.identity.classify(memberId);
       if (!directoryMember || directoryMember.type !== "internal" || !deps.identity.isInternal(principal))
@@ -812,7 +812,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const result = await deps.projects.removeMember(id, principalId, memberId, async ({ project, changed }) => {
         if (changed)
           deps.auditLog.record({
@@ -834,7 +834,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       let link: { channelId: string; channelName: string } | null = null;
       if (channel !== null) {
         const wanted = channel.trim().replace(/^#/, "");
@@ -893,7 +893,7 @@ export function createSessionMethods(
       if (!deps.projects) return { status: "not_found" };
       if (!deps.identity.isInternal(deps.identity.classify(principalId))) return { status: "forbidden" };
       const existing = await deps.projects.get(id);
-      if (!existing || existing.orgId !== orgIdOf()) return { status: "not_found" };
+      if (!existing) return { status: "not_found" };
       const result = await deps.projects.rename(id, principalId, name, async ({ project, changed }) => {
         if (changed)
           deps.auditLog.record({
@@ -1126,7 +1126,6 @@ export function createSessionMethods(
       const projects = deps.projects;
       if (!projects) return null;
       return projects.withRosterLock(projectId, async (project) => {
-        if (project.orgId !== orgIdOf()) return null;
         const members = await projects.members(parsed.ref);
         if (!members?.includes(principalId)) return null;
         return fork(members);
@@ -1164,7 +1163,6 @@ export function createSessionMethods(
         const projects = deps.projects;
         if (!projects) return null;
         return projects.withRosterLock(projectId, async (project) => {
-          if (project.orgId !== orgIdOf()) return null;
           const members = await projects.members(parsed.ref);
           if (!members?.includes(principalId)) return null;
           return create(members, project.name);
@@ -1305,7 +1303,7 @@ export function createSessionMethods(
     },
 
     getSoul(scopeIdValue) {
-      const orgScopeId = scopeId("org", orgIdOf());
+      const orgScopeId = tenantRootScope();
       const orgSoul = deps.config.getSoul(orgScopeId);
       const soul = deps.config.getSoul(scopeIdValue);
       return {

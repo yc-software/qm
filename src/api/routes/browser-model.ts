@@ -1,12 +1,12 @@
 import { modelRequestOverrides } from "../../model/pi-models.ts";
 import { gatewayRoot } from "../../model/provider-endpoints.ts";
-import { orgId } from "../../config.ts";
 import { scopeId } from "../../types.ts";
 import { resolveBrowserModel } from "../../model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../../model/browser-completion.ts";
 import { BROWSER_MODEL_AUD } from "../../auth/capability-token.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
+import { tenantRootScope } from "../../tenants/context.ts";
 
 const REQUEST_FIELDS = new Set([
   "model",
@@ -68,7 +68,7 @@ async function browserModel(ctx: ApiCtx): Promise<void> {
         });
       const companyHarness =
         (await deps.config?.getRuntimeSelectionDurable(scopeId("personal", capability.actorId)))?.harnessId ??
-        (await deps.config?.getRuntimeSelectionDurable(scopeId("org", orgId())))?.harnessId ??
+        (await deps.config?.getRuntimeSelectionDurable(tenantRootScope()))?.harnessId ??
         deps.harnessId;
       const useCompanySubscription = selected.account === "company" && companyHarness === deps.harnessId;
       return sendJson(

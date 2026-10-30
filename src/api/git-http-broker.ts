@@ -1,4 +1,3 @@
-import { orgId as configOrgId } from "../config.ts";
 import { Readable } from "node:stream";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { scopeId as makeScopeId } from "../types.ts";
@@ -7,6 +6,7 @@ import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./cr
 import { pipeToResponse, sendJson } from "./http.ts";
 import type { BaseCtx } from "./routes/route.ts";
 import { proxyHeaders } from "../util/http-proxy.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 
 export const GIT_HTTP_BROKER_PREFIX = "/v1/credentials/git/";
 
@@ -122,7 +122,7 @@ export async function brokerGitHttp(ctx: BaseCtx): Promise<void> {
 
   const claims = ctx.capability;
   if (!claims) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  const grant = await grantedCredential(claims, slug, ctx.deps.serviceCreds, makeScopeId("org", configOrgId()));
+  const grant = await grantedCredential(claims, slug, ctx.deps.serviceCreds, tenantRootScope());
   if (!grant.rec) return sendDenied(ctx, claims, grant.status, grant.code, grant.message, slug, grant.host);
   const { rec } = grant;
   const methods = (rec.allowedMethods && rec.allowedMethods.length ? rec.allowedMethods : ["GET"]).map((m) =>

@@ -14,7 +14,6 @@ import { errMessage } from "../../chassis/src/errors.ts";
 import { principalInAllowlist } from "../../chassis/src/principal-allowlist.ts";
 import {
   CORE_API_URL as CORE,
-  CORE_ORG_ID as ORG,
   CORE_SIGNING_SECRET,
   PORTAL_IDENTITY_SECRET,
   portFromEnv,
@@ -132,7 +131,7 @@ async function forward(
       method,
       headers: {
         ...signedHeaders(method, corePath, body ?? ""),
-        "x-admin-actor": `${principal}@${ORG}`,
+        "x-admin-actor": principal,
         ...portalIdentityHeader(),
       },
       ...(body ? { body } : {}),
@@ -173,7 +172,7 @@ async function forwardDownload(res: ServerResponse, principal: string, corePath:
       method: "GET",
       headers: {
         ...signedHeaders("GET", corePath, ""),
-        "x-admin-actor": `${principal}@${ORG}`,
+        "x-admin-actor": principal,
         ...portalIdentityHeader(),
       },
     });
@@ -264,7 +263,9 @@ async function uploadFileFromRequest(
   }
 }
 
-async function coreWhoami(principal: string): Promise<{ isAdmin: boolean; role?: string; scopeId?: string } | null> {
+async function coreWhoami(
+  principal: string,
+): Promise<{ isAdmin: boolean; role?: string; scopeId?: string; tenant?: string } | null> {
   const corePath = "/v1/admin/whoami";
   const started = Date.now();
   let failure = "unknown failure";
@@ -275,12 +276,12 @@ async function coreWhoami(principal: string): Promise<{ isAdmin: boolean; role?:
         headers: {
           ...signedHeaders("GET", corePath, ""),
           ...portalIdentityHeader(),
-          "x-admin-actor": `${principal}@${ORG}`,
+          "x-admin-actor": principal,
         },
         signal: AbortSignal.timeout(CORE_WHOAMI_TIMEOUT_MS),
       });
       if (r.ok) {
-        const body = (await r.json()) as { isAdmin?: unknown; role?: string; scopeId?: string };
+        const body = (await r.json()) as { isAdmin?: unknown; role?: string; scopeId?: string; tenant?: string };
         if (typeof body.isAdmin !== "boolean") throw new Error("core returned an invalid admin status");
         return { ...body, isAdmin: body.isAdmin };
       }
@@ -402,7 +403,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!p) return json(res, 401, { error: "signed_out" });
     const who = await coreWhoami(p);
     if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
-    return json(res, 200, { principal: p, org: ORG, ...who, permissions: inboxPermissions(p) });
+    const { tenant, ...status } = who;
+    return json(res, 200, { principal: p, org: tenant, ...status, permissions: inboxPermissions(p) });
   }
   if (method === "POST" && pathname === "/api/logout") {
     res.writeHead(200, {
@@ -461,7 +463,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           method: "PUT",
           headers: {
             ...signedHeaders("PUT", corePath, putBody),
-            "x-admin-actor": `${principal}@${ORG}`,
+            "x-admin-actor": principal,
             ...portalIdentityHeader(),
           },
           body: putBody,
@@ -531,7 +533,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
 export function startServer(): void {
   server.listen(PORT, () => {
-    console.log(`[admin-plugin] http://localhost:${PORT}  → core ${CORE} (org=${ORG})`);
+    console.log(`[admin-plugin] http://localhost:${PORT}  → core ${CORE}`);
     console.warn(
       "[admin-plugin] trusting the portal-synthesized admin cookie as identity. This app MUST stay private (no public http_service); reachable only through the private portal service.",
     );

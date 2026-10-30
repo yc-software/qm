@@ -63,7 +63,6 @@ export interface Config {
   allowUnauthenticatedCore: boolean;
   port: number;
   dataDir: string;
-  orgId: string;
   sessionStore: "memory" | "postgres";
   databaseUrl?: string;
   databaseCaCert?: string;
@@ -991,16 +990,6 @@ function flyDeployEnv(env: NodeJS.ProcessEnv): FlyDeployEnv {
   };
 }
 
-const DEFAULT_ORG_ID = "default-org";
-
-export function orgId(): string {
-  return process.env.ORG_ID ?? DEFAULT_ORG_ID;
-}
-
-export function orgScope(): string {
-  return `org:${orgId()}`;
-}
-
 export const CONFIG_DEFAULTS = {
   port: 8080,
   rateLimitPerWindow: 60,
@@ -1573,7 +1562,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     allowUnauthenticatedCore: boolEnvStrict("ALLOW_UNAUTHENTICATED_CORE", env.ALLOW_UNAUTHENTICATED_CORE) ?? false,
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
     dataDir,
-    orgId: env.ORG_ID ?? DEFAULT_ORG_ID,
     ...(env.POSTHOG_API_KEY?.trim()
       ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }
       : {}),

@@ -590,7 +590,6 @@ export interface OAuthState {
   issuedAt: number;
   nonce: string;
   returnTo?: string;
-  orgId?: string;
   accountType?: AccountType;
   clientRef?: string;
   codeVerifier?: string;
@@ -607,7 +606,6 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.issuedAt === "number" &&
     typeof s.nonce === "string" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
-    (s.orgId === undefined || typeof s.orgId === "string") &&
     (s.accountType === undefined || isAccountType(s.accountType)) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&
     (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&

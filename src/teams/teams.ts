@@ -5,6 +5,7 @@ import { conversationScope } from "../resolution/resolution-service.ts";
 import type { SharingPosture } from "../resolution/sharing-posture.ts";
 import type { Conversation, Principal, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 
 interface Team {
   id: string;
@@ -69,13 +70,9 @@ const SCHEMA = [
 const keysOf = (id: string) => personIds(id).map(foldPrincipalId);
 const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some((k) => team.present.has(k));
 
-export function createPostgresTeamStore(
-  connectionString: string,
-  flags: Pick<FeatureFlagStore, "enabled">,
-  orgScope: ScopeId,
-): TeamStore {
+export function createPostgresTeamStore(connectionString: string, flags: Pick<FeatureFlagStore, "enabled">): TeamStore {
   const { q, pool } = createPgPool(connectionString, "teams/0001", SCHEMA);
-  const enabled = () => flags.enabled("team_scopes", orgScope);
+  const enabled = () => flags.enabled("team_scopes", tenantRootScope());
   return {
     async list() {
       if (!(await enabled())) return [];

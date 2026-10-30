@@ -28,6 +28,7 @@ import {
   type DeploymentLayerRuntime,
   type LayerInstallFile,
 } from "./load-layer.ts";
+import { tenantRootScope } from "../tenants/context.ts";
 
 interface DeploymentLayerFile {
   path: string;
@@ -266,7 +267,6 @@ export function createDeploymentLayerStore(opts: {
   runtime: DeploymentLayerRuntime;
   skills: SkillStore;
   skillBundles?: SkillBundleStore;
-  scopeId: ScopeId;
   seedFallback?: () => Promise<unknown>;
   durable?: boolean;
   now?: () => number;
@@ -304,7 +304,7 @@ export function createDeploymentLayerStore(opts: {
   };
 
   const layerSkills = (all: Skill[]): Skill[] =>
-    all.filter((skill) => skill.scopeId === opts.scopeId && skill.createdBy === LAYER_CREATED_BY);
+    all.filter((skill) => skill.scopeId === tenantRootScope() && skill.createdBy === LAYER_CREATED_BY);
 
   const activeBundleClaims = async (all: Skill[]): Promise<Map<string, string>> => {
     const claimed = new Map<string, string>();
@@ -377,7 +377,7 @@ export function createDeploymentLayerStore(opts: {
       for (const manifest of manifests) {
         wanted.add(manifest.name);
         const outcome = await upsertSeedSkill(opts.skills, {
-          scopeId: opts.scopeId,
+          scopeId: tenantRootScope(),
           manifest,
           createdBy: LAYER_CREATED_BY,
           reviewer: LAYER_REVIEWER,
@@ -407,7 +407,7 @@ export function createDeploymentLayerStore(opts: {
       }
       for (const skill of projected) {
         if (
-          skill.scopeId === opts.scopeId &&
+          skill.scopeId === tenantRootScope() &&
           skill.createdBy === LAYER_CREATED_BY &&
           !wanted.has(skill.manifest.name)
         ) {
@@ -555,7 +555,11 @@ export function createDeploymentLayerStore(opts: {
           const existing = await opts.skills.list();
           const claimed = new Map<string, string>();
           for (const skill of existing) {
-            if (skill.status !== "published" || skill.scopeId !== opts.scopeId || skill.createdBy === LAYER_CREATED_BY)
+            if (
+              skill.status !== "published" ||
+              skill.scopeId !== tenantRootScope() ||
+              skill.createdBy === LAYER_CREATED_BY
+            )
               continue;
             for (const path of persistedSkillRecordPaths(skill.manifest.name, skill.manifest.files))
               claimed.set(path, `skill "${skill.manifest.name}" created by ${skill.createdBy}`);
@@ -564,7 +568,7 @@ export function createDeploymentLayerStore(opts: {
           for (const manifest of manifests) {
             const clash = foreignSkillCollision(
               existing,
-              opts.scopeId,
+              tenantRootScope(),
               manifest.name,
               (skill) => skill.createdBy === LAYER_CREATED_BY,
             );

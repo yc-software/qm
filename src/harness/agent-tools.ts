@@ -70,7 +70,7 @@ import { utcMinute } from "../util/time.ts";
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
   if (!a) return "Owned by you.";
   const note = a.note ? ` (note: ${a.note})` : "";
-  if (a.kind === "org") return `Owned by you; reachable by anyone at ${a.orgId ?? "your org"}.${note}`;
+  if (a.kind === "org") return `Owned by you; reachable by anyone at your org.${note}`;
   if (a.kind === "members") {
     if (a.memberCount === undefined)
       return `Owned by you; access follows the visibility and membership of its shared scopes.${note}`;
@@ -782,7 +782,7 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
   const scopedLine =
     '- "scoped" (default): this conversation\'s sandbox: its workspace files and $AGENT_API_* tokens; saved credentials only via `credentials`. Working state survives only within provider recovery limits: push code to git, save artifacts to Files.\n';
   const scratchLine =
-    '- "scratch": blank per-turn computer with the same tooling, read-only org-global files and skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
+    '- "scratch": blank per-turn computer with the same tooling, read-only skills, this conversation\'s $AGENT_API_* capabilities and requested credentials; no workspace or cached logins; files discarded after the turn, so publish outputs to Files and verify it worked.\n';
   const reachDescription =
     "Run a shell command and return stdout/stderr/exit code. `scope` picks the computer:\n" +
     scopedLine +

@@ -134,9 +134,7 @@ export async function resolveTurnContext(input: ContextInput) {
       const skillScopes = [
         ...new Set([
           memoryScopeId,
-          ...resolution.layers
-            .filter((layer) => layer.mode === "ro" && layer.scopeId !== resolution.orgScopeId)
-            .map((layer) => layer.scopeId),
+          ...resolution.layers.filter((layer) => layer.mode === "ro").map((layer) => layer.scopeId),
           ...sharingSources,
           ...(!input.external ? [resolution.orgScopeId] : []),
         ]),
