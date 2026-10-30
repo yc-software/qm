@@ -1,10 +1,12 @@
 import type { SlackFile } from "./attachments.ts";
+import { withRichContent } from "./rich-content.ts";
 
 const MAX_RENDERED_FORWARDS = 5;
 const MAX_FORWARD_DEPTH = 4;
 
 interface ForwardedMessage {
   text?: string;
+  blocks?: unknown[];
   files?: SlackFile[];
   attachments?: SlackMessageAttachment[];
 }
@@ -73,7 +75,7 @@ export function messageWithForwardedContent(message: ForwardedMessage): { text: 
   for (const file of Array.isArray(message.files) ? message.files : []) addFile(file);
   visit(message, 0);
 
-  const base = String(message.text ?? "");
+  const base = withRichContent(message);
   let text = base;
   if (rendered.length) text = base ? `${base}\n${rendered.join("\n")}` : rendered.join("\n");
   return { text, files };
