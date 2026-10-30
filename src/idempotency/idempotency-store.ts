@@ -1,7 +1,7 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
-import { keyValueConversion } from "../persistence/kv-conversion.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { boundTenant } from "../tenants/context.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { errMessage } from "../util/errors.ts";
 
 export interface IdempotencyStore {
@@ -25,7 +25,7 @@ interface CommitLog {
 const DEFAULT_RETENTION_MS = 14 * 24 * 60 * 60_000;
 const DEFAULT_PRUNE_INTERVAL_MS = 60 * 60_000;
 
-export const IDEMPOTENCY_MIGRATION = keyValueConversion({
+const IDEMPOTENCY_MIGRATION = typedTableMigration({
   table: "idempotency",
   columns: ["key TEXT NOT NULL", "committed_at BIGINT NOT NULL"],
   primaryKey: ["key"],
@@ -96,7 +96,7 @@ export function createPostgresIdempotencyStore(
   connectionString: string,
   opts: IdempotencyStoreOptions = {},
 ): IdempotencyStore {
-  const { q, close } = createPgPool(connectionString, [IDEMPOTENCY_MIGRATION]);
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, IDEMPOTENCY_MIGRATION]);
   const log: CommitLog = {
     async committedAt(key) {
       const rows = await q(`SELECT committed_at FROM idempotency WHERE tenant_id = ${TENANT} AND key = $1`, [key]);
