@@ -17,9 +17,16 @@ import {
   type RenderLog,
   type RenderRequest,
   type RenderService,
-  type ServiceType,
 } from "../render-api.ts";
-import { bindUrl, customDomains, httpsOrigin, publicUrl, renderInternalUrl, verifiedUrl } from "../render-domains.ts";
+import {
+  bindUrl,
+  customDomains,
+  httpsOrigin,
+  publicUrl,
+  renderInternalUrl,
+  serviceUrl,
+  verifiedUrl,
+} from "../render-domains.ts";
 import {
   renderMinioEnv,
   renderMinioInitCommand,
@@ -27,6 +34,7 @@ import {
   renderMinioWorkload,
 } from "../render-minio.ts";
 import {
+  renderComponent,
   renderManagedCoreEnv,
   renderServiceEnv,
   renderStorageEnv,
@@ -54,7 +62,7 @@ import {
   runtimeSecretNames,
 } from "../secrets.ts";
 import { githubRepoUrl } from "../render-source.ts";
-import { runnableServices, serviceDef, serviceHost } from "../services.ts";
+import { isCoreWorkload, runnableServices, serviceDef, serviceWorkloads, VIRTUAL_SERVICE_NAMES } from "../services.ts";
 import { capture, deploymentSecretValue, isInvalidSecret, sleep } from "../util.ts";
 import { doctorCommon, localDoctorSecrets } from "./doctor.ts";
 import type { DeployContext } from "./registry.ts";
@@ -155,14 +163,12 @@ function workloads(ctx: DeployContext): RenderWorkload[] {
   const render = coordinates(ctx.config);
   const out: RenderWorkload[] = [renderMinioWorkload(render)];
   for (const item of renderWorkloads(ctx.config, ctx.configDir)) {
-    const privateService = !!item.plugin || (item.name === "web-ui" && ctx.config.services.includes("portal"));
-    const type: ServiceType = privateService ? "private_service" : "web_service";
+    const core = isCoreWorkload(item.workload);
     out.push({
       ...item,
-      type,
-      plan: item.name === "core" ? render.corePlan : render.servicePlan,
-      ...(item.name === "core" ? { command: "node src/render/start.ts" } : {}),
-      ...(type === "web_service" ? { health: "/healthz" } : {}),
+      type: item.workload === "edge" ? "web_service" : "private_service",
+      plan: core ? render.corePlan : render.servicePlan,
+      ...(core ? { health: "/healthz" } : {}),
     });
   }
   return out;
@@ -468,29 +474,30 @@ function serviceEnv(
   state: State,
   services: Map<string, RenderService>,
   existing: Record<string, string>,
+  coreStored: Record<string, string> = {},
 ): Record<string, string> {
   if (workload.name === "minio") return renderMinioEnv(ctx.config.publicUrl, existing, !!state.services.minio);
   const resolved = new Map(values);
   for (const secret of computedSecrets(ctx.config)) {
     if (secret.managedBy !== "operator" || resolved.has(secret.name)) continue;
     const names = runtimeSecretNames(
-      workload.name,
+      workload.workload,
       secret,
       ctx.config.plugins.filter((item) => item.coreAccess !== false).map((item) => item.name),
     );
-    const stored = names.map((name) => existing[name]).find((value) => value !== undefined);
+    const stored = names
+      .map((name) => existing[name] ?? (isCoreWorkload(workload.workload) ? coreStored[name] : undefined))
+      .find((value) => value !== undefined);
     if (stored !== undefined) resolved.set(secret.name, stored);
   }
   const core = services.get("core");
-  const web = services.get("web-ui");
   return renderServiceEnv(
     ctx.config,
-    workload.name,
+    workload.workload,
     resolved,
     {
       ...connections,
       coreUrl: core ? renderInternalUrl(core) : "http://127.0.0.1:8080",
-      ...(web ? { webUiUrl: web.type === "private_service" ? renderInternalUrl(web) : publicUrl(web) } : {}),
       projectId: state.projectId,
       environmentId: state.environmentId,
       minioServiceId: state.services.minio?.id,
@@ -577,15 +584,13 @@ export function renderConfigErrors(
   }
   const [web, api] = origins.map((origin) => (origin ? new URL(origin).hostname : undefined));
   if (web && api) {
-    if (web === api) add("Render publicUrl and apiUrl must use different hostnames");
-    else if (web === `www.${api}` || api === `www.${web}`)
+    if (web === `www.${api}` || api === `www.${web}`)
       add(
         "Render publicUrl and apiUrl cannot be an apex domain and its www subdomain; Render pairs them as a redirect",
       );
   }
   if (plugins.some((plugin) => plugin.name === "minio"))
     add("Render plugin minio conflicts with the bundled Render minio service");
-  if (!config.services.includes("web-ui")) add("Render hosting requires web-ui");
   for (const service of runnableServices(config.services)) {
     if (serviceDef(service).tcpIngress) add(`Render hosting does not support TCP ingress for ${service}`);
   }
@@ -619,6 +624,7 @@ export function renderConfigErrors(
     "RENDER_PROJECT_ID",
     "RENDER_ENVIRONMENT_ID",
     "RENDER_MINIO_SERVICE_ID",
+    "RENDER_API_PORT",
   ]) {
     if (config.env.core?.[key] !== undefined || config.secretEnv?.core?.[key] !== undefined)
       add(`Render derives core ${key}; remove its env or secretEnv entry`);
@@ -694,7 +700,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           if (!service) {
             const name = `${state.appPrefix}-${workload.name}`;
             await assertAvailable(request, "/services", "service", name, state.workspaceId);
-            env = serviceEnv(ctx, workload, values, connections, state, services, env);
+            env = serviceEnv(ctx, workload, values, connections, state, services, env, envs.get("core"));
             const spec = serviceSpec(workload, bootstrapCommand);
             const result = await createResource<{ service: RenderService }>(ctx, request, state, "services", {
               ...spec,
@@ -726,14 +732,11 @@ export function createRenderBackend(ctx: DeployContext): Backend {
             connections.storage = { endpoint: publicUrl(service), secretKey: env.QM_STORAGE_SECRET_KEY };
           }
         }
-        const coreOrigin = publicUrl(services.get("core")!);
+        const edge = services.get("core")!;
+        const coreOrigin = publicUrl(edge);
         const urls = {
-          apiUrl: await bindUrl(request, services.get("core")!, ctx.config.apiUrl),
-          publicUrl: await bindUrl(
-            request,
-            services.get(ctx.config.services.includes("portal") ? "portal" : "web-ui")!,
-            ctx.config.publicUrl,
-          ),
+          apiUrl: serviceUrl(edge, ctx.config.apiUrl),
+          publicUrl: serviceUrl(edge, ctx.config.publicUrl),
         };
         const current = readFileSync(ctx.configPath, "utf8");
         const updated = updateConfigUrls(current, urls);
@@ -759,7 +762,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           const existing = envs.get(workload.name)!;
           service = await prepareBootstrap(request, workload, service);
           services.set(workload.name, service);
-          const env = serviceEnv(ctx, workload, values, connections, state, services, existing);
+          const env = serviceEnv(ctx, workload, values, connections, state, services, existing, envs.get("core"));
           const changed = await reconcileService(
             request,
             state,
@@ -814,6 +817,16 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           transport: layerTransport(() => coreOrigin),
           ...(ctx.envFile ? { envFile: ctx.envFile } : {}),
         });
+        for (const name of VIRTUAL_SERVICE_NAMES) {
+          const saved = state.services[name];
+          if (!saved) continue;
+          if (services.has(name)) await request(`/services/${saved.id}`, "DELETE");
+          services.delete(name);
+          delete state.services[name];
+          saveState(ctx, state);
+          ok(`${name}: deleted; the core service now serves it`);
+        }
+        for (const origin of new Set([urls.apiUrl, urls.publicUrl])) await bindUrl(request, edge, origin);
         const release: Record<string, string> = {};
         for (const workload of desired.filter((item) => !item.diskSizeGB)) {
           const service = services.get(workload.name)!;
@@ -859,11 +872,12 @@ export function createRenderBackend(ctx: DeployContext): Backend {
       const request = api(ctx);
       const state = readState(ctx);
       const bound = await inventory(ctx, request, state);
-      const host = service ? serviceHost(service) : undefined;
-      const ids = host
-        ? [bound.services.get(host)?.id].filter((id): id is string => Boolean(id))
+      const ids = service
+        ? [...new Set(serviceWorkloads(service).map(renderComponent))]
+            .map((name) => bound.services.get(name)?.id)
+            .filter((id): id is string => Boolean(id))
         : [...bound.services.values()].map((item) => item.id);
-      if (!ids.length) throw new CliError(`No Render service exists${host ? ` for ${host}` : ""}`);
+      if (!ids.length) throw new CliError(`No Render service exists${service ? ` for ${service}` : ""}`);
       const startTime = new Date().toISOString();
       const entries: RenderLog[] = [];
       const count = opts.tail ?? 100;
@@ -1004,8 +1018,10 @@ export function createRenderBackend(ctx: DeployContext): Backend {
             throw new CliError(`The rollback service ${name} is missing or has a disk`);
         }
         saveState(ctx, state);
-        const core = bound.services.get("core")!;
-        await request(`/services/${core.id}/env-vars/GIT_SHA`, "PUT", { value: progress.commit });
+        for (const name of ["core", "harness"]) {
+          const service = bound.services.get(name);
+          if (service) await request(`/services/${service.id}/env-vars/GIT_SHA`, "PUT", { value: progress.commit });
+        }
         for (const name of targets) {
           if (progress.restored[name]) continue;
           const service = bound.services.get(name)!;
@@ -1049,7 +1065,7 @@ export function createRenderBackend(ctx: DeployContext): Backend {
           const entries = computedSecrets(ctx.config).flatMap((secret) => {
             const value = values.get(secret.name);
             if (secret.managedBy !== "operator" || value === undefined) return [];
-            return runtimeSecretNames(workload.name, secret, plugins).map((key) => [key, value] as const);
+            return runtimeSecretNames(workload.workload, secret, plugins).map((key) => [key, value] as const);
           });
           if (!entries.length) continue;
           for (const [key, value] of entries)
@@ -1064,20 +1080,21 @@ export function createRenderBackend(ctx: DeployContext): Backend {
       const state = readState(ctx);
       const bound = await inventory(ctx, request, state);
       const core = bound.services.get("core");
-      const web = bound.services.get(ctx.config.services.includes("portal") ? "portal" : "web-ui");
-      if (!core || !web) throw new CliError("The Render deployment has no core or web service; run qm up");
-      for (const [name, service, configured] of [
-        ["core", core, ctx.config.apiUrl],
-        ["web", web, ctx.config.publicUrl],
-      ] as const) {
-        const url = await verifiedUrl(request, service, configured);
+      const harness = bound.services.get("harness");
+      if (!core || !harness) throw new CliError("The Render deployment has no core or harness service; run qm up");
+      for (const configured of new Set([ctx.config.apiUrl, ctx.config.publicUrl])) {
+        const url = await verifiedUrl(request, core, configured);
         const response = await fetch(`${url}/healthz`, {
           signal: AbortSignal.timeout(30_000),
           redirect: "error",
         });
-        if (!response.ok) throw new CliError(`${name} health check failed (HTTP ${response.status})`);
-        if (report) ok(`${name}: healthy`);
+        if (!response.ok) throw new CliError(`core health check at ${url} failed (HTTP ${response.status})`);
+        if (report) ok(`core: healthy at ${url}`);
       }
+      const harnessDeploy = await latestDeploy(request, harness);
+      if (harnessDeploy?.status !== "live")
+        throw new CliError(`harness is not live (${harnessDeploy?.status ?? "no deploy"}); use qm status and qm logs`);
+      if (report) ok("harness: live");
       const layer = await deploymentLayerRequest({
         config: ctx.config,
         configDir: ctx.configDir,

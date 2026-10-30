@@ -298,7 +298,7 @@ export const renderScaffold: ProviderScaffold = {
     renderConfig(orgId, {
       target: "render",
       modelProvider,
-      publicUrl: `https://${orgId}-portal.onrender.com`,
+      publicUrl: `https://${orgId}-core.onrender.com`,
       providerFields: `
   // The core API address. Render assigns both URLs and qm up rewrites them here.
   // Set your own HTTPS origins instead to use custom domains; see the Render reference.
@@ -340,7 +340,7 @@ export const renderScaffold: ProviderScaffold = {
 
 Render builds QM services from render.source in Git; no local Docker or image
 publication is involved. qm up creates one project with a production environment
-for core, web UI, portal, Render Postgres, and bundled MinIO, then
+for core, harness, Render Postgres, and bundled MinIO, then
 uploads the deployment layer. Later qm up runs retain the selected MinIO
 source commit. Use qm up --upgrade-minio to upgrade MinIO explicitly.
 Native Render Sandboxes are workspace resources.
