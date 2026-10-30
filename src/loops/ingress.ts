@@ -198,12 +198,8 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       }
     };
     const keys = [`loop-ingress:${sourceId}`, `loop-lifecycle:${initial.loopId}`];
-    const acquire = async (held: string[], action: () => Promise<void>) => {
-      if (deps.lock.tryWithLocks) await deps.lock.tryWithLocks(held, action);
-      else await deps.lock.withLock(`loop-ingress:${sourceId}`, action);
-    };
-    await acquire([...keys, `loop-intake:${initial.loopId}`], run);
-    await acquire(keys, async () => {
+    await deps.lock.tryWithLocks([...keys, `loop-intake:${initial.loopId}`], run);
+    await deps.lock.tryWithLocks(keys, async () => {
       const source = await deps.sources.get(sourceId);
       if (
         !source?.enabled ||

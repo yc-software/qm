@@ -475,7 +475,7 @@ describe("link mutation serialization", () => {
         ];
         for (const row of reverse ? rows.reverse() : rows) await store.put(row.principalId, row);
         const identity = createIdentityService(store, { principalLinks: links, directorySyncProtected: ["B"] });
-        await identity.hydrate();
+        await identity.refresh();
         assert.equal(identity.classify("B").type, "guest");
         await identity.refresh(true);
         assert.equal(identity.classify("B").type, "guest");

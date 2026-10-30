@@ -1,4 +1,5 @@
 import { createMemoryMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
+import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import type { LoopItem } from "../src/loops/types.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -464,6 +465,7 @@ test("ingest batches per-loop locks and writes while resolving legacy IDs and du
     undefined,
     {
       lock: {
+        ...createNoopAdvisoryLock(),
         withLock: async (_key, fn) => {
           locks++;
           return fn();

@@ -89,7 +89,7 @@ test("encodeWirePayload measures UTF-8 bytes and sheds participants before dropp
 
 test("[postgres] a re-established LISTEN connection announces a resync to subscribers", { skip: pgSkip }, async () => {
   const bus = createPostgresSessionStateBus(PG!);
-  const admin = createPgPool(PG!, []);
+  const admin = createPgPool(PG!);
   try {
     const listenerPids = async (): Promise<Set<number>> => {
       const rows = await admin.q("SELECT pid FROM pg_stat_activity WHERE query = 'LISTEN session_state'");

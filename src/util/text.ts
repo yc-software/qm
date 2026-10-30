@@ -12,10 +12,6 @@ export function tailSlice(s: string, n: number): string {
   return /^[\uDC00-\uDFFF]/.test(cut) ? cut.slice(1) : cut;
 }
 
-export function jsonbSafeStringify(value: unknown): string {
-  return JSON.stringify(value, (_k, v) => (typeof v === "string" ? v.replace(/\u0000/g, "") : v));
-}
-
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const LONE_SURROGATE_ALL = new RegExp(LONE_SURROGATE, "g");
 
@@ -28,6 +24,18 @@ export function pgTextSafe(s: string): string {
   if (out.includes("\u0000")) out = out.replaceAll("\u0000", "");
   if (hasLoneSurrogate(out)) out = out.replace(LONE_SURROGATE_ALL, "\uFFFD");
   return out;
+}
+
+function jsonbSafe(_key: string, value: unknown): unknown {
+  if (typeof value === "string") return pgTextSafe(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const keys = Object.keys(value);
+  if (keys.every((key) => pgTextSafe(key) === key)) return value;
+  return Object.fromEntries(keys.map((key) => [pgTextSafe(key), (value as Record<string, unknown>)[key]]));
+}
+
+export function jsonbStringify(value: unknown): string {
+  return JSON.stringify(value, jsonbSafe);
 }
 
 export function outermostJsonObject(text: string): string | undefined {

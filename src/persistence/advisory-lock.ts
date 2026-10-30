@@ -4,12 +4,12 @@ import { sleep } from "../util/async.ts";
 
 export interface AdvisoryLock {
   withLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
-  withSharedLock?<T>(key: string, fn: () => Promise<T>): Promise<T>;
-  tryWithLocks?<T>(keys: string[], fn: () => Promise<T>): Promise<T | null>;
-  tryWithLock?<T>(key: string, fn: () => Promise<T>): Promise<T | null>;
+  withSharedLock<T>(key: string, fn: () => Promise<T>): Promise<T>;
+  tryWithLocks<T>(keys: string[], fn: () => Promise<T>): Promise<T | null>;
+  tryWithLock<T>(key: string, fn: () => Promise<T>): Promise<T | null>;
 }
 
-function withMultiLocks(lock: AdvisoryLock): AdvisoryLock {
+function withMultiLocks(lock: Omit<AdvisoryLock, "tryWithLocks">): AdvisoryLock {
   const multi = new AsyncLocalStorage<{ keys: Set<string>; active: boolean; pending: Set<Promise<unknown>> }>();
   return {
     ...lock,
@@ -37,7 +37,7 @@ function withMultiLocks(lock: AdvisoryLock): AdvisoryLock {
                 scope.active = false;
               }
             })
-          : lock.tryWithLock!(unique[index]!, () => acquire(index + 1));
+          : lock.tryWithLock(unique[index]!, () => acquire(index + 1));
       try {
         return await acquire(0);
       } finally {

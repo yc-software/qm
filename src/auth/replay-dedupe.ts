@@ -35,7 +35,7 @@ const SCHEMA = [
 ];
 
 export function createPostgresReplayDedupe(connectionString: string): ReplayDedupe {
-  const pg = createPgPool(connectionString, "auth/replay-dedupe/0001", SCHEMA);
+  const pg = createPgPool(connectionString, [{ id: "auth/replay-dedupe/0001", statements: SCHEMA }]);
   let nextPruneAt = Number.NEGATIVE_INFINITY;
   return {
     durable: true,

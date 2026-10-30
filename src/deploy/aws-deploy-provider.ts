@@ -118,12 +118,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     inflightResolves.delete(id);
   };
   const detached = async (d: Deployment, fn: () => Promise<void>): Promise<void> => {
-    const run = (): Promise<void> => launchQueue(d.id, fn);
-    if (advisoryLock.tryWithLock) {
-      await advisoryLock.tryWithLock(`deploy:${d.id}`, run);
-      return;
-    }
-    await advisoryLock.withLock(`deploy:${d.id}`, run);
+    await advisoryLock.tryWithLock(`deploy:${d.id}`, () => launchQueue(d.id, fn));
   };
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
@@ -598,9 +593,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
             await store.put(d.id, { ...cur, lastSnapshotMs: Date.now() });
             return cur;
           });
-        const cur = advisoryLock.tryWithLock
-          ? await advisoryLock.tryWithLock(`deploy:${d.id}`, claim)
-          : await advisoryLock.withLock(`deploy:${d.id}`, claim);
+        const cur = await advisoryLock.tryWithLock(`deploy:${d.id}`, claim);
         if (cur) await snapshotData(d.id, cur.microvmId, cur.endpoint);
       })().catch((e) => swallow("aws-deploy: periodic data snapshot", e));
     }

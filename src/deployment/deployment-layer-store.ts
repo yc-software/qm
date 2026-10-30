@@ -20,6 +20,7 @@ import {
 import type { SkillBundleStore } from "../skills/skill-bundle-store.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { errMessage } from "../util/errors.ts";
+import { hasLoneSurrogate } from "../util/text.ts";
 import { parseToolDescriptor, type ToolDescriptor } from "./deployment-layer.ts";
 import {
   declaredInstallFiles,
@@ -90,20 +91,6 @@ const pathOrder = (a: DeploymentLayerFile, b: DeploymentLayerFile): number => {
   if (a.path > b.path) return 1;
   return 0;
 };
-
-function hasLoneSurrogate(value: string): boolean {
-  for (let i = 0; i < value.length; i++) {
-    const code = value.charCodeAt(i);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(i + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
-      i++;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
 
 function normalizedBundle(input: DeploymentLayerBundle): DeploymentLayerBundle {
   if (input.contract !== 1 || !Array.isArray(input.tools) || !Array.isArray(input.skills)) {

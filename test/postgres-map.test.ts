@@ -294,12 +294,15 @@ test("pg map: original folded-index migration upgrades without changing its ledg
   const factory = createPostgresMapFactory(URL!);
   const unindexed = factory.map<{ owner: string }>("map_wide_widgets");
   await unindexed.put("legacy", { owner: "short" });
-  const legacy = definePgMigration("durable-map/map_wide_widgets/select-owner", [
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_fold
+  const legacy = definePgMigration({
+    id: "durable-map/map_wide_widgets/select-owner",
+    statements: [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_fold
            ON map_wide_widgets (lower(json->>'owner'))`,
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_unicode
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_unicode
            ON map_wide_widgets (id) WHERE json->>'owner' ~ '[^\\x01-\\x7f]'`,
-  ]);
+    ],
+  });
   try {
     await factory.pool.q("DROP INDEX IF EXISTS map_wide_widgets_owner_fold, map_wide_widgets_owner_unicode");
     await factory.pool.q(

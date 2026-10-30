@@ -42,7 +42,7 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
         emailAuthPrincipals: ["allowed@example.com"],
       }),
     );
-    await built.identity.hydrate();
+    await built.identity.refresh();
     server = createServer(built.app, { signingSecret: SECRET, identity: built.identity, auditLog: built.auditLog });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

@@ -189,13 +189,13 @@ export function pgMigrationChecksum(statements: readonly string[]): string {
     .digest("hex");
 }
 
-export function definePgMigration(
-  id: string,
-  statements: readonly string[],
-  expectedChecksum?: string,
-  legacyId?: string,
-  prepare: readonly string[] = [],
-): PgMigration {
+export function definePgMigration({
+  id,
+  statements,
+  expectedChecksum,
+  legacyId,
+  prepare = [],
+}: PgMigrationDefinition): PgMigration {
   if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
     throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
   }
@@ -429,43 +429,14 @@ export async function migrateRegisteredPgSchemas(connectionString?: string): Pro
   }
 }
 
-export function createPgPool(connectionString: string): PgPool;
 export function createPgPool(
   connectionString: string,
-  migrationId: string,
-  statements: readonly string[],
-  maintenance?: readonly PgMigrationDefinition[],
-): PgPool;
-export function createPgPool(
-  connectionString: string,
-  definitions: readonly PgMigrationDefinition[],
-  maintenance?: readonly PgMigrationDefinition[],
-): PgPool;
-export function createPgPool(
-  connectionString: string,
-  idOrDefinitions: string | readonly PgMigrationDefinition[] = [],
-  statementsOrMaintenance: readonly string[] | readonly PgMigrationDefinition[] = [],
+  definitions: readonly PgMigrationDefinition[] = [],
   maintenanceDefinitions: readonly PgMigrationDefinition[] = [],
 ): PgPool {
-  const definitions =
-    typeof idOrDefinitions === "string"
-      ? [{ id: idOrDefinitions, statements: statementsOrMaintenance as readonly string[] }]
-      : idOrDefinitions;
-  const migrations = definitions.map((definition) =>
-    definePgMigration(
-      definition.id,
-      definition.statements,
-      definition.expectedChecksum,
-      definition.legacyId,
-      definition.prepare,
-    ),
-  );
+  const migrations = definitions.map(definePgMigration);
   for (const migration of migrations) registerPgMigration(connectionString, migration);
-  const maintenanceSource =
-    typeof idOrDefinitions === "string"
-      ? maintenanceDefinitions
-      : (statementsOrMaintenance as readonly PgMigrationDefinition[]);
-  const maintenance = maintenanceSource.map((definition) => definePgMigration(definition.id, definition.statements));
+  const maintenance = maintenanceDefinitions.map(definePgMigration);
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
@@ -583,29 +554,14 @@ export function createPgPool(
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
-    const migration = definePgMigration(
-      definition.id,
-      definition.statements,
-      definition.expectedChecksum,
-      definition.legacyId,
-      definition.prepare,
-    );
+    const migration = definePgMigration(definition);
     registerPgMigration(connectionString, migration);
     if (closed) throw new Error("Postgres store is closed");
     await ready();
     await withMigrationPool((instance) => applyPgMigrations(instance, [migration]));
   }
   function registerMigration(definition: PgMigrationDefinition): void {
-    registerPgMigration(
-      connectionString,
-      definePgMigration(
-        definition.id,
-        definition.statements,
-        definition.expectedChecksum,
-        definition.legacyId,
-        definition.prepare,
-      ),
-    );
+    registerPgMigration(connectionString, definePgMigration(definition));
   }
   return { pool, sessionPool, q, query, registerMigration, migrate, close };
 }

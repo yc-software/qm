@@ -68,7 +68,7 @@ test("durable rehydration folds a cased stored deactivation", async () => {
   const first = createIdentityService(backing);
   await first.deactivate("Carol@Corp.com");
   const second = createIdentityService(backing);
-  await second.hydrate();
+  await second.refresh();
   assert.equal(second.classify("carol@corp.com").type, "guest");
 });
 
@@ -79,7 +79,7 @@ test("deactivation is durable: a fresh service over the same backing rehydrates 
 
   const second = createIdentityService(backing);
   assert.equal(second.classify("U-leaver").type, "internal");
-  await second.hydrate();
+  await second.refresh();
   assert.equal(second.classify("U-leaver").type, "guest");
 });
 
@@ -87,10 +87,10 @@ test("a running instance refreshes deactivations written by another instance", a
   const backing = createMemoryMap<DeactivationRecord>();
   const writer = createIdentityService(backing);
   const reader = createIdentityService(backing);
-  await reader.hydrate();
+  await reader.refresh();
   await writer.deactivate("U-leaver");
   assert.equal(reader.classify("U-leaver").type, "internal");
-  await reader.refresh();
+  await reader.refresh(true);
   assert.equal(reader.classify("U-leaver").type, "guest");
 });
 
@@ -98,7 +98,7 @@ test("external members written by one instance reach another over the same backi
   const externalMembers = createMemoryMap<ExternalMember>();
   const writer = createIdentityService(undefined, { externalMembers });
   const reader = createIdentityService(undefined, { externalMembers });
-  await reader.hydrate();
+  await reader.refresh();
   const now = Date.now();
   const member = (expiresAt: number): ExternalMember => ({
     email: "pat@partner.example",
@@ -110,7 +110,7 @@ test("external members written by one instance reach another over the same backi
   });
   await writer.putExternalMember(member(now + 60_000));
   assert.equal(reader.externalMember("pat@partner.example"), undefined);
-  await reader.refresh();
+  await reader.refresh(true);
   assert.equal(reader.externalMember("Pat@Partner.example")?.expiresAt, now + 60_000);
   assert.equal(reader.classify("pat@partner.example").type, "internal");
 
@@ -120,8 +120,38 @@ test("external members written by one instance reach another over the same backi
   await reader.refresh(true);
   assert.equal(reader.classify("pat@partner.example").type, "guest", "a forced refresh reads the store");
   const late = createIdentityService(undefined, { externalMembers });
-  await late.hydrate();
+  await late.refresh();
   assert.equal(late.classify("pat@partner.example").type, "guest");
+});
+
+test("a manual deactivation issued alongside a directory sync is not undone by it", async () => {
+  const svc = createIdentityService();
+  await svc.deactivate("alice", "directory-sync");
+  await Promise.all([svc.deactivate("alice", "manual"), svc.recordDirectorySync([], ["alice"])]);
+  assert.equal(svc.deactivationSource("alice"), "manual");
+  assert.equal(svc.classify("alice").type, "guest");
+});
+
+test("a deactivation written during a refresh survives that refresh", async () => {
+  let release = () => {};
+  const backing = createMemoryMap<DeactivationRecord>();
+  const all = backing.all.bind(backing);
+  const svc = createIdentityService({
+    ...backing,
+    all: async () => {
+      const rows = await all();
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return rows;
+    },
+  });
+  const loading = svc.refresh(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  const deactivating = svc.deactivate("U-leaver");
+  release();
+  await Promise.all([loading, deactivating]);
+  assert.equal(svc.classify("U-leaver").type, "guest");
 });
 
 test("a directory sync deactivates dropped members and self-heals when they reappear", async () => {

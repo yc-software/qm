@@ -200,7 +200,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const leaderLease = deps.leaderLease;
 
   async function withCronLifecycle<T>(cronId: string, scheduled: boolean, run: () => Promise<T>): Promise<T | null> {
-    if (scheduled && deps.advisoryLock.tryWithLock) {
+    if (scheduled) {
       const result = await deps.advisoryLock.tryWithLock(`cron-lifecycle:${cronId}`, run);
       if (result === null) await deps.crons.defer(cronId, now() + BUSY_DEFER_MS);
       return result;

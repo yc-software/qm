@@ -140,15 +140,20 @@ function pgRowToRecord(r: Record<string, unknown>): ProcessRecord {
 }
 
 export function createPostgresProcessRegistry(connectionString: string): ProcessRegistry {
-  const pg = createPgPool(connectionString, "processes/registry/0001", [
-    `CREATE TABLE IF NOT EXISTS process_sessions(
+  const pg = createPgPool(connectionString, [
+    {
+      id: "processes/registry/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS process_sessions(
         process_id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, kind TEXT NOT NULL,
         command TEXT NOT NULL, started_at BIGINT NOT NULL, expires_at BIGINT NOT NULL,
         status TEXT NOT NULL
       )`,
-    `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT`,
-    `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT`,
-    `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
+        `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS session_ref TEXT`,
+        `ALTER TABLE process_sessions ADD COLUMN IF NOT EXISTS run_id TEXT`,
+        `CREATE INDEX IF NOT EXISTS idx_proc_scope_status ON process_sessions(scope_id, status)`,
+      ],
+    },
   ]);
 
   const migration = {

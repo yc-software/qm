@@ -420,8 +420,9 @@ export function createModalSandbox(workspace: WorkspaceStore, opts: ModalSandbox
 
   function withSession<T>(name: string, action: (session: ModalSession) => Promise<T>): Promise<T> {
     if (scratchKeyByName.has(name)) return withSessionUnlocked(name, action);
-    const shared = advisoryLock.withSharedLock ?? advisoryLock.withLock;
-    return shared(`modal-use:${scopeByName.get(name) ?? "default"}`, () => withSessionUnlocked(name, action));
+    return advisoryLock.withSharedLock(`modal-use:${scopeByName.get(name) ?? "default"}`, () =>
+      withSessionUnlocked(name, action),
+    );
   }
 
   const lastTouchMs = new Map<string, number>();

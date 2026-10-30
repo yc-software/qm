@@ -438,8 +438,8 @@ export function createSwarmService(deps: {
 
   async function reconcile(rootId: string, phase: "resources" | "delivery"): Promise<void> {
     const deadline = Date.now() + SWARM_LIMITS.reconcileMs;
-    const claim = deps.lock.tryWithLock?.bind(deps.lock) ?? deps.lock.withLock.bind(deps.lock);
-    await claim(phase === "resources" ? `swarm-reconcile:${rootId}` : `swarm-delivery:${rootId}`, async () => {
+    const key = phase === "resources" ? `swarm-reconcile:${rootId}` : `swarm-delivery:${rootId}`;
+    await deps.lock.tryWithLock(key, async () => {
       const pending = new Set<Promise<unknown>>();
       const step = <Result>(
         start: () => Promise<Result>,

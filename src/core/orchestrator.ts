@@ -159,7 +159,7 @@ import {
 } from "../agent/replay.ts";
 import { errMessage, reportFailure, swallow, swallowAs } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
-import { headSlice, jsonbSafeStringify } from "../util/text.ts";
+import { headSlice, jsonbStringify } from "../util/text.ts";
 import { absoluteAppLinks } from "../util/markdown.ts";
 import {
   isModelBudget,
@@ -352,7 +352,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
     deps.errors?.record({
       category: "sessions",
       code: "session_busy",
-      message: jsonbSafeStringify({
+      message: jsonbStringify({
         site: busy.site,
         heldBy: busy.attempt.heldBy ?? null,
         ...(busy.attempt.heldSince !== undefined ? { heldForMs: at - busy.attempt.heldSince } : {}),
@@ -389,7 +389,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       deps.errors?.record({
         category: "sessions",
         code: "session_missing",
-        message: jsonbSafeStringify({ site: args.site, runId: args.runId ?? null, surface: args.surface ?? null }),
+        message: jsonbStringify({ site: args.site, runId: args.runId ?? null, surface: args.surface ?? null }),
         scopeLabel: args.scopeId,
         sessionId: args.sessionId,
       });

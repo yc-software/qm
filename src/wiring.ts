@@ -661,7 +661,7 @@ export function buildApp(
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
-  void identity.hydrate().catch(reportFailureAs("startup: hydrate identity", undefined));
+  void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
@@ -2547,18 +2547,12 @@ export function buildApp(
     },
   );
   const sessionReturnSweeper = createSweeper(
-    () =>
-      advisoryLock.tryWithLock
-        ? advisoryLock.tryWithLock("session-return-sweep", sweepSessionReturns)
-        : advisoryLock.withLock("session-return-sweep", sweepSessionReturns),
+    () => advisoryLock.tryWithLock("session-return-sweep", sweepSessionReturns),
     1_000,
     { label: "session-returns", immediate: true },
   );
   const runResultSweeper = createSweeper(
-    () =>
-      advisoryLock.tryWithLock
-        ? advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep())
-        : advisoryLock.withLock("run-result-sweep", () => runResultRecovery.sweep()),
+    () => advisoryLock.tryWithLock("run-result-sweep", () => runResultRecovery.sweep()),
     60_000,
     { label: "run-results" },
   );

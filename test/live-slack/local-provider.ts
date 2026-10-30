@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   const name = `local-${randomUUID()}`;
   const failures: unknown[] = [];
   try {
-    await built.identity.hydrate();
+    await built.identity.refresh();
     await built.deploymentLayerReady;
     await built.sandboxResources.initialize();
     await setOnboardingStatus(built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), actorId);

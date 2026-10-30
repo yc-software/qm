@@ -41,19 +41,24 @@ const emptyCounts = (): AckPickCounts => ({ picked: 0, declined: 0 });
 
 export function createPostgresAckEmojiPickStore(connectionString: string): AckEmojiPickStore {
   const orgId = configOrgId();
-  const { q, close } = createPgPool(connectionString, "surface-cache/ack-emoji-pick/0001", [
-    `CREATE TABLE IF NOT EXISTS ack_emoji_picks(
+  const { q, close } = createPgPool(connectionString, [
+    {
+      id: "surface-cache/ack-emoji-pick/0001",
+      statements: [
+        `CREATE TABLE IF NOT EXISTS ack_emoji_picks(
         id BIGSERIAL PRIMARY KEY,
         org_id TEXT NOT NULL, surface TEXT NOT NULL, channel TEXT NOT NULL, ts TEXT NOT NULL,
         outcome TEXT NOT NULL, picked TEXT, icon TEXT, message TEXT, candidates TEXT, model TEXT,
         latency_ms INT, created_at BIGINT NOT NULL
       )`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_channel_created
+        `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_channel_created
         ON ack_emoji_picks(org_id, channel, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_created
+        `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_created
         ON ack_emoji_picks(org_id, created_at DESC, id DESC)`,
-    `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_outcome
+        `CREATE INDEX IF NOT EXISTS ack_emoji_picks_org_outcome
         ON ack_emoji_picks(org_id, outcome)`,
+      ],
+    },
   ]);
   const row = (r: Record<string, unknown>): AckEmojiPick => ({
     id: Number(r.id),

@@ -9,6 +9,18 @@ const isFileGrant = (g: Grant) => parseRef(g.ref).kind === "file";
 
 type ScopeEntitlement = (p: Principal, scope: ScopeId, sessionScopeId: ScopeId, orgScopeId: ScopeId) => boolean;
 
+function audienceReaches(
+  audience: readonly Principal[],
+  sessionScopeId: ScopeId,
+  orgScopeId: ScopeId,
+  entitled: ScopeEntitlement,
+): (g: Grant) => boolean {
+  const has = (p: Principal, scope: ScopeId) => entitled(p, scope, sessionScopeId, orgScopeId);
+  return (g) =>
+    audience.some((p) => has(p, g.granteeScopeId)) &&
+    audience.every((p) => has(p, g.granteeScopeId) || has(p, g.ownerScopeId));
+}
+
 export type ScopeManagement = (principalId: string, scopeId: ScopeId, authoredBy?: string) => Promise<boolean>;
 
 function ownerOf(scopeId: ScopeId): string | null {
@@ -209,17 +221,8 @@ export function createAclStore(
     },
     async handlesForAudience(audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
-      const reaches = (p: Principal, g: Grant) =>
-        entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId) ||
-        entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
-      return handles(
-        (await persist.all()).filter(
-          (g) =>
-            isFileGrant(g) &&
-            audience.some((p) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId)) &&
-            audience.every((p) => reaches(p, g)),
-        ),
-      );
+      const reaches = audienceReaches(audience, sessionScopeId, orgScopeId, entitled);
+      return handles((await persist.all()).filter((g) => isFileGrant(g) && reaches(g)));
     },
     async grantsFor(ownerScopeId, ref) {
       return (await persist.all()).filter((g) => g.ownerScopeId === ownerScopeId && g.ref === ref);
@@ -237,15 +240,8 @@ export function createAclStore(
     async sharedOfKindForAudience(kind, audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const prefix = refPrefix(kind);
-      const reaches = (p: Principal, g: Grant) =>
-        entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId) ||
-        entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
-      return (await persist.all()).filter(
-        (g) =>
-          g.ref.startsWith(prefix) &&
-          audience.some((p) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId)) &&
-          audience.every((p) => reaches(p, g)),
-      );
+      const reaches = audienceReaches(audience, sessionScopeId, orgScopeId, entitled);
+      return (await persist.all()).filter((g) => g.ref.startsWith(prefix) && reaches(g));
     },
     list: () => persist.all(),
   };

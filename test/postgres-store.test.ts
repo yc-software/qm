@@ -1299,6 +1299,19 @@ test("pg scopeSessionSummaries: previews are stored on append and match the JS e
   }
 });
 
+test("pg append returns the same sanitized text it stores for a lone surrogate", { skip }, async () => {
+  const s = createPostgresSessionStore(URL!);
+  const scope = scopeId("channel", "surrogate");
+  const session = await s.getOrCreateByThread("surrogateA", "channel", scope);
+  const { lease } = await s.acquireLease(session.id);
+  const cut = "emoji 😀".slice(0, 7);
+  const appended = await s.append(lease!, { type: "user", payload: { text: `${cut}\u0000` }, scopeLabel: scope });
+  await s.releaseLease(lease!);
+  const [stored] = await s.getEntries(session.id);
+  assert.deepEqual(appended.payload, { text: "emoji \uFFFD" });
+  assert.deepEqual(stored!.payload, appended.payload);
+});
+
 test("pg appendMany maintains first/last user previews across batches", { skip }, async () => {
   const s = createPostgresSessionStore(URL!);
   const scope = scopeId("channel", "pvw-batch");
@@ -1583,46 +1596,6 @@ test("pg scopeHasSessions + listByScope answer scope questions without a table s
   assert.equal(await s.scopeHasSessions(scope), true);
   const listed = await s.listByScope(scope);
   assert.deepEqual(new Set(listed.map((x) => x.id)), new Set([a.id, b.id]), "only the asked-for scope comes back");
-});
-
-test("pg safe JSON functions are marked parallel-unsafe", { skip }, async () => {
-  const pg = (await import("pg")).default;
-  const raw = new pg.Pool({ connectionString: URL });
-  try {
-    const seed = createPostgresSessionStore(URL!);
-    await seed.scanAll();
-    await raw.query(`CREATE OR REPLACE FUNCTION safe_jsonb(t text) RETURNS jsonb
-      LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $safe_jsonb$
-      BEGIN RETURN t::jsonb; EXCEPTION WHEN others THEN RETURN NULL; END $safe_jsonb$`);
-    await raw.query("CREATE INDEX safe_jsonb_parallel_repair_test ON sessions ((safe_jsonb(title) ->> 'ts'))");
-
-    const s = createPostgresSessionStore(URL!);
-    await s.scanAll();
-
-    const result = await raw.query(
-      `SELECT proname, proparallel
-         FROM pg_proc
-        WHERE oid IN (
-          'safe_json(text)'::regprocedure,
-          'safe_jsonb(text)'::regprocedure
-        )`,
-    );
-    assert.deepEqual(
-      new Map(result.rows.map((row) => [row.proname as string, row.proparallel as string])),
-      new Map([
-        ["safe_json", "u"],
-        ["safe_jsonb", "u"],
-      ]),
-    );
-    assert.equal(
-      (await raw.query("SELECT to_regclass('safe_jsonb_parallel_repair_test') AS index")).rows[0]!.index,
-      "safe_jsonb_parallel_repair_test",
-    );
-  } finally {
-    await raw.query("DROP INDEX IF EXISTS safe_jsonb_parallel_repair_test");
-    await raw.query("DROP FUNCTION IF EXISTS safe_jsonb(text)");
-    await raw.end();
-  }
 });
 
 test("no plpgsql exception handler is marked parallel-safe anywhere in the schema", { skip }, async () => {

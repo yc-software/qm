@@ -1,5 +1,5 @@
 import { createPgPool, withPgTransaction, type PgPool, type PoolClient } from "./pg-pool.ts";
-import { pgTextSafe } from "../util/text.ts";
+import { jsonbStringify } from "../util/text.ts";
 
 export interface DurableMapSelect<T, K extends Extract<keyof T, string>> {
   omit?: readonly K[];
@@ -26,21 +26,6 @@ export interface DurableMap<T> {
   deleteIf?(id: string, predicate: (value: T) => boolean): Promise<boolean>;
   delete(id: string): Promise<void>;
   take(id: string): Promise<T | null>;
-}
-
-function jsonbSafe(value: unknown): unknown {
-  if (typeof value === "string") return pgTextSafe(value);
-  if (Array.isArray(value)) return value.map(jsonbSafe);
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = Object.create(null);
-    for (const [k, v] of Object.entries(value)) out[pgTextSafe(k)] = jsonbSafe(v);
-    return out;
-  }
-  return value;
-}
-
-export function jsonbStringify(value: unknown): string {
-  return JSON.stringify(jsonbSafe(value));
 }
 
 function fieldText(value: unknown): string | null {

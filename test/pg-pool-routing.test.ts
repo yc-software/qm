@@ -113,8 +113,11 @@ test("closing during initialization rejects pending queries and leaves other sto
 });
 
 test("dynamic migration waits for its prerequisite schema on a fresh database", { skip }, async () => {
-  const a = createPgPool(direct!, "pool-routing/prerequisite/0001", [
-    "CREATE TABLE IF NOT EXISTS pool_routing_prerequisite(id INTEGER PRIMARY KEY)",
+  const a = createPgPool(direct!, [
+    {
+      id: "pool-routing/prerequisite/0001",
+      statements: ["CREATE TABLE IF NOT EXISTS pool_routing_prerequisite(id INTEGER PRIMARY KEY)"],
+    },
   ]);
   try {
     await a.migrate({

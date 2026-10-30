@@ -11,7 +11,7 @@ import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { scopeId } from "../src/types.ts";
-import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createNoopAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-bundle-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -744,6 +744,7 @@ test("two stores serialize the durable head and shared skill projection under on
   let active = 0;
   let maxActive = 0;
   const advisoryLock: AdvisoryLock = {
+    ...createNoopAdvisoryLock(),
     async withLock<T>(_key: string, fn: () => Promise<T>): Promise<T> {
       const previous = tail;
       let release!: () => void;

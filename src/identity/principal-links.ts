@@ -1,4 +1,5 @@
 import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { createTtlRefresh } from "../util/async.ts";
 import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
 
@@ -47,8 +48,6 @@ export function createPrincipalLinkService(
   const store = backing ?? createMemoryMap<PrincipalLink>();
   const byAlias = new Map<string, PrincipalLink>();
   const byCanonical = new Map<string, PrincipalLink[]>();
-  let refreshedAt = 0;
-  let refreshP: Promise<void> | null = null;
 
   function index(rows: PrincipalLink[]): void {
     byAlias.clear();
@@ -62,21 +61,7 @@ export function createPrincipalLinkService(
     }
   }
 
-  async function refresh(force = false): Promise<void> {
-    if (refreshP && !force) return refreshP;
-    while (refreshP) await refreshP;
-    if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
-    refreshP = store
-      .all()
-      .then(index)
-      .then(() => {
-        refreshedAt = Date.now();
-      })
-      .finally(() => {
-        refreshP = null;
-      });
-    return refreshP;
-  }
+  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.all()));
 
   return {
     canonical(key) {

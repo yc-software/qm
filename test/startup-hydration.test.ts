@@ -52,7 +52,7 @@ test("eager hydration failures are contained while explicit startup hydration re
       errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate configuration")),
     );
     for (let attempt = 0; attempt < 2; attempt++) {
-      await assert.rejects(built.identity.hydrate(), (error: unknown) => error === identityFailure);
+      await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
       await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);
     }
   } finally {
