@@ -1,7 +1,15 @@
 import type { ActorAssertion, Principal } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { currentTenant } from "../tenants/context.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { canonicalPerson, foldPrincipalId, personIds, personKey } from "../directory/person.ts";
-import { externalMemberActive, type ExternalMember } from "./external-members.ts";
+import {
+  createExternalMemberStore,
+  externalMemberActive,
+  type ExternalMember,
+  type ExternalMemberStore,
+} from "./external-members.ts";
 
 interface IdentityProvider {
   resolve(actor: ActorAssertion): Principal;
@@ -14,6 +22,66 @@ export interface DeactivationRecord {
   principalId: string;
   source: DeactivationSource;
   at: number;
+}
+
+export interface DeactivationStore {
+  list(): Promise<DeactivationRecord[]>;
+  put(record: DeactivationRecord): Promise<void>;
+  remove(principalIds: readonly string[]): Promise<void>;
+  close?(): Promise<void>;
+}
+
+const DEACTIVATED_PRINCIPALS_MIGRATION = typedTableMigration({
+  table: "deactivated_principals",
+  columns: ["principal_id TEXT NOT NULL", "source TEXT NOT NULL", "at BIGINT NOT NULL"],
+  constraints: ["CHECK (source IN ('manual', 'directory-sync'))"],
+  primaryKey: ["principal_id"],
+  backfill: { principal_id: "id", source: "json->>'source'", at: "(json->>'at')::bigint" },
+  where: "json->>'source' IN ('manual', 'directory-sync') AND json->>'at' IS NOT NULL",
+});
+
+export function createDeactivationStore(): DeactivationStore {
+  const tenants = new Map<string, Map<string, DeactivationRecord>>();
+  const rows = () => {
+    const tenant = currentTenant();
+    return tenants.get(tenant) ?? tenants.set(tenant, new Map()).get(tenant)!;
+  };
+  return {
+    list: async () => [...rows().values()],
+    put: async (record) => void rows().set(foldPrincipalId(record.principalId), record),
+    async remove(principalIds) {
+      for (const id of principalIds) rows().delete(foldPrincipalId(id));
+    },
+  };
+}
+
+export function createPostgresDeactivationStore(connectionString: string): DeactivationStore {
+  const { q, close } = createPgPool(connectionString, [TENANCY_BASE, DEACTIVATED_PRINCIPALS_MIGRATION]);
+  return {
+    async list() {
+      const rows = await q(
+        `SELECT principal_id, source, at FROM deactivated_principals WHERE tenant_id = ${TENANT} ORDER BY principal_id`,
+      );
+      return rows.map((row) => ({
+        principalId: String(row.principal_id),
+        source: row.source as DeactivationSource,
+        at: Number(row.at),
+      }));
+    },
+    async put(record) {
+      await q(
+        `INSERT INTO deactivated_principals(principal_id, source, at) VALUES ($1, $2, $3)
+         ON CONFLICT (tenant_id, principal_id) DO UPDATE SET source = EXCLUDED.source, at = EXCLUDED.at`,
+        [foldPrincipalId(record.principalId), record.source, record.at],
+      );
+    },
+    async remove(principalIds) {
+      await q(`DELETE FROM deactivated_principals WHERE tenant_id = ${TENANT} AND principal_id = ANY($1)`, [
+        principalIds.map(foldPrincipalId),
+      ]);
+    },
+    close,
+  };
 }
 
 interface DirectorySyncOutcome {
@@ -44,15 +112,15 @@ export function actorAssertionActive(
 }
 
 export function createIdentityService(
-  backing?: DurableMap<DeactivationRecord>,
   opts: {
+    deactivations?: DeactivationStore;
     directorySyncProtected?: readonly string[];
-    externalMembers?: DurableMap<ExternalMember>;
+    externalMembers?: ExternalMemberStore;
     principalLinks?: { refresh(force?: boolean): Promise<void> };
   } = {},
 ): IdentityService {
-  const store = backing ?? createMemoryMap<DeactivationRecord>();
-  const externalStore = opts.externalMembers ?? createMemoryMap<ExternalMember>();
+  const store = opts.deactivations ?? createDeactivationStore();
+  const externalStore = opts.externalMembers ?? createExternalMemberStore();
   const deactivated = new Map<string, DeactivationRecord>();
   const externals = new Map<string, ExternalMember>();
   const directorySyncProtected = opts.directorySyncProtected ?? [];
@@ -67,7 +135,7 @@ export function createIdentityService(
 
   async function load(overwrite: boolean): Promise<void> {
     await opts.principalLinks?.refresh(true);
-    const [deactivations, members] = await Promise.all([store.all(), externalStore.all()]);
+    const [deactivations, members] = await Promise.all([store.list(), externalStore.list()]);
     if (overwrite) {
       deactivated.clear();
       externals.clear();
@@ -102,12 +170,12 @@ export function createIdentityService(
     if (existing && (existing.source === "manual" || existing.source === source)) return;
     const record: DeactivationRecord = { principalId: externalId, source, at: Date.now() };
     deactivated.set(key, record);
-    await store.put(foldPrincipalId(externalId), record);
+    await store.put(record);
   }
 
   async function reactivate(externalId: string): Promise<void> {
     deactivated.delete(personKey(externalId));
-    for (const key of storeKeys(externalId)) await store.delete(key);
+    await store.remove(storeKeys(externalId));
   }
 
   async function refresh(force = false): Promise<void> {
@@ -154,11 +222,11 @@ export function createIdentityService(
     },
     async putExternalMember(m: ExternalMember): Promise<void> {
       externals.set(personKey(m.email), m);
-      await externalStore.put(foldPrincipalId(m.email), m);
+      await externalStore.put(m);
     },
     async removeExternalMember(principalId: string): Promise<void> {
       externals.delete(personKey(principalId));
-      for (const key of storeKeys(principalId)) await externalStore.delete(key);
+      await externalStore.remove(storeKeys(principalId));
     },
     hydrate(): Promise<void> {
       if (!hydrateP) hydrateP = load(false);

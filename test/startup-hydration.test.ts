@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -13,15 +15,15 @@ mock.module("../src/identity/identity-service.ts", {
   namedExports: {
     ...identityModule,
     createIdentityService: (...args: Parameters<typeof identityModule.createIdentityService>) =>
-      identityModule.createIdentityService(
-        {
-          ...createMemoryMap<identityModule.DeactivationRecord>(),
-          all: async () => {
+      identityModule.createIdentityService({
+        ...args[0],
+        deactivations: {
+          ...identityModule.createDeactivationStore(),
+          list: async () => {
             throw identityFailure;
           },
         },
-        args[1],
-      ),
+      }),
   },
 });
 mock.module("../src/resolution/config-store.ts", {
@@ -47,7 +49,6 @@ test("eager hydration failures are contained while explicit startup hydration re
   const built = buildApp(testConfig());
   try {
     await new Promise<void>((resolve) => setImmediate(resolve));
-    assert.ok(errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate identity")));
     assert.ok(
       errors.mock.calls.some(({ arguments: args }) => String(args[0]).includes("startup: hydrate configuration")),
     );

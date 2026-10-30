@@ -100,7 +100,7 @@ describe("fireDropResolution", () => {
   const depsWith = (run: (req: TurnRequest) => Promise<TurnResult>) => ({
     deliveries: createDeliveryStore(),
     idempotency: createIdempotencyStore(),
-    identity: createIdentityService(createMemoryMap()),
+    identity: createIdentityService(),
     run,
   });
 
@@ -155,7 +155,7 @@ describe("fireDropResolution", () => {
     const deps = {
       deliveries,
       idempotency: createIdempotencyStore(),
-      identity: createIdentityService(createMemoryMap()),
+      identity: createIdentityService(),
       run: async () => ({ status: "pending_approval" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;

@@ -10,10 +10,12 @@ import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { SessionStateEvent } from "../src/runs/session-state-bus.ts";
-import { uiStateId } from "../src/surfaces/ui-state.ts";
 import { installSharedCanvas, readUiCanvas } from "../src/surfaces/ui-canvas.ts";
 import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 
@@ -217,7 +219,7 @@ describe("ui canvas and ui observe", () => {
 
   it("does not deliver a result into a run the person does not own", async () => {
     runs.set("run-other", { id: "run-other", status: "running", request: { actor: { id: "U2" } } });
-    await built.uiState.put(uiStateId("U1", "observe:forged"), { value: { runId: "run-other" }, updatedAt: 1 });
+    await built.uiState.put("U1", "observe:forged", { value: { runId: "run-other" }, updatedAt: 1 });
     const r = await source("POST", "/v1/ui/observe/forged/result", { principalId: "U1", snapshot: {} });
     assert.equal(r.status, 404);
   });

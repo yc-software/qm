@@ -69,7 +69,11 @@ import {
 import { createModelVerifier, type ModelVerifier } from "./model/model-verification.ts";
 import type { probeModel } from "./harness/pi-harness.ts";
 import { createAwsRoleBroker, type AwsRoleBroker } from "./auth/aws-role-broker.ts";
-import type { SessionShare, SessionShareStore } from "./sessions/session-share.ts";
+import {
+  createPostgresSessionShareStore,
+  createSessionShareStore,
+  type SessionShareStore,
+} from "./sessions/session-share.ts";
 import { createModelOverlayStore, type ModelOverlayStore } from "./model/model-overlay-store.ts";
 import { mkdirSync } from "node:fs";
 import type { StagedEnvelope } from "./slack/envelope-staging.ts";
@@ -86,18 +90,20 @@ import {
 import type { ServerDeps } from "./api/deps.ts";
 import {
   actorAssertionActive,
+  createDeactivationStore,
   createIdentityService,
-  type DeactivationRecord,
+  createPostgresDeactivationStore,
   type IdentityService,
 } from "./identity/identity-service.ts";
 import {
+  createPostgresPrincipalLinkStore,
   createPrincipalLinkService,
-  type PrincipalLink,
+  createPrincipalLinkStore,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
-import type { ExternalMember } from "./identity/external-members.ts";
+import { createExternalMemberStore, createPostgresExternalMemberStore } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
 import { configStoreMaps, createMemoryConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
@@ -109,7 +115,7 @@ import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from 
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
-import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
+import { createPostgresUiStateStore, createUiStateStore, type UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
 import { configurePgCaTrust, configurePgPooling } from "./persistence/pg-pool.ts";
@@ -282,8 +288,8 @@ import {
 import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
 import {
   createFeatureFlagStore,
+  createPostgresFeatureFlagStore,
   externalAppSharingAllowed,
-  type FeatureFlagRecord,
   type FeatureFlagStore,
 } from "./feature-flags.ts";
 import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
@@ -662,14 +668,19 @@ export function buildApp(
   const advisoryLock: AdvisoryLock = pgArtifactMap
     ? createPostgresAdvisoryLock(pgArtifactMap.pool)
     : createMemoryAdvisoryLock();
-  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
+  const principalLinks = createPrincipalLinkService(
+    config.databaseUrl ? createPostgresPrincipalLinkStore(config.databaseUrl) : createPrincipalLinkStore(),
+    advisoryLock,
+  );
   installPrincipalLinks(principalLinks);
-  const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
+  const identity = createIdentityService({
+    deactivations: config.databaseUrl ? createPostgresDeactivationStore(config.databaseUrl) : createDeactivationStore(),
     directorySyncProtected: config.emailAuthPrincipals,
-    externalMembers: artifactMap<ExternalMember>("external_members"),
+    externalMembers: config.databaseUrl
+      ? createPostgresExternalMemberStore(config.databaseUrl)
+      : createExternalMemberStore(),
     principalLinks,
   });
-  void identity.hydrate().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = pgArtifactMap
     ? createPostgresLeaderLease(pgArtifactMap.pool)
     : createNoopLeaderLease();
@@ -687,7 +698,9 @@ export function buildApp(
   });
   const skillPacks = createSkillPackStore({ backing: artifactMap<SkillPack>("skill_packs") });
   const skillBundles = createSkillBundleStore({ backing: artifactMap<SkillBundle>("skill_bundles") });
-  const featureFlags = createFeatureFlagStore(artifactMap<FeatureFlagRecord>("feature_flags"));
+  const featureFlags = config.databaseUrl
+    ? createPostgresFeatureFlagStore(config.databaseUrl)
+    : createFeatureFlagStore();
   const teams = config.databaseUrl
     ? createPostgresTeamStore(config.databaseUrl, featureFlags, scopeId("org", config.orgId))
     : undefined;
@@ -2134,7 +2147,7 @@ export function buildApp(
       );
     },
   });
-  const uiState = artifactMap<PersistedUiState>("web_ui_state");
+  const uiState = config.databaseUrl ? createPostgresUiStateStore(config.databaseUrl) : createUiStateStore();
   const orchestratorDeps: OrchestratorDeps = {
     installSharedCanvas: async (actorId, fileId, where) => {
       const canvas = await installSharedCanvas(uiState, actorId, await app.openFileForViewer(fileId, actorId));
@@ -3179,7 +3192,7 @@ export function buildApp(
       : {}),
     ...(backgroundOwnership ? { backgroundOwnership } : {}),
     uiState,
-    sessionShares: artifactMap<SessionShare>("session_shares"),
+    sessionShares: config.databaseUrl ? createPostgresSessionShareStore(config.databaseUrl) : createSessionShareStore(),
     sessionShareBytes:
       config.snapshotStore === "s3" && config.s3Bucket
         ? createS3DurableByteStore({

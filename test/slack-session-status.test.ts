@@ -9,6 +9,9 @@ import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../src/processes/process-registry.ts";
 import type { Session, Monitor } from "../src/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function deferred() {
   let resolve!: () => void;
@@ -21,7 +24,7 @@ function deferred() {
 function fixture() {
   let at = 1_000;
   const store = createMemoryMap<SlackSessionStatusState>();
-  const flags = createFeatureFlagStore(createMemoryMap());
+  const flags = createFeatureFlagStore();
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
   const watches: Monitor[] = [];
