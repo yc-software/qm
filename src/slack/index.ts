@@ -117,7 +117,6 @@ export async function startSlackPlugin(
     ownWorkspaceUrl: "",
     identityMode: cfg.identityEmail === "0" ? "slack-id" : "email",
   };
-
   const ACK_OVERRIDE_CACHE_MS = 60_000;
   let ackOverrideCache: { names: string[] | null; fetchedAt: number } | undefined;
   function ackEmojiOverride(): readonly string[] | null {

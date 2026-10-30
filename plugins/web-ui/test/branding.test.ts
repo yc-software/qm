@@ -6,6 +6,9 @@ import { dirname, join } from "node:path";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { JSDOM } from "jsdom";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
+bindTestTenant();
 
 const core = createServer((req: IncomingMessage, res) => {
   if ((req.url ?? "").startsWith("/v1/surface-config")) {

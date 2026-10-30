@@ -347,11 +347,13 @@ export async function handler(req: IncomingMessage, res: ServerResponse): Promis
   const token = Array.isArray(raw) ? raw[0] : raw;
   const tenant = portalTenant(token, PORTAL_IDENTITY_SECRET, Date.now());
   const route = () => portalTokenStore.run(token, () => handle(req, res));
-  await (tenant ? withTenant(tenant, route) : route()).catch((err: unknown) => {
-    reportBackendError(err);
-    console.error("[admin] unhandled request error:", String(err));
-    json(res, 500, { error: "internal_error", message: "internal server error" });
-  });
+  await Promise.resolve()
+    .then(() => (tenant ? withTenant(tenant, route) : route()))
+    .catch((err: unknown) => {
+      reportBackendError(err);
+      console.error("[admin] unhandled request error:", String(err));
+      json(res, 500, { error: "internal_error", message: "internal server error" });
+    });
 }
 
 const server = createServer((req, res) => {
@@ -465,7 +467,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
           body: putBody,
         });
         const text = await r.text();
-        if (r.ok) await brandCache().refreshNow();
+        if (r.ok && boundTenant()) await brandCache().refreshNow();
         res.writeHead(r.status, { "content-type": "application/json" });
         res.end(text);
       } catch (err) {

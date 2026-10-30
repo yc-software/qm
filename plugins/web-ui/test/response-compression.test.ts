@@ -8,6 +8,9 @@ import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { sendBuffered } from "../../chassis/src/http.ts";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "web-ui-compression-test";
 
