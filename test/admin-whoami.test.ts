@@ -8,10 +8,12 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
+import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT, TENANT_HEADERS, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -110,16 +112,27 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
     assert.equal(unsigned.status, 401);
 
     const ts = Math.floor(Date.now() / 1000);
-    const badSig = signRequest("not-the-secret", ts, `GET\n/v1/admin/whoami\n`);
+    const canonical = canonicalPayload("GET", "/v1/admin/whoami", "", TEST_TENANT);
+    const identity = await mintPortalIdentity({ t: TEST_TENANT, p: "admin-alice", exp: Date.now() + 60_000 }, SECRET);
+    const headers = (signature: string, tenant = TENANT_HEADERS) => ({
+      ...tenant,
+      "x-portal-identity": identity,
+      "x-timestamp": String(ts),
+      "x-signature": signature,
+    });
     const forged = await fetch(`${s.base}/v1/admin/whoami`, {
-      headers: { "x-admin-actor": "admin-alice@default-org", "x-timestamp": String(ts), "x-signature": badSig },
+      headers: headers(signRequest("not-the-secret", ts, canonical)),
     });
     assert.equal(forged.status, 401);
 
-    const goodSig = signRequest(SECRET, ts, `GET\n/v1/admin/whoami\n`);
-    const ok = await fetch(`${s.base}/v1/admin/whoami`, {
-      headers: { "x-admin-actor": "admin-alice@default-org", "x-timestamp": String(ts), "x-signature": goodSig },
+    const foreign = await fetch(`${s.base}/v1/admin/whoami`, {
+      headers: headers(signRequest(SECRET, ts, canonicalPayload("GET", "/v1/admin/whoami", "", OTHER_TENANT)), {
+        "x-qm-tenant": OTHER_TENANT,
+      }),
     });
+    assert.equal(foreign.status, 401, "an identity minted for one tenant is refused on another tenant's request");
+
+    const ok = await fetch(`${s.base}/v1/admin/whoami`, { headers: headers(signRequest(SECRET, ts, canonical)) });
     assert.equal(ok.status, 200);
     assert.deepEqual(await ok.json(), {
       isAdmin: true,

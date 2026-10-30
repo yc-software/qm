@@ -9,13 +9,16 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
+import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
-import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { provisionTrustedAdmin as provision } from "../plugins/portal/src/trusted-admin.ts";
+import { inChassisTenant } from "./support/signed-core.ts";
+import { bindTestTenant, OTHER_TENANT, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
+
+const provisionTrustedAdmin = inChassisTenant(provision);
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
@@ -32,7 +35,6 @@ function start(enabled = true) {
     signingSecret,
     capabilitySecret: "capability-secret".repeat(3),
     portalIdentitySecret: identitySecret,
-    requireSignedPortalIdentity: true,
     replayDedupe: { ...createMemoryReplayDedupe(), durable: true },
     admin: built.admin,
     identity: built.identity,
@@ -50,32 +52,27 @@ function claims(overrides: Record<string, unknown> = {}) {
     purpose: "trusted-entry-admin",
     issuer,
     subject: "founder-7",
-    org: "org:default-org",
+    tenant: TEST_TENANT,
     exp: Date.now() + 55_000,
     jti: crypto.randomUUID(),
     ...overrides,
   };
 }
-async function send(base: string, payload: unknown, key = identitySecret, sourceSigned = true) {
+async function send(base: string, payload: unknown, key = identitySecret, sourceSigned = true, tenant = TEST_TENANT) {
   const path = `/v1/auth/trusted/admin?nonce=${crypto.randomUUID()}`;
   const body = JSON.stringify({ assertion: await mintSignedPayload(payload, key) });
-  const ts = Math.floor(Date.now() / 1000);
+  const headers = { "content-type": "application/json", ...TENANT_HEADERS, "x-qm-tenant": tenant };
   return fetch(base + path, {
     method: "POST",
     body,
-    headers: {
-      "content-type": "application/json",
-      ...(sourceSigned
-        ? { "x-timestamp": String(ts), "x-signature": signRequest(signingSecret, ts, `POST\n${path}\n${body}`) }
-        : {}),
-    },
+    headers: sourceSigned ? signedRequestHeaders(signingSecret, "POST", path, body, headers) : headers,
   });
 }
 
 test("portal provisioning creates a durable ordinary grant once and preserves existing grants", async (t) => {
   const s = start();
   t.after(s.close);
-  const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
+  const config = { core: s.base, signingSecret, identitySecret, tenant: TEST_TENANT, issuer };
   await Promise.all(Array.from({ length: 8 }, () => provisionTrustedAdmin(config, "founder-7")));
   const principal = { id: trustedPrincipal(issuer, "founder-7"), type: "internal" as const };
   assert.equal((await s.built.admin.adminStatusOf(principal)).isAdmin, true);
@@ -92,7 +89,8 @@ test("provisioning rejects forged, unrelated, expired, impersonated, and replaye
   t.after(s.close);
   for (const invalid of [
     { purpose: "session" },
-    { org: "org:other" },
+    { tenant: OTHER_TENANT },
+    { tenant: undefined },
     { issuer: "https://other.example.test" },
     { exp: Date.now() - 1 },
     { exp: Date.now() + 120_000 },
@@ -105,6 +103,7 @@ test("provisioning rejects forged, unrelated, expired, impersonated, and replaye
   ])
     assert.ok((await send(s.base, claims(invalid))).status >= 400, JSON.stringify(invalid));
   assert.equal((await send(s.base, claims(), signingSecret)).status, 403);
+  assert.equal((await send(s.base, claims(), identitySecret, true, OTHER_TENANT)).status, 403);
   assert.ok((await send(s.base, claims(), identitySecret, false)).status >= 400);
   assert.equal(
     (await send(s.base, { p: trustedPrincipal(issuer, "founder-7"), exp: Date.now() + 55_000 })).status,

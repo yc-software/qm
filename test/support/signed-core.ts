@@ -1,0 +1,36 @@
+import { signedRequestHeaders, TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { withTenant as withChassisTenant } from "../../plugins/chassis/src/tenant.ts";
+import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
+import { TEST_TENANT } from "./tenant.ts";
+
+export interface SignedCoreOptions {
+  actor?: string;
+  identitySecret?: string;
+  identityTenant?: string;
+  tenant?: string;
+  headers?: Record<string, string>;
+}
+
+export async function signedCoreHeaders(
+  secret: string,
+  method: string,
+  pathWithQuery: string,
+  body = "",
+  opts: SignedCoreOptions = {},
+): Promise<Record<string, string>> {
+  const tenant = opts.tenant ?? TEST_TENANT;
+  const base: Record<string, string> = { ...opts.headers, [TENANT_HEADER]: tenant };
+  if (opts.actor)
+    base[PORTAL_IDENTITY_HEADER] = await mintPortalIdentity(
+      { t: opts.identityTenant ?? tenant, p: opts.actor, exp: Date.now() + 60_000 },
+      opts.identitySecret ?? secret,
+    );
+  return signedRequestHeaders(secret, method, pathWithQuery, body, base);
+}
+
+export function inChassisTenant<A extends unknown[], R>(
+  fn: (...args: A) => R,
+  tenant = TEST_TENANT,
+): (...args: A) => R {
+  return (...args) => withChassisTenant(tenant, () => fn(...args));
+}
