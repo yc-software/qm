@@ -16,6 +16,7 @@ const SECRETS = {
   CORE_SIGNING_SECRET: "core-signing-supersecret".repeat(2),
   PORTAL_IDENTITY_SECRET: "portal-identity-supersecret",
   SKILL_SIGNING_SECRET: "skill-signing-supersecret".repeat(2),
+  DEPLOYMENT_CONTROL_SECRET: "deployment-control-supersecret".repeat(2),
   SB_TOKEN: "sandbox-forwarded-supersecret",
   PLUG_TOKEN: "plugin-supersecret",
   SLACK_BOT_TOKEN: "xoxb-dual-role-supersecret",
@@ -271,7 +272,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\n`,
+        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability-sign\nCONNECTOR_SECRET_KEY=${"connector-key".repeat(3)}\nCORE_SIGNING_SECRET=${"core-sign".repeat(4)}\nPORTAL_IDENTITY_SECRET=portal-sign\nSKILL_SIGNING_SECRET=${"skill-sign".repeat(4)}\nDEPLOYMENT_CONTROL_SECRET=${"control-sign".repeat(4)}\n`,
       );
       const fake = fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;
@@ -392,7 +393,7 @@ test(
       );
       writeFileSync(
         join(dir, ".env"),
-        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\n`,
+        `PUBLIC_API_URL=http://localhost:8080\nCAPABILITY_SECRET=capability\nCONNECTOR_SECRET_KEY=${"connector".repeat(4)}\nPORTAL_IDENTITY_SECRET=identity\nSKILL_SIGNING_SECRET=${"ok".repeat(16)}\nDEPLOYMENT_CONTROL_SECRET=${"ctl".repeat(16)}\n`,
       );
       fakeDocker(dir);
       process.env.PATH = `${dir}:${priorPath}`;

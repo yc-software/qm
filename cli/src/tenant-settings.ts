@@ -57,10 +57,18 @@ export async function seedTenantSettings(
   opts: { config: QmConfig; configDir: string; envFile?: string },
   link: () => Promise<CoreLink>,
   fallback?: (name: string) => string | undefined,
+  mode: "up" | "push" = "push",
 ): Promise<void> {
   const envPath = opts.envFile ?? join(opts.configDir, ".env");
   const values = existsSync(envPath) ? readEnvFile(envPath) : new Map<string, string>();
-  const credentials = operatorCredentials(values, fallback);
+  let credentials: ReturnType<typeof operatorCredentials>;
+  try {
+    credentials = operatorCredentials(values, fallback);
+  } catch (error) {
+    if (mode === "push") throw error;
+    warn(`tenant settings: skipped (${errMessage(error)}); run \`qm settings push\` with them in .env`);
+    return;
+  }
   const settings = tenantSettingsEnv(opts.config, values);
   let core: CoreLink;
   try {

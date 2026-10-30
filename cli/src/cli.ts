@@ -551,7 +551,7 @@ async function dispatch(argv: string[]): Promise<void> {
       await provider.createBackend(ctx).up(upOptions);
       const deploysCore = !upOptions.only || upOptions.only.includes("core");
       if (!dryRun && !upOptions.buildOnly && !upOptions.candidate && !upOptions.inactive && deploysCore)
-        await seedTenantSettings(ctx, () => provider.coreLink(ctx), operatorSecretOf(provider, ctx));
+        await seedTenantSettings(ctx, () => provider.coreLink(ctx), operatorSecretOf(provider, ctx), "up");
       return;
     }
 

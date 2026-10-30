@@ -89,6 +89,7 @@ else if (a[0] === "secrets" && a[1] === "list") {
       "PUBLIC_API_URL",
       "SECURITY_SCREEN_PROXY_TOKEN",
       "SKILL_SIGNING_SECRET",
+      "DEPLOYMENT_CONTROL_SECRET",
     ]
       .map((name) => `${name} digest`)
       .join("\n"),

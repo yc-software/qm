@@ -137,6 +137,10 @@ test("seeding refuses without a distinct operator credential, surfaces rejection
     const ok = async (): Promise<CoreLink> => ({ request: async () => ({ status: 200, body: "{}" }), close: () => {} });
     writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${signing}\n`);
     await assert.rejects(seedTenantSettings({ config: config(), configDir: dir }, ok), /must differ/);
+    await quietly(async (lines) => {
+      await seedTenantSettings({ config: config(), configDir: dir }, ok, undefined, "up");
+      assert.match(lines.join("\n"), /tenant settings: skipped \(DEPLOYMENT_CONTROL_SECRET is required locally/);
+    });
     writeFileSync(join(dir, ".env"), `CORE_SIGNING_SECRET=${signing}\nDEPLOYMENT_CONTROL_SECRET=${control}\n`);
     const rejected = async (): Promise<CoreLink> => ({
       request: async (path) => ({
