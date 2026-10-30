@@ -308,7 +308,7 @@ test("expiry sweep fires the resolution once and rides the scheduler tick", asyn
   const idStore = createIdempotencyStore(createMemoryMap<IdempotencyRecord>());
   const scheduler = createScheduler({
     ...singleProcessDeps(),
-    crons: createCronStore(createMemoryMap()),
+    crons: createCronStore(),
     deliveries: createDeliveryStore(),
     idempotency: idStore,
     identity: createIdentityService(createMemoryMap()),
