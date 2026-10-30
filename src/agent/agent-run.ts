@@ -16,8 +16,7 @@ import {
 } from "./turn-support.ts";
 import { withDocumentInputs, type DocumentModel } from "./document-inputs.ts";
 import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "./provider-payload.ts";
-import type { DocumentInput } from "../core/document-inputs.ts";
-import { documentStub } from "../core/document-kinds.ts";
+import { documentStub, type DocumentInput } from "../core/documents.ts";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

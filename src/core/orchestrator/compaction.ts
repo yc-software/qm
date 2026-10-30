@@ -34,27 +34,20 @@ interface Summarized {
   mode?: "recent";
 }
 
+interface CompactionInput {
+  session: Session;
+  lease: Lease;
+  visibleHistory: SessionEntry[];
+  scopeId: string;
+  actorId: string;
+  model?: string;
+  cancel?: AbortSignal;
+  reservedTokens?: number;
+}
+
 export interface CompactionContext {
-  compactContextIfNeeded(input: {
-    session: Session;
-    lease: Lease;
-    visibleHistory: SessionEntry[];
-    scopeId: string;
-    actorId: string;
-    model?: string;
-    cancel?: AbortSignal;
-    reservedTokens?: number;
-  }): Promise<SessionEntry[]>;
-  compactRecent(input: {
-    session: Session;
-    lease: Lease;
-    visibleHistory: SessionEntry[];
-    scopeId: string;
-    actorId: string;
-    model?: string;
-    cancel?: AbortSignal;
-    reservedTokens?: number;
-  }): Promise<SessionEntry[]>;
+  compactContextIfNeeded(input: CompactionInput): Promise<SessionEntry[]>;
+  compactRecent(input: CompactionInput): Promise<SessionEntry[]>;
   scheduleBackgroundCompaction(input: { sessionId: string; scopeId: string; actorId: string; model?: string }): void;
   documentTokenBudget(scopeId: string, model?: string): number;
 }
@@ -86,15 +79,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   const keepRecentTokenFraction = Math.min(KEEP_RECENT_TOKEN_FRACTION, COMPACT_SOFT_FRACTION - 0.1);
 
   async function summarizeForCompaction(
-    input: {
-      session: Session;
-      visibleHistory: SessionEntry[];
-      scopeId: string;
-      actorId: string;
-      model?: string;
-      cancel?: AbortSignal;
-      reservedTokens?: number;
-    },
+    input: Omit<CompactionInput, "lease">,
     recoverOnFailure = false,
   ): Promise<Summarized | null> {
     if (isManagedGroupScope(input.scopeId)) return null;
@@ -158,16 +143,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     return summary;
   }
 
-  async function applyCompaction(input: {
-    session: Session;
-    lease: Lease;
-    visibleHistory: SessionEntry[];
-    scopeId: string;
-    actorId: string;
-    model?: string;
-    cancel?: AbortSignal;
-    reservedTokens?: number;
-  }): Promise<SessionEntry[] | null> {
+  async function applyCompaction(input: CompactionInput): Promise<SessionEntry[] | null> {
     const summarized = await summarizeForCompaction(input, true);
     if (!summarized) return null;
     const summary = await writeCompaction({ ...input, summarized });
@@ -177,16 +153,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     return boundRecent([summary, ...recent], historyBudgetFor(input));
   }
 
-  async function compactContextIfNeeded(input: {
-    session: Session;
-    lease: Lease;
-    visibleHistory: SessionEntry[];
-    scopeId: string;
-    actorId: string;
-    model?: string;
-    cancel?: AbortSignal;
-    reservedTokens?: number;
-  }): Promise<SessionEntry[]> {
+  async function compactContextIfNeeded(input: CompactionInput): Promise<SessionEntry[]> {
     const maxContextTokens = historyBudgetFor(input);
     if (!overBudgetFraction(input.visibleHistory, maxContextTokens, COMPACT_HARD_FRACTION)) {
       return input.visibleHistory;
@@ -200,7 +167,7 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
     );
   }
 
-  async function compactRecent(input: Parameters<CompactionContext["compactRecent"]>[0]): Promise<SessionEntry[]> {
+  async function compactRecent(input: CompactionInput): Promise<SessionEntry[]> {
     input.cancel?.throwIfAborted();
     const budget = Math.floor(historyBudgetFor(input) * keepRecentTokenFraction);
     const prior = input.visibleHistory.findLast((entry) => contextSummaryPayload(entry));
@@ -273,6 +240,17 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
   }): void {
     if (compactionPending.has(input.sessionId)) return;
     compactionPending.add(input.sessionId);
+    const recordFailure = (e: unknown) =>
+      deps.errors?.record(
+        {
+          category: "turn",
+          code: "background_compaction_failed",
+          message: errMessage(e),
+          scopeLabel: input.scopeId as ScopeId,
+          sessionId: input.sessionId,
+        },
+        e,
+      );
     void backgroundCompaction(input.sessionId, async () => {
       compactionPending.delete(input.sessionId);
       let lease: Lease | null = null;
@@ -299,30 +277,12 @@ export function createCompaction(deps: OrchestratorDeps): CompactionContext {
           await writeCompaction({ session, lease, summarized });
         }
       } catch (e) {
-        deps.errors?.record(
-          {
-            category: "turn",
-            code: "background_compaction_failed",
-            message: errMessage(e),
-            scopeLabel: input.scopeId as ScopeId,
-            sessionId: input.sessionId,
-          },
-          e,
-        );
+        recordFailure(e);
       } finally {
         if (lease) await deps.sessions.releaseLease(lease);
       }
     }).catch((e) => {
-      deps.errors?.record(
-        {
-          category: "turn",
-          code: "background_compaction_failed",
-          message: errMessage(e),
-          scopeLabel: input.scopeId as ScopeId,
-          sessionId: input.sessionId,
-        },
-        e,
-      );
+      recordFailure(e);
     });
   }
 

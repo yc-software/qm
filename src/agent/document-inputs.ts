@@ -6,8 +6,9 @@ import {
   documentText,
   nativeDocumentIsReadable,
   type DocumentInput,
-} from "../core/document-inputs.ts";
-import { documentExtension, isTextDocument } from "../core/document-kinds.ts";
+  documentExtension,
+  isTextDocument,
+} from "../core/documents.ts";
 
 export interface DocumentModel {
   api?: string;

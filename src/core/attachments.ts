@@ -18,7 +18,7 @@ import {
 } from "../persistence/blob-transfer.ts";
 import { fileArtifactId, type FileArtifactStore, type FileDirection } from "../files/file-artifact-store.ts";
 import { swallowAs } from "../util/errors.ts";
-import { fileContentRequest } from "./document-kinds.ts";
+import { MIME_BY_EXT, fileContentRequest } from "./documents.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
 import { downscaleVisionImage } from "./image-downscale.ts";
@@ -83,42 +83,6 @@ export function safeAttachmentName(name: string): string {
   if (!base || /^\.+$/.test(base)) return "file";
   return base;
 }
-
-const MIME_BY_EXT: Record<string, string> = {
-  txt: "text/plain",
-  md: "text/markdown",
-  csv: "text/csv",
-  json: "application/json",
-  html: "text/html",
-  xml: "application/xml",
-  yaml: "application/yaml",
-  yml: "application/yaml",
-  pdf: "application/pdf",
-  doc: "application/msword",
-  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  xls: "application/vnd.ms-excel",
-  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ppt: "application/vnd.ms-powerpoint",
-  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  odt: "application/vnd.oasis.opendocument.text",
-  ods: "application/vnd.oasis.opendocument.spreadsheet",
-  odp: "application/vnd.oasis.opendocument.presentation",
-  rtf: "application/rtf",
-  tsv: "text/tab-separated-values",
-  eml: "message/rfc822",
-  ics: "text/calendar",
-  vcf: "text/vcard",
-  js: "text/javascript",
-  ts: "text/typescript",
-  py: "text/x-python",
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  gif: "image/gif",
-  webp: "image/webp",
-  svg: "image/svg+xml",
-  zip: "application/zip",
-};
 
 export function mimeFromName(name: string): string {
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";

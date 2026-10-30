@@ -20,8 +20,11 @@ import {
   type ExtractedDocumentText,
   historicalDocumentMetas,
   loadDocumentInputs,
-} from "./document-inputs.ts";
-import { MAX_DOCUMENT_BYTES, estimateDocumentTokens, isDocumentAttachment, isTextDocument } from "./document-kinds.ts";
+  MAX_DOCUMENT_BYTES,
+  estimateDocumentTokens,
+  isDocumentAttachment,
+  isTextDocument,
+} from "./documents.ts";
 import { recoveredRuntime } from "../agent/runtime-recovery.ts";
 import { createCanWriteScope, rosterAdmits, withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { goalView } from "../runs/turn-stream.ts";
@@ -2836,11 +2839,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               deps.files,
               [...historicalDocumentMetas(history), ...inbound.metas],
               mayReadArtifact,
-              undefined,
-              turnAbort.signal,
-              undefined,
-              undefined,
-              Math.max(0, documentBudget - countTokens(sideDiscussions)),
+              { signal: turnAbort.signal, maxTokens: Math.max(0, documentBudget - countTokens(sideDiscussions)) },
             );
         const screenDocuments = async (
           documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
@@ -3334,16 +3333,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                           )
                       : undefined,
                   );
-              const steeredDocuments = await loadDocumentInputs(
-                deps.files,
-                received.metas,
-                mayReadArtifact,
-                remainingDocumentBytes,
-                turnAbort.signal,
-                remainingDocumentCount,
-                initialDocuments,
-                remainingDocumentTokens,
-              );
+              const steeredDocuments = await loadDocumentInputs(deps.files, received.metas, mayReadArtifact, {
+                maxBytes: remainingDocumentBytes,
+                signal: turnAbort.signal,
+                maxDocuments: remainingDocumentCount,
+                existingDocuments: initialDocuments,
+                maxTokens: remainingDocumentTokens,
+              });
               let steeredUnscreened = false;
               if (enforceScreen) steeredUnscreened = await screenDocuments(steeredDocuments, text);
               else observeDocuments(steeredDocuments, text);

@@ -1,6 +1,6 @@
 import type { ReplayImageLoader } from "./replay-images.ts";
 import type { ResumableToolCall } from "../core/turn-resume.ts";
-import type { DocumentInput } from "../core/document-inputs.ts";
+import type { DocumentInput } from "../core/documents.ts";
 import type { RuntimeControl, TurnHandoff } from "./runtime-types.ts";
 import type {
   AttachmentMeta,

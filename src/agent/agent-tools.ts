@@ -1,4 +1,4 @@
-import type { DocumentInput } from "../core/document-inputs.ts";
+import type { DocumentInput } from "../core/documents.ts";
 import type { TurnHandoff } from "./runtime-types.ts";
 import { type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Config } from "../config.ts";

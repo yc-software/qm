@@ -6,7 +6,7 @@ import {
   planCompaction,
   compactTranscript,
 } from "../src/agent/context-compaction.ts";
-import { estimateDocumentTokens } from "../src/core/document-kinds.ts";
+import { estimateDocumentTokens } from "../src/core/documents.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 let seq = 0;

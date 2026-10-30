@@ -4,7 +4,7 @@ import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { headSlice, tailSlice } from "../util/text.ts";
 import { countTokens } from "../util/tokens.ts";
 import { isObj } from "../util/objects.ts";
-import { documentAttachmentTokens, replayableDocumentMetas } from "../core/document-kinds.ts";
+import { documentAttachmentTokens, replayableDocumentMetas } from "../core/documents.ts";
 
 const MAX_COMPACT_ENTRY_CHARS = 16_000;
 const COMPACT_ENTRY_TAIL_CHARS = 2_000;

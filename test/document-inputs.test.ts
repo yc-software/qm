@@ -4,14 +4,14 @@ import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { documentBlocks, nativeDocumentFormat, withDocumentInputs } from "../src/agent/document-inputs.ts";
-import { isDocumentAttachment } from "../src/core/document-kinds.ts";
 import {
+  isDocumentAttachment,
   documentFallbackText,
   documentText,
   historicalDocumentMetas,
   loadDocumentInputs,
   type DocumentInput,
-} from "../src/core/document-inputs.ts";
+} from "../src/core/documents.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";
@@ -299,7 +299,7 @@ test("reuploaded identical documents consume the input budget once and retain th
       checked.push(file.id);
       return true;
     },
-    artifact.sizeBytes,
+    { maxBytes: artifact.sizeBytes },
   );
   assert.equal(inputs.documents.length, 1);
   assert.equal(inputs.documents[0]!.artifactId, "new-upload");
@@ -321,10 +321,7 @@ test("steered reuploads already in the turn do not consume another document slot
       checked.push(file.id);
       return true;
     },
-    0,
-    undefined,
-    0,
-    initial.documents,
+    { maxBytes: 0, maxDocuments: 0, existingDocuments: initial.documents },
   );
   assert.deepEqual(steered, { documents: [], notices: [], tokens: 0 });
   assert.deepEqual(checked, ["steered-upload"]);
@@ -366,7 +363,7 @@ test("document restoration checks current access and budgets before opening byte
   const { store, meta, opens } = storeFor();
   assert.equal((await loadDocumentInputs(store, [meta], () => false)).documents.length, 0);
   assert.equal(opens(), 0);
-  const result = await loadDocumentInputs(store, [meta], () => true, 1);
+  const result = await loadDocumentInputs(store, [meta], () => true, { maxBytes: 1 });
   assert.equal(result.documents.length, 0);
   assert.match(result.notices[0]!, /not included inline/);
   assert.equal(opens(), 0);
@@ -439,7 +436,7 @@ test("document loading aborts active streams promptly", async () => {
   const stream = new Readable({ read() {} });
   store.open = async () => ({ artifact, sizeBytes: artifact.sizeBytes, stream });
   const controller = new AbortController();
-  const pending = loadDocumentInputs(store, [meta], () => true, undefined, controller.signal);
+  const pending = loadDocumentInputs(store, [meta], () => true, { signal: controller.signal });
   setTimeout(() => controller.abort(new Error("cancelled")), 10);
   await assert.rejects(pending, /cancelled/);
   assert.equal(stream.destroyed, true);
