@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toEvent } from "../src/api/routes/surface-cache.ts";
+import { toEvent } from "../src/edge/http/routes/surface-cache.ts";
 
 test("toEvent passes through mentions, bot, mentionsSelf, and handled", () => {
   const e = toEvent({

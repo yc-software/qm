@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import type { App } from "../src/api/app.ts";
 import { mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";

@@ -403,9 +403,6 @@ jobs:
           npm run typecheck
           npm test
           npm run build
-      - name: Build and boot production image
-        if: needs.reuse.outputs.reusable != 'true'
-        run: bash scripts/smoke-surface-image.sh web-ui
 
   auth-plugin:
     name: Auth plugin
@@ -431,9 +428,6 @@ jobs:
           npm ci
           npm run typecheck
           npm test
-      - name: Build and boot production image
-        if: needs.reuse.outputs.reusable != 'true'
-        run: bash scripts/smoke-surface-image.sh auth
 
   portal-plugin:
     name: Portal plugin
@@ -462,9 +456,6 @@ jobs:
           npm ci
           npm run typecheck
           npm test
-      - name: Build and boot production image
-        if: needs.reuse.outputs.reusable != 'true'
-        run: bash scripts/smoke-surface-image.sh portal
 
   certify:
     name: Certify tested tree

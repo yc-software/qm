@@ -156,10 +156,10 @@ test("probe failures map from structured codes and error names, never provider t
 
 import "./support/auto-fake-sprites.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
+import { buildApp as buildProductionApp, serverDeps } from "./support/compose.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import type { AddressInfo } from "node:net";
 import { modelFromOverlay } from "../src/model/pi-models.ts";
 import { parseModelOverlay } from "../src/model/model-overlay.ts";

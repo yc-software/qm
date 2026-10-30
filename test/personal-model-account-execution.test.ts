@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
-import * as agentRun from "../src/agent/agent-run.ts";
+import * as agentRun from "../src/harness/agent-run.ts";
 import * as mockAgent from "./support/mock-agent.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
@@ -26,10 +26,10 @@ function observedAgent() {
   return agent;
 }
 
-mock.module("../src/agent/agent-run.ts", {
+mock.module("../src/harness/agent-run.ts", {
   namedExports: { ...agentRun, createAgent: observedCreateAgent },
 });
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("./support/compose.ts");
 
 for (const provider of ["anthropic", "openai"] as const) {
   test(`queued personal ${provider} turns use only that provider's credentials after switching to company`, async () => {

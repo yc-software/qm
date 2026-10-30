@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compilePath, findRoute, type Route, type BaseCtx } from "../src/api/routes/route.ts";
-import { apiRoutes } from "../src/api/routes/index.ts";
+import { compilePath, findRoute, type Route, type BaseCtx } from "../src/edge/http/routes/route.ts";
+import { apiRoutes } from "../src/edge/http/routes/index.ts";
 
 function matched(path: string, pathname: string): Record<string, string> | null {
   const out: Record<string, string> = {};

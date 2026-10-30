@@ -18,18 +18,29 @@ type Resource = {
   metadata: { name: string; annotations?: Record<string, string> };
   spec: {
     replicas: number;
+    selector?: Record<string, string>;
     strategy?: { type: string; rollingUpdate?: null };
     accessModes?: string[];
     storageClassName?: string;
     resources?: { requests: { storage: string } };
-    ports?: { port: number; targetPort: number }[];
+    ports?: { name: string; port: number; targetPort: number }[];
     rules?: { http: { paths: { backend: { service: { name: string; port: { number: number } } } }[] } }[];
     template: {
       spec: {
+        terminationGracePeriodSeconds?: number;
+        affinity?: {
+          podAffinity: {
+            requiredDuringSchedulingIgnoredDuringExecution: {
+              topologyKey: string;
+              labelSelector: { matchLabels: Record<string, string> };
+            }[];
+          };
+        };
         securityContext?: { fsGroup: number };
         volumes?: { name: string; persistentVolumeClaim: { claimName: string } }[];
         containers: {
           image: string;
+          command: string[];
           env: { name: string; value: string }[];
           ports: { containerPort: number; name: string }[];
           volumeMounts?: { name: string; mountPath: string }[];
@@ -53,7 +64,6 @@ function render(values: object = {}, explicitImages = true): Resource[] {
       { encoding: "utf8" },
     );
     assert.equal(result.status, 0, result.stderr);
-    // Use Helm's YAML parser rather than require a second YAML implementation.
     writeFileSync(join(dir, "Chart.yaml"), "apiVersion: v2\nname: parser\nversion: 0.1.0\n");
     writeFileSync(join(dir, "rendered.yaml"), result.stdout);
     mkdirSync(join(dir, "templates"));
@@ -72,78 +82,222 @@ function render(values: object = {}, explicitImages = true): Resource[] {
   }
 }
 
-function deployment(resources: Resource[], name = "core") {
+function deployment(resources: Resource[], name = "edge") {
   const resource = resources.find((r) => r.kind === "Deployment" && r.metadata.name === `test-qm-${name}`);
   assert.ok(resource, `missing ${name} deployment`);
   return resource;
 }
 
-function container(resources: Resource[], name = "core") {
+function container(resources: Resource[], name = "edge") {
   const result = deployment(resources, name).spec.template.spec.containers[0];
   assert.ok(result, `missing ${name} container`);
   return result;
 }
 
-function env(resources: Resource[], name = "portal") {
+function env(resources: Resource[], name = "edge") {
   return {
     ...resources.find((r) => r.kind === "Secret" && r.metadata.name === "test-qm-env")?.stringData,
     ...Object.fromEntries((container(resources, name).env ?? []).map((e) => [e.name, e.value])),
   };
 }
 
+const workloads = ["edge", "harness"] as const;
+
+function service(resources: Resource[], name = "core") {
+  const resource = resources.find((r) => r.kind === "Service" && r.metadata.name === `test-qm-${name}`);
+  assert.ok(resource, `missing ${name} service`);
+  return resource;
+}
+
 test("Helm requires an explicit compatible image and supports full digest references", options, () => {
-  assert.throws(() => render({}, false), /imageRef.*image.tag/);
+  assert.throws(() => render({}, false), /services.core.imageRef.*image.tag/);
   const ref = `registry.example.com/qm/core@sha256:${"a".repeat(64)}`;
-  const resources = render({ services: { core: { imageRef: ref }, portal: { tag: "portal-fixture" } } });
-  assert.equal(container(resources).image, ref);
-  assert.equal(container(resources, "portal").image, "ghcr.io/yc-software/qm/portal:portal-fixture");
-  assert.equal(resources.filter((r) => r.kind === "Deployment").length, 4);
-  const byReference = render(
-    {
-      services: Object.fromEntries(
-        ["core", "portal", "web-ui", "egress-proxy"].map((name) => [name, { imageRef: ref }]),
-      ),
-    },
-    false,
-  );
-  assert.ok(
-    byReference
+  const resources = render({ services: { core: { imageRef: ref }, "egress-proxy": { tag: "proxy-fixture" } } });
+  for (const name of workloads) assert.equal(container(resources, name).image, ref);
+  assert.equal(container(resources, "egress-proxy").image, "ghcr.io/yc-software/qm/egress-proxy:proxy-fixture");
+  const byReference = render({ services: { core: { imageRef: ref }, "egress-proxy": { imageRef: ref } } }, false);
+  for (const name of [...workloads, "egress-proxy"]) assert.equal(container(byReference, name).image, ref);
+});
+
+test("Helm runs edge, harness and egress-proxy only, from the core image", options, () => {
+  const resources = render();
+  assert.deepEqual(
+    resources
       .filter((r) => r.kind === "Deployment")
-      .every((r) => container(byReference, r.metadata.name.replace("test-qm-", "")).image === ref),
+      .map((r) => r.metadata.name)
+      .sort(),
+    ["test-qm-edge", "test-qm-egress-proxy", "test-qm-harness"],
+  );
+  assert.deepEqual(
+    resources
+      .filter((r) => r.kind === "Service")
+      .map((r) => r.metadata.name)
+      .sort(),
+    ["test-qm-core", "test-qm-egress-proxy"],
+  );
+  assert.deepEqual(container(resources).command, ["node", "src/edge/main.ts"]);
+  assert.deepEqual(container(resources, "harness").command, ["node", "src/harness/main.ts"]);
+  for (const name of workloads) assert.equal(container(resources, name).image, "ghcr.io/yc-software/qm/core:fixture");
+  assert.equal(service(resources).spec.selector?.["app.kubernetes.io/component"], "edge");
+});
+
+test("Helm runs the harness as an unexposed worker that drains before shutdown", options, () => {
+  const resources = render({
+    publicUrl: "https://qm.example.com",
+    ingress: { enabled: true, hosts: ["qm.example.com"] },
+  });
+  const harness = deployment(resources, "harness");
+  const main = container(resources, "harness");
+  assert.equal(harness.spec.replicas, 1);
+  assert.equal(harness.spec.template.spec.terminationGracePeriodSeconds, 300);
+  assert.deepEqual(main.ports, [{ name: "http", containerPort: 8080 }]);
+  assert.equal(main.readinessProbe.httpGet.path, "/readyz");
+  assert.equal(main.readinessProbe.httpGet.port, 8080);
+  assert.equal(main.livenessProbe.httpGet.path, "/healthz");
+  assert.equal(main.livenessProbe.httpGet.port, 8080);
+  assert.equal(main.startupProbe?.httpGet.path, "/readyz");
+  const harnessEnv = env(resources, "harness");
+  assert.equal(harnessEnv.PORT, "8080");
+  assert.equal(harnessEnv.PUBLIC_WEB_URL, "https://qm.example.com");
+  for (const key of ["PUBLIC_PORT", "PORTAL_PUBLIC_URL", "AUTH_EMBEDDED", "OIDC_ISSUER", "ADMIN_ENABLED"]) {
+    assert.equal(harnessEnv[key], undefined, key);
+  }
+  assert.ok(
+    !resources.some((r) => r.kind === "Service" && r.spec.selector?.["app.kubernetes.io/component"] === "harness"),
+  );
+  const backends = resources
+    .filter((r) => r.kind === "Ingress")
+    .flatMap((r) => r.spec.rules ?? [])
+    .flatMap((rule) => rule.http.paths.map((path) => path.backend.service.name));
+  assert.deepEqual(backends, ["test-qm-core"]);
+  assert.equal(
+    deployment(
+      render({ services: { core: { harness: { replicas: 3, terminationGracePeriodSeconds: 600 } } } }),
+      "harness",
+    ).spec.template.spec.terminationGracePeriodSeconds,
+    600,
   );
 });
 
-test("Helm mounts a retained core PVC with node group permissions and no overlapping pods", options, () => {
+test("Helm serves the API and the embedded front door from the edge", options, () => {
+  const resources = render({ publicUrl: "https://qm.example.com/" });
+  const edge = container(resources);
+  assert.deepEqual(edge.ports, [
+    { name: "http", containerPort: 8080 },
+    { name: "public", containerPort: 8000 },
+  ]);
+  assert.deepEqual(
+    service(resources).spec.ports?.map((p) => [p.name, p.port, p.targetPort]),
+    [
+      ["http", 8080, 8080],
+      ["public", 8000, 8000],
+    ],
+  );
+  const edgeEnv = env(resources);
+  for (const [key, value] of Object.entries({
+    PORT: "8080",
+    PUBLIC_PORT: "8000",
+    REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
+    ADMIN_ENABLED: "1",
+    ADMIN_BASE_PATH: "/admin",
+    PORTAL_PUBLIC_URL: "https://qm.example.com/",
+    WEB_UI_PUBLIC_URL: "https://qm.example.com/",
+    PUBLIC_WEB_URL: "https://qm.example.com/",
+    AUTH_EMBEDDED: "1",
+    AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
+    AUTH_BROKER_PREFIX: "/idp",
+    AUTH_ISSUER: "https://qm.example.com/idp",
+    AUTH_CLIENT_ID: "qm-portal",
+    AUTH_REDIRECT_URI: "https://qm.example.com/auth/callback",
+    OIDC_CLIENT_ID: "qm-portal",
+    OIDC_ISSUER: "https://qm.example.com/idp",
+    OIDC_AUTH_ENDPOINT: "https://qm.example.com/idp/authorize",
+    OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
+    OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
+    OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
+  })) {
+    assert.equal(edgeEnv[key], value, key);
+  }
+  for (const key of ["WEB_UI_UPSTREAM", "ADMIN_UPSTREAM", "CORE_API_URL"]) assert.equal(edgeEnv[key], undefined, key);
+  assert.equal(env(render({ services: { admin: { enabled: false } } })).ADMIN_ENABLED, "0");
+  const noAuth = env(render({ publicUrl: "https://qm.example.com", services: { auth: { enabled: false } } }));
+  assert.equal(noAuth.PUBLIC_PORT, "8000");
+  assert.equal(noAuth.AUTH_EMBEDDED, undefined);
+  assert.equal(noAuth.OIDC_ISSUER, undefined);
+});
+
+test("Helm runs an API-only edge when the portal is disabled", options, () => {
+  const off = { portal: { enabled: false }, auth: { enabled: false }, admin: { enabled: false } };
+  const resources = render({ publicUrl: "https://qm.example.com", services: off });
+  assert.deepEqual(container(resources).ports, [{ name: "http", containerPort: 8080 }]);
+  assert.deepEqual(
+    service(resources).spec.ports?.map((p) => p.name),
+    ["http"],
+  );
+  const edgeEnv = env(resources);
+  for (const key of ["PUBLIC_PORT", "PORTAL_PUBLIC_URL", "REQUIRE_SIGNED_PORTAL_IDENTITY", "AUTH_EMBEDDED"]) {
+    assert.equal(edgeEnv[key], undefined, key);
+  }
+  for (const module of ["auth", "admin"] as const) {
+    assert.throws(
+      () => render({ services: { ...off, [module]: { enabled: true } } }),
+      new RegExp(`${module} requires services.portal.enabled=true`),
+    );
+  }
+});
+
+test("Helm mounts a retained core PVC on co-located edge and harness pods with no overlap", options, () => {
   const resources = render({
     services: { core: { persistence: { enabled: true, size: "20Gi", storageClass: "block" } } },
   });
-  const core = deployment(resources);
   const pvc = resources.find((r) => r.kind === "PersistentVolumeClaim");
   assert.ok(pvc);
+  assert.equal(pvc.metadata.name, "test-qm-core-data");
   assert.equal(pvc.metadata.annotations?.["helm.sh/resource-policy"], "keep");
   assert.deepEqual(pvc.spec.accessModes, ["ReadWriteOnce"]);
   assert.equal(pvc.spec.storageClassName, "block");
   assert.equal(pvc.spec.resources?.requests.storage, "20Gi");
-  assert.equal(core.spec.strategy?.type, "Recreate");
-  assert.equal(core.spec.strategy?.rollingUpdate, null);
-  assert.equal(core.spec.template.spec.securityContext?.fsGroup, 1000);
-  assert.equal(core.spec.template.spec.volumes?.[0]?.persistentVolumeClaim.claimName, pvc.metadata.name);
-  assert.deepEqual(container(resources).volumeMounts, [{ name: "data", mountPath: "/data" }]);
-  assert.equal(env(resources, "core").DATA_DIR, "/data");
-  assert.throws(
-    () => render({ services: { core: { replicas: 2, persistence: { enabled: true } } } }),
-    /at most one replica/,
-  );
+  for (const name of workloads) {
+    const workload = deployment(resources, name);
+    assert.equal(workload.spec.strategy?.type, "Recreate");
+    assert.equal(workload.spec.strategy?.rollingUpdate, null);
+    assert.equal(workload.spec.template.spec.securityContext?.fsGroup, 1000);
+    assert.equal(workload.spec.template.spec.volumes?.[0]?.persistentVolumeClaim.claimName, pvc.metadata.name);
+    assert.deepEqual(container(resources, name).volumeMounts, [{ name: "data", mountPath: "/data" }]);
+    assert.equal(env(resources, name).DATA_DIR, "/data");
+  }
+  assert.equal(deployment(resources).spec.template.spec.affinity, undefined);
+  const affinity = deployment(resources, "harness").spec.template.spec.affinity?.podAffinity
+    .requiredDuringSchedulingIgnoredDuringExecution[0];
+  assert.equal(affinity?.topologyKey, "kubernetes.io/hostname");
+  assert.equal(affinity?.labelSelector.matchLabels["app.kubernetes.io/component"], "edge");
+  for (const name of workloads) {
+    assert.throws(
+      () => render({ services: { core: { [name]: { replicas: 2 }, persistence: { enabled: true } } } }),
+      /at most one replica/,
+    );
+  }
   assert.throws(
     () => render({ services: { core: { env: { DATA_DIR: "/wrong" }, persistence: { enabled: true } } } }),
     /DATA_DIR=\/data/,
   );
+  const shared = render();
+  for (const name of workloads) {
+    assert.equal(deployment(shared, name).spec.strategy, undefined);
+    assert.equal(deployment(shared, name).spec.template.spec.affinity, undefined);
+  }
+  assert.equal(deployment(render({ services: { core: { harness: { replicas: 4 } } } }), "harness").spec.replicas, 4);
 });
 
 test("Helm supports existing claims, default or empty storage class, and opting out", options, () => {
   const resources = render({ services: { core: { persistence: { enabled: true, existingClaim: "restored-data" } } } });
   assert.ok(!resources.some((r) => r.kind === "PersistentVolumeClaim"));
-  assert.equal(deployment(resources).spec.template.spec.volumes?.[0]?.persistentVolumeClaim.claimName, "restored-data");
+  for (const name of workloads) {
+    assert.equal(
+      deployment(resources, name).spec.template.spec.volumes?.[0]?.persistentVolumeClaim.claimName,
+      "restored-data",
+    );
+  }
   for (const storageClass of [null, ""]) {
     const pvc = render({ services: { core: { persistence: { enabled: true, storageClass } } } }).find(
       (r) => r.kind === "PersistentVolumeClaim",
@@ -153,60 +307,93 @@ test("Helm supports existing claims, default or empty storage class, and opting 
   }
   const disabled = render();
   assert.ok(!disabled.some((r) => r.kind === "PersistentVolumeClaim"));
-  assert.equal(deployment(disabled).spec.template.spec.volumes, undefined);
+  for (const name of workloads) assert.equal(deployment(disabled, name).spec.template.spec.volumes, undefined);
 });
 
 test("Helm preserves zero replicas including a stopped persistent core", options, () => {
   const resources = render({
-    services: { core: { replicas: 0, persistence: { enabled: true } }, portal: { replicas: 0 } },
+    services: { core: { edge: { replicas: 0 }, harness: { replicas: 0 }, persistence: { enabled: true } } },
   });
-  assert.equal(deployment(resources).spec.replicas, 0);
-  assert.equal(deployment(resources, "portal").spec.replicas, 0);
+  for (const name of workloads) assert.equal(deployment(resources, name).spec.replicas, 0);
 });
 
 test("Helm keeps process ports, probes, Services and upstreams consistent", options, () => {
-  const resources = render({ services: { core: { port: 9090 }, portal: { port: 9091 }, "web-ui": { port: 9092 } } });
-  for (const [name, port] of [
-    ["core", 9090],
-    ["portal", 9091],
-    ["web-ui", 9092],
-  ] as const) {
-    assert.equal(env(resources, name).PORT, String(port));
-    assert.equal(container(resources, name).ports[0]?.containerPort, port);
-    const service = resources.find((r) => r.kind === "Service" && r.metadata.name === `test-qm-${name}`);
-    assert.equal(service?.spec.ports?.[0]?.targetPort, port);
-    assert.equal(service?.spec.ports?.[0]?.port, port);
+  const resources = render({ services: { core: { port: 9090, publicPort: 9091 } } });
+  for (const name of workloads) {
+    assert.equal(env(resources, name).PORT, "9090");
+    assert.equal(container(resources, name).ports[0]?.containerPort, 9090);
+    assert.equal(container(resources, name).readinessProbe.httpGet.port, 9090);
+    assert.equal(container(resources, name).livenessProbe.httpGet.port, 9090);
   }
-  assert.equal(container(resources).readinessProbe.httpGet.port, 9090);
-  assert.equal(env(resources).CORE_API_URL, "http://test-qm-core.default.svc.cluster.local:9090");
-  assert.equal(env(resources).WEB_UI_UPSTREAM, "http://test-qm-web-ui.default.svc.cluster.local:9092");
-  assert.throws(() => render({ services: { core: { env: { PORT: "9999" } } } }), /PORT conflicts/);
+  assert.equal(env(resources).PUBLIC_PORT, "9091");
+  assert.equal(container(resources).ports[1]?.containerPort, 9091);
+  assert.deepEqual(
+    service(resources).spec.ports?.map((p) => [p.port, p.targetPort]),
+    [
+      [9090, 9090],
+      [9091, 9091],
+    ],
+  );
+  assert.equal(env(resources, "egress-proxy").CORE_API_URL, "http://test-qm-core.default.svc.cluster.local:9090");
+  assert.throws(() => render({ services: { core: { env: { PORT: "9999" } } } }), /edge PORT conflicts/);
+  assert.throws(
+    () => render({ env: { PUBLIC_PORT: "9999" } }),
+    /edge PUBLIC_PORT conflicts with services.core.publicPort/,
+  );
   assert.throws(() => render({ services: { "egress-proxy": { port: 49000 } } }), /Envoy listener is fixed/);
 });
 
-test("Helm separates core startup/readiness from liveness and allows probe overrides", options, () => {
-  const core = container(render());
-  assert.equal(core.readinessProbe.httpGet.path, "/readyz");
-  assert.equal(core.livenessProbe.httpGet.path, "/healthz");
-  assert.equal(core.startupProbe?.httpGet.path, "/readyz");
-  assert.equal(core.startupProbe?.httpGet.port, "http");
-  assert.equal(core.startupProbe?.failureThreshold, 60);
-  const custom = container(render({ services: { core: { readinessPath: "/custom-ready", startupProbe: null } } }));
-  assert.equal(custom.readinessProbe.httpGet.path, "/custom-ready");
-  assert.equal(custom.livenessProbe.httpGet.path, "/healthz");
-  assert.equal(custom.startupProbe, undefined);
+test("Helm separates startup/readiness from liveness and allows probe overrides", options, () => {
+  const resources = render();
+  for (const name of workloads) {
+    const main = container(resources, name);
+    assert.equal(main.readinessProbe.httpGet.path, "/readyz");
+    assert.equal(main.livenessProbe.httpGet.path, "/healthz");
+    assert.equal(main.startupProbe?.httpGet.path, "/readyz");
+    assert.equal(main.startupProbe?.httpGet.port, "http");
+    assert.equal(main.startupProbe?.failureThreshold, 60);
+  }
+  const custom = render({ services: { core: { readinessPath: "/custom-ready", startupProbe: null } } });
+  for (const name of workloads) {
+    assert.equal(container(custom, name).readinessProbe.httpGet.path, "/custom-ready");
+    assert.equal(container(custom, name).livenessProbe.httpGet.path, "/healthz");
+    assert.equal(container(custom, name).startupProbe, undefined);
+  }
 });
 
-test("Helm ingress rejects embedded, missing, worker and disabled targets", options, () => {
-  for (const service of ["auth", "admin", "egress-proxy", "missing"]) {
-    assert.throws(() => render({ ingress: { enabled: true, service } }), /ingress.service must name/);
+test("Helm ingress targets the edge's front door or API port only", options, () => {
+  for (const service of ["web-ui", "auth", "admin", "harness", "egress-proxy", "missing"]) {
+    assert.throws(() => render({ ingress: { enabled: true, service } }), /ingress.service must be portal/);
   }
   assert.throws(
-    () => render({ ingress: { enabled: true }, services: { portal: { enabled: false }, auth: { enabled: false } } }),
+    () =>
+      render({
+        ingress: { enabled: true },
+        services: { portal: { enabled: false }, auth: { enabled: false }, admin: { enabled: false } },
+      }),
     /portal is disabled/,
   );
-  const ingress = render({ ingress: { enabled: true, hosts: ["qm.example.com"] } }).find((r) => r.kind === "Ingress");
-  assert.equal(ingress?.spec.rules?.[0]?.http.paths[0]?.backend.service.name, "test-qm-portal");
+  for (const [target, port] of [
+    ["portal", 8000],
+    ["core", 8080],
+  ] as const) {
+    const ingress = render({ ingress: { enabled: true, service: target, hosts: ["qm.example.com"] } }).find(
+      (r) => r.kind === "Ingress",
+    );
+    const backend = ingress?.spec.rules?.[0]?.http.paths[0]?.backend.service;
+    assert.equal(backend?.name, "test-qm-core");
+    assert.equal(backend?.port.number, port);
+  }
+});
+
+test("Helm rejects conflicting settings across modules hosted by the edge", options, () => {
+  assert.throws(
+    () => render({ services: { portal: { env: { SHARED: "a" } }, admin: { env: { SHARED: "b" } } } }),
+    /Conflicting SHARED settings in services hosted by edge/,
+  );
+  const merged = env(render({ services: { portal: { env: { SHARED: "a" } }, auth: { env: { SHARED: "a" } } } }));
+  assert.equal(merged.SHARED, "a");
+  assert.equal(env(render({ services: { admin: { env: { ONLY_EDGE: "1" } } } }), "harness").ONLY_EDGE, undefined);
 });
 
 test("Helm propagates the effective embedded auth allowlist without overriding portal policy", options, () => {
@@ -217,7 +404,7 @@ test("Helm propagates the effective embedded auth allowlist without overriding p
     assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, auth.AUTH_ALLOWED_EMAIL_DOMAIN);
   }
   const secretBacked = render({ secretEnv: auth });
-  assert.ok(!container(secretBacked, "portal").env.some((e) => e.name === "OIDC_ALLOWED_EMAILS"));
+  assert.ok(!container(secretBacked, "edge").env.some((e) => e.name === "OIDC_ALLOWED_EMAILS"));
   const values = { env: { AUTH_ALLOWED_EMAILS: "global@example.com" }, services: { auth: { env: auth } } };
   assert.equal(env(render(values)).OIDC_ALLOWED_EMAILS, auth.AUTH_ALLOWED_EMAILS);
   const explicit = { OIDC_ALLOWED_EMAILS: "other@example.org", OIDC_ALLOWED_EMAIL_DOMAIN: "example.org" };
@@ -240,7 +427,7 @@ test("Helm does not shadow an external OIDC allowlist with a derived value", opt
     ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN", "example.com", "staff.example.com"],
   ] as const) {
     for (const source of [{ env: { [authKey]: broad } }, { services: { auth: { env: { [authKey]: broad } } } }]) {
-      assert.ok(!container(render({ ...source, envFrom }), "portal").env.some((entry) => entry.name === oidcKey));
+      assert.ok(!container(render({ ...source, envFrom }), "edge").env.some((entry) => entry.name === oidcKey));
       assert.equal(env(render({ ...source, envFrom, secretEnv: { [oidcKey]: narrow } }))[oidcKey], narrow);
       assert.equal(
         env(
@@ -255,6 +442,6 @@ test("Helm does not shadow an external OIDC allowlist with a derived value", opt
     }
     assert.equal(env(render({ envFrom, env: { [authKey]: broad, [oidcKey]: narrow } }))[oidcKey], narrow);
   }
-  const externalOnly = container(render({ envFrom }), "portal").env;
+  const externalOnly = container(render({ envFrom }), "edge").env;
   assert.ok(!externalOnly.some((entry) => entry.name.startsWith("OIDC_ALLOWED_")));
 });

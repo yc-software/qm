@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import type { AddressInfo, Server } from "node:net";
 import { createApp } from "../src/api/app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";

@@ -19,16 +19,19 @@ import {
 } from "../util.ts";
 import { manifestRef, sandboxBaseRef } from "../manifest.ts";
 import {
-  brokerWiring,
   ordered,
-  brandEnvOf,
-  orgEnv,
+  coreWorkloadEnv,
+  hostsWebEdge,
+  isCoreWorkload,
+  isVirtualService,
+  PUBLIC_PORT,
+  runnableImages,
   runnableServices,
   hostedServiceEnv,
-  serviceHost,
   serviceDef,
+  serviceWorkloads,
   teardownOrdered,
-  virtualServiceEnv,
+  type ImageName,
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
@@ -53,6 +56,19 @@ const safe = (s: string): string => s.replace(/[^A-Za-z0-9_.-]/g, "-");
 const ORG_LABEL_KEY = "qm.org";
 const orgLabelArgs = (ctx: DockerCtx): string[] => ["--label", `${ORG_LABEL_KEY}=${ctx.config.orgId}`];
 const baseHostPort = (ctx: DockerCtx): number => dockerBasePort(ctx.config);
+const publicHostPort = (ctx: DockerCtx): number => baseHostPort(ctx) + 1;
+
+function hostPorts(ctx: DockerCtx, service: ServiceName): Array<[number, number]> {
+  const def = serviceDef(service);
+  return [
+    ...(def.docker.hostPortOffset === undefined
+      ? []
+      : [[baseHostPort(ctx) + def.docker.hostPortOffset, def.docker.internalPort] as [number, number]]),
+    ...(service === "edge" && hostsWebEdge(ctx.config.services)
+      ? [[publicHostPort(ctx), PUBLIC_PORT] as [number, number]]
+      : []),
+  ];
+}
 
 interface DockerCtx {
   config: QmConfig;
@@ -205,11 +221,19 @@ function pgContainerPassword(ctx: DockerCtx): string | undefined {
   }
 }
 
-function imageRef(ctx: DockerCtx, service: ServiceName): string {
+function imageRef(ctx: DockerCtx, service: ImageName): string {
   return ctx.config.imageOverrides[service] ?? manifestRef(service);
 }
 
-function resolveImage(ctx: DockerCtx, service: ServiceName): string {
+function resolveImage(ctx: DockerCtx, service: ImageName, resolved: Map<ImageName, string>): string {
+  const cached = resolved.get(service);
+  if (cached) return cached;
+  const ref = buildOrPullImage(ctx, service);
+  resolved.set(service, ref);
+  return ref;
+}
+
+function buildOrPullImage(ctx: DockerCtx, service: ImageName): string {
   if (ctx.buildFrom) {
     const root = ctx.repoRoot!;
     const dockerfile = join(root, "deploy", service, "Dockerfile");
@@ -343,7 +367,7 @@ function readEnvValue(envFile: string | undefined, key: string): string | undefi
 function secretValues(ctx: DockerCtx, service: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const secret of secretsForService(ctx.config, service)) {
-    if (secret.managedBy === "terraform" && service === "core") continue;
+    if (secret.managedBy === "terraform" && isCoreWorkload(service)) continue;
     const fileValue = readEnvValue(ctx.envFile, secret.name);
     const value = deploymentSecretValue(secret.name, fileValue);
     if (value === undefined) continue;
@@ -355,44 +379,29 @@ function secretValues(ctx: DockerCtx, service: string): Record<string, string> {
 }
 
 export function dockerServiceEnv(config: QmConfig, service: ServiceName): Record<string, string> {
+  if (isCoreWorkload(service)) {
+    return {
+      ...coreWorkloadEnv(config, service),
+      ...(localSandboxActive(config)
+        ? { DOCKER_HOST: "unix:///var/run/docker.sock", QM_CORE_CONTAINER: `${dockerPrefix(config)}-${service}` }
+        : {}),
+    };
+  }
   const def = serviceDef(service);
-  const out: Record<string, string> = {
+  return {
     [def.docker.portEnv]: String(def.docker.internalPort),
     CORE_API_URL: "http://core:8080",
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+    CORE_ORG_ID: config.orgId,
   };
-  if (service === "core" && localSandboxActive(config)) {
-    out.DOCKER_HOST = "unix:///var/run/docker.sock";
-    out.QM_CORE_CONTAINER = `${dockerPrefix(config)}-core`;
-  }
-  if (service === "portal") {
-    if (config.services.includes("web-ui")) out.WEB_UI_UPSTREAM = "http://web-ui:8080";
-    if (config.services.includes("admin")) out.ADMIN_UPSTREAM = "http://web-ui:8080/admin";
-  }
-  if (config.services.includes("auth")) {
-    Object.assign(
-      out,
-      brokerWiring(service, {
-        publicUrl: config.publicUrl,
-        authBaseUrl: `http://${dockerPrefix(config)}-auth.internal:8080`,
-        ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-          ? { allowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-          : {}),
-      }),
-    );
-  }
-  return out;
 }
 
 function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string> {
   const { config } = ctx;
   const out: Record<string, string> = {};
   if (ctx.signingSecret) out.CORE_SIGNING_SECRET = ctx.signingSecret;
-  if (service === "core") {
-    Object.assign(
-      out,
-      orgEnv("core", config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
-    );
+  Object.assign(out, dockerServiceEnv(config, service));
+  const core = isCoreWorkload(service);
+  if (core) {
     out.PORT = "8080";
     out.DATA_DIR = "/data";
     out.DATABASE_URL = ctx.databaseUrl;
@@ -401,23 +410,15 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     const layerSubs = existingLayerSubdirs(ctx);
     if (layerSubs.length) out.DEPLOYMENT_LAYER = "/layer";
     Object.assign(out, ctx.sandboxEnv);
-    if (localSandboxActive(config)) {
-      out.DOCKER_HOST = "unix:///var/run/docker.sock";
-      out.QM_CORE_CONTAINER = `${ctx.prefix}-core`;
-    }
-  } else {
-    Object.assign(out, dockerServiceEnv(config, service));
   }
-  const virtualEnv = service === "core" ? virtualServiceEnv(config.services, config.env) : {};
   const env = {
     ...out,
-    ...virtualEnv,
     ...hostedServiceEnv(config.services, config.env, service),
-    ...(service === "core" ? securityScreenEnv(config) : {}),
+    ...(core ? securityScreenEnv(config) : {}),
     ...secretValues(ctx, service),
   };
   if (ctx.signingSecret) env.CORE_SIGNING_SECRET = ctx.signingSecret;
-  if (service === "core") {
+  if (core) {
     env.DATABASE_URL = ctx.databaseUrl;
     for (const key of ctx.sandboxSecretKeys) {
       const value = out[key];
@@ -432,7 +433,7 @@ function secretEnvKeys(ctx: DockerCtx, service: string): Set<string> {
   const keys = new Set(Object.keys(secretValues(ctx, service)));
   const plugin = ctx.config.plugins.find((entry) => entry.name === service);
   if (ctx.signingSecret && plugin?.coreAccess !== false) keys.add("CORE_SIGNING_SECRET");
-  if (service === "core") {
+  if (isCoreWorkload(service)) {
     keys.add("DATABASE_URL");
     for (const key of ctx.sandboxSecretKeys) keys.add(key);
   }
@@ -484,13 +485,14 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
     ctx.network,
     "--network-alias",
     service,
+    ...(service === "edge" ? ["--network-alias", "core"] : []),
     "--network-alias",
     `${cname(ctx, service)}.internal`,
     "--restart",
     "no",
   ];
   const cleanup = pushEnvArgs(args, serviceEnv(ctx, service), secretEnvKeys(ctx, service));
-  if (service === "core") {
+  if (isCoreWorkload(service)) {
     args.push("-v", `${ctx.prefix}-coredata:/data`);
     for (const m of layerMounts(ctx)) args.push("-v", m);
     for (const m of skillMounts(ctx)) args.push("-v", m);
@@ -500,10 +502,8 @@ function runArgs(ctx: DockerCtx, service: ServiceName, image: string): { args: s
       if (socket.gid) args.push("--group-add", socket.gid);
     }
   }
-  if (def.docker.hostPortOffset !== undefined) {
-    args.push("-p", `${baseHostPort(ctx) + def.docker.hostPortOffset}:${def.docker.internalPort}`);
-  }
-  args.push(image);
+  for (const [host, container] of hostPorts(ctx, service)) args.push("-p", `${host}:${container}`);
+  args.push(image, ...(def.command ?? []));
   return { args, cleanup };
 }
 
@@ -589,7 +589,7 @@ function buildCtx(
     ...(opts.localSandboxImage ? { LOCAL_SANDBOX_IMAGE: opts.localSandboxImage } : {}),
   };
   ctx.missingSandboxSecrets = sb.missingSecrets;
-  if (opts.buildFrom) ctx.repoRoot = resolveBuildRepoRoot(opts.buildFromPath, runnableServices(config.services));
+  if (opts.buildFrom) ctx.repoRoot = resolveBuildRepoRoot(opts.buildFromPath, runnableImages(config.services));
   return ctx;
 }
 
@@ -656,13 +656,12 @@ export async function dockerUp(
     step(`network: ${ctx.network}`);
     if (resolvedLocalImage) step(`sandbox: local image ${resolvedLocalImage}`);
     for (const def of ordered(runnableServices(config.services))) {
-      const ports =
-        def.docker.hostPortOffset !== undefined ? ` (host :${baseHostPort(ctx) + def.docker.hostPortOffset})` : "";
-      step(
-        `${def.name}: image ${ctx.buildFrom ? `build deploy/${def.name}/Dockerfile` : imageRef(ctx, def.name)}${ports}`,
-      );
+      const mapped = hostPorts(ctx, def.name).map(([host]) => `:${host}`);
+      const ports = mapped.length ? ` (host ${mapped.join(", ")})` : "";
+      const image = def.docker.image;
+      step(`${def.name}: image ${ctx.buildFrom ? `build deploy/${image}/Dockerfile` : imageRef(ctx, image)}${ports}`);
       note(`     env: ${Object.keys(serviceEnv(ctx, def.name)).join(", ") || "(none)"}`);
-      if (def.name === "core") {
+      if (def.name === "edge") {
         const subs = existingLayerSubdirs(ctx);
         note(
           `     layer: ${subs.length ? `${ctx.sandboxDir} → /layer (${subs.join(", ")})` : `(no skills/ or tools/ in ${ctx.sandboxDir})`}`,
@@ -692,8 +691,10 @@ export async function dockerUp(
   ctx.databaseUrl = await ensurePostgres(ctx, false);
   if (!externalDatabaseUrl(ctx)) await waitPostgres(ctx);
 
+  const images = new Map<ImageName, string>();
+  removeRetiredContainers(ctx);
   for (const def of ordered(runnableServices(config.services))) {
-    const image = resolveImage(ctx, def.name);
+    const image = resolveImage(ctx, def.docker.image, images);
     docker(["rm", "-f", cname(ctx, def.name)], /No such container|is not running/);
     step(`starting ${def.name}`);
     const run = runArgs(ctx, def.name, image);
@@ -725,7 +726,7 @@ export async function dockerUp(
     ];
     const wiring = {
       ...(p.coreAccess === false ? {} : { CORE_API_URL: "http://core:8080" }),
-      ...orgEnv(p.name, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+      CORE_ORG_ID: config.orgId,
       PORT: "8080",
     };
     const env = {
@@ -751,16 +752,10 @@ export async function dockerUp(
 function printUrls(ctx: DockerCtx): void {
   note("");
   ok(`stack up — ${ctx.config.orgId}`);
-  const has = (s: ServiceName): boolean => ctx.config.services.includes(s);
-  const url = (s: ServiceName): string =>
-    `http://localhost:${baseHostPort(ctx) + serviceDef(s).docker.hostPortOffset!}`;
-  if (has("portal")) note(`   portal : ${url("portal")}  (public front door)`);
-  if (has("auth"))
-    note(`   auth   : ${url("portal")}/idp/authorize  (sign-in broker, published only through the portal)`);
-  if (has("web-ui")) note(`   web-ui : ${url("web-ui")}`);
-  if (has("admin")) note(`   admin  : ${url("admin")}/admin`);
-  note(`   core   : ${url("core")}`);
-  note(`   status : qm status   ·   logs: qm logs core   ·   stop: qm down`);
+  if (hostsWebEdge(ctx.config.services))
+    note(`   web    : http://localhost:${publicHostPort(ctx)}  (public front door)`);
+  note(`   api    : http://localhost:${baseHostPort(ctx)}`);
+  note(`   status : qm status   ·   logs: qm logs edge | harness   ·   stop: qm down`);
 }
 
 export function dockerStatus(config: QmConfig): void {
@@ -774,7 +769,19 @@ export function dockerStatus(config: QmConfig): void {
     "--format",
     "table {{.Names}}\t{{.Status}}\t{{.Ports}}",
   ]);
-  if (config.services.includes("slack")) note("slack: virtual service running in the core container");
+  const hosted = config.services.filter(isVirtualService);
+  if (hosted.length) note(`${hosted.join(", ")}: running in the edge container`);
+}
+
+const RETIRED_CONTAINERS = ["core", "web-ui", "portal", "auth", "admin"];
+
+function removeRetiredContainers(ctx: DockerCtx): void {
+  const present = new Set(psNames(["-a"]));
+  for (const name of RETIRED_CONTAINERS.map((service) => cname(ctx, service))) {
+    if (!present.has(name)) continue;
+    step(`removing ${name} (now served by edge and harness)`);
+    docker(["rm", "-f", name], /No such container/);
+  }
 }
 
 function psNames(args: string[]): string[] {
@@ -794,13 +801,18 @@ export async function dockerLogs(config: QmConfig, service: string | undefined, 
   const tail = String(opts.tail ?? 200);
 
   if (service) {
-    const resolved = serviceHost(service);
-    if (resolved !== service) note(`${service} runs in ${resolved}; showing ${resolved} logs`);
-    const name = `${prefix}-${resolved}`;
-    if (!containerExists(name)) die(`no container ${name} (is the stack up? services: ${config.services.join(", ")})`);
+    const resolved = serviceWorkloads(service);
+    if (resolved.join() !== service) note(`${service} runs in ${resolved.join(" and ")}; showing its logs`);
+    const names = resolved.map((workload) => `${prefix}-${workload}`);
+    const missing = names.find((name) => !containerExists(name));
+    if (missing) die(`no container ${missing} (is the stack up? services: ${config.services.join(", ")})`);
+    if (names.length > 1) {
+      await streamPrefixedLogs(names, prefix, { follow: opts.follow ?? false, tail });
+      return;
+    }
     const args = ["logs", "--tail", tail];
     if (opts.follow) args.push("-f");
-    args.push(name);
+    args.push(names[0]!);
     dockerInherit(args);
     return;
   }

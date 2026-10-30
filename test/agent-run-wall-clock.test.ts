@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { raceTurnWallClock } from "../src/agent/agent-run.ts";
+import { raceTurnWallClock } from "../src/harness/agent-run.ts";
 
 const never = new Promise<void>(() => {});
 

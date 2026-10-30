@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ensureSentChat, loopItemRoutes } from "../src/api/routes/loop-items.ts";
+import { ensureSentChat, loopItemRoutes } from "../src/edge/http/routes/loop-items.ts";
 import { buildGmailReplyMime } from "../src/loops/sources/gmail.ts";
-import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
+import { findRoute, run, type ApiCtx } from "../src/edge/http/routes/route.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { testMap } from "./support/test-database.ts";

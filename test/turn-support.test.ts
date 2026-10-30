@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { turnToolContext, oneShotModelUtilities, oneShotRunner } from "../src/agent/turn-support.ts";
+import { turnToolContext, oneShotModelUtilities, oneShotRunner } from "../src/harness/turn-support.ts";
 import { SECURITY_SCREEN_STEP, SECURITY_SCREEN_SYSTEM_PROMPT } from "../src/security/security-posture.ts";
 import type { TurnLlmRequestRecord, AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 

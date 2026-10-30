@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { createRunPreemption, createWorker } from "../src/runs/worker.ts";
-import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createRunPreemption, createWorker } from "../src/harness/worker.ts";
+import type { Orchestrator } from "../src/harness/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { handbackStop, PARKED, type Run, type RunStore } from "../src/runs/run-store.ts";
 import type { Principal, TurnResult } from "../src/types.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";

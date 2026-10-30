@@ -8,7 +8,7 @@ import {
   renderConversationRoster,
   renderReachRoster,
   renderStandingObligations,
-} from "../src/core/orchestrator/prompt-blocks.ts";
+} from "../src/core/prompt-blocks.ts";
 import type { GrantedHandle, CandidateDestination } from "../src/types.ts";
 import type { Cron, Webhook, Monitor } from "../src/triggers/types.ts";
 import type { DirectoryMember, DirectoryChannel } from "../src/directory/directory-store.ts";

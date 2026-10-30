@@ -7,7 +7,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { externalTools } from "../src/core/orchestrator/external-tools.ts";
+import { externalTools } from "../src/harness/orchestrator/external-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
@@ -161,7 +161,7 @@ test("external native tool ceiling cannot delegate, switch sandboxes, read confi
 });
 
 test("external broker requires the current run lease and both external-safe and ordinary grants", async () => {
-  const { externalSlackCapabilityAllowed } = await import("../src/api/external-slack-capability.ts");
+  const { externalSlackCapabilityAllowed } = await import("../src/edge/http/external-slack-capability.ts");
   const { createAclStore } = await import("../src/acl/acl-store.ts");
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
@@ -270,9 +270,9 @@ test("external account DMs require admission under the current policy", async ()
 });
 
 test("external sandbox API token cannot reach private APIs, while its safe broker token works", async (t) => {
-  const { createServer } = await import("../src/api/server.ts");
+  const { createServer } = await import("../src/edge/http/server.ts");
   const { mintCapabilityToken } = await import("../src/auth/capability-token.ts");
-  const { serverDeps } = await import("../src/wiring.ts");
+  const { serverDeps } = await import("./support/compose.ts");
   const config = testConfig({ signingSecret: "synthetic-signing-key-for-http-test", externalSlackPolicies });
   const b = buildApp(config);
   await b.identity.hydrate();

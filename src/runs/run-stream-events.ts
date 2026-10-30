@@ -1,10 +1,12 @@
 import type { EventBus } from "../util/event-bus.ts";
+import type { TurnStreamChange } from "./turn-stream.ts";
 
 export type RunStreamEvent =
-  | { runId: string; kind: "delta"; offset: number; text: string; startOffset: number }
-  | { runId: string; kind: "reasoning"; step: string; index: number; offset: number; text: string }
+  | { runId: string; kind: "delta"; offset: number; text: string; startOffset: number; origin?: string }
+  | { runId: string; kind: "reasoning"; step: string; index: number; offset: number; text: string; origin?: string }
   | { runId: string; kind: "sync"; offset: number; reasoning?: Record<string, number> }
-  | { runId: string; kind: "refresh" };
+  | { runId: string; kind: "refresh" }
+  | { runId: string; kind: "state"; origin: string; change: TurnStreamChange };
 
 export function emitRunText(
   bus: EventBus<RunStreamEvent>,
@@ -12,9 +14,10 @@ export function emitRunText(
   text: string,
   offset: number,
   startOffset: number,
+  origin?: string,
 ): void {
   for (const [at, chunk] of notifyChunks(text))
-    bus.emit({ runId, kind: "delta", offset: offset + at, text: chunk, startOffset });
+    bus.emit({ runId, kind: "delta", offset: offset + at, text: chunk, startOffset, ...(origin ? { origin } : {}) });
 }
 
 export function emitRunReasoning(
@@ -23,9 +26,18 @@ export function emitRunReasoning(
   block: { step: string; index: number },
   text: string,
   offset: number,
+  origin?: string,
 ): void {
   for (const [at, chunk] of notifyChunks(text))
-    bus.emit({ runId, kind: "reasoning", step: block.step, index: block.index, offset: offset + at, text: chunk });
+    bus.emit({
+      runId,
+      kind: "reasoning",
+      step: block.step,
+      index: block.index,
+      offset: offset + at,
+      text: chunk,
+      ...(origin ? { origin } : {}),
+    });
 }
 
 export function reasoningKey(block: { step: string; index: number }): string {

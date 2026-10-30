@@ -12,7 +12,7 @@ import { runNowSettled } from "./support/settle.ts";
 import { loadConfig, type Config } from "../src/config.ts";
 import type { SandboxHandle, ProvisionOptions, Sandbox } from "../src/sandbox/sandbox.ts";
 import { verifyCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
-import { egressClaimAllowingControlPlane } from "../src/core/orchestrator.ts";
+import { egressClaimAllowingControlPlane } from "../src/harness/orchestrator.ts";
 import { SESSION_BUSY_USER_TEXT } from "../src/core/failure-copy.ts";
 import { TURN_FILES_DIR, turnFileId } from "../src/core/attachments.ts";
 import { contextSummaryPayload } from "../src/sessions/session-store.ts";

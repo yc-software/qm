@@ -19,7 +19,7 @@ import {
   uploadAttachments,
   uploadFailureNote,
 } from "./lib.ts";
-import { stripAckPrefix } from "../core/orchestrator/turn-helpers.ts";
+import { stripAckPrefix } from "../core/turn-helpers.ts";
 import { parseBlockAction, parseInteractionBody } from "./payloads.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { TurnResult } from "../types.ts";

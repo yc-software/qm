@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runnableServices } from "../src/services.ts";
 import { loadConfigAt } from "../src/config.ts";
-import { flyLogs } from "../src/backends/fly.ts";
+import { flyApp, flyLogs } from "../src/backends/fly.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const configDir = join(repoRoot, "deploy", "stacks", "acme");
@@ -29,7 +29,8 @@ function captureFlyLogs(service: string | undefined, opts: { follow?: boolean; t
 test("no <service> prints a per-app tail for every service (the interleaved-all promise)", () => {
   const out = captureFlyLogs(undefined, {});
   for (const svc of runnableServices(config.services)) {
-    assert.match(out, new RegExp(`logs -a qm-${svc} --no-tail`), `missing tail for ${svc}`);
+    const app = flyApp("qm", svc);
+    assert.match(out, new RegExp(`logs -a ${app} --no-tail`), `missing tail for ${svc}`);
   }
 });
 

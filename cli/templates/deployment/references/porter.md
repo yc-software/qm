@@ -70,7 +70,7 @@ AUTH_ALLOWED_EMAILS=<email>
 With Postgres and no `ADMIN_GRANTS`, the instance boots, sign-in works, and
 the admin console is permanently unreachable — there is no in-product way to
 grant the first admin afterwards. The Helm chart bridges `AUTH_ALLOWED_EMAILS`
-to the portal's `OIDC_ALLOWED_EMAILS`; on the raw `porter/apps/` path set both.
+to the edge's `OIDC_ALLOWED_EMAILS`; on the raw `porter/apps/` path set both.
 
 ## Build, deploy, verify
 
