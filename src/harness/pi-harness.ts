@@ -835,6 +835,32 @@ function documentsDroppedNote(documents: readonly DocumentInput[]): string {
 const DOCUMENTS_DROPPED_RETRY_NOTE =
   "[system] The previous request failed while it carried inline attachments; they have been replaced with notes on how to read them from saved files. Continue with the request.";
 
+const IMAGES_DROPPED_RETRY_NOTE =
+  "[system] The previous request failed while it carried images added in this task, so they have been replaced with notes. Continue with the request, and tell the person if an image they asked about couldn't be read.";
+
+function imageCountSince(session: AgentSession, from: number): number {
+  return session.agent.state.messages
+    .slice(from)
+    .flatMap((m) => ((m as { content?: unknown }).content as Array<{ type?: string }> | undefined) ?? [])
+    .filter((block) => block?.type === "image").length;
+}
+
+function replaceImagesSince(session: AgentSession, from: number): void {
+  const state = session.agent.state;
+  state.messages = state.messages.map((m, i) => {
+    const content = (m as { content?: unknown }).content;
+    if (i < from || !Array.isArray(content)) return m;
+    return {
+      ...m,
+      content: content.map((block: { type?: string }) =>
+        block?.type === "image"
+          ? { type: "text", text: "[image removed: the model provider rejected a request that carried it]" }
+          : block,
+      ),
+    } as typeof m;
+  });
+}
+
 function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
   const state = session.agent.state;
   for (let i = state.messages.length - 1; i >= messagesBefore; i--) {
@@ -2036,9 +2062,37 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
               );
             return true;
           };
+          let imagesRetried = false;
+          const retryWithoutImages = async (failure: ProviderTurnError | null): Promise<boolean> => {
+            if (imagesRetried || userAborted || turn.cancel?.aborted || failure?.code !== "bad_request") return false;
+            const lastAssistant = entry.agentSession.messages
+              .slice(messagesBefore)
+              .findLast((m) => (m as { role?: string }).role === "assistant") as AssistantMessage | undefined;
+            if (lastAssistant && lastAssistant.stopReason !== "error") return false;
+            const images = imageCountSince(entry.agentSession, messagesBefore);
+            if (!images) return false;
+            const capMs = raceCapMs();
+            if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
+            imagesRetried = true;
+            console.error(
+              `[pi] request with ${images} image(s) from this turn rejected (${failure.code}: ${failure.raw || failure.message}) — retrying without them session=${turn.session.id}`,
+            );
+            dropFailedAssistant(entry.agentSession, messagesBefore);
+            replaceImagesSince(entry.agentSession, messagesBefore);
+            const outcome = await raceTurnWallClock(entry.agentSession.prompt(IMAGES_DROPPED_RETRY_NOTE), {
+              capMs,
+              extendMs: extendCapMs,
+              abort: () => entry.agentSession.abort(),
+            });
+            if (userAborted) return false;
+            if (outcome !== "ok")
+              throw new NonRetryableTurnError(`${failure.message} (retry without images was ${outcome})`);
+            return true;
+          };
           const recoverFailedRound = async (): Promise<void> => {
             if (entry.ref.runtimeHandoff || userAborted || turn.cancel?.aborted) return;
-            await retryWithoutDocuments();
+            if (!(await retryWithoutDocuments()))
+              await retryWithoutImages(piAssistantFailure(messagesSince(entry.agentSession, messagesBefore)));
             const refusal = providerRefusalError(entry.agentSession, messagesBefore);
             if (!refusal) return;
             try {
@@ -2164,6 +2218,13 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
                 recovered = await retryWithoutDocuments();
               } catch (e) {
                 swallow("pi: document-free retry", e);
+              }
+              if (!recovered && turnErr instanceof ProviderTurnError) {
+                try {
+                  recovered = await retryWithoutImages(turnErr);
+                } catch (e) {
+                  swallow("pi: image-free retry", e);
+                }
               }
               if (!recovered && turnErr instanceof ProviderTurnError && FALLBACK_CODES.has(turnErr.code)) {
                 try {
