@@ -13,7 +13,7 @@ import {
   type ProviderScaffold,
 } from "../provider-scaffold.ts";
 import type { ResolvedPlugin } from "../plugins.ts";
-import { runnableServices, serviceHost } from "../services.ts";
+import { runnableServices, serviceWorkloads } from "../services.ts";
 import {
   awsCheckLive,
   awsDoctor,
@@ -262,7 +262,8 @@ const aws: HostingProvider = {
   ],
   upOptions: (ctx, flags, dryRun) => {
     const only = workloadOptions(flags);
-    const unknown = only?.filter((name) => !ctx.config.aws?.services[serviceHost(name)]) ?? [];
+    const unknown =
+      only?.filter((name) => !serviceWorkloads(name).every((workload) => ctx.config.aws?.services[workload])) ?? [];
     if (unknown.length) throw new CliError(`--only has unknown AWS workload(s): ${unknown.join(", ")}`);
     const imageLabel = stringFlag(flags, "image-label");
     const candidate = stringFlag(flags, "candidate");
@@ -338,7 +339,7 @@ const aws: HostingProvider = {
       }
     }
     for (const name of Object.keys(config.aws.services)) {
-      if (!workloads.has(name) && !workloads.has(serviceHost(name))) {
+      if (!workloads.has(name)) {
         errors.push({
           clause: "config.v1",
           message: `contract aws.services.${name}: coordinates do not match an enabled service or discovered plugin`,

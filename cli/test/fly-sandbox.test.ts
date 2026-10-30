@@ -23,7 +23,7 @@ test("Fly runs the live session smoke inside the private core machine", () => {
   assert.equal(flyLiveSessionCommand(), "node src/deployment/postdeploy-smoke.ts session http://127.0.0.1:8080");
 });
 
-test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image, env literals)", () => {
+test("a fly config's sandbox block rewrites the edge and harness fly.toml [env] (app, image, env literals)", () => {
   const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
   const cfg = {
     ...config,
@@ -34,7 +34,7 @@ test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image,
     },
   };
 
-  const core = derivedTomlFor(cfg, "core", repoRoot);
+  const core = derivedTomlFor(cfg, "edge", repoRoot);
   assert.match(core, /FLY_RESIDENT_ENV_TZ = "UTC"/, "sandbox.env literal forwarded as FLY_RESIDENT_ENV_*");
   assert.doesNotMatch(
     core,
@@ -42,11 +42,11 @@ test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image,
     "secretEnv value/name must not be written to the toml",
   );
 
-  const admin = derivedTomlFor(cfg, "admin", repoRoot);
-  assert.doesNotMatch(admin, /FLY_RESIDENT_ENV_TZ/);
+  assert.match(derivedTomlFor(cfg, "harness", repoRoot), /FLY_RESIDENT_ENV_TZ = "UTC"/);
+  assert.doesNotMatch(derivedTomlFor(cfg, "egress-proxy", repoRoot), /FLY_RESIDENT_ENV_TZ/);
 });
 
-test("the fly target routes security screen proxy configuration only to core", () => {
+test("the fly target routes security screen proxy configuration only to edge and harness", () => {
   const { config } = loadConfigAt(join(repoRoot, "deploy", "stacks", "acme", "qm.config.jsonc"));
   const screened: QmConfig = {
     ...config,
@@ -57,20 +57,21 @@ test("the fly target routes security screen proxy configuration only to core", (
       endpoint: "https://screen.example.test/classify",
     },
   };
-  assert.deepEqual(
-    Object.fromEntries(
-      Object.entries(generatedEnv(derivedTomlFor(screened, "core", repoRoot))).filter(([name]) =>
-        name.startsWith("SECURITY_SCREEN_"),
+  for (const workload of ["edge", "harness"] as const)
+    assert.deepEqual(
+      Object.fromEntries(
+        Object.entries(generatedEnv(derivedTomlFor(screened, workload, repoRoot))).filter(([name]) =>
+          name.startsWith("SECURITY_SCREEN_"),
+        ),
       ),
-    ),
-    {
-      SECURITY_SCREEN_CLASSIFIER: "proxy",
-      SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
-      SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-    },
-  );
+      {
+        SECURITY_SCREEN_CLASSIFIER: "proxy",
+        SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
+        SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
+      },
+    );
   assert.deepEqual(
-    Object.keys(generatedEnv(derivedTomlFor(screened, "admin", repoRoot))).filter((name) =>
+    Object.keys(generatedEnv(derivedTomlFor(screened, "egress-proxy", repoRoot))).filter((name) =>
       name.startsWith("SECURITY_SCREEN_"),
     ),
     [],
@@ -254,7 +255,7 @@ test("the Fly S3 probe is valid CommonJS that reports async failures", () => {
   }
 });
 
-test("fly secrets push stages a dual-role secret under BOTH names on the core app", async () => {
+test("fly secrets push stages a dual-role secret under BOTH names on the edge and harness apps", async () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-fly-push-"));
   const config: QmConfig = {
     contract: 1,
@@ -307,16 +308,23 @@ test("fly secrets push stages a dual-role secret under BOTH names on the core ap
       "renamed variant forwarded into sandboxes",
     );
     assert.ok(calls.includes("secrets set --stage -a acme-core FLY_RESIDENT_ENV_COMPANY_TOKEN=-"));
+    assert.ok(calls.includes("secrets set --stage -a acme-harness ANTHROPIC_API_KEY=-"), "the harness runs turns");
+    assert.ok(calls.includes("secrets set --stage -a acme-harness FLY_RESIDENT_ENV_COMPANY_TOKEN=-"));
+    assert.ok(!calls.includes("-a acme-harness SLACK_BOT_TOKEN=-"), "Slack app tokens stay on the edge");
     assert.ok(!calls.includes("-a acme-core COMPANY_TOKEN=-"), "a sandbox-only secret is not staged plain");
     assert.ok(
       calls.includes("secrets set --stage -a acme-core SLACK_BOT_TOKEN=-"),
-      "virtual-service secrets stage plain on core",
+      "virtual-service secrets stage plain on the edge",
     );
     assert.ok(
       calls.includes("secrets set --stage -a acme-srcplug CORE_SIGNING_SECRET=-"),
       "discovered source plugins get the signing secret",
     );
-    assert.ok(calls.includes("apps create acme-core --org personal"), "the service app exists before secret staging");
+    assert.ok(calls.includes("apps create acme-core --org personal"), "the edge app exists before secret staging");
+    assert.ok(
+      calls.includes("apps create acme-harness --org personal"),
+      "the harness app exists before secret staging",
+    );
     assert.ok(calls.includes("apps create acme-srcplug --org personal"), "source plugin apps are created too");
     assert.ok(calls.includes("apps create acme-signer --org personal"), "coreless plugin apps are created too");
     assert.ok(
@@ -560,16 +568,14 @@ test("fly live check requires deployed machines and a healthy public endpoint", 
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
-  const liveEnvs = Object.fromEntries(
-    ["core", "web-ui", "portal"].map((service) => [
-      service,
-      generatedEnv(derivedTomlFor(config, service as "core" | "web-ui" | "portal", repoRoot)),
-    ]),
-  );
+  const liveEnvs = {
+    core: generatedEnv(derivedTomlFor(config, "edge", repoRoot)),
+    harness: generatedEnv(derivedTomlFor(config, "harness", repoRoot)),
+  };
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify(["core", "web-ui", "portal"].map((service) => ({ Name: "acme-" + service }))));
+if (a.startsWith("apps list")) console.log(JSON.stringify(["core", "harness"].map((service) => ({ Name: "acme-" + service }))));
 else if (a.startsWith("status")) {
   const app = process.argv[process.argv.indexOf("-a") + 1];
   const service = app.slice("acme-".length);
@@ -591,7 +597,7 @@ else console.log("ok");`,
     });
     assert.deepEqual(lines, [], "JSON callers can suppress all human-readable live-check output");
     const calls = readFileSync(fake.log, "utf8");
-    for (const app of ["acme-core", "acme-web-ui", "acme-portal"]) {
+    for (const app of ["acme-core", "acme-harness"]) {
       assert.ok(calls.includes(`status -a ${app} --json`));
     }
     assert.match(
@@ -624,7 +630,7 @@ test("fly live readiness rejects the wrong organization identity, region, and re
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }]));
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{
   id: "machine-core", state: "started", region: "ord",
   config: { image: "registry.fly.io/app@sha256:abc", env: { QM_DEPLOYMENT_ID: "qm-v2:other-org:acme:acme" } }
@@ -667,11 +673,11 @@ test("fly live readiness rejects the wrong region after deployment identity matc
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
-  const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
+  const env = generatedEnv(derivedTomlFor(config, "edge", repoRoot));
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }]));
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{
   id: "machine-core", state: "started", region: "ord",
   config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(env)} }
@@ -704,11 +710,11 @@ test("fly live readiness rejects rendered environment drift after identity and r
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
-  const env = { ...generatedEnv(derivedTomlFor(config, "core", repoRoot)), S3_BUCKET: "wrong-bucket" };
+  const env = { ...generatedEnv(derivedTomlFor(config, "edge", repoRoot)), S3_BUCKET: "wrong-bucket" };
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }]));
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{
   id: "machine-core", state: "started", region: "sjc",
   config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(env)} }
@@ -743,13 +749,14 @@ test("fly live readiness requires the generated TCP check for plugins", async ()
   };
   const plugin: ResolvedPlugin = { name: "linear", kind: "image", image: "ghcr.io/example/linear:1", env: {} };
   const liveEnvs = {
-    core: generatedEnv(derivedTomlFor(config, "core", repoRoot)),
+    core: generatedEnv(derivedTomlFor(config, "edge", repoRoot)),
+    harness: generatedEnv(derivedTomlFor(config, "harness", repoRoot)),
     linear: generatedEnv(derivedPluginTomlFor(config, plugin)),
   };
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-linear" }]));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }, { Name: "acme-linear" }]));
 else if (a.startsWith("status")) {
   const app = process.argv[process.argv.indexOf("-a") + 1];
   const service = app.slice("acme-".length);
@@ -790,13 +797,14 @@ test("fly live readiness rejects a plugin whose TCP check is not passing", async
   };
   const plugin: ResolvedPlugin = { name: "linear", kind: "image", image: "ghcr.io/example/linear:1", env: {} };
   const liveEnvs = {
-    core: generatedEnv(derivedTomlFor(config, "core", repoRoot)),
+    core: generatedEnv(derivedTomlFor(config, "edge", repoRoot)),
+    harness: generatedEnv(derivedTomlFor(config, "harness", repoRoot)),
     linear: generatedEnv(derivedPluginTomlFor(config, plugin)),
   };
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-linear" }]));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }, { Name: "acme-linear" }]));
 else if (a.startsWith("status")) {
   const app = process.argv[process.argv.indexOf("-a") + 1];
   const service = app.slice("acme-".length);
@@ -832,11 +840,11 @@ test("fly live readiness fails when core cannot round-trip durable object storag
     env: { core: { SNAPSHOT_STORE: "s3", TRANSFER_STORE: "s3", S3_BUCKET: "acme-data", S3_REGION: "auto" } },
     imageOverrides: {},
   };
-  const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
+  const env = generatedEnv(derivedTomlFor(config, "edge", repoRoot));
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }]));
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "started", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc", env: ${JSON.stringify(env)} } }] }));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else if (a.startsWith("machine exec")) { console.error("AccessDenied"); process.exit(1); }
@@ -870,11 +878,11 @@ test("fly live readiness rejects a healthy machine on the wrong configured image
     env: { core: {} },
     imageOverrides: { core: configured },
   };
-  const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
+  const env = generatedEnv(derivedTomlFor(config, "edge", repoRoot));
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }]));
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "started", region: "sjc", config: { image: ${JSON.stringify(running)}, env: ${JSON.stringify(env)} } }] }));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
 else console.log("ok");`,
@@ -906,11 +914,11 @@ test("fly live readiness resolves deployment tags to their immutable image diges
     env: { core: {} },
     imageOverrides: { core: `registry.fly.io/acme-core@${digest}` },
   };
-  const env = generatedEnv(derivedTomlFor(config, "core", repoRoot));
+  const env = generatedEnv(derivedTomlFor(config, "edge", repoRoot));
   const fake = fakeFly(
     dir,
     `
-if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
+if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }]));
 else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "started", region: "sjc", config: { image: "registry.fly.io/acme-core:deployment-123", env: ${JSON.stringify(env)} } }] }));
 else if (a.startsWith("image show")) console.log(JSON.stringify([{ MachineID: "machine-core", Registry: "registry.fly.io", Repository: "acme-core", Tag: "deployment-123", Digest: ${JSON.stringify(digest)} }]));
 else if (a.startsWith("checks list")) console.log(JSON.stringify({ machine: [{ status: "passing" }] }));
@@ -943,7 +951,7 @@ test("fly live check rejects stopped workloads even when the public endpoint res
   };
   const fake = fakeFly(
     dir,
-    `if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }])); else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "stopped", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc" } }] })); else console.log("ok");`,
+    `if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }])); else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [{ id: "machine-core", state: "stopped", region: "sjc", config: { image: "registry.fly.io/app@sha256:abc" } }] })); else console.log("ok");`,
   );
   try {
     await assert.rejects(
@@ -973,7 +981,7 @@ test("fly live check rejects a configured workload with no deployed machine", as
   };
   const fake = fakeFly(
     dir,
-    `if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }])); else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [] })); else console.log("ok");`,
+    `if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }])); else if (a.startsWith("status")) console.log(JSON.stringify({ Machines: [] })); else console.log("ok");`,
   );
   try {
     await assert.rejects(
@@ -1045,7 +1053,7 @@ test("fly secrets push refuses an unmarked pre-existing app", async () => {
     dir,
     `
 if (a.startsWith("apps create")) console.log("already been taken");
-else if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }]));
+else if (a.startsWith("apps list")) console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }]));
 else if (a.startsWith("secrets list")) console.log("CORE_SIGNING_SECRET");
 else console.log("ok");`,
   );
@@ -1153,14 +1161,18 @@ test("fly secrets push stages a secretEnv alias under its declared env name on i
     await flySecretsPush(config, dir);
     const calls = readFileSync(fake.log, "utf8");
     assert.ok(
-      calls.includes("secrets set --stage -a acme-portal PORTAL_SESSION_SECRET=-"),
-      "the portal keeps its plain delivery",
+      calls.includes("secrets set --stage -a acme-core PORTAL_SESSION_SECRET=-"),
+      "the edge-hosted portal keeps its plain delivery",
     );
+    for (const app of ["acme-core", "acme-harness"])
+      assert.ok(
+        calls.includes(`secrets set --stage -a ${app} DEPLOY_APPS_SESSION_SECRET=-`),
+        "the alias delivers the stored value under its declared env name on both core workloads",
+      );
     assert.ok(
-      calls.includes("secrets set --stage -a acme-core DEPLOY_APPS_SESSION_SECRET=-"),
-      "the alias delivers the stored value under its declared env name on core",
+      !calls.includes("-a acme-harness PORTAL_SESSION_SECRET"),
+      "the alias adds no plain-name delivery on the harness",
     );
-    assert.ok(!calls.includes("-a acme-core PORTAL_SESSION_SECRET"), "the alias adds no plain-name delivery on core");
     assert.ok(
       calls.includes("secrets set --stage -a acme-core EXTRA_API_KEY=-"),
       "config secretEnv extras stage on their service",

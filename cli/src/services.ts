@@ -1,54 +1,65 @@
-export const SERVICE_NAMES = ["core", "web-ui", "admin", "portal", "auth", "egress-proxy"] as const;
+import type { QmConfig } from "./config.ts";
+
+export const SERVICE_NAMES = ["edge", "harness", "egress-proxy"] as const;
 export type ServiceName = (typeof SERVICE_NAMES)[number];
 
 export const isServiceName = (s: string): s is ServiceName => (SERVICE_NAMES as readonly string[]).includes(s);
 
-export const VIRTUAL_SERVICE_NAMES = ["slack"] as const;
+export const CORE_WORKLOADS = ["edge", "harness"] as const;
+export type CoreWorkload = (typeof CORE_WORKLOADS)[number];
+
+export const isCoreWorkload = (s: string): s is CoreWorkload => (CORE_WORKLOADS as readonly string[]).includes(s);
+
+export const VIRTUAL_SERVICE_NAMES = ["slack", "web-ui", "admin", "portal", "auth"] as const;
 export type VirtualServiceName = (typeof VIRTUAL_SERVICE_NAMES)[number];
-export type DeclaredServiceName = ServiceName | VirtualServiceName;
+
+export const DECLARED_SERVICE_NAMES = ["core", "egress-proxy", ...VIRTUAL_SERVICE_NAMES] as const;
+export type DeclaredServiceName = (typeof DECLARED_SERVICE_NAMES)[number];
 
 export const isVirtualService = (s: string): s is VirtualServiceName =>
   (VIRTUAL_SERVICE_NAMES as readonly string[]).includes(s);
-export const isDeclaredService = (s: string): s is DeclaredServiceName => isServiceName(s) || isVirtualService(s);
+export const isDeclaredService = (s: string): s is DeclaredServiceName =>
+  (DECLARED_SERVICE_NAMES as readonly string[]).includes(s);
 
-export function serviceHost(name: string): string {
-  if (name === "admin") return "web-ui";
-  if (name === "auth") return "portal";
-  if (name === "slack") return "core";
-  return name;
-}
+export const serviceHost = (name: string): string => (isVirtualService(name) ? "edge" : name);
+
+export const serviceWorkloads = (name: string): string[] =>
+  name === "core" ? [...CORE_WORKLOADS] : [serviceHost(name)];
 
 export const runnableServices = (names: readonly DeclaredServiceName[]): ServiceName[] =>
-  [...new Set(names.map(serviceHost))].filter(isServiceName);
+  [...new Set(names.flatMap(serviceWorkloads))].filter(isServiceName);
+
+export const PUBLIC_PORT = 8000;
+
+export const CORE_IMAGE = "core";
+
+export const IMAGE_NAMES = [CORE_IMAGE, "egress-proxy"] as const;
+export type ImageName = (typeof IMAGE_NAMES)[number];
+
+export const isImageName = (s: string): s is ImageName => (IMAGE_NAMES as readonly string[]).includes(s);
+
+export const hostsWebEdge = (services: readonly DeclaredServiceName[]): boolean => services.includes("portal");
 
 export function hostedServiceEnv(
   services: readonly DeclaredServiceName[],
   env: Partial<Record<DeclaredServiceName, Record<string, string>>>,
-  host: string,
+  workload: string,
 ): Record<string, string> {
-  if (host === "core" || serviceHost(host) !== host) return { ...env[host as DeclaredServiceName] };
-  const out: Record<string, string> =
-    host === "web-ui" ? { ADMIN_ENABLED: services.includes("admin") ? "1" : "0" } : {};
-  for (const service of services.filter((name) => serviceHost(name) === host)) {
+  if (workload === "harness") return { ...env.core };
+  if (workload !== "edge") return { ...env[workload as DeclaredServiceName] };
+  const out: Record<string, string> = {};
+  for (const service of services.filter(isVirtualService)) {
     for (const [name, value] of Object.entries(env[service] ?? {})) {
-      if (name === "PORT") continue;
       if (out[name] !== undefined && out[name] !== value) {
-        throw new Error(`Conflicting ${name} settings in services hosted by ${host}`);
+        throw new Error(`Conflicting ${name} settings in services hosted by edge`);
       }
       out[name] = value;
     }
   }
-  return out;
+  return { ...out, ...env.core };
 }
 
-export function virtualServiceEnv(
-  services: readonly DeclaredServiceName[],
-  env: Partial<Record<DeclaredServiceName, Record<string, string>>>,
-): Record<string, string> {
-  return Object.assign({}, ...services.filter(isVirtualService).map((s) => env[s] ?? {}));
-}
-
-const RESERVED_CONTAINER_NAMES: readonly string[] = [...SERVICE_NAMES, ...VIRTUAL_SERVICE_NAMES, "pg", "sandbox"];
+const RESERVED_CONTAINER_NAMES: readonly string[] = [...SERVICE_NAMES, ...DECLARED_SERVICE_NAMES, "pg", "sandbox"];
 export const isReservedContainerName = (name: string): boolean => RESERVED_CONTAINER_NAMES.includes(name);
 
 export function pluginNameError(name: string): string | null {
@@ -66,41 +77,32 @@ export interface LogOpts {
   tail?: number;
 }
 
+type WebConfig = Pick<QmConfig, "orgId" | "publicUrl" | "services" | "env" | "botName" | "orgName">;
+
 export interface ServiceCtx {
-  appPrefix: string;
-  orgId: string;
+  config: WebConfig;
   deployAppPrefix: string;
-  publicUrl: string;
-  hasPortal: boolean;
-  hasAuth: boolean;
-  authAllowedEmailDomain?: string;
-  brand?: BrandEnv;
-  /** Provider-supplied internal URL other services use to reach core. */
   coreUrl: string;
-  /** Provider-supplied internal base URL of the auth service. */
-  authUrl: string;
 }
 
 interface FlyServiceSpec {
   managed: (s: ServiceCtx) => Record<string, string>;
   stackKeys: string[];
   deployFlags: string[];
-  flycast?: boolean;
-  publicIngress?: boolean;
+  publicIngress?: (s: ServiceCtx) => boolean;
 }
 
 export interface ServiceDef {
   name: ServiceName;
   readiness: RegExp;
   order: number;
+  command?: string[];
   dev?: {
     cwd: string;
     entry: string[];
-    portEnv?: "PORT";
-    portSlotOffset?: number;
   };
   docker: {
-    image: ServiceName;
+    image: ImageName;
     internalPort: number;
     portEnv: "PORT";
     hostPortOffset?: number;
@@ -114,7 +116,7 @@ export interface BrandEnv {
   orgName?: string;
 }
 
-export const brandEnvOf = (c: { botName?: string; orgName?: string }): BrandEnv | undefined =>
+const brandEnvOf = (c: { botName?: string; orgName?: string }): BrandEnv | undefined =>
   c.botName || c.orgName
     ? { ...(c.botName ? { botName: c.botName } : {}), ...(c.orgName ? { orgName: c.orgName } : {}) }
     : undefined;
@@ -148,6 +150,7 @@ export function orgEnv(
 
 const AUTH_PATH_PREFIX = "/idp";
 const AUTH_CLIENT_ID = "qm-portal";
+const AUTH_LOOPBACK = "http://127.0.0.1:8099";
 
 export const AUTH_BROKER_ENV_KEYS = [
   "AUTH_BROKER_UPSTREAM",
@@ -163,130 +166,84 @@ export const AUTH_BROKER_ENV_KEYS = [
   "OIDC_ALLOWED_EMAIL_DOMAIN",
 ] as const;
 
-export function brokerWiring(
-  service: string,
-  o: { publicUrl: string; authBaseUrl: string; allowedEmailDomain?: string },
-): Record<string, string> {
+export function brokerWiring(o: { publicUrl: string; allowedEmailDomain?: string }): Record<string, string> {
   const base = o.publicUrl.replace(/\/$/, "");
   const issuer = `${base}${AUTH_PATH_PREFIX}`;
-  if (service === "portal") {
-    return {
-      AUTH_BROKER_UPSTREAM: "http://127.0.0.1:8099",
-      AUTH_EMBEDDED: "1",
-      AUTH_ISSUER: issuer,
-      AUTH_CLIENT_ID,
-      AUTH_REDIRECT_URI: `${base}/auth/callback`,
-      AUTH_BROKER_PREFIX: AUTH_PATH_PREFIX,
-      OIDC_CLIENT_ID: AUTH_CLIENT_ID,
-      OIDC_ISSUER: issuer,
-      OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
-      OIDC_TOKEN_ENDPOINT: "http://127.0.0.1:8099/token",
-      OIDC_USERINFO_ENDPOINT: "http://127.0.0.1:8099/userinfo",
-      OIDC_JWKS_URI: "http://127.0.0.1:8099/.well-known/jwks.json",
-      OIDC_SCOPES: "openid email",
-      OIDC_PRINCIPAL_CLAIM: "email",
-      ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
-    };
-  }
-  if (service === "core") return o.allowedEmailDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {};
-  if (service === "auth") {
-    return {
-      AUTH_ISSUER: issuer,
-      AUTH_CLIENT_ID,
-      AUTH_REDIRECT_URI: `${base}/auth/callback`,
-    };
-  }
-  return {};
+  return {
+    AUTH_BROKER_UPSTREAM: AUTH_LOOPBACK,
+    AUTH_EMBEDDED: "1",
+    AUTH_ISSUER: issuer,
+    AUTH_CLIENT_ID,
+    AUTH_REDIRECT_URI: `${base}/auth/callback`,
+    AUTH_BROKER_PREFIX: AUTH_PATH_PREFIX,
+    OIDC_CLIENT_ID: AUTH_CLIENT_ID,
+    OIDC_ISSUER: issuer,
+    OIDC_AUTH_ENDPOINT: `${issuer}/authorize`,
+    OIDC_TOKEN_ENDPOINT: `${AUTH_LOOPBACK}/token`,
+    OIDC_USERINFO_ENDPOINT: `${AUTH_LOOPBACK}/userinfo`,
+    OIDC_JWKS_URI: `${AUTH_LOOPBACK}/.well-known/jwks.json`,
+    OIDC_SCOPES: "openid email",
+    OIDC_PRINCIPAL_CLAIM: "email",
+    ...(o.allowedEmailDomain ? { OIDC_ALLOWED_EMAIL_DOMAIN: o.allowedEmailDomain } : {}),
+  };
 }
 
-const brokerEnv = (service: string, s: ServiceCtx): Record<string, string> =>
-  s.hasAuth
-    ? brokerWiring(service, {
-        publicUrl: s.publicUrl,
-        authBaseUrl: s.authUrl,
-        ...(s.authAllowedEmailDomain ? { allowedEmailDomain: s.authAllowedEmailDomain } : {}),
-      })
-    : {};
+export function coreWorkloadEnv(c: WebConfig, workload: CoreWorkload): Record<string, string> {
+  const edge = hostsWebEdge(c.services);
+  const brand = brandEnvOf(c);
+  const allowedEmailDomain = c.services.includes("auth") ? c.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN : undefined;
+  const shared = {
+    ...orgEnv("core", c.orgId, c.publicUrl, edge, brand),
+    ...(allowedEmailDomain ? { AUTH_ALLOWED_EMAIL_DOMAIN: allowedEmailDomain } : {}),
+  };
+  if (workload === "harness") return shared;
+  const hosted = c.services
+    .filter(isVirtualService)
+    .flatMap((service) => Object.entries(orgEnv(service, c.orgId, c.publicUrl, edge, brand)))
+    .filter(([name]) => name !== "CORE_ORG_ID");
+  return {
+    ...Object.fromEntries(hosted),
+    ...shared,
+    ...(edge
+      ? {
+          PUBLIC_PORT: String(PUBLIC_PORT),
+          REQUIRE_SIGNED_PORTAL_IDENTITY: "1",
+          ADMIN_ENABLED: c.services.includes("admin") ? "1" : "0",
+        }
+      : {}),
+    ...(c.services.includes("auth")
+      ? brokerWiring({ publicUrl: c.publicUrl, ...(allowedEmailDomain ? { allowedEmailDomain } : {}) })
+      : {}),
+  };
+}
 
-const pluginWiring = (service: string, s: ServiceCtx): Record<string, string> => ({
-  CORE_API_URL: s.coreUrl,
-  ...orgEnv(service, s.orgId, s.publicUrl, s.hasPortal, s.brand),
-  ...brokerEnv(service, s),
-});
+const CORE_STACK_KEYS = [
+  "SNAPSHOT_STORE",
+  "TRANSFER_STORE",
+  "S3_BUCKET",
+  "S3_REGION",
+  "PUBLIC_WEB_URL",
+  "FLY_ORG",
+  "PI_DETECT_MODEL",
+];
 
 const CATALOG: Record<ServiceName, ServiceDef> = {
-  core: {
-    name: "core",
+  edge: {
+    name: "edge",
     readiness: /listening on :\d+/,
     order: 0,
-    dev: { cwd: ".", entry: ["--env-file-if-exists=.env", "src/index.ts"], portEnv: "PORT", portSlotOffset: 0 },
-    docker: { image: "core", internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
+    command: ["node", "src/edge/main.ts"],
+    dev: { cwd: ".", entry: ["--env-file-if-exists=.env", "src/edge/main.ts"] },
+    docker: { image: CORE_IMAGE, internalPort: 8080, portEnv: "PORT", hostPortOffset: 0 },
     fly: {
-      managed: (s) => ({
-        ...orgEnv("core", s.orgId, s.publicUrl, s.hasPortal, s.brand),
-        ...brokerEnv("core", s),
-        FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix,
-      }),
+      managed: (s) => ({ ...coreWorkloadEnv(s.config, "edge"), FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix }),
       stackKeys: [
-        "SNAPSHOT_STORE",
-        "TRANSFER_STORE",
-        "S3_BUCKET",
-        "S3_REGION",
-        "PUBLIC_WEB_URL",
-        "FLY_ORG",
-        "PI_DETECT_MODEL",
-      ],
-      deployFlags: ["--ha=false"],
-    },
-  },
-  "web-ui": {
-    name: "web-ui",
-    readiness: /surface on http/,
-    order: 20,
-    dev: {
-      cwd: "plugins/web-ui",
-      entry: ["--env-file-if-exists=.env", "server/index.ts"],
-      portEnv: "PORT",
-      portSlotOffset: 16,
-    },
-    docker: { image: "web-ui", internalPort: 8080, portEnv: "PORT", hostPortOffset: 2 },
-    fly: {
-      managed: (s) => pluginWiring("web-ui", s),
-      stackKeys: ["WEB_UI_PUBLIC_URL"],
-      deployFlags: ["--ha=false", "--flycast", "--no-public-ips"],
-      flycast: true,
-    },
-  },
-  admin: {
-    name: "admin",
-    readiness: /\[admin-plugin\] http/,
-    order: 30,
-    dev: { cwd: "plugins/admin", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 32 },
-    docker: { image: "admin", internalPort: 8080, portEnv: "PORT", hostPortOffset: 3 },
-    fly: {
-      managed: (s) => pluginWiring("admin", s),
-      stackKeys: ["ADMIN_BASE_PATH"],
-      deployFlags: ["--ha=false"],
-    },
-  },
-  portal: {
-    name: "portal",
-    readiness: /public front door on/,
-    order: 40,
-    dev: { cwd: "plugins/portal", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 48 },
-    docker: { image: "portal", internalPort: 8080, portEnv: "PORT", hostPortOffset: 1 },
-    fly: {
-      managed: (s) => ({
-        ...pluginWiring("portal", s),
-        WEB_UI_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast`,
-        ADMIN_UPSTREAM: `http://${s.appPrefix}-web-ui.flycast/admin`,
-      }),
-      stackKeys: [
+        ...CORE_STACK_KEYS,
+        "PUBLIC_PORT",
         "PORTAL_PUBLIC_URL",
-        "OIDC_CLIENT_ID",
-        "OIDC_ALLOWED_EMAILS",
+        "ADMIN_ENABLED",
+        "ADMIN_BASE_PATH",
         "OIDC_ALLOWED_EMAIL_DOMAIN",
-        "PORTAL_EXPECTED_TEAM_ID",
         "OIDC_AUTH_ENDPOINT",
         "OIDC_TOKEN_ENDPOINT",
         "OIDC_USERINFO_ENDPOINT",
@@ -294,33 +251,22 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
         "OIDC_JWKS_URI",
         "OIDC_SCOPES",
         "OIDC_PRINCIPAL_CLAIM",
-        "OIDC_PROMPT",
-        "AUTH_BROKER_UPSTREAM",
-        "AUTH_BROKER_PREFIX",
       ],
       deployFlags: ["--ha=false"],
+      publicIngress: (s) => hostsWebEdge(s.config.services),
     },
   },
-  auth: {
-    name: "auth",
-    readiness: /sign-in broker on/,
-    order: 35,
-    dev: { cwd: "plugins/auth", entry: ["src/index.ts"], portEnv: "PORT", portSlotOffset: 64 },
-    docker: { image: "auth", internalPort: 8080, portEnv: "PORT" },
+  harness: {
+    name: "harness",
+    readiness: /listening on :\d+/,
+    order: 10,
+    command: ["node", "src/harness/main.ts"],
+    dev: { cwd: ".", entry: ["--env-file-if-exists=.env", "src/harness/main.ts"] },
+    docker: { image: CORE_IMAGE, internalPort: 8080, portEnv: "PORT" },
     fly: {
-      managed: (s) => pluginWiring("auth", s),
-      stackKeys: [
-        "AUTH_ISSUER",
-        "AUTH_CLIENT_ID",
-        "AUTH_REDIRECT_URI",
-        "AUTH_EMAIL_TRANSPORT",
-        "AUTH_BRAND_NAME",
-        "AUTH_ALLOWED_EMAIL_DOMAIN",
-        "SMTP_PORT",
-        "SMTP_TLS",
-      ],
-      deployFlags: ["--ha=false", "--flycast", "--no-public-ips"],
-      flycast: true,
+      managed: (s) => ({ ...coreWorkloadEnv(s.config, "harness"), FLY_DEPLOY_APP_PREFIX: s.deployAppPrefix }),
+      stackKeys: CORE_STACK_KEYS,
+      deployFlags: ["--ha=false"],
     },
   },
   "egress-proxy": {
@@ -329,10 +275,10 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
     order: 50,
     docker: { image: "egress-proxy", internalPort: 48080, portEnv: "PORT", hostPortOffset: 4 },
     fly: {
-      managed: (s) => pluginWiring("egress-proxy", s),
+      managed: (s) => ({ CORE_API_URL: s.coreUrl, CORE_ORG_ID: s.config.orgId }),
       stackKeys: [],
       deployFlags: ["--ha=false"],
-      publicIngress: true,
+      publicIngress: () => true,
     },
     tcpIngress: {
       healthCheck: [
@@ -346,6 +292,10 @@ const CATALOG: Record<ServiceName, ServiceDef> = {
 };
 
 export const serviceDef = (name: ServiceName): ServiceDef => CATALOG[name];
+
+export const runnableImages = (names: readonly DeclaredServiceName[]): ImageName[] => [
+  ...new Set(runnableServices(names).map((name) => serviceDef(name).docker.image)),
+];
 
 export function ordered(names: ServiceName[]): ServiceDef[] {
   return names.map(serviceDef).sort((a, b) => a.order - b.order);

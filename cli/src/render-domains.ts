@@ -69,15 +69,12 @@ async function ensureCustomDomain(request: RenderRequest, service: RenderService
   if (domain.verificationStatus === "verified") ok(`${service.name}: custom domain ${name} verified`);
   else note(`${service.name}: custom domain ${name} is unverified; ${dnsInstruction(domain, service)}`);
 }
-export async function bindUrl(
-  request: RenderRequest,
-  service: RenderService,
-  configured: string | undefined,
-): Promise<string> {
+export function serviceUrl(service: RenderService, configured: string | undefined): string {
   const origin = httpsOrigin(configured);
-  if (!origin || assignedOrigin(origin)) return publicUrl(service);
-  await ensureCustomDomain(request, service, origin);
-  return origin;
+  return !origin || assignedOrigin(origin) ? publicUrl(service) : origin;
+}
+export async function bindUrl(request: RenderRequest, service: RenderService, origin: string): Promise<void> {
+  if (!assignedOrigin(origin)) await ensureCustomDomain(request, service, origin);
 }
 export async function verifiedUrl(
   request: RenderRequest,
