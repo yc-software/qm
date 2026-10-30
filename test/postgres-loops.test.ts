@@ -166,7 +166,7 @@ test(
         await store.grantStore.deleteByLoop(loop.id);
         const twin = await store.loopStore.create(loopInput({ surface: "inbox" }));
         assert.equal(twin.created, true);
-        assert.equal(twin.loop.id, loop.id);
+        assert.notEqual(twin.loop.id, loop.id);
       });
       await withTenant(tenant, async () => {
         assert.equal((await store.loopStore.get(loop.id))?.name, "Inbox");
