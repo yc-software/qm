@@ -1,4 +1,4 @@
-app = "qm-core"
+app = "qm-harness"
 primary_region = "sjc"
 
 [env]
@@ -11,12 +11,11 @@ primary_region = "sjc"
   S3_REGION = "auto"
   DATA_DIR = "/data"
   PUBLIC_WEB_URL = "https://agent.example.com"
-  WEB_UI_PUBLIC_URL = "https://agent.example.com"
-  REQUIRE_SIGNED_PORTAL_IDENTITY = "1"
   FLY_ORG = "personal"
   FLY_DEPLOY_APP_PREFIX = "qm-d"
   SANDBOX_BACKEND = "sprites"
   SECURITY_SCREEN = "off"
+  WEB_UI_PUBLIC_URL = "https://agent.example.com"
 [deploy]
   strategy = "bluegreen"
 
@@ -39,3 +38,6 @@ kill_timeout = "300s"
     interval = "15s"
     timeout = "2s"
     grace_period = "20s"
+
+[processes]
+  app = "node src/harness/main.ts"

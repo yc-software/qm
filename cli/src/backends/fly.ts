@@ -16,16 +16,14 @@ import {
   which,
 } from "../util.ts";
 import {
+  isCoreWorkload,
   isVirtualService,
   ordered,
-  type BrandEnv,
-  brandEnvOf,
-  orgEnv,
   runnableServices,
   hostedServiceEnv,
-  serviceHost,
   serviceDef,
-  virtualServiceEnv,
+  serviceWorkloads,
+  type ImageName,
   type ServiceCtx,
   type LogOpts,
   type ServiceName,
@@ -49,23 +47,17 @@ import {
 import { manifestRef } from "../manifest.ts";
 import { CONNECTIVITY_CODES, CoreUnreachableError, type DeploymentLayerTransport } from "../deployment-layer.ts";
 
-const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => {
-  const brand = brandEnvOf(config);
-  return {
-    appPrefix,
-    orgId: config.orgId,
-    deployAppPrefix,
-    publicUrl: config.publicUrl,
-    hasPortal: config.services.includes("portal"),
-    hasAuth: config.services.includes("auth"),
-    ...(config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN
-      ? { authAllowedEmailDomain: config.env.auth.AUTH_ALLOWED_EMAIL_DOMAIN }
-      : {}),
-    ...(brand ? { brand } : {}),
-    coreUrl: `http://${appPrefix}-core.internal:8080`,
-    authUrl: `http://${appPrefix}-auth.flycast`,
-  };
-};
+const flyServiceCtx = (config: QmConfig, appPrefix: string, deployAppPrefix: string): ServiceCtx => ({
+  config,
+  deployAppPrefix,
+  coreUrl: `http://${flyApp(appPrefix, "edge")}.internal:8080`,
+});
+
+export const flyApp = (appPrefix: string, workload: string): string =>
+  `${appPrefix}-${workload === "edge" ? "core" : workload}`;
+
+const flyImageApp = (appPrefix: string, service: ServiceName): string =>
+  `${appPrefix}-${serviceDef(service).docker.image}`;
 
 const FLY_RESPONSE = "QM_LAYER_RESPONSE=";
 const FLY_REMOTE_ERROR = "QM_LAYER_ERROR=";
@@ -120,7 +112,7 @@ async function flyRequest(
   method: "GET" | "PUT",
   body: string,
 ): Promise<{ status: number; body: string }> {
-  const app = `${appPrefixOf(config)}-core`;
+  const app = flyApp(appPrefixOf(config), "edge");
   const script = `const{createHmac}=require("node:crypto");const fail=error=>{const code=error&&(error.cause&&error.cause.code||error.code);console.log(${JSON.stringify(FLY_REMOTE_ERROR)}+JSON.stringify({message:error&&error.message?error.message:String(error),...(typeof code==="string"?{code}:{})}))};try{const method=${JSON.stringify(method)},path="/v1/deployment-layer",body=Buffer.from(process.argv.slice(1).join(""),"base64").toString("utf8"),timestamp=Math.floor(Date.now()/1000),canonical=method+"\\n"+path+"\\n"+body,secret=process.env.CORE_SIGNING_SECRET;if(!secret)throw new Error("CORE_SIGNING_SECRET is not set on core");const signature=createHmac("sha256",secret).update("v0:"+timestamp+":"+canonical).digest("hex");fetch("http://127.0.0.1:"+(process.env.PORT||8080)+path,{method,headers:{"content-type":"application/json","x-timestamp":String(timestamp),"x-signature":"v0="+signature},...(method==="PUT"?{body}: {})}).then(async response=>console.log(${JSON.stringify(FLY_RESPONSE)}+JSON.stringify({status:response.status,body:await response.text()}))).catch(fail)}catch(error){fail(error)}`;
   const encodedBody = Buffer.from(body).toString("base64");
   const bodyArgs = Array.from({ length: Math.ceil(encodedBody.length / FLY_EXEC_ARG_BYTES) }, (_, index) =>
@@ -308,7 +300,7 @@ export function stageFlyEmailAllowlist(
   const staged: string[] = [];
   for (const [workload, names] of secretDestinations(secret)) {
     if (!selectedWorkloads.has(workload)) continue;
-    const app = `${appPrefixOf(config)}-${workload}`;
+    const app = flyApp(appPrefixOf(config), workload);
     for (const name of names) stageSecret(app, name, value);
     staged.push(app);
   }
@@ -335,47 +327,48 @@ const flyOwnershipMarker = (flyOrg: string, orgId: string, appPrefix: string): s
 function deriveToml(ctx: FlyCtx, service: ServiceName): string {
   const spec = serviceDef(service).fly!;
   const base = readFileSync(join(flyTemplateRoot(), `${service}.toml`), "utf8");
-  const sandboxEnv = service === "core" ? sandboxCoreEnv(ctx.config).env : {};
-  const virtualEnv = service === "core" ? virtualServiceEnv(ctx.config.services, ctx.config.env) : {};
-  const modelEnv: Record<string, string> =
-    service === "core"
-      ? {
+  const core = isCoreWorkload(service);
+  const sandboxEnv = core ? sandboxCoreEnv(ctx.config).env : {};
+  const modelEnv: Record<string, string> = core
+    ? {
           ...(ctx.config.model ? { PI_MODEL: ctx.config.model } : {}),
           ...(ctx.config.modelProvider ? { MODEL_PROVIDER: ctx.config.modelProvider } : {}),
         }
       : {};
   const configuredEnv = hostedServiceEnv(ctx.config.services, ctx.config.env, service);
-  if (service === "core") delete configuredEnv.FLY_ORG;
-  const deploymentEnv: Record<string, string> = service === "core" && ctx.flyOrg ? { FLY_ORG: ctx.flyOrg } : {};
+  if (core) delete configuredEnv.FLY_ORG;
+  const deploymentEnv: Record<string, string> = core && ctx.flyOrg ? { FLY_ORG: ctx.flyOrg } : {};
   const overrides: Record<string, string> = {
     ...spec.managed(ctx.serviceCtx),
     ...sandboxEnv,
-    ...virtualEnv,
     ...modelEnv,
     ...configuredEnv,
-    ...(service === "core" ? securityScreenEnv(ctx.config) : {}),
+    ...(core ? securityScreenEnv(ctx.config) : {}),
     ...deploymentEnv,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(ctx.flyOrg, ctx.orgId, ctx.appPrefix),
   };
   const provided = new Set(Object.keys(overrides));
-  const vm = ctx.config.vms?.[service];
+  const vm = ctx.config.vms?.[service] ?? (core ? ctx.config.vms?.core : undefined);
   const lines = base.split("\n");
   const out: string[] = [];
   let inEnv = false;
   let inVm = false;
   let envIndent = "  ";
   const seen = new Set<string>();
+  let inManaged = false;
   for (const line of lines) {
     const section = line.match(/^\s*\[(.+)\]\s*$/);
     if (section) {
       if (inEnv) out.splice(out.length, 0, ...pendingExtra());
       inEnv = section[1] === "env";
       inVm = section[1] === "[vm]";
-      out.push(line);
+      inManaged = /^\[?(processes|http_service)\b/.test(section[1] ?? "");
+      if (!inManaged) out.push(line);
       continue;
     }
+    if (inManaged) continue;
     if (line.startsWith("app = ")) {
-      out.push(`app = ${tomlStr(`${ctx.appPrefix}-${service}`)}`);
+      out.push(`app = ${tomlStr(flyApp(ctx.appPrefix, service))}`);
       continue;
     }
     const regionM = line.match(/^(\s*)primary_region\s*=\s*".*"\s*$/);
@@ -413,7 +406,12 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
     out.push(line);
   }
   if (inEnv) out.push(...pendingExtra());
-  return out.join("\n");
+  while (out.at(-1) === "") out.pop();
+  const command = serviceDef(service).command;
+  if (command) out.push("", "[processes]", `  app = ${tomlStr(command.join(" "))}`);
+  if (overrides.PUBLIC_PORT) out.push("", ...publicHttpService(Number(overrides.PUBLIC_PORT)));
+  while (out.at(-1) === "") out.pop();
+  return `${out.join("\n")}\n`;
 
   function pendingExtra(): string[] {
     return Object.entries(overrides)
@@ -421,6 +419,30 @@ function deriveToml(ctx: FlyCtx, service: ServiceName): string {
       .map(([k, v]) => `${envIndent}${k} = ${tomlStr(v)}`);
   }
 }
+
+const publicHttpService = (port: number): string[] => [
+  "[http_service]",
+  `  internal_port = ${port}`,
+  "  force_https = true",
+  "  auto_stop_machines = false",
+  "  auto_start_machines = true",
+  "  min_machines_running = 1",
+  "",
+  "  [[http_service.ports]]",
+  "    port = 80",
+  '    handlers = ["http"]',
+  "    force_https = true",
+  "",
+  "  [[http_service.ports]]",
+  "    port = 443",
+  '    handlers = ["tls", "http"]',
+  "",
+  "  [http_service.concurrency]",
+  '    type = "requests"',
+  "    soft_limit = 200",
+  "    hard_limit = 250",
+  "",
+];
 
 export function derivedTomlFor(config: QmConfig, service: ServiceName, repoRoot: string): string {
   const appPrefix = appPrefixOf(config);
@@ -459,16 +481,16 @@ function secretNames(app: string): Set<string> | undefined {
 }
 
 function flyProviderSecrets(config: QmConfig, workload: string): string[] {
-  if (workload !== "core") return [];
+  if (!isCoreWorkload(workload)) return [];
   const core = config.env.core ?? {};
   if (core.SNAPSHOT_STORE !== "s3" && core.TRANSFER_STORE !== "s3") return [];
   return ["AWS_ACCESS_KEY_ID", "AWS_ENDPOINT_URL_S3", "AWS_SECRET_ACCESS_KEY"];
 }
 
 function ensureObjectStorage(ctx: FlyCtx): void {
-  const required = flyProviderSecrets(ctx.config, "core");
+  const required = flyProviderSecrets(ctx.config, "edge");
   if (!required.length) return;
-  const app = `${ctx.appPrefix}-core`;
+  const app = flyApp(ctx.appPrefix, "edge");
   if (required.every((name) => secretNames(app)?.has(name))) {
     note(`object storage: credentials already set on ${app}`);
     return;
@@ -480,6 +502,27 @@ function ensureObjectStorage(ctx: FlyCtx): void {
   const missing = required.filter((name) => !secretNames(app)?.has(name));
   if (missing.length) throw new CliError(`Fly storage create did not attach ${missing.join(", ")} to ${app}`);
   note(`object storage: credentials staged on ${app}`);
+}
+
+const FLY_SHARED_SECRETS = "QM_SHARED_SECRETS=";
+
+function shareObjectStorage(ctx: FlyCtx): void {
+  const harness = flyApp(ctx.appPrefix, "harness");
+  const missing = flyProviderSecrets(ctx.config, "harness").filter((name) => !secretNames(harness)?.has(name));
+  if (!missing.length) return;
+  const edge = flyApp(ctx.appPrefix, "edge");
+  const source = `process.stdout.write(${JSON.stringify(FLY_SHARED_SECRETS)}+Buffer.from(JSON.stringify(Object.fromEntries(${JSON.stringify(missing)}.map(n=>[n,process.env[n]||""])))).toString("base64"))`;
+  const command = `node -e "eval(Buffer.from('${Buffer.from(source).toString("base64")}','base64').toString('utf8'))"`;
+  const output = flySensitive(
+    ["machine", "exec", "-a", edge, flyCoreMachineId(edge), command, "--timeout", String(FLY_EXEC_TIMEOUT_SEC)],
+    `failed to read object storage credentials from ${edge}`,
+  );
+  const encoded = output.match(new RegExp(`${FLY_SHARED_SECRETS}([A-Za-z0-9+/=]+)`))?.[1];
+  const values = encoded ? (JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as Record<string, string>) : {};
+  const absent = missing.filter((name) => !values[name]);
+  if (absent.length) throw new CliError(`${edge} has no ${absent.join(", ")} to share with ${harness}`);
+  for (const name of missing) stageSecret(harness, name, values[name]!);
+  note(`object storage: credentials shared from ${edge} to ${harness}`);
 }
 
 function generatedTomlEnv(toml: string): Record<string, string> {
@@ -589,8 +632,7 @@ function ensureApp(app: string, flyOrg: string, orgId: string, appPrefix: string
   note(`app ${app}: created`);
 }
 
-function ensurePostgres(ctx: FlyCtx): void {
-  const app = `${ctx.appPrefix}-core`;
+function ensurePostgres(ctx: FlyCtx, app: string): void {
   const hasDatabaseUrl = secretNames(app)?.has("DATABASE_URL");
   if (hasDatabaseUrl) {
     note(`postgres: DATABASE_URL already set on ${app}`);
@@ -662,13 +704,6 @@ export function mpgDirectUrl(statusOutput: string, clusterId: string): string {
   return url.toString();
 }
 
-function ensureFlycast(app: string): void {
-  const ips = fly(["ips", "list", "-a", app]);
-  if (/private/i.test(ips)) return;
-  fly(["ips", "allocate-v6", "--private", "-a", app]);
-  note(`flycast: allocated private v6 for ${app}`);
-}
-
 function ensurePublicIngress(app: string): void {
   let ips: Array<{ Type?: string }>;
   try {
@@ -737,20 +772,32 @@ function recordServiceImages(ctx: FlyCtx, services: ServiceName[], selectedConfi
   const configPath = selectedConfigPath ?? join(ctx.commandCwd, CONFIG_FILENAME);
   if (!existsSync(configPath)) return;
   const images = Object.fromEntries(
-    services.map((service) => {
-      const image = currentImage(`${ctx.appPrefix}-${service}`);
+    imageOwners(services).map((service) => {
+      const app = flyApp(ctx.appPrefix, service);
+      const image = currentImage(app);
       if (!/@sha256:[a-f0-9]{64}$/.test(image)) {
-        throw new CliError(`${ctx.appPrefix}-${service} did not report an immutable image digest after deployment`);
+        throw new CliError(`${app} did not report an immutable image digest after deployment`);
       }
-      return [service, image];
+      return [serviceDef(service).docker.image, image];
     }),
   );
+  const count = Object.keys(images).length;
   writeFileSync(configPath, updateConfigImageOverrides(readFileSync(configPath, "utf8"), images));
-  ok(`recorded ${services.length} immutable service image pin${services.length === 1 ? "" : "s"} in ${configPath}`);
+  ok(`recorded ${count} immutable service image pin${count === 1 ? "" : "s"} in ${configPath}`);
 }
 
-function flyTaggedImage(appPrefix: string, service: string, label: string): string {
-  return `registry.fly.io/${appPrefix}-${service}:${label}`;
+function imageOwners(services: ServiceName[]): ServiceName[] {
+  const seen = new Set<ImageName>();
+  return services.filter((service) => {
+    const image = serviceDef(service).docker.image;
+    if (seen.has(image)) return false;
+    seen.add(image);
+    return true;
+  });
+}
+
+function flyTaggedImage(appPrefix: string, image: string, label: string): string {
+  return `registry.fly.io/${appPrefix}-${image}:${label}`;
 }
 
 function imageSourceFor(ctx: FlyCtx, opts: FlyUpOpts): ImageSource | undefined {
@@ -760,24 +807,6 @@ function imageSourceFor(ctx: FlyCtx, opts: FlyUpOpts): ImageSource | undefined {
   if (ctx.sourceRoot) return undefined;
   if (ctx.config.imageFrom) return { kind: "current", appPrefix: ctx.config.imageFrom };
   return { kind: "manifest" };
-}
-
-const SAFE_AFTER_CORE = new Set<ServiceName>(["web-ui", "admin", "auth"]);
-
-export function flyDeployPhases(services: ServiceName[]): ServiceName[][] {
-  const phases: ServiceName[][] = [];
-  const remaining = [...services];
-  const coreIndex = remaining.indexOf("core");
-  if (coreIndex !== -1) {
-    phases.push(["core"]);
-    remaining.splice(coreIndex, 1);
-  }
-  const parallel = remaining.filter((s) => SAFE_AFTER_CORE.has(s));
-  if (parallel.length) phases.push(parallel);
-  for (const s of remaining) {
-    if (!SAFE_AFTER_CORE.has(s)) phases.push([s]);
-  }
-  return phases;
 }
 
 function resolveServices(config: QmConfig, only?: ServiceName[]): ServiceName[] {
@@ -804,7 +833,7 @@ function sourceRootFor(configDir: string, explicit?: string): string | undefined
   if (explicit) {
     const root = resolve(explicit);
     return existsSync(join(root, "package.json")) &&
-      existsSync(join(root, "src", "index.ts")) &&
+      existsSync(join(root, "src", "edge", "main.ts")) &&
       existsSync(join(root, "deploy", "core", "Dockerfile"))
       ? root
       : undefined;
@@ -821,7 +850,7 @@ function sourceRootFor(configDir: string, explicit?: string): string | undefined
   return candidates.find(
     (root) =>
       existsSync(join(root, "package.json")) &&
-      existsSync(join(root, "src", "index.ts")) &&
+      existsSync(join(root, "src", "edge", "main.ts")) &&
       existsSync(join(root, "deploy", "core", "Dockerfile")),
   );
 }
@@ -860,41 +889,53 @@ async function deployService(
   service: ServiceName,
   imageSource: ImageSource | undefined,
   timing: ReturnType<typeof createTimingRecorder>,
+  built?: string,
 ): Promise<void> {
-  const app = `${ctx.appPrefix}-${service}`;
+  const app = flyApp(ctx.appPrefix, service);
   const spec = serviceDef(service).fly!;
+  const image = serviceDef(service).docker.image;
   note(`\n=== deploying ${app} ===`);
-  if (service === "core") timing.time(service, "Postgres ensure", () => ensurePostgres(ctx));
-  if (spec.flycast) timing.time(service, "Flycast ensure", () => ensureFlycast(app));
-  if (spec.publicIngress) timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
+  if (isCoreWorkload(service)) timing.time(service, "Postgres ensure", () => ensurePostgres(ctx, app));
+  if (service === "harness") timing.time(service, "object storage share", () => shareObjectStorage(ctx));
+  if (spec.publicIngress?.(ctx.serviceCtx))
+    timing.time(service, "public ingress ensure", () => ensurePublicIngress(app));
   const cfgPath = serviceCfgPath(ctx, service);
   const args = ["deploy", "--yes", "-c", cfgPath, ...spec.deployFlags];
-  if (imageSource?.kind === "tagged") {
-    args.push("--image", flyTaggedImage(imageSource.appPrefix, service, imageSource.label));
+  if (built) {
+    args.push("--image", built);
+  } else if (imageSource?.kind === "tagged") {
+    args.push("--image", flyTaggedImage(imageSource.appPrefix, image, imageSource.label));
   } else if (imageSource?.kind === "current") {
     args.push(
       "--image",
-      timing.time(service, "current image lookup", () => currentImage(`${imageSource.appPrefix}-${service}`)),
+      timing.time(service, "current image lookup", () => currentImage(`${imageSource.appPrefix}-${image}`)),
     );
   } else if (imageSource?.kind === "manifest") {
-    args.push("--image", ctx.config.imageOverrides[service] ?? manifestRef(service));
+    args.push("--image", ctx.config.imageOverrides[image] ?? manifestRef(image));
   } else {
-    args.push("--remote-only", "--dockerfile", join(ctx.sourceRoot!, "deploy", service, "Dockerfile"), ctx.sourceRoot!);
+    args.push("--remote-only", "--dockerfile", join(ctx.sourceRoot!, "deploy", image, "Dockerfile"), ctx.sourceRoot!);
   }
   step(`fly ${args.join(" ")}`);
 
   await timing.timeAsync(service, "fly deploy", () => runFlyDeploy(args, ctx.commandCwd));
 }
 
-async function deployPhase(
+async function deployServices(
   ctx: FlyCtx,
-  phase: ServiceName[],
+  services: ServiceName[],
   imageSource: ImageSource | undefined,
   timing: ReturnType<typeof createTimingRecorder>,
 ): Promise<void> {
-  if (phase.length > 1)
-    note(`\n=== deploying in parallel: ${phase.map((s) => `${ctx.appPrefix}-${s}`).join(", ")} ===`);
-  await settleAll(phase.map((s) => deployService(ctx, s, imageSource, timing)));
+  const built = new Map<ImageName, string>();
+  for (const service of services) {
+    const image = serviceDef(service).docker.image;
+    await deployService(ctx, service, imageSource, timing, built.get(image));
+    if (!imageSource && !built.has(image))
+      built.set(
+        image,
+        timing.time(service, "built image lookup", () => currentImage(flyApp(ctx.appPrefix, service))),
+      );
+  }
 }
 
 async function buildServiceImage(
@@ -903,9 +944,10 @@ async function buildServiceImage(
   label: string,
   timing: ReturnType<typeof createTimingRecorder>,
 ): Promise<void> {
-  const app = `${ctx.appPrefix}-${service}`;
+  const app = flyImageApp(ctx.appPrefix, service);
+  const image = serviceDef(service).docker.image;
   const spec = serviceDef(service).fly!;
-  note(`\n=== building image ${flyTaggedImage(ctx.appPrefix, service, label)} ===`);
+  note(`\n=== building image ${flyTaggedImage(ctx.appPrefix, image, label)} ===`);
   const cfgPath = serviceCfgPath(ctx, service);
   const args = [
     "deploy",
@@ -919,13 +961,13 @@ async function buildServiceImage(
     ...spec.deployFlags,
     "--remote-only",
     "--dockerfile",
-    join(ctx.sourceRoot!, "deploy", service, "Dockerfile"),
+    join(ctx.sourceRoot!, "deploy", image, "Dockerfile"),
     ctx.sourceRoot!,
   ];
   step(`fly ${args.join(" ")}`);
 
   await timing.timeAsync(service, "image build", () => runFlyDeploy(args, ctx.commandCwd));
-  note(`image: ${app} -> ${flyTaggedImage(ctx.appPrefix, service, label)}`);
+  note(`image: ${app} -> ${flyTaggedImage(ctx.appPrefix, image, label)}`);
 }
 
 async function buildImages(
@@ -934,7 +976,7 @@ async function buildImages(
   label: string,
   timing: ReturnType<typeof createTimingRecorder>,
 ): Promise<void> {
-  await settleAll(services.map((s) => buildServiceImage(ctx, s, label, timing)));
+  await settleAll(imageOwners(services).map((s) => buildServiceImage(ctx, s, label, timing)));
 }
 
 const pluginApp = (ctx: FlyCtx, name: string): string => `${ctx.appPrefix}-${name}`;
@@ -947,15 +989,12 @@ function pluginTomlContent(
   appPrefix: string,
   flyOrg: string,
   orgId: string,
-  publicUrl: string,
-  hasPortal: boolean,
   region: string,
   plugin: ResolvedPlugin,
-  brand?: BrandEnv,
 ): string {
   const env: Record<string, string> = {
-    ...(plugin.coreAccess === false ? {} : { CORE_API_URL: `http://${appPrefix}-core.internal:8080` }),
-    ...orgEnv(plugin.name, orgId, publicUrl, hasPortal, brand),
+    ...(plugin.coreAccess === false ? {} : { CORE_API_URL: `http://${flyApp(appPrefix, "edge")}.internal:8080` }),
+    CORE_ORG_ID: orgId,
     PORT: "8080",
     ...plugin.env,
     [FLY_DEPLOYMENT_ID_ENV]: flyDeploymentId(flyOrg, orgId, appPrefix),
@@ -976,34 +1015,13 @@ function pluginTomlContent(
 }
 
 export function derivedPluginTomlFor(config: QmConfig, plugin: ResolvedPlugin): string {
-  return pluginTomlContent(
-    appPrefixOf(config),
-    config.flyOrg ?? "",
-    config.orgId,
-    config.publicUrl,
-    config.services.includes("portal"),
-    config.region ?? "",
-    plugin,
-    brandEnvOf(config),
-  );
+  return pluginTomlContent(appPrefixOf(config), config.flyOrg ?? "", config.orgId, config.region ?? "", plugin);
 }
 
 function writePluginDerived(ctx: FlyCtx, plugin: ResolvedPlugin): string {
   mkdirSync(generatedDir(ctx), { recursive: true });
   const path = pluginCfgPath(ctx, plugin.name);
-  writeFileSync(
-    path,
-    pluginTomlContent(
-      ctx.appPrefix,
-      ctx.flyOrg,
-      ctx.orgId,
-      ctx.config.publicUrl,
-      ctx.config.services.includes("portal"),
-      ctx.region,
-      plugin,
-      brandEnvOf(ctx.config),
-    ),
-  );
+  writeFileSync(path, pluginTomlContent(ctx.appPrefix, ctx.flyOrg, ctx.orgId, ctx.region, plugin));
   return path;
 }
 
@@ -1087,17 +1105,15 @@ function runFlyDeploy(args: string[], cwd: string): Promise<void> {
   });
 }
 
-function unsetDisabledSecurityScreenToken(config: QmConfig, appPrefix: string): void {
+function unsetDisabledSecurityScreenToken(config: QmConfig, app: string): void {
   if (config.securityScreen?.classifier === "proxy") return;
-  const app = `${appPrefix}-core`;
   if (!secretNames(app)?.has("SECURITY_SCREEN_PROXY_TOKEN")) return;
   fly(["secrets", "unset", "--stage", "-a", app, "SECURITY_SCREEN_PROXY_TOKEN"]);
   note(`removed the disabled security screen token from ${app}`);
 }
 
-function unsetDisabledFlyPublisherToken(config: QmConfig, appPrefix: string): void {
+function unsetDisabledFlyPublisherToken(config: QmConfig, app: string): void {
   if (config.env.core?.DEPLOY_PROVIDER === "fly") return;
-  const app = `${appPrefix}-core`;
   if (!secretNames(app)?.has("FLY_DEPLOY_API_TOKEN")) return;
   fly(["secrets", "unset", "--stage", "-a", app, "FLY_DEPLOY_API_TOKEN"]);
   note(`removed the disabled Fly app publisher token from ${app}`);
@@ -1142,10 +1158,10 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
       if (serviceSet.has(name)) {
         if (isVirtualService(name)) {
           throw new CliError(
-            `--only "${name}": ${name} is a virtual service — it runs in-process on the core, so deploy it with --only core`,
+            `--only "${name}": ${name} is a virtual service — it runs in-process on the edge, so deploy it with --only core`,
           );
         }
-        svc.push(serviceHost(name) as ServiceName);
+        svc.push(...(serviceWorkloads(name) as ServiceName[]));
       } else if (pluginSet.has(name)) plg.add(name);
       else {
         throw new CliError(
@@ -1178,20 +1194,20 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
 
     if (!opts.dryRun) {
       for (const s of services)
-        timing.time(s, "app ensure", () => ensureApp(`${ctx.appPrefix}-${s}`, ctx.flyOrg, ctx.orgId, ctx.appPrefix));
+        timing.time(s, "app ensure", () => ensureApp(flyApp(ctx.appPrefix, s), ctx.flyOrg, ctx.orgId, ctx.appPrefix));
       for (const p of plugins)
         timing.time(p.name, "app ensure", () =>
           ensureApp(pluginApp(ctx, p.name), ctx.flyOrg, ctx.orgId, ctx.appPrefix),
         );
-      if (!opts.buildOnly && services.includes("core")) {
-        timing.time("core", "object storage ensure", () => ensureObjectStorage(ctx));
+      if (!opts.buildOnly && services.includes("edge")) {
+        timing.time("edge", "object storage ensure", () => ensureObjectStorage(ctx));
       }
     }
 
     if (opts.buildOnly) {
       for (const s of services) {
         const path = writeDerived(ctx, s);
-        note(`\n=== ${ctx.appPrefix}-${s} ===`);
+        note(`\n=== ${flyApp(ctx.appPrefix, s)} ===`);
         note(`config: ${path}`);
       }
       const sourcePlugins = plugins.filter((p) => p.kind === "source");
@@ -1232,12 +1248,12 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
 
     let missingAny = false;
     for (const s of services) {
-      const app = `${ctx.appPrefix}-${s}`;
+      const app = flyApp(ctx.appPrefix, s);
       const required = [
         ...secretsForService(config, s)
           .filter((secret) => secret.required)
           .flatMap((secret) => runtimeSecretNames(s, secret)),
-        ...flyProviderSecrets(config, s),
+        ...(s === "harness" ? [] : flyProviderSecrets(config, s)),
       ];
       if (gateSecrets(app, app, writeDerived(ctx, s), required, s)) missingAny = true;
     }
@@ -1259,13 +1275,13 @@ export async function flyUp(config: QmConfig, configDir: string, opts: FlyUpOpts
     if (missingAny) {
       die("\naborting `up`: set the missing secrets above first (use --stage, the deploy applies them)");
     }
-    if (services.includes("core")) {
-      unsetDisabledSecurityScreenToken(config, ctx.appPrefix);
-      unsetDisabledFlyPublisherToken(config, ctx.appPrefix);
+    for (const s of services.filter(isCoreWorkload)) {
+      unsetDisabledSecurityScreenToken(config, flyApp(ctx.appPrefix, s));
+      unsetDisabledFlyPublisherToken(config, flyApp(ctx.appPrefix, s));
     }
     unsetCorelessPluginCoreSecrets(plugins, ctx.appPrefix);
 
-    for (const phase of flyDeployPhases(services)) await deployPhase(ctx, phase, imageSource, timing);
+    await deployServices(ctx, services, imageSource, timing);
     await deployPlugins(ctx, plugins, imageSource, timing);
     if (ctx.sourceRoot) recordServiceImages(ctx, services, opts.configPath);
 
@@ -1351,7 +1367,7 @@ function listRunningApps(
 function discoverFlyApps(config: QmConfig, configDir: string): FlyAppDiscovery {
   const appPrefix = appPrefixOf(config);
   const deployAppPrefix = config.deployAppPrefix ?? `${appPrefix}-d`;
-  const services = resolveServices(config).map((s) => `${appPrefix}-${s}`);
+  const services = resolveServices(config).map((s) => flyApp(appPrefix, s));
   const plugins = discoverPlugins(configDir, config).plugins.map((p) => `${appPrefix}-${p.name}`);
   const configured = new Set([...services, ...plugins]);
   let runtime: FlyAppDiscovery = { apps: [], unverified: [] };
@@ -1398,7 +1414,8 @@ export function flyStatus(config: QmConfig, configDir: string): void {
       note(errMessage(e));
     }
   }
-  if (config.services.includes("slack")) note("slack: virtual service running in the core app");
+  const hosted = config.services.filter(isVirtualService);
+  if (hosted.length) note(`${hosted.join(", ")}: running in the edge app ${flyApp(appPrefixOf(config), "edge")}`);
 }
 
 export function flyLogs(
@@ -1413,15 +1430,22 @@ export function flyLogs(
   const logArgs = (app: string): string[] => ["logs", "-a", app, ...(opts.follow ? [] : ["--no-tail"])];
 
   if (service) {
-    const resolved = serviceHost(service);
-    if (resolved !== service) note(`${service} runs in ${resolved}; showing ${resolved} logs`);
-    const app = `${appPrefix}-${resolved}`;
+    const resolved = serviceWorkloads(service);
+    if (resolved.join() !== service) note(`${service} runs in ${resolved.join(" and ")}; showing its logs`);
+    const apps = resolved.map((workload) => flyApp(appPrefix, workload));
     if (!which(flyBin())) {
-      note(`flyctl not found — run:\n  ${flyBin()} ${logArgs(app).join(" ")}`);
+      note(`flyctl not found — run:`);
+      for (const app of apps) note(`  ${flyBin()} ${logArgs(app).join(" ")}`);
       return;
     }
-    flyInherit(logArgs(app));
-    return;
+    if (apps.length === 1) {
+      flyInherit(logArgs(apps[0]!));
+      return;
+    }
+    return streamLabeled(
+      apps.map((app) => ({ label: app.slice(appPrefix.length + 1), command: flyBin(), args: logArgs(app) })),
+      (label, line) => note(`${dim(label)} | ${line}`),
+    );
   }
 
   const apps = flyAppNames(config, configDir);
@@ -1575,7 +1599,7 @@ export async function flyCheckLive(
   const failures: string[] = [];
   let coreMachineId = "";
   for (const workload of workloads) {
-    const app = `${ctx.appPrefix}-${workload}`;
+    const app = flyApp(ctx.appPrefix, workload);
     if (!orgApps.has(app)) {
       failures.push(`${app}: not present in configured Fly organization ${ctx.flyOrg}`);
       continue;
@@ -1613,8 +1637,9 @@ export async function flyCheckLive(
       continue;
     }
     if (firstParty.has(workload)) {
-      const configured = config.imageOverrides[workload as ServiceName];
-      const packaged = configured ? undefined : manifestRef(workload as ServiceName);
+      const image = serviceDef(workload as ServiceName).docker.image;
+      const configured = config.imageOverrides[image];
+      const packaged = configured ? undefined : manifestRef(image);
       const expected = configured ?? (packaged?.includes("registry.invalid") ? undefined : packaged);
       const expectedDigest = expected?.match(/@(?<digest>sha256:[a-f0-9]{64})$/)?.groups?.["digest"];
       let imageDetails: FlyImageDetail[] = [];
@@ -1658,16 +1683,7 @@ export async function flyCheckLive(
     const expectedEnv = generatedTomlEnv(
       firstParty.has(workload)
         ? deriveToml(ctx, workload as ServiceName)
-        : pluginTomlContent(
-            ctx.appPrefix,
-            ctx.flyOrg,
-            ctx.orgId,
-            config.publicUrl,
-            config.services.includes("portal"),
-            ctx.region,
-            plugin!,
-            brandEnvOf(config),
-          ),
+        : pluginTomlContent(ctx.appPrefix, ctx.flyOrg, ctx.orgId, ctx.region, plugin!),
     );
     const envDrift = machines.flatMap((machine, index) =>
       Object.entries(expectedEnv).flatMap(([name, value]) =>
@@ -1678,7 +1694,7 @@ export async function flyCheckLive(
       failures.push(`${app}: rendered config drift (${envDrift.join(", ")})`);
       continue;
     }
-    if (workload === "core") coreMachineId = machines[0]?.id ?? machines[0]?.ID ?? "";
+    if (workload === "edge") coreMachineId = machines[0]?.id ?? machines[0]?.ID ?? "";
     try {
       const rawChecks = JSON.parse(fly(["checks", "list", "-a", app, "--json"])) as unknown;
       if (!rawChecks || typeof rawChecks !== "object" || Array.isArray(rawChecks)) {
@@ -1715,7 +1731,7 @@ export async function flyCheckLive(
       failures.push(`${ctx.appPrefix}-core: cannot run the S3 durability probe without an identified machine`);
     } else {
       try {
-        flyS3RoundTrip(`${ctx.appPrefix}-core`, coreMachineId);
+        flyS3RoundTrip(flyApp(ctx.appPrefix, "edge"), coreMachineId);
         if (report) step(`${ctx.appPrefix}-core: S3 put/get/delete round trip passed`);
       } catch (error) {
         failures.push(`${ctx.appPrefix}-core: S3 put/get/delete probe failed: ${errMessage(error)}`);
@@ -1736,7 +1752,7 @@ export async function flyCheckLive(
       failures.push(`${ctx.appPrefix}-core: cannot run the live session smoke without an identified machine`);
     } else {
       try {
-        flyLiveSession(`${ctx.appPrefix}-core`, coreMachineId);
+        flyLiveSession(flyApp(ctx.appPrefix, "edge"), coreMachineId);
         if (report) step(`${ctx.appPrefix}-core: private live session smoke passed`);
       } catch (error) {
         failures.push(`${ctx.appPrefix}-core: private live session smoke failed: ${errMessage(error)}`);
@@ -1787,7 +1803,7 @@ export async function flySecretsPush(config: QmConfig, configDir: string, envFil
     }
     const destinations = new Map<string, Set<string>>();
     for (const [workload, names] of secretDestinations(secret, corePluginNames)) {
-      destinations.set(`${prefix}-${workload}`, names);
+      destinations.set(flyApp(prefix, workload), names);
     }
     for (const [app, names] of destinations) {
       stagedApps.add(app);
