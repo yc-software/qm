@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { textPng } from "./live-slack/text-png.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -359,7 +360,7 @@ test("reply-or-decline nudge preserves the trigger image and environment", async
   const built = buildApp(testConfig({ dataDir, securityPosture: "dangerous" }));
   built.runtime.start();
   try {
-    const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const image = textPng("A");
     const { blobId } = await built.blobTransfer.put(image);
     await built.app.turn({
       ...mention("!shedmute", "C-nudge-image", "710.2"),

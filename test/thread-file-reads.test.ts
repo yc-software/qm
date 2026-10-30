@@ -12,6 +12,7 @@ import { createAgentTools, type ToolContextRef } from "../src/harness/agent-tool
 import { createSurfaceContextFulfiller } from "../src/slack/surface-context.ts";
 import { encodeTs } from "../src/slack/reactions.ts";
 import { textPng } from "./live-slack/text-png.ts";
+import { visionImage } from "../src/core/attachments.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -279,4 +280,12 @@ test("a file on a reply in a neighbouring thread is found by asking Slack for th
   }
   assert.deepEqual(repliesAsked, ["100.000001", "200.000002"]);
   assert.equal(fulfilled[0]!.outcome.result.file.name, "shot.png");
+});
+
+test("only whole images in a supported format are shown to the model", async () => {
+  const png = textPng("AB");
+  assert.equal((await visionImage(png))?.mimeType, "image/png");
+  assert.equal(await visionImage(png.subarray(0, 33)), undefined, "a truncated png");
+  assert.equal(await visionImage(Buffer.from("<svg/>")), undefined);
+  assert.equal(await visionImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), undefined);
 });

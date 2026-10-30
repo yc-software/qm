@@ -21,7 +21,7 @@ import { swallowAs } from "../util/errors.ts";
 import { fileContentRequest } from "./document-kinds.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
-import { downscaleVisionImage } from "./image-downscale.ts";
+import { downscaleVisionImage, imageLooksComplete, sniffImageDimensions } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
 
 export const INBOX_DIR = "inbox";
@@ -37,12 +37,13 @@ const VISION_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "imag
 
 export const MAX_VISION_IMAGE_BYTES = 5_000_000;
 
-export async function visionImage(
-  bytes: Uint8Array,
-  mimetype: string,
-): Promise<{ data: string; mimeType: string } | undefined> {
-  if (!VISION_MIME_TYPES.has(mimetype) || bytes.length === 0 || bytes.length > MAX_VISION_IMAGE_BYTES) return undefined;
-  return { data: Buffer.from(await downscaleVisionImage(bytes, mimetype)).toString("base64"), mimeType: mimetype };
+export async function visionImage(bytes: Uint8Array): Promise<{ data: string; mimeType: string } | undefined> {
+  const format = sniffImageDimensions(bytes)?.format;
+  const mimeType = format ? `image/${format}` : "";
+  if (!format || !VISION_MIME_TYPES.has(mimeType) || !imageLooksComplete(bytes, format)) return undefined;
+  const scaled = await downscaleVisionImage(bytes, mimeType);
+  if (scaled.length > MAX_VISION_IMAGE_BYTES) return undefined;
+  return { data: Buffer.from(scaled).toString("base64"), mimeType };
 }
 
 export const MAX_LLM_REQUEST_BYTES = 18_000_000;
@@ -349,7 +350,7 @@ export async function materializeInbound(
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
     });
-    const image = await visionImage(bytes, mimetype);
+    const image = await visionImage(bytes);
     if (image)
       images.push({
         name,

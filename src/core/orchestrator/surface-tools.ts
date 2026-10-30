@@ -503,18 +503,20 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       }
       const bytes = await collectBlob(blob.stream);
       const meta = { sizeBytes: blob.sizeBytes, name: result.file.name };
-      const format = sniffImageDimensions(bytes)?.format;
-      const image = format ? await visionImage(bytes, `image/${format}`) : undefined;
+      const image = await visionImage(bytes);
       if (image) return { ok: true, ...meta, contentType: image.mimeType, image };
-      if (!headLooksLikeText(bytes.subarray(0, 8000)))
+      const declared = result.file.mimetype ?? "application/octet-stream";
+      const format = sniffImageDimensions(bytes)?.format;
+      if (format || declared.startsWith("image/"))
         return {
           ok: true,
           ...meta,
-          contentType: result.file.mimetype ?? "application/octet-stream",
-          ...(format && bytes.length > MAX_VISION_IMAGE_BYTES
-            ? { message: `image too large to show inline (limit ${MAX_VISION_IMAGE_BYTES} bytes)` }
-            : {}),
+          contentType: format ? `image/${format}` : declared,
+          message: format
+            ? `image can't be shown inline (over ${MAX_VISION_IMAGE_BYTES} bytes after downscaling, or an unsupported format)`
+            : `labelled ${declared} but the bytes aren't a readable image`,
         };
+      if (!headLooksLikeText(bytes.subarray(0, 8000))) return { ok: true, ...meta, contentType: declared };
       const decoded = bytes.toString("utf8");
       const content =
         decoded.length > SURFACE_FILE_MAX_CHARS ? `${decoded.slice(0, SURFACE_FILE_MAX_CHARS)}…[truncated]` : decoded;
