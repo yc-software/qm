@@ -12,6 +12,9 @@ import {
 } from "../src/connectors/oauth.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const HOST = "mcp.example.com";
 

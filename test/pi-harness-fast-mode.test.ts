@@ -18,6 +18,9 @@ import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";
 import type { Api, Model, Usage } from "@earendil-works/pi-ai";
 import { defaultInteractiveThinkingLevel, getRequiredModel } from "../src/model/pi-models.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
   for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {

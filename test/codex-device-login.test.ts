@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { createCodexDeviceLogin } from "../src/model/codex-device-login.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function accessToken(accountId: string): string {
   const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
@@ -70,6 +74,20 @@ test("device login: start returns the prompt, poll is pending then yields subscr
   assert.match(exchange?.body ?? "", /code_verifier=verifier-1/);
   assert.match(exchange?.body ?? "", /deviceauth%2Fcallback/);
   await assert.rejects(() => login.poll(prompt.deviceAuthId), /expired or unknown/);
+});
+
+test("device login: a login started in one tenant cannot be polled from another", async (t) => {
+  const server = fakeAuthServer(t);
+  const login = createCodexDeviceLogin();
+  t.after(() => login.close());
+  const prompt = await login.start();
+  server.approve();
+  await assert.rejects(
+    () => withTenant("00000000-0000-4000-8000-00000000000b", () => login.poll(prompt.deviceAuthId)),
+    /expired or unknown/,
+  );
+  const tokens = await settle(() => login.poll(prompt.deviceAuthId));
+  assert.ok(tokens && typeof tokens === "object" && "accessToken" in tokens);
 });
 
 test("device login: a denied login surfaces the provider error and cleans up", async (t) => {

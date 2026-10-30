@@ -5,6 +5,9 @@ import { getRequiredModel, thinkingLevelsForHarness, safeModelMetadata } from ".
 import { validateRuntimeChoice } from "../src/api/runtime-config.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const adaptiveId = "claude-sonnet-4-6";
 

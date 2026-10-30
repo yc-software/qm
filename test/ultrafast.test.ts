@@ -6,6 +6,9 @@ import { zstdDecompressSync } from "node:zlib";
 import { buildModelRuntime, piUsageToCallUsage, wantsFastMode } from "../src/harness/pi-harness.ts";
 import { getRequiredModel, modelSupportedByHarness, resolveModel } from "../src/model/pi-models.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 for (const [baseId, shortCost, longCost] of [
   ["gpt-6-astra", 0.3, 6.35],

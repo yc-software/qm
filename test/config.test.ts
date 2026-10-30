@@ -14,6 +14,9 @@ import {
   providerKeysPresent,
   CONFIG_DEFAULTS,
 } from "../src/config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const productionEnv = {
   NODE_ENV: "production",

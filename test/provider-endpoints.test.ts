@@ -9,6 +9,9 @@ import {
 } from "../src/model/provider-endpoints.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { loadConfig } from "../src/config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const BASE_ENV = {} as NodeJS.ProcessEnv;
 

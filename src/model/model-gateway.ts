@@ -1,4 +1,5 @@
 import type { ScopeId } from "../types.ts";
+import { perTenant } from "../tenants/context.ts";
 
 interface ModelCallRecord {
   at: number;
@@ -17,12 +18,13 @@ const DEFAULT_MAX_RECORDS = 1_000;
 
 export function createModelGateway(opts: { maxRecords?: number } = {}): ModelGateway {
   const max = Math.max(1, opts.maxRecords ?? DEFAULT_MAX_RECORDS);
-  const records: ModelCallRecord[] = [];
+  const records = perTenant((): ModelCallRecord[] => []);
   return {
     recordCall: (rec) => {
-      records.push(rec);
-      if (records.length > max) records.splice(0, records.length - max);
+      const list = records();
+      list.push(rec);
+      if (list.length > max) list.splice(0, list.length - max);
     },
-    audit: () => [...records],
+    audit: () => [...records()],
   };
 }

@@ -8,6 +8,9 @@ import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../src/core/turn-options.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "org:default-org";
 const SCOPE = "personal:alice";

@@ -18,6 +18,9 @@ import {
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",

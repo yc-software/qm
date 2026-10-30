@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore, type PersistedDeploymentIdentity } from "../src/resolution/config-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("a durable database is pinned to one organization", async () => {
   const deploymentIdentity = createMemoryMap<PersistedDeploymentIdentity>();

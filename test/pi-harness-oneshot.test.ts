@@ -32,6 +32,9 @@ import type { SessionEntry } from "../src/types.ts";
 import type { HarnessDetectInput, HarnessLlmRequestRecord } from "../src/harness/harness.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;
