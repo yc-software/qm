@@ -5,6 +5,9 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const base = { owner: "josh", createdBy: "josh", ownerScopeId: scopeId("personal", "josh") };
 

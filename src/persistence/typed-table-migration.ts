@@ -25,12 +25,13 @@ export function typedTableMigration(spec: TypedTableSpec): PgMigrationDefinition
       `CREATE TABLE IF NOT EXISTS ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
       `ALTER TABLE ${table} RENAME TO ${old}`,
       `ALTER INDEX ${table}_pkey RENAME TO ${old}_pkey`,
+      `SELECT qm_tenant_column('${old}')`,
       `CREATE TABLE ${table}(
          tenant_id UUID NOT NULL DEFAULT qm_tenant_id() REFERENCES tenants,
          ${[...spec.columns, ...(spec.constraints ?? []), `PRIMARY KEY (tenant_id, ${spec.primaryKey.join(", ")})`].join(",\n         ")}
        )`,
       `INSERT INTO ${table}(tenant_id, ${targets.join(", ")})
-         SELECT (SELECT id FROM tenants), ${targets.map((column) => spec.backfill[column]).join(", ")} FROM ${old}${spec.where ? ` WHERE ${spec.where}` : ""}`,
+         SELECT tenant_id, ${targets.map((column) => spec.backfill[column]).join(", ")} FROM ${old}${spec.where ? ` WHERE ${spec.where}` : ""}`,
       `DROP TABLE ${old}`,
       `DO $drop_version$ BEGIN
          IF to_regclass('durable_map_versions') IS NOT NULL THEN

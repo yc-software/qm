@@ -115,6 +115,7 @@ export const WEBHOOK_EVENTS_MIGRATION: PgMigrationDefinition = {
   statements: [
     `SET LOCAL lock_timeout = '5s'`,
     `CREATE TABLE IF NOT EXISTS webhook_history(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
+    `SELECT qm_tenant_column('webhook_history')`,
     `CREATE TABLE webhook_events(
        tenant_id UUID NOT NULL DEFAULT qm_tenant_id() REFERENCES tenants,
        webhook_id TEXT NOT NULL,
@@ -124,7 +125,7 @@ export const WEBHOOK_EVENTS_MIGRATION: PgMigrationDefinition = {
        PRIMARY KEY (tenant_id, webhook_id, delivery_id)
      )`,
     `INSERT INTO webhook_events(tenant_id, webhook_id, delivery_id, received_at, payload)
-       SELECT (SELECT id FROM tenants), old.id, e."deliveryId", e."receivedAt"::bigint, e.payload
+       SELECT old.tenant_id, old.id, e."deliveryId", e."receivedAt"::bigint, e.payload
          FROM webhook_history old,
               jsonb_to_recordset(old.json->'events') AS e("deliveryId" text, "receivedAt" numeric, payload text)
         WHERE jsonb_typeof(old.json->'events') = 'array'

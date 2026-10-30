@@ -123,7 +123,7 @@ export const MONITORS_MIGRATION = typedTableMigration({
     pattern: "json->>'pattern'",
     cursor: "COALESCE((json->>'cursor')::numeric::bigint, 0)",
     tail: "json->>'tail'",
-    expires_at: "(json->>'expiresAt')::numeric::bigint",
+    expires_at: "COALESCE((json->>'expiresAt')::numeric::bigint, (json->>'createdAt')::numeric::bigint)",
     last_error: "json->>'lastError'",
   },
   indexes: [

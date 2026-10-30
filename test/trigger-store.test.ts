@@ -4,6 +4,9 @@ import { assertNoEscalation } from "../src/triggers/trigger-store.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("assertNoEscalation: owner == createdBy is always allowed (no consent needed)", () => {
   assert.doesNotThrow(() => assertNoEscalation({ owner: "U1", createdBy: "U1" }));
