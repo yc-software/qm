@@ -13,7 +13,13 @@ interface QueryInternals {
   requiresPreparation(): boolean;
   prepare(connection: Connection): void;
   submit(connection: Connection): Error | null;
+  handleDataRow(message: unknown): void;
+  handleCommandComplete(message: unknown, connection: Connection): void;
   handleReadyForQuery(connection: Connection): void;
+}
+
+interface Submittable {
+  submit(connection: Connection): Error | null;
 }
 
 interface Queryable {
@@ -27,6 +33,15 @@ interface ClientInternals extends Queryable {
 
 const BIND_TENANT = "SELECT set_config('qm.tenant_id', $1, true)";
 
+function guardSubmittable(client: ClientInternals, config: Submittable, tenant: string | undefined): void {
+  if (!tenant) return;
+  const submit = config.submit.bind(config);
+  config.submit = (connection) =>
+    client.getTransactionStatus() === "T" && client.transactionTenant === tenant
+      ? submit(connection)
+      : new Error("Streaming queries for a tenant must run inside a transaction bound to that tenant");
+}
+
 function plainQuery(config: unknown): boolean {
   return typeof config === "string" || (typeof config === "object" && config !== null && !("submit" in config));
 }
@@ -39,18 +54,22 @@ function tenantPgPoolClass(pg: PgModule): new (config: PoolConfig) => PgPoolInst
   class TenantQuery extends BaseQuery {
     client: ClientInternals | undefined;
     bound = false;
+    binding = false;
     readonly tenant: string | undefined;
     constructor(tenant: string | undefined, config: unknown, values?: unknown) {
       super(config, values);
       this.tenant = tenant;
     }
     override submit(connection: Connection): Error | null {
-      const idle = this.client?.getTransactionStatus() === "I";
-      if (this.client && idle) this.client.transactionTenant = this.tenant;
-      if (this.tenant && !idle && this.client?.transactionTenant && this.client.transactionTenant !== this.tenant) {
+      const client = this.client;
+      const idle = client?.getTransactionStatus() === "I";
+      if (client && idle) client.transactionTenant = this.tenant;
+      if (this.tenant && !idle && client?.transactionTenant && client.transactionTenant !== this.tenant) {
         return new Error("This transaction is bound to another tenant");
       }
-      this.bound = Boolean(this.tenant) && idle && !this.rows && typeof this.text === "string";
+      this.bound = Boolean(this.tenant) && typeof this.text === "string" && (idle || !client?.transactionTenant);
+      if (this.bound && client && !idle) client.transactionTenant = this.tenant;
+      this.binding = this.bound;
       if (!this.bound || this.requiresPreparation()) return super.submit(connection);
       connection.query(`SELECT set_config('qm.tenant_id', '${this.tenant}', true);${this.text}`);
       return null;
@@ -63,6 +82,17 @@ function tenantPgPoolClass(pg: PgModule): new (config: PoolConfig) => PgPoolInst
         connection.execute({ portal: "" }, false);
       }
       super.prepare(connection);
+    }
+    override handleDataRow(message: unknown): void {
+      if (!this.binding) super.handleDataRow(message);
+    }
+    override handleCommandComplete(message: unknown, connection: Connection): void {
+      if (!this.binding) return super.handleCommandComplete(message, connection);
+      this.binding = false;
+      const rows = this.rows;
+      this.rows = undefined;
+      super.handleCommandComplete(message, connection);
+      this.rows = rows;
     }
     override handleReadyForQuery(connection: Connection): void {
       if (this.bound && Array.isArray(this._results)) {
@@ -79,7 +109,10 @@ function tenantPgPoolClass(pg: PgModule): new (config: PoolConfig) => PgPoolInst
         config.client = this;
         return super.query(config, values, callback);
       }
-      if (!plainQuery(config)) return super.query(config, values, callback);
+      if (!plainQuery(config)) {
+        guardSubmittable(this, config as Submittable, boundTenant());
+        return super.query(config, values, callback);
+      }
       const done = (typeof values === "function" ? values : callback) as Callback | undefined;
       const query = new TenantQuery(boundTenant(), config, typeof values === "function" ? undefined : values);
       query.client = this;
