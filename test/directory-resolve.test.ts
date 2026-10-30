@@ -33,7 +33,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -186,7 +186,7 @@ describe("a deployment without the Slack surface (the directory store is never p
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

@@ -34,7 +34,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       capabilitySecret: CAP,
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
       identity: built.identity,
       sessionShares: built.sessionShares,
     });

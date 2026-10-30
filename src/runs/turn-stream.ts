@@ -50,7 +50,7 @@ export type TurnStreamChange =
   | { replyDone: true }
   | { settleReasoning: { step: string; index: number } };
 
-export type RemoteTurnEvent =
+type RemoteTurnEvent =
   | { kind: "delta"; offset: number; text: string }
   | { kind: "reasoning"; step: string; index: number; offset: number; text: string }
   | { kind: "state"; change: TurnStreamChange };

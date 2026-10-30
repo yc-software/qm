@@ -46,7 +46,7 @@ describe("environment verbs (list / create / attach, owner-gated)", async () => 
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

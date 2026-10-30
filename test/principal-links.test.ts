@@ -397,7 +397,7 @@ describe("the portal identity gate accepts a linked sign-in for the canonical vi
     server = createInsecureTestServer(built.app, {
       portalIdentitySecret: PID,
       requireSignedPortalIdentity: true,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
       identity: built.identity,
       sessionShares: built.sessionShares,
     });

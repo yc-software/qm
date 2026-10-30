@@ -75,7 +75,7 @@ describe("capability-token control plane (crons + webhooks + SOUL)", () => {
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
       config: built.config,
       admin: built.admin,
     });

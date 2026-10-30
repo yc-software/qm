@@ -33,7 +33,7 @@ describe("capability tokens verify under the core-only capability secret, not th
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
       capabilitySecret: CAP,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -64,7 +64,7 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
     createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
       requireSignedPortalIdentity: true,
       ...extra,
     });
@@ -108,18 +108,18 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
     const server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SOURCE,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
     });
     assert.ok(server);
     server.close();
   });
 
   it("production refuses an unauthenticated core unless explicitly isolated", () => {
-    assert.throws(() => createServer(built.app, { production: true, cronRuns: built.cronRuns }), /CORE_SIGNING_SECRET/);
+    assert.throws(() => createServer(built.app, { production: true, cronRuns: built.scheduler }), /CORE_SIGNING_SECRET/);
     const server = createServer(built.app, {
       production: true,
       allowUnauthenticatedCore: true,
-      cronRuns: built.cronRuns,
+      cronRuns: built.scheduler,
     });
     server.close();
   });
@@ -131,7 +131,7 @@ describe("createServer refuses to boot enforcement that a surface could bypass",
           replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
           production: true,
           signingSecret: SOURCE,
-          cronRuns: built.cronRuns,
+          cronRuns: built.scheduler,
         }),
       /CAPABILITY_SECRET is not set/,
     );

@@ -203,7 +203,7 @@ test(
       });
       assert.match(flyPlan, /Plan only/);
       assert.doesNotMatch(flyPlan, /source checkout|deploy\/core\/Dockerfile/);
-      const generatedCore = join(deployment, ".generated", "fly", "acme", "core.fly.toml");
+      const generatedCore = join(deployment, ".generated", "fly", "acme", "edge.fly.toml");
       assert.ok(existsSync(generatedCore));
       const generatedCoreToml = readFileSync(generatedCore, "utf8");
       assert.doesNotMatch(generatedCoreToml, /^\s*PI_(?:MODEL|DETECT_MODEL)\s*=/m);
