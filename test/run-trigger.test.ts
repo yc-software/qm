@@ -346,3 +346,33 @@ describe("runTrigger: a busy session defers a fire instead of consuming it", () 
     assert.equal((await d.deliveries.pending("slack")).length, 1);
   });
 });
+
+it("delivers scheduled approval, silent, reaction and failure outcomes by their authenticated run", async () => {
+  const results: TurnResult[] = [
+    {
+      status: "pending_approval",
+      pendingApprovals: [{ requestId: "approve", command: "send", reason: "approval required" }],
+    },
+    { status: "silent" },
+    { status: "react", reactions: ["thumbsup"] },
+    { status: "failed", reason: "failed" },
+    { status: "refused", reason: "refused" },
+  ];
+  for (const surface of ["cron", "monitor"]) {
+    for (const result of results) {
+      const d = deps(async () => ({ ...result, runId: "scheduled-run" }));
+      await runTrigger(d, {
+        owner: "U1",
+        ownerScopeId: scopeId("personal", "U1"),
+        input: "scheduled task",
+        fireKey: "cron:1:fire:1",
+        surface,
+        destination: { type: "webhook", target: "web:U1:bound", webhook: { binding: "binding" } },
+        errorNotice: () => "failed",
+      });
+      const pending = await d.deliveries.pending("webhook");
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0]?.provenance?.sourceRunId, "scheduled-run");
+    }
+  }
+});

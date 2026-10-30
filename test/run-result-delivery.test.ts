@@ -540,14 +540,18 @@ test("bound webhook results identify every terminal outcome for native receiver 
 
 test("a scheduled approval continuation correlates with the receiver's action request", () => {
   const request = {
-    ...turn("scheduled update", "web:alice:conversation"),
-    surface: "web",
-    origin: { kind: "automation" as const },
+    ...turn("scheduled update"),
+    surface: "cron",
+    origin: {
+      kind: "automation" as const,
+      destination: { type: "webhook" as const, target: "web:alice:conversation", webhook: { binding: "binding" } },
+    },
     idempotencyKey: "receiver-approval-1",
     approval: { requestId: "approval-1", approved: true },
-    deliveryWebhook: { binding: "binding" },
   };
   const delivery = runResultDelivery(run({ request, dedupKey: "receiver-approval-1:approval:approval-1:true" }));
   assert.equal(delivery?.provenance.sourceRequestId, "receiver-approval-1");
   assert.equal(delivery?.provenance.sourceRunId, "r-1");
+  assert.equal(delivery?.destination.target, "web:alice:conversation");
+  assert.deepEqual(delivery?.destination.webhook, { binding: "binding" });
 });

@@ -166,3 +166,22 @@ test("bound approval callbacks retain the caller key when the run store extends 
   const delivery = runResultDelivery({ ...stored, status: "done", result: { status: "ok", reply: "done" } });
   assert.equal(delivery?.provenance.sourceRequestId, request.idempotencyKey);
 });
+
+test("a scheduled bound turn returns the persisted run needed for its callback", async () => {
+  const built = freshApp();
+  const request: TurnRequest = {
+    surface: "cron",
+    actor,
+    conversation: { kind: "dm", threadRef: "cron:bound:fire" },
+    triggered: true,
+    text: "hello",
+    idempotencyKey: "cron:bound:fire",
+    triggerDestination: { type: "webhook", target: "web:U1:bound", webhook: { binding: "binding" } },
+  };
+  const result = await built.app.turn(request);
+  const replayed = await built.app.turn(request);
+  assert.equal(replayed.runId, result.runId);
+  assert.ok(result.runId);
+  const stored = await built.runs.get(result.runId);
+  assert.equal(stored?.result?.status, result.status);
+});

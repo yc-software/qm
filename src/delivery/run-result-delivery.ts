@@ -30,16 +30,21 @@ export type AdminUrlFor = (sessionId: string) => string | undefined;
 
 export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResultDelivery | null {
   if (isSubagentThreadRef(run.sessionId) || run.request.swarm || run.request.privateSessionMessage) return null;
-  const target = run.request.deliveryTarget;
+  const origin = resolveTurnOrigin(run.request);
+  const approvalDestination =
+    run.request.approval && origin.kind === "automation" && origin.destination?.type === "webhook"
+      ? origin.destination
+      : undefined;
+  const webhook = approvalDestination?.webhook ?? run.request.deliveryWebhook;
+  const target = approvalDestination?.target ?? run.request.deliveryTarget;
   const surface = run.request.surface;
   if (!target || !surface) return null;
-  const origin = resolveTurnOrigin(run.request);
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
   const webTranscript = webTranscriptNote(run, surface, failed);
   const destination: Destination = {
-    type: run.request.deliveryWebhook ? "webhook" : surface,
-    ...(run.request.deliveryWebhook ? { webhook: run.request.deliveryWebhook } : {}),
+    type: webhook ? "webhook" : surface,
+    ...(webhook ? { webhook } : {}),
     target,
     ...(run.request.slackSource
       ? { slackAccountId: run.request.slackSource.accountId, slackTeamId: run.request.slackSource.teamId }
@@ -63,9 +68,9 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor): RunResul
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }
       : {}),
   });
-  if (run.request.deliveryWebhook && run.request.idempotencyKey && (origin.kind === "human" || run.request.approval))
+  if (webhook && run.request.idempotencyKey && (origin.kind === "human" || run.request.approval))
     provenance.sourceRequestId = run.request.idempotencyKey;
-  if (run.request.deliveryWebhook && run.result) {
+  if (webhook && run.result) {
     return {
       destination,
       text: run.result.reply ?? "",
