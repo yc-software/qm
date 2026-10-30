@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import { currentTenant } from "./context.ts";
 
@@ -19,4 +20,10 @@ export function composioNamespaceReader(pool: Pick<PgPool, "q"> | null): () => P
     }
     return namespace;
   };
+}
+
+export function composioUserId(namespace: string, principal: string): string {
+  return `qm_${createHash("sha256")
+    .update(JSON.stringify([namespace, principal]))
+    .digest("hex")}`;
 }

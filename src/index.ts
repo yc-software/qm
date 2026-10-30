@@ -49,6 +49,7 @@ await built.config.hydrate?.();
 await built.refreshCustomProviders();
 await built.identity.hydrate();
 await built.deploymentLayerReady();
+void built.skillsReady();
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 

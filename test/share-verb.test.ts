@@ -20,8 +20,6 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
-const ORG = "default-org";
-
 interface FakeState {
   artifacts: Record<string, ArtifactHome & { type: ArtifactType }>;
   scopesByPrincipal: Record<string, ScopeId[]>;

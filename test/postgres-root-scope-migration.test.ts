@@ -7,9 +7,6 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { withTenant } from "../src/tenants/context.ts";
 import { composioNamespaceReader } from "../src/tenants/composio-namespace.ts";
 import { hashId } from "../src/util/crypto.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the root scope migration test";
@@ -20,6 +17,7 @@ const KV_TABLES = [
   "keychain_credentials",
   "keychain_grants",
   "slack_installation",
+  "ambient_cursors",
 ];
 
 test(
@@ -42,17 +40,18 @@ test(
       );
       for (const table of KV_TABLES) await raw.query(`CREATE TABLE ${table}(id TEXT PRIMARY KEY, json JSONB NOT NULL)`);
       await raw.query(`CREATE TABLE org_rows(org_id TEXT NOT NULL, scope_label TEXT, scopes TEXT[], note TEXT)`);
-      const oldBroker = hashId([TEST_ROOT_SCOPE, "openai", "broker"]);
+      const oldBroker = hashId(["org:acme", "openai", "broker"]);
       await raw.query(`INSERT INTO deployment_identity VALUES ('singleton', '{"orgId":"acme"}')`);
-      await raw.query(`INSERT INTO soul_configs VALUES (TEST_ROOT_SCOPE, '{"scopeId":TEST_ROOT_SCOPE,"content":"x"}')`);
+      await raw.query(`INSERT INTO soul_configs VALUES ('org:acme', '{"scopeId":"org:acme","content":"x"}')`);
       await raw.query(`INSERT INTO keychain_credentials VALUES ($1, $2)`, [
         oldBroker,
-        { id: oldBroker, ownerId: TEST_ROOT_SCOPE, service: "openai", kind: "broker" },
+        { id: oldBroker, ownerId: "org:acme", service: "openai", kind: "broker" },
       ]);
       await raw.query(`INSERT INTO keychain_grants VALUES ('g1', $1)`, [{ id: "g1", credentialId: oldBroker }]);
       await raw.query(`INSERT INTO slack_installation VALUES ('acme', '{"disabled":true}')`);
+      await raw.query(`INSERT INTO ambient_cursors VALUES ('acme:slack:C1', '{"lastJudgedTs":"1.0"}')`);
       await raw.query(
-        `INSERT INTO org_rows VALUES ('acme', 'system:${TEST_ROOT_SCOPE}', ARRAY[TEST_ROOT_SCOPE, 'org:acme-labs'], 'mentions org:acme-labs')`,
+        `INSERT INTO org_rows VALUES ('acme', 'system:org:acme', ARRAY['org:acme', 'org:acme-labs'], 'prose about org:acme stays')`,
       );
 
       await applyPgMigrations(raw, migrations);
@@ -71,12 +70,13 @@ test(
       );
       assert.equal((await raw.query("SELECT json->>'credentialId' AS c FROM keychain_grants")).rows[0].c, newBroker);
       assert.equal((await raw.query("SELECT id FROM slack_installation")).rows[0].id, tenant);
+      assert.equal((await raw.query("SELECT id FROM ambient_cursors")).rows[0].id, `${tenant}:slack:C1`);
       assert.deepEqual((await raw.query("SELECT * FROM org_rows")).rows, [
         {
           org_id: tenant,
           scope_label: `system:${root}`,
           scopes: [root, "org:acme-labs"],
-          note: "mentions org:acme-labs",
+          note: "prose about org:acme stays",
         },
       ]);
       const namespace = composioNamespaceReader(app);

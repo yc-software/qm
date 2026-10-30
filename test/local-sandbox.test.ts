@@ -115,7 +115,6 @@ test("cold provision creates volume + container, run() execs over the daemon, by
   const c = fake.containers.get(h.id)!;
   assert.equal(c.labels["qm.sandbox"], "1");
   assert.equal(c.labels["qm.scope"], scope);
-  assert.equal(c.labels["qm.org"], "default-org");
   assert.equal(c.labels["agent_env"], "dev");
   assert.equal(c.volume, localVolumeName(scope));
 

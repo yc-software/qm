@@ -4,7 +4,7 @@ import { parseAckEmoji } from "../../slack/config.ts";
 import type { ServerDeps } from "../deps.ts";
 import type { ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
-import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
+import { parseScopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
   defaultModelForHarness,
   fastModeModelIds,

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { Principal, ScopeId } from "../types.ts";
-import { parseScopeId, scopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store.ts";
 import { personKey, samePerson } from "../directory/person.ts";
 import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "./admin-grant-store.ts";
@@ -123,7 +122,6 @@ export function createAdminService(store?: AdminGrantStore, opts: AdminServiceOp
       if (role !== "org_admin") {
         throw new AdminError(400, "role must be org_admin");
       }
-      const parsed = parseScopeId(input.scopeId);
       if (input.scopeId !== tenantRootScope()) {
         throw new AdminError(400, `org_admin scope must be ${tenantRootScope()}`);
       }

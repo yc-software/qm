@@ -1,6 +1,5 @@
 import { brokerCredentialCall, realBrokerFetch, type BrokerAudit } from "../credential-broker.ts";
 import { brokerConnectorCall } from "../connector-broker.ts";
-import { scopeId as makeScopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { tenantRootScope } from "../../tenants/context.ts";

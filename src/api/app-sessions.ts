@@ -1125,7 +1125,7 @@ export function createSessionMethods(
       if (!projectId) return fork();
       const projects = deps.projects;
       if (!projects) return null;
-      return projects.withRosterLock(projectId, async (project) => {
+      return projects.withRosterLock(projectId, async () => {
         const members = await projects.members(parsed.ref);
         if (!members?.includes(principalId)) return null;
         return fork(members);

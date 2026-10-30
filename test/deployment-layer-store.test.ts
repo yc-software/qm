@@ -10,7 +10,6 @@ import {
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
-import { scopeId } from "../src/types.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createAuditLog } from "../src/audit/audit-log.ts";
 import { computeBundleHash, createSkillBundleStore } from "../src/skills/skill-bundle-store.ts";
@@ -889,7 +888,6 @@ test("a later hydrate reconciles a persisted layer audit exactly once", async ()
 
 test("a failed audit remains recoverable after a later revision replaces the durable head", async () => {
   const backing = createMemoryMap<StoredDeploymentLayer>();
-  const org = TEST_ROOT_SCOPE;
   const audited: number[] = [];
   let auditAvailable = false;
   const store = createDeploymentLayerStore({

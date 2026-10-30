@@ -2,7 +2,6 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAdminGrantStore } from "../src/admin/postgres-admin-grant-store.ts";
 import { createAdminGrantStore, type AdminGrant } from "../src/admin/admin-grant-store.ts";
-import { scopeId } from "../src/types.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();

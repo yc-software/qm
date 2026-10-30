@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolveBranding, sanitizeBranding } from "../src/resolution/branding.ts";
-import { scopeId } from "../src/types.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();

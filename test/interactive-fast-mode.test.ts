@@ -2,9 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
-import { scopeId } from "../src/types.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -36,7 +35,7 @@ test("refreshScope picks up an interactive fast mode change written elsewhere", 
   const interactiveFastMode = createMemoryMap<PersistedScopedFlag>();
   const store = createMemoryConfigStore({ interactiveFastMode });
   await store.hydrate!();
-  const org = scopeId("org", "org");
+  const org = TEST_ROOT_SCOPE;
   await interactiveFastMode.put(org, { scopeId: org, on: true });
   await store.refreshScope(org);
   assert.equal(store.getInteractiveFastMode(), true);

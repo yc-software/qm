@@ -512,10 +512,7 @@ function turnBoxes(sandbox: Partial<Sandbox>, transferId = "turn-a") {
     memoryScopeId: scopeId("channel", "C1"),
     connectorEnv: { AGENT_API_TOKEN: "scope-capability" },
     resolution: {
-      layers: [
-        { scopeId: scopeId("channel", "C1"), mode: "rw", mountPath: "" },
-        { scopeId: scopeId("org", "global"), mode: "ro", mountPath: "global" },
-      ],
+      layers: [{ scopeId: scopeId("channel", "C1"), mode: "rw", mountPath: "" }],
     },
   } as unknown as TurnSandboxContext);
   return { boxes, events, errors };
@@ -545,10 +542,7 @@ test("scratch provisioning is singleflight within a turn and isolated across tur
   assert.notEqual(a.id, c.id);
   assert.equal(provisions.length, 2);
   for (const [layers, opts] of provisions) {
-    assert.deepEqual(
-      layers.map((layer) => layer.mountPath),
-      ["global"],
-    );
+    assert.deepEqual(layers, []);
     assert.deepEqual(opts?.env, { AGENT_API_TOKEN: "scope-capability" });
   }
   await first.boxes.reclaimBox();

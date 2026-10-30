@@ -6,6 +6,8 @@ import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
 
+bindTestTenant();
+
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
   const config = testConfig({ anthropicApiKey: "test-only" });
@@ -223,8 +225,6 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 
 import { createServer } from "node:http";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

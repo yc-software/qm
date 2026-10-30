@@ -3,7 +3,8 @@ import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
-import { composioRoutes, composioUserId } from "../src/api/routes/composio.ts";
+import { composioRoutes } from "../src/api/routes/composio.ts";
+import { composioNamespaceReader, composioUserId } from "../src/tenants/composio-namespace.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
@@ -31,6 +32,7 @@ function fixture() {
   const audits: Array<{ action: string; resource?: string }> = [];
   const deps: Partial<ServerDeps> = {
     keychain,
+    composioNamespace: composioNamespaceReader(null),
     deliveries: createDeliveryStore(),
     serviceCreds: keychain,
     acl,

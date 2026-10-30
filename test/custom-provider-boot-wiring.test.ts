@@ -56,10 +56,9 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
 
     assert.equal(defaultModelForHarness("pi", deps.baseModelDefault), "custom/acme-gateway/acme-large");
 
-    const runtime = await fetch(
-      `${base}/v1/runtime-config?principalId=admin-alice@default-org&scopeId=personal:admin-alice`,
-      { headers: ADMIN },
-    );
+    const runtime = await fetch(`${base}/v1/runtime-config?principalId=admin-alice&scopeId=personal:admin-alice`, {
+      headers: ADMIN,
+    });
     assert.equal(runtime.status, 200);
     const body = (await runtime.json()) as {
       effective: { modelId: string };

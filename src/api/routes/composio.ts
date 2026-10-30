@@ -6,7 +6,6 @@ import { livePersonCapability } from "../artifact-share.ts";
 import { mintSignedPayload, verifySignedPayload } from "../../auth/signed-token.ts";
 import { canonicalPerson, personIds, samePerson } from "../../directory/person.ts";
 import { PrincipalLinkError } from "../../identity/principal-links.ts";
-import { createHash } from "node:crypto";
 import { scopeId } from "../../types.ts";
 import { parseRef } from "../../acl/resource-ref.ts";
 import { principalEntitledToScope } from "../../resolution/context-filter.ts";
@@ -17,20 +16,13 @@ import { errMessage, httpFailure, reportFailure } from "../../util/errors.ts";
 import { activePrincipal, audit } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import type { ServerDeps } from "../deps.ts";
+import { composioUserId } from "../../tenants/composio-namespace.ts";
 import { tenantRootScope } from "../../tenants/context.ts";
 
 export const ACCOUNT_ID = /^ca_[a-zA-Z0-9_-]+$/;
 
-export function composioUserId(org: string, principal: string): string {
-  return `qm_${createHash("sha256")
-    .update(JSON.stringify([org, principal]))
-    .digest("hex")}`;
-}
-
-async function composioNamespace(deps: ServerDeps): Promise<string> {
-  if (!deps.composioNamespace) throw new Error("Composio user namespace is not configured");
-  return deps.composioNamespace();
-}
+const composioNamespace = (deps: ServerDeps): Promise<string> =>
+  deps.composioNamespace?.() ?? Promise.reject(new Error("Composio user namespace is not configured"));
 
 export async function composioUserIds(deps: ServerDeps, principal: string): Promise<string[]> {
   const namespace = await composioNamespace(deps);

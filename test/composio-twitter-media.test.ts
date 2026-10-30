@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
-import { composioUserId } from "../src/api/routes/composio.ts";
+import { composioNamespaceReader, composioUserId } from "../src/tenants/composio-namespace.ts";
 import { composioTwitterMediaRoutes } from "../src/api/routes/composio-twitter-media.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
@@ -10,7 +10,7 @@ import { createKeychain } from "../src/credentials/keychain.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { TEST_ROOT_SCOPE, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -57,6 +57,7 @@ async function fixture() {
   const audits: string[] = [];
   const deps: Partial<ServerDeps> = {
     keychain,
+    composioNamespace: composioNamespaceReader(null),
     serviceCreds: keychain,
     auditLog: { record: (e: { action: string }) => audits.push(e.action) } as unknown as ServerDeps["auditLog"],
     runs: {

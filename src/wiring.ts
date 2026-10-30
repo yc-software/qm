@@ -487,6 +487,7 @@ export interface BuiltApp {
   brokeredTools: readonly BrokeredLayerTool[];
   deploymentLayerStore: DeploymentLayerStore;
   deploymentLayerReady: () => Promise<unknown>;
+  skillsReady: () => Promise<void>;
   deploymentLayerRefresh: Sweeper;
   sessions: SessionStore;
   runs: RunStore;
@@ -3082,6 +3083,7 @@ export function buildApp(
     deploymentLayerStore,
     brokeredTools,
     deploymentLayerReady,
+    skillsReady,
     deploymentLayerRefresh,
     sessions,
     runs,

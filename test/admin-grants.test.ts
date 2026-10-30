@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -56,6 +56,7 @@ test("an org admin promotes a user to org_admin; whoami reflects it; audited", a
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
     assert.ok(
       (await s.built.auditLog.events()).some((e) => e.action === "grant.create" && e.resource === "U1/org_admin"),
@@ -70,7 +71,7 @@ test("a team_admin grant is rejected (400) — the role is unsupported / not wir
   try {
     const r = await post(s.base, ALICE, { principalId: "U2", role: "team_admin", scopeId: "team:team-eng" });
     assert.equal(r.status, 400);
-    assert.deepEqual(await whoami(s.base, "U2"), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await whoami(s.base, "U2"), { isAdmin: false, permissions: [], tenant: TEST_TENANT });
   } finally {
     await s.close();
   }
@@ -81,7 +82,7 @@ test("a non-admin cannot grant (403) — grant mutation is org_admin only", asyn
   try {
     const r = await post(s.base, NOBODY, { principalId: "U3", role: "org_admin", scopeId: TEST_ROOT_SCOPE });
     assert.equal(r.status, 403);
-    assert.deepEqual(await whoami(s.base, "U3"), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await whoami(s.base, "U3"), { isAdmin: false, permissions: [], tenant: TEST_TENANT });
     assert.equal(
       (await post(s.base, "U-nobody", { principalId: "U4", role: "org_admin", scopeId: TEST_ROOT_SCOPE })).status,
       403,
@@ -121,7 +122,7 @@ test("revoke flips a promoted user back to non-admin; audited", async () => {
     await post(s.base, ALICE, { principalId: "U1", role: "org_admin", scopeId: TEST_ROOT_SCOPE });
     const r = await del(s.base, ALICE, "U1", TEST_ROOT_SCOPE, "org_admin");
     assert.equal(r.status, 200);
-    assert.deepEqual(await whoami(s.base, "U1"), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await whoami(s.base, "U1"), { isAdmin: false, permissions: [], tenant: TEST_TENANT });
     assert.ok(
       (await s.built.auditLog.events()).some((e) => e.action === "grant.revoke" && e.resource === "U1/org_admin"),
     );
@@ -139,11 +140,12 @@ test("a cased stored grant is revoked by its canonical id (the delete follows th
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
     assert.equal((await del(s.base, ALICE, "jordan@acme.test", TEST_ROOT_SCOPE, "org_admin")).status, 200);
     assert.deepEqual(
       await whoami(s.base, "Jordan@Acme.test"),
-      { isAdmin: false, permissions: [] },
+      { isAdmin: false, permissions: [], tenant: TEST_TENANT },
       "the cased row was actually removed",
     );
   } finally {
@@ -165,6 +167,7 @@ test("the last-admin guard counts one person's case-variant grants as ONE admin"
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await s.close();
@@ -192,6 +195,7 @@ test("a non-admin cannot revoke (403)", async () => {
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await s.close();
@@ -209,6 +213,7 @@ test("the last org admin cannot be revoked (400 lock-out guard)", async () => {
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await s.close();
@@ -239,18 +244,20 @@ test("without DATABASE_URL grants are in-memory: the seed re-applies each boot; 
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await b1.close();
   }
   const b2 = boot();
   try {
-    assert.deepEqual(await whoami(b2.base, "U-durable"), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await whoami(b2.base, "U-durable"), { isAdmin: false, permissions: [], tenant: TEST_TENANT });
     assert.deepEqual(await whoami(b2.base, ALICE), {
       isAdmin: true,
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await b2.close();

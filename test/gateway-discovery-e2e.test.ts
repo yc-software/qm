@@ -10,7 +10,6 @@ import { oneShot } from "../src/harness/pi-harness.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
-import { scopeId } from "../src/types.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();

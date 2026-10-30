@@ -11,7 +11,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -42,6 +42,7 @@ test("whoami reports an org_admin as admin with the org scope", async () => {
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await s.close();
@@ -53,7 +54,7 @@ test("whoami reports an ungranted actor as not-admin", async () => {
   try {
     const r = await whoami(s.base, "U-nobody");
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [], tenant: TEST_TENANT });
   } finally {
     await s.close();
   }
@@ -64,7 +65,7 @@ test("whoami reports a foreign-org actor as not-admin (resolveActor null → 200
   try {
     const r = await whoami(s.base, "admin-alice@other-org");
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [], tenant: TEST_TENANT });
   } finally {
     await s.close();
   }
@@ -75,7 +76,7 @@ test("whoami with no x-admin-actor is not-admin (200)", async () => {
   try {
     const r = await whoami(s.base);
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await r.json(), { isAdmin: false, permissions: [], tenant: TEST_TENANT });
   } finally {
     await s.close();
   }
@@ -126,6 +127,7 @@ test("with a signing secret set, a whoami GET with a BAD/missing signature is 40
       role: "org_admin",
       scopeId: TEST_ROOT_SCOPE,
       permissions: ["admin"],
+      tenant: TEST_TENANT,
     });
   } finally {
     await s.close();

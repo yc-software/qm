@@ -1,5 +1,5 @@
 import type { DurableMap } from "./persistence/durable-map.ts";
-import { scopeId, type ScopeId } from "./types.ts";
+import { type ScopeId } from "./types.ts";
 import { tenantRootScope } from "./tenants/context.ts";
 
 export const FEATURES = {

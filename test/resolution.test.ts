@@ -19,16 +19,16 @@ async function setup() {
   return createResolutionService(config, createAclStore());
 }
 
-test("DM mounts global + personal (the user's own workspace)", async () => {
+test("DM mounts only personal (the user's own workspace)", async () => {
   const res = await setup();
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const r = await res.resolve(conv, actor);
   const mounts = r.layers.map((l) => l.scopeId);
-  assert.deepEqual(mounts, [TEST_ROOT_SCOPE, scopeId("personal", "U1")]);
+  assert.deepEqual(mounts, [scopeId("personal", "U1")]);
   assert.match(r.systemPrompt, /PERSONAL_SOUL/);
 });
 
-test("channel mounts ONLY global + that channel — never personal (spec §9)", async () => {
+test("channel mounts ONLY that channel — never personal (spec §9)", async () => {
   const res = await setup();
   const conv: Conversation = {
     kind: "channel",
@@ -38,7 +38,7 @@ test("channel mounts ONLY global + that channel — never personal (spec §9)", 
   };
   const r = await res.resolve(conv, actor);
   const mounts = r.layers.map((l) => l.scopeId);
-  assert.deepEqual(mounts, [TEST_ROOT_SCOPE, scopeId("channel", "C1")]);
+  assert.deepEqual(mounts, [scopeId("channel", "C1")]);
   assert.equal(mounts.includes(scopeId("personal", "U1")), false);
   assert.match(r.systemPrompt, /CHANNEL_SOUL/);
   assert.doesNotMatch(r.systemPrompt, /PERSONAL_SOUL/);
@@ -82,14 +82,13 @@ test("egress floor includes the conversation scope policy for shared rooms", asy
   assert.deepEqual(r.egress.deniedHosts, ["channel-bad.test"]);
 });
 
-test("the writable layer is the scope, global is read-only", async () => {
+test("the writable layer is the scope and the tenant root is the org scope, not a mount", async () => {
   const res = await setup();
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const r = await res.resolve(conv, actor);
-  const org = r.layers.find((l) => l.scopeId === TEST_ROOT_SCOPE);
   const personal = r.layers.find((l) => l.scopeId === scopeId("personal", "U1"));
-  assert.equal(org?.mode, "ro");
   assert.equal(personal?.mode, "rw");
+  assert.equal(r.orgScopeId, TEST_ROOT_SCOPE);
 });
 
 test("resolution carries the durable effective security posture", async () => {

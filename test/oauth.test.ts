@@ -18,7 +18,7 @@ import {
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -355,7 +355,7 @@ test("scopesFor: BYO client scopes override the provider default", async () => {
   assert.deepEqual(scopesFor(PROVIDERS.google!, await googleClient()), PROVIDERS.google!.scopes);
 });
 
-test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", async () => {
+test("OAuth state is sealed, scoped (tenant/accountType/clientRef), and expires", async () => {
   const state = await sealOAuthState(
     {
       provider: "google",
@@ -378,6 +378,7 @@ test("OAuth state is sealed, scoped (org/accountType/clientRef), and expires", a
     clientRef: "env:google",
     issuedAt: 1_000,
     nonce: "n1",
+    tenant: TEST_TENANT,
   });
   await assert.rejects(() => openOAuthState(`${state}x`, { secret: "state-secret" }), /invalid OAuth state/);
   await assert.rejects(

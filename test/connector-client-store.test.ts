@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { scopeId } from "../src/types.ts";
 import {
   createConnectorClientResolver,
   encryptSecret,

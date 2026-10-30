@@ -1742,7 +1742,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
 
   const org = textOf(
     await call(
-      createAgentTools({ current: withAudience({ kind: "org", orgId: "acme" }) }).find((tool) => tool.name === "apps"),
+      createAgentTools({ current: withAudience({ kind: "org" }) }).find((tool) => tool.name === "apps"),
       {
         action: "publish",
         entrypoint: "x",
@@ -1751,7 +1751,7 @@ test("publish reply states owner + resolved audience in human terms (ADR 0003 D7
     ),
   );
   assert.match(org, /Owned by you/);
-  assert.match(org, /anyone at acme/);
+  assert.match(org, /anyone at your org/);
 
   const members = textOf(
     await call(

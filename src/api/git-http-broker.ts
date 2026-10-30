@@ -1,6 +1,5 @@
 import { Readable } from "node:stream";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
-import { scopeId as makeScopeId } from "../types.ts";
 import { type DecryptedServiceCredential, isValidCredentialSlug, isComposioHost } from "../credentials/keychain.ts";
 import { brokerPathAllowed, brokerRequestHeaders, grantedCredential } from "./credential-broker.ts";
 import { pipeToResponse, sendJson } from "./http.ts";

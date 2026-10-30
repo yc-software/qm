@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { type ScopeId } from "../src/types.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();

@@ -11,6 +11,9 @@ import { instrumentedSnapshotStore } from "./support/snapshot-stores.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("real Modal adapter creates blank worker computers without snapshot or restore calls", async () => {
   const fake = installFakeModal();

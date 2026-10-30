@@ -30,8 +30,6 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
-const ORG = "default-org";
-
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 
 function fakeSandbox(): Sandbox {

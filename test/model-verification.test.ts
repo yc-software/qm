@@ -3,6 +3,8 @@ import { test } from "node:test";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
+bindTestTenant();
+
 const spec = {
   id: "verify-future",
   name: "Verify future",
@@ -507,8 +509,6 @@ test("environment and gateway credential changes invalidate cached fingerprints"
 
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const built = buildApp(testConfig({ openaiApiKey: "test-key" }));

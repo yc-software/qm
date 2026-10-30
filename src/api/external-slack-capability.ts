@@ -2,7 +2,6 @@ import { currentExternalSlackRun } from "../resolution/external-slack.ts";
 import { parseRef } from "../acl/resource-ref.ts";
 import type { CapabilityClaims } from "../auth/capability-token.ts";
 import { principalEntitledToScope } from "../resolution/context-filter.ts";
-import { scopeId } from "../types.ts";
 import type { ServerDeps } from "./deps.ts";
 import { tenantRootScope } from "../tenants/context.ts";
 

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { ScopeId } from "../types.ts";
 import {
   safeSkillFilePath,
   type Skill,

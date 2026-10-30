@@ -10,7 +10,6 @@ import {
   createPostgresAdvisoryLock,
   type AdvisoryLock,
 } from "../src/persistence/advisory-lock.ts";
-import { scopeId } from "../src/types.ts";
 import { installSeedSkills } from "../src/skills/seed.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 

@@ -2,13 +2,12 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresTeamStore } from "../src/teams/teams.ts";
 import { scopeId } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres team tests";
-const org = TEST_ROOT_SCOPE;
 const room = scopeId("channel", "C1");
 
 beforeEach(async () => {

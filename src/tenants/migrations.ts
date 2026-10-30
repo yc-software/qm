@@ -4,7 +4,9 @@ export const TENANT = "qm_tenant_id()";
 
 const SCOPE_COLUMN_TYPES = `'text'::regtype, 'varchar'::regtype, 'json'::regtype, 'jsonb'::regtype, 'text[]'::regtype`;
 
-const VERBATIM_HISTORY_TABLES = `'items', 'tenants', 'qm_schema_migrations', 'llm_prompt_envelopes', 'channel_messages'`;
+const UNREWRITTEN_TABLES = `'tenants', 'qm_schema_migrations', 'items', 'tool_calls', 'llm_prompt_envelopes',
+  'session_llm_requests', 'channel_messages', 'channel_files', 'runs', 'run_activity', 'run_signals', 'deliveries',
+  'audit_log', 'egress_events', 'error_events', 'credential_usage', 'cron_fires', 'webhook_history'`;
 
 const BROKER_ID = String.raw`left(encode(sha256(convert_to(json->>'ownerId', 'UTF8') || '\x00'::bytea ||
   convert_to(json->>'service', 'UTF8') || '\x00'::bytea || convert_to('broker', 'UTF8')), 'hex'), 16)`;
@@ -60,15 +62,16 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
          PERFORM set_config('qm.tenant_id', tenant::text, true);
          needle := 'org:' || old_org;
          replacement := 'org:' || tenant::text;
-         pattern := '(?<![A-Za-z0-9_.-])' || regexp_replace(needle, '([^A-Za-z0-9])', '\\\1', 'g') || '(?![A-Za-z0-9_.-])';
+         pattern := '(^|["{,])((?:system:)?)' || regexp_replace(needle, '([^A-Za-z0-9])', '\\\1', 'g') || '(?=$|["}|:,])';
+         replacement := '\1\2' || replacement;
          FOR rel IN
            SELECT c.oid::regclass AS tbl,
              string_agg(format('%1$I = CASE WHEN strpos(%1$I::text, %2$L) > 0 THEN regexp_replace(%1$I::text, %3$L, %4$L, %5$L)::%6$s ELSE %1$I END',
-               a.attname, needle, pattern, replacement, 'g', format_type(a.atttypid, a.atttypmod)), ', ') AS sets,
+               a.attname, needle, pattern, replacement, 'g', format_type(a.atttypid, NULL)), ', ') AS sets,
              string_agg(format('strpos(%I::text, %L) > 0', a.attname, needle), ' OR ') AS conds
            FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid
            WHERE c.relnamespace = current_schema()::regnamespace AND c.relkind IN ('r', 'p')
-             AND c.relname NOT IN (${VERBATIM_HISTORY_TABLES})
+             AND c.relname NOT IN (${UNREWRITTEN_TABLES})
              AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
              AND a.atttypid IN (${SCOPE_COLUMN_TYPES})
            GROUP BY c.oid
@@ -83,13 +86,17 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
          LOOP
            EXECUTE format('UPDATE %s SET org_id = $1 WHERE org_id = $2', rel.tbl) USING tenant::text, old_org;
          END LOOP;
+         IF to_regclass('ambient_cursors') IS NOT NULL THEN
+           UPDATE ambient_cursors SET id = tenant::text || substr(id, length(old_org) + 1)
+             WHERE starts_with(id, old_org || ':');
+         END IF;
          IF to_regclass('slack_installation') IS NOT NULL THEN
            UPDATE slack_installation SET id = tenant::text WHERE id = old_org;
          END IF;
          IF to_regclass('keychain_credentials') IS NOT NULL THEN
            CREATE TEMP TABLE qm_broker_ids ON COMMIT DROP AS
              SELECT id AS old_id, ${BROKER_ID} AS new_id FROM keychain_credentials
-             WHERE json->>'kind' = 'broker' AND json->>'ownerId' = replacement;
+             WHERE json->>'kind' = 'broker' AND json->>'ownerId' = 'org:' || tenant::text;
            DELETE FROM qm_broker_ids WHERE old_id = new_id;
            UPDATE keychain_credentials k SET id = m.new_id, json = jsonb_set(k.json, '{id}', to_jsonb(m.new_id))
              FROM qm_broker_ids m WHERE k.id = m.old_id;
