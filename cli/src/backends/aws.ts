@@ -30,7 +30,6 @@ import {
   requiresAwsMicrovmImage,
   isDigestPinned,
   sandboxCoreEnv,
-  securityScreenEnv,
   type AwsConfig,
   type QmConfig,
 } from "../config.ts";
@@ -397,7 +396,6 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
         }),
     ...coreEnv,
     ...hostedServiceEnv(config.services, config.env, service),
-    ...(service === "core" ? securityScreenEnv(config) : {}),
   };
   if (service === "core") {
     const sandboxBackend = config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;

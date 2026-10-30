@@ -1,4 +1,4 @@
-import { securityScreenEnv, type QmConfig, type RenderConfig } from "./config.ts";
+import { type QmConfig, type RenderConfig } from "./config.ts";
 import { CliError } from "./log.ts";
 import { discoverPlugins, type ResolvedPlugin } from "./plugins.ts";
 import type { ServiceType } from "./render-api.ts";
@@ -132,7 +132,6 @@ export function renderServiceEnv(
   if (service === "core")
     Object.assign(out, {
       HARNESS: config.env.core?.HARNESS ?? "pi",
-      ...securityScreenEnv(config),
       ...renderManagedCoreEnv(render),
       ...managedValues,
       ...(connections.projectId ? { RENDER_PROJECT_ID: connections.projectId } : {}),

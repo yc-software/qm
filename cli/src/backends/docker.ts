@@ -32,7 +32,7 @@ import {
   type LogOpts,
   type ServiceName,
 } from "../services.ts";
-import { dockerBasePort, localSandboxActive, sandboxCoreEnv, securityScreenEnv, type QmConfig } from "../config.ts";
+import { dockerBasePort, localSandboxActive, sandboxCoreEnv, type QmConfig } from "../config.ts";
 import { discoverPlugins, type ResolvedPlugin } from "../plugins.ts";
 import { computedSecrets, missingRequiredSecrets, runtimeSecretNames, secretsForService } from "../secrets.ts";
 import { doctorCommon, localDoctorSecrets } from "./doctor.ts";
@@ -409,7 +409,6 @@ function serviceEnv(ctx: DockerCtx, service: ServiceName): Record<string, string
     ...out,
     ...virtualEnv,
     ...hostedServiceEnv(config.services, config.env, service),
-    ...(service === "core" ? securityScreenEnv(config) : {}),
     ...secretValues(ctx, service),
   };
   if (ctx.signingSecret) env.CORE_SIGNING_SECRET = ctx.signingSecret;

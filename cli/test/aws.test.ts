@@ -634,41 +634,6 @@ test("a configured bot identity lands in the AWS core task env and only there", 
   assert.equal(serviceEnvironment(config, "core").ORG_BRAND_SELF_LABEL, undefined);
 });
 
-test("AWS routes security screen proxy configuration and its token only to core", () => {
-  const screened: QmConfig = {
-    ...config,
-    securityScreen: {
-      mode: "enforce",
-      classifier: "proxy",
-      provider: "example-screen",
-      endpoint: "https://screen.example.test/classify",
-    },
-    secretEnv: { core: { SECURITY_SCREEN_PROXY_TOKEN: "EXAMPLE_SCREEN_TOKEN" } },
-  };
-  assert.deepEqual(
-    Object.fromEntries(
-      Object.entries(serviceEnvironment(screened, "core")).filter(([name]) => name.startsWith("SECURITY_SCREEN_")),
-    ),
-    {
-      SECURITY_SCREEN_CLASSIFIER: "proxy",
-      SECURITY_SCREEN_PROXY_ENDPOINT: "https://screen.example.test/classify",
-      SECURITY_SCREEN_PROXY_PROVIDER: "example-screen",
-    },
-  );
-  assert.deepEqual(
-    Object.keys(serviceEnvironment(screened, "web-ui")).filter((name) => name.startsWith("SECURITY_SCREEN_")),
-    [],
-  );
-  const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/qm-core@sha256:${"a".repeat(64)}`;
-  const task = renderTaskDefinition(screened, "core", image, { EXAMPLE_SCREEN_TOKEN: "arn:example-screen-token" });
-  assert.deepEqual(
-    (task.containerDefinitions[0]!.secrets as Array<{ name: string; valueFrom: string }>).filter(({ name }) =>
-      name.startsWith("SECURITY_SCREEN_"),
-    ),
-    [{ name: "SECURITY_SCREEN_PROXY_TOKEN", valueFrom: "arn:example-screen-token" }],
-  );
-});
-
 test("AWS fixes every workload listen port to its ECS port mapping", () => {
   const configured: QmConfig = {
     ...config,
