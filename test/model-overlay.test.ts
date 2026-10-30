@@ -60,7 +60,7 @@ import {
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
-import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
+import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 
 const createModelOverlayStore: typeof createStore = (backing, write) =>
   createStore(backing, write, async () => ({ fingerprint: "fixture", probe: async () => {} }));

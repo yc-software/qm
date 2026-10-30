@@ -1,6 +1,6 @@
 import { nativeDocumentFormat } from "../src/agent/document-inputs.ts";
 import { runtimeFallback } from "../src/api/runtime-config.ts";
-import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
+import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { afterEach, test } from "node:test";

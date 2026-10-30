@@ -14,7 +14,7 @@ import { createSweeper } from "../util/sweeper.ts";
 import { errMessage, reportFailureAs } from "../util/errors.ts";
 import type { CurrentScopeMembers } from "../resolution/scope-membership.ts";
 import { compileMonitorPattern } from "./monitor-broker.ts";
-import { buildEventWakeEnvelope, capForEscaping } from "../core/wake-envelope.ts";
+import { buildEventWakeEnvelope, capForEscaping } from "../wake/wake-envelope.ts";
 
 const TICK_LEASE_KEY = "monitor:poller:tick";
 const MAX_EVENT_CHARS = 16_000;

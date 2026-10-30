@@ -10,9 +10,31 @@ import {
 } from "../model/pi-models.ts";
 import type { ScopeId } from "../types.ts";
 import type { Agent, AgentTurnInput, RuntimeChoice } from "./agent.ts";
-import { NON_INTERACTIVE_THINKING_LEVEL, NON_INTERACTIVE_FAST_MODE } from "../core/turn-options.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import { governGoal, type GoalGovernorInput } from "./goal.ts";
+
+export const NON_INTERACTIVE_THINKING_LEVEL = "xhigh";
+export const NON_INTERACTIVE_FAST_MODE = false;
+
+export function turnModelOptions(input: {
+  triggered?: boolean;
+  surface?: string;
+  thinkingLevel?: string;
+  fastMode?: boolean;
+}): {
+  thinkingLevel?: string;
+  fastMode?: boolean;
+} {
+  const nonInteractiveDefaults = input.triggered && input.surface !== "cron" && input.surface !== "loop";
+  let thinkingLevel = input.thinkingLevel;
+  if (!thinkingLevel && nonInteractiveDefaults) thinkingLevel = NON_INTERACTIVE_THINKING_LEVEL;
+  let fastMode = input.fastMode;
+  if (typeof fastMode !== "boolean" && nonInteractiveDefaults) fastMode = NON_INTERACTIVE_FAST_MODE;
+  return {
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(typeof fastMode === "boolean" ? { fastMode } : {}),
+  };
+}
 
 function normalizeRuntimeChoice(choice: RuntimeChoice): RuntimeChoice {
   if (

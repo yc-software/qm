@@ -13,7 +13,7 @@ import {
   serviceableModelIds,
 } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
-import { validateWebTurnModelOptions } from "../src/core/turn-options.ts";
+import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 
 test("registry model identifiers are unique", () => {
   const ids = MODEL_REGISTRY.map((model) => model.id);

@@ -19,7 +19,7 @@ import {
 import { isVisible } from "../directory/visibility.ts";
 import { pickMatch, type DirectoryMember } from "../directory/directory-store.ts";
 import { externalMemberActive } from "../identity/external-members.ts";
-import { hasRevisionEvents, recordMessageRevisions } from "../core/message-revisions.ts";
+import { hasRevisionEvents, recordMessageRevisions } from "../slack/message-revisions.ts";
 import { answerWebContextRequest } from "./web-context.ts";
 import { availableRuntimeError, validateRuntimeChoice } from "./runtime-config.ts";
 import { assertCronRuntime } from "../cron/runtime.ts";

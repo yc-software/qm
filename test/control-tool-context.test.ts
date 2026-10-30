@@ -14,7 +14,7 @@ import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools } from "../src/agent/agent-tools.ts";
 import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
-import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
+import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/surfaces/surface-tools.ts";
 
 const SECRET = "control-tool-ctx";
 const handle: SandboxHandle = { id: "h", rootDir: "/workspace" };

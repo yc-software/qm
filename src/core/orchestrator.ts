@@ -212,9 +212,9 @@ import { createSecurityClassifier } from "./orchestrator/security-screen.ts";
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import type { EgressPolicy } from "../types.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
-import { createSurfaceToolDeps, type SpineState } from "./orchestrator/surface-tools.ts";
+import { createSurfaceToolDeps, type SpineState } from "../surfaces/surface-tools.ts";
 import { createAttachStaging } from "./orchestrator/attach-tool.ts";
-import { reconcileMessageRevisions, revisionAnchorAt } from "./message-revisions.ts";
+import { reconcileMessageRevisions, revisionAnchorAt } from "../slack/message-revisions.ts";
 import { type ProviderKeys } from "../model/model-runtime.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";

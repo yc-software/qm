@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createApprovalStore } from "../src/core/approval-store.ts";
+import { createApprovalStore } from "../src/slack/approval-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { messageRevision } from "../src/core/message-revisions.ts";
+import { messageRevision } from "../src/slack/message-revisions.ts";
 import { sleep } from "../src/util/async.ts";
 import type { TurnRequest } from "../src/types.ts";
 

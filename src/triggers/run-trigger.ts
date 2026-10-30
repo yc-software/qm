@@ -3,7 +3,7 @@ import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
 import type { IdempotencyStore } from "../idempotency/idempotency-store.ts";
-import { turnModelOptions } from "../core/turn-options.ts";
+import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { userFacingFailureClause } from "../core/failure-copy.ts";
 import { reachEnqueue } from "../reach/reach.ts";
 import { isVisible, type VisibilityDirectory } from "../directory/visibility.ts";

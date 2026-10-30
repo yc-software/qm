@@ -12,7 +12,7 @@ import type {
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../types.ts";
 import { deliveryNote } from "../core/attachments.ts";
 import { goalCancelledNote } from "./goal.ts";
-import { messageRevision, renderMessageRevision } from "../core/message-revisions.ts";
+import { messageRevision, renderMessageRevision } from "../slack/message-revisions.ts";
 import { CONTEXT_SUMMARY_HEADER, INTERRUPTED_TOOL_RESULT, unrecordedToolResult } from "./context-compaction.ts";
 import { contextSummaryPayload } from "../sessions/session-store.ts";
 import { isoFromTs, messageTag } from "../util/message-tag.ts";

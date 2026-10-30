@@ -8,7 +8,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   type ArtifactRegistration,
 } from "../src/core/attachments.ts";
-import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/core/orchestrator/surface-tools.ts";
+import { createSurfaceToolDeps, type SurfaceToolsContext } from "../src/surfaces/surface-tools.ts";
 import { turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";

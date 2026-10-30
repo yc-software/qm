@@ -1,5 +1,5 @@
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
-import { requestedRuntimeError } from "./runtime-config.ts";
+import { requestedRuntimeError, validateWebTurnModelOptions } from "./runtime-config.ts";
 import type { Run } from "../runs/run-store.ts";
 import { userRuntimeConfigBody } from "./runtime-config.ts";
 import { isSubagentThreadRef, stopSessionTree } from "../sessions/session-syscalls.ts";
@@ -13,7 +13,8 @@ import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigi
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
 import type { SessionStateEvent } from "../runs/session-state-bus.ts";
-import { turnModelOptions, turnRuntimePurpose, validateWebTurnModelOptions } from "../core/turn-options.ts";
+import { turnRuntimePurpose } from "../core/turn-options.ts";
+import { turnModelOptions } from "../agent/runtime-choice.ts";
 import { isProjectGroupRef, projectIdFromGroupRef } from "../projects/project-store.ts";
 import { samePerson } from "../directory/person.ts";
 import {

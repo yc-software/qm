@@ -9,7 +9,7 @@ import {
   revisionAnchorAt,
   slackTsToMs,
   type MessageRevisionPayload,
-} from "../src/core/message-revisions.ts";
+} from "../src/slack/message-revisions.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "../src/slack/message-gating.ts";
 import { sleep } from "../src/util/async.ts";
 import { createMemorySurfaceCache } from "../src/surface-cache/surface-cache.ts";

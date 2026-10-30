@@ -19,6 +19,11 @@ import {
   thinkingLevelsFor,
   codexProviderModelId,
   codexSubscriptionModelId,
+  defaultWebuiModelIds,
+  THINKING_LEVELS,
+  modelServiceable,
+  resolveModel,
+  type ModelProviderAvailability,
 } from "../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../model/model-catalog.ts";
 import type { RuntimeChoice } from "../agent/agent.ts";
@@ -237,4 +242,21 @@ export async function requestedRuntimeError(
     },
     purpose,
   );
+}
+
+export function validateWebTurnModelOptions(
+  input: { model?: string; thinkingLevel?: string },
+  enabledModels: readonly string[] | null,
+  providers: ModelProviderAvailability = ALL_PROVIDERS_AVAILABLE,
+): string | null {
+  const enabled = enabledModels ?? defaultWebuiModelIds();
+  const allowedModels = serviceableModelIds(enabled, providers);
+  if (input.model && !allowedModels.includes(input.model)) {
+    return resolveModel(input.model) && !modelServiceable(input.model, providers)
+      ? "that model isn't available on this deployment (its provider isn't configured)"
+      : "that model is not enabled for the web UI";
+  }
+  if (input.thinkingLevel && !(THINKING_LEVELS as readonly string[]).includes(input.thinkingLevel))
+    return "unsupported thinking level";
+  return null;
 }

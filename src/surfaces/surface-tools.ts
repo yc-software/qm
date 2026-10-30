@@ -1,4 +1,4 @@
-import { isSessionTurn } from "../turn-origin.ts";
+import { isSessionTurn } from "../core/turn-origin.ts";
 import type {
   Conversation,
   DeliveryProvenance,
@@ -7,7 +7,7 @@ import type {
   Principal,
   ScopeId,
   Session,
-} from "../../types.ts";
+} from "../types.ts";
 import {
   openGroupViaSurface,
   reachEnqueue,
@@ -16,8 +16,8 @@ import {
   withEdit,
   withDelete,
   type ReachResolution,
-} from "../../reach/reach.ts";
-import { type SandboxHandle } from "../../sandbox/sandbox.ts";
+} from "../reach/reach.ts";
+import { type SandboxHandle } from "../sandbox/sandbox.ts";
 import type {
   SurfaceToolDeps,
   SurfacePostResult,
@@ -26,21 +26,21 @@ import type {
   SurfaceEditInput,
   SurfaceDeleteInput,
   SurfaceSearchResult,
-} from "../../tools/primitives.ts";
-import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../../persistence/blob-transfer.ts";
+} from "../tools/primitives.ts";
+import { collectBlob, MAX_BLOB_BYTES, type BlobTransferStore } from "../persistence/blob-transfer.ts";
 import {
   collectNamedOutbound,
   parseOutboundFiles,
   type OutboundFile,
   type OpenStoredFile,
   type ArtifactRegistration,
-} from "../attachments.ts";
-import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../../surface-cache/channel-policy-store.ts";
-import { isoFromTs } from "../../util/message-tag.ts";
-import { errMessage, swallowAs } from "../../util/errors.ts";
-import { adminSessionUrl } from "../../util/admin-links.ts";
-import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "./turn-helpers.ts";
-import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
+} from "../core/attachments.ts";
+import { parseBotLedger, type BotPolicy, type ChannelPolicy } from "../surface-cache/channel-policy-store.ts";
+import { isoFromTs } from "../util/message-tag.ts";
+import { errMessage, swallowAs } from "../util/errors.ts";
+import { adminSessionUrl } from "../util/admin-links.ts";
+import { headLooksLikeText, replaceThreadSegment, type TurnPostKeys } from "../core/orchestrator/turn-helpers.ts";
+import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
 const SURFACE_SEARCH_DEFAULT = 10;
