@@ -533,9 +533,11 @@ export function createTurnSandboxes(ctx: TurnSandboxContext) {
     }
   };
   const reclaimBox = async (): Promise<void> => {
+    const opening = () => [...pool.values()].flatMap((slot) => (slot.opening && !slot.ready ? [slot.opening] : []));
+    for (let waiting = opening(); waiting.length; waiting = opening())
+      await Promise.all(waiting.map((open) => open.catch(swallowAs("orchestrator: provision", undefined))));
     const slots = [...pool];
     pool.clear();
-    await Promise.allSettled(slots.map(([, slot]) => slot.opening));
     const targets = new Map<string, { handle: SandboxHandle; scoped: boolean }>();
     for (const [key, slot] of slots)
       for (const handle of key === SCRATCH ? [] : slot.handles) {

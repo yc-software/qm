@@ -219,6 +219,21 @@ test("reclaim waits for in-flight creation before releasing", async () => {
   assert.deepEqual(Object.keys(f.released()), ["job-box"]);
 });
 
+test("a computer opened while reclaim waits on another is released too", async () => {
+  const f = fixture();
+  const first = Promise.withResolvers<void>();
+  const second = Promise.withResolvers<void>();
+  f.gates.push(first.promise, second.promise);
+  const opening = f.turn.provisionResource(await f.turn.accessResource("job-box"));
+  const reclaim = f.turn.reclaimBox();
+  const late = f.turn.provisionForReach("channel:C1");
+  first.resolve();
+  await opening;
+  second.resolve();
+  await Promise.all([late, reclaim]);
+  assert.deepEqual(Object.keys(f.released()).sort(), ["channel:C1", "job-box"]);
+});
+
 test("another scope's computer is released without touching this turn's files", async () => {
   const f = fixture();
   await f.turn.provisionResource({
