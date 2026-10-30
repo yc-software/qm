@@ -11,9 +11,11 @@ import {
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
 import { modelSupportedByHarness, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { StoredCustomProvider } from "../src/model/custom-provider-store.ts";
+
 import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 afterEach(() => setCustomProviders([]));
 

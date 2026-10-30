@@ -8,6 +8,9 @@ import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { createSessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import type { Run } from "../src/runs/run-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));

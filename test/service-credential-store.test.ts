@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { scopeId } from "../src/types.ts";
-import { createKeychain, isValidCredentialSlug, type KeychainCredential } from "../src/credentials/keychain.ts";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
+import { createKeychain, isValidCredentialSlug } from "../src/credentials/keychain.ts";
+
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows, type KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = scopeId("org", "default-org");
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");

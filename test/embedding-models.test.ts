@@ -25,6 +25,9 @@ import {
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
 import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const definition = {
   kind: "embedding",

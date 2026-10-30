@@ -40,6 +40,9 @@ import { materializeGrant } from "./support/materialize-grant.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);

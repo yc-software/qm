@@ -5,6 +5,10 @@ import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
+import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
@@ -29,7 +33,7 @@ test("admin lookup recognizes an existing model without asking for a clone templ
 
 import { lookupModel } from "../src/model/model-lookup.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { setModelOverlays } from "../src/model/pi-models.ts";
@@ -223,7 +227,6 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 });
 
 import { createServer } from "node:http";
-import { memoryModelTables } from "../src/model/model-tables.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

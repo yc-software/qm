@@ -18,9 +18,8 @@ import {
   fileCredentialEnvironment,
   KeychainError,
   type Keychain,
-  type KeychainGrant,
 } from "../src/credentials/keychain.ts";
-import { createMemoryMap, type DurableMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
+
 import { envKey } from "../src/credentials/connector-token.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
@@ -330,7 +329,6 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
 describe("connectors are grantable like any keychain record", () => {
   const GMAIL = "gmail.googleapis.com";
   const G1 = scopeId("group", "G1");
-  type Rec = import("../src/credentials/keychain.ts").KeychainCredential;
   function kcWithRefresh(freshToken: string): Keychain {
     return createKeychain({
       lock: createMemoryAdvisoryLock(),

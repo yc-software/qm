@@ -7,6 +7,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 for (const surface of ["web", "slack", "swarm"]) {
   test(`HTTP ${surface} tool screening carries current request on every output chunk`, async () => {

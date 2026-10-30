@@ -86,7 +86,7 @@ const ownerIndexes = (table: string) => [
   `CREATE INDEX ${table}_by_unicode_owner ON ${table}(tenant_id) WHERE owner_id ~ ${NON_ASCII}`,
 ];
 
-export const KEYCHAIN_MIGRATIONS: readonly PgMigrationDefinition[] = [
+const KEYCHAIN_MIGRATIONS: readonly PgMigrationDefinition[] = [
   typedTableMigration({
     table: "keychain_credentials",
     columns: [

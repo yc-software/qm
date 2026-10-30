@@ -18,6 +18,9 @@ import {
   CONTROL_PLANE_AUD,
 } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "consent-bridge-secret".repeat(3);
 const oauthEnv = { GOOGLE_OAUTH_CLIENT_ID: "gid", GOOGLE_OAUTH_CLIENT_SECRET: "gsecret" } as NodeJS.ProcessEnv;

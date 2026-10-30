@@ -10,10 +10,13 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, type BuiltApp } from "../src/wiring.ts";
 import { providerKeysPresent, harnessCarriedModelAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
+
 import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

@@ -10,9 +10,12 @@ import {
   setPublicOAuthClients,
   withPublicOAuthClients,
 } from "../src/connectors/oauth.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { memoryLinkTables } from "../src/connectors/link-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const HOST = "mcp.example.com";
 

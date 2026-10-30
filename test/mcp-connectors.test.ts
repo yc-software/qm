@@ -3,17 +3,20 @@ import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
-import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
+import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { settle } from "./support/settle.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 import { memoryLinkTables } from "../src/connectors/link-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {

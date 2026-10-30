@@ -1,10 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createKeychain } from "../src/credentials/keychain.ts";
+
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 

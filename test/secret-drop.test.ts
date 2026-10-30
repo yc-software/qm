@@ -30,6 +30,9 @@ import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { memoryLinkTables } from "../src/connectors/link-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "secret-drop-test-secret".repeat(3);
 const execFileAsync = promisify(execFile);

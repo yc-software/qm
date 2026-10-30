@@ -10,13 +10,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKeychain, type CredentialFile, type Keychain } from "../src/credentials/keychain.ts";
 import { reconcileProcesses } from "../src/processes/reconcile.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createToolContext, type ToolContextDeps } from "../src/tools/primitives.ts";
 import type { ProcessSandbox, ProcessState, Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId } from "../src/types.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const run = promisify(execFile);
 const SECRET_TOKEN = "synthetic-background-token-123";

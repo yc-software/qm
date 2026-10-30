@@ -115,7 +115,7 @@ const updated = {
   updated_by: "COALESCE(json->>'updatedBy', '')",
 };
 
-export const MODEL_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
+const MODEL_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
   typedTableMigration({
     table: "model_credentials",
     columns: [

@@ -10,11 +10,14 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createMcpServerStore, type McpServer } from "../src/mcp/mcp-server-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createMcpServerStore } from "../src/mcp/mcp-server-store.ts";
+
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
 import { memoryLinkTables } from "../src/connectors/link-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

@@ -221,7 +221,7 @@ const MCP_SERVER = typedColumns<McpServer>(MCP_SERVER_SPEC);
 const linkIdIndex = (table: string) => `CREATE UNIQUE INDEX ${table}_by_link_id ON ${table}(id)`;
 const timestamp = (field: string) => `COALESCE((json->>'${field}')::numeric::bigint, 0)`;
 
-export const LINK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
+const LINK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
   typedTableMigration({
     table: "oauth_flows",
     columns: [

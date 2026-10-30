@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createKeychain, type KeychainAsk, type KeychainGrant } from "../src/credentials/keychain.ts";
+import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
 import { approvalCardDestination, createKeychainApprovals } from "../src/credentials/keychain-approval.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import {
@@ -17,6 +17,9 @@ import type { Directory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows, type KeychainAskRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function failFirstApproval(asks: KeychainAskRows): void {
   const update = asks.update.bind(asks);

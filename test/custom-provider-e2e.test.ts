@@ -1,3 +1,7 @@
+import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 // QA: end-to-end custom-provider lifecycle against a REAL fake upstream.
 // Boots the app, registers a provider pointing at a local OpenAI-compatible
 // server, and proves: validation, catalog surfacing, key hygiene, a real
@@ -17,10 +21,9 @@ import { oneShot } from "../src/harness/pi-harness.ts";
 import { resolveModel, modelSupportedByHarness, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { memoryModelTables } from "../src/model/model-tables.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 

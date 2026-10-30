@@ -7,11 +7,14 @@ import { composioTwitterMediaRoutes } from "../src/api/routes/composio-twitter-m
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { orgId } from "../src/config.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const PNG = Buffer.concat([
   Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108020000009077" + "53de", "hex"),

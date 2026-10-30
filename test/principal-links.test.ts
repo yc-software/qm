@@ -22,7 +22,7 @@ import {
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
+import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
 import { computeUsers } from "../src/admin/users.ts";
@@ -33,6 +33,9 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const EMAIL = "jordan@acme.test";
 const SLACK = "U0JORDAN";

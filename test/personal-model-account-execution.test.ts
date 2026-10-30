@@ -9,6 +9,9 @@ import * as mockHarness from "./support/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const turns: HarnessTurnInput[] = [];
 let piOptions: Parameters<typeof piHarness.createPiHarness>[0];

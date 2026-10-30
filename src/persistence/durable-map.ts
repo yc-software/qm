@@ -38,7 +38,7 @@ function isAscii(text: string): boolean {
   return true;
 }
 
-export function selectEntries<T, K extends Extract<keyof T, string>>(
+function selectEntries<T, K extends Extract<keyof T, string>>(
   entries: ReadonlyArray<readonly [string, T]>,
   query: DurableMapSelect<T, K>,
 ): Array<[string, Omit<T, K>]> {

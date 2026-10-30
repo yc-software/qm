@@ -8,11 +8,14 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createKeychain } from "../src/credentials/keychain.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const run = promisify(execFile);
 const script = fileURLToPath(new URL("../skills-seed/interactive-login/scripts/save-login.mjs", import.meta.url));

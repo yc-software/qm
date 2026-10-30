@@ -6,6 +6,10 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp, serverDeps } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { getRequiredModel } from "../src/model/pi-models.ts";
+import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 const MODEL_ID = "overlay-future-model";
@@ -42,7 +46,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
 });
 
 import { afterEach } from "node:test";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { createModelOverlayStore as createStore, type StoredModelOverlay } from "../src/model/model-overlay-store.ts";
 import {
   setModelOverlays,
@@ -495,7 +499,6 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
-import { memoryModelTables } from "../src/model/model-tables.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = createMemoryConfigStore("default-org");

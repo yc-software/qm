@@ -2,22 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { envKey, withOperatorTokenFallback } from "../src/credentials/connector-token.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
-import {
-  createKeychain,
-  type KeychainCredential,
-  type OAuthRefresh,
-  type OAuthToken,
-} from "../src/credentials/keychain.ts";
+import { createKeychain, type OAuthRefresh, type OAuthToken } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import {
-  createMemoryMap,
-  selectEntries,
-  type DurableMap,
-  type DurableMapSelect,
-} from "../src/persistence/durable-map.ts";
+
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows, type KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 

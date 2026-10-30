@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const spec = {
   id: "verify-future",
@@ -513,7 +516,6 @@ test("environment and gateway credential changes invalidate cached fingerprints"
 });
 
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { memoryModelTables } from "../src/model/model-tables.ts";
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const built = buildApp(testConfig({ openaiApiKey: "test-key" }));

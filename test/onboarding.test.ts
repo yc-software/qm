@@ -12,6 +12,9 @@ import { detectOnboardingStatus, setOnboardingStatus, PROACTIVE_OPENER_PROMPT } 
 import { testConfig } from "./support/test-config.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor = { externalId: "U1" };
 const onboardingSkillDir = join(process.cwd(), "plugins/onboarding/skills");

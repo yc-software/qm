@@ -9,14 +9,13 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
-import {
-  createBrowserSessionStore,
-  type BrowserSessionStore,
-  type StoredBrowserSession,
-} from "../src/connectors/browser-session-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createBrowserSessionStore, type BrowserSessionStore } from "../src/connectors/browser-session-store.ts";
+
 import { createDirectoryStore } from "../src/directory/directory-store.ts";
 import { memoryLinkTables } from "../src/connectors/link-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "emoji-route-secret".repeat(3);
 const ACTOR = "U_E1";

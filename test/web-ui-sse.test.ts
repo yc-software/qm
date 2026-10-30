@@ -12,6 +12,9 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "core-signing-secret".repeat(3);
 

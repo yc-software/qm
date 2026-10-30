@@ -10,6 +10,9 @@ import { testConfig } from "./support/test-config.ts";
 import { messageRevision } from "../src/core/message-revisions.ts";
 import { sleep } from "../src/util/async.ts";
 import type { TurnRequest } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const actor = { externalId: "U1", displayName: "Ada" };
 

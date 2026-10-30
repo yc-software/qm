@@ -94,7 +94,7 @@ function memoryTable<T extends { id: string }>() {
     },
     list(predicate: (value: T) => boolean = () => true): T[] {
       return [...rows().values()]
-        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .sort((a, b) => Number(a.id > b.id) - Number(a.id < b.id))
         .filter(predicate)
         .map((value) => structuredClone(value));
     },

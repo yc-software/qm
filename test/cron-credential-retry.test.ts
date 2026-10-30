@@ -7,10 +7,13 @@ import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createAskExpirySweep, fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import type { TurnRequest, TurnResult } from "../src/types.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function fixture(run: (request: TurnRequest) => Promise<TurnResult>) {
   const crons = createCronStore();

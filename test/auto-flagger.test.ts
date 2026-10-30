@@ -17,6 +17,9 @@ import { createMemoryConfigStore, type PersistedAutoFlaggerConfig } from "../src
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { SECURITY_SCREEN_STEP, securityScreenSystemPrompt } from "../src/security/security-posture.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const org = scopeId("org", "acme");
 

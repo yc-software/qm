@@ -9,13 +9,12 @@ import {
   EMOJI_UPLOAD_SESSION_EXPIRED,
   type EmojiUploadDeps,
 } from "../src/connectors/emoji-upload-service.ts";
-import {
-  createBrowserSessionStore,
-  type BrowserSessionStore,
-  type StoredBrowserSession,
-} from "../src/connectors/browser-session-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createBrowserSessionStore, type BrowserSessionStore } from "../src/connectors/browser-session-store.ts";
+
 import { memoryLinkTables } from "../src/connectors/link-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ACTOR = "U_ACTOR";
 const FALLBACK = "U_FALLBACK";
