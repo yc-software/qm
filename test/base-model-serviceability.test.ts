@@ -1,21 +1,18 @@
 import "./support/auto-fake-sprites.ts";
-
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "../src/wiring.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
+import { buildApp } from "./support/compose.ts";
 import type { ModelProvider } from "../src/model/model-credential-store.ts";
 import { defaultModelFor } from "../src/model/tenant-models.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
-import { testTenantSettings } from "./support/build-app.ts";
+import { testTenantSettings, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { stopAtEnd } from "./support/build-app.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 

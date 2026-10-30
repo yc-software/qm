@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { bindTestTenant, seedTenant } from "./support/tenant.ts";
 

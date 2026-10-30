@@ -3,7 +3,7 @@ import test from "node:test";
 import { createMemoryTidyService, withMemoryTidy } from "../src/memory/tidy.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/harness/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { MemoryFact } from "../src/memory/facts.ts";
 import { scopeId, type ScopeId, type TurnRequest } from "../src/types.ts";

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { featureRoutes } from "../src/api/routes/features.ts";
+import { featureRoutes } from "../src/edge/http/routes/features.ts";
 import { testFeatureFlagStore } from "./support/typed-stores.ts";
 import { scopeId } from "../src/types.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const flags = testFeatureFlagStore();

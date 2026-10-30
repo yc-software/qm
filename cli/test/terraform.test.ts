@@ -14,6 +14,23 @@ import type { QmConfig } from "../src/config.ts";
 
 const DEPLOY_IMAGE = "acme-qm-sandbox";
 
+type AwsService = NonNullable<NonNullable<QmConfig["aws"]>["services"][string]>;
+
+function coreServices(core: AwsService): Record<string, AwsService> {
+  const { targetGroup: _targetGroup, publicPaths: _publicPaths, ...shared } = core;
+  return { edge: core, harness: { ...shared, ecsService: `${core.ecsService}-harness` } };
+}
+
+function withCore(base: QmConfig, patch: Partial<AwsService>): QmConfig {
+  return {
+    ...base,
+    aws: {
+      ...base.aws!,
+      services: { ...base.aws!.services, ...coreServices({ ...base.aws!.services.edge!, ...patch }) },
+    },
+  };
+}
+
 const config: QmConfig = {
   contract: 1,
   deploymentId: "acme",
@@ -34,7 +51,7 @@ const config: QmConfig = {
     imageLabel: "release",
     deployEnvironment: "production",
     networking: { cloudMapNamespace: "acme.internal" },
-    services: { core: { ecrRepository: "qm-core", ecsService: "acme-core", cpu: 2048, memory: 4096 } },
+    services: coreServices({ ecrRepository: "qm-core", ecsService: "acme-core", cpu: 2048, memory: 4096 }),
   },
 };
 
@@ -105,10 +122,10 @@ test("new S3 buckets use AWS's default public-access block without a separate mu
 test("each AWS workload can assume configured roles through an isolated task role", () => {
   assert.match(
     mainTf,
-    /assume_role_services\s*=\s*\{ for name, service in var\.services : name => service if try\(length\(service\.assume_role_arns\), 0\) > 0 \}/,
+    /assume_role_services\s*=\s*\{ for name, service in local\.image_owners : name => service if try\(length\(service\.assume_role_arns\), 0\) > 0 \}/,
   );
   assert.match(mainTf, /managed_assume_role_services\s*=\s*\{[\s\S]*service\.manage_task_role[\s\S]*\}/);
-  assert.match(mainTf, /qm_scaffold_version\s*=\s*3/);
+  assert.match(mainTf, /qm_scaffold_version\s*=\s*4/);
   assert.match(
     readFileSync(new URL("../templates/aws/variables.tf", import.meta.url), "utf8"),
     /manage_task_role\s*=\s*optional\(bool, false\)/,
@@ -125,20 +142,10 @@ test("each AWS workload can assume configured roles through an isolated task rol
   assert.match(mainTf, /Resource\s*=\s*each\.value\.assume_role_arns/);
   assert.match(mainTf, /task_role_arn\s*=\s*local\.effective_task_role_arns\[each\.key\]/);
   const rendered = terraformVars(
-    {
-      ...config,
-      aws: {
-        ...config.aws!,
-        services: {
-          ...config.aws!.services,
-          core: {
-            ...config.aws!.services.core!,
-            taskRoleArn: "arn:aws:iam::123456789012:role/existing-core",
-            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
-          },
-        },
-      },
-    },
+    withCore(config, {
+      taskRoleArn: "arn:aws:iam::123456789012:role/existing-core",
+      assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+    }),
     "",
     declared,
   );
@@ -260,31 +267,12 @@ test("an active assume-role policy blocks task-role replacement", () => {
   );
 
   const coreRole = "arn:aws:iam::123456789012:role/existing-core";
-  const configuredCore: QmConfig = {
-    ...config,
-    aws: {
-      ...config.aws!,
-      services: {
-        core: { ...config.aws!.services.core!, taskRoleArn: coreRole, assumeRoleArns: [role] },
-      },
-    },
-  };
+  const configuredCore = withCore(config, { taskRoleArn: coreRole, assumeRoleArns: [role] });
   const configuredCoreVars = terraformVars(configuredCore, "", declared);
   assert.throws(
     () =>
       terraformVars(
-        {
-          ...configuredCore,
-          aws: {
-            ...configuredCore.aws!,
-            services: {
-              core: {
-                ...configuredCore.aws!.services.core!,
-                taskRoleArn: "arn:aws:iam::123456789012:role/replacement-core",
-              },
-            },
-          },
-        },
+        withCore(configuredCore, { taskRoleArn: "arn:aws:iam::123456789012:role/replacement-core" }),
         configuredCoreVars,
         declared,
       ),
@@ -292,53 +280,27 @@ test("an active assume-role policy blocks task-role replacement", () => {
   );
 });
 
-test("assume-role config rejects vendored AWS scaffolds that predate workload roles", () => {
+test("a vendored AWS scaffold that predates the edge and harness services fails closed", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-legacy-terraform-"));
   try {
     const infra = join(dir, "infra");
     mkdirSync(infra);
     writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
-    writeFileSync(
-      join(infra, "variables.tf"),
-      'variable "services" { type = map(object({ assume_role_arns = optional(set(string)) })) }\n',
-    );
-    writeFileSync(
-      join(infra, "main.tf"),
-      'resource "aws_iam_role" "assume_role_task" {}\nresource "aws_iam_role_policy" "managed_service_assume_role" {}\nresource "aws_iam_role_policy" "configured_service_assume_role" {}\n',
-    );
-    const configured: QmConfig = {
-      ...config,
-      aws: {
-        ...config.aws!,
-        services: {
-          core: {
-            ...config.aws!.services.core!,
-            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
-          },
-        },
-      },
-    };
+    writeFileSync(join(infra, "variables.tf"), variablesTf.replace(/variable "public_port" \{[^}]*\}\n/, ""));
+    writeFileSync(join(infra, "main.tf"), mainTf);
     assert.throws(
-      () => renderTerraformVars(configured, dir),
-      /AWS scaffold predates aws\.services\.\*\.assumeRoleArns[\s\S]*variables\.tf[\s\S]*main\.tf/,
+      () => renderTerraformVars(config, dir),
+      /AWS scaffold predates the edge and harness services; update infra\/variables\.tf and infra\/main\.tf from the current scaffold, whose moved blocks keep the existing core service as the edge/,
     );
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("database class overrides reject vendored AWS scaffolds that cannot render them", () => {
-  const dir = mkdtempSync(join(tmpdir(), "qm-legacy-database-"));
-  try {
-    const infra = join(dir, "infra");
-    mkdirSync(infra);
-    writeFileSync(join(infra, "terraform.tfvars"), "services = {}\n");
-    writeFileSync(join(infra, "variables.tf"), 'variable "services" { type = map(any) }\n');
-    writeFileSync(join(infra, "main.tf"), "");
-    assert.throws(
-      () => renderTerraformVars({ ...config, aws: { ...config.aws!, dbInstanceClass: "db.t4g.micro" } }, dir),
-      /AWS scaffold predates aws\.dbInstanceClass/,
-    );
+    writeFileSync(join(infra, "variables.tf"), variablesTf);
+    writeFileSync(join(infra, "main.tf"), mainTf.replace(/qm_scaffold_version\s*=\s*4/, "qm_scaffold_version = 3"));
+    assert.throws(() => renderTerraformVars(config, dir), /predates the edge and harness services/);
+    writeFileSync(join(infra, "main.tf"), mainTf);
+    renderTerraformVars(withCore(config, { assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"] }), dir);
+    const rendered = readFileSync(join(infra, "terraform.tfvars"), "utf8");
+    assert.match(rendered, /"edge": \{/);
+    assert.match(rendered, /"harness": \{/);
+    assert.doesNotMatch(rendered, /"core": \{/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -383,7 +345,10 @@ test("the deploy role can run and inspect only stack-scoped deployment canaries"
   const policy = mainTf.match(/resource "aws_iam_role_policy" "github_deploy" \{([\s\S]*?)\n\}/)?.[1] ?? "";
   const run = policy.match(/Sid\s*= "RunDeploymentCanaries"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
   assert.match(run, /ecs:RunTask/);
-  assert.match(run, /task-definition\/\$\{var\.services\["core"\]\.ecs_service\}:\*/);
+  assert.match(run, /task-definition\/\$\{var\.services\["edge"\]\.ecs_service\}:\*/);
+  const migration = policy.match(/Sid\s*= "RunCoreMigrationTask"([\s\S]*?)\n\s*\},/)?.[1] ?? "";
+  assert.match(migration, /task-definition\/\$\{var\.services\["edge"\]\.ecs_service\}:\*/);
+  assert.doesNotMatch(mainTf, /var\.services\["core"\]/);
   assert.match(run, /"ecs:cluster"\s*=\s*aws_ecs_cluster\.this\.arn/);
   assert.doesNotMatch(run, /Resource\s*= "\*"/);
 
@@ -434,25 +399,16 @@ test("MicroVM build and runtime roles can write only their stack-owned log group
 
 test("terraform defaults built-in workloads to the published image architecture", () => {
   const rendered = terraformVars(config, "", declared);
-  assert.match(rendered, /"core": \{[\s\S]*?"architecture": "amd64"/);
+  assert.match(rendered, /"edge": \{[\s\S]*?"architecture": "amd64"/);
+  assert.match(rendered, /"harness": \{[\s\S]*?"architecture": "amd64"/);
 });
 
 test("terraform propagates workload architecture to bootstrap task definitions", () => {
-  const rendered = terraformVars(
-    {
-      ...config,
-      aws: {
-        ...config.aws!,
-        services: {
-          core: { ...config.aws!.services.core!, architecture: "amd64" },
-        },
-      },
-    },
-    "",
-    declared,
-  );
-  assert.match(rendered, /"core": \{[\s\S]*?"architecture": "amd64"/);
-  assert.match(rendered, /"core": \{[\s\S]*?"internal_port": 8080/);
+  const rendered = terraformVars(withCore(config, { architecture: "amd64" }), "", declared);
+  for (const workload of ["edge", "harness"]) {
+    assert.match(rendered, new RegExp(`"${workload}": \\{[\\s\\S]*?"architecture": "amd64"`));
+    assert.match(rendered, new RegExp(`"${workload}": \\{[\\s\\S]*?"internal_port": 8080`));
+  }
   assert.match(mainTf, /cpu_architecture\s*= each\.value\.architecture == "amd64" \? "X86_64" : "ARM64"/);
   assert.match(mainTf, /service\.internal_port/);
 });
@@ -702,19 +658,10 @@ test("AWS module reuses account OIDC, guards account and passes configured task 
   assert.match(mainTf, /Action\s*=\s*\["iam:PassRole"\]\s*Resource\s*=\s*var\.deploy_microvm_execution_role_arn\s*\}/);
   assert.match(mainTf, /lambda:PassNetworkConnector/);
   const rendered = terraformVars(
-    {
-      ...config,
-      aws: {
-        ...config.aws!,
-        services: {
-          core: {
-            ...config.aws!.services.core!,
-            taskRoleArn: "arn:aws:iam::123456789012:role/custom-task",
-            executionRoleArn: "arn:aws:iam::123456789012:role/custom-execution",
-          },
-        },
-      },
-    },
+    withCore(config, {
+      taskRoleArn: "arn:aws:iam::123456789012:role/custom-task",
+      executionRoleArn: "arn:aws:iam::123456789012:role/custom-execution",
+    }),
     "",
     declared,
   );
@@ -781,17 +728,61 @@ test("AWS ECS services use native blue-green rollouts with rollback signals and 
   );
   assert.match(
     service,
-    /service_connect_configuration \{[\s\S]*enabled\s*= true[\s\S]*namespace\s*= aws_service_discovery_private_dns_namespace\.this\.arn[\s\S]*port_name\s*= each\.key[\s\S]*discovery_name\s*= each\.key/,
+    /service_connect_configuration \{[\s\S]*enabled\s*= true[\s\S]*namespace\s*= aws_service_discovery_private_dns_namespace\.this\.arn[\s\S]*port_name\s*= local\.container_names\[each\.key\][\s\S]*discovery_name\s*= local\.container_names\[each\.key\]/,
   );
   assert.match(
     service,
-    /alarm_names = \[[\s\S]*aws_cloudwatch_metric_alarm\.primary_target_5xx[\s\S]*aws_cloudwatch_metric_alarm\.alternate_target_5xx[\s\S]*enable\s*= true[\s\S]*rollback = true/,
+    /alarm_names = flatten\(\[[\s\S]*aws_cloudwatch_metric_alarm\.primary_target_5xx[\s\S]*aws_cloudwatch_metric_alarm\.alternate_target_5xx[\s\S]*enable\s*= true[\s\S]*rollback = true/,
   );
   assert.match(service, /sigint_rollback = true/);
   assert.match(
     mainTf,
-    /portMappings = \[merge\(\{ name = each\.key, containerPort = each\.value\.internal_port \}, contains\(keys\(local\.egress_proxy\), each\.key\) \? \{\} : \{ appProtocol = "http" \}\)\]/,
+    /portMappings = concat\(\[merge\(\{ name = local\.container_names\[each\.key\], containerPort = each\.value\.internal_port \}, contains\(keys\(local\.egress_proxy\), each\.key\) \? \{\} : \{ appProtocol = "http" \}\)\], contains\(local\.owned_ingress\[each\.key\], "portal"\) \? \[\{ name = "public", containerPort = var\.public_port, appProtocol = "http" \}\] : \[\]\)/,
   );
+});
+
+test("AWS module runs edge on the existing core service and adds a private rolling harness", () => {
+  assert.match(
+    mainTf,
+    /container_names\s*= \{ for name in keys\(var\.services\) : name => name == "edge" \? "core" : name \}/,
+  );
+  assert.match(
+    mainTf,
+    /ingress_owners\s*= \{ for name in local\.public_service_names : name => contains\(\["portal", "core"\], name\) \? "edge" : name \}/,
+  );
+  assert.match(mainTf, /has_portal\s*= var\.public_port > 0/);
+  assert.match(mainTf, /rolling_services\s*= concat\(keys\(local\.egress_proxy\), \["harness"\]\)/);
+  assert.match(
+    mainTf,
+    /image_owners\s*= \{ for name, service in var\.services : name => service if name != "harness" \}/,
+  );
+  assert.match(mainTf, /resource "aws_ecr_repository" "service" \{\n\s*for_each\s*= local\.image_owners/);
+  assert.match(
+    mainTf,
+    /contains\(local\.core_workloads, name\) \? local\.core_task_role_arn : local\.default_task_role_arn/,
+  );
+  const service = mainTf.match(/resource "aws_ecs_service" "service" \{([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(service, /strategy\s*= contains\(local\.rolling_services, each\.key\) \? "ROLLING" : "BLUE_GREEN"/);
+  assert.match(service, /for_each = local\.owned_ingress\[each\.key\]/);
+  assert.match(service, /container_port\s*= local\.ingress_services\[load_balancer\.value\]\.container_port/);
+  for (const resource of [
+    "aws_ecr_repository.service",
+    "aws_cloudwatch_log_group.service",
+    "aws_ecs_task_definition.bootstrap",
+    "aws_ecs_service.service",
+    "aws_iam_role_policy.configured_service_assume_role",
+  ]) {
+    const escaped = resource.replaceAll(".", "\\.");
+    assert.match(
+      mainTf,
+      new RegExp(`moved \\{\\n\\s*from = ${escaped}\\["core"\\]\\n\\s*to\\s*= ${escaped}\\["edge"\\]\\n\\}`),
+      `${resource} keeps the live core instance as the edge`,
+    );
+  }
+  assert.match(variablesTf, /variable "public_port" \{\n\s*type\s*= number\n\s*default = 0\n\}/);
+  const portal = terraformVars({ ...config, services: ["core", "portal"] }, "", declared);
+  assert.match(portal, /public_port\s+= 8000/);
+  assert.match(terraformVars(config, "", declared), /public_port\s+= 0/);
 });
 
 test("drift check flags wrong derived values but never operator formatting", () => {

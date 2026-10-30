@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { gmailSent } from "../src/api/routes/connectors.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { gmailSent } from "../src/edge/http/routes/connectors.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 
 test("sent mail requires portal identity and ignores a forged principal query", async () => {
   let status = 0;

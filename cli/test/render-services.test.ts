@@ -32,7 +32,6 @@ function deployment(t: TestContext, change?: (raw: ScaffoldConfig) => void) {
 const connections = {
   databaseOwnerUrl: "postgres://qm:password@postgres/qm",
   coreUrl: "http://core-assigned:8080",
-  webUiUrl: "http://web-ui:8080",
   projectId: "prj-acme",
   environmentId: "evm-production",
 };
@@ -89,11 +88,24 @@ test("Render uses Git builds for all services and rejects image overrides", (t) 
   const { config, dir } = deployment(t);
   const workloads = renderWorkloads(config, dir);
   assert.deepEqual(
-    workloads.find((workload) => workload.name === "core"),
-    { name: "core", source: config.render!.source, dockerfile: "deploy/core/Dockerfile" },
+    workloads.map(({ name, workload, dockerfile, command }) => ({ name, workload, dockerfile, command })),
+    [
+      {
+        name: "core",
+        workload: "edge",
+        dockerfile: "deploy/core/Dockerfile",
+        command: "node src/render/start.ts edge",
+      },
+      {
+        name: "harness",
+        workload: "harness",
+        dockerfile: "deploy/core/Dockerfile",
+        command: "node src/render/start.ts harness",
+      },
+    ],
   );
-  assert.ok(workloads.every((workload) => workload.source));
-  const core = renderServiceEnv(config, "core", new Map(), connections);
+  assert.ok(workloads.every((workload) => workload.source === config.render!.source));
+  const core = renderServiceEnv(config, "edge", new Map(), connections);
   assert.equal(core.RENDER_DEPLOY_REPO, config.render!.source.repo);
   assert.equal(core.RENDER_DEPLOY_BRANCH, "main");
   assert.equal(config.render!.appRegion, undefined);
@@ -124,10 +136,12 @@ test("Render appRegion accepts supported regions without changing the core regio
     const config = loadConfigAt(path).config;
     assert.equal(config.render!.appRegion, appRegion);
     assert.equal(config.render!.region, "oregon");
-    const core = renderServiceEnv(config, "core", new Map(), connections);
-    assert.equal(core.RENDER_APP_REGION, appRegion);
-    assert.equal(core.RENDER_REGION, "oregon");
-    assert.equal(renderServiceEnv(config, "web-ui", new Map(), connections).RENDER_APP_REGION, undefined);
+    for (const workload of ["edge", "harness"]) {
+      const core = renderServiceEnv(config, workload, new Map(), connections);
+      assert.equal(core.RENDER_APP_REGION, appRegion);
+      assert.equal(core.RENDER_REGION, "oregon");
+    }
+    assert.equal(renderServiceEnv(config, "reports", new Map(), connections).RENDER_APP_REGION, undefined);
   }
   for (const appRegion of ["us-east-1", "Virginia", "", null, 3, {}]) {
     writeFileSync(path, JSON.stringify({ ...raw, render: { ...raw.render, appRegion } }));
@@ -149,7 +163,7 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
     ...connections,
     storage: { endpoint: "https://minio-assigned.onrender.com", secretKey: "scoped-secret" },
   };
-  const core = renderServiceEnv(config, "core", values, wired);
+  const core = renderServiceEnv(config, "edge", values, wired);
   assert.equal(core.AWS_ACCESS_KEY_ID, "qm-storage");
   assert.equal(core.AWS_SECRET_ACCESS_KEY, "scoped-secret");
   assert.equal(core.AWS_ENDPOINT_URL_S3, "https://minio-assigned.onrender.com");
@@ -166,28 +180,26 @@ test("Render core receives scoped storage credentials and assigned URLs", (t) =>
   assert.equal(core.CORE_SIGNING_SECRET, "qm-signing-key");
   assert.equal(core.WORKERS, undefined);
   assert.equal(core.WORKSPACE_STORE, "postgres");
-  for (const service of ["core", "web-ui", "portal"]) {
+  for (const service of ["edge", "harness", "reports"]) {
     const env = renderServiceEnv(config, service, values, wired);
     assert.equal(env.CORE_API_URL, connections.coreUrl);
     assert.equal(env.MINIO_ROOT_USER, undefined);
     assert.equal(env.MINIO_ROOT_PASSWORD, undefined);
-    if (service !== "core") {
-      assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined);
-    }
+    assert.equal(env.AWS_SECRET_ACCESS_KEY, service === "reports" ? undefined : "scoped-secret");
   }
-  const portal = renderServiceEnv(config, "portal", values, connections);
-  assert.equal(portal.OIDC_ISSUER, undefined);
+  assert.equal(core.OIDC_ISSUER, undefined);
   assert.equal(tenantSettingsEnv(config, values).OIDC_ISSUER, `${config.publicUrl}/idp`);
-  assert.equal(portal.AUTH_REDIRECT_URI, `${config.publicUrl}/auth/callback`);
-  assert.equal(portal.ADMIN_UPSTREAM, "http://web-ui:8080/admin");
-  assert.equal(renderServiceEnv(config, "slack", values, connections).PUBLIC_API_URL, config.apiUrl);
+  assert.equal(core.AUTH_REDIRECT_URI, `${config.publicUrl}/auth/callback`);
+  assert.equal(core.ADMIN_UPSTREAM, undefined);
 });
 
 test("Render supplies core every secret that the specs mark as Render-managed and rejects overrides", (t) => {
   const { config } = deployment(t);
-  const core = renderServiceEnv(config, "core", new Map(), connections);
+  const edge = renderServiceEnv(config, "edge", new Map(), connections);
+  const harness = renderServiceEnv(config, "harness", new Map(), connections);
   for (const { name } of FIRST_PARTY_SECRET_SPECS.filter((spec) => managedByFor(spec, "render") === "render")) {
-    assert.ok(core[name], name);
+    assert.ok(edge[name], name);
+    assert.equal(harness[name], edge[name], name);
     config.secretEnv = { core: { [name]: name } };
     assert.ok(
       renderConfigErrors(config, []).some(
@@ -210,27 +222,27 @@ test("removing hosted auth, admin, and Slack resets their managed settings", (t)
   const { config } = deployment(t);
   config.services = config.services.filter((service) => !["auth", "admin", "slack"].includes(service));
   config.env.portal = { OIDC_ISSUER: "https://idp.example.test" };
-  const core = renderServiceEnv(config, "core", new Map(), connections);
-  for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET"]) assert.equal(core[key], "");
-  assert.equal(core.AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
-  const portal = renderServiceEnv(config, "portal", new Map(), connections);
-  assert.equal(portal.AUTH_EMBEDDED, "0");
-  assert.equal(portal.AUTH_BROKER_UPSTREAM, "");
-  assert.equal(portal.ADMIN_UPSTREAM, "");
-  assert.equal(portal.OIDC_ISSUER, undefined);
+  const edge = renderServiceEnv(config, "edge", new Map(), connections);
+  for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_SIGNING_SECRET"]) assert.equal(edge[key], "");
+  assert.equal(edge.AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
+  assert.equal(edge.AUTH_EMBEDDED, "0");
+  assert.equal(edge.AUTH_BROKER_UPSTREAM, "");
+  assert.equal(edge.ADMIN_ENABLED, "0");
+  assert.equal(edge.OIDC_ISSUER, undefined);
   assert.equal(tenantSettingsEnv(config, new Map()).OIDC_ISSUER, "https://idp.example.test");
   assert.equal(tenantSettingsEnv(config, new Map()).OIDC_JWKS_URI, "https://slack.com/openid/connect/keys");
 });
 
-test("an embedded auth domain is a tenant setting that no Render service env carries", (t) => {
+test("an embedded auth domain is a tenant setting that neither the edge nor the harness env carries", (t) => {
   const { config } = deployment(t);
   config.env.auth = { AUTH_ALLOWED_EMAIL_DOMAIN: "example.test" };
-  assert.equal(renderServiceEnv(config, "core", new Map(), connections).AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
+  for (const workload of ["edge", "harness"]) {
+    const env = renderServiceEnv(config, workload, new Map(), connections);
+    assert.equal(env.AUTH_ALLOWED_EMAIL_DOMAIN, undefined, workload);
+    assert.equal(env.OIDC_ALLOWED_EMAIL_DOMAIN, undefined, workload);
+  }
   assert.equal(tenantSettingsEnv(config, new Map()).AUTH_ALLOWED_EMAIL_DOMAIN, "example.test");
   assert.equal(tenantSettingsEnv(config, new Map()).OIDC_ALLOWED_EMAIL_DOMAIN, "example.test");
-  const portal = renderServiceEnv(config, "portal", new Map(), connections);
-  assert.equal(portal.AUTH_ALLOWED_EMAIL_DOMAIN, undefined);
-  assert.equal(portal.OIDC_ALLOWED_EMAIL_DOMAIN, undefined);
 });
 
 test("Render storage validates settings and reserves bundled resource names", (t) => {
@@ -252,4 +264,46 @@ test("Render storage validates settings and reserves bundled resource names", (t
       (error) => error.message === "Render plugin minio conflicts with the bundled Render minio service",
     ),
   );
+});
+
+test("Render serves the front door from the edge port and keeps Slack and front-door wiring off the harness", (t) => {
+  const { config } = deployment(t);
+  const values = new Map([
+    ["SLACK_BOT_TOKEN", "xoxb-bot"],
+    ["SLACK_APP_TOKEN", "xapp-app"],
+    ["CORE_SIGNING_SECRET", "qm-signing-key"],
+  ]);
+  const edge = renderServiceEnv(config, "edge", values, connections);
+  const harness = renderServiceEnv(config, "harness", values, connections);
+  assert.equal(edge.PORT, "8000");
+  assert.equal(edge.PUBLIC_PORT, "8000");
+  assert.equal(edge.RENDER_API_PORT, "8080");
+  assert.equal(edge.AUTH_EMBEDDED, "1");
+  assert.equal(edge.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
+  assert.equal(edge.SLACK_BOT_TOKEN, "xoxb-bot");
+  assert.equal(edge.SLACK_APP_TOKEN, "xapp-app");
+  assert.equal(harness.PORT, "8080");
+  assert.equal(harness.CORE_SIGNING_SECRET, "qm-signing-key");
+  assert.equal(harness.DATABASE_OWNER_URL, connections.databaseOwnerUrl);
+  assert.equal(harness.DATABASE_URL, edge.DATABASE_URL);
+  assert.equal(harness.DATABASE_READER_URL, edge.DATABASE_READER_URL);
+  for (const key of [
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+    "SLACK_SIGNING_SECRET",
+    "PUBLIC_PORT",
+    "RENDER_API_PORT",
+    "REQUIRE_SIGNED_PORTAL_IDENTITY",
+    "PORTAL_PUBLIC_URL",
+    "AUTH_EMBEDDED",
+    "AUTH_BROKER_UPSTREAM",
+    "OIDC_ISSUER",
+    "ADMIN_ENABLED",
+  ])
+    assert.equal(harness[key], undefined, key);
+  config.services = config.services.filter((service) => !["portal", "web-ui", "admin", "auth"].includes(service));
+  const headless = renderServiceEnv(config, "edge", values, connections);
+  assert.equal(headless.PORT, "8080");
+  assert.equal(headless.PUBLIC_PORT, undefined);
+  assert.equal(headless.RENDER_API_PORT, undefined);
 });

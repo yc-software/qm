@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/orchestrator/turn-helpers.ts";
+import { completedSurfaceEnqueues, turnPostKeys } from "../src/core/turn-helpers.ts";
 import type { SessionEntry } from "../src/types.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 

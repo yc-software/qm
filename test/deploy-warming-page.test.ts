@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import type { App } from "../src/api/app.ts";
 import { TEST_TENANT } from "./support/tenant.ts";
 

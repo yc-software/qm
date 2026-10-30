@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { loadConfig } from "../src/config.ts";
-import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
+import { createAgent, agentConfigOptions } from "../src/harness/agent-run.ts";
 import { codexSubscriptionModelId } from "../src/model/pi-models.ts";
 import { defaultModelFor } from "../src/model/tenant-models.ts";
 import { parseTenantSettings } from "../src/tenants/settings-parse.ts";

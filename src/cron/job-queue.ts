@@ -7,6 +7,7 @@ export interface CronFireJob {
   cronId: string;
   scheduledAt: number;
   notBefore?: number;
+  fireKey?: string;
 }
 
 interface CronQueueHandlers {
@@ -14,7 +15,7 @@ interface CronQueueHandlers {
 }
 
 export interface CronJobQueue {
-  start(handlers: CronQueueHandlers): Promise<void>;
+  start(handlers: CronQueueHandlers | null): Promise<void>;
   enqueueFire(job: CronFireJob): Promise<void>;
   healthy(): boolean;
   stopClaims?(): Promise<void>;
@@ -63,13 +64,14 @@ export function createPgBossCronQueue(
         }
         await boss.createQueue(FIRE_QUEUE, { policy: "short", notify: true });
         const localConcurrency = Math.min(32, Math.max(1, Math.trunc(fireConcurrency)));
-        await boss.work<CronFireJob>(
-          FIRE_QUEUE,
-          { pollingIntervalSeconds: 1, batchSize: 1, localConcurrency },
-          async (jobs) => {
-            for (const job of jobs) await handlers.onFire(job.data);
-          },
-        );
+        if (handlers)
+          await boss.work<CronFireJob>(
+            FIRE_QUEUE,
+            { pollingIntervalSeconds: 1, batchSize: 1, localConcurrency },
+            async (jobs) => {
+              for (const job of jobs) await handlers.onFire(job.data);
+            },
+          );
       } catch (e) {
         if (initialized) {
           await boss
@@ -87,11 +89,14 @@ export function createPgBossCronQueue(
       lastErrorAt = 0;
     },
     async enqueueFire(job) {
-      if (!started) return;
+      if (!started) {
+        if (job.fireKey) throw new Error("cron job queue is not running");
+        return;
+      }
       await boss
         .send(FIRE_QUEUE, job, {
           startAfter: new Date(Math.max(job.scheduledAt, job.notBefore ?? 0)),
-          singletonKey: `${job.tenantId ?? ""}:${job.cronId}:${job.scheduledAt}`,
+          singletonKey: job.fireKey ?? `${job.tenantId ?? ""}:${job.cronId}:${job.scheduledAt}`,
           retryLimit: 0,
         })
         .catch((e: unknown) => {

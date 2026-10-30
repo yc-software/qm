@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/compose.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { TenantSettingMissingError } from "../src/tenants/settings.ts";
 import { testTenantSettings } from "./support/build-app.ts";

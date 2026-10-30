@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
@@ -25,7 +25,7 @@ const core = createServer(built.app, {
   featureFlags: built.featureFlags,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
-  scheduler: built.scheduler,
+  cronRuns: built.scheduler,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;

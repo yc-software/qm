@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";

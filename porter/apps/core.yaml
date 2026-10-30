@@ -5,14 +5,27 @@ build:
   context: .
   dockerfile: ./deploy/core/Dockerfile
 services:
-  - name: core
+  - name: edge
     type: web
-    private: true
-    run: node src/index.ts
+    run: node src/edge/main.ts
     instances: 1
     cpuCores: 1
     ramMegabytes: 2048
-    port: 8080
+    port: 8000
+    terminationGracePeriodSeconds: 300
     healthCheck:
       enabled: true
       httpPath: /healthz
+  - name: harness
+    type: worker
+    run: node src/harness/main.ts
+    instances: 1
+    cpuCores: 1
+    ramMegabytes: 2048
+    terminationGracePeriodSeconds: 300
+    livenessCheck:
+      enabled: true
+      command: curl -fsS http://127.0.0.1:8080/healthz
+    readinessCheck:
+      enabled: true
+      command: curl -fsS http://127.0.0.1:8080/readyz

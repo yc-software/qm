@@ -1,23 +1,20 @@
 import "./support/auto-fake-sprites.ts";
-
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp as buildProductionApp, type BuiltApp } from "../src/wiring.ts";
-import type { ModelProvider } from "../src/model/pi-models.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
+import { buildApp as buildProductionApp, type BuiltApp } from "./support/compose.ts";
+import { type ModelProvider, getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
-import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
+import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 import { testModelTables } from "./support/typed-stores.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 

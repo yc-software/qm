@@ -14,6 +14,10 @@ variable "core_public_hosts" {
     error_message = "core_public_hosts entries must be normalized DNS hostnames with an optional leading wildcard"
   }
 }
+variable "public_port" {
+  type    = number
+  default = 0
+}
 variable "cloud_map_namespace" { type = string }
 variable "secrets_prefix" { type = string }
 variable "github_repository" {

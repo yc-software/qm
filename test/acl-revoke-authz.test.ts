@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { scopeId, type Grant } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";

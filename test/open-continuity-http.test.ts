@@ -45,7 +45,7 @@ mock.module("./support/mock-agent.ts", {
   },
 });
 const { buildApp } = await import("./support/build-app.ts");
-const { createServer } = await import("../src/api/server.ts");
+const { createServer } = await import("../src/edge/http/server.ts");
 const SECRET = "synthetic-continuity-http-signing-key";
 const members = ["alice", "bob"].map((id) => ({ id, type: "internal" as const }));
 
@@ -74,7 +74,7 @@ async function fixture(t: TestContext) {
   const server = createServer(b.app, {
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
-    scheduler: b.scheduler,
+    cronRuns: b.scheduler,
     config: b.config,
     admin: b.admin,
   });

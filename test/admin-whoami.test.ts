@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/edge/http/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";

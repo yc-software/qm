@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterConnectorSkills } from "../src/core/orchestrator.ts";
+import { filterConnectorSkills } from "../src/harness/orchestrator.ts";
 import type { SkillResolution } from "../src/skills/skill-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 

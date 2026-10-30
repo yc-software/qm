@@ -342,7 +342,7 @@ test("most_confident hook points follow the likeliest enforced verdict and error
 });
 
 test("the decisions resource checks the model catalog and lets an admin's agent enforce", async () => {
-  const { ADMIN_RESOURCE_BY_ID } = await import("../src/api/routes/admin-resources.ts");
+  const { ADMIN_RESOURCE_BY_ID } = await import("../src/edge/http/routes/admin-resources.ts");
   const { selectableBaseModels } = await import("../src/model/pi-models.ts");
   const saved: DecisionRule[] = [];
   const decisions = {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { projectGroupRef } from "../src/projects/project-store.ts";
 import type { Conversation, Principal } from "../src/types.ts";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/compose.ts";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testTenantSettings } from "./support/build-app.ts";

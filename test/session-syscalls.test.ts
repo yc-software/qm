@@ -1,7 +1,7 @@
 import { wireRunResultDeliveries, runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createControlService } from "../src/api/control-service.ts";
-import { deliveryCandidatesFor } from "../src/core/orchestrator/turn-helpers.ts";
+import { deliveryCandidatesFor } from "../src/core/turn-helpers.ts";
 import { jsonbStringify } from "../src/util/text.ts";
 import { type SessionMailbox, type SessionMessage } from "../src/sessions/session-mailbox.ts";
 import { test } from "node:test";
@@ -20,7 +20,7 @@ import {
 import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import type { AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";

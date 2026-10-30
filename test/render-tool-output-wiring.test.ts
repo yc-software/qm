@@ -19,7 +19,7 @@ mock.module("../src/sessions/tool-output.ts", {
   },
 });
 
-const { buildApp } = await import("../src/wiring.ts");
+const { buildApp } = await import("./support/compose.ts");
 const { testTenantSettings } = await import("./support/build-app.ts");
 
 test("parked tool output uses the configured S3 endpoint and bucket path", async (t) => {

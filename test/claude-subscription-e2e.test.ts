@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/harness/agent-run.ts";
 
 const SUBSCRIPTION_TOKEN = "sk-ant-oat01-personal-e2e";
 

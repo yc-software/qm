@@ -5,12 +5,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createOrchestrator } from "../src/harness/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createRuntimeService } from "../src/agent/runtime-control.ts";
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
@@ -28,9 +29,12 @@ import {
 } from "../src/agent/context-compaction.ts";
 import { countTokens } from "../src/util/tokens.ts";
 import type { Agent, CompactInput } from "../src/agent/agent.ts";
-import type { SessionStore } from "../src/sessions/session-store.ts";
+import {
+  type SessionStore,
+  contextSummaryPayload,
+  createContextSummaryPayload,
+} from "../src/sessions/session-store.ts";
 import type { TeamStore } from "../src/teams/teams.ts";
-import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";

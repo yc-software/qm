@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createHmac } from "node:crypto";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/edge/http/server.ts";
 import { signedCoreHeaders } from "./support/signed-core.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";

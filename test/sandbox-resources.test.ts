@@ -1,7 +1,7 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
-import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
+import { createTurnSandboxes, type TurnSandboxContext } from "../src/harness/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";

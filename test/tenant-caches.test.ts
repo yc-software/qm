@@ -158,7 +158,7 @@ test("a run-stream sync from one tenant never replays another tenant's run text"
   const stream = createTurnStream({
     onDelta: (runId, text, offset, startOffset) => emitRunText(bus, runId, text, offset, startOffset),
   });
-  serveRunStreamSync(bus, stream);
+  serveRunStreamSync(bus, stream, "test-origin");
   withTenant(A, () => {
     stream.begin("run-a");
     stream.publish("run-a", "secret from tenant a");

@@ -3,14 +3,17 @@ import { isAbsolute, resolve } from "node:path";
 import { CliError, die, errMessage, warn } from "./log.ts";
 import {
   AUTH_BROKER_ENV_KEYS,
-  SERVICE_NAMES,
-  VIRTUAL_SERVICE_NAMES,
+  DECLARED_SERVICE_NAMES,
   isDeclaredService,
+  isImageName,
+  isCoreWorkload,
   isServiceName,
+  isVirtualService,
   pluginNameError,
   runnableServices,
   serviceDef,
   type DeclaredServiceName,
+  type ImageName,
   type ServiceName,
 } from "./services.ts";
 import {
@@ -121,10 +124,10 @@ export function awsWorkloadArchitecture(config: QmConfig, workload: string): "ar
   if (!service) throw new CliError(`aws.services.${workload} is missing`);
   const externalImage =
     config.plugins.some((plugin) => plugin.name === workload && plugin.image) ||
-    (isServiceName(workload) && Boolean(config.imageOverrides[workload]));
+    (isServiceName(workload) && Boolean(config.imageOverrides[serviceDef(workload).docker.image]));
   if (!service.architecture && externalImage) {
     throw new CliError(
-      `aws.services.${workload}.architecture is required because ${workload} uses an external prebuilt image`,
+      `aws.services.${isCoreWorkload(workload) ? "core" : workload}.architecture is required because ${workload} uses an external prebuilt image`,
     );
   }
   return service.architecture ?? (isServiceName(workload) ? "amd64" : "arm64");
@@ -163,8 +166,8 @@ export interface QmConfig {
   env: Partial<Record<DeclaredServiceName, Record<string, string>>>;
   secretEnv?: Partial<Record<DeclaredServiceName, Record<string, string>>>;
   securityScreen?: SecurityScreenConfig;
-  vms?: Partial<Record<ServiceName, { size?: string; memory?: string }>>;
-  imageOverrides: Partial<Record<ServiceName, string>>;
+  vms?: Partial<Record<ServiceName | "core", { size?: string; memory?: string }>>;
+  imageOverrides: Partial<Record<ImageName, string>>;
   sandbox?: SandboxConfig;
   botName?: string;
   orgName?: string;
@@ -586,21 +589,14 @@ function validate(raw: unknown, path: string): QmConfig {
   const services: DeclaredServiceName[] = [];
   for (const s of servicesRaw) {
     if (typeof s !== "string" || !isDeclaredService(s)) {
-      throw new CliError(
-        `${path}: unknown service ${JSON.stringify(s)} — valid: ${[...SERVICE_NAMES, ...VIRTUAL_SERVICE_NAMES].join(", ")}`,
-      );
+      throw new CliError(`${path}: unknown service ${JSON.stringify(s)} — valid: ${DECLARED_SERVICE_NAMES.join(", ")}`);
     }
     if (!services.includes(s)) services.push(s);
   }
   if (!services.includes("core")) throw new CliError(`${path}: "services" must include "core"`);
-  if (services.includes("auth") && !services.includes("portal")) {
-    throw new CliError(
-      `${path}: the "auth" sign-in broker requires "portal" — the portal is the only service that publishes it`,
-    );
-  }
-
-  if (services.includes("admin") && !services.includes("portal") && target === "aws") {
-    throw new CliError(`${path}: admin requires the authenticated portal`);
+  const unfronted = (["web-ui", "admin", "auth"] as const).find((s) => services.includes(s));
+  if (unfronted && !services.includes("portal")) {
+    throw new CliError(`${path}: "${unfronted}" requires "portal" — the edge serves it only behind the portal`);
   }
   const plugins = validatePlugins(o["plugins"], path);
   const skills = validateStringArray(o["skills"], path, "skills");
@@ -652,22 +648,17 @@ function validate(raw: unknown, path: string): QmConfig {
   if (securityScreen?.classifier !== "proxy" && secretEnv.core?.SECURITY_SCREEN_PROXY_TOKEN !== undefined) {
     throw new CliError(`${path}: secretEnv.core.SECURITY_SCREEN_PROXY_TOKEN requires securityScreen classifier proxy`);
   }
-  for (const [service, values] of Object.entries(env)) {
-    if (!isServiceName(service)) continue;
-    const portEnv = serviceDef(service).docker.portEnv;
-    if (values?.[portEnv] !== undefined) {
-      throw new CliError(
-        `${path}: "env.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
-      );
-    }
-  }
-  for (const [service, entries] of Object.entries(secretEnv)) {
-    if (!isServiceName(service)) continue;
-    const portEnv = serviceDef(service).docker.portEnv;
-    if (entries?.[portEnv] !== undefined) {
-      throw new CliError(
-        `${path}: "secretEnv.${service}.${portEnv}" is managed by the deployment target and cannot be overridden`,
-      );
+  for (const [field, map] of [
+    ["env", env],
+    ["secretEnv", secretEnv],
+  ] as const) {
+    for (const [service, values] of Object.entries(map)) {
+      const managed = ["PORT", "PUBLIC_PORT"].find((name) => values?.[name] !== undefined);
+      if (managed) {
+        throw new CliError(
+          `${path}: "${field}.${service}.${managed}" is managed by the deployment target and cannot be overridden`,
+        );
+      }
     }
   }
   const portalMountsAdmin = services.includes("portal") && services.includes("admin");
@@ -686,7 +677,7 @@ function validate(raw: unknown, path: string): QmConfig {
       );
     }
   }
-  const imageOverrides = validateServiceMap(o["imageOverrides"], path, "imageOverrides", (v, k) => {
+  const imageOverrides = validateKeyedMap(o["imageOverrides"], path, "imageOverrides", isImageName, (v, k) => {
     if (typeof v !== "string") throw new CliError(`${path}: "imageOverrides.${k}" must be a string`);
     return v;
   });
@@ -775,14 +766,14 @@ function validate(raw: unknown, path: string): QmConfig {
       );
     const externalImages = [
       ...plugins.filter((plugin) => plugin.image).map((plugin) => plugin.name),
-      ...Object.keys(imageOverrides).filter((service) => services.includes(service as DeclaredServiceName)),
+      ...runnableServices(services).filter((service) => imageOverrides[serviceDef(service).docker.image]),
     ];
     for (const workload of new Set([...runnableServices(services), ...externalImages])) {
       if (out.aws?.services[workload]) awsWorkloadArchitecture(out, workload);
     }
   }
   if (o["vms"] !== undefined) {
-    out.vms = validateServiceMap(o["vms"], path, "vms", (v, k) => {
+    out.vms = validateKeyedMap(o["vms"], path, "vms", isVmKey, (v, k) => {
       if (!isPlainObject(v)) {
         throw new CliError(`${path}: "vms.${k}" must be an object (e.g. { "memory": "4gb" })`);
       }
@@ -950,7 +941,6 @@ export function requiresAwsMicrovmImage(config: QmConfig): boolean {
 
 function validateAwsFrontDoor(config: QmConfig, path: string): void {
   const hasPortal = config.services.includes("portal");
-  const hasWebUi = config.services.includes("web-ui");
   const publicUrl = new URL(config.publicUrl);
   const protocol = publicUrl.protocol;
   if (publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash || publicUrl.username || publicUrl.password) {
@@ -967,17 +957,6 @@ function validateAwsFrontDoor(config: QmConfig, path: string): void {
     throw new CliError(
       `${path}: AWS requires env.core.AWS_DEPLOY_IMAGE to name a non-placeholder, stack-owned Lambda MicroVM image`,
     );
-  }
-  if (hasWebUi && !hasPortal) {
-    throw new CliError(
-      `${path}: AWS web-ui requires the authenticated portal; a portal-free ALB must never expose the Web UI`,
-    );
-  }
-  if (config.services.includes("admin") && !hasPortal) {
-    throw new CliError(`${path}: AWS admin requires the authenticated portal`);
-  }
-  if (hasPortal && !hasWebUi) {
-    throw new CliError(`${path}: AWS portal requires web-ui`);
   }
   if (hasPortal && protocol !== "https:") {
     throw new CliError(`${path}: AWS portal requires an HTTPS publicUrl and ACM certificate`);
@@ -1252,7 +1231,21 @@ function validateAws(
     return false;
   };
   for (const [name, value] of Object.entries(servicesRaw)) {
-    if (!isServiceName(name) && pluginNameError(name)) {
+    if (isVirtualService(name)) {
+      const move =
+        name === "portal" && isPlainObject(value) && value["targetGroup"] !== undefined
+          ? " and move its targetGroup to aws.services.core.targetGroup"
+          : "";
+      throw new CliError(
+        `${path}: "aws.services.${name}" is no longer a workload — the edge runs ${name}. Delete the entry${move}; the next terraform apply retires its ECS service and ECR repository`,
+      );
+    }
+    if (isCoreWorkload(name)) {
+      throw new CliError(
+        `${path}: "aws.services.${name}" is derived from aws.services.core — configure the core entry; edge and harness both run its image`,
+      );
+    }
+    if (name !== "core" && !isServiceName(name) && pluginNameError(name)) {
       throw new CliError(`${path}: "aws.services" has invalid workload name "${name}"`);
     }
     if (!isPlainObject(value)) throw new CliError(`${path}: "aws.services.${name}" must be an object`);
@@ -1289,7 +1282,7 @@ function validateAws(
     if (value["publicPaths"] !== undefined) {
       const paths = validateStringArray(value["publicPaths"], path, `aws.services.${name}.publicPaths`);
       if (
-        isServiceName(name) ||
+        isDeclaredService(name) ||
         ["v1", "d", "key", "models", "slack", "api", "assets", "oauth", "healthz", "readyz", "metrics"].includes(
           name,
         ) ||
@@ -1389,9 +1382,27 @@ function validateAws(
     }
     services[name] = service;
   }
+  const core = services["core"];
+  if (core) {
+    const harnessService = `${core.ecsService}-harness`;
+    const taken = coordinates.ecsService.get(harnessService);
+    if (taken) {
+      throw new CliError(
+        `${path}: "aws.services.${taken}.ecsService" collides with the harness service derived from aws.services.core (${JSON.stringify(harnessService)})`,
+      );
+    }
+    delete services["core"];
+    const { targetGroup: _targetGroup, publicPaths: _publicPaths, logGroup, ...shared } = core;
+    services["edge"] = core;
+    services["harness"] = {
+      ...shared,
+      ecsService: harnessService,
+      ...(logGroup ? { logGroup: `${logGroup}-harness` } : {}),
+    };
+  }
   const effectiveTaskRoleArn = (name: string, service: AwsServiceConfig): string => {
     if (service.taskRoleArn) return service.taskRoleArn;
-    if (name === "core") return `arn:aws:iam::${accountId}:role/${cluster}-core-task`;
+    if (isCoreWorkload(name)) return `arn:aws:iam::${accountId}:role/${cluster}-core-task`;
     const roleName = service.assumeRoleArns ? `${cluster}-${name}-task` : `${cluster}-task`;
     return `arn:aws:iam::${accountId}:role/${roleName}`;
   };
@@ -1403,14 +1414,17 @@ function validateAws(
   for (const [name, service] of Object.entries(services)) {
     if (!service.assumeRoleArns) continue;
     const role = effectiveTaskRoleArn(name, service);
-    const owners = taskRoleOwners.get(role)!;
-    if (owners.length > 1) {
+    const configKey = (workload: string): string => (isCoreWorkload(workload) ? "core" : workload);
+    const owners = taskRoleOwners.get(role)!.filter((owner) => configKey(owner) !== configKey(name));
+    if (owners.length) {
       throw new CliError(
-        `${path}: "aws.services.${name}.taskRoleArn" must be unique because assumeRoleArns grants workload-scoped permissions; ${role} is also used by ${owners.filter((owner) => owner !== name).join(", ")}`,
+        `${path}: "aws.services.${configKey(name)}.taskRoleArn" must be unique because assumeRoleArns grants workload-scoped permissions; ${role} is also used by ${[...new Set(owners.map(configKey))].join(", ")}`,
       );
     }
   }
   for (const name of enabledServices) {
+    if (!services[name] && isCoreWorkload(name))
+      throw new CliError(`${path}: "aws.services.core" is required because core is enabled`);
     if (!services[name]) throw new CliError(`${path}: "aws.services.${name}" is required because ${name} is enabled`);
   }
   const netOut: AwsConfig["networking"] = {
@@ -1658,21 +1672,32 @@ function validateStringMap(raw: unknown, path: string, field: string): Record<st
   return out;
 }
 
+const isVmKey = (k: string): k is ServiceName | "core" => k === "core" || isServiceName(k);
+
 function validateServiceMap<T>(
   raw: unknown,
   path: string,
   field: string,
   value: (v: unknown, key: string) => T,
 ): Partial<Record<DeclaredServiceName, T>> {
+  return validateKeyedMap(raw, path, field, isDeclaredService, value);
+}
+
+function validateKeyedMap<K extends string, T>(
+  raw: unknown,
+  path: string,
+  field: string,
+  validKey: (k: string) => k is K,
+  value: (v: unknown, key: string) => T,
+): Partial<Record<K, T>> {
   if (raw === undefined) return {};
   if (!isPlainObject(raw)) {
     throw new CliError(`${path}: "${field}" must be an object keyed by service name`);
   }
-  const out: Partial<Record<DeclaredServiceName, T>> = {};
+  const out: Partial<Record<K, T>> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (!(field === "env" || field === "secretEnv" ? isDeclaredService(k) : isServiceName(k)))
-      throw new CliError(`${path}: "${field}" has unknown service "${k}"`);
-    out[k as DeclaredServiceName] = value(v, k);
+    if (!validKey(k)) throw new CliError(`${path}: "${field}" has unknown service "${k}"`);
+    out[k] = value(v, k);
   }
   return out;
 }

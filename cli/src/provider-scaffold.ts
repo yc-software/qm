@@ -76,11 +76,14 @@ function renderConfig(deploymentId: string, values: ConfigValues): string {
   // "model": "",
 ${values.providerFields}
   // First-party services to run. The full set: "core" (the agent runtime and API,
-  // always required), "slack" (the Slack surface, runs inside the core process),
-  // "web-ui" (a browser chat UI), "admin" (the operator dashboard), "portal"
-  // (the public sign-in front door), "auth" (the built-in sign-in broker that
-  // emails one-time links; drop it to sign in through an external OIDC provider),
-  // and "egress-proxy" (the TLS proxy that enforces sandbox egress policy).
+  // always required; it runs as two services from one image: the edge, which serves
+  // HTTP, and the harness, which runs agent turns), "slack" (the Slack surface),
+  // "portal" (the public sign-in front door), "web-ui" (a browser chat UI), "admin"
+  // (the operator dashboard), "auth" (the built-in sign-in broker that emails
+  // one-time links; drop it to sign in through an external OIDC provider), and
+  // "egress-proxy" (the TLS proxy that enforces sandbox egress policy). slack,
+  // portal, web-ui, admin, and auth run inside the edge; web-ui, admin, and auth
+  // require portal.
   "services": [${values.services.map((service) => JSON.stringify(service)).join(", ")}],
 
   // Extra plugins to run alongside the services. A prebuilt image runs with
@@ -165,14 +168,14 @@ cannot deregister or delete task definitions.
 const noFiles = (): ScaffoldFile[] => [];
 
 export const dockerScaffold: ProviderScaffold = {
-  renderConfig: (deploymentId, modelProvider) =>
+  renderConfig: (deploymentId, modelProvider, emailTransport) =>
     renderConfig(deploymentId, {
       target: "docker",
       modelProvider,
-      publicUrl: "http://localhost:8082",
+      publicUrl: "http://localhost:8081",
       providerFields: "",
-      services: ["core", "web-ui"],
-      env: `{}`,
+      services: ["core", "web-ui", "portal", "auth"],
+      env: `{ "auth": { "AUTH_EMAIL_TRANSPORT": ${JSON.stringify(emailTransport)} } }`,
       secretEnv: "",
       sandbox: "",
     }),
@@ -189,7 +192,7 @@ export const flyScaffold: ProviderScaffold = {
     renderConfig(deploymentId, {
       target: "fly",
       modelProvider,
-      publicUrl: `https://${deploymentId}-portal.fly.dev`,
+      publicUrl: `https://${deploymentId}-core.fly.dev`,
       providerFields: `
   // Globally unique prefix for every Fly app in this deployment.
   "appPrefix": ${JSON.stringify(deploymentId)},
@@ -217,21 +220,9 @@ export const flyScaffold: ProviderScaffold = {
 export const awsScaffold: ProviderScaffold = {
   renderConfig: (deploymentId, modelProvider, emailTransport) => {
     const cluster = clusterName(deploymentId);
-    const services = Object.fromEntries(
-      [
-        ["core", 2048, 4096],
-        ["web-ui", 512, 1024],
-        ["portal", 512, 1024],
-      ].map(([name, cpu, memory]) => [
-        name,
-        {
-          ecrRepository: `${deploymentId}-qm-${name}`,
-          ecsService: `${cluster}-${name}`,
-          cpu,
-          memory,
-        },
-      ]),
-    );
+    const services = {
+      core: { ecrRepository: `${deploymentId}-qm-core`, ecsService: `${cluster}-core`, cpu: 2048, memory: 4096 },
+    };
     return renderConfig(deploymentId, {
       target: "aws",
       modelProvider,
@@ -298,7 +289,7 @@ export const renderScaffold: ProviderScaffold = {
     renderConfig(deploymentId, {
       target: "render",
       modelProvider,
-      publicUrl: `https://${deploymentId}-portal.onrender.com`,
+      publicUrl: `https://${deploymentId}-core.onrender.com`,
       providerFields: `
   // The core API address. Render assigns both URLs and qm up rewrites them here.
   // Set your own HTTPS origins instead to use custom domains; see the Render reference.
@@ -340,7 +331,7 @@ export const renderScaffold: ProviderScaffold = {
 
 Render builds QM services from render.source in Git; no local Docker or image
 publication is involved. qm up creates one project with a production environment
-for core, web UI, portal, Render Postgres, and bundled MinIO, then
+for core, harness, Render Postgres, and bundled MinIO, then
 uploads the deployment layer. Later qm up runs retain the selected MinIO
 source commit. Use qm up --upgrade-minio to upgrade MinIO explicitly.
 Native Render Sandboxes are workspace resources.

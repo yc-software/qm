@@ -35,11 +35,7 @@ function portalSignInSettings(config: QmConfig): Record<string, string> {
   if (!config.services.includes("portal")) return {};
   if (config.services.includes("auth")) {
     const allowedEmailDomain = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN;
-    return brokerWiring("portal", {
-      publicUrl: config.publicUrl,
-      authBaseUrl: "",
-      ...(allowedEmailDomain ? { allowedEmailDomain } : {}),
-    });
+    return brokerWiring({ publicUrl: config.publicUrl, ...(allowedEmailDomain ? { allowedEmailDomain } : {}) });
   }
   return config.target === "render" ? SLACK_SIGN_IN : {};
 }

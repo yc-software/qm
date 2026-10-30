@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { constants as http2Constants, createServer as createHttp2Server, type ServerHttp2Session } from "node:http2";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/edge/http/server.ts";
 import type { App } from "../src/api/app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";

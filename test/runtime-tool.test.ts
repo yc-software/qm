@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createRuntimeService } from "../src/agent/runtime-control.ts";
-import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
+import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";

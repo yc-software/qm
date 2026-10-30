@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { basename, join } from "node:path";
 import { die, note, ok } from "../log.ts";
 import { envNum, gitTopLevel, runInherit, spawnBackground, stopPid, tail, waitForLog, which } from "../util.ts";
-import { serviceDef } from "../services.ts";
+import { CORE_WORKLOADS, serviceDef } from "../services.ts";
 
 const ciDir = (root: string): string => join(root, process.env.CI_INSTANCE_DIR ?? ".ci-instance");
 const ciPort = (): number => envNum("CI_INSTANCE_PORT", 8181);
@@ -64,7 +64,7 @@ export async function devCiUp(): Promise<void> {
 
   const dir = ciDir(root);
   mkdirSync(dir, { recursive: true });
-  for (const f of ["core.log", "tunnel.log"]) writeFileSync(join(dir, f), "");
+  for (const f of ["edge.log", "harness.log", "tunnel.log"]) writeFileSync(join(dir, f), "");
   const port = ciPort();
 
   const overlay: Record<string, string> = {};
@@ -88,22 +88,30 @@ export async function devCiUp(): Promise<void> {
 
   const baseEnv = { ...process.env, ...overlay } as NodeJS.ProcessEnv;
 
-  const coreLog = join(dir, "core.log");
-  const corePid = spawnBackground(process.execPath, [...serviceDef("core").dev!.entry], {
-    cwd: root,
-    env: { ...baseEnv, PORT: String(port) },
-    logFile: coreLog,
-  });
-  writePid(dir, "core", corePid);
-  if (!(await waitForLog(coreLog, serviceDef("core").readiness, readyTimeout()))) {
-    await dieWithTail(coreLog, `core failed to start on :${port}`);
+  const edgeLog = join(dir, "edge.log");
+  const ports = { edge: port, harness: port + 2 };
+  for (const workload of CORE_WORKLOADS) {
+    const def = serviceDef(workload);
+    const logFile = join(dir, `${workload}.log`);
+    writePid(
+      dir,
+      workload,
+      spawnBackground(process.execPath, [...def.dev!.entry], {
+        cwd: root,
+        env: { ...baseEnv, PORT: String(ports[workload]) },
+        logFile,
+      }),
+    );
+    if (!(await waitForLog(logFile, def.readiness, readyTimeout()))) {
+      await dieWithTail(logFile, `${workload} failed to start on :${ports[workload]}`);
+    }
   }
-  if (!(await waitForLog(coreLog, /connected as @/, readyTimeout()))) {
-    await dieWithTail(coreLog, "slack surface failed to connect (bad/uninstalled CI app token?)");
+  if (!(await waitForLog(edgeLog, /connected as @/, readyTimeout()))) {
+    await dieWithTail(edgeLog, "slack surface failed to connect (bad/uninstalled CI app token?)");
   }
 
-  const handle = readFileSync(coreLog, "utf8").match(/connected as @([^\s]+)/)?.[1] ?? "agent";
-  ok(`ci instance up — core :${port}, slack @${handle}`);
+  const handle = readFileSync(edgeLog, "utf8").match(/connected as @([^\s]+)/)?.[1] ?? "agent";
+  ok(`ci instance up — edge :${port}, harness :${ports.harness}, slack @${handle}`);
 
   if (process.env.GITHUB_ENV) {
     appendFileSync(process.env.GITHUB_ENV, `CORE_API_URL=http://localhost:${port}\nAGENT_HANDLE=${handle}\n`);
@@ -123,8 +131,8 @@ export async function devCiDown(): Promise<void> {
     note("nothing to tear down.");
     return;
   }
-  for (const name of ["core", "tunnel"]) await stopPid(pidFromFile(dir, name));
-  for (const name of ["core", "tunnel"]) rmSync(join(dir, `${name}.pid`), { force: true });
+  for (const name of [...CORE_WORKLOADS, "tunnel"]) await stopPid(pidFromFile(dir, name));
+  for (const name of [...CORE_WORKLOADS, "tunnel"]) rmSync(join(dir, `${name}.pid`), { force: true });
 
   ok(`ci instance down (logs kept in ${process.env.CI_INSTANCE_DIR ?? ".ci-instance"}/)`);
 }

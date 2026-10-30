@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHART="$ROOT/deploy/helm"
 CHART_NS="${REPO%/*}"
 
-SERVICES=(core auth web-ui admin portal egress-proxy)
+SERVICES=(core egress-proxy)
 
 for svc in "${SERVICES[@]}"; do
   image="$REPO/$svc:$TAG"

@@ -141,13 +141,13 @@ export function flyDatabaseLogins(
   });
 }
 
-export function ensureFlyPostgres(target: FlyPostgresTarget): void {
-  const app = `${target.appPrefix}-core`;
-  const existing = secretNames(app);
-  if (DATABASE_LOGIN_ENV_NAMES.every((name) => existing?.has(name))) {
-    note(`postgres: database logins already set on ${app}`);
+export function ensureFlyPostgres(target: FlyPostgresTarget, apps: readonly string[]): void {
+  const existing = new Map(apps.map((app) => [app, secretNames(app)]));
+  if (apps.every((app) => DATABASE_LOGIN_ENV_NAMES.every((name) => existing.get(app)?.has(name)))) {
+    note(`postgres: database logins already set on ${apps.join(", ")}`);
     return;
   }
-  for (const [name, value] of Object.entries(flyDatabaseLogins(target, existing))) stageSecret(app, name, value);
-  note(`postgres: owner, qm_app and qm_reader connections staged on ${app}`);
+  const logins = flyDatabaseLogins(target, existing.get(`${target.appPrefix}-core`));
+  for (const app of apps) for (const [name, value] of Object.entries(logins)) stageSecret(app, name, value);
+  note(`postgres: owner, qm_app and qm_reader connections staged on ${apps.join(", ")}`);
 }

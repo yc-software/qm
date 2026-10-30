@@ -1,24 +1,24 @@
-import { createRuntimeService } from "../src/agent/runtime-control.ts";
-import type { RuntimeChoice } from "../src/agent/agent.ts";
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
+import type { RuntimeChoice, Agent } from "../src/agent/agent.ts";
 import type { RuntimeControl } from "../src/agent/runtime-types.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createOrchestrator } from "../src/harness/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import type { Agent } from "../src/agent/agent.ts";
-import { turnToolOptions } from "../src/agent/turn-support.ts";
-import { createAgentTools, type AgentToolsOptions } from "../src/agent/agent-tools.ts";
+import { turnToolOptions } from "../src/harness/turn-support.ts";
+import { createAgentTools, type AgentToolsOptions } from "../src/harness/agent-tools.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { type FeatureName } from "../src/feature-flags.ts";
+import type { FeatureName } from "../src/feature-flags.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -34,8 +34,7 @@ import { testConfigStore, testDatabaseUrl, testDeployBackings, testAdvisoryLock 
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testSessionMailbox } from "./support/typed-stores.ts";
-import { testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
+import { testSessionMailbox, testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
 type Turn = {

@@ -1,16 +1,14 @@
 import "./support/auto-fake-sprites.ts";
-
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT } from "./support/tenant.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 

@@ -1,4 +1,4 @@
-import type { BuiltApp } from "../../src/wiring.ts";
+import type { BuiltApp } from "./compose.ts";
 import type { ScopeId } from "../../src/types.ts";
 
 export async function selectDefaultSandbox(built: BuiltApp, actorId: string, ...scopes: ScopeId[]): Promise<void> {

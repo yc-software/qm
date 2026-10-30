@@ -1042,7 +1042,7 @@ export function createSessionMethods(
       if (!session) return null;
       const parsed = parseScopeId(session.scopeId);
       const projectMembers = parsed.kind === "group" ? await deps.projects?.members(parsed.ref) : undefined;
-      return deps.orchestrator.regenerateTitle(sessionId, principalId, projectMembers);
+      return deps.regenerateTitle(sessionId, principalId, projectMembers);
     },
 
     async forkSession(sessionId, principalId, opts) {

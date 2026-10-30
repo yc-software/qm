@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getContextPolicy, setContextPolicy } from "../src/api/routes/context-policy.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { getContextPolicy, setContextPolicy } from "../src/edge/http/routes/context-policy.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 

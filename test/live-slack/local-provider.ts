@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
-import { buildApp } from "../../src/wiring.ts";
+import { buildApp } from "../support/compose.ts";
 import { enterTenant } from "../../src/tenants/context.ts";
 import { TENANT_SETTING_KEYS, type TenantSettingValues } from "../../src/tenants/settings.ts";
 import { testTenantSettings } from "../support/build-app.ts";

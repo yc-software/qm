@@ -2,8 +2,8 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test, afterEach } from "node:test";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
+import { buildApp as buildProductionApp, serverDeps } from "./support/compose.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import type { Config } from "../src/config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
@@ -20,6 +20,24 @@ import {
   fastModeModelIds,
   defaultWebuiModelIds,
 } from "../src/model/pi-models.ts";
+import {
+  createModelOverlayStore as createStore,
+  setModelOverlays,
+  validateModelOverlay,
+  type StoredModelOverlay,
+} from "../src/model/model-overlay-store.ts";
+import { setCustomProviders } from "../src/model/custom-providers.ts";
+import { selectableModelCatalog } from "../src/model/model-catalog.ts";
+import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
+import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
+import { createServer } from "node:http";
+import { createAgent } from "../src/harness/agent-run.ts";
+import { oneShot } from "../src/model/pi-runtime.ts";
+import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { calculateCost } from "@earendil-works/pi-ai";
+import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
+import { wantsFastMode } from "../src/model/model-runtime.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 bindTestTenant();
 
@@ -32,6 +50,7 @@ const buildApp = (config: Config, overrides: Parameters<typeof buildProductionAp
   );
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
+
 const MODEL_ID = "overlay-future-model";
 
 test("unknown builtin-provider model fails resolution and a live runtime selection request", async () => {
@@ -63,17 +82,6 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
-
-import {
-  createModelOverlayStore as createStore,
-  setModelOverlays,
-  validateModelOverlay,
-  type StoredModelOverlay,
-} from "../src/model/model-overlay-store.ts";
-import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { selectableModelCatalog } from "../src/model/model-catalog.ts";
-import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
-import { validateWebTurnModelOptions } from "../src/api/runtime-config.ts";
 
 const createModelOverlayStore: typeof createStore = (backing, write) =>
   createStore(backing, write, async () => ({ fingerprint: "fixture", probe: async () => {} }));
@@ -313,11 +321,6 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
   }
 });
 
-import { createServer } from "node:http";
-import { oneShot, createAgent } from "../src/agent/agent-run.ts";
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
-import { calculateCost } from "@earendil-works/pi-ai";
-
 test("Pi serves an overlay via the inherited provider endpoint and metadata drives request limits and pricing", async () => {
   let received: { model?: string; max_tokens?: number } | undefined;
   let authorized = false;
@@ -506,10 +509,6 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
     setProviderBaseUrls(TEST_TENANT, {});
   }
 });
-
-import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
-import { wantsFastMode } from "../src/model/model-runtime.ts";
-import { testModelTables } from "./support/typed-stores.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = testConfigStore();

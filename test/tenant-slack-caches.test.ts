@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { currentTenant, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { neutralizeMentions, setMentionIndex, toSlackMrkdwn } from "../src/slack/mrkdwn.ts";
-import { scopeActivity } from "../src/api/routes/admin/scope-activity.ts";
+import { scopeActivity } from "../src/edge/http/routes/admin/scope-activity.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 
 const A = "00000000-0000-4000-8000-00000000000a";

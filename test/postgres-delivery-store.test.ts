@@ -4,7 +4,6 @@ import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-s
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
-  exerciseDeliveryFail,
   exerciseDeliveryStore,
 } from "./delivery-store-contract.ts";
 import { bindTestTenant, testTenantsSeeded } from "./support/tenant.ts";
@@ -101,6 +100,20 @@ test("pg delivery store: once-ever keys revive after a TTL drop instead of deadl
   await exerciseDeliveryExpiryRevive((opts) => createPostgresDeliveryStore(URL!, opts));
 });
 
-test("pg delivery store: a permanently refused row fails once and never revives", { skip }, async () => {
-  await exerciseDeliveryFail((opts) => createPostgresDeliveryStore(URL!, opts));
+test("pg delivery store: an enqueue in one process wakes listeners in another", { skip }, async () => {
+  const harness = createPostgresDeliveryStore(URL!);
+  const edge = createPostgresDeliveryStore(URL!);
+  const woken = new Promise<void>((resolve) => {
+    const off = edge.onEnqueue(() => {
+      off();
+      resolve();
+    });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await harness.enqueue({
+    destination: { type: "slack", target: "C-cross-process" },
+    text: "from the harness",
+    idempotencyKey: "cross-process-wake",
+  });
+  await woken;
 });

@@ -1,0 +1,65 @@
+import { withTenant } from "../../../tenants/context.ts";
+import { validTenantSlug } from "../../../tenants/install.ts";
+import { importTenantSettings, unknownTenantImportKeys } from "../../../tenants/settings-import.ts";
+import { PLUGIN_SETTING_KEYS } from "../../../tenants/settings.ts";
+import { errMessage } from "../../../util/errors.ts";
+import { sendJson } from "../../../api/http.ts";
+import { requireOperatorControl } from "./background-work.ts";
+import { isObj } from "./shared.ts";
+import type { ApiCtx, Route } from "./route.ts";
+
+async function putTenantSettings(ctx: ApiCtx): Promise<void> {
+  if (!requireOperatorControl(ctx)) return;
+  const { deps, body, res } = ctx;
+  if (!deps.tenantSettings || !deps.modelCredentials || !deps.config || !deps.featureFlags)
+    return sendJson(res, 404, { error: "not_found" });
+  const env = isObj(body) ? body.env : undefined;
+  if (!isObj(env) || Object.values(env).some((value) => typeof value !== "string"))
+    return sendJson(res, 400, { error: "bad_request", message: "env must be an object of string values" });
+  const unknown = unknownTenantImportKeys(env);
+  if (unknown.length)
+    return sendJson(res, 400, { error: "not_tenant_settings", message: `Not tenant settings: ${unknown.join(", ")}` });
+  const slug = isObj(body) ? body.tenant : undefined;
+  if (!validTenantSlug(slug))
+    return sendJson(res, 400, {
+      error: "invalid_tenant",
+      message: "tenant must be a tenant slug: lowercase letters, digits and inner hyphens",
+    });
+  const tenant = await deps.tenantSettings.tenantForSlug(slug);
+  if (!tenant)
+    return sendJson(res, 404, { error: "unknown_tenant", message: `No tenant has the slug ${slug}`, tenant: slug });
+  try {
+    const updated = await withTenant(tenant, () =>
+      importTenantSettings(env as Record<string, string>, {
+        settings: deps.tenantSettings!,
+        modelCredentials: deps.modelCredentials!,
+        featureFlags: deps.featureFlags!,
+        config: deps.config!,
+        actor: "operator settings push",
+      }),
+    );
+    return sendJson(res, 200, { tenant, updated });
+  } catch (error) {
+    return sendJson(res, 400, { error: "invalid_tenant_settings", message: errMessage(error) });
+  }
+}
+
+async function getPluginSettings(ctx: ApiCtx): Promise<void> {
+  if (!ctx.deps.tenantSettings) return sendJson(ctx.res, 404, { error: "not_found" });
+  const { values } = await ctx.deps.tenantSettings.get();
+  return sendJson(ctx.res, 200, {
+    values: Object.fromEntries(PLUGIN_SETTING_KEYS.flatMap((key) => (values[key] ? [[key, values[key]]] : []))),
+  });
+}
+
+export const tenantSettingsRoutes: ReadonlyArray<Route<ApiCtx>> = [
+  { method: "GET", path: "/v1/plugin-settings", auth: "source", handle: getPluginSettings },
+  {
+    method: "PUT",
+    path: "/v1/tenant-settings",
+    actor: "system",
+    auth: "source",
+    unbound: true,
+    handle: putTenantSettings,
+  },
+];

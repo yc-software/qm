@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import type { App } from "../src/api/app.ts";
-import type { ServerDeps } from "../src/api/deps.ts";
+import type { ServerDeps } from "../src/edge/http/deps.ts";
 import {
   CONTROL_PLANE_AUD,
   CREDENTIAL_BROKER_AUD,

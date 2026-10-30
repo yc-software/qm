@@ -75,7 +75,7 @@ const fs = require("node:fs");
 const a = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
 if (a[0] === "apps" && a[1] === "create") console.log("already been taken");
-else if (a[0] === "apps" && a[1] === "list") console.log(JSON.stringify([{ Name: "acme-core" }]));
+else if (a[0] === "apps" && a[1] === "list") console.log(JSON.stringify([{ Name: "acme-core" }, { Name: "acme-harness" }]));
 else if (a[0] === "secrets" && a[1] === "list") {
   console.log(${JSON.stringify(
     [
@@ -139,9 +139,22 @@ else console.log("ok");
     assert.match(calls, /DATABASE_OWNER_URL=-\n {2}value postgresql:\/\/u:p@direct\.pg-1\.flympg\.net\/db/);
     assert.match(calls, /DATABASE_URL=-\n {2}value postgresql:\/\/qm_app:rotated-qm_app@direct\.pg-1\.flympg\.net\/db/);
     assert.match(calls, /DATABASE_READER_URL=-\n {2}value postgresql:\/\/qm_reader:rotated-qm_reader@direct/);
+    for (const app of ["acme-core", "acme-harness"]) {
+      assert.match(calls, new RegExp(`secrets set --stage -a ${app} DATABASE_OWNER_URL=-`));
+      assert.match(
+        calls,
+        new RegExp(
+          `secrets unset --stage -a ${app} SECURITY_SCREEN_PROXY_TOKEN ANTHROPIC_API_KEY FLY_RESIDENT_ENV_STALE_TOKEN\n`,
+        ),
+      );
+    }
+    assert.equal(calls.match(/mpg users rotate-password pg-1 --username qm_app/g)?.length, 1, "logins are minted once");
     assert.match(
       calls,
-      /secrets unset --stage -a acme-core SECURITY_SCREEN_PROXY_TOKEN ANTHROPIC_API_KEY FLY_RESIDENT_ENV_STALE_TOKEN\n/,
+      new RegExp(
+        `deploy --yes -c \\S+harness\\.fly\\.toml --ha=false --image registry\\.fly\\.io/acme-core@sha256:${"b".repeat(64)}`,
+      ),
+      "the harness deploys the image the edge just built",
     );
     assert.ok(calls.indexOf("secrets unset") < calls.indexOf("deploy"));
     assert.ok(calls.indexOf("storage create") < calls.indexOf("deploy"));
@@ -176,7 +189,7 @@ test('--only "slack" explains the virtual service runs in-process on the core', 
   try {
     await assert.rejects(
       flyUp(config, dir, { only: ["slack"] }),
-      /--only "slack": slack is a virtual service — it runs in-process on the core, so deploy it with --only core/,
+      /--only "slack": slack is a virtual service — it runs in-process on the edge, so deploy it with --only core/,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

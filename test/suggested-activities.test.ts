@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSuggestedActivityService } from "../src/suggestions/activities.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/harness/scheduler.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";

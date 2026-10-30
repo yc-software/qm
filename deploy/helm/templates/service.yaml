@@ -1,22 +1,42 @@
-{{- $root := . -}}
-{{- range $name, $svc := .Values.services }}
-{{- if and $svc.enabled (ne $name "admin") (ne $name "auth") }}
+{{- $core := .Values.services.core }}
+{{- $proxy := index .Values.services "egress-proxy" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "qm.fullname" . }}-core
+  labels:
+    {{- include "qm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: edge
+spec:
+  type: {{ $core.serviceType | default "ClusterIP" }}
+  selector:
+    {{- include "qm.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: edge
+  ports:
+    - name: http
+      port: {{ $core.port }}
+      targetPort: {{ $core.port }}
+    {{- if .Values.services.portal.enabled }}
+    - name: public
+      port: {{ $core.publicPort }}
+      targetPort: {{ $core.publicPort }}
+    {{- end }}
+{{- if $proxy.enabled }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "qm.fullname" $root }}-{{ $name }}
+  name: {{ include "qm.fullname" . }}-egress-proxy
   labels:
-    {{- include "qm.labels" $root | nindent 4 }}
-    app.kubernetes.io/component: {{ $name }}
+    {{- include "qm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
 spec:
-  type: {{ $svc.serviceType | default "ClusterIP" }}
+  type: {{ $proxy.serviceType | default "ClusterIP" }}
   selector:
-    {{- include "qm.selectorLabels" $root | nindent 4 }}
-    app.kubernetes.io/component: {{ $name }}
+    {{- include "qm.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: egress-proxy
   ports:
     - name: http
-      port: {{ $svc.port }}
-      targetPort: {{ $svc.port }}
-{{- end }}
+      port: {{ $proxy.port }}
+      targetPort: {{ $proxy.port }}
 {{- end }}

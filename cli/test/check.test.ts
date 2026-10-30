@@ -197,7 +197,8 @@ test("AWS requires exact ECS/ECR coordinates for discovered plugins", () => {
     imageLabel: "release",
     networking: { cloudMapNamespace: "acme.internal" },
     services: {
-      core: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 },
+      edge: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 },
+      harness: { ecrRepository: "core", ecsService: "acme-core-harness", cpu: 512, memory: 1024 },
       linear: {
         ecrRepository: "linear",
         ecsService: "acme-linear",
@@ -220,7 +221,7 @@ test("AWS requires exact ECS/ECR coordinates for discovered plugins", () => {
   }
 });
 
-test("AWS accepts retained bundled coordinates only when their host is enabled", () => {
+test("AWS requires coordinates for both the edge and the harness and rejects retired surfaces", () => {
   const d = deployment(() => {}, {
     target: "aws",
     services: ["core", "web-ui", "admin", "portal", "auth"],
@@ -232,23 +233,21 @@ test("AWS accepts retained bundled coordinates only when their host is enabled",
       secretsPrefix: "acme/",
       imageLabel: "release",
       networking: { cloudMapNamespace: "acme.internal" },
-      services: Object.fromEntries(
-        ["core", "web-ui", "admin", "portal", "auth"].map((name) => [
-          name,
-          { ecrRepository: name, ecsService: `acme-${name}`, cpu: 512, memory: 1024 },
-        ]),
-      ),
+      services: {
+        edge: { ecrRepository: "core", ecsService: "acme-core", cpu: 512, memory: 1024 },
+        harness: { ecrRepository: "core", ecsService: "acme-core-harness", cpu: 512, memory: 1024 },
+      },
     },
   });
   try {
     assert.doesNotThrow(() => check(d));
+    const harness = d.config.aws!.services.harness!;
+    delete d.config.aws!.services.harness;
+    assert.throws(() => check(d), /aws\.services\.harness: every AWS service and plugin needs ECS\/ECR coordinates/);
+    d.config.aws!.services.harness = harness;
+    d.config.aws!.services["web-ui"] = { ecrRepository: "web-ui", ecsService: "acme-web-ui", cpu: 512, memory: 1024 };
+    assert.throws(() => check(d), /aws\.services\.web-ui: coordinates do not match/);
     delete d.config.aws!.services["web-ui"];
-    assert.throws(() => check(d), /aws\.services\.web-ui/);
-    d.config.services = ["core"];
-    delete d.config.aws!.services.portal;
-    assert.throws(() => check(d), /aws\.services\.(admin|auth)/);
-    delete d.config.aws!.services.admin;
-    delete d.config.aws!.services.auth;
     d.config.aws!.services.unused = { ecrRepository: "unused", ecsService: "unused", cpu: 512, memory: 1024 };
     assert.throws(() => check(d), /aws\.services\.unused/);
   } finally {
@@ -442,9 +441,9 @@ test("a secretEnv alias colliding with another secret's delivery on the same wor
   try {
     assert.throws(
       () => check(collide),
-      /core would receive env CORE_SIGNING_SECRET from both CORE_SIGNING_SECRET and SOME_OTHER_NAME/,
+      /edge would receive env CORE_SIGNING_SECRET from both CORE_SIGNING_SECRET and SOME_OTHER_NAME[\s\S]*harness would receive env CORE_SIGNING_SECRET/,
     );
-    assert.throws(() => check(folded), /core would receive env SHARED_NAME from both STORE_A and STORE_B/);
+    assert.throws(() => check(folded), /edge would receive env SHARED_NAME from both STORE_A and STORE_B/);
     check(benign);
   } finally {
     rmSync(collide.dir, { recursive: true, force: true });
@@ -480,7 +479,10 @@ test("a delivered secret name shadowing renderer-derived env fails config.secret
     deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
     secretsPrefix: "acme/",
     networking: { cloudMapNamespace: "acme.internal" },
-    services: { core: { ecrRepository: "qm-core", ecsService: "acme-core", cpu: 2048, memory: 4096 } },
+    services: {
+      edge: { ecrRepository: "qm-core", ecsService: "acme-core", cpu: 2048, memory: 4096 },
+      harness: { ecrRepository: "qm-core", ecsService: "acme-core-harness", cpu: 2048, memory: 4096 },
+    },
   } as const;
   const base = { target: "aws" as const, aws, env: { core: { AWS_DEPLOY_IMAGE: "acme-sandbox" } } };
   const shadowed = deployment(() => {}, { ...base, secretEnv: { core: { S3_BUCKET: "SOME_SECRET_BUCKET_URL" } } });
@@ -494,7 +496,7 @@ test("a delivered secret name shadowing renderer-derived env fails config.secret
   try {
     assert.throws(
       () => check(shadowed),
-      /core env S3_BUCKET is derived by the deployment target and cannot also be delivered as a secret/,
+      /edge env S3_BUCKET is derived by the deployment target and cannot also be delivered as a secret[\s\S]*harness env S3_BUCKET is derived/,
     );
     assert.throws(
       () => check(overridden),

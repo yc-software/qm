@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createAgent, agentConfigOptions } from "../src/agent/agent-run.ts";
+import { createAgent, agentConfigOptions } from "../src/harness/agent-run.ts";
 import { loadConfig } from "../src/config.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { createMemoryStrategy, DEFAULT_MEMORY_STRATEGY, type MemoryStrategyKind } from "../src/memory/strategy.ts";

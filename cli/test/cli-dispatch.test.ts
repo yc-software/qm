@@ -211,7 +211,7 @@ test("check --live on aws runs live drift checks in plain and JSON modes", async
 const args = process.argv.slice(2).join(" ");
 if (args.includes("sts get-caller-identity")) console.log("123456789012");
 else if (args.includes("get-secret-value")) console.log(JSON.stringify({ ARN: "arn", SecretString: "secret-value".repeat(3) }));
-else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s" }] }));
+else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s" }, { serviceName: "s-harness" }] }));
 else console.log("{}");
 `,
   );
@@ -283,7 +283,10 @@ test("successful check --json --live reports the live-drift clause", async (t) =
   const config = loadConfigAt(configPath).config;
   const arns = Object.fromEntries(computedSecrets(config).map((secret) => [secret.name, "arn"]));
   const image = `123456789012.dkr.ecr.us-west-2.amazonaws.com/repo@${digest}`;
-  const task = renderTaskDefinition(config, "core", image, arns);
+  const tasks = {
+    edge: renderTaskDefinition(config, "edge", image, arns),
+    harness: renderTaskDefinition(config, "harness", image, arns),
+  };
   const layerBody = JSON.stringify({ contract: 1, tools: [], skills: [] });
   const layerHash = createHash("sha256").update(layerBody).digest("hex");
   const targetGroupName = `c-core-${createHash("sha1").update("c:core").digest("hex").slice(0, 6)}`;
@@ -291,7 +294,7 @@ test("successful check --json --live reports the live-drift clause", async (t) =
     id: "manifest",
     createdAt: "2026-01-01T00:00:00.000Z",
     imageLabel: "release",
-    tasks: { core: "task" },
+    tasks: { edge: "task-edge", harness: "task-harness" },
     layer: { key: `deployment/layers/${layerHash}.json`, sha256: layerHash },
   };
   writeFileSync(
@@ -306,10 +309,13 @@ else if (args.includes("lambda-microvms list-microvm-image-versions")) console.l
 else if (args.includes("describe-secret")) console.log(JSON.stringify({ ARN: "arn", VersionIdsToStages: { current: ["AWSCURRENT"] } }));
 else if (args.includes("get-secret-value") && args.includes("--query SecretString")) console.log("signing-secret".repeat(3));
 else if (args.includes("get-secret-value")) console.log(JSON.stringify({ ARN: "arn", SecretString: "secret-value".repeat(3) }));
-else if (args.includes("describe-services")) console.log(JSON.stringify({ services: [{ serviceName: "s", status: "ACTIVE", desiredCount: 1, runningCount: 1, taskDefinition: "task", networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet"], securityGroups: ["sg"], assignPublicIp: "DISABLED" } }, deployments: [{ status: "PRIMARY", rolloutState: "COMPLETED", taskDefinition: "task" }], loadBalancers: [{ targetGroupArn: "tg" }] }] }));
-else if (args.includes("describe-task-definition")) console.log(${JSON.stringify(JSON.stringify({ taskDefinition: task }))});
+else if (args.includes("describe-services")) {
+  const services = { s: "edge", "s-harness": "harness" };
+  console.log(JSON.stringify({ services: argv.filter((arg) => services[arg]).map((name) => ({ serviceName: name, status: "ACTIVE", desiredCount: 1, runningCount: 1, taskDefinition: "task-" + services[name], networkConfiguration: { awsvpcConfiguration: { subnets: ["subnet"], securityGroups: ["sg"], assignPublicIp: "DISABLED" } }, deployments: [{ status: "PRIMARY", rolloutState: "COMPLETED", taskDefinition: "task-" + services[name] }], loadBalancers: services[name] === "edge" ? [{ targetGroupArn: "tg" }] : [] })) }));
+}
+else if (args.includes("describe-task-definition")) console.log(JSON.stringify({ taskDefinition: ${JSON.stringify(tasks)}[argv[argv.indexOf("--task-definition") + 1].slice("task-".length)] }));
 else if (args.includes("list-tasks")) console.log(JSON.stringify({ taskArns: ["live-core"] }));
-else if (args.includes("describe-tasks") && args.includes("live-core")) console.log(JSON.stringify({ tasks: [{ taskDefinitionArn: "task", lastStatus: "RUNNING", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
+else if (args.includes("describe-tasks") && args.includes("live-core")) console.log(JSON.stringify({ tasks: [{ taskDefinitionArn: "task-edge", lastStatus: "RUNNING", containers: [{ name: "core", networkInterfaces: [{ privateIpv4Address: "10.0.1.8" }] }] }] }));
 else if (args.includes("run-task")) console.log(JSON.stringify({ tasks: [{ taskArn: "canary" }] }));
 else if (args.includes("describe-tasks")) console.log(JSON.stringify({ tasks: [{ lastStatus: "STOPPED", containers: [{ name: "core", exitCode: 0 }] }] }));
 else if (args.includes("dynamodb get-item") && args.includes("deployment/current")) console.log(JSON.stringify({ Item: { manifestId: { S: "manifest" } } }));

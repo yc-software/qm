@@ -1,4 +1,4 @@
-import { buildApp } from "../../src/wiring.ts";
+import { buildApp } from "./compose.ts";
 import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { testConfig } from "./test-config.ts";
 import { enterTenant } from "../../src/tenants/context.ts";

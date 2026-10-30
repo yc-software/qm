@@ -9,7 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import { createGoalRecord, openGoal } from "../src/agent/goal.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { Principal } from "../src/types.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 

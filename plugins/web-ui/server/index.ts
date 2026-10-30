@@ -7,9 +7,11 @@ import { appEditSlug } from "../src/app-edit.ts";
 import { composioCallbackUrl } from "./composio-return.ts";
 import { sharedSessionHtml } from "./shared-session.ts";
 import { uiCanvasRoutes } from "./ui-canvas-routes.ts";
+import { createUiReleases, type UiDocument } from "./ui-releases.ts";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, normalize } from "node:path";
@@ -71,6 +73,13 @@ const requestFeatures = new WeakMap<IncomingMessage, ReadonlySet<string>>();
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist-web");
+const releases = process.env.WEB_UI_RELEASES_URL ? createUiReleases(process.env.WEB_UI_RELEASES_URL) : undefined;
+
+async function uiDocument(name: UiDocument): Promise<string | null> {
+  if (releases) return releases.document(name);
+  const filePath = join(DIST, name);
+  return existsSync(filePath) ? readFileSync(filePath, "utf8") : null;
+}
 
 const brandingCache = perTenant(() =>
   createBrandingCache(async () => {
@@ -229,6 +238,7 @@ function framedByOwnSurfaces(
 interface ViteDevServer {
   middlewares(req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void): void;
   transformIndexHtml(url: string, html: string): Promise<string>;
+  close(): Promise<void>;
 }
 
 type CreateViteServer = (opts: Record<string, unknown>) => Promise<ViteDevServer>;
@@ -566,17 +576,19 @@ export function forwardSessionState(frame: SessionStateFrame): void {
 }
 
 async function consumeCoreFeed(
+  signal: AbortSignal,
   path: string,
   eventName: string,
   onEvent: (data: unknown) => void,
   onReconnect?: () => void,
 ): Promise<void> {
   let dropped = false;
-  for (;;) {
+  while (!signal.aborted) {
     try {
       const signedPath = withSourceAuthNonce(path, CORE_SIGNING_SECRET);
       const r = await fetch(`${CORE}${signedPath}`, {
         headers: signedHeaders(CORE_SIGNING_SECRET, "GET", signedPath, ""),
+        signal,
       });
       if (r.status === 200 && r.body) {
         if (dropped) {
@@ -613,12 +625,13 @@ async function consumeCoreFeed(
     } catch {
       dropped = true;
     }
-    await new Promise((resolve) => setTimeout(resolve, STATE_FEED_RECONNECT_MS));
+    await delay(STATE_FEED_RECONNECT_MS, undefined, { signal }).catch(() => undefined);
   }
 }
 
-function runStateFeed(): Promise<void> {
+function runStateFeed(signal: AbortSignal): Promise<void> {
   return consumeCoreFeed(
+    signal,
     "/v1/session-state/events",
     "session_state",
     (data) => forwardSessionState(data as SessionStateFrame),
@@ -628,8 +641,9 @@ function runStateFeed(): Promise<void> {
   );
 }
 
-function runInboxFeed(): Promise<void> {
+function runInboxFeed(signal: AbortSignal): Promise<void> {
   return consumeCoreFeed(
+    signal,
     "/v1/loop-items/events",
     "loop_item",
     (data) => void forwardInboxItem(data as { tenant?: string; loopId?: string; itemId?: string; op?: string }),
@@ -972,22 +986,29 @@ async function uploadFileFromRequest(
 
 async function serveStatic(res: ServerResponse, urlPath: string): Promise<void> {
   const rel = normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, "");
-  let filePath = join(DIST, rel);
+  const filePath = join(DIST, rel);
   if (!filePath.startsWith(DIST)) return void json(res, 403, { error: "forbidden" });
 
-  const isFile = existsSync(filePath) && statSync(filePath).isFile();
+  if (releases && rel.startsWith("/assets/")) {
+    const headers = withSecurityHeaders({
+      "content-type": CONTENT_TYPES[extname(rel)] ?? "application/octet-stream",
+      "cache-control": "public, max-age=31536000, immutable",
+    });
+    const found =
+      /^\/assets\/[\w.-]+$/.test(rel) && (await releases.relayAsset(res, rel, headers, gzipAccepted(res.req)));
+    if (!found) json(res, 404, { error: "not_found" });
+    return;
+  }
+  const isFile = existsSync(filePath) && statSync(filePath).isFile() && !filePath.endsWith("index.html");
   const immutable = isFile && /(?:^|[/\\])assets[/\\]/.test(rel);
   if (!isFile) {
-    if (extname(rel)) return void json(res, 404, { error: "not_found" });
-    filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) {
+    if (extname(rel) && rel !== "/index.html") return void json(res, 404, { error: "not_found" });
+    const html = await uiDocument("index.html");
+    if (html === null) {
       return void json(res, 503, { error: "not_built", message: "run `npm run build` to produce dist-web/" });
     }
-  }
-  if (filePath.endsWith("index.html")) {
-    const branded = await brandIndexHtml(readFileSync(filePath, "utf8"));
     const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
-    return sendBuffered(res, 200, headers, branded);
+    return sendBuffered(res, 200, headers, await brandIndexHtml(html));
   }
   const headers = withSecurityHeaders({
     "content-type": CONTENT_TYPES[extname(filePath)] ?? "application/octet-stream",
@@ -1018,9 +1039,9 @@ async function serveAppEditHtml(req: IncomingMessage, res: ServerResponse, url: 
     const raw = readFileSync(join(ROOT, "index.html"), "utf8").replace("%BASE_URL%favicon.svg", "favicon.svg");
     html = await vite.transformIndexHtml(req.url ?? "/", raw);
   } else {
-    const filePath = join(DIST, "index.html");
-    if (!existsSync(filePath)) return false;
-    html = readFileSync(filePath, "utf8");
+    const document = await uiDocument("index.html");
+    if (document === null) return false;
+    html = document;
   }
   const headers = withSecurityHeaders({ "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" });
   const csp = SPA_CSP.replace("frame-ancestors 'self'", `frame-ancestors 'self' ${slug}.${APPS_FRAME_DOMAIN}`);
@@ -1035,7 +1056,7 @@ async function createVite(server: Server): Promise<ViteDevServer | undefined> {
   const importVite = new Function("specifier", "return import(specifier)") as (
     specifier: string,
   ) => Promise<{ createServer: CreateViteServer }>;
-  const { createServer: createViteServer } = await importVite("vite");
+  const { createServer: createViteServer } = await importVite(import.meta.resolve("vite"));
   return createViteServer({
     root: ROOT,
     configFile: join(ROOT, "vite.config.ts"),
@@ -3429,7 +3450,7 @@ const routeRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const dev = vite && !external;
     const template = dev
       ? await vite!.transformIndexHtml("/shared.html", readFileSync(join(ROOT, "shared.html"), "utf8"))
-      : readFileSync(join(DIST, "shared.html"), "utf8");
+      : ((await uiDocument("shared.html")) ?? readFileSync(join(DIST, "shared.html"), "utf8"));
     res.writeHead(result.status, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
@@ -3555,25 +3576,41 @@ const server = createServer((req, res) => {
   });
 });
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  createVite(server)
-    .then((v) => {
-      vite = v;
-      server.listen(PORT, () => {
-        console.log(`[web-ui] surface on http://localhost:${PORT} → core ${CORE}${WEB_UI_DEV ? " [vite hmr]" : ""}`);
-        if (!WEB_UI_DEV && !existsSync(join(DIST, "index.html")))
-          console.warn("[web-ui] dist-web/ not built, run `npm run build`");
-        const t = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
-        t.unref?.();
-        void runStateFeed();
-        void runInboxFeed();
-        void sweepDictationSpool();
-      });
-    })
-    .catch(async (err: unknown) => {
-      reportBackendError(err);
-      console.error("[web-ui] failed to start:", String(err));
-      await flushErrorReporting();
-      process.exit(1);
+export async function startServer(port = PORT, host?: string): Promise<Server> {
+  vite = await createVite(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      resolve();
     });
+  });
+  const address = server.address();
+  const bound = typeof address === "object" && address ? address.port : port;
+  console.log(
+    `[web-ui] surface on http://${host ?? "localhost"}:${bound} → core ${CORE}${WEB_UI_DEV ? " [vite hmr]" : ""}`,
+  );
+  if (!WEB_UI_DEV && !releases && !existsSync(join(DIST, "index.html")))
+    console.warn("[web-ui] dist-web/ not built, run `npm run build`");
+  const stopped = new AbortController();
+  const deliveries = setInterval(() => void drainWebDeliveries(), WEB_DELIVERY_POLL_MS);
+  deliveries.unref();
+  server.once("close", () => {
+    clearInterval(deliveries);
+    stopped.abort();
+    void vite?.close();
+  });
+  void runStateFeed(stopped.signal);
+  void runInboxFeed(stopped.signal);
+  void sweepDictationSpool();
+  return server;
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  startServer().catch(async (err: unknown) => {
+    reportBackendError(err);
+    console.error("[web-ui] failed to start:", String(err));
+    await flushErrorReporting();
+    process.exit(1);
+  });
 }

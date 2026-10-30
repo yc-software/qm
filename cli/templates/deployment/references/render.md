@@ -35,20 +35,22 @@ Set these keys in `qm.config.jsonc`:
   creation.
 - `render.corePlan`, `render.servicePlan`, and `render.storage.plan`: Render
   compute plan IDs such as `2c-4g`. Retired names such as `standard` are
-  rejected with the current ID. `render.corePlan` defaults to `2c-4g`, which fits the
-  default 16 run workers; a smaller core plan needs a lower `env.core.WORKERS`.
+  rejected with the current ID. `render.corePlan` sizes both the core and the
+  harness service. It defaults to `2c-4g`, which fits the default 16 run
+  workers; a smaller core plan needs a lower `env.core.WORKERS`.
+  `render.servicePlan` sizes plugin services.
 - `render.postgresPlan` and `render.postgresDiskSizeGB`: passed through to
   Render Postgres for QM core. `render.storage.diskSizeGB` sizes the MinIO disk.
   Each published app starts with a separate 1 GB disk mounted at `/data`.
-- `env.core.SHUTDOWN_DRAIN_MS` (default 10000): how long a previous core
+- `env.core.SHUTDOWN_DRAIN_MS` (default 10000): how long a previous harness
   instance gives in-flight turns after SIGTERM. Render ends that instance 300
   seconds after SIGTERM, so keep the value below 290000.
-- `publicUrl` and `apiUrl`: the assigned `onrender.com` URLs work without DNS
-  changes. To use custom domains, set both to HTTPS origins with different
-  hostnames and run `qm up`. The CLI adds each hostname to the portal (or the web
-  UI when there is no portal) and to core, and prints the DNS record to create.
-  Until both domains are verified, sandboxes and published apps cannot reach
-  core and `qm check --live` fails. Run `qm slack render` after changing
+- `publicUrl` and `apiUrl`: both name the core service, and the assigned
+  `onrender.com` URL works without DNS changes. To use custom domains, set them
+  to HTTPS origins and run `qm up`. They may share one hostname. The CLI adds
+  each hostname to core and prints the DNS record to create. Until the domains
+  are verified, sandboxes and published apps cannot reach core and
+  `qm check --live` fails. Run `qm slack render` after changing
   `publicUrl`. A hostname removed from the config stays on its service until it
   is removed in the Render dashboard.
 
@@ -65,9 +67,22 @@ npm exec qm -- doctor
 npm exec qm -- check --live
 ```
 
-`qm up` creates one project with one production environment for core, web UI,
-portal, Render Postgres, and bundled MinIO, initializes MinIO before it deploys
-core, applies registered database migrations, and uploads the deployment layer.
+`qm up` creates one project with one production environment for core, harness,
+Render Postgres, and bundled MinIO, initializes MinIO before it deploys core,
+applies registered database migrations, and uploads the deployment layer. Core
+and harness are built from the same `deploy/core/Dockerfile`. Core is the public
+web service: with the portal enabled, Render routes its public port to the
+portal, web UI, and sign-in on port 8000, and the API listens on port 8080 for
+other services in the project. The harness is a private service that runs agent
+turns and scheduled work; it has no public address and Render checks its
+`/healthz`. Core and harness restart and deploy independently.
+
+Deployments created with separate web UI, portal, and auth services move to
+this layout on the next `qm up`. After core and the harness are live, the CLI
+deletes those services and adds the custom domains to core. Point the
+`publicUrl` DNS record at core when the CLI prints the new record; the site is
+unavailable at that hostname until the record changes. Releases recorded before
+the move cannot be restored with `qm rollback`.
 Each published app gets a network-isolated environment and one persistent disk
 in the same project. Apps use SQLite at `/data/app.db`, with `DATA_DIR=/data`.
 Litestream 0.3.13 backs up this SQLite database to `S3_PREFIX + "litestream"` in MinIO,
@@ -123,12 +138,14 @@ Routine operations:
 ```bash
 npm exec qm -- status
 npm exec qm -- logs core --follow
+npm exec qm -- logs harness --follow
 npm exec qm -- up --upgrade-minio
 npm exec qm -- rollback --to <release-label-commit-or-deploy-id>
 npm exec qm -- down
 ```
 
-`up --upgrade-minio` explicitly selects the current source commit for MinIO.
+`logs core` follows core and the harness together; `logs harness` follows only
+the harness. `up --upgrade-minio` explicitly selects the current source commit for MinIO.
 The CLI saves that selection before deployment. If deployment fails or its
 reply is lost, a normal `up` retries the same selected version, even if the QM
 branch advances. Use the flag again to select another version. The persistent

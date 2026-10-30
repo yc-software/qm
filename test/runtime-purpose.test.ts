@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
-import { createRuntimeService } from "../src/agent/runtime-control.ts";
-import { recoveredRuntime } from "../src/agent/runtime-recovery.ts";
+import { createRuntimeService } from "../src/harness/runtime-control.ts";
+import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { turnModelOptions } from "../src/agent/runtime-choice.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";

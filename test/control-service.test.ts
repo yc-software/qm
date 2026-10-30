@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type BuiltApp } from "./support/compose.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";

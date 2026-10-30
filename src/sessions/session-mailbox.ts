@@ -1,4 +1,4 @@
-import type { OrchestratorInput } from "../core/orchestrator/types.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";

@@ -1,6 +1,34 @@
+import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test, afterEach } from "node:test";
-import { createModelOverlayStore, setModelOverlays } from "../src/model/model-overlay-store.ts";
+import {
+  createModelOverlayStore,
+  setModelOverlays,
+  type StoredModelOverlay,
+} from "../src/model/model-overlay-store.ts";
+import {
+  ModelVerificationError,
+  verificationFailure,
+  createModelVerifier,
+  type ModelVerifier,
+} from "../src/model/model-verification.ts";
+import { resolveModel, modelUnavailableReason, modelFromOverlay } from "../src/model/pi-models.ts";
+import { ProviderTurnError, type ProviderErrorCode } from "../src/core/turn-error.ts";
+import { GatewayModelUnavailableError, setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { verificationUpstream } from "./support/model-verification-upstream.ts";
+import { buildApp as buildProductionApp, serverDeps } from "./support/compose.ts";
+import { type ModelProvider, createModelCredentialStore } from "../src/model/model-credential-store.ts";
+import type { TenantSettingValues } from "../src/tenants/settings.ts";
+import { enterTenant } from "../src/tenants/context.ts";
+import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+import { testConfig } from "./support/test-config.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
+import type { AddressInfo } from "node:net";
+import { parseModelOverlay } from "../src/model/model-overlay.ts";
+import { createHmac, scryptSync } from "node:crypto";
+import { probeModel } from "../src/model/model-runtime.ts";
+import { testModelTables } from "./support/typed-stores.ts";
 
 const spec = {
   id: "verify-future",
@@ -18,18 +46,8 @@ test("no model can be enabled without provider verification", async () => {
   assert.deepEqual(await store.statuses(), []);
 });
 
-import {
-  ModelVerificationError,
-  verificationFailure,
-  createModelVerifier,
-  type ModelVerifier,
-} from "../src/model/model-verification.ts";
-import { resolveModel, modelUnavailableReason, modelFromOverlay } from "../src/model/pi-models.ts";
-import type { StoredModelOverlay } from "../src/model/model-overlay-store.ts";
-import { ProviderTurnError, type ProviderErrorCode } from "../src/core/turn-error.ts";
-import { GatewayModelUnavailableError, setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
-
 const verified: ModelVerifier = async () => ({ fingerprint: "test-context", probe: async () => {} });
+
 afterEach(() => setModelOverlays([]));
 
 test("legacy unverified rows remain unavailable and statuses never expose proof fingerprints", async () => {
@@ -152,19 +170,6 @@ test("probe failures map from structured codes and error names, never provider t
     assert.ok(failure instanceof ModelVerificationError);
   }
 });
-
-import "./support/auto-fake-sprites.ts";
-import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
-import type { ModelProvider } from "../src/model/model-credential-store.ts";
-import type { TenantSettingValues } from "../src/tenants/settings.ts";
-import { enterTenant } from "../src/tenants/context.ts";
-import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
-import { testConfig } from "./support/test-config.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import type { AddressInfo } from "node:net";
-import { parseModelOverlay } from "../src/model/model-overlay.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -461,8 +466,6 @@ test("the store deadline leaves a hanging provider unverified", { timeout: 25_00
   }
 });
 
-import { createHmac, scryptSync } from "node:crypto";
-
 test("verification fingerprints use a memory-hard credential-bound MAC key", async () => {
   const { built } = await seededApp({ openai: "fingerprint-test-key" });
   const keyMaterial = "deployment-fingerprint-test-key";
@@ -522,10 +525,6 @@ test("admin and gateway credential changes invalidate cached fingerprints", asyn
   modelGateway.apiKeyHeader = "x-new-gateway-key";
   assert.notEqual((await gateway(candidate)).fingerprint, rotatedGateway);
 });
-
-import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { probeModel } from "../src/model/model-runtime.ts";
-import { testModelTables } from "./support/typed-stores.ts";
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const { built } = await seededApp({ openai: "test-key" });

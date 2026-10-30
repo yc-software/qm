@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresSurfaceCache } from "../src/surface-cache/surface-cache.ts";
 import { createMirror, slackMessageToIngestEvent } from "../src/slack/mirror.ts";
-import { toEvent } from "../src/api/routes/surface-cache.ts";
+import { toEvent } from "../src/edge/http/routes/surface-cache.ts";
 import { createSlackHistoryReader } from "../src/slack/history.ts";
 import { buildContextWindow } from "../src/slack/conversation.ts";
 import { createConversationSerializer } from "../src/slack/conversation-view.ts";

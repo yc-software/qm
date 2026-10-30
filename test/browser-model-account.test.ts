@@ -1,8 +1,8 @@
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import "./support/auto-fake-sprites.ts";
+import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { COMPANY_CHATGPT_CREDENTIAL, saveCompanyChatGPTLogin } from "./support/company-chatgpt-login.ts";
@@ -10,7 +10,6 @@ import { resolveBrowserModel } from "../src/model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
 import { zeroUsage } from "../src/model/model-runtime.ts";
-import { stopAtEnd } from "./support/build-app.ts";
 
 test("browser follows durable user AI access and personal model defaults", async () => {
   const built = stopAtEnd(buildApp(testConfig()));

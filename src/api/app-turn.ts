@@ -6,7 +6,7 @@ import type { Conversation, Principal, TurnRequest, TurnResult } from "../types.
 import { scopeId } from "../types.ts";
 import { rosterAdmits } from "../resolution/scope-membership.ts";
 import { isHalt, routeWake, type Wake } from "../wake/wake.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import { desktopClientForTurn, isPersonAuthored, isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
 import { isTerminal, leaseLapsed } from "../runs/run-store.ts";
@@ -472,7 +472,7 @@ export function createTurnMethods(
           let injectedText = steerText;
           if (origin.kind === "ambient") {
             const session = await deps.sessions.getByThread(conversation.threadRef);
-            const decision = await deps.orchestrator.screenSecuritySteer({
+            const decision = await deps.screenSecuritySteer({
               payload: steerText,
               actor,
               conversation,

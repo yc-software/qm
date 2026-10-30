@@ -4,7 +4,7 @@ import { envKey } from "../src/credentials/connector-token.ts";
 import { createKeychain, type OAuthRefresh, type OAuthToken } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { KeychainCredentialRows } from "../src/credentials/keychain-rows.ts";
-import { oauthRevoke } from "../src/api/routes/connectors.ts";
+import { oauthRevoke } from "../src/edge/http/routes/connectors.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testKeychainRows } from "./support/typed-stores.ts";

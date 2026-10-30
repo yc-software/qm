@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { serviceHost, type DeclaredServiceName } from "./services.ts";
+import { serviceHost, serviceWorkloads, type DeclaredServiceName } from "./services.ts";
 import { effectiveModelProvider, type ModelProvider, type QmConfig } from "./config.ts";
 import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, isInvalidSecret } from "./util.ts";
@@ -725,10 +725,10 @@ export function secretDestinations(
     out.set(workload, (out.get(workload) ?? new Set()).add(name));
   };
   for (const service of secret.services) {
-    add(serviceHost(service), secret.name);
+    for (const workload of serviceWorkloads(service)) add(workload, secret.name);
   }
   for (const alias of secret.aliases ?? []) {
-    add(serviceHost(alias.service), alias.name);
+    for (const workload of serviceWorkloads(alias.service)) add(workload, alias.name);
   }
   if (secret.name === "CORE_SIGNING_SECRET") {
     for (const plugin of pluginNames) add(plugin, secret.name);

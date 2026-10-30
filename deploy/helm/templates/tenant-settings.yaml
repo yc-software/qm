@@ -11,7 +11,7 @@
 {{- end }}
 {{- end }}
 {{- $core := index .Values.services "core" }}
-{{- if $core.enabled }}
+{{- if $core }}
 {{- $settings := dict }}
 {{- if (index .Values.services "auth").enabled }}
 {{- $issuer := printf "%s/idp" (trimSuffix "/" (.Values.publicUrl | default "")) }}
@@ -22,14 +22,13 @@
 {{- $_ := set $settings "OIDC_JWKS_URI" "http://127.0.0.1:8099/.well-known/jwks.json" }}
 {{- $_ := set $settings "OIDC_SCOPES" "openid email" }}
 {{- $_ := set $settings "OIDC_PRINCIPAL_CLAIM" "email" }}
-{{- with .Values.secretEnv.AUTH_CLIENT_ID }}{{ $_ := set $settings "OIDC_CLIENT_ID" . }}{{ end }}
+{{- $_ := set $settings "OIDC_CLIENT_ID" "qm-portal" }}
 {{- with .Values.secretEnv.AUTH_CLIENT_SECRET }}{{ $_ := set $settings "OIDC_CLIENT_SECRET" . }}{{ end }}
 {{- with .Values.tenantSettings.AUTH_ALLOWED_EMAILS }}{{ $_ := set $settings "OIDC_ALLOWED_EMAILS" . }}{{ end }}
 {{- with .Values.tenantSettings.AUTH_ALLOWED_EMAIL_DOMAIN }}{{ $_ := set $settings "OIDC_ALLOWED_EMAIL_DOMAIN" . }}{{ end }}
 {{- end }}
-{{- $web := index .Values.services "web-ui" }}
-{{- if and $web $web.enabled }}
-{{- $webEnv := mergeOverwrite (deepCopy (.Values.secretEnv | default dict)) (deepCopy (.Values.env | default dict)) (deepCopy ($web.env | default dict)) }}
+{{- if .Values.services.portal.enabled }}
+{{- $webEnv := mergeOverwrite (deepCopy (.Values.secretEnv | default dict)) (deepCopy (.Values.env | default dict)) (deepCopy ($core.env | default dict)) }}
 {{- range $key := splitList " " (include "qm.webUiAccessKeys" $) }}
 {{- $_ := set $settings $key (toString (index $webEnv $key | default "")) }}
 {{- end }}

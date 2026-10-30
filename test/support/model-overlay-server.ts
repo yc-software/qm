@@ -1,8 +1,8 @@
 import "./auto-fake-sprites.ts";
 import type { AddressInfo } from "node:net";
-import { serverDeps } from "../../src/wiring.ts";
-import { createInsecureTestServer } from "../../src/api/server.ts";
-import { buildApp, testTenantSettings } from "./build-app.ts";
+import { serverDeps, buildApp } from "./compose.ts";
+import { createInsecureTestServer } from "../../src/edge/http/server.ts";
+import { testTenantSettings } from "./build-app.ts";
 import { testConfig } from "./test-config.ts";
 import { enterTenant } from "../../src/tenants/context.ts";
 import { seedTenant, TEST_TENANT } from "./tenant-seed.ts";

@@ -5,11 +5,11 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import type { BuiltApp } from "./support/compose.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { canonicalPayload, signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { createServer } from "../src/api/server.ts";
+import { createServer } from "../src/edge/http/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -34,7 +34,7 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      scheduler: built.scheduler,
+      cronRuns: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -186,7 +186,7 @@ describe("a deployment without the Slack surface (the directory store is never p
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      scheduler: built.scheduler,
+      cronRuns: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;

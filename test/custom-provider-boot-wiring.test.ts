@@ -1,18 +1,16 @@
 import "./support/auto-fake-sprites.ts";
-
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, afterEach } from "node:test";
-import { createInsecureTestServer } from "../src/api/server.ts";
-import { serverDeps } from "../src/wiring.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
+import { serverDeps } from "./support/compose.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 

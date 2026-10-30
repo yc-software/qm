@@ -176,6 +176,28 @@ export const FORWARD_DEPLOYMENT_LAYER_HEADERS = [
   "x-signature",
 ];
 
+export const FORWARD_DEPLOYMENT_GIT_HEADERS = [
+  "authorization",
+  "content-type",
+  "content-length",
+  "content-encoding",
+  "accept",
+  "accept-encoding",
+  "git-protocol",
+  "user-agent",
+];
+
+export const FORWARD_SLACK_EVENTS_HEADERS = [
+  "content-type",
+  "content-length",
+  "x-slack-signature",
+  "x-slack-request-timestamp",
+  "x-slack-retry-num",
+  "x-slack-retry-reason",
+];
+
+export const FORWARD_SPEND_EXPORT_HEADERS = ["authorization", "accept"];
+
 export const FORWARD_OAUTH_HEADERS = ["accept", "accept-language", "user-agent", "content-type"];
 
 export interface DeploymentTarget {

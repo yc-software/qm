@@ -27,6 +27,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   swarmDefaults?: SwarmSettings;
   production: boolean;
   port: number;
+  publicPort?: number;
   dataDir: string;
   databaseUrl?: string;
   databaseOwnerUrl?: string;
@@ -266,6 +267,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     suggestedActivitiesEnabled: boolEnvStrict("SUGGESTED_ACTIVITIES_ENABLED", env.SUGGESTED_ACTIVITIES_ENABLED) ?? true,
     production: env.NODE_ENV === "production",
     port: numEnvStrict("PORT", env.PORT) ?? CONFIG_DEFAULTS.port,
+    ...(env.PUBLIC_PORT ? { publicPort: numEnvStrict("PUBLIC_PORT", env.PUBLIC_PORT) } : {}),
     dataDir,
     ...(env.POSTHOG_API_KEY?.trim()
       ? { productAnalytics: { apiKey: env.POSTHOG_API_KEY.trim(), host: env.POSTHOG_HOST?.trim() } }

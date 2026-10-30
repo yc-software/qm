@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
+import { createOrchestrator } from "../src/harness/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
@@ -15,8 +16,7 @@ import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-
-import { createAgentTools } from "../src/agent/agent-tools.ts";
+import { createAgentTools } from "../src/harness/agent-tools.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
@@ -28,8 +28,7 @@ import { testAdvisoryLock, testConfigStore, testDatabaseUrl, testDeployBackings 
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { testSessionMailbox } from "./support/typed-stores.ts";
-import { testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
+import { testSessionMailbox, testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
 
 function fakeSandbox(): Sandbox {
   const unreached = () => {

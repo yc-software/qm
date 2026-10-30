@@ -11,7 +11,7 @@ import {
   type ComputedSecret,
 } from "../src/secrets.ts";
 import { renderEnvExample } from "../src/env-example.ts";
-import { isReservedContainerName, pluginNameError, SERVICE_NAMES } from "../src/services.ts";
+import { isReservedContainerName, pluginNameError, DECLARED_SERVICE_NAMES } from "../src/services.ts";
 
 function makeConfig(overrides: Partial<QmConfig> = {}): QmConfig {
   return {
@@ -60,11 +60,12 @@ test("required secret validation uses the selected values without ambient creden
   }
 });
 
-test("a virtual-only secret keeps its plain name on core (the virtual service runs in-process)", () => {
+test("a virtual-only secret keeps its plain name on the edge (the virtual service runs in-process)", () => {
   const config = makeConfig({ services: ["core", "slack"] });
   const secret = secretByName(config, "SLACK_APP_TOKEN");
-  assert.deepEqual(runtimeSecretNames("core", secret), ["SLACK_APP_TOKEN"]);
-  assert.ok(secretsForService(config, "core").some((s) => s.name === "SLACK_APP_TOKEN"));
+  assert.deepEqual(runtimeSecretNames("edge", secret), ["SLACK_APP_TOKEN"]);
+  assert.ok(secretsForService(config, "edge").some((s) => s.name === "SLACK_APP_TOKEN"));
+  assert.ok(!secretsForService(config, "harness").some((s) => s.name === "SLACK_APP_TOKEN"));
 });
 
 test("split security keys are required and routed only to their trust boundary", () => {
@@ -72,11 +73,11 @@ test("split security keys are required and routed only to their trust boundary",
   for (const name of ["CAPABILITY_SECRET", "CONNECTOR_SECRET_KEY"] as const) {
     const secret = secretByName(config, name);
     assert.equal(secret.required, true);
-    assert.deepEqual([...secretDestinations(secret).keys()], ["core"]);
+    assert.deepEqual([...secretDestinations(secret).keys()], ["edge", "harness"]);
   }
   const identity = secretByName(config, "PORTAL_IDENTITY_SECRET");
   assert.equal(identity.required, true);
-  assert.deepEqual([...secretDestinations(identity).keys()].sort(), ["core", "portal"]);
+  assert.deepEqual([...secretDestinations(identity).keys()].sort(), ["edge", "harness"]);
   const example = renderEnvExample(config);
   for (const name of ["CORE_SIGNING_SECRET", "CAPABILITY_SECRET", "PORTAL_IDENTITY_SECRET", "CONNECTOR_SECRET_KEY"]) {
     assert.match(example, new RegExp(`^${name}=$`, "m"));
@@ -106,7 +107,8 @@ test("portal deployments require a real initial administrator seed", () => {
   });
   const secret = secretByName(hosted, "ADMIN_GRANTS");
   assert.equal(secret.required, true);
-  assert.deepEqual(runtimeSecretNames("core", secret), [], "the seed is a tenant setting, not core env");
+  assert.deepEqual(runtimeSecretNames("edge", secret), [], "the seed is a tenant setting, not edge env");
+  assert.deepEqual(runtimeSecretNames("harness", secret), [], "the seed is a tenant setting, not harness env");
   assert.ok(!computedSecrets(makeConfig()).some((item) => item.name === "ADMIN_GRANTS"));
 });
 
@@ -116,7 +118,7 @@ test("a plugin secret lands plain on the plugin's own workload, nowhere else", (
   });
   const secret = secretByName(config, "PLUG_TOKEN");
   assert.deepEqual(runtimeSecretNames("linear", secret), ["PLUG_TOKEN"]);
-  assert.deepEqual(runtimeSecretNames("core", secret), []);
+  assert.deepEqual(runtimeSecretNames("harness", secret), []);
   assert.deepEqual([...secretDestinations(secret).keys()], ["linear"]);
 });
 
@@ -220,7 +222,7 @@ test("AWS public app domains require and route their gate secret to core", () =>
   const enabled = makeConfig({ target: "aws", env: { core: { AWS_DEPLOY_APPS_DOMAIN: "apps.example.com" } } });
   const gate = secretByName(enabled, "AWS_DEPLOY_GATE_SECRET");
   assert.equal(gate.required, true);
-  assert.deepEqual(runtimeSecretNames("core", gate), ["AWS_DEPLOY_GATE_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("harness", gate), ["AWS_DEPLOY_GATE_SECRET"]);
   assert.ok(renderEnvExample(enabled).includes("AWS_DEPLOY_GATE_SECRET="));
 });
 
@@ -228,11 +230,11 @@ test("core requires and routes the sandbox-reachable PUBLIC_API_URL", () => {
   const real = makeConfig();
   const publicApi = secretByName(real, "PUBLIC_API_URL");
   assert.equal(publicApi.required, true);
-  assert.deepEqual(runtimeSecretNames("core", publicApi), ["PUBLIC_API_URL"]);
+  assert.deepEqual(runtimeSecretNames("harness", publicApi), ["PUBLIC_API_URL"]);
   assert.ok(renderEnvExample(real).includes("PUBLIC_API_URL="));
 });
 
-test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto core", () => {
+test("config secretEnv extras enter the computed set as required operator secrets, virtual services folding onto the edge", () => {
   const config = makeConfig({
     services: ["core", "slack"],
     secretEnv: { core: { EXTRA_API_KEY: "EXTRA_API_KEY" }, slack: { SLACK_AUX_BOT_TOKEN: "SLACK_AUX_BOT_TOKEN" } },
@@ -240,12 +242,12 @@ test("config secretEnv extras enter the computed set as required operator secret
   const extra = secretByName(config, "EXTRA_API_KEY");
   assert.equal(extra.required, true);
   assert.equal(extra.managedBy, "operator");
-  assert.deepEqual(runtimeSecretNames("core", extra), ["EXTRA_API_KEY"]);
+  assert.deepEqual(runtimeSecretNames("harness", extra), ["EXTRA_API_KEY"]);
   const auxiliary = secretByName(config, "SLACK_AUX_BOT_TOKEN");
   assert.deepEqual(
     [...secretDestinations(auxiliary).keys()],
-    ["core"],
-    "a virtual service's extra folds onto the core",
+    ["edge"],
+    "a virtual service's extra folds onto the edge",
   );
   assert.match(renderEnvExample(config), /^EXTRA_API_KEY=$/m);
 });
@@ -257,9 +259,9 @@ test("a secretEnv alias delivers the stored secret under its declared env name o
   });
   const secret = secretByName(config, "PORTAL_SESSION_SECRET");
   assert.deepEqual(secret.services, ["portal"], "the alias adds no plain-name claim");
-  assert.deepEqual(runtimeSecretNames("core", secret), ["DEPLOY_APPS_SESSION_SECRET"]);
-  assert.deepEqual(runtimeSecretNames("portal", secret), ["PORTAL_SESSION_SECRET"]);
-  assert.ok(secretsForService(config, "core").some((s) => s.name === "PORTAL_SESSION_SECRET"));
+  assert.deepEqual(runtimeSecretNames("harness", secret), ["DEPLOY_APPS_SESSION_SECRET"]);
+  assert.deepEqual(runtimeSecretNames("edge", secret).sort(), ["DEPLOY_APPS_SESSION_SECRET", "PORTAL_SESSION_SECRET"]);
+  assert.ok(secretsForService(config, "harness").some((s) => s.name === "PORTAL_SESSION_SECRET"));
   assert.ok(
     !computedSecrets(config).some((s) => s.name === "DEPLOY_APPS_SESSION_SECRET"),
     "the alias env name is delivery, not a second stored secret",
@@ -286,7 +288,7 @@ test("PORTAL_IDENTITY_SECRET reaches every service that signs or verifies a port
   const secret = secretByName(config, "PORTAL_IDENTITY_SECRET");
   assert.deepEqual(
     [...secretDestinations(secret).keys()].sort(),
-    ["core", "portal", "web-ui"],
+    ["edge", "harness"],
     "core verifies with PORTAL_IDENTITY_SECRET, so a surface left without it signs with a different key and every request it makes is rejected",
   );
 });
@@ -295,7 +297,7 @@ test("the invitation-email pair reaches core as optional secrets on every topolo
   for (const name of ["RESEND_API_KEY", "AUTH_EMAIL_FROM"]) {
     const alone = secretByName(makeConfig(), name);
     assert.equal(alone.required, false);
-    assert.deepEqual([...secretDestinations(alone).keys()], ["core"]);
+    assert.deepEqual([...secretDestinations(alone).keys()], ["edge", "harness"]);
     assert.match(alone.description, /admin Users tab or by chatting with QM/);
     assert.match(renderEnvExample(makeConfig()), new RegExp(`^# ${name}=  # optional$`, "m"));
 
@@ -305,12 +307,12 @@ test("the invitation-email pair reaches core as optional secrets on every topolo
     });
     const shared = secretByName(broker, name);
     assert.equal(shared.required, false);
-    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["core", "portal"]);
+    assert.deepEqual([...secretDestinations(shared).keys()].sort(), ["edge", "harness"]);
   }
 });
 
 test("the .env.example catalog names every secret exactly once", () => {
-  for (const services of [["core"], ["core", "portal"], ["core", "portal", "auth"], SERVICE_NAMES] as const) {
+  for (const services of [["core"], ["core", "portal"], ["core", "portal", "auth"], DECLARED_SERVICE_NAMES] as const) {
     const rendered = renderEnvExample(makeConfig({ services: [...services] as QmConfig["services"] }));
     const declared = rendered
       .split("\n")

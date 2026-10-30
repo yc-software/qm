@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "./support/build-app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";

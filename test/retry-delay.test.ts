@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { retryDelay } from "../src/runs/retry-delay.ts";
-import { processRun } from "../src/runs/worker.ts";
+import { processRun } from "../src/harness/worker.ts";
 import { NonRetryableTurnError } from "../src/core/turn-error.ts";
-import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { Orchestrator } from "../src/harness/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 

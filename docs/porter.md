@@ -95,10 +95,12 @@ any other way.
 
 ## Hosting the qm surfaces
 
-`porter/apps/` declares four services (core, web-ui, portal,
-egress-proxy) as one Porter app per file, built from `deploy/*/Dockerfile` — `porter
-apply` takes exactly one app per invocation and silently ignores extra YAML documents,
-which is why they are separate files:
+`porter/apps/` declares two Porter apps, one per file — `porter apply` takes exactly one
+app per invocation and silently ignores extra YAML documents. `qm-core` builds
+`deploy/core/Dockerfile` once and runs it as two services: `edge`, a web service that
+serves the API and the public front door (portal with the embedded auth broker, web UI
+and `/admin`), and `harness`, a worker that claims and runs agent turns, crons and sweeps.
+`qm-egress-proxy` builds `deploy/egress-proxy/Dockerfile`:
 
 ```bash
 for f in porter/apps/*.yaml; do porter apply -f "$f"; done
@@ -106,9 +108,15 @@ for f in porter/apps/*.yaml; do porter apply -f "$f"; done
 
 Porter runs the services and assigns each **public** web service an `onporter.run`
 hostname with a Let's Encrypt certificate, so this path needs no DNS record, no TLS
-certificate, and no ingress controller. Only the portal is meant to be Internet-facing;
-core and web-ui carry `private: true` so Porter creates no ingress for them
-and they are reachable only at their in-cluster address.
+certificate, and no ingress controller. Only `edge` is Internet-facing. Its Porter
+`port` is the front door, `PUBLIC_PORT=8000`; the front door forwards the API routes that
+sandboxes, Slack and webhooks use, so the API port 8080 needs no address of its own. A
+Porter web service exposes one port, so nothing else in the cluster can reach 8080: the
+egress proxy writes its audit records straight to Postgres instead. `harness` has no
+ingress and no Service; Porter probes it with `curl` against its own `/healthz` and
+`/readyz` on 8080. Both services get `terminationGracePeriodSeconds: 300` so in-flight
+turns can drain on deploy. Both run migrations at boot under an advisory lock, so there
+is no pre-deploy job.
 
 Two things `porter apply` will not do for you:
 
@@ -130,32 +138,27 @@ latest environment with provided name`, because `porter env create` makes a
 Nothing generates the inter-service wiring for you — `cli/src/services.ts` has `fly` and
 `docker` targets but no Porter one — so set it by hand on each app:
 
-| Service      | Wiring                                                                                                                                                                                                                                                                                                                 |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| all          | `CORE_SIGNING_SECRET`, `PORTAL_IDENTITY_SECRET`                                                                                                                                                                                                                                                                        |
-| all but core | `CORE_API_URL=http://qm-core-core.<namespace>.svc.cluster.local:8080`                                                                                                                                                                                                                                                  |
-| core         | `MODEL_PROVIDER`, `SANDBOX_BACKEND`, `PUBLIC_WEB_URL`/`WEB_UI_PUBLIC_URL` (the portal's hostname), `CAPABILITY_SECRET`, `CONNECTOR_SECRET_KEY`, `SKILL_SIGNING_SECRET`, `DATABASE_URL` — production refuses to boot without them; `DATABASE_OWNER_URL` and `DATABASE_READER_URL` alongside `DATABASE_URL`              |
-| portal       | `PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`, `WEB_UI_UPSTREAM`, `ADMIN_UPSTREAM`, `AUTH_BROKER_UPSTREAM`, `AUTH_BROKER_PREFIX=/idp`; the portal reads its `OIDC_*` sign-in settings (the set from `brokerWiring` in `cli/src/services.ts`, `OIDC_CLIENT_SECRET` and the allow-list) from core's tenant settings       |
-| admin        | `ADMIN_BASE_PATH=/admin`                                                                                                                                                                                                                                                                                               |
-| auth         | `AUTH_ISSUER=<portal>/idp`, `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, `AUTH_REDIRECT_URI=<portal>/auth/callback`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK` (a P-256 private JWK), `AUTH_EMAIL_FROM`, and `AUTH_EMAIL_TRANSPORT` with a `RESEND_API_KEY` or SMTP credentials — without a mail transport nobody can sign in |
+| App                    | Wiring                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `qm-core`              | `CORE_SIGNING_SECRET`, `PORTAL_IDENTITY_SECRET`, `MODEL_PROVIDER`, `SANDBOX_BACKEND`, `PUBLIC_WEB_URL`/`WEB_UI_PUBLIC_URL`/`AGENT_API_URL` (the edge's hostname), `CAPABILITY_SECRET`, `CONNECTOR_SECRET_KEY`, `SKILL_SIGNING_SECRET`, `DEPLOYMENT_CONTROL_SECRET`, `DATABASE_URL` — production refuses to boot without them; `DATABASE_OWNER_URL` and `DATABASE_READER_URL` alongside `DATABASE_URL`                                                                                                                                                 |
+| `qm-core` (front door) | `PORT=8080`, `PUBLIC_PORT=8000`, `ADMIN_ENABLED=1`, `ADMIN_BASE_PATH=/admin`, `PORTAL_PUBLIC_URL`, `PORTAL_SESSION_SECRET`; the front door reads its `OIDC_*` sign-in settings (including the allow-list) from core's tenant settings                                                                                                                                                                                                                                                                                                                 |
+| `qm-core` (auth)       | `AUTH_EMBEDDED=1`, `AUTH_BROKER_UPSTREAM=http://127.0.0.1:8099`, `AUTH_BROKER_PREFIX=/idp`, `AUTH_ISSUER=<edge>/idp`, `AUTH_CLIENT_ID=qm-portal`, `AUTH_CLIENT_SECRET`, `AUTH_REDIRECT_URI=<edge>/auth/callback`, `AUTH_TOKEN_SECRET`, `AUTH_SIGNING_JWK` (a P-256 private JWK), `AUTH_EMAIL_FROM`, and `AUTH_EMAIL_TRANSPORT` with a `RESEND_API_KEY` or SMTP credentials — without a mail transport nobody can sign in; the matching `OIDC_*` set from `brokerWiring` in `cli/src/services.ts` (including `OIDC_CLIENT_SECRET`) is a tenant setting |
+| `qm-egress-proxy`      | `CAPABILITY_SECRET`, `DATABASE_URL`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
-Core also reads `RESEND_API_KEY` and `AUTH_EMAIL_FROM` when they are set — optional there,
-they let admins email external-user invitations from the admin Users tab or by chatting
-with QM.
-
-The admin module runs in web-ui at `/admin`; its environment belongs to web-ui.
-The auth module runs inside portal: move its environment and secrets to portal,
-set `AUTH_EMBEDDED=1`, and use `http://127.0.0.1:8099` for
-`AUTH_BROKER_UPSTREAM` and the OIDC token, userinfo, and JWKS endpoint base.
-Set `ADMIN_UPSTREAM` to the web-ui service URL followed by `/admin`.
-See [the combined-service migration](combined-services.md) before upgrading existing apps.
+Set all of `qm-core`'s wiring at the app level: `edge` and `harness` share it, and the
+harness ignores the front-door and auth variables. Core also reads `RESEND_API_KEY` and
+`AUTH_EMAIL_FROM` when they are set — optional there, they let admins email external-user
+invitations from the admin Users tab or by chatting with QM. There are no
+`WEB_UI_UPSTREAM` or `ADMIN_UPSTREAM` variables any more: the web UI and admin run inside
+the edge. See [the combined-service migration](combined-services.md) before upgrading
+existing apps.
 
 `src/deployment/secret-schema.ts` is the authoritative list of what each service
 requires; when a boot refusal names a variable this table doesn't, that file is the place
 to look.
 
-The portal's hostname is only knowable after its first apply, and core, portal, and auth
-all need it, so expect to apply twice: once to mint the hostname, once to wire it in. The
+The edge's hostname is only knowable after its first apply, and the API, front door and
+auth broker all need it, so expect to apply twice: once to mint the hostname, once to wire it in. The
 CLI does not print the assigned hostname — read it from the app's page in the dashboard,
 or from the ingress itself: `porter kubectl --print-kubeconfig` writes a short-lived
 kubeconfig, and `kubectl get ingress` lists every assigned host.
@@ -167,12 +170,12 @@ entry ... no encryption`. Use one or the other: a configured CA always verifies 
 host name, whatever `sslmode` the URL carries.
 
 `deploy/helm/` carries the same topology as a Helm chart for operators who would rather
-manage the release themselves; it expects the images published at
-`ghcr.io/yc-software/qm/<service>` and an ingress you configure. Pin `image.tag` to a
+manage the release themselves: `edge` and `harness` Deployments from the
+`ghcr.io/yc-software/qm/core` image plus the egress proxy, and an ingress you configure. Pin `image.tag` to a
 commit that actually carries the Porter deploy provider — the published tags are commit SHAs, and
 one from before Porter support landed rejects `DEPLOY_PROVIDER=porter` at startup. Set
 `publicUrl` and the chart derives the broker wiring (`AUTH_ISSUER`, `AUTH_REDIRECT_URI`
-and, through its hook Job, the portal's `OIDC_*` tenant settings) the way
+and, through its hook Job, the front door's `OIDC_*` tenant settings) the way
 `cli/src/services.ts` does for the other targets; what it cannot invent is the identity
 allow-list, so set `tenantSettings.AUTH_ALLOWED_EMAILS` or `AUTH_ALLOWED_EMAIL_DOMAIN`, and the auth broker
 needs a real mail transport (`RESEND_API_KEY` or the `SMTP_*` set) because there is no

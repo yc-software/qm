@@ -1,33 +1,32 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { brokerWiring, hostedServiceEnv, runnableServices } from "../src/services.ts";
+import { brokerWiring, hostedServiceEnv, runnableImages, runnableServices } from "../src/services.ts";
 import { secretDestinations } from "../src/secrets.ts";
 
-test("five logical components deploy as three services without losing core-only deployments", () => {
-  assert.deepEqual(runnableServices(["core", "slack", "web-ui", "admin", "portal", "auth"]), [
-    "core",
-    "web-ui",
-    "portal",
-  ]);
-  assert.deepEqual(runnableServices(["core"]), ["core"]);
+test("core runs as edge and harness, and every surface but the egress proxy runs inside the edge", () => {
+  assert.deepEqual(runnableServices(["core", "slack", "web-ui", "admin", "portal", "auth"]), ["edge", "harness"]);
+  assert.deepEqual(runnableServices(["core", "portal", "egress-proxy"]), ["edge", "harness", "egress-proxy"]);
+  assert.deepEqual(runnableImages(["core", "portal", "egress-proxy"]), ["core", "egress-proxy"]);
 });
 
-test("combined settings preserve component configuration and reject conflicting values", () => {
-  assert.deepEqual(hostedServiceEnv(["portal", "auth"], { portal: { A: "1" }, auth: { B: "2" } }, "portal"), {
-    A: "1",
-    B: "2",
+test("the edge absorbs hosted component settings, keeps core's last, and rejects conflicts between them", () => {
+  const env = { core: { A: "core" }, portal: { A: "portal", B: "1" }, auth: { C: "2" }, slack: { D: "3" } };
+  assert.deepEqual(hostedServiceEnv(["core", "slack", "portal", "auth"], env, "edge"), {
+    A: "core",
+    B: "1",
+    C: "2",
+    D: "3",
   });
+  assert.deepEqual(hostedServiceEnv(["core", "slack", "portal", "auth"], env, "harness"), { A: "core" });
   assert.throws(
-    () => hostedServiceEnv(["portal", "auth"], { portal: { A: "1" }, auth: { A: "2" } }, "portal"),
-    /Conflicting A/,
+    () => hostedServiceEnv(["core", "portal", "auth"], { portal: { A: "1" }, auth: { A: "2" } }, "edge"),
+    /Conflicting A settings in services hosted by edge/,
   );
+  assert.deepEqual(hostedServiceEnv(["core", "auth"], { auth: { A: "1" } }, "egress-proxy"), {});
 });
 
-test("broker stays private inside portal and keeps its public issuer and callback", () => {
-  const env = brokerWiring("portal", {
-    publicUrl: "https://agent.example.com",
-    authBaseUrl: "http://retired-auth:8080",
-  });
+test("broker stays private inside the edge and keeps its public issuer and callback", () => {
+  const env = brokerWiring({ publicUrl: "https://agent.example.com/" });
   assert.equal(env.AUTH_EMBEDDED, "1");
   assert.equal(env.AUTH_BROKER_UPSTREAM, "http://127.0.0.1:8099");
   assert.equal(env.AUTH_ISSUER, "https://agent.example.com/idp");
@@ -35,8 +34,8 @@ test("broker stays private inside portal and keeps its public issuer and callbac
   assert.equal(env.OIDC_TOKEN_ENDPOINT, "http://127.0.0.1:8099/token");
 });
 
-test("the broker client secret reaches the portal only under its own name", () => {
-  const destinations = secretDestinations({
+test("secrets for core reach both workloads while front-door secrets reach only the edge", () => {
+  const client = secretDestinations({
     name: "AUTH_CLIENT_SECRET",
     services: ["auth"],
     aliases: [{ service: "portal", name: "OIDC_CLIENT_SECRET" }],
@@ -44,5 +43,19 @@ test("the broker client secret reaches the portal only under its own name", () =
     required: true,
     managedBy: "operator",
   });
-  assert.deepEqual([...destinations], [["portal", new Set(["AUTH_CLIENT_SECRET"])]]);
+  assert.deepEqual([...client], [["edge", new Set(["AUTH_CLIENT_SECRET"])]]);
+  const core = secretDestinations({
+    name: "CORE_SIGNING_SECRET",
+    services: ["core", "slack"],
+    description: "test",
+    required: true,
+    managedBy: "operator",
+  });
+  assert.deepEqual(
+    [...core],
+    [
+      ["edge", new Set(["CORE_SIGNING_SECRET"])],
+      ["harness", new Set(["CORE_SIGNING_SECRET"])],
+    ],
+  );
 });

@@ -10,7 +10,7 @@ import {
   type TenantSettingsStore,
   type TenantSettingValues,
 } from "../../src/tenants/settings.ts";
-import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
+import { buildApp as buildProductionApp, type BuiltApp } from "./compose.ts";
 import { createMockAgent } from "./mock-agent.ts";
 import { TEST_TENANT } from "./tenant.ts";
 import { seedSettingsTenants, settingsDatabase } from "./tenant-settings.ts";

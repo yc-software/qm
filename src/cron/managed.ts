@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Cron } from "../triggers/types.ts";
 import type { CreateCronInput, CronStore } from "./cron-store.ts";
-import type { Scheduler } from "./scheduler.ts";
+import type { CronChangeNotifier } from "./fires.ts";
 
 export const nightlyAt = (key: string, hour: number) =>
   `${createHash("sha256").update(key).digest()[0]! % 60} ${hour} * * *`;
@@ -20,7 +20,7 @@ export interface ManagedCronProfiles<T> {
 type ManagedCronDeps<T> = {
   store: ManagedCronProfiles<T>;
   crons: CronStore;
-  scheduler: Pick<Scheduler, "notifyChanged">;
+  scheduler: CronChangeNotifier;
 };
 
 export async function claimManagedCron<T extends ManagedCronClaim>(

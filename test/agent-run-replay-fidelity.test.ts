@@ -1,6 +1,6 @@
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import { createAgent, EMPTY_ENDING_NOTE } from "../src/agent/agent-run.ts";
+import { createAgent, EMPTY_ENDING_NOTE } from "../src/harness/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { forModelContext } from "../src/agent/context-compaction.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";

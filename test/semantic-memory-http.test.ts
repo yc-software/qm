@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { createServer as httpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig, TEST_CAPABILITY_SECRET } from "./support/test-config.ts";
 import { bindTestTenant, seedTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";

@@ -6,16 +6,14 @@ import { test } from "node:test";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
-import { oneShot } from "../src/agent/agent-run.ts";
-import { buildApp } from "../src/wiring.ts";
+import { oneShot } from "../src/model/pi-runtime.ts";
+import { buildApp } from "./support/compose.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
-import { testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { testTenantSettings, stopAtEnd } from "./support/build-app.ts";
+import { TEST_TENANT, TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
-import { stopAtEnd } from "./support/build-app.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function gatewaySettings(config: { url: string; apiKey: string; apiKeyHeader: string }): TenantSettingValues {
   return {
@@ -26,7 +24,6 @@ function gatewaySettings(config: { url: string; apiKey: string; apiKeyHeader: st
 }
 
 enterTenant(TEST_TENANT);
-import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 

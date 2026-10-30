@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { continuableContext, createAgent } from "../src/agent/agent-run.ts";
+import { continuableContext, createAgent } from "../src/harness/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";

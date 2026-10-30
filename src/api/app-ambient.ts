@@ -1,6 +1,6 @@
 import type { ActorAssertion, TurnRequest } from "../types.ts";
 import { perTenant } from "../tenants/context.ts";
-import type { OrchestratorInput } from "../core/orchestrator.ts";
+import type { OrchestratorInput } from "../core/turn-input.ts";
 import { samePerson } from "../directory/person.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import type { CachedMessage } from "../surface-cache/surface-cache.ts";
@@ -308,7 +308,7 @@ export function createAmbientHelpers(deps: AppDeps, app: App) {
     const live = await deps.runs.activeForThread(liveRef);
     if (!live || isTerminal(live.status)) return false;
     const session = await deps.sessions.getByThread(liveRef).catch(() => null);
-    const decision = await deps.orchestrator
+    const decision = await deps
       .screenSecuritySteer({
         payload: req.text,
         actor: { id: `system:ambient:${currentTenant()}`, type: "internal" },

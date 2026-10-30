@@ -23,7 +23,7 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
     writeConfig(dir, {
       deploymentId: org,
       target: "docker",
-      services: ["core", "web-ui"],
+      services: ["core", "web-ui", "portal"],
       plugins: [{ name: "ext", image: "ghcr.io/example/ext:1.2" }],
     });
     standInPlugin(dir, "widget");
@@ -32,7 +32,8 @@ test("plan reports the docker plan (network, images, env, layer, plugins) and st
     assert.equal(r.code, 0, r.out);
     assert.match(r.out, /DRY RUN/);
     assert.match(r.out, new RegExp(`network: qm-${org}`));
-    assert.match(r.out, /core: image registry\.invalid\/qm\/qm-core@sha256:a{64}/);
+    assert.match(r.out, /edge: image registry\.invalid\/qm\/qm-core@sha256:a{64} \(host :\d+, :\d+\)/);
+    assert.match(r.out, /harness: image registry\.invalid\/qm\/qm-core@sha256:a{64}\n/);
     assert.match(r.out, /env: .*\bDATA_DIR\b/);
     assert.match(r.out, /layer:/);
     assert.match(r.out, /plugin widget: build plugins\/widget\/Dockerfile/);
@@ -90,7 +91,10 @@ test("plan --build-from <path> shows local builds instead of registry pulls", ()
     writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--build-from", checkout], { cwd: dir });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /core: image build deploy\/core\/Dockerfile/);
+    assert.match(
+      r.out,
+      /edge: image build deploy\/core\/Dockerfile[\s\S]*harness: image build deploy\/core\/Dockerfile/,
+    );
     assert.doesNotMatch(r.out, /pull/);
   } finally {
     rmDir(dir);
@@ -104,7 +108,10 @@ test("bare plan --build-from builds from the enclosing qm checkout", () => {
     const cfg = writeConfig(stack, { deploymentId: "acme", target: "docker", services: ["core"] });
     const r = runCli(["plan", "--build-from", "--config", cfg], { cwd: repoRoot });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /core: image build deploy\/core\/Dockerfile/);
+    assert.match(
+      r.out,
+      /edge: image build deploy\/core\/Dockerfile[\s\S]*harness: image build deploy\/core\/Dockerfile/,
+    );
   } finally {
     rmDir(stack);
   }
@@ -128,7 +135,7 @@ test("plan honors a host port base from the config", () => {
     writeConfig(dir, { deploymentId: "acme", target: "docker", services: ["core"], basePort: 31080 });
     const r = runCli(["plan"], { cwd: dir, env: { QM_BASE_PORT: undefined } });
     assert.equal(r.code, 0, r.out);
-    assert.match(r.out, /core: image .*\(host :31080\)/);
+    assert.match(r.out, /edge: image .*\(host :31080\)/);
   } finally {
     rmDir(dir);
   }

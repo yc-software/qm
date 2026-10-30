@@ -49,9 +49,9 @@ const flyConfig = (): QmConfig => ({
 });
 
 test("resource names derived from the deployment id stay exactly as they were", () => {
-  assert.match(derivedTomlFor(flyConfig(), "core", repoRoot), /^\s*QM_DEPLOYMENT_ID = "qm-v2:personal:acme:acme"$/m);
+  assert.match(derivedTomlFor(flyConfig(), "edge", repoRoot), /^\s*QM_DEPLOYMENT_ID = "qm-v2:personal:acme:acme"$/m);
   const docker: QmConfig = { ...flyConfig(), target: "docker", sandbox: { backend: "local" } };
-  assert.equal(dockerServiceEnv(docker, "core").QM_CORE_CONTAINER, "qm-acme-core");
+  assert.equal(dockerServiceEnv(docker, "edge").QM_CORE_CONTAINER, "qm-acme-edge");
   const aws = {
     ...flyConfig(),
     target: "aws",
@@ -91,7 +91,7 @@ const fs = require("node:fs");
 const a = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");
 const started = ${JSON.stringify(started)};
-if (a[0] === "apps" && a[1] === "list") console.log(JSON.stringify(["acme-core", ...Object.keys(started)].map((Name) => ({ Name }))));
+if (a[0] === "apps" && a[1] === "list") console.log(JSON.stringify(["acme-core", "acme-harness", ...Object.keys(started)].map((Name) => ({ Name }))));
 else if (a[0] === "secrets" && a[1] === "list") console.log("QM_OWNER_CD83933C6C53374D digest");
 else if (a[0] === "status") console.log(JSON.stringify({ Machines: [{ state: started[a[a.indexOf("-a") + 1]] ? "started" : "stopped" }] }));
 else console.log("ok");
@@ -114,6 +114,7 @@ test("fly down refuses while a published app is running and scales down once the
     fakeFlyForDown(dir, { "acme-d-old": false });
     flyDown(flyConfig(), dir);
     assert.match(readFileSync(calls, "utf8"), /scale count 0 -a acme-core --yes/);
+    assert.match(readFileSync(calls, "utf8"), /scale count 0 -a acme-harness --yes/);
   } finally {
     console.log = log;
     if (prior === undefined) delete process.env.FLY_BIN;

@@ -268,7 +268,9 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
     },
   };
   withConfig({ target: "aws", aws }, ({ path }) => {
-    assert.equal(loadConfigAt(path).config.aws!.services.core!.architecture, "amd64");
+    const services = loadConfigAt(path).config.aws!.services;
+    assert.equal(services.edge!.architecture, "amd64");
+    assert.equal(services.harness!.architecture, "amd64");
   });
   withConfig(
     {
@@ -280,7 +282,7 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
   withConfig(
     {
       target: "aws",
-      services: ["core", "web-ui"],
+      plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
       aws: {
         ...aws,
         services: {
@@ -289,11 +291,34 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
             taskRoleArn: "arn:aws:iam::123456789012:role/acme-task",
             assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
           },
-          "web-ui": { ecrRepository: "web-ui", ecsService: "acme-web-ui", cpu: 512, memory: 1024 },
+          linear: { ecrRepository: "linear", ecsService: "acme-linear", cpu: 512, memory: 1024, architecture: "arm64" },
         },
       },
     },
-    ({ path }) => assert.throws(() => loadConfigAt(path), /taskRoleArn.*must be unique.*also used by web-ui/),
+    ({ path }) =>
+      assert.throws(
+        () => loadConfigAt(path),
+        /"aws\.services\.core\.taskRoleArn" must be unique.*also used by linear$/,
+      ),
+  );
+  withConfig(
+    {
+      target: "aws",
+      aws: {
+        ...aws,
+        services: {
+          core: {
+            ...aws.services.core,
+            taskRoleArn: "arn:aws:iam::123456789012:role/acme-core-gateway",
+            assumeRoleArns: ["arn:aws:iam::111122223333:role/model-gateway"],
+          },
+        },
+      },
+    },
+    ({ path }) => {
+      const services = loadConfigAt(path).config.aws!.services;
+      assert.equal(services.edge!.taskRoleArn, services.harness!.taskRoleArn, "edge and harness share core's role");
+    },
   );
   withConfig(
     { target: "aws", aws: { ...aws, services: { core: { ...aws.services.core, architecture: "ppc64" } } } },
@@ -304,7 +329,7 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
 
   const untypedAws = { ...aws, services: { core: { ...aws.services.core, architecture: undefined } } };
   withConfig({ target: "aws", imageOverrides: { core: "ghcr.io/acme/core:1" }, aws: untypedAws }, ({ path }) => {
-    assert.throws(() => loadConfigAt(path), /core\.architecture is required/);
+    assert.throws(() => loadConfigAt(path), /aws\.services\.core\.architecture is required/);
   });
   withConfig(
     {
@@ -321,6 +346,76 @@ test("AWS workload architecture accepts arm64 or amd64 only", () => {
     ({ path }) => {
       assert.throws(() => loadConfigAt(path), /linear\.architecture is required/);
     },
+  );
+});
+
+test("aws.services.core configures the edge and a private harness that share its image", () => {
+  const aws = {
+    accountId: "123456789012",
+    region: "us-west-2",
+    cluster: "acme",
+    deployRoleArn: "arn:aws:iam::123456789012:role/deploy",
+    secretsPrefix: "acme/",
+    imageLabel: "release",
+    networking: { cloudMapNamespace: "acme.internal" },
+  };
+  const core = {
+    ecrRepository: "qm-core",
+    ecsService: "acme-core",
+    cpu: 2048,
+    memory: 4096,
+    desiredCount: 2,
+    stopTimeout: 120,
+    targetGroup: "legacy-portal-tg",
+    logGroup: "/ecs/legacy-core",
+  };
+  withConfig({ target: "aws", aws: { ...aws, services: { core } } }, ({ path }) => {
+    const services = loadConfigAt(path).config.aws!.services;
+    assert.deepEqual(Object.keys(services).sort(), ["edge", "harness"]);
+    assert.deepEqual(services.edge, core);
+    assert.deepEqual(services.harness, {
+      ecrRepository: "qm-core",
+      ecsService: "acme-core-harness",
+      cpu: 2048,
+      memory: 4096,
+      desiredCount: 2,
+      stopTimeout: 120,
+      logGroup: "/ecs/legacy-core-harness",
+    });
+  });
+  for (const workload of ["edge", "harness"]) {
+    withConfig({ target: "aws", aws: { ...aws, services: { core, [workload]: core } } }, ({ path }) =>
+      assert.throws(
+        () => loadConfigAt(path),
+        new RegExp(`"aws\\.services\\.${workload}" is derived from aws\\.services\\.core`),
+      ),
+    );
+  }
+  for (const surface of ["portal", "web-ui", "auth"]) {
+    withConfig({ target: "aws", aws: { ...aws, services: { core, [surface]: core } } }, ({ path }) =>
+      assert.throws(() => loadConfigAt(path), new RegExp(`"aws\\.services\\.${surface}" is no longer a workload`)),
+    );
+  }
+  withConfig(
+    {
+      target: "aws",
+      plugins: [{ name: "jobs", image: "ghcr.io/acme/jobs:1" }],
+      aws: {
+        ...aws,
+        services: {
+          core,
+          jobs: {
+            ecrRepository: "jobs",
+            ecsService: "acme-core-harness",
+            cpu: 256,
+            memory: 512,
+            architecture: "arm64",
+          },
+        },
+      },
+    },
+    ({ path }) =>
+      assert.throws(() => loadConfigAt(path), /collides with the harness service derived from aws\.services\.core/),
   );
 });
 
@@ -347,7 +442,7 @@ test("AWS workloads accept scoped commercial IAM assume-role targets", () => {
     },
   };
   withConfig({ target: "aws", aws }, ({ path }) => {
-    assert.deepEqual(loadConfigAt(path).config.aws!.services.core!.assumeRoleArns, [
+    assert.deepEqual(loadConfigAt(path).config.aws!.services.harness!.assumeRoleArns, [
       "arn:aws:iam::111122223333:role/model-gateway",
     ]);
   });
@@ -403,7 +498,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
     secretsPrefix: "acme/",
     imageLabel: "release",
     networking: { cloudMapNamespace: "acme.internal" },
-    services: Object.fromEntries(names.map((name) => [name, service(name)])),
+    services: Object.fromEntries(names.filter((name) => name === "core").map((name) => [name, service(name)])),
   });
   const cases: Array<{ label: string; config: Record<string, unknown>; error: RegExp }> = [
     {
@@ -414,7 +509,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         services: ["core", "web-ui"],
         aws: aws(["core", "web-ui"]),
       },
-      error: /web-ui requires the authenticated portal/,
+      error: /"web-ui" requires "portal"/,
     },
     {
       label: "admin without portal",
@@ -424,7 +519,7 @@ test("AWS config rejects public surfaces without the HTTPS portal and real harne
         services: ["core", "admin"],
         aws: aws(["core", "admin"]),
       },
-      error: /admin requires the authenticated portal/,
+      error: /"admin" requires "portal"/,
     },
     {
       label: "portal over HTTP",
@@ -659,12 +754,18 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
     withConfig(
       {
         target: "aws",
-        services: ["core", "web-ui"],
+        plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
         aws: {
           ...aws,
           services: {
             core: service,
-            "web-ui": { ...service, ecrRepository: "web", ecsService: "acme-web", [field]: service[field] },
+            linear: {
+              ...service,
+              ecrRepository: "linear",
+              ecsService: "acme-linear",
+              architecture: "arm64",
+              [field]: service[field],
+            },
           },
         },
       },
@@ -735,9 +836,11 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
       aws: { ...aws, services: { core: { ...service, desiredCount: 2, targetGroup: "legacy-core-tg" } } },
     },
     ({ path }) => {
-      const core = loadConfigAt(path).config.aws!.services.core!;
-      assert.equal(core.desiredCount, 2);
-      assert.equal(core.targetGroup, "legacy-core-tg");
+      const { edge, harness } = loadConfigAt(path).config.aws!.services;
+      assert.equal(edge!.desiredCount, 2);
+      assert.equal(harness!.desiredCount, 2);
+      assert.equal(edge!.targetGroup, "legacy-core-tg");
+      assert.equal(harness!.targetGroup, undefined, "the harness never joins a load balancer");
     },
   );
   for (const desiredCount of [0, -1, 1.5, "2"]) {
@@ -753,12 +856,18 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
   withConfig(
     {
       target: "aws",
-      services: ["core", "web-ui"],
+      plugins: [{ name: "linear", image: "ghcr.io/acme/linear:1" }],
       aws: {
         ...aws,
         services: {
           core: { ...service, targetGroup: "shared-tg" },
-          "web-ui": { ...service, ecrRepository: "web", ecsService: "acme-web", targetGroup: "shared-tg" },
+          linear: {
+            ...service,
+            ecrRepository: "linear",
+            ecsService: "acme-linear",
+            architecture: "arm64",
+            targetGroup: "shared-tg",
+          },
         },
       },
     },
@@ -767,7 +876,8 @@ test("AWS validates release labels, unique coordinates, Fargate sizes, and owned
   withConfig(
     { target: "aws", aws: { ...aws, services: { core: { ...service, dockerfile: "layered/core.Dockerfile" } } } },
     ({ path }) => {
-      assert.equal(loadConfigAt(path).config.aws?.services.core?.dockerfile, "layered/core.Dockerfile");
+      assert.equal(loadConfigAt(path).config.aws?.services.edge?.dockerfile, "layered/core.Dockerfile");
+      assert.equal(loadConfigAt(path).config.aws?.services.harness?.dockerfile, "layered/core.Dockerfile");
     },
   );
   for (const dockerfile of [
@@ -1192,9 +1302,11 @@ test("aws.services logGroup and stopTimeout adopt live task-def values and valid
   withConfig(
     { target: "aws", aws: { ...aws, services: services({ logGroup: "/ecs/legacy-core", stopTimeout: 120 }) } },
     ({ path }) => {
-      const core = loadConfigAt(path).config.aws!.services.core!;
-      assert.equal(core.logGroup, "/ecs/legacy-core");
-      assert.equal(core.stopTimeout, 120);
+      const { edge, harness } = loadConfigAt(path).config.aws!.services;
+      assert.equal(edge!.logGroup, "/ecs/legacy-core");
+      assert.equal(harness!.logGroup, "/ecs/legacy-core-harness");
+      assert.equal(edge!.stopTimeout, 120);
+      assert.equal(harness!.stopTimeout, 120);
     },
   );
   withConfig({ target: "aws", aws: { ...aws, services: services({ logGroup: "bad name" }) } }, ({ path }) =>
@@ -1240,7 +1352,8 @@ test("blank model provider overrides preserve the declared provider in runtime a
     ({ path }) => {
       const { config } = loadConfigAt(path);
       assert.equal(config.env.core?.MODEL_PROVIDER, undefined);
-      assert.equal(serviceEnvironment(config, "core").MODEL_PROVIDER, undefined);
+      assert.equal(serviceEnvironment(config, "edge").MODEL_PROVIDER, undefined);
+      assert.equal(serviceEnvironment(config, "harness").MODEL_PROVIDER, undefined);
       assert.equal(tenantSettingsEnv(config, new Map()).MODEL_PROVIDER, "openrouter");
       assert.equal(computedSecrets(config).find((secret) => secret.name === "OPENROUTER_API_KEY")?.required, true);
     },
@@ -1322,7 +1435,7 @@ test("proxy deployment rendering names the mode and classifier", () => {
 });
 
 test("AWS built-in architecture defaults match published images and retain explicit choices", () => {
-  const workloads = ["core", "web-ui", "admin", "portal", "auth", "linear"];
+  const workloads = ["edge", "harness", "egress-proxy", "linear"];
   const config = {
     plugins: [{ name: "linear" }],
     imageOverrides: {},

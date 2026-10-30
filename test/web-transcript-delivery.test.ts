@@ -9,7 +9,7 @@ import { sleep } from "../src/util/async.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnResult } from "../src/types.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";

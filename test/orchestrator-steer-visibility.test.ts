@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import * as mockAgent from "./support/mock-agent.ts";
-import { recordSteerIntake } from "../src/agent/turn-support.ts";
+import { recordSteerIntake } from "../src/harness/turn-support.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";

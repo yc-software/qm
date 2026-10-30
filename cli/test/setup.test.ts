@@ -26,7 +26,7 @@ function configFor(services: string[], extra = "", env = `{}`): ReturnType<typeo
 }
 
 test("pendingSecrets collects required deployment secrets and leaves optional integrations to Admin", () => {
-  const config = configFor(["core", "slack", "web-ui"]);
+  const config = configFor(["core", "slack"]);
   const env = new Map([
     ["ANTHROPIC_API_KEY", "sk-ant-real-value"],
     ["CORE_SIGNING_SECRET", "short"],

@@ -65,3 +65,15 @@ test("nothing engaged ⇒ a pass does no work", async () => {
   assert.deepEqual(swept, []);
   assert.equal(res.swept, 0);
 });
+
+test("engaged sessions older than the run age limit drop out of the registry", () => {
+  let clock = 0;
+  const reg = createEngagedRegistry({ maxAgeMs: 1_000, now: () => clock });
+  reg.engage("t1");
+  clock = 600;
+  reg.engage("t2");
+  clock = 1_200;
+  assert.deepEqual(reg.list(), ["t2"]);
+  reg.engage("t1");
+  assert.deepEqual(reg.list(), ["t2", "t1"]);
+});

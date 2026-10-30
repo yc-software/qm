@@ -32,7 +32,7 @@ import { type Sandbox } from "../sandbox/sandbox.ts";
 import type { ProcessRegistry } from "../processes/process-registry.ts";
 import type { MonitorStore } from "../monitors/monitor-store.ts";
 import type { EngagedRegistry } from "../wake/engaged-registry.ts";
-import type { Orchestrator } from "../core/orchestrator.ts";
+import type { SteerScreen } from "../security/steer-screen.ts";
 import type { Run, RunDeliveryState, RunStore } from "../runs/run-store.ts";
 import type { GoalView, ReasoningBlock, TurnStream } from "../runs/turn-stream.ts";
 import type { SessionStateBus, SessionStateEvent } from "../runs/session-state-bus.ts";
@@ -618,7 +618,13 @@ export interface AppDeps {
   inviteMailer?: Mailer;
   sessions: SessionStore;
   screenSecurity?: SecurityScreenProbe;
-  orchestrator: Orchestrator;
+  screenSecuritySteer: SteerScreen;
+  regenerateTitle(
+    sessionId: string,
+    principalId: string,
+    participantIds?: readonly string[],
+  ): Promise<{ title: string | null } | null>;
+  runInline?: (run: Run, shutdown?: AbortSignal) => Promise<TurnResult>;
   runs: RunStore;
   leaseTtlMs: number;
   maxAttempts: number;
@@ -666,7 +672,7 @@ export interface AppDeps {
   monitors?: MonitorStore;
   sandbox?: Sandbox;
   reaperPoke?: () => void;
-  engaged?: EngagedRegistry;
+  engaged?: Pick<EngagedRegistry, "engage">;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   ambientJudge?: (systemPrompt: string, prompt: string, signal?: AbortSignal) => Promise<string | undefined>;

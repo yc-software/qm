@@ -1,14 +1,21 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test, afterEach } from "node:test";
-import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
+import { buildApp as buildProductionApp, serverDeps } from "./support/compose.ts";
 import type { Config } from "../src/config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
 import { TEST_TENANT, bindTestTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
-import { createInsecureTestServer } from "../src/api/server.ts";
+import { createInsecureTestServer } from "../src/edge/http/server.ts";
 import type { AddressInfo } from "node:net";
+import { lookupModel } from "../src/model/model-lookup.ts";
+import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
+import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+import { verificationUpstream } from "./support/model-verification-upstream.ts";
+import { setModelOverlays } from "../src/model/model-overlay-store.ts";
+import { createServer } from "node:http";
+import { testModelTables } from "./support/typed-stores.ts";
 
 bindTestTenant();
 
@@ -21,6 +28,7 @@ const buildApp = (config: Config, overrides: Parameters<typeof buildProductionAp
   );
 
 const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
+
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
   const config = testConfig();
   const built = buildApp(config);
@@ -43,17 +51,13 @@ test("admin lookup recognizes an existing model without asking for a clone templ
   }
 });
 
-import { lookupModel } from "../src/model/model-lookup.ts";
-import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
-import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { setModelOverlays } from "../src/model/model-overlay-store.ts";
-
 enterTenant(TEST_TENANT);
+
 afterEach(() => {
   setProviderBaseUrls(TEST_TENANT, {});
   setModelOverlays([]);
 });
+
 async function credentials() {
   const store = createModelCredentialStore({ backing: testModelTables().credentials, keyMaterial: "test-key" });
   await store.set("openai", "test-openai-key", "admin");
@@ -226,9 +230,6 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
   ])
     assert.equal(modelLookupInput.safeParse(body).success, false);
 });
-
-import { createServer } from "node:http";
-import { testModelTables } from "./support/typed-stores.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

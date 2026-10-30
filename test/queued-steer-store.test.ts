@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { type RunSignal } from "../src/runs/run-signal-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import type { OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 test("queued steering transfers files once or leaves the original queue intact", async () => {

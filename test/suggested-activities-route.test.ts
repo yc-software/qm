@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { suggestedActivityRoutes } from "../src/api/routes/suggested-activities.ts";
-import type { ApiCtx } from "../src/api/routes/route.ts";
+import { suggestedActivityRoutes } from "../src/edge/http/routes/suggested-activities.ts";
+import type { ApiCtx } from "../src/edge/http/routes/route.ts";
 
 async function request(body: unknown, enabled: boolean, actor = "alice") {
   let status = 0;

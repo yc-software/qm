@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/compose.ts";
 import { testConfig } from "./support/test-config.ts";
 
 test("sandbox maintenance runs when both idle stopping settings are disabled", async () => {

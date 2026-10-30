@@ -20,12 +20,13 @@ import {
 } from "./harness.ts";
 
 const SERVICES = ["core", "web-ui", "admin", "portal"] as const;
-const WORKLOADS = ["core", "web-ui", "portal"] as const;
+const IMAGES = ["core"] as const;
+const WORKLOADS = ["edge", "harness"] as const;
 const suffix = (names: string[], end: string): string | undefined => names.find((n) => n.endsWith(`-${end}`));
 
 function lifecycleSkip(): string | false {
   if (!dockerAvailable()) return "no Docker daemon reachable";
-  const pre = preexistingServiceImages(SERVICES);
+  const pre = preexistingServiceImages(IMAGES);
   if (pre.length) return `refusing to clobber your local images: ${pre.join(", ")} (docker rmi them to run this test)`;
   return false;
 }
@@ -37,7 +38,7 @@ test(
     const org = `qm-e2e-dl-${process.pid}`;
     const basePort = 20000 + (process.pid % 5000);
     const dep = tmp("dl-dep");
-    const checkout = standInCheckout(SERVICES);
+    const checkout = standInCheckout(IMAGES);
     const sentinel = `e2e-${process.pid}-sentinel-${"x".repeat(32)}`;
 
     writeFileSync(
@@ -76,7 +77,8 @@ test(
         const r = up();
         assert.equal(r.code, 0, r.out);
         assert.match(r.out, /stack up/);
-        assert.match(r.out, new RegExp(`core   : http://localhost:${basePort}\\b`));
+        assert.match(r.out, new RegExp(`api    : http://localhost:${basePort}\\b`));
+        assert.match(r.out, new RegExp(`web    : http://localhost:${basePort + 1}\\b`));
         assert.match(r.out, /plugin widget running/);
 
         const names = deploymentContainers(org);
@@ -85,38 +87,40 @@ test(
         }
       });
 
-      await t.test("local sandbox mode gives only core the host Docker socket", () => {
+      await t.test("local sandbox mode gives edge and harness the host Docker socket", () => {
         const names = deploymentContainers(org);
-        const core = suffix(names, "core")!;
-        const portal = suffix(names, "portal")!;
         const inspect = (container: string) =>
           JSON.parse(execFileSync("docker", ["inspect", container], { encoding: "utf8" }))[0] as {
             Config: { Env: string[] };
             Mounts: Array<{ Source: string; Destination: string }>;
           };
-        const coreInfo = inspect(core);
-        assert.ok(coreInfo.Config.Env.includes("DOCKER_HOST=unix:///var/run/docker.sock"));
-        assert.ok(coreInfo.Config.Env.includes(`QM_CORE_CONTAINER=${core}`));
-        assert.ok(coreInfo.Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
-        assert.ok(!inspect(portal).Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
+        for (const workload of WORKLOADS) {
+          const container = suffix(names, workload)!;
+          const info = inspect(container);
+          assert.ok(info.Config.Env.includes("DOCKER_HOST=unix:///var/run/docker.sock"));
+          assert.ok(info.Config.Env.includes(`QM_CORE_CONTAINER=${container}`));
+          assert.ok(info.Mounts.some((mount) => mount.Destination === "/var/run/docker.sock"));
+          assert.ok(info.Mounts.some((mount) => mount.Destination === "/data"));
+        }
       });
 
-      await t.test("services receive their private-network aliases", () => {
-        const portal = suffix(deploymentContainers(org), "portal")!;
+      await t.test("the edge answers to core and its own private-network aliases", () => {
+        const edge = suffix(deploymentContainers(org), "edge")!;
         const aliases = JSON.parse(
           execFileSync(
             "docker",
-            ["inspect", "-f", `{{json (index .NetworkSettings.Networks "qm-${org}").Aliases}}`, portal],
+            ["inspect", "-f", `{{json (index .NetworkSettings.Networks "qm-${org}").Aliases}}`, edge],
             {
               encoding: "utf8",
             },
           ),
         ) as string[];
-        assert.ok(aliases.includes(`qm-${org}-portal.internal`), aliases.join(", "));
+        assert.ok(aliases.includes(`qm-${org}-edge.internal`), aliases.join(", "));
+        assert.ok(aliases.includes("core"), aliases.join(", "));
       });
 
-      await t.test("computed secrets from the deployment ./.env reach the core container", () => {
-        const core = suffix(deploymentContainers(org), "core")!;
+      await t.test("computed secrets from the deployment ./.env reach the harness container", () => {
+        const core = suffix(deploymentContainers(org), "harness")!;
         const got = execFileSync("docker", ["exec", core, "printenv", "CORE_SIGNING_SECRET"], {
           encoding: "utf8",
         }).trim();
@@ -127,21 +131,25 @@ test(
         assert.equal(apiUrl, `http://qm-${org}-core:8080`);
       });
 
-      await t.test("the configured bot identity reaches the core container and only the core container", () => {
+      await t.test("the configured bot identity reaches both workloads, and sign-in branding only the edge", () => {
         const names = deploymentContainers(org);
         const printenv = (container: string, name: string): string =>
           execFileSync("docker", ["exec", container, "printenv", name], { encoding: "utf8" }).trim();
-        const core = suffix(names, "core")!;
-        assert.equal(printenv(core, "ORG_BRAND_SELF_LABEL"), "straylight");
-        assert.equal(printenv(core, "ORG_BRAND_ORG_NAME"), "Straylight Industries");
-        assert.throws(() => printenv(suffix(names, "web-ui")!, "ORG_BRAND_SELF_LABEL"));
+        for (const workload of WORKLOADS) {
+          const container = suffix(names, workload)!;
+          assert.equal(printenv(container, "ORG_BRAND_SELF_LABEL"), "straylight");
+          assert.equal(printenv(container, "ORG_BRAND_ORG_NAME"), "Straylight Industries");
+        }
+        assert.equal(printenv(suffix(names, "edge")!, "AUTH_BRAND_NAME"), "straylight");
+        assert.throws(() => printenv(suffix(names, "harness")!, "AUTH_BRAND_NAME"));
       });
 
       await t.test("status enumerates exactly this deployment's containers with ports", () => {
         const r = runCli(["status"], { cwd: dep });
         assert.equal(r.code, 0, r.out);
         assert.match(r.out, /qm status/);
-        assert.match(r.out, new RegExp(`qm-${org}-core\\b`));
+        assert.match(r.out, new RegExp(`qm-${org}-edge\\b`));
+        assert.match(r.out, new RegExp(`qm-${org}-harness\\b`));
         assert.match(r.out, /Up\b/);
         assert.match(r.out, new RegExp(`${basePort}->8080`));
       });
@@ -171,7 +179,7 @@ test(
       await t.test("up is idempotent — re-running keeps the stack up", () => {
         const r = up();
         assert.equal(r.code, 0, r.out);
-        assert.ok(suffix(deploymentContainers(org), "core"), "core still up after re-up");
+        assert.ok(suffix(deploymentContainers(org), "edge"), "edge still up after re-up");
       });
 
       await t.test("down (no purge) removes containers but keeps the network + volumes", () => {
@@ -186,7 +194,7 @@ test(
       await t.test("up after down reuses the preserved Postgres volume + recorded password", () => {
         const r = up();
         assert.equal(r.code, 0, r.out);
-        assert.ok(suffix(deploymentContainers(org), "core"), "stack back up");
+        assert.ok(suffix(deploymentContainers(org), "harness"), "stack back up");
       });
 
       await t.test("down --purge removes containers, the network, and the volumes", () => {

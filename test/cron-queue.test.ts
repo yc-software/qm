@@ -1,6 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
+import { createScheduler, type Scheduler } from "../src/harness/scheduler.ts";
 import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createPostgresCronRows } from "../src/cron/cron-table.ts";

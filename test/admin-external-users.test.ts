@@ -9,7 +9,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createInsecureTestServer, createServer } from "../src/api/server.ts";
+import { createInsecureTestServer, createServer } from "../src/edge/http/server.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../src/admin/invite-email.ts";
 import type { Mailer } from "../plugins/chassis/src/resend.ts";

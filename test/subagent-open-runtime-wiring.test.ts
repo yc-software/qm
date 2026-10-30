@@ -2,7 +2,7 @@ import "./support/auto-fake-sprites.ts";
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildApp } from "../src/wiring.ts";
+import { buildApp } from "./support/compose.ts";
 import { testConfig } from "./support/test-config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
 import { scopeId, type Principal } from "../src/types.ts";

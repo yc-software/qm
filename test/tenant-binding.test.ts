@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { IncomingMessage, request, ServerResponse, type Server } from "node:http";
 import { Socket } from "node:net";
 import type { AddressInfo } from "node:net";
-import { createServer } from "../src/api/server.ts";
-import { withRowTenant } from "../src/api/tenant-ingress.ts";
+import { createServer } from "../src/edge/http/server.ts";
+import { withRowTenant } from "../src/edge/http/tenant-ingress.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
@@ -83,7 +83,7 @@ describe("core ingress binds the verified tenant", () => {
       signingSecret: SOURCE,
       capabilitySecret: TEST_CAPABILITY_SECRET,
       portalIdentitySecret: IDENTITY,
-      scheduler: built.scheduler,
+      cronRuns: built.scheduler,
       identity: built.identity,
       config: built.config,
       tenants: { forHost: async (host) => HOSTS[host] ?? null, forSlackTeam: async () => null },

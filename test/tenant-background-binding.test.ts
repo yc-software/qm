@@ -2,11 +2,11 @@ import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { createWorker } from "../src/runs/worker.ts";
+import { createWorker } from "../src/harness/worker.ts";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
 import { configurePgPooling, createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
-import { createScheduler } from "../src/cron/scheduler.ts";
+import { createScheduler } from "../src/harness/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
@@ -15,7 +15,8 @@ import { claimAcrossTenants, eachTenant, inTenantOf, type EachTenant } from "../
 import { boundTenant, tenantKey, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { pgTenants } from "../src/tenants/resolver.ts";
 import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
-import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
+import type { Orchestrator } from "../src/harness/orchestrator.ts";
+import type { OrchestratorInput } from "../src/core/turn-input.ts";
 import { scopeId, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
@@ -209,7 +210,7 @@ test("the scheduler ticks each tenant bound and cron-fire jobs carry and rebind 
     let onFire: ((job: CronFireJob) => Promise<void>) | undefined;
     const jobQueue: CronJobQueue = {
       async start(handlers) {
-        onFire = handlers.onFire;
+        onFire = handlers!.onFire;
       },
       async enqueueFire(job) {
         enqueued.push(job);

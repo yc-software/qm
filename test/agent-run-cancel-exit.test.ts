@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, turnAtSeq } from "../src/core/turn-resume.ts";
 import { createGoalRecord, type GoalRecord } from "../src/agent/goal.ts";
-import { createAgent } from "../src/agent/agent-run.ts";
+import { createAgent } from "../src/harness/agent-run.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import type { NewEntry } from "../src/sessions/session-store.ts";
 import type { SessionEntry } from "../src/types.ts";

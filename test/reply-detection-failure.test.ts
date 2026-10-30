@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createOrchestrator } from "../src/core/orchestrator.ts";
+import { createOrchestrator } from "../src/harness/orchestrator.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";

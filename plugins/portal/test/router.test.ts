@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer, type IncomingMessage } from "node:http";
-import { request } from "node:http";
+import { createServer, request, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
 
@@ -26,6 +25,31 @@ const upstream = createServer((req: IncomingMessage, res) => {
     const tenant = TENANT_BY_HOST[new URL(req.url, "http://core").searchParams.get("host") ?? ""];
     res.writeHead(tenant ? 200 : 404, { "content-type": "application/json" });
     return void res.end(JSON.stringify(tenant ? { tenant } : { error: "not_found" }));
+  }
+  if (req.url?.startsWith("/v1/deployments/dep_1/git/git-receive-pack")) {
+    res.writeHead(200, { "content-type": "application/x-git-receive-pack-result" });
+    res.flushHeaders();
+    req.on("data", (chunk: Buffer) => res.write(`ack:${chunk.toString("utf8")};`));
+    return void req.on("end", () => res.end("done"));
+  }
+  if (
+    req.url?.startsWith("/slack/events") ||
+    req.url?.startsWith("/v1/spend/export") ||
+    req.url?.startsWith("/v1/deployments/dep_1/git/")
+  ) {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    return void req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          method: req.method,
+          url: req.url,
+          headers: req.headers,
+          body: Buffer.concat(chunks).toString("base64"),
+        }),
+      );
+    });
   }
   if (
     req.url?.startsWith("/v1/deployment-layer") ||
@@ -831,4 +855,114 @@ test("linked administrator impersonation follows the target", async () => {
   });
   const body = (await web.json()) as { cookie: string };
   assert.match(body.cookie, /webuiuser=alice%40acme/);
+});
+
+type CorePublicEcho = { method: string; url: string; headers: Record<string, string>; body: string };
+
+function assertNoPortalIdentity(headers: Record<string, string>): void {
+  for (const name of ["cookie", "x-portal-identity", "x-as-principal", "x-admin-actor", "x-signature", "x-timestamp"])
+    assert.equal(headers[name], undefined, name);
+}
+
+test("Slack HTTP events reach the core byte-for-byte with their signature and no portal identity", async () => {
+  const raw = Buffer.from('{"type":"event_callback","event":{"text":"caf\u00e9  \\n"}}\r\n', "utf8");
+  const r = await fetch(`${base}/slack/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-slack-signature": "v0=abc",
+      "x-slack-request-timestamp": "1700000000",
+      "x-slack-retry-num": "1",
+      "x-slack-retry-reason": "http_timeout",
+      cookie: sessionCookie("U1"),
+    },
+    body: raw,
+  });
+  assert.equal(r.status, 200);
+  const echo = (await r.json()) as CorePublicEcho;
+  assert.equal(echo.url, "/slack/events");
+  assert.deepEqual(Buffer.from(echo.body, "base64"), raw);
+  assert.equal(echo.headers["x-slack-signature"], "v0=abc");
+  assert.equal(echo.headers["x-slack-request-timestamp"], "1700000000");
+  assert.equal(echo.headers["x-slack-retry-num"], "1");
+  assert.equal(echo.headers["x-slack-retry-reason"], "http_timeout");
+  assertNoPortalIdentity(echo.headers);
+});
+
+test("the spend export reaches the core with its bearer token and query, and no portal identity", async () => {
+  const r = await fetch(`${base}/v1/spend/export?from=2026-10-01&to=2026-10-30`, {
+    headers: { authorization: "Bearer spend-token", accept: "text/csv" },
+  });
+  assert.equal(r.status, 200);
+  const echo = (await r.json()) as CorePublicEcho;
+  assert.equal(echo.method, "GET");
+  assert.equal(echo.url, "/v1/spend/export?from=2026-10-01&to=2026-10-30");
+  assert.equal(echo.headers.authorization, "Bearer spend-token");
+  assertNoPortalIdentity(echo.headers);
+});
+
+test("deployment git smart-HTTP reaches the core with basic auth and an exact body", async () => {
+  const refs = await fetch(`${base}/v1/deployments/dep_1/git/info/refs?service=git-upload-pack`, {
+    headers: { authorization: "Basic eDp0b2tlbg==", "git-protocol": "version=2" },
+  });
+  assert.equal(refs.status, 200);
+  const refsEcho = (await refs.json()) as CorePublicEcho;
+  assert.equal(refsEcho.url, "/v1/deployments/dep_1/git/info/refs?service=git-upload-pack");
+  assert.equal(refsEcho.headers.authorization, "Basic eDp0b2tlbg==");
+  assert.equal(refsEcho.headers["git-protocol"], "version=2");
+  assertNoPortalIdentity(refsEcho.headers);
+  const pack = Buffer.from([0x30, 0x30, 0x33, 0x32, 0x00, 0xff, 0x1f, 0x8b, 0x0a, 0x0d]);
+  const upload = await fetch(`${base}/v1/deployments/dep_1/git/git-upload-pack`, {
+    method: "POST",
+    headers: {
+      authorization: "Basic eDp0b2tlbg==",
+      "content-type": "application/x-git-upload-pack-request",
+      "content-encoding": "gzip",
+    },
+    body: pack,
+  });
+  assert.equal(upload.status, 200);
+  const uploadEcho = (await upload.json()) as CorePublicEcho;
+  assert.equal(uploadEcho.method, "POST");
+  assert.deepEqual(Buffer.from(uploadEcho.body, "base64"), pack);
+  assert.equal(uploadEcho.headers["content-encoding"], "gzip");
+  assertNoPortalIdentity(uploadEcho.headers);
+});
+
+test("deployment git receive-pack streams the request and the response through the portal", async () => {
+  const { port } = server.address() as AddressInfo;
+  const result = await new Promise<string>((resolve, reject) => {
+    const req = request(
+      {
+        host: "localhost",
+        port,
+        method: "POST",
+        path: "/v1/deployments/dep_1/git/git-receive-pack",
+        headers: { authorization: "Basic eDp0b2tlbg==", "content-type": "application/x-git-receive-pack-request" },
+      },
+      (res) => {
+        let received = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          received += chunk;
+          if (received === "ack:first;") req.end("second");
+        });
+        res.on("end", () => resolve(received));
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.flushHeaders();
+    req.write("first");
+  });
+  assert.equal(result, "ack:first;ack:second;done");
+});
+
+test("the core-public passthroughs are exact-shape and method-bound", async () => {
+  assert.equal((await fetch(`${base}/v1/deployments/dep_1/git/git-upload-pack`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/deployments/dep_1/git/info/refs`, { method: "POST" })).status, 404);
+  assert.equal((await fetch(`${base}/v1/deployments/dep_1/git/objects/info/packs`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/deployments/a/b/git/info/refs`)).status, 404);
+  assert.equal((await fetch(`${base}/v1/spend/export`, { method: "POST" })).status, 404);
+  assert.equal((await fetch(`${base}/v1/spend`)).status, 404);
 });
