@@ -11,7 +11,7 @@ import { resolveBrowserModel } from "../model/browser-model.ts";
 import { memoryRecallDelta } from "../memory/recall-delta.ts";
 import { UNTRACKED_PROVENANCE } from "../memory/facts.ts";
 import { memoryRecallQuery } from "../memory/semantic-recall.ts";
-import { requiresDelegation, delegatedAuthorizationOrigin } from "../sessions/session-syscalls.ts";
+import { requiresDelegation, delegatedAuthorizationOrigin, isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import {
   documentText,
   type ExtractedDocumentText,
@@ -39,7 +39,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
+import { desktopClientForTurn, isPersonAuthored, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { renderGatewayContext } from "./gateway-context.ts";
@@ -551,6 +551,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const humanTurn = input.origin.kind === "human";
       const sessionTurn = isSessionTurn(input);
       const humanInput = humanTurn && !sessionTurn;
+      const personConversationTurn =
+        isPersonAuthored(input.origin.kind) &&
+        !sessionTurn &&
+        !isSubagentThreadRef(conversation.threadRef) &&
+        !input.botActor &&
+        !input.proactiveOpener;
       const allInternal =
         deps.identity.audienceIsAllInternal(conversation.audience) &&
         (conversation.kind === "dm" ||
@@ -584,10 +590,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           reason: "internal-only: non-internal principals cannot interact",
         };
       }
-      const delegatedSession = conversation.threadRef.startsWith("agent:main:subagent:")
+      const delegatedSession = isSubagentThreadRef(conversation.threadRef)
         ? await deps.sessions.getByThread(conversation.threadRef)
         : null;
-      if (conversation.threadRef.startsWith("agent:main:subagent:")) {
+      if (isSubagentThreadRef(conversation.threadRef)) {
         const canWrite = createCanWriteScope({
           managedGroups: deps.managedGroups
             ? {
@@ -3843,7 +3849,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.runId && !pausing && reply && reply.trim()) deps.turnStream?.markReplyDone(input.runId);
         const turnUserSeq = partial?.userSeq ?? emittedEntries.find((e) => e.type === "user")?.seq;
         const onTurnEnd = memoryStrategy.onTurnEnd?.bind(memoryStrategy);
-        if (!pausing && !cancelStopped && useMemory && memoryPolicy.capture !== "off" && onTurnEnd) {
+        if (
+          !pausing &&
+          !cancelStopped &&
+          personConversationTurn &&
+          useMemory &&
+          memoryPolicy.capture !== "off" &&
+          onTurnEnd
+        ) {
           const prior = pendingCaptures.get(memoryScopeId);
           const capture = (async () => {
             if (prior) await prior.catch(swallowAs("prior memory capture", undefined));
@@ -3855,7 +3868,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 input: turnInput,
                 reply,
                 actorId: actor.id,
-                ...(automatedTurn ? { autonomous: true } : {}),
                 sessionId: session.id,
                 idempotencyKey: input.runId ?? `${session.id}:${spine.turnUserEntrySeq ?? "turn"}`,
               });

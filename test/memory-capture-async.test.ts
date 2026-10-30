@@ -25,7 +25,7 @@ import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { Harness } from "../src/harness/harness.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import type { Conversation, Principal } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 
 const ORG = "default-org";
@@ -90,7 +90,12 @@ function gatedHarness() {
   };
 }
 
-function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrategy?: MemoryStrategy) {
+function buildOrchestrator(
+  harness: Harness,
+  memory?: MemoryService,
+  memoryStrategy?: MemoryStrategy,
+  sessions = createMemorySessionStore(),
+) {
   const config = createMemoryConfigStore(ORG);
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -107,7 +112,7 @@ function buildOrchestrator(harness: Harness, memory?: MemoryService, memoryStrat
     ...singleProcessDeps(),
     identity: createIdentityService(),
     resolution: createResolutionService(ORG, config, acl),
-    sessions: createMemorySessionStore(),
+    sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
     sandbox: fakeSandbox(),
@@ -142,6 +147,49 @@ test("skipMemory turns neither recall nor capture", async () => {
   assert.equal(result.status, "ok");
   assert.equal(recalls, 0);
   assert.equal(captures, 0);
+});
+
+test("memory capture runs only for a person's own turn in a human conversation", async () => {
+  const captured: string[] = [];
+  const sessions = createMemorySessionStore();
+  const orch = buildOrchestrator(
+    createMockHarness(),
+    undefined,
+    {
+      onTurnEnd: async ({ input }) => {
+        captured.push(input);
+      },
+    },
+    sessions,
+  );
+  const personal = scopeId("personal", "U1");
+  const parent = await sessions.getOrCreateByThread("web:U1:parent", "dm", personal);
+  const child = await sessions.getOrCreateByThread("agent:main:subagent:brief", "dm", personal);
+  await sessions.setParentSession(child.id, parent.id);
+  await sessions.addParticipant(child.id, "U1");
+  await sessions.setSpawnMeta(child.id, {
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: parent.threadRef, audience: [actor] },
+  });
+  const turn = (surface: string, threadRef: string, origin: OrchestratorInput["origin"], text: string) =>
+    orch.handleTurn({ surface, actor, conversation: { kind: "dm", threadRef, audience: [actor] }, origin, text });
+
+  const subagent = await turn("web", child.threadRef, { kind: "human" }, "brief from the parent session");
+  const cron = await turn("cron", "dm:U1:cron", { kind: "automation" }, "scheduled wake");
+  const opener = await orch.handleTurn({
+    surface: "web",
+    actor,
+    conversation: { kind: "dm", threadRef: "web:U1:opener", audience: [actor] },
+    origin: { kind: "human" },
+    text: "",
+    proactiveOpener: true,
+  });
+  const person = await turn("web", "web:U1:dm", { kind: "human" }, "I prefer terse replies");
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert.deepEqual([subagent.status, cron.status, opener.status, person.status], ["ok", "ok", "ok", "ok"]);
+  assert.deepEqual(captured, ["I prefer terse replies"]);
 });
 
 test("approval replay preserves the memory opt-out", () => {

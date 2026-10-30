@@ -102,25 +102,3 @@ test("burst debounce: different speakers in one channel keep separate bursts in 
   assert.equal(await memory.read(PERSONAL), "");
   assert.equal(await memory.read(scopeId("personal", "U2")), "");
 });
-
-test("a channel turn by a system actor captures nothing anywhere", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
-  await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: "system:ambient:acme" });
-
-  assert.equal(await memory.read(CHANNEL), "", "origin scope receives nothing");
-  assert.equal(
-    await memory.read(scopeId("personal", "system:ambient:acme")),
-    "",
-    "no personal drawer for the platform actor",
-  );
-});
-
-test("an autonomous (triggered) channel turn captures nothing, even for a human actor", async () => {
-  const { memory } = freshMemory();
-  const strategy = createPerTurnStrategy({ harness: createMockHarness().models, memory });
-  await strategy.onTurnEnd!({ scopeId: CHANNEL, input: INPUT, reply: REPLY, actorId: ACTOR, autonomous: true });
-
-  assert.equal(await memory.read(CHANNEL), "", "origin scope receives nothing on a triggered wake");
-  assert.equal(await memory.read(PERSONAL), "", "owner notebook remains untouched on a triggered wake");
-});

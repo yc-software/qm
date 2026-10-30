@@ -25,7 +25,6 @@ export interface MemoryRecallContext {
   actorId?: string;
   sessionId?: string;
   maxChars?: number;
-  autonomous?: boolean;
 }
 
 export interface MemoryCaptureContext extends MemoryCaptureMetadata {
@@ -33,7 +32,6 @@ export interface MemoryCaptureContext extends MemoryCaptureMetadata {
   actorId?: string;
   input?: string;
   reply?: string;
-  autonomous?: boolean;
   idempotencyKey?: string;
 }
 
@@ -231,8 +229,4 @@ export function createMemoryService(workspace: WorkspaceStore): MemoryService {
         return result;
       }),
   });
-}
-
-export function isSystemActor(actorId: string | undefined): boolean {
-  return !!actorId?.startsWith("system:");
 }

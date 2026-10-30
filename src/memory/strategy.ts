@@ -13,7 +13,6 @@ export interface MemoryStrategy {
       input: string;
       reply: string;
       actorId?: string;
-      autonomous?: boolean;
       conversationScopeId?: ScopeId;
       sessionId?: string;
       idempotencyKey?: string;

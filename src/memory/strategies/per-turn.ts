@@ -1,5 +1,5 @@
 import type { HarnessModelUtilities } from "../../harness/harness.ts";
-import { type MemoryService, type MemoryCaptureContext, isSystemActor } from "../memory-service.ts";
+import type { MemoryService, MemoryCaptureContext } from "../memory-service.ts";
 import type { MemoryStrategy } from "../strategy.ts";
 import type { ScopeId } from "../../types.ts";
 import { bullets } from "../notebook.ts";
@@ -72,7 +72,6 @@ type TurnEndCtx = MemoryCaptureMetadata & {
   input: string;
   reply: string;
   actorId?: string;
-  autonomous?: boolean;
   conversationScopeId?: ScopeId;
   sessionId?: string;
   idempotencyKey?: string;
@@ -85,18 +84,7 @@ function createBurstBuffer(
   onError?: (e: unknown, burst: Burst) => void,
 ): (ctx: TurnEndCtx) => Promise<void> {
   const bursts = new Map<string, Burst>();
-  return async ({
-    scopeId,
-    input,
-    reply,
-    actorId,
-    autonomous,
-    conversationScopeId,
-    sessionId,
-    idempotencyKey,
-    inheritedFacts,
-  }) => {
-    if (autonomous === true || isSystemActor(actorId)) return;
+  return async ({ scopeId, input, reply, actorId, conversationScopeId, sessionId, idempotencyKey, inheritedFacts }) => {
     const burst: Burst = {
       scopeId,
       conversationScopeId: conversationScopeId ?? scopeId,
