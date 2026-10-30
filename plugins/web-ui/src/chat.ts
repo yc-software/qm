@@ -309,6 +309,7 @@ export function createChatSurface(
     rememberedScopeId: null as string | null,
     rememberedContextName: null as string | null,
     liveWork: null as WorkBlock | null,
+    serverWorking: null as string | null,
     goal: null as GoalStripState | null,
     turnRuntime: null as TurnRuntime | null,
     pendingSend: null as string | null,
@@ -596,6 +597,7 @@ export function createChatSurface(
     });
     chatState.agent = agent;
     clearLiveWork();
+    chatState.serverWorking = session?.working === true ? threadRef : null;
     resetBackgroundPanel();
     chatState.resolvingApprovals.clear();
     openThinking.clear();
@@ -1095,12 +1097,22 @@ export function createChatSurface(
       activeRun = await activeRunForThread(threadRef);
     } catch (error) {
       reportHandledError("web:resume_active_run", error);
+      withdrawServerWorking(agent, threadRef);
       return false;
     }
     if (agent === chatState.agent && threadRef === chatState.threadRef)
       ctx.composer.setQueuedRuns(threadRef, activeRun.queued);
-    if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) return false;
+    if (!activeRun.runId || !activeRun.run || runIsTerminal(activeRun.run)) {
+      withdrawServerWorking(agent, threadRef);
+      return false;
+    }
     return resumeRun(agent, threadRef, normalStreamFn, onWork, activeRun.runId, activeRun.run);
+  }
+
+  function withdrawServerWorking(agent: Agent, threadRef: string): void {
+    if (agent !== chatState.agent || chatState.serverWorking !== threadRef) return;
+    chatState.serverWorking = null;
+    drawActiveChat(agent);
   }
 
   async function resumeRun(
@@ -1168,7 +1180,7 @@ export function createChatSurface(
     ctx.onState?.({
       threadRef: chatState.threadRef ?? chatState.rememberedThreadRef,
       sessionId: chatState.sessionId ?? chatState.rememberedSessionId,
-      working: live !== null,
+      working: live !== null || chatState.serverWorking === chatState.threadRef,
     });
   }
 
@@ -1637,7 +1649,7 @@ export function createChatSurface(
 
   function paneNowLine(agent: Agent): string | null {
     if (activePendingApprovals().length) return "Needs your approval";
-    if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0) {
+    if (agent.state.isStreaming || chatState.resolvingApprovals.size > 0 || awaitingLiveTurn(agent)) {
       const work = chatState.liveWork ?? { status: "thinking", activity: [] };
       if (runSlot.stopGeneration === runSlot.generation) return "Stop requested";
       if (currentTextPhase(work)?.phase === "final_answer") return "Responding…";
@@ -2425,6 +2437,7 @@ export function createChatSurface(
   function clearLiveWork(): void {
     if (chatState.liveWork?.goal) chatState.goal = chatState.liveWork.goal;
     chatState.liveWork = null;
+    chatState.serverWorking = null;
     liveFoldOpened = false;
     liveStepLine.reset();
     chatState.pendingSend = null;
@@ -2932,8 +2945,14 @@ export function createChatSurface(
     `;
   }
 
+  function awaitingLiveTurn(agent: Agent): boolean {
+    return (
+      !agent.state.isStreaming && chatState.serverWorking !== null && chatState.serverWorking === chatState.threadRef
+    );
+  }
+
   function liveWorkStatus(agent: Agent): TemplateResult | typeof nothing {
-    if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0) return nothing;
+    if (!agent.state.isStreaming && chatState.resolvingApprovals.size === 0 && !awaitingLiveTurn(agent)) return nothing;
     if (runSlot.stopGeneration === runSlot.generation)
       return html`<div class="stopped-head" role="status">${icon(Ban, 13)}<span>Stop requested</span></div>`;
     const work = chatState.liveWork ?? { status: "thinking", activity: [] };
