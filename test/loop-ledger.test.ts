@@ -1,9 +1,11 @@
-import { createMemoryMap, type DurableMapSelect } from "../src/persistence/durable-map.ts";
-import type { LoopItem } from "../src/types.ts";
+import { createMemoryItemRows } from "../src/loops/item-table.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentDraftOf, createLoopItemLedger, loopItemId, type IngestEntryInput } from "../src/loops/item-ledger.ts";
 import { ledgerItemView, ledgerState, sortLedgerItems } from "../src/loops/ledger-view.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const LOOP = "loop-1";
 
@@ -387,8 +389,8 @@ test("continuing a sent reply clears the old draft without losing chat or allowi
 });
 
 test("email classification projection is opt-in, scoped, and never changes stored previews", async (t) => {
-  const backing = createMemoryMap<LoopItem>();
-  const ledger = createLoopItemLedger(backing);
+  const rows = createMemoryItemRows();
+  const ledger = createLoopItemLedger(rows);
   await ledger.ingest([
     entry({
       sourcePayload: { automated: true, privateDetail: "hidden" },
@@ -397,21 +399,19 @@ test("email classification projection is opt-in, scoped, and never changes store
     entry({ loopId: "unselected", sourcePayload: { automated: true } }),
   ]);
   const stored = structuredClone(await ledger.get(loopItemId(LOOP, "gmail:thread-1")));
-  t.mock.method(backing, "all", async () => {
-    assert.fail("summaries must not scan the full ledger");
+  t.mock.method(rows, "byLoop", async () => {
+    assert.fail("summaries must not read full ledger items");
   });
-  const originalSelect = backing.select.bind(backing);
-  t.mock.method(backing, "select", async (query: DurableMapSelect<LoopItem, keyof LoopItem>) => {
-    assert.deepEqual(query.where, { field: "loopId", anyOfFold: [LOOP] });
-    assert.ok(query.omit?.includes("proposal"));
-    assert.ok(query.omit?.includes("thread"));
-    if (!query.omit?.includes("sourcePayload"))
-      assert.deepEqual(query.pickNested, {
-        sourcePayload: ["source", "automated", "participants", "slackAvatarsRefreshAt"],
-      });
-    const rows = await originalSelect(query);
-    for (const row of rows) assert.equal((row as LoopItem).sourcePayload?.privateDetail, undefined);
-    return rows;
+  const originalSummaries = rows.summaries.bind(rows);
+  t.mock.method(rows, "summaries", async (loopIds: readonly string[], payloadKeys?: readonly string[]) => {
+    assert.deepEqual(loopIds, [LOOP]);
+    if (payloadKeys) assert.deepEqual(payloadKeys, ["source", "automated", "participants", "slackAvatarsRefreshAt"]);
+    const summaries = await originalSummaries(loopIds, payloadKeys);
+    for (const row of summaries) {
+      assert.equal(row.sourcePayload?.privateDetail, undefined);
+      for (const key of ["proposal", "thread", "agentDrafts"]) assert.ok(!(key in row));
+    }
+    return summaries;
   });
   const before = await ledger.summaries([LOOP]);
   assert.equal(before.length, 1);
@@ -437,28 +437,28 @@ test("flagged summaries classify payload-only legacy email without changing stor
 });
 
 test("ingest batches per-loop locks and writes while resolving legacy IDs and duplicate events", async () => {
-  const backing = createMemoryMap<LoopItem>();
-  const seed = createLoopItemLedger(backing);
+  const rows = createMemoryItemRows();
+  const seed = createLoopItemLedger(rows);
   await seed.ingest([entry()]);
   const original = (await seed.byLoop(LOOP))[0]!;
-  await backing.delete(original.id);
-  await backing.put("legacy", { ...original, id: "legacy" });
+  await rows.delete([original.id]);
+  await rows.insertIfAbsent({ ...original, id: "legacy" });
   let selects = 0;
   let writes = 0;
   let locks = 0;
   const ledger = createLoopItemLedger(
     {
-      ...backing,
-      select: async (query) => {
+      ...rows,
+      idsBySourceKey: async (loopId, sourceKeys) => {
         selects++;
-        return backing.select(query);
+        return rows.idsBySourceKey(loopId, sourceKeys);
       },
       get: async () => {
         throw new Error("per-item read");
       },
       mutateMany: async (updates) => {
         writes++;
-        return backing.mutateMany(updates);
+        return rows.mutateMany(updates);
       },
     },
     undefined,
@@ -476,9 +476,9 @@ test("ingest batches per-loop locks and writes while resolving legacy IDs and du
   const outcome = await ledger.ingest([entry(), ...batch, ...batch]);
   assert.deepEqual(outcome, { created: 100, updated: 0, skipped: 101 });
   assert.deepEqual({ selects, writes, locks }, { selects: 1, writes: 1, locks: 1 });
-  assert.equal((await backing.all()).length, 101);
-  assert.ok(await backing.get("legacy"));
-  assert.equal(await backing.get(original.id), null);
+  assert.equal((await rows.byLoop(LOOP)).length, 101);
+  assert.ok(await rows.get("legacy"));
+  assert.equal(await rows.get(original.id), null);
 });
 
 test("conditional annotations reject changed source payloads even within the same clock tick", async (t) => {

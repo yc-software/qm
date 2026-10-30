@@ -5,6 +5,9 @@ import { buildGmailReplyMime } from "../src/loops/sources/gmail.ts";
 import { findRoute, run, type ApiCtx } from "../src/api/routes/route.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("sent chats are durable, idempotent, and isolated to the signed-in owner", async () => {
   const store = createLoopStore();

@@ -1,5 +1,5 @@
 import type { LoopOutput, LoopOutputState, LoopShipResult } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import { createMemoryOutputRows, type OutputRows } from "./output-table.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -87,19 +87,11 @@ export function unresolvedOutput(output: LoopOutput): boolean {
 }
 
 export function createLoopOutputStore(
-  backing: DurableMap<LoopOutput> = createMemoryMap<LoopOutput>(),
+  rows: OutputRows = createMemoryOutputRows(),
   onEvent?: (output: LoopOutput) => void,
 ): LoopOutputStore {
-  const forLoop = async (loopId: string): Promise<LoopOutput[]> =>
-    (await backing.all()).filter((output) => output.loopId === loopId);
-
-  const byAttempt = async (itemId: string, attemptId: string): Promise<LoopOutput[]> =>
-    (await backing.all()).filter((output) => output.itemId === itemId && output.attemptId === attemptId);
-
-  if (!backing.update) throw new Error("loop outputs need atomic durable updates");
-  const atomicUpdate = backing.update.bind(backing);
   const update = async (id: string, change: (output: LoopOutput) => LoopOutput): Promise<LoopOutput | null> => {
-    const output = await atomicUpdate(id, change);
+    const output = await rows.update(id, change);
     if (output) onEvent?.(output);
     return output;
   };
@@ -119,8 +111,7 @@ export function createLoopOutputStore(
 
   return {
     async rebindItem(itemId, from, to) {
-      for (const output of await backing.select({ where: { field: "itemId", anyOfFold: [itemId] } })) {
-        if (output.itemId !== itemId) continue;
+      for (const output of await rows.byItem(itemId)) {
         await update(output.id, (current) => (current.loopId === from ? { ...current, loopId: to } : current));
       }
     },
@@ -134,9 +125,9 @@ export function createLoopOutputStore(
         input.externalRef,
       );
       const now = Date.now();
-      const prior = (await forLoop(input.loopId)).filter(
+      const prior = (await rows.byItem(input.itemId)).filter(
         (output) =>
-          output.itemId === input.itemId &&
+          output.loopId === input.loopId &&
           output.attemptId !== input.attemptId &&
           output.shipAction === input.shipAction &&
           output.externalRef === input.externalRef,
@@ -157,7 +148,7 @@ export function createLoopOutputStore(
         ...(input.externalRef !== undefined ? { externalRef: input.externalRef } : {}),
         ...(input.summary !== undefined ? { summary: input.summary } : {}),
       };
-      const captured = await backing.putIfAbsent(id, candidate);
+      const captured = await rows.insertIfAbsent(candidate);
       for (const output of prior) {
         await update(output.id, (current) => ({
           ...current,
@@ -168,22 +159,16 @@ export function createLoopOutputStore(
       onEvent?.(captured);
       return captured;
     },
-    get: (id) => backing.get(id),
-    byLoop: forLoop,
-    async byItem(itemId) {
-      return (await backing.all()).filter((output) => output.itemId === itemId);
-    },
-    async awaitingReview(loopId) {
-      return (await forLoop(loopId))
-        .filter((output) => output.state === "ready")
-        .sort((a, b) => a.createdAt - b.createdAt);
-    },
+    get: (id) => rows.get(id),
+    byLoop: (loopId) => rows.byLoop(loopId),
+    byItem: (itemId) => rows.byItem(itemId),
+    awaitingReview: (loopId) => rows.ready(loopId),
     async classify(id, input) {
       return update(id, (output) => ({ ...output, ...input, updatedAt: Date.now() }));
     },
     async promoteAttempt(itemId, attemptId) {
       const promoted: LoopOutput[] = [];
-      for (const output of await byAttempt(itemId, attemptId)) {
+      for (const output of await rows.byAttempt(itemId, attemptId)) {
         const after = await applyIf(
           output.id,
           (current) => current.state === "staged",
@@ -195,7 +180,7 @@ export function createLoopOutputStore(
     },
     async supersedeAttempt(itemId, attemptId) {
       const superseded: LoopOutput[] = [];
-      for (const output of await byAttempt(itemId, attemptId)) {
+      for (const output of await rows.byAttempt(itemId, attemptId)) {
         const after = await applyIf(
           output.id,
           (current) => current.state === "staged" || current.state === "ready",
@@ -207,11 +192,8 @@ export function createLoopOutputStore(
     },
     async supersedeActiveSiblings(itemId, exceptOutputId) {
       const superseded: LoopOutput[] = [];
-      for (const output of (await backing.all()).filter(
-        (candidate) =>
-          candidate.itemId === itemId &&
-          candidate.id !== exceptOutputId &&
-          (candidate.state === "staged" || unresolvedOutput(candidate)),
+      for (const output of (await rows.byItem(itemId)).filter(
+        (candidate) => candidate.id !== exceptOutputId && (candidate.state === "staged" || unresolvedOutput(candidate)),
       )) {
         const after = await applyIf(
           output.id,
@@ -310,9 +292,8 @@ export function createLoopOutputStore(
       );
     },
     async expireOlderThan(loopId, cutoff) {
-      const stale = (await forLoop(loopId)).filter((output) => output.state === "ready" && output.createdAt < cutoff);
       const expired: LoopOutput[] = [];
-      for (const output of stale) {
+      for (const output of await rows.ready(loopId, cutoff)) {
         const next = await applyIf(
           output.id,
           (current) => current.state === "ready",
@@ -322,8 +303,6 @@ export function createLoopOutputStore(
       }
       return expired;
     },
-    async deleteByLoop(loopId) {
-      for (const output of await forLoop(loopId)) await backing.delete(output.id);
-    },
+    deleteByLoop: (loopId) => rows.deleteByLoop(loopId),
   };
 }

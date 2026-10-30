@@ -40,7 +40,8 @@ import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createPostgresSessionMailbox, createSessionMailbox } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
-import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
+import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
+import { createLoopTables } from "./loops/tables.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
 import { createGatewayCatalog } from "./model/gateway-catalog.ts";
 import { createSuggestedActivityService } from "./suggestions/activities.ts";
@@ -126,10 +127,6 @@ import {
 } from "./persistence/advisory-lock.ts";
 import type {
   CommandApprovalGrant,
-  Loop,
-  LoopItem,
-  LoopOutput,
-  ShipGrant,
   PendingApprovalRecord,
   ScopeId,
   Session,
@@ -1961,8 +1958,8 @@ export function buildApp(
   const monitors = createMonitorStore(
     config.databaseUrl ? createPostgresMonitorRows(config.databaseUrl) : createMemoryMonitorRows(),
   );
-  const loopStore = createLoopStore(artifactMap<Loop>("loops"));
-  const loopItemsMap = artifactMap<LoopItem>("loop_items", ["loopId"]);
+  const loopTables = createLoopTables(config.databaseUrl);
+  const loopStore = createLoopStore(loopTables.loops);
   const loopOwnerCache = new Map<string, string>();
   const publishLoopEvent = (event: import("./loops/ledger-events.ts").LedgerEvent): void => {
     void (async () => {
@@ -1974,17 +1971,17 @@ export function buildApp(
       if (owner) ledgerEventBus.emit({ ...event, owner });
     })().catch(() => {});
   };
-  const loopItems = createLoopItemLedger(loopItemsMap, publishLoopEvent, {
+  const loopItems = createLoopItemLedger(loopTables.items, publishLoopEvent, {
     lock: advisoryLock,
     accepts: async (id) => {
       const loop = await loopStore.get(id);
       return Boolean(loop && (loop.surface !== "inbox" || loop.state === "enabled"));
     },
   });
-  const loopOutputs = createLoopOutputStore(artifactMap<LoopOutput>("loop_outputs", ["itemId"]), (output) =>
+  const loopOutputs = createLoopOutputStore(loopTables.outputs, (output) =>
     publishLoopEvent({ loopId: output.loopId, itemId: output.itemId, op: "ready", at: Date.now() }),
   );
-  const loopGrants = createShipGrantStore(artifactMap<ShipGrant>("loop_ship_grants"));
+  const loopGrants = createShipGrantStore(loopTables.grants);
   const cronChanged: { notify?: (id: string) => void } = {};
   const cronFires = config.databaseUrl ? createPostgresCronFireStore(config.databaseUrl) : createMemoryCronFireStore();
   const cronsBase = createCronStore(
@@ -2656,8 +2653,8 @@ export function buildApp(
   });
   const loopIngress = createLoopIngress({
     enabledFor: (owner) => featureFlags.enabled("inbox_loops", scopeId("personal", owner)),
-    sources: artifactMap<LoopIngress>("loop_ingress", ["loopId"]),
-    deliveries: artifactMap<IngressDelivery>("loop_ingress_deliveries", ["queueKey"]),
+    sources: loopTables.sources,
+    deliveries: loopTables.deliveries,
     loops: loopStore,
     items: loopItems,
     outputs: loopOutputs,

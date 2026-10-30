@@ -5,6 +5,9 @@ import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { collectVitals, evaluateGovernor } from "../src/loops/governor.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const captured = {
   loopId: "L1",

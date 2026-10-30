@@ -6,6 +6,9 @@ import { planTriage, removeFromGroup, settleGroup, triageWork, workOrder } from 
 import { scopeId, type Loop, type LoopItem } from "../src/types.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { sleep } from "../src/util/async.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const LOOP = "loop-1";
 

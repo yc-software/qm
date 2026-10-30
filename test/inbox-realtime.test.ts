@@ -7,6 +7,9 @@ import { slackConversationRef } from "../src/loops/sources/slack.ts";
 import type { LedgerEvent } from "../src/loops/ledger-events.ts";
 import type { Loop } from "../src/types.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
+import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const LOOP = { id: "loop-inbox", owner: "owner@example.com", surface: "inbox" } as unknown as Loop;
 
@@ -49,7 +52,7 @@ function gmailEntry(over: Partial<IngestEntryInput> = {}): IngestEntryInput {
 function realtime(items: ReturnType<typeof createLoopItemLedger>) {
   const calls: IngressEntry[][] = [];
   const rt = createInboxRealtime({
-    loops: { list: async () => [LOOP] },
+    loops: { inboxLoops: async () => [{ ...LOOP, tenantId: TEST_TENANT }] },
     items,
     enqueue: async (_loop, entries) => {
       calls.push(entries);
