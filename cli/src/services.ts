@@ -31,9 +31,9 @@ export const runnableServices = (names: readonly DeclaredServiceName[]): Service
 
 export const PUBLIC_PORT = 8000;
 
-export const CORE_IMAGE = "core";
+const CORE_IMAGE = "core";
 
-export const IMAGE_NAMES = [CORE_IMAGE, "egress-proxy"] as const;
+const IMAGE_NAMES = [CORE_IMAGE, "egress-proxy"] as const;
 export type ImageName = (typeof IMAGE_NAMES)[number];
 
 export const isImageName = (s: string): s is ImageName => (IMAGE_NAMES as readonly string[]).includes(s);

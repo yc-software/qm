@@ -14,7 +14,7 @@ import {
   runnableServices,
 } from "./services.ts";
 
-export const RENDER_API_PORT = "8080";
+const RENDER_API_PORT = "8080";
 
 export const renderComponent = (workload: string): string => (workload === "edge" ? "core" : workload);
 
