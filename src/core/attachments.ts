@@ -1,14 +1,7 @@
 import type { Readable } from "node:stream";
 import { basename } from "node:path";
 import { randomUUID } from "node:crypto";
-import type {
-  AttachmentMeta,
-  GrantedHandle,
-  IncomingAttachment,
-  OutgoingAttachment,
-  ScopeId,
-  SessionEntry,
-} from "../types.ts";
+import type { AttachmentMeta, IncomingAttachment, OutgoingAttachment, ScopeId, SessionEntry } from "../types.ts";
 import { hasParentPathSegment, type Sandbox, type SandboxHandle } from "../sandbox/sandbox.ts";
 import {
   MAX_BLOB_BYTES,
@@ -208,22 +201,6 @@ export function inboundIssueList(opts: {
   }
   for (const n of opts.surfaceNotes ?? []) if (n.trim()) issues.push(n.trim());
   return issues;
-}
-
-export function sharedFilesSystemSection(handles: readonly GrantedHandle[]): string {
-  const total = new Set(handles.map((h) => h.handlePath)).size;
-  if (!total) return "";
-  return `## Files\n${total} ${total === 1 ? "file is" : "files are"} shared with you; list and read them with the \`files\` tool.`;
-}
-
-export function environmentNote(text: string): string {
-  if (!text.trim()) return "";
-  return `<environment>\n${text.trim()}\n</environment>`;
-}
-
-export function senderNote(name: string | undefined): string {
-  const n = name?.trim();
-  return n ? `This message is from @${n}.` : "";
 }
 
 export async function materializeInbound(

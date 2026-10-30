@@ -48,7 +48,6 @@ import { scopeId as toScopeId, personalScope } from "../types.ts";
 import { desktopClientForTurn, isSessionTurn, turnOriginRequestFields } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
-import { renderGatewayContext } from "./gateway-context.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
 import { applyPromptVars, loadProtocolFile, type PromptVars } from "../resolution/prompt-vars.ts";
 import { cleanBrandingLabel, resolveBranding } from "../resolution/branding.ts";
@@ -80,7 +79,6 @@ import {
 } from "../credentials/keychain.ts";
 import { finishProcessCredentials } from "../credentials/execute-files.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
-import { membershipEvent, renderSandboxProviders } from "./environment-facts.ts";
 import { CONNECTOR_HOSTS } from "../connectors/oauth.ts";
 import { SANDBOX_MODEL_PREFIX } from "../api/contract.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
@@ -132,15 +130,12 @@ import { defaultPublishAudience } from "../resolution/publish-audience.ts";
 import {
   INBOX_DIR,
   TURN_FILES_DIR,
-  environmentNote,
   inboundIssuesNote,
   inboundIssueList,
   inboundManifest,
   isVisionAttachment,
   materializeInbound,
   safeAttachmentName,
-  senderNote,
-  sharedFilesSystemSection,
   turnFileId,
   type ArtifactRegistration,
   withoutAlreadyIngested,
@@ -202,7 +197,13 @@ import {
 import {
   currentTimeBlock,
   deliveryMenu,
+  environmentNote,
+  membershipEvent,
   renderConversationRoster,
+  renderGatewayContext,
+  renderSandboxProviders,
+  senderNote,
+  sharedFilesSystemSection,
   renderProjectHomeChannel,
   renderReachRoster,
   renderStandingObligations,

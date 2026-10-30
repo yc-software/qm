@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { membershipEvent, renderSandboxProviders } from "../src/core/environment-facts.ts";
+import { membershipEvent, renderSandboxProviders } from "../src/core/orchestrator/prompt-blocks.ts";
 import { currentTimeBlock, renderStandingObligations } from "../src/core/orchestrator/prompt-blocks.ts";
 import type { SessionEntry } from "../src/types.ts";
 import type { Cron } from "../src/triggers/types.ts";

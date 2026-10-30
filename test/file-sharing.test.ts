@@ -19,7 +19,6 @@ import {
   MAX_OUTBOUND_FILES,
   MAX_INBOUND_FILES,
   MAX_ATTACHMENT_BYTES,
-  environmentNote,
   inboundIssueList,
   inboundIssuesNote,
   inboundManifest,
@@ -27,10 +26,9 @@ import {
   withoutAlreadyIngested,
   mimeFromName,
   safeAttachmentName,
-  senderNote,
-  sharedFilesSystemSection,
   turnFileId,
 } from "../src/core/attachments.ts";
+import { environmentNote, senderNote, sharedFilesSystemSection } from "../src/core/orchestrator/prompt-blocks.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderGatewayContext } from "../src/core/gateway-context.ts";
+import { renderGatewayContext } from "../src/core/orchestrator/prompt-blocks.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import { scopeId } from "../src/types.ts";

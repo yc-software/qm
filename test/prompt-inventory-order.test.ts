@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderSandboxProviders } from "../src/core/environment-facts.ts";
-import { renderGatewayContext } from "../src/core/gateway-context.ts";
-import { sharedFilesSystemSection } from "../src/core/attachments.ts";
+import {
+  renderGatewayContext,
+  renderSandboxProviders,
+  sharedFilesSystemSection,
+} from "../src/core/orchestrator/prompt-blocks.ts";
 import {
   deliveryMenu,
   renderConversationRoster,
