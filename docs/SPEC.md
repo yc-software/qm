@@ -12,7 +12,7 @@
 
 ## Subsystems, most central first
 
-**Agent turns.** The system revolves around durable execution against a central writeahead log: the session tape. To execute an agent turn, a session offers up a write lease, at which point a worker claims it from the run queue. The _orchestrator_ assembles context and drives a harness, which fulfills tool calls, and the result is committed to the session tape. The system should be robust to interruption at any time, end to end, and scale to swarms that are millions of agents strong.
+**Agent turns.** The system revolves around durable execution against a central writeahead log: the session tape. To execute an agent turn, a session offers up a write lease, at which point a worker claims it from the run queue. The _orchestrator_ assembles context and drives a harness, which fulfills tool calls, and the result is committed to the session tape. The system should be robust to interruption at any time, end to end, and scale to swarms that are millions of agents strong. The run queue in Postgres is also the process boundary: the edge serves HTTP and only enqueues and reads runs, the harness claims and executes them, so either deploys without interrupting the other (see `docs/edge-harness-contract.md`).
 
 **Models.** Agents have a single tool catalog; their turns are fulfilled by Pi, which calls into the model catalog, the canonical source for model varieties, effort levels, speed multipliers, and their prices. A particular selection of those variables fulfilling a turn is called the _runtime_.
 
