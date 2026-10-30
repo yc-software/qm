@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const core = createServer((_req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
@@ -49,7 +50,7 @@ test("a webuiuser cookie confers nothing in portal mode", async () => {
 });
 
 test("a verified principal outside WEB_UI_PRINCIPALS is not_allowed, not unauthenticated", async () => {
-  const token = mintPortalIdentity({ p: "mallory", exp: Date.now() + 60_000 }, SECRET);
+  const token = mintPortalIdentity({ t: TEST_TENANT, p: "mallory", exp: Date.now() + 60_000 }, SECRET);
   const r = await fetch(`${base}/me`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
   assert.equal(r.status, 401);
   const body = await r.json();
@@ -58,7 +59,7 @@ test("a verified principal outside WEB_UI_PRINCIPALS is not_allowed, not unauthe
 });
 
 test("a verified allowed principal gets through and /me reports the mode", async () => {
-  const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET);
+  const token = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, SECRET);
   const r = await fetch(`${base}/me`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
   assert.equal(r.status, 200);
   const body = await r.json();

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 let coreStatus = 200;
 const core = createServer((req, res) => {
@@ -26,7 +27,7 @@ const base = `http://127.0.0.1:${(surface.address() as AddressInfo).port}`;
 const headers = (imp?: string) => ({
   "content-type": "application/json",
   [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
-    { p: "alice@example.com", exp: Date.now() + 60_000, ...(imp ? { imp } : {}) },
+    { t: TEST_TENANT, p: "alice@example.com", exp: Date.now() + 60_000, ...(imp ? { imp } : {}) },
     secret,
   ),
 });
