@@ -63,10 +63,9 @@ function request(text: string, threadRef = "t-signal"): OrchestratorInput {
 }
 
 function identityFor(body: unknown, fallback: string): Record<string, string> {
-  const named = (body as { request?: { actor?: { externalId?: unknown } }; actor?: { externalId?: unknown } } | null)
-    ?.request?.actor?.externalId;
-  const direct = (body as { actor?: { externalId?: unknown } } | null)?.actor?.externalId;
-  const p = typeof named === "string" ? named : typeof direct === "string" ? direct : fallback;
+  const shaped = body as { request?: { actor?: { externalId?: unknown } }; actor?: { externalId?: unknown } } | null;
+  const named = [shaped?.request?.actor?.externalId, shaped?.actor?.externalId].find((v) => typeof v === "string");
+  const p = typeof named === "string" ? named : fallback;
   return { [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p, exp: Date.now() + 60_000 }, SECRET) };
 }
 
