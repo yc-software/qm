@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { PORTAL_IDENTITY_HEADER } from "../auth/portal-identity.ts";
 import { mintSignedPayload } from "../auth/signed-token.ts";
-import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { TENANT_HEADER, signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { loadConfig, type Config } from "../config.ts";
 import { errMessage } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
@@ -99,7 +100,11 @@ export async function stagingApiHeaders(
   base: Record<string, string> = {},
   nowMs = Date.now(),
 ): Promise<Record<string, string>> {
-  const portalIdentity = await mintSignedPayload({ p: principalId, exp: nowMs + 60_000 }, portalIdentitySecret);
+  const tenant = currentTenant();
+  const portalIdentity = await mintSignedPayload(
+    { t: tenant, p: principalId, exp: nowMs + 60_000 },
+    portalIdentitySecret,
+  );
   return signedRequestHeaders(
     sourceSecret,
     method,
@@ -107,6 +112,7 @@ export async function stagingApiHeaders(
     body,
     {
       ...base,
+      [TENANT_HEADER]: tenant,
       [PORTAL_IDENTITY_HEADER]: portalIdentity,
     },
     Math.floor(nowMs / 1000),
