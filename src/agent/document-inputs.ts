@@ -1,5 +1,5 @@
 import { resolveGatewayModel } from "../model/gateway-models.ts";
-import { countTokens } from "../util/tokens.ts";
+import { payloadTokensWithoutBinary } from "./provider-payload.ts";
 import {
   fitDocumentText,
   documentFallbackText,
@@ -139,9 +139,7 @@ export async function withDocumentInputs(
   const item = items[index]!;
   const key = google ? "parts" : "content";
   const content = item[key];
-  const promptTokens = countTokens(
-    JSON.stringify(payload, (key, value) => (["data", "image_url", "file_data"].includes(key) ? "" : value)),
-  );
+  const promptTokens = payloadTokensWithoutBinary(payload);
   const remainingTokens = Math.max(0, (model.contextWindow ?? 128_000) - promptTokens - 8192);
   const blocks =
     stubText === undefined

@@ -2,7 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
-import { guardOutputBudget, OUTPUT_BUDGET_FLOOR_TOKENS, OUTPUT_GUARD_SAFETY_TOKENS } from "../src/agent/agent-run.ts";
+import {
+  guardOutputBudget,
+  OUTPUT_BUDGET_FLOOR_TOKENS,
+  OUTPUT_GUARD_SAFETY_TOKENS,
+} from "../src/agent/provider-payload.ts";
 
 const FABLE = { contextWindow: 200_000, maxTokens: 64_000 };
 

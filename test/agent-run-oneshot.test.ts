@@ -18,11 +18,8 @@ import {
   REFUSAL_FALLBACK_MODEL_IDS,
   renderDetectPrompt,
   resolveConfiguredModelId,
-  sanitizeLlmPayload,
-  trimPayloadToByteBudget,
   seedRawMessagesIntoSession,
   toPiMessage,
-  transportFromModel,
 } from "../src/agent/agent-run.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
@@ -31,6 +28,7 @@ import type { SessionEntry } from "../src/types.ts";
 import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
 import { testConfig } from "./support/test-config.ts";
 import { ProviderTurnError, turnFailureMessage } from "../src/core/turn-error.ts";
+import { sanitizeLlmPayload, trimPayloadToByteBudget, transportFromModel } from "../src/agent/provider-payload.ts";
 
 function countTempDirs(prefix: string): number {
   return readdirSync(tmpdir()).filter((name) => name.startsWith(prefix)).length;

@@ -12,10 +12,10 @@ import {
   loadDocumentInputs,
   type DocumentInput,
 } from "../src/core/document-inputs.ts";
-import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/agent/agent-run.ts";
 import { mimeFromName } from "../src/core/attachments.ts";
 import type { AttachmentMeta, SessionEntry } from "../src/types.ts";
 import type { FileArtifact, FileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { guardOutputBudget, sanitizeLlmPayload, trimPayloadToByteBudget } from "../src/agent/provider-payload.ts";
 
 const openai = { api: "openai-responses", provider: "openai", input: ["text", "image"] };
 const anthropic = { api: "anthropic-messages", provider: "anthropic", input: ["text", "image"] };
@@ -191,6 +191,24 @@ test("requests clearly under the byte budget are sent without serializing them",
   const stringify = t.mock.method(JSON, "stringify");
   assert.equal(trimPayloadToByteBudget(payload, 3_400_000), payload);
   assert.equal(stringify.mock.callCount(), 0);
+});
+
+test("chat-completions image URLs over the byte budget are shed like other inline images", () => {
+  const payload = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "describe" },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${"A".repeat(400_000)}` } },
+        ],
+      },
+    ],
+  };
+  const trimmed = JSON.stringify(trimPayloadToByteBudget(payload, 100_000));
+  assert.doesNotMatch(trimmed, /AAAA/);
+  assert.match(trimmed, /image removed/);
+  assert.match(trimmed, /describe/);
 });
 
 test("escape-heavy text near the byte budget still sheds inline images", () => {
