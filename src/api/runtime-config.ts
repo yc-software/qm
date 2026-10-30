@@ -1,4 +1,3 @@
-import { errMessage } from "../util/errors.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { RuntimePurpose } from "../resolution/config-store.ts";
 import { resolveRuntimeChoiceDurable } from "../harness/harness-router.ts";
@@ -268,35 +267,6 @@ export async function availableRuntimeError(
   });
 }
 
-async function subagentRuntimeError(
-  ctx: { deps: RuntimeDeps },
-  scope: ScopeId,
-  choice: RuntimeChoice,
-): Promise<string | null> {
-  const error = await availableRuntimeError(ctx, scope, choice, "subagent").catch((resolveError: unknown) => {
-    if (!(resolveError instanceof NonRetryableTurnError)) throw resolveError;
-    return `${resolveError.message}; it may be an unknown model ID`;
-  });
-  if (!error) return null;
-  const head = `${choice.harnessId}/${choice.modelId} can't run subagents here (${error}). Don't guess another model. Omit model and harness to use the default`;
-  try {
-    const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(
-      ctx,
-      scope,
-      undefined,
-      "subagent",
-    );
-    const usable: string[] = [];
-    for (const harnessId of approvedHarnesses)
-      for (const modelId of modelsByHarness[harnessId] ?? [])
-        if (await webuiModelEnabled(ctx, modelId, "subagent")) usable.push(`${harnessId}/${modelId}`);
-    const options = usable.length ? `, or pick one of: ${usable.join(", ")}` : "";
-    return `${head}, ${effective.harnessId}/${effective.modelId}${options}.`;
-  } catch (listError) {
-    return `${head}, or pick one runtime get lists (listing them failed: ${errMessage(listError)}).`;
-  }
-}
-
 export async function assertSubagentRuntime(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
@@ -304,15 +274,35 @@ export async function assertSubagentRuntime(
   requested: Partial<RuntimeChoice>,
   resolve: () => Promise<RuntimeChoice>,
 ): Promise<void> {
-  const resolved = await resolve().catch((error: unknown) => ({ error }));
   if (Object.keys(requested).length === 0) {
-    if ("error" in resolved) throw resolved.error;
+    await resolve();
     return;
   }
-  const choice = "error" in resolved ? { ...fallback, ...requested } : resolved;
-  const error = await subagentRuntimeError(ctx, scope, choice).catch((checkError: unknown) => {
-    throw "error" in resolved ? new AggregateError([resolved.error, checkError], errMessage(checkError)) : checkError;
+  let choice: RuntimeChoice = { ...fallback, ...requested };
+  let reason: string | null;
+  let cause: unknown;
+  try {
+    choice = await resolve();
+    reason = await availableRuntimeError(ctx, scope, choice, "subagent");
+  } catch (error) {
+    if (!(error instanceof NonRetryableTurnError)) throw error;
+    reason = `${error.message}; it may be an unknown model ID`;
+    cause = error;
+  }
+  if (!reason) return;
+  const head = `${choice.harnessId}/${choice.modelId} can't run subagents here (${reason}). Don't guess another model. Omit model and harness to use the default`;
+  const { effective, approvedHarnesses, modelsByHarness } = await runtimeConfigBody(
+    ctx,
+    scope,
+    undefined,
+    "subagent",
+  ).catch((listError: unknown) => {
+    throw new Error(`${head} (listing usable models failed)`, { cause: listError });
   });
-  if ("error" in resolved) throw error ? new Error(error, { cause: resolved.error }) : resolved.error;
-  if (error) throw new Error(error);
+  const usable: string[] = [];
+  for (const harnessId of approvedHarnesses)
+    for (const modelId of modelsByHarness[harnessId] ?? [])
+      if (await webuiModelEnabled(ctx, modelId, "subagent")) usable.push(`${harnessId}/${modelId}`);
+  const options = usable.length ? `, or pick one of: ${usable.join(", ")}` : "";
+  throw new Error(`${head}, ${effective.harnessId}/${effective.modelId}${options}.`, { cause });
 }
