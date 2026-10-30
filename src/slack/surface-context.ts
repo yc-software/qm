@@ -17,6 +17,7 @@ import {
 import { SLACK_AUTH_ERRORS, type SlackHistoryMessage, parseMessageList, slackErrorCode } from "./payloads.ts";
 import type { SlackCoreClient, SurfaceContextRequest } from "../api/slack-core-client.ts";
 import type { Directory } from "./directory.ts";
+import { decodeTs } from "./reactions.ts";
 import {
   type ConversationSerializer,
   RECENT_HISTORY_LIMIT,
@@ -113,23 +114,30 @@ export function createSurfaceContextFulfiller(deps: {
     threadTs: string | undefined,
   ): Promise<SlackHistoryMessage | undefined> {
     client = deps.historyClient ?? client;
-    if (threadTs) {
-      const res = await client.conversations.replies({ channel, ts: threadTs, oldest: ts, inclusive: true, limit: 2 });
-      const hit = parseMessageList(res).messages.find((m) => m?.ts === ts);
-      if (hit) return hit;
-    }
+    const inThread = async (root: string) =>
+      parseMessageList(
+        await client.conversations.replies({ channel, ts: root, oldest: ts, inclusive: true, limit: 2 }),
+      ).messages.find((m) => m?.ts === ts);
+    const hit = threadTs ? await inThread(threadTs) : undefined;
+    if (hit) return hit;
     const res = await client.conversations.history({ channel, latest: ts, inclusive: true, limit: 1 });
-    return parseMessageList(res).messages.find((m) => m?.ts === ts);
+    return parseMessageList(res).messages.find((m) => m?.ts === ts) ?? (ts !== threadTs ? inThread(ts) : undefined);
   }
 
   async function fetchSurfaceFile(
     client: any,
     channel: string,
     conversationThreadTs: string | undefined,
-    ref: { ts: string; threadTs?: string; name?: string },
+    ref: { ts: string; threadTs?: string; name?: string; index?: number },
   ): Promise<Record<string, unknown>> {
+    const ts = decodeTs(ref.ts) ?? ref.ts.trim();
+    if (!ts.includes(".") || !Number.isFinite(Number(ts)))
+      return {
+        error:
+          "that isn't a message ref — pass the ts (or ~id) of the message carrying the file, plus name or index when it carries several",
+      };
     const threadTs = typeof ref.threadTs === "string" && ref.threadTs ? ref.threadTs : conversationThreadTs;
-    const msg = await findMessageAt(client, channel, ref.ts, threadTs);
+    const msg = await findMessageAt(client, channel, ts, threadTs);
     if (!msg) {
       return {
         error: "I couldn't find that message — if it's a thread reply, pass its threadTs (the parent message's ts) too",
@@ -137,21 +145,25 @@ export function createSurfaceContextFulfiller(deps: {
     }
     const files = (msg.files ?? []).filter((f) => f?.id);
     if (!files.length) return { error: "that message has no files attached" };
+    const listing = files.map((f, i) => `${i + 1}. ${slackFileName(f)}`).join(", ");
     let file: SlackFile | undefined;
-    if (ref.name) {
+    if (ref.index !== undefined) {
+      file = files[ref.index - 1];
+      if (!file) return { error: `that message carries ${files.length} file(s) — pick one by position: ${listing}` };
+    } else if (ref.name) {
       const want = ref.name.toLowerCase();
       file =
         files.find((f) => slackFileName(f).toLowerCase() === want) ??
         files.find((f) => slackFileName(f).toLowerCase().includes(want));
       if (!file)
         return {
-          error: `that message has no file matching "${ref.name}" — it carries: ${files.map(slackFileName).join(", ")}`,
+          error: `that message has no file matching "${ref.name}" — it carries: ${listing} (pass a name or a position)`,
         };
     } else if (files.length === 1) {
       file = files[0]!;
     } else {
       return {
-        error: `that message carries ${files.length} files — pass a name: ${files.map(slackFileName).join(", ")}`,
+        error: `that message carries ${files.length} files — pass a name or a position: ${listing}`,
       };
     }
     if (isOversize(file)) return { error: oversizeMsg(slackFileName(file)) };

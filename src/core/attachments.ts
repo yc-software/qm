@@ -21,7 +21,7 @@ import { swallowAs } from "../util/errors.ts";
 import { fileContentRequest } from "./document-kinds.ts";
 import { hashId } from "../util/crypto.ts";
 import type { SecurityScreenVerdict } from "../security/security-posture.ts";
-import { downscaleVisionImage } from "./image-downscale.ts";
+import { downscaleVisionImage, sniffImageDimensions } from "./image-downscale.ts";
 import { NoDefaultSandboxError } from "../sandbox/sandbox-routing.ts";
 
 export const INBOX_DIR = "inbox";
@@ -36,6 +36,20 @@ export const MAX_ATTACHMENT_BYTES = MAX_BLOB_BYTES;
 const VISION_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
 export const MAX_VISION_IMAGE_BYTES = 5_000_000;
+
+export type VisionImage =
+  | { ok: true; data: string; mimeType: string }
+  | { ok: false; reason: "not an image" | "unsupported image format" | "too large" };
+
+export async function visionImage(bytes: Uint8Array): Promise<VisionImage> {
+  const format = sniffImageDimensions(bytes)?.format;
+  if (!format) return { ok: false, reason: "not an image" };
+  const mimeType = `image/${format}`;
+  if (!VISION_MIME_TYPES.has(mimeType)) return { ok: false, reason: "unsupported image format" };
+  const scaled = await downscaleVisionImage(bytes, mimeType);
+  if (scaled.length > MAX_VISION_IMAGE_BYTES) return { ok: false, reason: "too large" };
+  return { ok: true, data: Buffer.from(scaled).toString("base64"), mimeType };
+}
 
 export const MAX_LLM_REQUEST_BYTES = 18_000_000;
 
@@ -341,15 +355,16 @@ export async function materializeInbound(
       ...(a.sourceId ? { sourceId: a.sourceId } : {}),
       ...(registered ? { artifactId: registered.id } : {}),
     });
-    if (VISION_MIME_TYPES.has(mimetype) && bytes.length > 0 && bytes.length <= MAX_VISION_IMAGE_BYTES) {
-      const imageBytes = await downscaleVisionImage(bytes, mimetype);
+    const image = await visionImage(bytes);
+    if (!image.ok && VISION_MIME_TYPES.has(mimetype))
+      console.warn(`attachments: ${name} (${mimetype}) not shown to the model: ${image.reason}`);
+    if (image.ok)
       images.push({
         name,
-        mimeType: mimetype,
-        dataBase64: Buffer.from(imageBytes).toString("base64"),
+        mimeType: image.mimeType,
+        dataBase64: image.data,
         ...(registered ? { artifactId: registered.id } : {}),
       });
-    }
   }
   return { metas, images, tooMany, unavailable, blocked, unscreened, ...(unstaged.size ? { unstaged } : {}) };
 }

@@ -658,3 +658,37 @@ test("a request rejected as too long retries once without its inline documents i
     globalThis.fetch = realFetch;
   }
 });
+
+test("a request rejected over an image retries once without this turn's images instead of failing the turn", async () => {
+  const harness = createPiHarness({ apiKey: "sk-test" });
+  const sink: Sink = { entries: [] };
+  const realFetch = globalThis.fetch;
+  const requests: string[] = [];
+  const dataBase64 = Buffer.from("not really a png, but labelled as one").toString("base64");
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    const body = String(init?.body);
+    requests.push(body);
+    if (body.includes(dataBase64))
+      return new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "messages.0.content.1.image.source: could not process image",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    return sse(textReplyEvents("answered without the image"));
+  }) as typeof fetch;
+  try {
+    const result = await harness.turns.runTurn(
+      turnInput("rejected-image", sink, { images: [{ mimeType: "image/png", dataBase64 }] }),
+    );
+    assert.equal(result.reply, "answered without the image");
+    assert.equal(requests.filter((body) => body.includes(dataBase64)).length, 1, "the image is sent only once");
+    assert.match(requests.at(-1)!, /image removed/);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

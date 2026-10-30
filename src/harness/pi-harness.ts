@@ -832,8 +832,31 @@ function documentsDroppedNote(documents: readonly DocumentInput[]): string {
   );
 }
 
-const DOCUMENTS_DROPPED_RETRY_NOTE =
-  "[system] The previous request failed while it carried inline attachments; they have been replaced with notes on how to read them from saved files. Continue with the request.";
+const ATTACHMENTS_DROPPED_RETRY_NOTE =
+  "[system] The previous request failed while it carried inline attachments; they have been replaced with notes (documents say how to read them from saved files). Continue with the request, and tell the person if an image they asked about couldn't be read.";
+
+function imageCountSince(session: AgentSession, from: number): number {
+  return session.agent.state.messages
+    .slice(from)
+    .flatMap((m) => ((m as { content?: unknown }).content as Array<{ type?: string }> | undefined) ?? [])
+    .filter((block) => block?.type === "image").length;
+}
+
+function replaceImagesSince(session: AgentSession, from: number): void {
+  const state = session.agent.state;
+  state.messages = state.messages.map((m, i) => {
+    const content = (m as { content?: unknown }).content;
+    if (i < from || !Array.isArray(content)) return m;
+    return {
+      ...m,
+      content: content.map((block: { type?: string }) =>
+        block?.type === "image"
+          ? { type: "text", text: "[image removed: the model provider rejected a request that carried it]" }
+          : block,
+      ),
+    } as typeof m;
+  });
+}
 
 function dropFailedAssistant(session: AgentSession, messagesBefore: number): void {
   const state = session.agent.state;
@@ -2003,15 +2026,17 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
           let documentRejection: ProviderTurnError | undefined;
           let documentRetried = false;
           const noteDocumentRejection = (message: unknown): void => {
-            if (documentRejection || !entry.ref.documents?.length) return;
+            const documents = entry.ref.documents?.length ?? 0;
+            const images = imageCountSince(entry.agentSession, messagesBefore);
+            if (documentRejection || (!documents && !images)) return;
             const failed = message as AssistantMessage | undefined;
             if (failed?.role !== "assistant" || failed.stopReason !== "error") return;
             const failure = piAssistantFailure({ messages: [failed] } as unknown as AssistantTextSession);
             if (!failure || !DOCUMENT_REJECTION_CODES.has(failure.code)) return;
             documentRejection = failure;
-            entry.ref.documentsStubbed = true;
+            if (documents) entry.ref.documentsStubbed = true;
             console.error(
-              `[pi] request with ${entry.ref.documents.length} inline document(s) rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with stubs session=${turn.session.id}`,
+              `[pi] request with ${documents} inline document(s) and ${images} image(s) from this turn rejected (${failure.code}: ${failure.raw || failure.message}) — replacing them with notes session=${turn.session.id}`,
             );
           };
           const retryWithoutDocuments = async (): Promise<boolean> => {
@@ -2024,7 +2049,8 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (turnWallClockMs > 0 && capMs < EMPTY_ENDING_MIN_BUDGET_MS) return false;
             documentRetried = true;
             dropFailedAssistant(entry.agentSession, messagesBefore);
-            const outcome = await raceTurnWallClock(entry.agentSession.prompt(DOCUMENTS_DROPPED_RETRY_NOTE), {
+            replaceImagesSince(entry.agentSession, messagesBefore);
+            const outcome = await raceTurnWallClock(entry.agentSession.prompt(ATTACHMENTS_DROPPED_RETRY_NOTE), {
               capMs,
               extendMs: extendCapMs,
               abort: () => entry.agentSession.abort(),
@@ -2032,7 +2058,7 @@ export function createPiHarness(opts?: PiHarnessOptions): Harness {
             if (userAborted) return false;
             if (outcome !== "ok")
               throw new NonRetryableTurnError(
-                `${documentRejection.message} (retry without inline documents was ${outcome})`,
+                `${documentRejection.message} (retry without inline attachments was ${outcome})`,
               );
             return true;
           };

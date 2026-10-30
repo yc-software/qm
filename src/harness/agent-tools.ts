@@ -3118,8 +3118,8 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
             "(send to a DIFFERENT audience: a teammate DM, another channel, a group — the ONLY way to " +
             "leave this conversation), react (emoji on a message), edit/delete (revise/retract your " +
             "OWN message), read_thread (read stored thread messages, with live fallback for missing context), whats_new (pointers to what " +
-            "changed), search (find messages), read_members (the roster), read_file (a shared file's " +
-            "contents by reference).",
+            "changed), search (find messages), read_members (the roster), read_file (open a file posted in this " +
+            "conversation — text comes back as text, images as an image you can see).",
         },
       ),
       text: Type.Optional(
@@ -3159,10 +3159,23 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
       sandbox_id: outboundSandboxSchema,
       files: Type.Optional(outboundFilesSchema),
       emoji: Type.Optional(Type.String({ description: 'react: emoji name without colons (e.g. "eyes", "tada").' })),
+      name: Type.Optional(
+        Type.String({
+          description:
+            "read_file: which file, by name (a unique part is enough), when the message at `ref` carries more than one.",
+        }),
+      ),
+      index: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          description:
+            "read_file: which file, by 1-based position on the message at `ref`; use this when names repeat.",
+        }),
+      ),
       ref: Type.Optional(
         Type.String({
           description:
-            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the file's reference (its id from an earlier read result).",
+            "edit/delete: the id of your OWN message to rewrite/retract (its `ts` from read_thread). read_file: the `ts` (or `~id`) of the message carrying the file, as shown on each message by read_thread and the conversation context.",
         }),
       ),
       limit: Type.Optional(
@@ -3478,8 +3491,13 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
         }
         case "read_file": {
           if (params.ref === undefined) return missing("ref");
-          await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref });
-          const r = await tc.readFile(params.ref);
+          const pick = {
+            ...(typeof params.name === "string" && params.name.trim() ? { name: params.name.trim() } : {}),
+            ...(params.index !== undefined ? { index: params.index } : {}),
+          };
+          const picked = Object.keys(pick).length > 0;
+          await recordCall(callId, { tool: surfaceName, action: "read_file", ref: params.ref, ...pick });
+          const r = picked ? await tc.readFile(params.ref, pick) : await tc.readFile(params.ref);
           if (!r.ok)
             return recordResult(
               callId,
@@ -3487,34 +3505,36 @@ export function createAgentTools(ref: ToolContextRef, opts?: AgentToolsOptions):
               text(`[couldn't read that file] ${r.message ?? "unavailable"}`),
               true,
             );
-          if (r.content !== undefined) {
+          const summary = {
+            tool: surfaceName,
+            action: "read_file",
+            ok: true,
+            ...(r.name ? { name: r.name } : {}),
+            ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
+          };
+          if (r.image) {
+            const label = `[image ${r.name ?? "file"} (${r.sizeBytes ?? "?"} bytes), shown below]`;
             return recordExternalResult(
               callId,
+              { ...summary, image: true, contentType: r.image.mimeType },
               {
-                tool: surfaceName,
-                action: "read_file",
-                ok: true,
-                ...(r.name ? { name: r.name } : {}),
-                ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
+                ...text(label),
+                content: [...text(label).content, { type: "image" as const, ...r.image }],
               },
-              text(r.content),
               "surface file",
             );
+          }
+          if (r.content !== undefined) {
+            return recordExternalResult(callId, summary, text(r.content), "surface file");
           }
           const kind = r.contentType ?? "binary";
           const size = r.sizeBytes !== undefined ? ` (${r.sizeBytes} bytes)` : "";
           return recordResult(
             callId,
-            {
-              tool: surfaceName,
-              action: "read_file",
-              ok: true,
-              binary: true,
-              ...(r.name ? { name: r.name } : {}),
-              ...(r.sizeBytes !== undefined ? { sizeBytes: r.sizeBytes } : {}),
-              ...(r.contentType ? { contentType: r.contentType } : {}),
-            },
-            text(`[${r.name ?? "file"}${size} — ${kind}; not text. Bring it onto your computer to work with it.]`),
+            { ...summary, binary: true, ...(r.contentType ? { contentType: r.contentType } : {}) },
+            text(
+              `[${r.name ?? "file"}${size} — ${kind}; ${r.message ?? "not text"}. To work with it on your computer, POST $AGENT_API_URL/v1/surface-file with the same ts and name or index, and follow the returned download note.]`,
+            ),
           );
         }
         default:
