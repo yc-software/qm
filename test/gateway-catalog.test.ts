@@ -5,6 +5,10 @@ import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { resolveRuntimeChoice } from "../src/harness/harness-router.ts";
 import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { oneShot } from "../src/harness/pi-harness.ts";
+import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { setGatewayModels } from "../src/model/gateway-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
@@ -157,7 +161,7 @@ test("successful revocation clears legacy aliases and cached models and cannot b
   assert.throws(() => modelGatewayRequest(undefined, stale), /unavailable/);
 });
 
-test("legacy routes work without discovery support, then discovery adds models and governs access", async () => {
+test("configured routes work without discovery support, then discovery adds models", async () => {
   const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
   f.status(404);
   await f.catalog.refresh();
@@ -166,33 +170,58 @@ test("legacy routes work without discovery support, then discovery adds models a
   f.status(200);
   await f.catalog.refresh();
   assert.ok(f.catalog.transport.models["gateway/vendor/new-model"]);
-  f.tick();
-  f.status(401);
-  await f.catalog.refresh();
-  assert.deepEqual(f.catalog.transport.models, {});
 });
 
-test("a transient discovery blip keeps last known routes; a prolonged outage hides them", async () => {
+test("failed discovery keeps last known routes until discovery succeeds again", async () => {
   const f = fixture([group()], { "claude-opus-5": "vendor/new-model" });
   await f.catalog.refresh();
   const native = resolveModel("claude-opus-5")!;
-  f.tick();
-  f.status(503);
-  await f.catalog.refresh();
-  assert.ok(resolveModel("gateway/vendor/new-model"));
-  assert.ok(modelGatewayRequest(f.catalog.transport, native));
-  for (let i = 0; i < 3; i++) {
+  for (const status of [503, 401]) {
     f.tick();
+    f.status(status);
     await f.catalog.refresh();
+    assert.ok(resolveModel("gateway/vendor/new-model"));
+    assert.equal(modelGatewayRequest(f.catalog.transport, native)?.target, "vendor/new-model");
   }
-  assert.equal(resolveModel("gateway/vendor/new-model"), undefined);
-  assert.throws(() => modelGatewayRequest(f.catalog.transport, native), /unavailable/);
   f.tick();
   f.status(200);
   f.metadata([group("new")]);
   f.listing(["new"]);
   await f.catalog.refresh();
   assert.ok(resolveModel("gateway/new"));
+});
+
+test("a gateway over budget still receives requests, so its refusal is classified as model_budget", async (t) => {
+  const target = "anthropic/claude-opus-5";
+  let exhausted = false;
+  const gateway = createServer((req, res) => {
+    req.resume();
+    res.writeHead(exhausted ? 400 : 200, { "content-type": "application/json" });
+    if (exhausted)
+      return res.end(JSON.stringify({ error: { message: "Budget has been exceeded!", type: "budget_exceeded" } }));
+    res.end(JSON.stringify({ data: req.url === "/v1/models" ? [{ id: target }] : [group(target)] }));
+  });
+  await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => gateway.close(() => resolve())));
+  let clock = 0;
+  const catalog = createGatewayCatalog(
+    {
+      ...config,
+      url: `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+      models: { "claude-opus-5": target },
+    },
+    fetch,
+    () => clock,
+  );
+  await catalog.refresh();
+  exhausted = true;
+  clock += 300001;
+  await catalog.refresh();
+  const failure = await oneShot("gateway-budget", resolveModel("claude-opus-5")!, {}, "system", "hello", {
+    modelGateway: catalog.transport,
+  }).catch((error: unknown) => error);
+  assert.ok(failure instanceof ProviderTurnError);
+  assert.equal(failure.code, "model_budget");
 });
 
 test("malformed and oversized catalogs cannot grant access", async () => {
