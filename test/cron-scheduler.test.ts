@@ -28,6 +28,7 @@ function harness(
   reply: string | ((req: TurnRequest) => Promise<TurnResult>) = "CRON-OUTPUT-XYZ",
   directory?: DirectoryStore,
   maxFiresPerTick?: number,
+  now?: () => number,
 ) {
   const crons = createCronStore();
   const deliveries = createDeliveryStore();
@@ -47,6 +48,7 @@ function harness(
     run,
     ...(directory ? { directory } : {}),
     ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
+    ...(now ? { now } : {}),
   });
   return { crons, deliveries, calls, scheduler, identity };
 }
@@ -1833,4 +1835,48 @@ test("scheduled and manual fires use the saved runtime; clearing it restores inh
   assert.equal(calls[2]?.harness, undefined);
   assert.equal(calls[2]?.thinkingLevel, undefined);
   assert.equal(calls[2]?.fastMode, undefined);
+});
+
+test("a failing cron posts one notice to its destination, then stays quiet until a fire succeeds", async () => {
+  let result: TurnResult = {
+    status: "refused",
+    reason: "pi/claude-sonnet-5 can't run here (runtime is no longer available)",
+  };
+  let clock = 1_000_000;
+  const { crons, deliveries, scheduler } = harness(
+    async () => result,
+    undefined,
+    undefined,
+    () => (clock += 1000),
+  );
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "post the standup",
+    title: "Daily standup",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+  });
+  const texts = async () => (await deliveries.pending("slack")).map((d) => d.text);
+
+  await runNowSettled(scheduler, cron.id);
+  assert.deepEqual(await texts(), [
+    "⚠️ Scheduled task “Daily standup” did not run: pi/claude-sonnet-5 can't run here (runtime is no longer available). Later failures go only to its run log until it runs successfully again.",
+  ]);
+
+  await runNowSettled(scheduler, cron.id);
+  assert.equal((await texts()).length, 1, "a repeat failure is logged, not posted again");
+
+  result = { status: "ok", reply: "standup posted" };
+  await runNowSettled(scheduler, cron.id);
+  result = { status: "failed" };
+  await runNowSettled(scheduler, cron.id);
+  const after = await texts();
+  assert.equal(after.length, 3, "a failure after a success notifies again");
+  assert.match(after[2]!, /^⚠️ Scheduled task “Daily standup” did not run: /);
+  assert.deepEqual(
+    (await crons.listFires(cron.id)).runs.map((r) => r.status),
+    ["refused", "refused", "ok", "failed"],
+  );
 });

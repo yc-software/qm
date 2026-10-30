@@ -263,6 +263,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
       return { authzFailed: false };
     }
+    const previous = (await deps.crons.listFires(cron.id, { limit: 2 })).runs
+      .filter((r) => r.fireKey !== fireKey)
+      .at(-1);
+    const failingAlready = previous?.status === "failed" || previous?.status === "refused";
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
       outcome = await runTrigger(
@@ -289,6 +293,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
+          ...(failingAlready
+            ? {}
+            : {
+                errorNotice: (reason: string) =>
+                  `⚠️ Scheduled task “${cron.title ?? cron.id}” did not run: ${reason}. Later failures go only to its run log until it runs successfully again.`,
+              }),
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
       );
