@@ -559,6 +559,9 @@ export interface App {
   effectiveDeploymentPermission(d: Deployment, principalId: string): Promise<Permission | null>;
   deploymentGitPermissionFor(idOrName: string, principalId: string): Promise<"read" | "write" | null>;
   listSkills(): Promise<Skill[]>;
+  archivedSkillsFor(principalId: string): Promise<Skill[]>;
+  skillsInScope(scope: ScopeId): Promise<Skill[]>;
+  skillsFromPacks(packIds: readonly string[]): Promise<Skill[]>;
   getSkill(id: string): Promise<Skill | null>;
   archiveSkill(id: string): Promise<Skill>;
   listVisibleSkills(principalId: string): Promise<SkillResolution[]>;

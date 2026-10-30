@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node
 import { join, relative, sep } from "node:path";
 import type { ScopeId } from "../types.ts";
 import { createKeyedQueue } from "../util/async.ts";
+import { errMessage } from "../util/errors.ts";
 import { parseSeedSkillFrontmatter } from "./frontmatter.ts";
 import { safeSkillFilePath, type Skill, type SkillFile, type SkillManifest, type SkillStore } from "./skill-store.ts";
 
@@ -112,9 +113,9 @@ async function upsertSeedSkillUnsafe(
   },
 ): Promise<UpsertOutcome> {
   const { scopeId, manifest, createdBy, reviewer, pack } = input;
-  const all = await skills.list();
+  const all = await skills.inScopes([scopeId], manifest.name);
   const isOwn = (s: Skill) => (pack ? s.pack?.packId === pack.packId : s.createdBy === createdBy);
-  const existing = all.find((s) => s.scopeId === scopeId && s.manifest.name === manifest.name && isOwn(s));
+  const existing = all.find(isOwn);
   if (!existing && foreignSkillCollision(all, scopeId, manifest.name, isOwn)) return "foreign";
   if (existing?.status === "archived" && input.respectArchived) return "skipped";
   if (existing) {
@@ -157,4 +158,25 @@ export async function installSeedSkills(
   }
 
   return result;
+}
+
+export function lazySkillBoot(
+  hydrateLayer: () => Promise<unknown>,
+  installCatalogs?: () => Promise<void>,
+): { layerReady: () => Promise<unknown>; skillsReady: () => Promise<void> } {
+  let boot: { layer: Promise<unknown>; skills: Promise<void> } | undefined;
+  const start = () => {
+    if (boot) return boot;
+    const layer = hydrateLayer();
+    const layerSettled = layer.then(
+      () => undefined,
+      (e: unknown) => console.error("[seed] deployment layer not ready:", errMessage(e)),
+    );
+    const catalogs = installCatalogs?.().catch((e: unknown) =>
+      console.error("[seed] failed to install seed skills:", errMessage(e)),
+    );
+    boot = { layer, skills: Promise.all([catalogs, layerSettled]).then(() => undefined) };
+    return boot;
+  };
+  return { layerReady: () => start().layer, skillsReady: () => start().skills };
 }

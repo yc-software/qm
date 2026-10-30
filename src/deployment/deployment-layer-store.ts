@@ -306,27 +306,20 @@ export function createDeploymentLayerStore(opts: {
   const layerSkills = (all: Skill[]): Skill[] =>
     all.filter((skill) => skill.scopeId === opts.scopeId && skill.createdBy === LAYER_CREATED_BY);
 
-  const activeBundleClaims = async (all: Skill[]): Promise<Map<string, string>> => {
+  const layerScopeSkills = () => opts.skills.inScopes([opts.scopeId]);
+
+  const activeBundleClaims = async (): Promise<Map<string, string>> => {
     const claimed = new Map<string, string>();
     if (!opts.skillBundles) return claimed;
-    const active = new Set(
-      all.flatMap((skill) => (skill.status === "published" && skill.pack?.packId ? [skill.pack.packId] : [])),
-    );
-    const bundles = (await opts.skillBundles.list())
-      .filter((bundle) => active.has(bundle.packId))
-      .sort((a, b) => {
-        if (a.packId < b.packId) return -1;
-        if (a.packId > b.packId) return 1;
-        return 0;
-      });
+    const bundles = await opts.skillBundles.forPacks(await opts.skills.activePackIds());
     for (const bundle of bundles) {
       for (const path of bundleFilePaths(bundle.files).sort()) claimed.set(path, `pack:${bundle.packId}`);
     }
     return claimed;
   };
 
-  const assertNoBundleCollisions = async (manifests: SkillManifest[], all: Skill[]): Promise<void> => {
-    const claimed = await activeBundleClaims(all);
+  const assertNoBundleCollisions = async (manifests: SkillManifest[]): Promise<void> => {
+    const claimed = await activeBundleClaims();
     for (const manifest of manifests) {
       const collision = detectPathCollisions(skillRecordPaths(manifest.name, manifest.files), claimed)[0];
       if (collision) {
@@ -344,7 +337,7 @@ export function createDeploymentLayerStore(opts: {
     if (opts.runtime.dir !== `durable:${record.contentHash}`) return false;
     const next = validated ?? validateBundle(record.bundle, `durable:${record.contentHash}`);
     if (JSON.stringify(publicResolved(opts.runtime)) !== JSON.stringify(publicResolved(next.runtime))) return false;
-    const current = layerSkills(await opts.skills.list());
+    const current = layerSkills(await layerScopeSkills());
     const wanted = new Set(next.manifests.map((manifest) => manifest.name));
     if (current.some((skill) => skill.status !== "archived" && !wanted.has(skill.manifest.name))) return false;
     return next.manifests.every((manifest) => {
@@ -355,7 +348,7 @@ export function createDeploymentLayerStore(opts: {
 
   const restoreProjection = async (snapshot: Skill[]): Promise<void> => {
     const before = new Set(snapshot.map((skill) => skill.id));
-    for (const skill of layerSkills(await opts.skills.list())) {
+    for (const skill of layerSkills(await layerScopeSkills())) {
       if (!before.has(skill.id)) await opts.skills.delete(skill.id);
     }
     for (const skill of snapshot) await opts.skills.restore(skill);
@@ -369,11 +362,10 @@ export function createDeploymentLayerStore(opts: {
     )
       return;
     appliedHash = null;
-    const all = await opts.skills.list();
-    const snapshot = layerSkills(all).map((skill) => structuredClone(skill));
+    const snapshot = layerSkills(await layerScopeSkills()).map((skill) => structuredClone(skill));
     const wanted = new Set<string>();
     try {
-      await assertNoBundleCollisions(manifests, all);
+      await assertNoBundleCollisions(manifests);
       for (const manifest of manifests) {
         wanted.add(manifest.name);
         const outcome = await upsertSeedSkill(opts.skills, {
@@ -386,7 +378,7 @@ export function createDeploymentLayerStore(opts: {
           throw new Error(`deployment layer skill "${manifest.name}" collides with an existing non-layer skill`);
         }
       }
-      const projected = layerSkills(await opts.skills.list());
+      const projected = layerSkills(await layerScopeSkills());
       for (const manifest of manifests) {
         const desired = projected.find(
           (skill) =>
@@ -552,15 +544,14 @@ export function createDeploymentLayerStore(opts: {
           pendingAudits: [],
         };
         return withFleetLock(async () => {
-          const existing = await opts.skills.list();
+          const existing = await layerScopeSkills();
           const claimed = new Map<string, string>();
           for (const skill of existing) {
-            if (skill.status !== "published" || skill.scopeId !== opts.scopeId || skill.createdBy === LAYER_CREATED_BY)
-              continue;
+            if (skill.status !== "published" || skill.createdBy === LAYER_CREATED_BY) continue;
             for (const path of persistedSkillRecordPaths(skill.manifest.name, skill.manifest.files))
               claimed.set(path, `skill "${skill.manifest.name}" created by ${skill.createdBy}`);
           }
-          for (const [path, owner] of await activeBundleClaims(existing)) claimed.set(path, owner);
+          for (const [path, owner] of await activeBundleClaims()) claimed.set(path, owner);
           for (const manifest of manifests) {
             const clash = foreignSkillCollision(
               existing,

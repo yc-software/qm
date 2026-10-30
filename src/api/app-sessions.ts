@@ -912,12 +912,12 @@ export function createSessionMethods(
 
     async listScopeResources(principalId, scope) {
       if (!(await principalCanAccessCurrentScope(principalId, scope))) return null;
-      const [page, allCrons, allWebhooks, allDeployments, allSkills] = await Promise.all([
+      const [page, allCrons, allWebhooks, allDeployments, scopeSkills] = await Promise.all([
         filesForViewer(principalId, undefined, scope),
         deps.crons.list(),
         deps.webhooks.list(),
         deps.deploy.listDeployments(),
-        deps.skills.list(),
+        deps.skills.inScopes([scope]),
       ]);
       const files = [...page.owned, ...page.shared];
       let cursor = page.nextCursor;
@@ -945,9 +945,12 @@ export function createSessionMethods(
             }),
         )
       ).filter((d): d is ScopeDeployment => d != null);
-      const skills = allSkills
-        .filter((s) => s.scopeId === scope)
-        .map((s) => ({ id: s.id, name: s.manifest.name, description: s.manifest.description, status: s.status }));
+      const skills = scopeSkills.map((s) => ({
+        id: s.id,
+        name: s.manifest.name,
+        description: s.manifest.description,
+        status: s.status,
+      }));
       return {
         files,
         webhooks: allWebhooks.filter((w) => w.ownerScopeId === scope),
