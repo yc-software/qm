@@ -113,7 +113,7 @@ export function createApprovalStore(deliveries: Pick<DeliveryStore, "enqueue">):
     return byTenant.get(tenant) ?? byTenant.set(tenant, new Map()).get(tenant)!;
   };
   const matching = (keep: (r: PendingApprovalRecord) => boolean) =>
-    [...rows()].filter(([, r]) => keep(r)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    [...rows()].filter(([, r]) => keep(r)).sort(([a], [b]) => a.localeCompare(b));
   return withDelivery(
     {
       get: async (id) => rows().get(id) ?? null,

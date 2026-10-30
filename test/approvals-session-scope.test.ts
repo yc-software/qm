@@ -6,6 +6,9 @@ import { createApprovalStore } from "../src/core/approval-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const approval = (sessionId: string, actor: string, command: string, blocksInput = true): PendingApprovalRecord => ({
   sessionId,
