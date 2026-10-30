@@ -483,6 +483,7 @@ export function createPgPool(
       const res = await p.query(text, params);
       return { rows: res.rows as Rows, rowCount: res.rowCount ?? 0 };
     }
+    signal?.throwIfAborted();
     const connecting = p.connect();
     let client: PoolClient;
     try {
