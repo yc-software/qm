@@ -1,6 +1,6 @@
 import { createPgPool, withPgTransaction, type PgMigrationDefinition, type Rows } from "./pg-pool.ts";
-import { keyValueConversion } from "./kv-conversion.ts";
-import { TENANT } from "../tenants/migrations.ts";
+import { typedTableMigration } from "./typed-table-migration.ts";
+import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { jsonbSafeStringify, pgTextSafe } from "../util/text.ts";
 
 export type ColumnType = "text" | "bigint" | "double precision" | "boolean" | "jsonb" | "text[]";
@@ -49,7 +49,7 @@ export function tableConversion<T, K extends string>(
   const key = keyOf(spec as TableSpec<never, string>);
   const required = new Set<string>(spec.required ?? []);
   const fields = Object.entries(spec.columns) as Array<[string, ColumnType]>;
-  return keyValueConversion({
+  return typedTableMigration({
     table: spec.table,
     columns: [
       `${key} TEXT NOT NULL`,
@@ -80,7 +80,7 @@ export function typedTable<T extends object, K extends string = never>(
   migration: PgMigrationDefinition,
   before: readonly PgMigrationDefinition[] = [],
 ) {
-  const db = createPgPool(databaseUrl, [...before, migration]);
+  const db = createPgPool(databaseUrl, [TENANCY_BASE, ...before, migration]);
   const key = keyOf(spec as TableSpec<never, string>);
   const types = spec.columns as Readonly<Record<string, ColumnType>>;
   const fields = Object.keys(types);

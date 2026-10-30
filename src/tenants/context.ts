@@ -27,3 +27,13 @@ export function currentTenant(): string {
   if (!id) throw new Error("No tenant is bound to this operation");
   return id;
 }
+
+export function tenantMap<V>(): () => Map<string, V> {
+  const tenants = new Map<string, Map<string, V>>();
+  return () => {
+    const tenant = bound.getStore() ?? "";
+    let rows = tenants.get(tenant);
+    if (!rows) tenants.set(tenant, (rows = new Map()));
+    return rows;
+  };
+}
