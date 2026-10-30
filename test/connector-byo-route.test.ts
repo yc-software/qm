@@ -276,3 +276,26 @@ test("an agent capability token can read the connector catalog; an unauthenticat
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("connector writes save without consulting another scope's client", async () => {
+  const srv = start();
+  try {
+    const disabled = await putConnector(srv.base, {
+      provider: "google",
+      clientId: "org-cid",
+      clientSecret: "org-secret",
+      enabled: false,
+    });
+    assert.equal(disabled.status, 200);
+    const team = await fetch(`${srv.base}/v1/admin/scopes/team:eng/connectors`, {
+      method: "PUT",
+      headers: ADMIN,
+      body: JSON.stringify({ provider: "google", clientId: "team-cid", clientSecret: "team-secret" }),
+    });
+    assert.equal(team.status, 200);
+    const saved = await srv.built.config.getConnectorClientSecret(scopeId("team", "eng"), "google");
+    assert.equal(saved?.clientId, "team-cid");
+  } finally {
+    await srv.close();
+  }
+});
