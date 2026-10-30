@@ -38,7 +38,7 @@ import { createMemoryEventBus } from "./util/event-bus.ts";
 import { createPostgresNotifyBus } from "./persistence/postgres-notify-bus.ts";
 import { emitRunReasoning, emitRunText, reasoningKey, type RunStreamEvent } from "./runs/run-stream-events.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
-import { createSessionMailbox, type SessionMessage } from "./sessions/session-mailbox.ts";
+import { createPostgresSessionMailbox, createSessionMailbox } from "./sessions/session-mailbox.ts";
 import type { TaskAckState } from "./slack/task-ack.ts";
 import { createLoopIngress, type LoopIngressService, type LoopIngress, type IngressDelivery } from "./loops/ingress.ts";
 import { createGmailPushClient } from "./loops/gmail-push.ts";
@@ -373,7 +373,8 @@ import { createMemoryRunActivityStore, type RunActivityStore } from "./runs/run-
 import { createPostgresRunActivityStore } from "./runs/postgres-run-activity-store.ts";
 import { createApp, type App } from "./api/app.ts";
 import { startSession } from "./api/start-session.ts";
-import { createSwarmStore, type SwarmStorage } from "./swarms/swarm-store.ts";
+import { createSwarmStore } from "./swarms/swarm-store.ts";
+import { createMemorySwarmRows, createPostgresSwarmRows } from "./swarms/swarm-table.ts";
 import { createSwarmService } from "./swarms/swarm-service.ts";
 import { createSlackCoreClient, type SlackCoreClient } from "./api/slack-core-client.ts";
 import { createSurfaceContextPuller } from "./api/surface-context-puller.ts";
@@ -1652,11 +1653,11 @@ export function buildApp(
     config.swarmsEnabled !== false && config.sessionStore === swarmStoreKind && runStoreKind === swarmStoreKind
       ? createSwarmService({
           defaults: config.swarmDefaults,
-          store: createSwarmStore(artifactMap<SwarmStorage>("swarms", ["pending"]), {
-            runs,
-            sessions,
-            ...(pgArtifactMap && runStoreKind === "postgres" ? { pg: pgArtifactMap.pool } : {}),
-          }),
+          store: createSwarmStore(
+            config.databaseUrl
+              ? createPostgresSwarmRows(config.databaseUrl)
+              : createMemorySwarmRows({ runs, sessions }),
+          ),
           sessions,
           runs,
           sandboxes: sandboxResources,
@@ -2088,7 +2089,7 @@ export function buildApp(
       conversation: { ...request.conversation, audience, publishMembers: audience },
     };
   };
-  const sessionMailbox = createSessionMailbox(artifactMap<SessionMessage>("session_mailbox", ["recipientId"]));
+  const sessionMailbox = config.databaseUrl ? createPostgresSessionMailbox(config.databaseUrl) : createSessionMailbox();
   const sessionSyscalls = createSessionSyscalls({
     mailbox: sessionMailbox,
     enabled: async (actorId) =>

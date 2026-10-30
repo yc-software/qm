@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("a swarm provisions one shared board computer that the root and every worker share", async () => {
   const fixture = await swarmFixture();
