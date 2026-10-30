@@ -3,7 +3,7 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
-import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "../src/tenants/migrations.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { createTenantSettingsStore } from "../src/tenants/settings.ts";
 
@@ -15,23 +15,22 @@ async function withSettingsDb(
   fn: (ctx: { app: ReturnType<typeof createPgPool>; admin: pg.Pool; a: string; b: string }) => Promise<void>,
 ): Promise<void> {
   const schema = `tenant_settings_${randomUUID().replaceAll("-", "")}`;
-  const role = `app_${randomUUID().replaceAll("-", "")}`;
   const schemaUrl = new globalThis.URL(URL!);
   schemaUrl.searchParams.set("options", `-c search_path=${schema}`);
   const admin = new pg.Pool({ connectionString: schemaUrl.toString() });
   await admin.query(`CREATE SCHEMA ${schema}`);
-  await admin.query(`CREATE ROLE ${role} LOGIN PASSWORD 'app' NOSUPERUSER NOBYPASSRLS`);
-  createPostgresSessionStore(schemaUrl.toString());
+  const owner = createPgPool(schemaUrl.toString(), [TENANCY_BASE, TENANT_SETTINGS_MIGRATION]);
   try {
     await migrateRegisteredPgSchemas(schemaUrl.toString());
-    const a = String((await admin.query(`SELECT id::text AS id FROM tenants`)).rows[0].id);
+    await admin.query(`ALTER ROLE qm_app PASSWORD 'app'`);
+    const a = randomUUID();
     const b = randomUUID();
-    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'second', 'Second')`, [b]);
-    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
-    await admin.query(`GRANT SELECT, INSERT, UPDATE ON tenant_settings TO ${role}`);
-    await admin.query(`GRANT SELECT ON tenants TO ${role}`);
+    await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'first', 'First'), ($2, 'second', 'Second')`, [
+      a,
+      b,
+    ]);
     const appUrl = new globalThis.URL(schemaUrl);
-    appUrl.username = role;
+    appUrl.username = "qm_app";
     appUrl.password = "app";
     const app = createPgPool(appUrl.toString());
     try {
@@ -40,9 +39,8 @@ async function withSettingsDb(
       await app.close();
     }
   } finally {
+    await owner.close();
     await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-    await admin.query(`DROP OWNED BY ${role}`).catch(() => undefined);
-    await admin.query(`DROP ROLE ${role}`);
     await admin.end();
   }
 }

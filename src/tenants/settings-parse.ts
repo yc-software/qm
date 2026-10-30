@@ -1,10 +1,9 @@
-import { parseProviderBaseUrl, type ModelGatewayTransportConfig, type ProviderBaseUrls } from "../model/provider-endpoints.ts";
 import {
-  MODEL_PROVIDERS,
-  defaultModelForProvider,
-  isModelProvider,
-  type ModelProvider,
-} from "../model/pi-models.ts";
+  parseProviderBaseUrl,
+  type ModelGatewayTransportConfig,
+  type ProviderBaseUrls,
+} from "../model/provider-endpoints.ts";
+import { MODEL_PROVIDERS, defaultModelForProvider, isModelProvider, type ModelProvider } from "../model/pi-models.ts";
 import type { SandboxBackendName } from "../sandbox/sandbox-routing.ts";
 import { SECURITY_SCREEN_MODES, type SecurityScreenMode } from "../security/security-posture.ts";
 import type { TenantSettingValues } from "./settings.ts";
@@ -131,7 +130,8 @@ function parseSecurityScreenProxy(
   const endpoint = values.SECURITY_SCREEN_PROXY_ENDPOINT?.trim();
   const token = values.SECURITY_SCREEN_PROXY_TOKEN?.trim();
   if (classifier !== "proxy") {
-    if (provider || endpoint || token) throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
+    if (provider || endpoint || token)
+      throw new Error("SECURITY_SCREEN_PROXY_* requires SECURITY_SCREEN_CLASSIFIER=proxy");
     return undefined;
   }
   if (!provider || !endpoint || !token) {

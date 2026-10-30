@@ -37,6 +37,7 @@ import { emojiRoutes } from "./emoji.ts";
 import { projectRoutes } from "./projects.ts";
 import { contextPolicyRoutes } from "./context-policy.ts";
 import { deploymentLayerRoutes } from "./deployment-layer.ts";
+import { tenantSettingsRoutes } from "./tenant-settings.ts";
 import { egressAuditRoutes } from "./egress-audit.ts";
 import { slackEventRawRoutes } from "./slack-events.ts";
 import { authBrokerRoutes } from "./auth-broker.ts";
@@ -89,6 +90,7 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...swarmRoutes,
   ...searchRoutes,
   ...deploymentLayerRoutes,
+  ...tenantSettingsRoutes,
   ...backgroundWorkRoutes,
   ...deploymentLiveSmokeRoutes,
   ...turnRoutes,

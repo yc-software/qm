@@ -256,8 +256,7 @@ function credentialRows() {
         credentialState.rows,
         (c) => c.slug,
         (c) => {
-          const deployment = c.source === "deployment";
-          const org = deployment || (c.grantees || []).some((g: string) => g.startsWith("org:"));
+          const org = (c.grantees || []).some((g: string) => g.startsWith("org:"));
           const target =
             c.delivery === "env"
               ? "sandbox env $" + (c.envKey || "?")
@@ -274,25 +273,21 @@ function credentialRows() {
               </div>
               <div class="hint">${target + " · " + credentialUsage(c)}</div>
               <div class="credential-badges">
-                ${badge(c.delivery === "env" ? "Env" : "Broker", "info")}${badge(c.enabled === false ? "Disabled" : "Enabled", c.enabled === false ? "warn" : "ok")}${badge(c.hasSecret ? "Secret set" : "Secret missing", c.hasSecret ? "ok" : "err")}${badge(org ? "Organization-wide" : plural((c.grantees || []).length, "principal"), org ? "info" : "muted")}${c.delivery !== "env" && c.deployments === false ? badge("No apps", "muted") : null}${deployment ? badge("Supplied by deployment", "info") : null}
+                ${badge(c.delivery === "env" ? "Env" : "Broker", "info")}${badge(c.enabled === false ? "Disabled" : "Enabled", c.enabled === false ? "warn" : "ok")}${badge(c.hasSecret ? "Secret set" : "Secret missing", c.hasSecret ? "ok" : "err")}${badge(org ? "Organization-wide" : plural((c.grantees || []).length, "principal"), org ? "info" : "muted")}${c.delivery !== "env" && c.deployments === false ? badge("No apps", "muted") : null}
               </div>
             </div>
-            ${
-              deployment
-                ? html`<div class="credential-actions hint">Read-only</div>`
-                : html`<div class="credential-actions">
-                    <button type="button" @click=${() => config.edit(c)}>Edit</button
-                    ><button
-                      type="button"
-                      class="rowbtn danger"
-                      title="Delete credential"
-                      aria-label=${"Delete " + (c.name || c.slug)}
-                      @click=${() => config.remove(c)}
-                    >
-                      Delete
-                    </button>
-                  </div>`
-            }
+            <div class="credential-actions">
+              <button type="button" @click=${() => config.edit(c)}>Edit</button
+              ><button
+                type="button"
+                class="rowbtn danger"
+                title="Delete credential"
+                aria-label=${"Delete " + (c.name || c.slug)}
+                @click=${() => config.remove(c)}
+              >
+                Delete
+              </button>
+            </div>
           </div>`;
         },
       )

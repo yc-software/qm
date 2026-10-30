@@ -25,6 +25,7 @@
     "dev-instance:status": "bash scripts/dev-instance.sh status",
     "dev-instance:down": "bash scripts/dev-instance.sh down",
     "worker": "node --env-file-if-exists=.env src/runs/worker-main.ts",
+    "tenant-settings:import": "node --env-file-if-exists=.env src/tenants/settings-import-main.ts",
     "test": "node --experimental-test-module-mocks --test test/*.test.ts",
     "test:root:shard": "node scripts/run-root-test-shard.mjs",
     "test:root:shard:check": "node scripts/run-root-test-shard.mjs --check --shards 5",

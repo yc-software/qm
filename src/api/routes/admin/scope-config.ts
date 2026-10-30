@@ -334,9 +334,8 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
 }
 
 async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, unknown>, nonblocking: boolean) {
-  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-  const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, configuredKeys, managedKeys);
+  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : ALL_PROVIDERS_AVAILABLE;
+  const providersFor = (harnessId: string) => modelProviderAvailabilityFor(harnessId, managedKeys);
   const cached =
     deps.modelCredentials && managedKeys.openrouter && nonblocking
       ? cachedModelCatalog(deps.modelCredentialFetch)
@@ -348,7 +347,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
       : builtInModelCatalog());
   const runtime = values.runtime as { harnessId?: unknown; modelId?: unknown } | null | undefined;
   const approvedHarnesses = (await deps.config!.getApprovedHarnessesDurable()) ?? [deps.harnessId ?? "pi"];
-  let currentId = defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault);
+  let currentId = defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault?.());
   if (typeof values.baseModel === "string") currentId = values.baseModel;
   if (typeof runtime?.modelId === "string") currentId = runtime.modelId;
   const currentHarness = typeof runtime?.harnessId === "string" ? runtime.harnessId : (deps.harnessId ?? "pi");
@@ -388,7 +387,7 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
   const modelsByHarness = Object.fromEntries(HARNESS_IDS.map((id) => [id, modelsFor(id)]));
   return {
     ...(cached?.refreshing ? { modelCatalogRefreshing: true } : {}),
-    baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault),
+    baseModelDefault: defaultModelForHarness(deps.harnessId ?? "pi", deps.baseModelDefault?.()),
     baseModelOptions: modelsFor(deps.harnessId ?? "pi"),
     harnessDefault: deps.harnessId ?? "pi",
     harnessOptions: HARNESS_IDS.filter(

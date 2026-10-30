@@ -8,7 +8,6 @@ export const TEST_CAPABILITY_SECRET = "test-capability-key-distinct-from-ingress
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({}),
-    securityScreen: "enforce",
     port: 0,
     pluginSkillDirs: [],
     memoryCaptureQuietMs: 0,
@@ -16,8 +15,6 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     turnLeaseWaitMs: 50,
     connectorSecretKey: "test-connector-key-distinct-from-ingress-auth",
     capabilitySecret: TEST_CAPABILITY_SECRET,
-    sandboxBackend: "sprites" as const,
-    spritesSandbox: { token: "test-token" },
     dataDir: overrides.dataDir ?? mkdtempSync(join(tmpdir(), "qm-test-")),
     ...overrides,
   };
