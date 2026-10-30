@@ -268,7 +268,7 @@ export async function availableRuntimeError(
   });
 }
 
-export async function subagentRuntimeError(
+async function subagentRuntimeError(
   ctx: { deps: RuntimeDeps },
   scope: ScopeId,
   choice: RuntimeChoice,
@@ -295,4 +295,24 @@ export async function subagentRuntimeError(
   } catch (listError) {
     return `${head}, or pick one runtime get lists (listing them failed: ${errMessage(listError)}).`;
   }
+}
+
+export async function assertSubagentRuntime(
+  ctx: { deps: RuntimeDeps },
+  scope: ScopeId,
+  fallback: RuntimeChoice,
+  requested: Partial<RuntimeChoice>,
+  resolve: () => Promise<RuntimeChoice>,
+): Promise<void> {
+  const resolved = await resolve().catch((error: unknown) => ({ error }));
+  if (Object.keys(requested).length === 0) {
+    if ("error" in resolved) throw resolved.error;
+    return;
+  }
+  const choice = "error" in resolved ? { ...fallback, ...requested } : resolved;
+  const error = await subagentRuntimeError(ctx, scope, choice).catch((checkError: unknown) => {
+    throw "error" in resolved ? new AggregateError([resolved.error, checkError], errMessage(checkError)) : checkError;
+  });
+  if ("error" in resolved) throw error ? new Error(error, { cause: resolved.error }) : resolved.error;
+  if (error) throw new Error(error);
 }

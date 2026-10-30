@@ -7,7 +7,7 @@ import { createDecisionHooks, routeTurnRuntime, turnStartState } from "./decisio
 import { createDecisionBackend } from "./decisions/providers.ts";
 import { createPostgresDecisionStore, type DecisionStore } from "./decisions/store.ts";
 import type { SlackSessionStatusState } from "./slack/session-status.ts";
-import { availableRuntimeError, subagentRuntimeError, type RuntimeDeps } from "./api/runtime-config.ts";
+import { availableRuntimeError, assertSubagentRuntime, type RuntimeDeps } from "./api/runtime-config.ts";
 import { createApprovalStore } from "./core/approval-store.ts";
 import { createRenderDeployProvider, type StoredRenderDeploy } from "./deploy/render-deploy-provider.ts";
 import { createRenderDeployArtifacts, type StoredRenderDeployCredential } from "./deploy/render-deploy-artifacts.ts";
@@ -2137,27 +2137,17 @@ export function buildApp(
         ...(input.thinkingLevel ? { effortLevel: input.thinkingLevel } : {}),
         ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
       };
-      const resolved = await resolveRuntimeChoiceDurable(
-        configStore,
-        runtimeOrgScope,
-        scope,
-        fallback,
-        requested,
-        hydrateModelCatalog,
-        "subagent",
-      ).catch((error: unknown) => ({ error }));
-      if (!input.model && !input.harness && !input.thinkingLevel && input.fastMode === undefined) {
-        if ("error" in resolved) throw resolved.error;
-        return;
-      }
-      const choice = "error" in resolved ? { ...fallback, ...requested } : resolved;
-      const error = await subagentRuntimeError({ deps: runtimeDeps }, scope, choice).catch((checkError: unknown) => {
-        throw "error" in resolved
-          ? new AggregateError([resolved.error, checkError], errMessage(checkError))
-          : checkError;
-      });
-      if ("error" in resolved) throw error ? new Error(error, { cause: resolved.error }) : resolved.error;
-      if (error) throw new Error(error);
+      await assertSubagentRuntime({ deps: runtimeDeps }, scope, fallback, requested, () =>
+        resolveRuntimeChoiceDurable(
+          configStore,
+          runtimeOrgScope,
+          scope,
+          fallback,
+          requested,
+          hydrateModelCatalog,
+          "subagent",
+        ),
+      );
     },
   });
   const uiState = artifactMap<PersistedUiState>("web_ui_state");
