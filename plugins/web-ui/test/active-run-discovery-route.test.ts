@@ -3,6 +3,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { bindTestTenant } from "../../../test/support/tenant.ts";
+
+bindTestTenant();
 
 // The scenario Bugbot caught on this feature: a surface instance that saw only the QUEUE
 // submission holds the pending run in its local index and nothing else. Core's durable answer

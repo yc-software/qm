@@ -15,6 +15,9 @@ import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { createDirectory } from "../src/slack/directory.ts";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const policy = {
   companyDomains: ["company.example"],

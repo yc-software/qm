@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createDeliveryPoller } from "../src/slack/deliveries.ts";
 import { statusPlaceholderKey } from "../src/slack/lib.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const RECOVERED_AGE_MS = 60_000;
 
