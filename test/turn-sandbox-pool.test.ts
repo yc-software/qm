@@ -56,9 +56,18 @@ function fixture(over: { holdKeepsWarm?: boolean | Error; live?: string[] | Erro
   const holdFailures = new Set<string>();
   const errors: Array<{ code: string; message: string }> = [];
   let liveLookups = 0;
-  const resource = (id: string, ownerScopeId = OWN) => ({ id, ownerScopeId, state: "ready", backend: "fake" });
+  const resource = (id: string, ownerScopeId = OWN) => ({
+    id,
+    ownerScopeId,
+    state: "ready",
+    backend: "fake",
+    jobOnly: id.startsWith("job-only"),
+  });
   const sandboxResources = {
-    access: async (_actor: string, id: string) => resource(id),
+    access: async (_actor: string, id: string) => {
+      if (resource(id).jobOnly) throw new Error("only the job's own controls can reach it");
+      return resource(id);
+    },
     get: async (id: string) => resource(id),
     resolve: async () => undefined,
     hold: async (id: string) => {
@@ -318,4 +327,14 @@ test("reopening a computer under a different egress policy releases it once", as
   await f.turn.reclaimBox();
   assert.equal(f.tornDown.length, 1);
   assert.equal(f.tornDown[0], narrowed);
+});
+
+test("concurrent opens of a background job's own computer share one provision", async () => {
+  const f = fixture();
+  const [a, b] = await Promise.all([
+    f.turn.provisionJobSandbox("job-only-1"),
+    f.turn.provisionJobSandbox("job-only-1"),
+  ]);
+  assert.equal(a, b);
+  assert.equal(f.provisions.length, 1);
 });
