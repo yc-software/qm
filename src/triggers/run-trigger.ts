@@ -52,6 +52,7 @@ export interface TriggerSpec extends Pick<TurnRequest, "model" | "harness" | "fa
   readOnly?: boolean;
   turnWallClockMs?: number;
   errorNotice?: (noteOrStatus: string) => string;
+  notice?: { text: string; idempotencyKey: string };
   onClaimed?: () => Promise<void>;
   deferWhenBusy?: boolean;
 }
@@ -359,6 +360,15 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(sessionId ? { sessionId } : {}),
   };
 
+  if (spec.notice && spec.destination && deliverable && outcome.ran) {
+    await deps.deliveries.enqueue({
+      destination: spec.destination,
+      text: spec.notice.text,
+      idempotencyKey: spec.notice.idempotencyKey,
+      provenance: deliveryProvenance(spec, threadRef),
+      ...(spec.shadow ? { shadow: true } : {}),
+    });
+  }
   if (spec.errorNotice && spec.destination && deliverable && isTriggerFailure(outcome)) {
     await deps.deliveries.enqueue({
       destination: spec.destination,

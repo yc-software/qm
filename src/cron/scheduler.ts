@@ -1,7 +1,15 @@
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import { type Cron, type CronFireLogEntry, type CronFireNote, type TurnRequest, type TurnResult } from "../types.ts";
+import {
+  type Cron,
+  type ScopeId,
+  type CronFireLogEntry,
+  type CronFireNote,
+  type TurnRequest,
+  type TurnResult,
+} from "../types.ts";
+import type { RuntimeChoice } from "../harness/harness.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -84,6 +92,7 @@ export interface SchedulerDeps {
   sessions?: TriggerDeps["sessions"];
   resolveRecipient?: TriggerDeps["resolveRecipient"];
   skipFire?: (cron: Cron) => Promise<string | undefined>;
+  runtimeError?: (scope: ScopeId, runtime: RuntimeChoice) => Promise<string | null>;
   deleteCron?: (id: string) => Promise<void>;
   fireLoop?: (
     loopId: string,
@@ -268,7 +277,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       .at(-1);
     const failingAlready = previous?.status === "failed" || previous?.status === "refused";
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
+    let runtimeFallback: string | null;
     try {
+      runtimeFallback = cron.runtime ? ((await deps.runtimeError?.(cron.ownerScopeId, cron.runtime)) ?? null) : null;
       outcome = await runTrigger(
         {
           deliveries: deps.deliveries,
@@ -286,7 +297,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fireKey,
           threadRef,
           surface: "cron",
-          ...(cron.runtime ? { runtime: cron.runtime } : {}),
+          ...(cron.runtime && !runtimeFallback ? { runtime: cron.runtime } : {}),
+          ...(cron.runtime && runtimeFallback
+            ? {
+                notice: {
+                  text: `⚠️ Scheduled task “${cron.title ?? cron.id}” ran on its default model: ${runtimeFallback} It keeps using the default until its model is changed or becomes available again; this is the only notice.`,
+                  idempotencyKey: `cron:${cron.id}:runtime-fallback:${cron.runtime.harnessId}/${cron.runtime.modelId}`,
+                },
+              }
+            : {}),
           ...(cron.title ? { title: cron.title } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);
@@ -336,7 +355,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         endedAt: now(),
         ...(scheduledAt !== undefined ? { scheduledAt } : {}),
         status: outcome.status ?? (outcome.authzFailed ? "refused" : "ok"),
-        ...(outcome.note ? { note: truncate(outcome.note, CRON_FIRE_REPLY_MAX_CHARS) } : {}),
+        ...(outcome.note || runtimeFallback
+          ? {
+              note: truncate(outcome.note ?? `ran on the default model: ${runtimeFallback}`, CRON_FIRE_REPLY_MAX_CHARS),
+            }
+          : {}),
         ...(outcome.reply !== undefined ? { reply: cronFireLogReply(outcome.reply) } : {}),
         ...(outcome.sessionId ? { sessionId: outcome.sessionId } : {}),
       });

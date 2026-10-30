@@ -28,7 +28,7 @@ function harness(
   reply: string | ((req: TurnRequest) => Promise<TurnResult>) = "CRON-OUTPUT-XYZ",
   directory?: DirectoryStore,
   maxFiresPerTick?: number,
-  now?: () => number,
+  extra: Partial<Parameters<typeof createScheduler>[0]> = {},
 ) {
   const crons = createCronStore();
   const deliveries = createDeliveryStore();
@@ -48,7 +48,7 @@ function harness(
     run,
     ...(directory ? { directory } : {}),
     ...(maxFiresPerTick !== undefined ? { maxFiresPerTick } : {}),
-    ...(now ? { now } : {}),
+    ...extra,
   });
   return { crons, deliveries, calls, scheduler, identity };
 }
@@ -1843,12 +1843,9 @@ test("a failing cron posts one notice to its destination, then stays quiet until
     reason: "pi/claude-sonnet-5 can't run here (runtime is no longer available).",
   };
   let clock = 1_000_000;
-  const { crons, deliveries, scheduler } = harness(
-    async () => result,
-    undefined,
-    undefined,
-    () => (clock += 1000),
-  );
+  const { crons, deliveries, scheduler } = harness(async () => result, undefined, undefined, {
+    now: () => (clock += 1000),
+  });
   const cron = await crons.create({
     schedule: { everyMs: 1000 },
     action: "post the standup",
@@ -1879,4 +1876,48 @@ test("a failing cron posts one notice to its destination, then stays quiet until
     (await crons.listFires(cron.id)).runs.map((r) => r.status),
     ["refused", "refused", "ok", "failed"],
   );
+});
+
+test("a cron whose model is unavailable runs on its default model and says so once per model", async () => {
+  const unavailable = new Set(["claude-sonnet-5", "claude-opus-5-5"]);
+  const { crons, deliveries, calls, scheduler } = harness("standup posted", undefined, undefined, {
+    runtimeError: async (_scope, runtime) =>
+      unavailable.has(runtime.modelId)
+        ? `pi/${runtime.modelId} can't run here (runtime is no longer available).`
+        : null,
+  });
+  const cron = await crons.create({
+    schedule: { everyMs: 1000 },
+    action: "post the standup",
+    title: "Daily standup",
+    owner: "U1",
+    createdBy: "U1",
+    ownerScopeId: scopeId("channel", "C1"),
+    destination: { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") },
+    runtime: { harnessId: "pi", modelId: "claude-sonnet-5" },
+  });
+  const texts = async () => (await deliveries.pending("slack")).map((d) => d.text);
+
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls[0]?.model, undefined, "the unavailable model is dropped so the cron default applies");
+  assert.deepEqual(await texts(), [
+    "standup posted",
+    "⚠️ Scheduled task “Daily standup” ran on its default model: pi/claude-sonnet-5 can't run here (runtime is no longer available). It keeps using the default until its model is changed or becomes available again; this is the only notice.",
+  ]);
+  assert.match((await crons.listFires(cron.id)).runs[0]!.note ?? "", /^ran on the default model: pi\/claude-sonnet-5/);
+
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(
+    (await texts()).filter((t) => t.startsWith("⚠️")).length,
+    1,
+    "the same unavailable model is noticed once",
+  );
+
+  await crons.update(cron.id, { runtime: { harnessId: "pi", modelId: "claude-opus-5-5" } });
+  await runNowSettled(scheduler, cron.id);
+  assert.equal((await texts()).filter((t) => t.startsWith("⚠️")).length, 2, "a different unavailable model is noticed");
+
+  unavailable.clear();
+  await runNowSettled(scheduler, cron.id);
+  assert.equal(calls.at(-1)?.model, "claude-opus-5-5", "the owner's model is used again once it is available");
 });

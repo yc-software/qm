@@ -2720,6 +2720,7 @@ export function buildApp(
   const scheduler = createScheduler({
     admittedWork,
     skipFire: async (cron) => (await memoryTidy.skipFire(cron)) ?? suggestedActivities.skipFire(cron),
+    runtimeError: (scope, runtime) => availableRuntimeError({ deps: runtimeDeps }, scope, runtime, "cron"),
     deleteCron: (id) => app.deleteCron(id),
     requireQueueStart: Boolean(config.backgroundDeploymentId),
     advisoryLock,
