@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("once runs fn the first time and skips on replay (in-memory)", async () => {
   const store = createIdempotencyStore();

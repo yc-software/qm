@@ -1,6 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
-import { boundTenant } from "../tenants/context.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { errMessage } from "../util/errors.ts";
 
@@ -42,10 +42,10 @@ function idempotencyStore(log: CommitLog | undefined, opts: IdempotencyStoreOpti
   const inflight = new Set<string>();
   const lastPruneAt = new Map<string, number>();
   const startedAt = now();
-  const tenantKey = (key: string) => `${boundTenant() ?? ""}\u0000${key}`;
+  const tenantKey = (key: string) => `${currentTenant()}\u0000${key}`;
 
   function pruneIfDue(t: number): void {
-    const tenant = boundTenant() ?? "";
+    const tenant = currentTenant();
     if (t - (lastPruneAt.get(tenant) ?? startedAt) < pruneIntervalMs) return;
     lastPruneAt.set(tenant, t);
     const cutoff = t - retentionMs;
