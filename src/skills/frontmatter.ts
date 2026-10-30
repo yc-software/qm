@@ -5,6 +5,27 @@ export interface Frontmatter {
   body: string;
 }
 
+function stripInlineComment(value: string): string {
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    const prev = value[i - 1];
+    const afterSpace = i === 0 || prev === " " || prev === "\t";
+    if ((ch === '"' || ch === "'") && (afterSpace || prev === "[" || prev === ",")) {
+      let close = i + 1;
+      while (close < value.length) {
+        if (ch === '"' && value[close] === "\\") close += 2;
+        else if (value[close] !== ch) close++;
+        else if (ch === "'" && value[close + 1] === "'") close += 2;
+        else break;
+      }
+      if (close < value.length) i = close;
+    } else if (ch === "#" && afterSpace) {
+      return value.slice(0, i).trimEnd();
+    }
+  }
+  return value;
+}
+
 function stripQuotes(value: string): string {
   const t = value.trim();
   if (t.length >= 2 && ((t[0] === '"' && t.at(-1) === '"') || (t[0] === "'" && t.at(-1) === "'"))) {
@@ -44,7 +65,7 @@ export function parseFrontmatter(raw: string): Frontmatter {
     const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
     if (!m) continue;
     const key = m[1]!;
-    const rest = m[2] ?? "";
+    const rest = stripInlineComment(m[2] ?? "");
 
     if (rest === ">" || rest === "|" || rest === ">-" || rest === "|-") {
       const literal = rest[0] === "|";
@@ -74,10 +95,10 @@ export function parseFrontmatter(raw: string): Frontmatter {
       if (indentOf(next) <= baseIndent) break;
       const item = /^\s*-\s+(.*)$/.exec(next);
       if (!item) break;
-      items.push(stripQuotes(item[1]!));
+      items.push(stripQuotes(stripInlineComment(item[1]!)));
       i++;
     }
-    attrs[key] = items;
+    attrs[key] = items.filter((s) => s.length > 0);
   }
 
   return { attrs, body: source.slice(end + closing[0].length).replace(/^\s+/, "") };
