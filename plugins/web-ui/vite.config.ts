@@ -1,10 +1,12 @@
 import { defineConfig, type Plugin } from "vite";
 import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { extname, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import emojiSource from "emoji-datasource/emoji.json" with { type: "json" };
 import { emojiTableModule } from "./src/emoji-source.ts";
+import { UI_PROTOCOL } from "../chassis/src/ui-release.ts";
 
 const SERVER = process.env.WEB_UI_SERVER_URL ?? "http://localhost:8096";
 
@@ -52,6 +54,24 @@ export function precompressStaticAssets(): Plugin {
   };
 }
 
+export function releaseManifest(): Plugin {
+  let outDir = "";
+  return {
+    name: "qm-release-manifest",
+    apply: "build",
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    closeBundle() {
+      const hash = createHash("sha256");
+      for (const name of ["index.html", "shared.html"]) hash.update(readFileSync(join(outDir, name)));
+      const release = { id: hash.digest("hex").slice(0, 16), protocol: UI_PROTOCOL };
+      writeFileSync(join(outDir, "release.json"), `${JSON.stringify(release)}\n`);
+      this.info(`release ${release.id} (protocol ${release.protocol})`);
+    },
+  };
+}
+
 function emojiTablePlugin(): Plugin {
   return {
     name: "qm-emoji-table",
@@ -64,7 +84,7 @@ function emojiTablePlugin(): Plugin {
 
 export default defineConfig({
   base: process.env.WEB_UI_BASE ?? "/",
-  plugins: [emojiTablePlugin(), precompressStaticAssets()],
+  plugins: [emojiTablePlugin(), precompressStaticAssets(), releaseManifest()],
   resolve: {
     alias: [
       { find: /^katex$/, replacement: here("src/lazy-katex.ts") },
