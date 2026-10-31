@@ -1340,7 +1340,7 @@ function livePublishedApps(config: QmConfig): string[] {
 export function flyDown(config: QmConfig, configDir: string): void {
   const { apps, unverified } = discoverFlyApps(config, configDir);
   header(`qm down — ${appPrefixOf(config)} (target: fly)`);
-  if (which(flyBin())) {
+  if (which(flyBin()) && apps.length) {
     const published = livePublishedApps(config);
     if (published.length)
       throw new CliError(

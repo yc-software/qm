@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import { scramVerifier } from "../../cli/src/scram-verifier.ts";
 
-export const MANAGED_LOGINS = ["qm_app", "qm_reader"] as const;
+const MANAGED_LOGINS = ["qm_app", "qm_reader"] as const;
 
 type Query = (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
 

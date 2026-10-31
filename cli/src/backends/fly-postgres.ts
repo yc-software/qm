@@ -114,10 +114,7 @@ function mpgLoginPassword(clusterId: string, login: string, role: "writer" | "re
   return password;
 }
 
-export function flyDatabaseLogins(
-  target: FlyPostgresTarget,
-  existing: ReadonlySet<string> | undefined,
-): DatabaseLoginEnv {
+function flyDatabaseLogins(target: FlyPostgresTarget, existing: ReadonlySet<string> | undefined): DatabaseLoginEnv {
   let ownerUrl = target.ownerUrl;
   if (!ownerUrl) {
     if (existing?.has("DATABASE_URL")) {

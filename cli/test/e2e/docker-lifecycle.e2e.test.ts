@@ -44,6 +44,7 @@ test(
       join(dep, ".env"),
       [
         `CORE_SIGNING_SECRET=${sentinel}`,
+        `DEPLOYMENT_CONTROL_SECRET=${sentinel}-control`,
         `PUBLIC_API_URL=http://qm-${org}-core:8080`,
         `CAPABILITY_SECRET=${sentinel}-capability`,
         `CONNECTOR_SECRET_KEY=${sentinel}-connector`,
