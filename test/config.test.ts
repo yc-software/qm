@@ -224,7 +224,7 @@ test("Slack HTTP ingress exposes only a valid configured receiver port", () => {
 });
 
 test("sandbox backend is parsed once before production backend guards", () => {
-  assert.equal(loadConfig({ SANDBOX_BACKEND: " local " }).sandboxBackend, "local");
+  assert.equal(loadConfig({ SANDBOX_BACKEND: " aws " }).sandboxBackend, "aws");
   assert.throws(
     () => loadConfig({ ...productionEnv, SANDBOX_BACKEND: "bogus" }),
     /SANDBOX_BACKEND="bogus" is not recognized/,
@@ -368,6 +368,18 @@ test("the server can boot before an admin configures a model provider", () => {
   assert.doesNotThrow(() => loadConfig({ ...productionEnv, ANTHROPIC_API_KEY: "sk-ant" }));
 });
 
+test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
+  for (const value of ["9007199254740993", "-1", "0.5", "NaN", "Infinity"]) {
+    assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }), /SUPERSERVE_CONFIG_GENERATION/, value);
+  }
+  for (const value of [undefined, "", "  "]) {
+    assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, undefined);
+  }
+  for (const value of ["0", "7", " 42 ", String(Number.MAX_SAFE_INTEGER)]) {
+    assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, Number(value));
+  }
+});
+
 test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary variable is tolerated", () => {
   assert.equal(loadConfig({}).sandboxBackend, "local");
   assert.throws(
@@ -375,8 +387,83 @@ test("SANDBOX_BACKEND: unset defaults to local (dev only); the retired secondary
     /SANDBOX_BACKEND must be set explicitly in production/,
   );
   assert.throws(() => loadConfig({ SANDBOX_BACKEND: "sprites" }), /SPRITES_TOKEN/);
-  for (const retired of ["agent37", "superserve", "porter", "aws"])
-    assert.throws(() => loadConfig({ SANDBOX_BACKEND: retired }), /is not recognized/, retired);
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "agent37" }), /AGENT37_API_KEY/);
+  assert.equal(loadConfig({ SANDBOX_BACKEND: "agent37", AGENT37_API_KEY: "sk_live_k" }).sandboxBackend, "agent37");
+  assert.throws(() => loadConfig({ SANDBOX_BACKEND: "superserve" }), /SUPERSERVE_API_KEY/);
+  assert.throws(
+    () => loadConfig({ SANDBOX_BACKEND: "superserve", SUPERSERVE_API_KEY: "ss_live_k" }),
+    /SUPERSERVE_TEMPLATE/,
+  );
+  assert.throws(
+    () => loadConfig({ SANDBOX_BACKEND: " superserve ", SUPERSERVE_API_KEY: "ss_live_k" }),
+    /SUPERSERVE_TEMPLATE/,
+  );
+  assert.throws(
+    () => loadConfig({ SANDBOX_BACKEND: " superserve ", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" }),
+    /SUPERSERVE_API_KEY/,
+  );
+  assert.equal(
+    loadConfig({
+      SANDBOX_BACKEND: "superserve",
+      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
+      SUPERSERVE_API_KEY: "ss_live_k",
+      SUPERSERVE_CONFIG_GENERATION: "7",
+    }).superserveSandbox.configGeneration,
+    7,
+    "a deployment that tracks its own rollouts stamps the generation its sandboxes carry",
+  );
+  assert.throws(
+    () =>
+      loadConfig({
+        SANDBOX_BACKEND: "superserve",
+        SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
+        SUPERSERVE_API_KEY: "ss_live_k",
+        SUPERSERVE_CONFIG_GENERATION: "later",
+      }),
+    /SUPERSERVE_CONFIG_GENERATION/,
+  );
+  assert.equal(
+    loadConfig({
+      SANDBOX_BACKEND: "superserve",
+      SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
+      SUPERSERVE_API_KEY: "ss_live_k",
+    }).sandboxBackend,
+    "superserve",
+  );
+  assert.doesNotThrow(
+    () =>
+      loadConfig({
+        SANDBOX_BACKEND: "superserve",
+        SUPERSERVE_TEMPLATE: "qm-agent-1.0.0",
+        SUPERSERVE_API_KEY: "ss_live_k",
+      }),
+    "a single-process dev instance needs no durable store",
+  );
+  assert.ok(
+    !enabledSandboxBackends(loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k" })).includes(
+      "superserve",
+    ),
+    "a stray key without a template must not enable the secondary backend",
+  );
+  assert.ok(
+    enabledSandboxBackends(
+      loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" }),
+    ).includes("superserve"),
+  );
+  assert.ok(
+    !enabledSandboxBackends(
+      loadConfig({ SANDBOX_BACKEND: "local", SUPERSERVE_API_KEY: "ss_live_k", SUPERSERVE_TEMPLATE: "   " }),
+    ).includes("superserve"),
+    "a blank template must not enable the secondary backend",
+  );
+  assert.equal(
+    loadConfig({
+      SANDBOX_BACKEND: "superserve",
+      SUPERSERVE_TEMPLATE: " qm-agent-1.0.0 ",
+      SUPERSERVE_API_KEY: "ss_live_k",
+    }).superserveSandbox?.template,
+    "qm-agent-1.0.0",
+  );
 });
 
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
@@ -506,16 +593,20 @@ test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain",
   );
 });
 
-test("DEPLOY_PROVIDER=porter locates the API with the deploy token", () => {
+test("SANDBOX_BACKEND=porter locates the API and shares the deploy provider's token", () => {
   assert.throws(
-    () => loadConfig({ DEPLOY_PROVIDER: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
+    () => loadConfig({ SANDBOX_BACKEND: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
     /PORTER_DEPLOY_PROJECT_ID/,
   );
   const inCluster = loadConfig({
+    SANDBOX_BACKEND: "porter",
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",
+    PORTER_SANDBOX_TTL_SEC: "120",
   });
+  assert.equal(inCluster.porterSandbox.token, "tok");
+  assert.equal(inCluster.porterSandbox.ttlSec, 120);
   assert.equal(inCluster.porterDeploy.token, "tok");
 });
 

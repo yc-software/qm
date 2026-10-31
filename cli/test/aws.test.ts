@@ -576,7 +576,7 @@ const config: QmConfig = {
   },
 };
 
-test("AWS environment derives identity, public URLs and private wiring", () => {
+test("AWS environment derives identity, public URLs, private wiring, and MicroVM coordinates", () => {
   assert.deepEqual(serviceEnvironment(config, "web-ui"), {
     ADMIN_BASE_PATH: "/admin",
     ADMIN_ENABLED: "1",
@@ -591,6 +591,15 @@ test("AWS environment derives identity, public URLs and private wiring", () => {
   assert.equal(core.PUBLIC_WEB_URL, "https://agent.acme.example");
   assert.equal(core.WEB_UI_PUBLIC_URL, "https://agent.acme.example");
   assert.equal(core.SANDBOX_BACKEND, "sprites");
+  assert.equal(core.AWS_SANDBOX_IMAGE, undefined);
+  const { sandbox: _sandbox, ...rest } = config;
+  const microvm = serviceEnvironment(rest as QmConfig, "core");
+  assert.equal(microvm.SANDBOX_BACKEND, "aws");
+  assert.equal(microvm.AWS_SANDBOX_REGION, "us-west-2");
+  assert.equal(microvm.AWS_SANDBOX_IMAGE, "acme-qm-sandbox");
+  assert.equal(microvm.AWS_SANDBOX_IMAGE_VERSION, "1");
+  assert.equal(microvm.AWS_SANDBOX_EXEC_ROLE_ARN, "arn:aws:iam::123456789012:role/acme-qm-microvm-exec");
+  assert.equal(microvm.AWS_SANDBOX_S3_BUCKET, awsObjectStoreBucket(config));
   assert.equal(core.SNAPSHOT_STORE, "s3");
   assert.equal(core.TRANSFER_STORE, "s3");
   assert.equal(core.S3_REGION, "us-west-2");
@@ -600,7 +609,7 @@ test("AWS environment derives identity, public URLs and private wiring", () => {
 });
 
 test("AWS hosting preserves an explicit publishing provider independently of sandbox selection", () => {
-  for (const sandbox of [{ backend: "sprites" as const }, { backend: "e2b" as const }]) {
+  for (const sandbox of [config.sandbox, undefined]) {
     for (const provider of ["fly", "porter"]) {
       const selected: QmConfig = {
         ...config,
@@ -609,7 +618,7 @@ test("AWS hosting preserves an explicit publishing provider independently of san
       };
       const core = serviceEnvironment(selected, "core");
       assert.equal(core.DEPLOY_PROVIDER, provider);
-      assert.equal(core.SANDBOX_BACKEND, sandbox.backend);
+      assert.equal(core.SANDBOX_BACKEND, sandbox?.backend ?? "aws");
       assert.equal(core.SNAPSHOT_STORE, "s3");
       assert.equal(serviceEnvironment(selected, "portal").DEPLOY_PROVIDER, undefined);
     }
@@ -724,6 +733,10 @@ test("AWS required runtime settings cannot be overridden by config env", () => {
   assert.equal(core.SNAPSHOT_STORE, "s3");
   assert.equal(core.TRANSFER_STORE, "s3");
   assert.equal(core.SANDBOX_BACKEND, "sprites");
+  const { sandbox: _sandbox, ...rest } = overridden;
+  const microvm = serviceEnvironment(rest as QmConfig, "core");
+  assert.equal(microvm.SNAPSHOT_STORE, "s3");
+  assert.equal(microvm.SANDBOX_BACKEND, "aws");
 });
 
 test("AWS deploy-role trust permits only the exact repository branch", () => {
@@ -4932,12 +4945,14 @@ test("env.core.SANDBOX_BACKEND adopts the deployment's substrate; the default is
     env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "sprites" } },
   };
   assert.equal(serviceEnvironment(adopted, "core").SANDBOX_BACKEND, "sprites");
-  const modal: QmConfig = {
+  const agent37: QmConfig = {
     ...config,
     sandbox: undefined,
-    env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "modal" } },
+    env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "agent37" } },
   };
-  assert.equal(serviceEnvironment(modal, "core").SANDBOX_BACKEND, "modal");
+  const agent37Env = serviceEnvironment(agent37, "core");
+  assert.equal(agent37Env.SANDBOX_BACKEND, "agent37");
+  assert.equal(agent37Env.AWS_SANDBOX_IMAGE, undefined);
 });
 
 test("env.core.S3_BUCKET adopts a pre-existing snapshot bucket; the derived object store remains the default", () => {

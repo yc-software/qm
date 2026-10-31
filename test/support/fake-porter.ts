@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { NotFoundError } from "porter-sandbox";
-import type { PorterClientLike, PorterSandboxLike, PorterSandboxSpec } from "../../src/deploy/porter-client.ts";
+import type { PorterClientLike, PorterSandboxLike, PorterSandboxSpec } from "../../src/sandbox/porter-client.ts";
 
 export interface FakePorterBody {
   name: string;

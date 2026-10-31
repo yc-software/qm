@@ -91,13 +91,17 @@ test("a failed provider execution reports what the execute call returned", () =>
 
 test("every provider has its own parallel execution scenario", () => {
   assert.deepEqual(sandboxProviders.toSorted(), [
+    "agent37",
+    "aws",
     "do-managed-agents",
     "e2b",
     "local",
     "modal",
+    "porter",
     "render",
     "smolmachines",
     "sprites",
+    "superserve",
   ]);
   assert.equal(sandboxProviderScenarios.length, sandboxProviders.length);
   assert.ok(sandboxProviderScenarios.every((s) => s.lane === "parallel" && s.tags?.includes("provider-execution")));
@@ -174,18 +178,19 @@ for (const failExecution of [false, true]) {
 }
 
 test("explicit provider selection retains strict coverage without treating deferred providers as failed skips", () => {
-  const selected = selectSandboxProviderScenarios("sprites,local,smolmachines,e2b,modal");
+  const selected = selectSandboxProviderScenarios("sprites,aws,local,smolmachines,e2b,modal");
   assert.deepEqual(
     selected.map((s) => s.name),
     [
       "sandbox-execute-sprites",
+      "sandbox-execute-aws",
       "sandbox-execute-local",
       "sandbox-execute-smolmachines",
       "sandbox-execute-e2b",
       "sandbox-execute-modal",
     ],
   );
-  assert.equal(selectSandboxProviderScenarios("all").length, 7);
+  assert.equal(selectSandboxProviderScenarios("all").length, 11);
   assert.deepEqual(selectSandboxProviderScenarios(undefined), []);
   for (const value of ["", "sprites,", "typo", "sprites,sprites", "all,sprites", "constructor", "__proto__"])
     assert.throws(() => selectSandboxProviderScenarios(value));

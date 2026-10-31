@@ -221,8 +221,14 @@ export const dockerBasePort = (config: QmConfig): number => envNum("QM_BASE_PORT
 
 export const isDigestPinned = (ref: string): boolean => /@sha256:[0-9a-f]{64}$/.test(ref);
 
+const effectiveSandboxBackend = (config: Pick<QmConfig, "env" | "sandbox">): string | undefined =>
+  config.env.core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend;
+
 export const localSandboxActive = (config: QmConfig): boolean =>
-  config.target === "docker" && config.sandbox?.backend === "local";
+  config.target === "docker" &&
+  (config.sandbox?.backend === "superserve"
+    ? effectiveSandboxBackend(config) === "local"
+    : config.sandbox?.backend === "local" && effectiveSandboxBackend(config) !== "superserve");
 
 export function sandboxCoreEnv(
   config: QmConfig,
@@ -237,8 +243,12 @@ export function sandboxCoreEnv(
     if (sb.image) env.LOCAL_SANDBOX_IMAGE = sb.image;
     return { env, missingSecrets };
   }
-  if (sb.backend === "e2b") {
-    env.SANDBOX_BACKEND = sb.backend;
+  const backend =
+    sb.backend === "superserve" || effectiveSandboxBackend(config) === "superserve"
+      ? effectiveSandboxBackend(config)
+      : sb.backend;
+  if (backend === "agent37" || backend === "superserve" || backend === "e2b") {
+    env.SANDBOX_BACKEND = backend;
     return { env, missingSecrets };
   }
   for (const [k, v] of Object.entries(sb.env ?? {})) env[`FLY_RESIDENT_ENV_${k}`] = v;
@@ -708,6 +718,20 @@ function validate(raw: unknown, path: string): QmConfig {
     return v;
   });
   const sandbox = validateSandbox(o["sandbox"], path, target);
+  if (
+    sandbox?.backend === "superserve" &&
+    env.core?.SANDBOX_BACKEND !== undefined &&
+    !env.core.SANDBOX_BACKEND.trim()
+  ) {
+    throw new CliError(
+      `${path}: "env.core.SANDBOX_BACKEND" is blank — name the backend core should run, or remove the key; every target forwards env.core verbatim, so a blank value leaves core with no backend`,
+    );
+  }
+  if (effectiveSandboxBackend({ env, sandbox }) === "superserve" && !env.core?.SUPERSERVE_TEMPLATE?.trim()) {
+    throw new CliError(
+      `${path}: the superserve sandbox backend requires env.core.SUPERSERVE_TEMPLATE (the ready qm-agent-<release> template); core refuses to start without it`,
+    );
+  }
 
   const out: QmConfig = {
     contract,
@@ -958,7 +982,8 @@ export function validatePortalTrust(config: QmConfig, path = "config", secrets?:
 export function requiresAwsMicrovmImage(config: QmConfig): boolean {
   if (config.target !== "aws") return false;
   const core = config.env.core;
-  return (core?.DEPLOY_PROVIDER?.trim() || "aws") === "aws";
+  if ((core?.DEPLOY_PROVIDER?.trim() || "aws") === "aws") return true;
+  return (core?.SANDBOX_BACKEND?.trim() || config.sandbox?.backend || "aws") === "aws";
 }
 
 function validateAwsFrontDoor(config: QmConfig, path: string): void {
@@ -1630,7 +1655,8 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
     const targets = targetsAllowingSandboxBackend(out.backend)
       .map((allowed) => JSON.stringify(allowed))
       .join(" or ");
-    throw new CliError(`${path}: "sandbox.backend": ${JSON.stringify(out.backend)} requires target ${targets}`);
+    const label = out.backend === "aws" ? " (Lambda MicroVM sandboxes)" : "";
+    throw new CliError(`${path}: "sandbox.backend": ${JSON.stringify(out.backend)}${label} requires target ${targets}`);
   }
   if (out.backend === "local") {
     const stray = (["app", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
@@ -1640,7 +1666,15 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
       );
     }
   }
-  if (out.backend === "e2b" || out.backend === "render") {
+  if (out.backend === "aws") {
+    const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
+    if (stray.length) {
+      throw new CliError(
+        `${path}: "sandbox.backend": "aws" runs Lambda MicroVM sandboxes, which ignore ${stray.map((key) => `"sandbox.${key}"`).join(", ")} (Fly sandbox settings) — remove them or set "sandbox.backend": "sprites"`,
+      );
+    }
+  }
+  if (out.backend === "agent37" || out.backend === "superserve" || out.backend === "e2b" || out.backend === "render") {
     const stray = (["app", "image", "baseImage", "env", "secretEnv"] as const).filter((key) => out[key] !== undefined);
     if (stray.length) {
       throw new CliError(
@@ -1653,7 +1687,7 @@ function validateSandbox(raw: unknown, path: string, target: Target): SandboxCon
   }
   if (SANDBOX_BACKEND_POLICY[target].requireExplicit && out.backend === undefined) {
     throw new CliError(
-      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" runs Fly Sprites; "e2b" runs E2B sandboxes`,
+      `${path}: target ${JSON.stringify(target)} requires an explicit "sandbox.backend" — "sprites" runs Fly Sprites; "aws" runs Lambda MicroVM sandboxes (or omit the whole "sandbox" block for the MicroVM default)`,
     );
   }
   return out;

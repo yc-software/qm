@@ -32,6 +32,10 @@ test("every ENFORCED deployment-contract clause names a verifier and its impleme
     ],
     "aws.rendered-task": [["../cli/src/backends/aws.ts", /function renderTaskDefinition/]],
     "aws.live-drift": [["../cli/src/backends/aws.ts", /function awsCheckLive/]],
+    "sandbox.aws-substrate": [
+      ["../src/sandbox/aws-sandbox.ts", /function createAwsSandbox/],
+      ["../cli/src/backends/aws.ts", /AWS_SANDBOX_IMAGE_VERSION/],
+    ],
     "target.provider-registry": [
       ["../cli/src/backends/registry.ts", /HOSTING_PROVIDERS/],
       ["../cli/test/package.test.ts", /packed npm artifact creates and operates a standalone deployment repository/],

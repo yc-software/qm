@@ -12,10 +12,12 @@ import {
 } from "../src/sandbox/local-sandbox.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { createSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
+import { createAgent37Sandbox } from "../src/sandbox/agent37-sandbox.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 
 import { installFakeSmolmachines } from "./support/fake-smolmachines.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
+import { installFakeAgent37 } from "./support/fake-agent37.ts";
 import { installFakeDocker } from "./support/fake-docker.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
@@ -85,7 +87,10 @@ test("Sprites scope deletion sends only DELETE, retries provider errors, and acc
   }
 });
 
-for (const [name, create, resource] of [["Smolmachines", createSmolmachinesSandbox, "machines"]] as const) {
+for (const [name, create, resource] of [
+  ["Smolmachines", createSmolmachinesSandbox, "machines"],
+  ["Agent37", createAgent37Sandbox, "instances"],
+] as const) {
   test(`${name} scope deletion finds existing bodies without booting and propagates transient deletion errors`, async () => {
     const calls: string[] = [];
     let status = 503;
@@ -99,7 +104,7 @@ for (const [name, create, resource] of [["Smolmachines", createSmolmachinesSandb
         calls.push(`${init?.method} ${path}`);
         if (init?.method === "GET") {
           const rows = exists ? [{ id: "existing", name: sandboxScopeName("qm", "scope"), status: "stopped" }] : [];
-          return Response.json(rows);
+          return Response.json(resource === "instances" ? { data: rows } : rows);
         }
         return new Response(null, { status, headers: { "retry-after": "0" } });
       },
@@ -138,7 +143,10 @@ test("Local deletion retries remaining disk cleanup after partial failure withou
   assert.equal(calls.at(-1)?.at(-1), localVolumeName("scope"));
 });
 
-for (const [name, create, install] of [["Smolmachines", createSmolmachinesSandbox, installFakeSmolmachines]] as const) {
+for (const [name, create, install] of [
+  ["Smolmachines", createSmolmachinesSandbox, installFakeSmolmachines],
+  ["Agent37", createAgent37Sandbox, installFakeAgent37],
+] as const) {
   test(`${name} stale adapter deletes another adapter's replacement for the same scope`, async () => {
     const fake = install();
     try {

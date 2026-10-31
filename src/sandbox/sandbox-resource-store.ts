@@ -77,26 +77,17 @@ const DEFAULTS: RowTable<SandboxDefault, "scopeId"> = {
   ],
 };
 
-const dropTables = (id: string, tables: readonly string[]) => ({
-  id,
+const DROP_ROUTING = {
+  id: "tenancy/sandbox_routing/0001-drop",
   statements: [
-    `DROP TABLE IF EXISTS ${tables.join(", ")}`,
+    `DROP TABLE IF EXISTS sandbox_routing, sandbox_resource_rollout`,
     `DO $versions$ BEGIN
        IF to_regclass('durable_map_versions') IS NOT NULL THEN
-         DELETE FROM durable_map_versions WHERE tbl IN (${tables.map((t) => `'${t}'`).join(", ")});
+         DELETE FROM durable_map_versions WHERE tbl IN ('sandbox_routing', 'sandbox_resource_rollout');
        END IF;
      END $versions$`,
   ],
-});
-
-const RETIRED_TABLES = [
-  dropTables("tenancy/sandbox_routing/0001-drop", ["sandbox_routing", "sandbox_resource_rollout"]),
-  dropTables("tenancy/retired-sandbox-backends/0001", [
-    "aws_sandbox_bodies",
-    "superserve_sandbox_bodies",
-    "superserve_config_epochs",
-  ]),
-];
+};
 
 export interface SandboxResourceRecords {
   get(id: string): Promise<SandboxResource | null>;
@@ -119,7 +110,7 @@ export function createSandboxResourceStores(databaseUrl: string): {
   close(): Promise<void>;
 } {
   const records = pgRows(databaseUrl, RESOURCES);
-  const defaults = pgRows(databaseUrl, { ...DEFAULTS, migrations: [...DEFAULTS.migrations, ...RETIRED_TABLES] });
+  const defaults = pgRows(databaseUrl, { ...DEFAULTS, migrations: [...DEFAULTS.migrations, DROP_ROUTING] });
   const visible = "job_only IS NOT TRUE";
   return {
     records: {

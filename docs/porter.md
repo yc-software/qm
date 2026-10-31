@@ -1,16 +1,17 @@
 # Running qm on Porter
 
 [Porter](https://porter.run) provisions and manages a Kubernetes cluster inside your own
-AWS, GCP, or Azure account. qm can host its surfaces there, and with
-`DEPLOY_PROVIDER=porter` the apps the agent publishes run on the same cluster. Agent
-computers come from one of the remote sandbox backends (`sprites`, `e2b`, `modal`,
-`smolmachines` or `do-managed-agents`); Porter no longer provides them.
+AWS, GCP, or Azure account. qm can use it two ways, independently:
 
-Publishing needs a Porter API token and the project and cluster that own the sandbox API.
-The Porter part of the environment:
+- `SANDBOX_BACKEND=porter` — every agent computer is a Porter sandbox with a persistent
+  home volume.
+- `DEPLOY_PROVIDER=porter` — apps the agent publishes run on the same cluster.
+
+Both need a Porter API token and the project and cluster that own the sandbox API. The
+complete environment for a Porter-backed instance, verified against a live deployment:
 
 ```bash
-SANDBOX_BACKEND=e2b   # or sprites, modal, smolmachines, do-managed-agents — with its credential
+SANDBOX_BACKEND=porter
 DEPLOY_PROVIDER=porter
 PORTER_DEPLOY_API_TOKEN=<ADMIN-role api token from Settings -> API tokens>
 PORTER_DEPLOY_PROJECT_ID=<project id>
@@ -162,8 +163,8 @@ host name, whatever `sslmode` the URL carries.
 `deploy/helm/` carries the same topology as a Helm chart for operators who would rather
 manage the release themselves; it expects the images published at
 `ghcr.io/yc-software/qm/<service>` and an ingress you configure. Pin `image.tag` to a
-commit that actually carries the Porter deploy provider — the published tags are commit SHAs, and
-one from before Porter support landed rejects `DEPLOY_PROVIDER=porter` at startup. Set
+commit that actually carries the Porter backend — the published tags are commit SHAs, and
+one from before Porter support landed rejects `SANDBOX_BACKEND=porter` at startup. Set
 `publicUrl` and the chart derives the broker wiring (`AUTH_ISSUER`, `AUTH_REDIRECT_URI`
 and the portal's `OIDC_*` endpoints) the way `cli/src/services.ts` does for the other
 targets; what it cannot invent is the identity allow-list, so production still refuses to

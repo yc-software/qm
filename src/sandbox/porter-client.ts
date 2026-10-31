@@ -4,7 +4,7 @@ import { sleep } from "../util/async.ts";
 import { swallowAs } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
 import { shortHash } from "../util/crypto.ts";
-import type { ExecResult } from "../sandbox/sandbox.ts";
+import type { ExecResult } from "./sandbox.ts";
 
 const MISSING_RC = 44;
 const READ_CHUNK = 256 * 1024;
@@ -76,7 +76,7 @@ const enrichPorterError = (e: unknown): unknown => {
   return e;
 };
 
-function withPorterErrorDetails<T>(value: T): T {
+export function withPorterErrorDetails<T>(value: T): T {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return value;
   return new Proxy(value as object, {
     get(target, prop) {
@@ -111,6 +111,14 @@ export function createPorterClient(opts: { token?: string; baseUrl?: string }): 
     }) as PorterClientLike,
   );
 }
+
+export const porterSlug = (prefix: string, id: string): string => {
+  const cleaned = id
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${prefix}-${cleaned.slice(0, 28).replace(/-+$/, "") || "scope"}-${shortHash(id)}`;
+};
 
 export const porterDnsLabel = (name: string): string => {
   const cleaned = name

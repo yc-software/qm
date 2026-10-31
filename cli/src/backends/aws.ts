@@ -409,10 +409,23 @@ export function serviceEnvironment(config: QmConfig, service: ServiceName): Reco
       S3_BUCKET: config.env.core?.S3_BUCKET?.trim() || awsObjectStoreBucket(config),
       S3_REGION: aws.region,
     };
-    Object.assign(env, sandboxCoreEnv(config).env, {
-      ...(sandboxBackend ? { SANDBOX_BACKEND: sandboxBackend } : {}),
-      ...stores,
-    });
+    if (sandboxBackend && sandboxBackend !== "aws") {
+      Object.assign(env, sandboxCoreEnv(config).env, {
+        SANDBOX_BACKEND: sandboxBackend,
+        ...stores,
+      });
+    } else {
+      Object.assign(env, {
+        SANDBOX_BACKEND: "aws",
+        AWS_SANDBOX_REGION: aws.region,
+        AWS_SANDBOX_IMAGE: config.env.core?.AWS_DEPLOY_IMAGE ?? "",
+        AWS_SANDBOX_IMAGE_VERSION: config.env.core?.AWS_DEPLOY_IMAGE_VERSION ?? "",
+        AWS_SANDBOX_EXEC_ROLE_ARN:
+          config.env.core?.AWS_DEPLOY_EXEC_ROLE_ARN ?? `arn:aws:iam::${aws.accountId}:role/${aws.cluster}-microvm-exec`,
+        AWS_SANDBOX_S3_BUCKET: awsObjectStoreBucket(config),
+        ...stores,
+      });
+    }
   }
   if (service === "portal") {
     env.WEB_UI_UPSTREAM = `http://web-ui.${aws.networking.cloudMapNamespace}:8080`;
