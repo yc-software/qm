@@ -196,7 +196,7 @@ test("NOTIFY payloads carry the emitter's tenant to subscribers", { skip }, () =
   }),
 );
 
-test("the scheduler ticks each tenant bound and cron-fire jobs carry and rebind their tenant", () =>
+test("the scheduler claims due crons unbound and cron-fire jobs carry and rebind their tenant", () =>
   withoutTenant(async () => {
     const crons = createCronStore(testCronRows(), { fires: createPostgresCronFireStore(testDatabaseUrl()) });
     const dueUnder: Array<string | undefined> = [];
@@ -227,7 +227,7 @@ test("the scheduler ticks each tenant bound and cron-fire jobs carry and rebind 
       tenants: twoTenants,
     };
     await createScheduler(deps).tick(Date.now());
-    assert.deepEqual(dueUnder, [TEST_TENANT, OTHER_TENANT]);
+    assert.deepEqual(dueUnder, [undefined]);
     const scheduler = createScheduler({ ...deps, jobQueue });
     scheduler.start(1000);
     await scheduler.ready();

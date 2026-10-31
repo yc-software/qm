@@ -21,8 +21,7 @@ import {
 import { FileUploadError, type FileUpload, type FileUploadStore } from "./file-upload-store.ts";
 import { safeAttachmentName, mimeFromName } from "../core/attachments.ts";
 import { createSweeper } from "../util/sweeper.ts";
-import { inTenantOf } from "../tenants/claim.ts";
-import { withoutTenant } from "../tenants/context.ts";
+import { crossTenantLoop, inTenantOf } from "../tenants/claim.ts";
 import { durableObjectKey, FILES_AREA } from "./durable-byte-store.ts";
 import { isTenantId, withTenant } from "../tenants/context.ts";
 
@@ -140,7 +139,7 @@ export function createDirectFileUploads(options: {
       throw new FileUploadError("upload parts are incomplete or do not match the manifest", 409);
     return parts;
   }
-  const sweeper = createSweeper(() => withoutTenant(() => service.sweep()), 60_000, {
+  const sweeper = createSweeper(() => service.sweep(), 60_000, {
     label: "file uploads",
     immediate: true,
   });
@@ -339,7 +338,7 @@ export function createDirectFileUploads(options: {
       }
       await store.transition(id, ["aborting"], "aborted");
     },
-    async sweep() {
+    sweep: crossTenantLoop(async () => {
       for (const row of await store.expired(now())) {
         try {
           await inTenantOf(row.tenantId, async () => {
@@ -387,7 +386,7 @@ export function createDirectFileUploads(options: {
         uploadMarker = page.IsTruncated ? page.NextUploadIdMarker : undefined;
         if (page.IsTruncated && !keyMarker) throw new Error("S3 omitted the next upload marker");
       } while (keyMarker);
-    },
+    }),
     start: () => sweeper.start(),
     stop: () => sweeper.stop(),
   };

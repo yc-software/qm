@@ -15,6 +15,7 @@ import { canonicalPayload, TENANT_HEADER } from "../plugins/chassis/src/source-a
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "test-signing-secret".repeat(3);
@@ -29,11 +30,12 @@ describe("web feeds", { skip: !DATABASE_URL }, () => {
   let built: BuiltApp;
   let server: Server;
   before(async () => {
+    const ownerUrl = testMigratedDatabaseUrl();
     built = buildApp(
       testConfig({
         dataDir: mkdtempSync(join(tmpdir(), "web-feed-tenants-")),
-        databaseUrl: appLogin(DATABASE_URL!),
-        databaseOwnerUrl: DATABASE_URL!,
+        databaseUrl: appLogin(ownerUrl),
+        databaseOwnerUrl: ownerUrl,
       }),
     );
     server = withoutTenant(() => createServer(built.app, { signingSecret: SECRET, replayDedupe: built.replayDedupe }));

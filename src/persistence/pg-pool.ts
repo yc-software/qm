@@ -49,12 +49,11 @@ export function registerOwnerLogin(connectionString: string, ownerUrl: string): 
 }
 
 function ownerLogin(connectionString: string): string {
-  const registered = ownedDatabases.get(connectionString);
-  if (registered) return registered;
   const { databaseUrl, ownerUrl } = poolingConfig;
-  if (!ownerUrl || (connectionString !== databaseUrl && connectionString !== ownerUrl))
-    throw new Error("Cross-tenant claims need DATABASE_OWNER_URL for this database");
-  return ownerUrl;
+  if (ownerUrl && (connectionString === databaseUrl || connectionString === ownerUrl)) return ownerUrl;
+  const registered = ownedDatabases.get(connectionString);
+  if (!registered) throw new Error("Cross-tenant claims need DATABASE_OWNER_URL for this database");
+  return registered;
 }
 
 let loginPasswordsSet = false;

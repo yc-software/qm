@@ -25,13 +25,14 @@ export const TEST_TENANT_SETTINGS: TenantSettingValues = {
 export function testTenantSettings(
   values: TenantSettingValues = {},
   databaseUrl: string = testMigratedDatabaseUrl(),
+  ownerUrl: string = databaseUrl,
 ): TenantSettingsStore {
   const store = createTenantSettingsStore({
     db: createPgPool(databaseUrl),
     keyMaterial: "test-connector-key-distinct-from-ingress-auth",
     onLoad: (tenant, settings) => setProviderBaseUrls(tenant, settings.providerBaseUrls),
   });
-  const seeded = seedSettingsTenants(databaseUrl).then(() =>
+  const seeded = seedSettingsTenants(ownerUrl).then(() =>
     withTenant(TEST_TENANT, () => store.update({ ...TEST_TENANT_SETTINGS, ...values })),
   );
   return {
@@ -86,7 +87,9 @@ export function buildApp(
     buildProductionApp(config, {
       agent: recordingModelCalls(createMockAgent(), modelCalls),
       ...overrides,
-      tenantSettings: overrides.tenantSettings ?? testTenantSettings({}, config.databaseUrl),
+      tenantSettings:
+        overrides.tenantSettings ??
+        testTenantSettings({}, config.databaseUrl, config.databaseOwnerUrl ?? config.databaseUrl),
     }),
   );
   return Object.assign(app, { modelCalls });

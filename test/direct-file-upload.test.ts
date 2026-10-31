@@ -8,6 +8,7 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { withoutTenant } from "../src/tenants/context.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
 function fixture() {
@@ -42,9 +43,9 @@ function fixture() {
       );
     },
     async expired(now) {
-      return [...rows.values()].filter(
-        (r) => r.expiresAt <= now && r.state !== "complete" && r.state !== "aborted" && r.state !== "failed",
-      );
+      return [...rows.values()]
+        .filter((r) => r.expiresAt <= now && r.state !== "complete" && r.state !== "aborted" && r.state !== "failed")
+        .map((r) => ({ ...r, tenantId: TEST_TENANT }));
     },
     async completingUploadId(id) {
       const row = rows.get(id);
