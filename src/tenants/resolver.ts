@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { PgPool } from "../persistence/pg-pool.ts";
 
 export type TenantResolver = {
@@ -5,10 +6,31 @@ export type TenantResolver = {
   forSlackTeam(teamId: string): Promise<string | null>;
 };
 
-export function singleTenantResolver(pool: Pick<PgPool, "q">): TenantResolver {
-  const only = async (): Promise<string | null> => {
-    const rows = await pool.q("SELECT id::text AS id FROM tenants LIMIT 2");
-    return rows.length === 1 ? String(rows[0]!.id) : null;
+export type TenantList = () => Promise<string[]>;
+
+const TENANTS_TTL_MS = 60_000;
+
+export function pgTenants(pool: Pick<PgPool, "q">): TenantList {
+  let cached: { at: number; tenants: Promise<string[]> } | undefined;
+  return () => {
+    if (cached && Date.now() - cached.at < TENANTS_TTL_MS) return cached.tenants;
+    const tenants = pool
+      .q("SELECT id::text AS id FROM tenants ORDER BY id")
+      .then((rows) => rows.map((row) => String(row.id)));
+    cached = { at: Date.now(), tenants };
+    tenants.catch(() => (cached = undefined));
+    return tenants;
   };
-  return { forHost: only, forSlackTeam: only };
+}
+
+const PROCESS_TENANT = randomUUID();
+
+export const memoryTenants: TenantList = async () => [PROCESS_TENANT];
+
+export function singleTenantResolver(tenants: TenantList): TenantResolver {
+  const onlyTenant = async (): Promise<string | null> => {
+    const all = await tenants();
+    return all.length === 1 ? all[0]! : null;
+  };
+  return { forHost: onlyTenant, forSlackTeam: onlyTenant };
 }

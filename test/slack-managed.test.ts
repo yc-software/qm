@@ -126,6 +126,32 @@ test("installation needs a state this deployment signed and lands only in that t
   });
 });
 
+test("an installation state is single-use and only this deployment's key can mint one", { skip }, async (t) => {
+  await withDb(async (db) => {
+    const f = await fixture(t, db);
+    const state = await f.stateFor(db.tenant);
+    assert.equal((await f.request("installation", { ...installation, state })).status, 202);
+    const replay = { ...installation, installId: "install-2", installedAt: 2000, state };
+    assert.deepEqual(await (await f.request("installation", replay)).json(), { error: "invalid_state" });
+    assert.equal((await f.inTenant(db.tenant, () => f.store.get()))?.installId, "install-1");
+    const foreign = createManagedSlack({
+      serviceUrl: "https://slack.example.com",
+      token: "company-token",
+      stateSecret: "another-deployment",
+      store: f.store,
+      resolver: { forHost: async () => null, forSlackTeam: async () => null },
+      runtimes: { current: () => [], accounts: async () => [], refresh: async () => {} },
+      fetchImpl: (async (_url: URL, init?: RequestInit) => {
+        f.sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return Response.json({ url: "https://slack.example.com/install/launch?id=opaque" });
+      }) as typeof fetch,
+    });
+    await f.inTenant(db.tenant, () => foreign.start());
+    const minted = { ...replay, state: f.sent.at(-1)!.state };
+    assert.equal((await f.request("installation", minted)).status, 403);
+  });
+});
+
 test("an expired installation state is refused", { skip }, async (t) => {
   await withDb(async (db) => {
     const f = await fixture(t, db);
@@ -207,8 +233,8 @@ test("uninstall needs the workspace and disables only that tenant's installation
 test("managed generations cannot overwrite newer installs or revive removed credentials", { skip }, async (t) => {
   await withDb(async (db) => {
     const f = await fixture(t, db);
-    const state = await f.stateFor(db.tenant);
-    const install = (body: Record<string, unknown>) => f.request("installation", { ...body, state });
+    const install = async (body: Record<string, unknown>) =>
+      f.request("installation", { ...body, state: await f.stateFor(db.tenant) });
     const remove = (installId: string) => f.request("installation", { installId, teamId: "T123" }, "DELETE");
     await install(installation);
     const replacement = { ...installation, installId: "install-2", installedAt: 2000 };
@@ -228,21 +254,22 @@ test("managed generations cannot overwrite newer installs or revive removed cred
 test("own-app switch blocks stale managed callbacks until explicit restart", { skip }, async (t) => {
   await withDb(async (db) => {
     const f = await fixture(t, db);
-    const state = await f.stateFor(db.tenant);
-    await f.request("installation", { ...installation, state });
+    await f.request("installation", { ...installation, state: await f.stateFor(db.tenant) });
+    const states = [await f.stateFor(db.tenant), await f.stateFor(db.tenant), await f.stateFor(db.tenant)];
     await f.inTenant(db.tenant, () =>
       f.store.set({ botToken: "xoxb-own", appToken: "xapp-own", teamId: "T123", updatedBy: "admin" }),
     );
-    const replacement = { ...installation, installId: "late", installedAt: Date.now() + 1000, state };
-    assert.equal((await f.request("installation", replacement)).status, 409);
+    const replacement = { ...installation, installId: "late", installedAt: Date.now() + 1000 };
+    const late = () => f.request("installation", { ...replacement, state: states.shift() });
+    assert.equal((await late()).status, 409);
     assert.equal(await f.inTenant(db.tenant, () => f.store.enableManaged()), false);
     await f.request("installation", { installId: installation.installId, teamId: "T123" }, "DELETE");
     assert.equal((await f.inTenant(db.tenant, () => f.store.get()))?.botToken, "xoxb-own");
     assert.equal((await f.request("events", { installId: installation.installId, body: event })).status, 409);
     await f.inTenant(db.tenant, () => f.store.delete("admin"));
-    assert.equal((await f.request("installation", replacement)).status, 409);
+    assert.equal((await late()).status, 409);
     assert.equal(await f.inTenant(db.tenant, () => f.store.enableManaged()), true);
-    assert.equal((await f.request("installation", replacement)).status, 202);
+    assert.equal((await late()).status, 202);
   });
 });
 

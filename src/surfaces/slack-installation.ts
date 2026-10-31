@@ -49,6 +49,7 @@ export interface SlackInstallationStore {
   }): Promise<boolean>;
   disableManaged(installId: string): Promise<boolean>;
   enableManaged(): Promise<boolean>;
+  consumeInstallState(nonce: string, expiresAt: number): Promise<boolean>;
 }
 
 export function createSlackInstallationStore(
@@ -146,6 +147,7 @@ export function createSlackInstallationStore(
       });
       return accepted;
     },
+    consumeInstallState: (nonce, expiresAt) => rows.consumeState(nonce, expiresAt, Date.now()),
     async disableManaged(installId) {
       let disabled = false;
       await rows.mutate((current) => {

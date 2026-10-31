@@ -81,9 +81,20 @@ export function createSlackTenants(deps: {
   const stopAccounts = async (accounts: readonly SlackAccountRuntime[]): Promise<void> => {
     for (const account of accounts) await account.stop().catch(report);
   };
+  const contextSubscriptions = new Map<string, () => void>();
+  const keep = (tenant: string, entry: Entry): void => {
+    entries.set(tenant, entry);
+    if (!entry.accounts.length || contextSubscriptions.has(tenant)) return;
+    const unsubscribe = deps.core.onContextRequest((request) => {
+      for (const account of accountsOf(tenant) ?? []) account.serviceContextRequest(request);
+    });
+    contextSubscriptions.set(tenant, unsubscribe);
+  };
   const discard = async (tenant: string): Promise<void> => {
     const entry = entries.get(tenant);
     entries.delete(tenant);
+    contextSubscriptions.get(tenant)?.();
+    contextSubscriptions.delete(tenant);
     await entry?.failure?.cleanup?.();
     if (entry) await stopAccounts(entry.accounts);
   };
@@ -133,7 +144,7 @@ export function createSlackTenants(deps: {
         await stopAccounts(accounts);
         return undefined;
       }
-      entries.set(tenant, { version: desired.version, configs: desired.accounts, accounts });
+      keep(tenant, { version: desired.version, configs: desired.accounts, accounts });
       drainDeliveries();
       return accounts;
     } catch (error) {
@@ -141,7 +152,7 @@ export function createSlackTenants(deps: {
       const failures = current?.failure?.version === desired.version ? current.failure.failures + 1 : 1;
       const restore = current?.accounts.length && running ? current : undefined;
       const previous = restore ? await startAll(restore.configs).catch((e: unknown) => void report(e)) : undefined;
-      entries.set(tenant, {
+      keep(tenant, {
         version: previous && restore ? restore.version : desired.version,
         configs: previous && restore ? restore.configs : desired.accounts,
         accounts: previous ?? [],
@@ -236,7 +247,6 @@ export function createSlackTenants(deps: {
     for (const account of (tenant && accountsOf(tenant)) || []) fn(account);
   };
   deps.core.onDeliveryEnqueued(drainDeliveries);
-  deps.core.onContextRequest((request) => forBound((account) => account.serviceContextRequest(request)));
   deps.core.onScopeModelChanged((scope) => forBound((account) => account.scopeModelChanged(scope)));
   deps.core.onChannelHeaderPinChanged((scope) => forBound((account) => account.channelHeaderPinChanged(scope)));
 

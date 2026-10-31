@@ -53,12 +53,16 @@ test("every Slack table keeps each tenant's rows to itself and refuses unbound a
       assert.equal(await store.taskAcknowledgements.get("run-a"), null);
       assert.equal(await store.taskAcknowledgements.update!("run-a", (s) => ({ ...s, finished: true })), null);
       await store.stagedEnvelopes.delete("k");
+      assert.equal(await store.installation.consumeState("nonce", 2_000, 1_000), true, "nonces are per tenant");
       await installs.set({ botToken: "xoxb-b", appToken: "xapp-b", teamId: "TB", updatedBy: "admin" });
     });
     await withTenant(tenant, async () => {
       assert.equal((await installs.get())?.botToken, "xoxb-a");
       assert.equal((await store.accounts.get("alice"))?.accountId, "ca_a");
       assert.equal((await store.taskAcknowledgements.get("run-a"))?.previous[0], "0.9");
+      assert.equal(await store.installation.consumeState("nonce", 2_000, 1_000), true);
+      assert.equal(await store.installation.consumeState("nonce", 2_000, 1_000), false);
+      assert.equal(await store.installation.consumeState("nonce", 4_000, 3_000), true, "expired nonces are forgotten");
       assert.equal((await store.sessionStatus.entries()).length, 1);
     });
     await assert.rejects(installs.get(), /No tenant is bound/);

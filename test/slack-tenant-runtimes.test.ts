@@ -19,7 +19,7 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 function fakeCore(rows: Delivery[]) {
   const listeners = {
     delivery: [] as Array<() => void>,
-    context: [] as Array<(r: SurfaceContextRequest) => void>,
+    context: [] as Array<{ tenant: string | undefined; fn: (r: SurfaceContextRequest) => void }>,
     model: [] as Array<(scope: string) => void>,
     pin: [] as Array<(scope: string) => void>,
   };
@@ -39,8 +39,9 @@ function fakeCore(rows: Delivery[]) {
       return () => {};
     },
     onContextRequest: (fn: (r: SurfaceContextRequest) => void) => {
-      listeners.context.push(fn);
-      return () => {};
+      const entry = { tenant: boundTenant(), fn };
+      listeners.context.push(entry);
+      return () => listeners.context.splice(listeners.context.indexOf(entry), 1);
     },
     onScopeModelChanged: (fn: (scope: string) => void) => void listeners.model.push(fn),
     onChannelHeaderPinChanged: (fn: (scope: string) => void) => void listeners.pin.push(fn),
@@ -145,17 +146,24 @@ test("each tenant's Slack is built once in its own tenant and rebuilt only when 
   );
   assert.deepEqual(h.started.at(-1), [A, "TA"]);
   assert.deepEqual(await withTenant(B, () => h.tenants.accounts()), []);
+  assert.deepEqual(
+    h.listeners.context.map((l) => l.tenant),
+    [A],
+    "an uninstalled tenant stops hearing context requests",
+  );
   await h.tenants.stop();
   assert.equal(h.stopped.length, 3);
 });
 
 test("ingress and core notifications reach only the bound tenant's accounts", async () => {
   const h = harness();
+  assert.equal(h.listeners.context.length, 0, "nothing subscribes to context requests outside a tenant");
   h.tenants.start();
   await h.tenants.reconcile();
+  assert.deepEqual(h.listeners.context.map((l) => l.tenant).sort(), [A, B].sort());
   h.calls.length = 0;
   await withTenant(A, async () => {
-    for (const fn of h.listeners.context) fn({ id: "ctx-a" } as SurfaceContextRequest);
+    for (const { tenant, fn } of h.listeners.context) if (tenant === A) fn({ id: "ctx-a" } as SurfaceContextRequest);
     for (const fn of h.listeners.model) fn("channel:C1");
   });
   await withTenant(B, async () => {

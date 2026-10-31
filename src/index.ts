@@ -12,7 +12,8 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackPluginConfigFromEnv } from "./slack/index.ts";
 import { createSlackRuntime } from "./slack/runtime.ts";
 import { createPgPool, migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { singleTenantResolver } from "./tenants/resolver.ts";
+import { pgTenants, singleTenantResolver } from "./tenants/resolver.ts";
+import { deriveConnectorKey } from "./connectors/connector-client-store.ts";
 import { instanceTenant } from "./tenants/instance.ts";
 import { enterTenant } from "./tenants/context.ts";
 
@@ -31,7 +32,7 @@ const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLA
 let slackEnvironmentState: "absent" | "configured" | "partial" = "absent";
 if (slackConfig) slackEnvironmentState = "configured";
 else if (envSlackAttempted) slackEnvironmentState = "partial";
-const resolver = config.databaseUrl ? singleTenantResolver(createPgPool(config.databaseUrl)) : undefined;
+const resolver = config.databaseUrl ? singleTenantResolver(pgTenants(createPgPool(config.databaseUrl))) : undefined;
 const slackRuntime =
   resolver && built.slackTables && built.slackInstallation
     ? createSlackRuntime({
@@ -50,7 +51,9 @@ const managedSlack =
     ? createManagedSlack({
         serviceUrl: process.env.QM_SLACK_SERVICE_URL,
         token: process.env.QM_SLACK_SERVICE_TOKEN ?? "",
-        stateSecret: config.signingSecret ?? "",
+        stateSecret: config.connectorSecretKey
+          ? deriveConnectorKey(config.connectorSecretKey, "slack-install-state").current.toString("base64url")
+          : "",
         appId: process.env.QM_SLACK_APP_ID ?? "",
         store: built.slackInstallation,
         resolver,

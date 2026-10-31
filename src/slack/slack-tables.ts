@@ -186,6 +186,18 @@ const SLACK_TABLE_MIGRATIONS: readonly PgMigrationDefinition[] = [
          WHERE NOT synced OR NOT finished`,
     ],
   }),
+  {
+    id: "tenancy/slack_install_states/0001-create",
+    statements: [
+      `CREATE TABLE slack_install_states(
+         tenant_id UUID NOT NULL DEFAULT qm_tenant_id() REFERENCES tenants,
+         nonce TEXT NOT NULL,
+         expires_at BIGINT NOT NULL,
+         PRIMARY KEY (tenant_id, nonce)
+       )`,
+      ...tenantPolicies("slack_install_states"),
+    ],
+  },
 ];
 
 type Row = Rows[number];
@@ -231,6 +243,7 @@ export interface SlackInstallationRows {
   mutate(
     fn: (current: StoredSlackInstallation | null) => StoredSlackInstallation | null,
   ): Promise<StoredSlackInstallation | null>;
+  consumeState(nonce: string, expiresAt: number, now: number): Promise<boolean>;
 }
 
 const INSTALLATION_COLUMNS = `disabled, service_blocked, bot_token_enc, app_token_enc, app_id, install_id, installed_at,
@@ -259,6 +272,14 @@ function pgSlackInstallationRows(pg: PgPool): SlackInstallationRows {
     async read() {
       const row = (await pg.q(select))[0];
       return row ? installationRecord(row) : null;
+    },
+    async consumeState(nonce, expiresAt, now) {
+      await pg.q(`DELETE FROM slack_install_states WHERE tenant_id = qm_tenant_id() AND expires_at < $1`, [now]);
+      const inserted = await pg.q(
+        `INSERT INTO slack_install_states(nonce, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING nonce`,
+        [nonce, expiresAt],
+      );
+      return inserted.length === 1;
     },
     mutate: (fn) =>
       locked(pg, "slack_installation:", async (client) => {
@@ -600,10 +621,17 @@ export type SlackTables = ReturnType<typeof createSlackTables>;
 export function memorySlackRows(): { installation: SlackInstallationRows; accounts: SlackAccountRows } {
   const installations = new Map<string, StoredSlackInstallation>();
   const accounts = new Map<string, SlackAccountLink>();
+  const states = new Set<string>();
   const accountKey = (principalId: string) => JSON.stringify([currentTenant(), principalId]);
   return {
     installation: {
       read: async () => installations.get(currentTenant()) ?? null,
+      async consumeState(nonce) {
+        const key = JSON.stringify([currentTenant(), nonce]);
+        if (states.has(key)) return false;
+        states.add(key);
+        return true;
+      },
       async mutate(fn) {
         const tenant = currentTenant();
         const current = installations.get(tenant) ?? null;

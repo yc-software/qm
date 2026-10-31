@@ -55,12 +55,12 @@ export function createManagedSlack(opts: {
       { aud: INSTALL_STATE_AUD, tenantId: currentTenant(), nonce: randomUUID(), exp: now() + INSTALL_STATE_TTL_MS },
       opts.stateSecret,
     );
-  const stateTenant = async (state: unknown): Promise<string | null> => {
+  const verifyState = async (state: unknown): Promise<{ tenant: string; nonce: string; exp: number } | null> => {
     if (typeof state !== "string" || !state || state.length > 4096) return null;
     const claims = (await verifySignedPayload(state, opts.stateSecret)) as Record<string, unknown> | null;
     if (!claims || claims.aud !== INSTALL_STATE_AUD || typeof claims.nonce !== "string") return null;
     if (typeof claims.exp !== "number" || claims.exp <= now() || typeof claims.tenantId !== "string") return null;
-    return claims.tenantId;
+    return { tenant: claims.tenantId, nonce: claims.nonce, exp: claims.exp };
   };
 
   async function install(res: ServerResponse, input: Record<string, unknown>): Promise<void> {
@@ -79,12 +79,14 @@ export function createManagedSlack(opts: {
     ) {
       return sendJson(res, 400, { error: "invalid_installation" });
     }
-    const tenant = await stateTenant(input.state);
-    if (!tenant) return sendJson(res, 403, { error: "invalid_state" });
+    const state = await verifyState(input.state);
+    if (!state) return sendJson(res, 403, { error: "invalid_state" });
     const owner = await opts.resolver.forSlackTeam(input.teamId);
-    if (owner && owner !== tenant) return sendJson(res, 409, { error: "workspace_conflict" });
+    if (owner && owner !== state.tenant) return sendJson(res, 409, { error: "workspace_conflict" });
     const installId = input.installId as string;
-    return withTenant(tenant, async () => {
+    return withTenant(state.tenant, async () => {
+      if (!(await opts.store.consumeInstallState(state.nonce, state.exp)))
+        return sendJson(res, 403, { error: "invalid_state" });
       const accepted = await opts.store.setManaged({
         botToken: input.botToken as string,
         appId: input.appId as string,
