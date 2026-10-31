@@ -14,7 +14,6 @@ import { testMigratedDatabaseUrl } from "./test-database.ts";
 import { retryDue } from "./absurd-clock.ts";
 import { eventually } from "./settle.ts";
 import { CONFIG_DEFAULTS } from "../../src/config.ts";
-import type { Runtime } from "../../src/wiring.ts";
 
 export async function settledRun(runs: Pick<RunStore, "get">, runId: string, timeoutMs = 30_000): Promise<Run> {
   const run = await eventually(() => runs.get(runId), {
@@ -135,19 +134,13 @@ export function appLedger(built: { runs: Pick<RunStore, "emitTerminal"> }, datab
   return tracked(ledger, databaseUrl);
 }
 
-export async function pauseTurns(built: { runtime: Pick<Runtime, "setBackgroundAdmission"> }): Promise<void> {
-  built.runtime.setBackgroundAdmission(
-    () => false,
-    () => false,
-  );
+export async function pauseTurns(built: { turnRunner: Pick<TurnRunner, "stopClaims"> }): Promise<void> {
+  await built.turnRunner.stopClaims();
   await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
-export function resumeTurns(built: { runtime: Pick<Runtime, "setBackgroundAdmission"> }): void {
-  built.runtime.setBackgroundAdmission(
-    () => true,
-    () => false,
-  );
+export function resumeTurns(built: { turnRunner: Pick<TurnRunner, "start"> }): void {
+  built.turnRunner.start();
 }
 
 export function startTurnRunner(

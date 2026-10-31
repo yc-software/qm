@@ -271,7 +271,6 @@ test("an unattended admin-read grant opens only the five read-only routes and ke
       [`/v1/admin/sessions/missing-session?${scopeQ}`, 404],
       ["/v1/admin/scopes", 200],
       [`/v1/admin/errors?${scopeQ}`, 200],
-      [`/v1/admin/runs?${scopeQ}`, 200],
     ];
     for (const [path, expected] of allowed) {
       const response = await fetch(`${s.base}${path}`, { headers: { "x-agent-capability": granted } });

@@ -24,8 +24,6 @@ async function main(): Promise<void> {
     dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
     databaseUrl: process.env.DATABASE_URL,
     sandboxBackend: "local",
-
-    backgroundWorkEnabled: false,
     turnWallClockMs: 180_000,
   });
   const actorId = `provider-qualification-${randomUUID()}`;

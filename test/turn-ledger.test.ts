@@ -586,6 +586,7 @@ test(
   "cutover: legacy pending and running rows are queued and started in order; nothing is failed",
   { skip },
   async () => {
+    await admin.query("ALTER TABLE runs ADD COLUMN IF NOT EXISTS lease_expires_at BIGINT");
     const thread = `web:alice:${randomUUID()}`;
     const running = randomUUID();
     const waiting = randomUUID();
@@ -599,6 +600,7 @@ test(
     const cutover = registeredPgMigrations(URL!).find((m) => m.id === "runs/store/0012-absurd-turns")!;
     for (const statement of cutover.statements.filter((sql) => sql.trim().startsWith("UPDATE runs")))
       await admin.query(statement);
+    await admin.query("ALTER TABLE runs DROP COLUMN lease_expires_at");
     const resumed = await runStore.runs.get(running);
     assert.equal(resumed?.status, "queued");
     assert.deepEqual(resumed?.lastStop, { kind: "shutdown" });

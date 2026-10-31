@@ -14,7 +14,6 @@ import { createTurnLedger, queueOf } from "../src/turns/turn-ledger.ts";
 test("getRun reports stale exactly when no live worker owns a previously-claimed run", async () => {
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "run-stale-")),
-    backgroundWorkEnabled: false,
   });
   const built = buildApp(config);
   const ledger = createTurnLedger(config.databaseUrl!);
