@@ -13,7 +13,7 @@ import { assertLateJoinerScopes, assertLeanListing } from "./support/participant
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("listed sessions leave out spawn metadata; scopes count only sessions with content", async () => {
   await assertLeanListing(createPostgresSessionStore(testDatabaseUrl()), "mem");

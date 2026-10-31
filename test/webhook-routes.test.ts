@@ -14,7 +14,7 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { OTHER_TENANT, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const HOOK_SECRET = "hook-secret";

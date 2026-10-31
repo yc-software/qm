@@ -14,7 +14,6 @@ import { CAPABILITY_HEADER } from "../src/api/contract.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const SECRET = "blob-auth-secret".repeat(3);
 

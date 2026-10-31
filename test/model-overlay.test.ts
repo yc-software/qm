@@ -498,7 +498,7 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { wantsFastMode } from "../src/model/model-runtime.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {
   const config = testConfigStore("default-org");

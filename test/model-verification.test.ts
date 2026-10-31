@@ -511,7 +511,7 @@ test("environment and gateway credential changes invalidate cached fingerprints"
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { probeModel } from "../src/model/model-runtime.ts";
 import { testMap } from "./support/test-database.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const built = buildApp(testConfig({ openaiApiKey: "test-key" }));

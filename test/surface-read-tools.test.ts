@@ -10,7 +10,6 @@ import type { TurnRequest } from "../src/types.ts";
 import type { SurfaceContextResult } from "../src/reach/reach.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 

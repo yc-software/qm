@@ -10,7 +10,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
-import { TENANT_HEADERS, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;

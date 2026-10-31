@@ -10,13 +10,10 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
 import type { ReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { signedCoreHeaders } from "./support/signed-core.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant, OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "auth-broker-claim-test-secret".repeat(2);
 const CLAIM_PATH = "/v1/auth/broker/claim";

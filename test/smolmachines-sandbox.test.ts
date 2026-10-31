@@ -20,7 +20,6 @@ import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import type { StoredSmolmachinesSandbox } from "../src/sandbox/smolmachines-sandbox.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 let fake: FakeSmolmachines;
 let sandbox: Sandbox;

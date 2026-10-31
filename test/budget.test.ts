@@ -12,7 +12,6 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresBudgetTracker } from "../src/ratelimit/postgres-budget.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 test("budget tracker accumulates per-principal and trips at the limit", async () => {
   const b = createPostgresBudgetTracker(testDatabaseUrl(), { limitUsd: 1, windowMs: 60_000 });

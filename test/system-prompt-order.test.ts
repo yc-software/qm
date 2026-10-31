@@ -41,7 +41,6 @@ import {
 } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };

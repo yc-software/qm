@@ -16,7 +16,7 @@ import { Readable } from "node:stream";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const body = async (r: Response | Promise<Response>): Promise<any> => (await r).json();
 

@@ -40,7 +40,7 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { bindTestTenant, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");

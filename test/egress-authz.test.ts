@@ -16,9 +16,7 @@ import type { EgressAuditRecord } from "../src/admin/egress-audit-sink.ts";
 import { scopeId, type EgressPolicy } from "../src/types.ts";
 import { canonicalPayload } from "../plugins/chassis/src/source-auth-sign.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { bindTestTenant, OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const CAPABILITY_SECRET = "test-egress-capability-secret";
 const SOURCE_SECRET = "test-egress-source-secret";

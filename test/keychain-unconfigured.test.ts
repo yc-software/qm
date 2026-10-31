@@ -5,9 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("a server without a keychain key refuses to start and names the missing setting", () => {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "kc-off-")) });

@@ -9,7 +9,7 @@ import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push
 import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 async function world() {
   const sources = testMap<LoopIngress>();

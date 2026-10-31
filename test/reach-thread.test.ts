@@ -10,7 +10,6 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const SECRET = "reach-thread-secret".repeat(3);
 const TS = "1723497600.123456";

@@ -482,6 +482,7 @@ function buildServer(app: App, deps: ServerOptions, unsignedTenant: string | nul
   const tenantDeps = {
     ...(deps.tenants ? { tenants: deps.tenants } : {}),
     capabilitySecret: deps.capabilitySecret ?? deps.signingSecret,
+    ...(deps.deploymentControlSecret ? { controlSecret: deps.deploymentControlSecret } : {}),
     unsignedTenant,
   };
   const server = createHttpServer((req, res) => {

@@ -1,11 +1,5 @@
 import { signedRequestHeaders, TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
-import { withTenant as withChassisTenant } from "../../plugins/chassis/src/tenant.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
-import { signedHeaders as chassisSignedHeaders } from "../../plugins/chassis/src/core-client.ts";
-import {
-  coreEmailAdmission as chassisEmailAdmission,
-  coreEmailAllowed as chassisEmailAllowed,
-} from "../../plugins/chassis/src/external-members.ts";
 import { TEST_TENANT } from "./tenant.ts";
 
 export interface SignedCoreOptions {
@@ -33,13 +27,6 @@ export async function signedCoreHeaders(
   return signedRequestHeaders(secret, method, pathWithQuery, body, base);
 }
 
-export function inChassisTenant<A extends unknown[], R>(
-  fn: (...args: A) => R,
-  tenant = TEST_TENANT,
-): (...args: A) => R {
-  return (...args) => withChassisTenant(tenant, () => fn(...args));
-}
-
 let clock = 0;
 
 export function signedFetcher(secret: string, tenant = TEST_TENANT): typeof fetch {
@@ -60,7 +47,3 @@ export function signedFetcher(secret: string, tenant = TEST_TENANT): typeof fetc
     return fetch(input, { ...init, headers: signed });
   };
 }
-
-export const signedHeaders = inChassisTenant(chassisSignedHeaders);
-export const coreEmailAdmission = inChassisTenant(chassisEmailAdmission);
-export const coreEmailAllowed = inChassisTenant(chassisEmailAllowed);

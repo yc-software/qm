@@ -15,7 +15,6 @@ import { NonRetryableTurnError } from "../src/core/turn-error.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 let fake: FakeAgent37;
 let sandbox: Sandbox;

@@ -15,7 +15,7 @@ import { scopeId } from "../src/types.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { OTHER_TENANT, TEST_TENANT, TENANT_HEADERS, bindTestTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT, TENANT_HEADERS } from "./support/tenant.ts";
 import { signedFetcher } from "./support/signed-core.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 

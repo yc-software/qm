@@ -15,7 +15,6 @@ import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-remote-secret".repeat(3);

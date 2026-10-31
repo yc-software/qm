@@ -20,7 +20,6 @@ import { E2bSandboxGoneError } from "../src/sandbox/e2b-client.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 let fake: FakeE2b;
 let sandbox: Sandbox;

@@ -6,12 +6,11 @@ import { randomUUID } from "node:crypto";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { mintCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
-import { signedHeaders } from "./support/signed-core.ts";
+import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 mock.module("./support/mock-agent.ts", {
   namedExports: {

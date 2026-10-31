@@ -12,9 +12,7 @@ import { buildApp } from "./support/build-app.ts";
 import { signedCoreHeaders } from "./support/signed-core.ts";
 import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant, OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "oauth-route-test-secret".repeat(3);
 const oauthEnv = {

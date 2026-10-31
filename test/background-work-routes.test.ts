@@ -12,7 +12,6 @@ import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src
 import { testConfig } from "./support/test-config.ts";
 import { testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);

@@ -9,7 +9,7 @@ import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TENANT_HEADERS, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 test("swarm HTTP rejects body identity selectors and completed capabilities while allowing arbitrary context keys", async () => {
   const fixture = await swarmFixture();

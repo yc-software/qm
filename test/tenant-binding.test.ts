@@ -8,7 +8,7 @@ import { withRowTenant } from "../src/api/tenant-ingress.ts";
 import { mintCapabilityToken, verifyCapabilityToken, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { mintPortalIdentity, verifyPortalIdentity } from "../src/auth/portal-identity.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { currentTenant, withTenant } from "../src/tenants/context.ts";
+import { currentTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { singleTenantResolver } from "../src/tenants/resolver.ts";
 import { signedRequestHeaders, TENANT_HEADER } from "../plugins/chassis/src/source-auth-sign.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -17,6 +17,7 @@ import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SOURCE = "tenant-binding-source-secret-0123456789abcdef";
 const IDENTITY = "tenant-binding-identity-secret-0123456789ab";
+const CONTROL = "tenant-binding-control-secret-0123456789abcd";
 const HOSTS: Record<string, string> = { "a.example": TEST_TENANT, "b.example": OTHER_TENANT };
 
 describe("tenant resolution", () => {
@@ -80,6 +81,7 @@ describe("core ingress binds the verified tenant", () => {
       identity: built.identity,
       config: built.config,
       tenants: { forHost: async (host) => HOSTS[host] ?? null, forSlackTeam: async () => null },
+      deploymentControlSecret: CONTROL,
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     port = (server.address() as AddressInfo).port;
@@ -102,7 +104,7 @@ describe("core ingress binds the verified tenant", () => {
     const { status, body } = await call(
       "a.example",
       "/v1/surface-config",
-      signedRequestHeaders(SOURCE, "GET", "/v1/surface-config"),
+      withoutTenant(() => signedRequestHeaders(SOURCE, "GET", "/v1/surface-config")),
     );
     assert.equal(status, 401);
     assert.match(body.message ?? "", /no verifiable tenant/);
@@ -137,12 +139,19 @@ describe("core ingress binds the verified tenant", () => {
     assert.match(capability.body.message ?? "", /another tenant/);
   });
 
-  it("binds the host's tenant for operator routes whose signed request names none", async () => {
-    const headers = signedRequestHeaders(SOURCE, "GET", "/v1/deployment-layer");
-    assert.equal((await call("a.example", "/v1/deployment-layer", headers)).status, 404);
-    const unknown = await call("unknown.example", "/v1/deployment-layer", headers);
-    assert.equal(unknown.status, 401);
-    assert.match(unknown.body.message ?? "", /no verifiable tenant/);
+  it("binds the host's tenant for operator routes only with the deployment-control bearer", async () => {
+    const signed = () => withoutTenant(() => signedRequestHeaders(SOURCE, "GET", "/v1/deployment-layer"));
+    const operator = () => ({ ...signed(), authorization: `Bearer ${CONTROL}` });
+    assert.equal((await call("a.example", "/v1/deployment-layer", operator())).status, 404);
+    for (const [host, headers] of [
+      ["a.example", signed()],
+      ["a.example", { ...signed(), authorization: `Bearer ${SOURCE}` }],
+      ["unknown.example", operator()],
+    ] as const) {
+      const refused = await call(host, "/v1/deployment-layer", headers);
+      assert.equal(refused.status, 401);
+      assert.match(refused.body.message ?? "", /no verifiable tenant/);
+    }
   });
 
   it("requires a portal identity on person routes even with a valid signature", async () => {

@@ -4,9 +4,7 @@ import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;

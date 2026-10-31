@@ -13,9 +13,7 @@ import {
   type CapabilityClaims,
 } from "../src/auth/capability-token.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { bindTestTenant, OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "test-signing-secret";
 const claims = (over: Partial<CapabilityClaims> = {}): CapabilityClaims => ({

@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { mintPortalIdentity, verifyPortalIdentity } from "../plugins/chassis/src/portal-identity.ts";
 import { verifyPortalIdentity as verifyCoreIdentity } from "../src/auth/portal-identity.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { bindTestTenant, OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "portal-identity-test-secret";
 const now = 1_000_000;

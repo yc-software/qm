@@ -15,7 +15,6 @@ import { scopeId } from "../src/types.ts";
 import { artifactPath } from "../src/files/file-artifact-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 const principals = [
   { id: "alice@example.com", type: "internal" as const },
   { id: "bob@example.com", type: "internal" as const },

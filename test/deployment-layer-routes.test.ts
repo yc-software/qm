@@ -16,7 +16,7 @@ import { testConfig } from "./support/test-config.ts";
 import { DeploymentLayerPersistedError } from "../src/deployment/deployment-layer-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "layer-routes-secret".repeat(3);
 const PATH = "/v1/deployment-layer";

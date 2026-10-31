@@ -8,12 +8,12 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
-import { signedHeaders } from "./support/signed-core.ts";
+import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turns-union-")) }));

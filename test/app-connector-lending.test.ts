@@ -24,7 +24,6 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";

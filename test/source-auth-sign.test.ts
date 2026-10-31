@@ -4,9 +4,7 @@ import { createHmac } from "node:crypto";
 import { canonicalPayload, signRequest, signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { tenantStore, withTenant as withChassisTenant } from "../plugins/chassis/src/tenant.ts";
 import { signRequest as legacySignRequest } from "../src/auth/source-auth.ts";
-import { bindTestTenant, OTHER_TENANT, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { OTHER_TENANT, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 test("canonicalPayload binds method + path + tenant + body with newlines", () => {
   assert.equal(canonicalPayload("POST", "/v1/turns?x=1", "{}", TEST_TENANT), `POST\n/v1/turns?x=1\n${TEST_TENANT}\n{}`);

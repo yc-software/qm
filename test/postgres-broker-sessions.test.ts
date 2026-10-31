@@ -4,9 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresBrokerSessions } from "../src/auth/broker-sessions.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { bindTestTenant, OTHER_TENANT } from "./support/tenant.ts";
-
-bindTestTenant();
+import { OTHER_TENANT } from "./support/tenant.ts";
 
 const url = process.env.DATABASE_URL;
 

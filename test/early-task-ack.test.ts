@@ -6,7 +6,6 @@ import { testConfig } from "./support/test-config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { settle } from "./support/settle.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 let exercise: (turn: AgentTurnInput) => Promise<void>;
 mock.module("./support/mock-agent.ts", {

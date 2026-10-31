@@ -183,13 +183,13 @@ export const awsDeploymentLayerTransport: DeploymentLayerTransport = httpDeploym
     return url;
   },
   request: awsCoreRequest,
-  secretFallback: (config) =>
+  secretFallback: (config, name) =>
     config.aws
       ? capture(process.env.AWS_BIN ?? "aws", [
           "secretsmanager",
           "get-secret-value",
           "--secret-id",
-          `${config.aws.secretsPrefix}CORE_SIGNING_SECRET`,
+          `${config.aws.secretsPrefix}${name}`,
           "--query",
           "SecretString",
           "--output",

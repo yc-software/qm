@@ -9,9 +9,6 @@ import { installGlobalFakeSprites, type FakeSprites } from "./support/fake-sprit
 import { testConfig } from "./support/test-config.ts";
 import { createAwsRoleBroker } from "../src/auth/aws-role-broker.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 let ff: FakeSprites;
 before(() => {

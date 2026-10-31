@@ -19,7 +19,7 @@ import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { createOAuthFlowStore } from "../src/connectors/oauth-flow-store.ts";
 import { testMap } from "./support/test-database.ts";
-import { bindTestTenant, TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const env = {
   GOOGLE_OAUTH_CLIENT_ID: "gid",

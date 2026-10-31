@@ -9,7 +9,7 @@ import { PORTAL_IDENTITY_HEADER, mintPortalIdentity } from "../src/auth/portal-i
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { TENANT_HEADERS, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "deploy-redeploy-route-secret".repeat(2);
 

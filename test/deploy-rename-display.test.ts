@@ -14,7 +14,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function svc() {
   const deployStore = createDeployStore(testDeployBackings());

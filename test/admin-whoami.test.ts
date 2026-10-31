@@ -15,7 +15,7 @@ import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdminGrantStore, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { OTHER_TENANT, TEST_TENANT, TENANT_HEADERS, bindTestTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT, TENANT_HEADERS } from "./support/tenant.ts";
 
 function start(withAdmin = true, signingSecret?: string) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));

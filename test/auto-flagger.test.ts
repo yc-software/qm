@@ -16,7 +16,6 @@ import { SECURITY_SCREEN_STEP, securityScreenSystemPrompt } from "../src/securit
 import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const org = scopeId("org", "acme");
 

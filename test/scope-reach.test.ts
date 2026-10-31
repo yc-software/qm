@@ -21,7 +21,6 @@ import type { AuditEvent, AuditLog } from "../src/audit/audit-log.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 test("resolveReachableChannel: a public channel is reachable by any internal member", async () => {
   const d = createPostgresDirectoryStore(testDatabaseUrl());
