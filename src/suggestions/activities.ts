@@ -1,9 +1,9 @@
 import { parseSuggestedActivities, type SuggestedActivity } from "../../plugins/chassis/src/suggested-activities.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
 import type { CronStore } from "../cron/cron-store.ts";
 import type { Scheduler } from "../cron/scheduler.ts";
-import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/managed.ts";
+import { claimManagedCron, nightlyAt, type ManagedCronProfiles } from "../cron/managed.ts";
+import type { DismissedActivity, SuggestedActivityProfile } from "./activity-profiles.ts";
 import { scopeId } from "../types.ts";
 import type { Cron } from "../triggers/types.ts";
 
@@ -19,22 +19,6 @@ prompt: a natural, collaborative request, at most 1200 characters. Prefer phrasi
 Example prompt: "Let's get the staging playground working again for testing. The latest checkpoint is in the playground conversation and HANDOFF.md. Last time, staging returned a 503 and AWS access was blocked. Either may have changed in the meantime."
 icon: one relevant emoji, or "yc" for YC-specific work only when deployment guidance establishes a YC context. Never use image URLs or markup.`;
 
-export interface SuggestedActivityProfile extends ManagedCronClaim {
-  timezone: string;
-  lastSeenAt: number;
-  lastBootstrapAt?: number;
-  dismissalRefreshAt?: number;
-  managedAction?: string;
-  seeds?: SuggestedActivity[];
-  dismissed?: DismissedActivity[];
-}
-
-interface DismissedActivity {
-  id: string;
-  title: string;
-  at: number;
-}
-
 export interface SuggestedActivityResult {
   activities: SuggestedActivity[];
   pending: boolean;
@@ -46,7 +30,7 @@ const VISIBLE_COUNT = 3;
 const MAX_DISMISSED = 30;
 
 export function createSuggestedActivityService(deps: {
-  store: DurableMap<SuggestedActivityProfile>;
+  store: ManagedCronProfiles<SuggestedActivityProfile>;
   sessions: Pick<SessionStore, "latestEntrySeq" | "getEntries" | "get">;
   crons: CronStore;
   scheduler: Pick<Scheduler, "notifyChanged" | "runNow">;
@@ -71,7 +55,7 @@ export function createSuggestedActivityService(deps: {
     if (action === cron.action) return;
     if (cron.action !== profile.managedAction && !cron.action?.startsWith(managedPrefix)) return;
     await deps.crons.update(cron.id, { action });
-    await deps.store.merge(cron.owner, { managedAction: action });
+    await deps.store.update(cron.owner, (profile) => ({ ...profile, managedAction: action }));
   };
 
   const latestResult = async (cron: Cron, principalId: string) => {
@@ -114,9 +98,9 @@ export function createSuggestedActivityService(deps: {
     ): Promise<SuggestedActivityResult> {
       if (!deps.enabled) return { activities: seeds.slice(0, GENERATED_COUNT), pending: false };
       new Intl.DateTimeFormat("en-US", { timeZone: timezone });
-      let profile = await deps.store.putIfAbsent(principalId, { timezone, lastSeenAt: now() });
+      let profile = await deps.store.insertIfAbsent(principalId, { timezone, lastSeenAt: now() });
       const seen = poll ? {} : { lastSeenAt: now() };
-      await deps.store.merge(principalId, { ...seen, seeds });
+      await deps.store.update(principalId, (current) => ({ ...current, ...seen, seeds }));
       profile = { ...profile, ...seen, seeds };
       if (!profile.cronId || profile.arming) {
         profile = await claimManagedCron(

@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createGoalRecord } from "../src/agent/goal.ts";
 import { createSwarmGoalInbox } from "../src/swarms/swarm-goal-inbox.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("a message wakes its recipients unless sent with wake:false, which leaves it in their mailboxes", async () => {
   const f = await swarmFixture();

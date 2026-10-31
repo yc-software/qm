@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { IngressDeliveryRows, IngressSourceRows } from "./ingress-table.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Loop, LoopItem } from "./types.ts";
 import type { LoopStore } from "./loop-store.ts";
@@ -98,8 +98,8 @@ export interface IngressDelivery {
 
 export interface LoopIngressDeps {
   enabledFor: (owner: string) => Promise<boolean>;
-  sources: DurableMap<LoopIngress>;
-  deliveries: DurableMap<IngressDelivery>;
+  sources: IngressSourceRows;
+  deliveries: IngressDeliveryRows;
   loops: LoopStore;
   items: LoopItemLedger;
   outputs: LoopOutputStore;
@@ -119,13 +119,17 @@ export interface IngressSetup {
 
 export function createLoopIngress(deps: LoopIngressDeps) {
   let nextCleanupAt = 0;
+  const mergeSource = (id: string, patch: Partial<LoopIngress>) =>
+    deps.sources.update(id, (source) => ({ ...source, ...patch }));
+  const mergeDelivery = (id: string, patch: Partial<IngressDelivery>) =>
+    deps.deliveries.update(id, (delivery) => ({ ...delivery, ...patch }));
   async function enqueue(
     source: LoopIngress,
     deliveryId: string,
     payload: Pick<IngressDelivery, "entries" | "historyId">,
   ) {
     const id = hashId([source.id, deliveryId]);
-    await deps.deliveries.putIfAbsent(id, {
+    await deps.deliveries.insertIfAbsent({
       id,
       ingressId: source.id,
       queueKey: source.id,
@@ -134,7 +138,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       nextAttemptAt: 0,
       ...payload,
     });
-    await deps.sources.merge(source.id, { lastReceivedAt: Date.now() });
+    await mergeSource(source.id, { lastReceivedAt: Date.now() });
   }
 
   async function process(sourceId: string) {
@@ -145,10 +149,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       if (!source?.enabled || !(await deps.enabledFor(source.owner)) || (source.nextWorkAt ?? 0) > Date.now()) return;
       const loop = await deps.loops.get(source.loopId);
       if (loop?.state !== "enabled") return;
-      const pending = (await deps.deliveries.select({ where: { field: "queueKey", anyOfFold: [sourceId] } }))
-        .filter((delivery) => !delivery.completedAt && delivery.nextAttemptAt <= Date.now())
-        .sort((a, b) => a.receivedAt - b.receivedAt)
-        .slice(0, 20);
+      const pending = await deps.deliveries.pending(sourceId, Date.now(), 20);
       const ingest = async (entries: IngressEntry[]) => {
         for (const raw of entries) {
           const existing = (await deps.items.byLoop(source.loopId)).find((item) => item.sourceKey === raw.dedupeKey);
@@ -168,7 +169,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       };
       for (const delivery of pending) {
         const attempt = delivery.attempts + 1;
-        await deps.deliveries.merge(delivery.id, { attempts: attempt, nextAttemptAt: Date.now() + 60_000 });
+        await mergeDelivery(delivery.id, { attempts: attempt, nextAttemptAt: Date.now() + 60_000 });
         try {
           if (!delivery.ingested) {
             if (source.kind === "gmail") {
@@ -176,21 +177,21 @@ export function createLoopIngress(deps: LoopIngressDeps) {
               if (!delivery.historyId || BigInt(delivery.historyId) > BigInt(source.gmail.historyId)) {
                 const historyId = await deps.gmailClient.changes(source.owner, source.loopId, source.gmail, ingest);
                 source.gmail = { ...source.gmail, historyId };
-                await deps.sources.merge(source.id, { gmail: source.gmail });
+                await mergeSource(source.id, { gmail: source.gmail });
               }
             } else await ingest(delivery.entries ?? []);
           }
-          await deps.deliveries.merge(delivery.id, {
+          await mergeDelivery(delivery.id, {
             ingested: true,
             completedAt: Date.now(),
             queueKey: undefined,
             entries: undefined,
           });
-          await deps.sources.merge(source.id, { lastError: undefined });
+          await mergeSource(source.id, { lastError: undefined });
         } catch (error) {
           swallow("Loop ingress delivery", error);
-          await deps.sources.merge(source.id, { lastError: errMessage(error) });
-          await deps.deliveries.merge(delivery.id, {
+          await mergeSource(source.id, { lastError: errMessage(error) });
+          await mergeDelivery(delivery.id, {
             nextAttemptAt: Date.now() + Math.min(3_600_000, 30_000 * 2 ** Math.min(attempt, 7)),
           });
           return;
@@ -219,11 +220,11 @@ export function createLoopIngress(deps: LoopIngressDeps) {
             return;
           await deps.outputs.supersedeActiveSiblings(item.id, "");
         }
-        await deps.sources.merge(source.id, { nextWorkAt: Date.now() + 30_000 });
+        await mergeSource(source.id, { nextWorkAt: Date.now() + 30_000 });
         const result = await deps.fire.fire(source.loopId, `loop-ingress:${source.id}:${randomUUID()}`, undefined, {
           enumerate: false,
         });
-        await deps.sources.merge(source.id, {
+        await mergeSource(source.id, {
           nextWorkAt: Date.now() + (result.status === "failed" ? 60_000 : 5_000),
           lastError: result.status === "failed" ? (result.note ?? "Loop processing failed") : undefined,
         });
@@ -232,10 +233,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
   }
 
   async function conversationSource(loop: Pick<Loop, "id" | "owner">): Promise<LoopIngress> {
-    const find = async () =>
-      (await deps.sources.select({ where: { field: "loopId", anyOfFold: [loop.id] } })).find(
-        (source) => source.kind === "conversation",
-      );
+    const find = async () => (await deps.sources.byLoop(loop.id)).find((source) => source.kind === "conversation");
     const found = await find();
     if (found) return found;
     return deps.lock.withLock(`loop-ingress-setup:${loop.id}`, async () => {
@@ -249,7 +247,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         enabled: true,
         createdAt: Date.now(),
       };
-      await deps.sources.put(source.id, source);
+      await deps.sources.insert(source);
       return source;
     });
   }
@@ -264,9 +262,9 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       return true;
     },
     async list(loopId: string) {
-      return (await deps.sources.select({ omit: ["secret"], where: { field: "loopId", anyOfFold: [loopId] } })).filter(
-        (source) => source.kind !== "conversation",
-      );
+      return (await deps.sources.byLoop(loopId))
+        .filter((source) => source.kind !== "conversation")
+        .map(({ secret: _secret, ...source }) => source);
     },
     async create(loop: Loop, input: IngressSetup): Promise<LoopIngress> {
       if (!(await deps.enabledFor(loop.owner))) throw new Error("Event ingestion is not enabled for this owner");
@@ -286,9 +284,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
       if (input.kind === "gmail" && loop.ownerScopeId !== `personal:${loop.owner}`)
         throw new Error("Gmail ingestion requires a personal Loop");
       return deps.lock.withLock(`loop-ingress-setup:${loop.id}`, async () => {
-        const existing = (await deps.sources.all()).find(
-          (source) => source.loopId === loop.id && source.kind === input.kind,
-        );
+        const existing = (await deps.sources.byLoop(loop.id)).find((source) => source.kind === input.kind);
         if (existing) throw new Error("This Loop already has that source. Disable or enable the existing source.");
         const source: LoopIngress = {
           id: randomUUID(),
@@ -309,7 +305,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
             source.channels = [...new Set(input.channels!)];
           }
         }
-        await deps.sources.put(source.id, source);
+        await deps.sources.insert(source);
         return source;
       });
     },
@@ -323,12 +319,12 @@ export function createLoopIngress(deps: LoopIngressDeps) {
           if (!deps.gmailClient) throw new Error("Gmail Pub/Sub is not configured");
           const watch = await deps.gmailClient.watch(source.owner);
           if (source.gmail && watch.email !== source.gmail.email) throw new Error("Connected Gmail account changed");
-          await deps.sources.merge(id, {
+          await mergeSource(id, {
             gmail: { ...watch, historyId: source.gmail?.historyId ?? watch.historyId },
             nextWatchAt: Date.now() + 86_400_000,
           });
         }
-        await deps.sources.merge(id, { enabled });
+        await mergeSource(id, { enabled });
       });
     },
     async receive(
@@ -357,12 +353,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
         } catch {
           return { status: 400, body: "Invalid Gmail notification" };
         }
-        const sources = (await deps.sources.all()).filter(
-          (source) =>
-            source.enabled &&
-            source.kind === "gmail" &&
-            source.gmail?.email === String(notification.emailAddress).toLowerCase(),
-        );
+        const sources = await deps.sources.gmailWatching(String(notification.emailAddress).toLowerCase());
         for (const source of sources)
           if (await deps.enabledFor(source.owner))
             await enqueue(source, String(notification.historyId), { historyId: String(notification.historyId) });
@@ -439,14 +430,12 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     },
     async maintain() {
       if (Date.now() >= nextCleanupAt) {
-        for (const delivery of await deps.deliveries.select({ omit: ["entries"] }))
-          if (delivery.completedAt && delivery.completedAt < Date.now() - 30 * 86_400_000)
-            await deps.deliveries.delete(delivery.id);
+        await deps.deliveries.pruneCompleted(Date.now() - 30 * 86_400_000);
         nextCleanupAt = Date.now() + 86_400_000;
       }
-      const sources = await deps.sources.all();
+      const sources = await deps.sources.enabled();
       for (const source of sources) {
-        if (!source.enabled || !(await deps.enabledFor(source.owner))) continue;
+        if (!(await deps.enabledFor(source.owner))) continue;
         if (source.kind === "gmail" && deps.gmailClient && (source.nextWatchAt ?? 0) <= Date.now()) {
           await deps.lock.withLock(`loop-ingress:${source.id}`, async () => {
             const current = await deps.sources.get(source.id);
@@ -455,20 +444,20 @@ export function createLoopIngress(deps: LoopIngressDeps) {
               const watch = await deps.gmailClient!.watch(source.owner);
               if (current.gmail && watch.email !== current.gmail.email)
                 throw new Error("Connected Gmail account changed");
-              await deps.sources.merge(source.id, {
+              await mergeSource(source.id, {
                 gmail: { ...watch, historyId: current.gmail?.historyId ?? watch.historyId },
                 nextWatchAt: Date.now() + 86_400_000,
                 lastError: undefined,
               });
               await enqueue(source, `reconcile:${Date.now()}`, { historyId: watch.historyId });
             } catch (error) {
-              await deps.sources.merge(source.id, { lastError: errMessage(error), nextWatchAt: Date.now() + 300_000 });
+              await mergeSource(source.id, { lastError: errMessage(error), nextWatchAt: Date.now() + 300_000 });
             }
           });
         }
         if (source.kind === "gmail" && (source.nextReconcileAt ?? 0) <= Date.now()) {
           await enqueue(source, `reconcile:${Math.floor(Date.now() / 600_000)}`, {});
-          await deps.sources.merge(source.id, { nextReconcileAt: Date.now() + 600_000 });
+          await mergeSource(source.id, { nextReconcileAt: Date.now() + 600_000 });
         }
       }
       for (const source of sources) {

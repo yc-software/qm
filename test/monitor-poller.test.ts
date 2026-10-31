@@ -12,6 +12,7 @@ import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts"
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testMonitorRows } from "./support/typed-stores.ts";
 
 const SCOPE = "personal:U1";
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
@@ -104,7 +105,7 @@ async function agent(opts?: {
   onRun?: () => Promise<void>;
 }) {
   const fake = fakeSandbox();
-  const monitors = createMonitorStore(testMap());
+  const monitors = createMonitorStore(testMonitorRows());
   const processes = createPostgresProcessRegistry(testDatabaseUrl());
   const deliveries = createDeliveryStore();
   const calls: TurnRequest[] = [];
