@@ -1,10 +1,12 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { pgRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { DurableByteStore } from "../files/durable-byte-store.ts";
 import { collectBytes } from "../util/bytes.ts";
 import { swallowAs } from "../util/errors.ts";
@@ -55,10 +57,51 @@ export interface DeployGitArchive {
   updatedAt: number;
 }
 
+export interface DeployGitArchives {
+  get(deploymentId: string): Promise<DeployGitArchive | null>;
+  put(deploymentId: string, archive: DeployGitArchive): Promise<void>;
+  update(deploymentId: string, fn: (current: DeployGitArchive) => DeployGitArchive): Promise<unknown>;
+  delete(deploymentId: string): Promise<void>;
+}
+
+const ARCHIVES_COLUMNS: RowColumns<DeployGitArchive, "deploymentId"> = {
+  deploymentId: "text",
+  bundleB64: "text",
+  blobKey: "text",
+  etag: "text",
+  updatedAt: "bigint",
+};
+
+const ARCHIVES: RowTable<DeployGitArchive, "deploymentId"> = {
+  table: "deploy_git_repos",
+  key: "deploymentId",
+  recordKey: true,
+  columns: ARCHIVES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "deploy_git_repos",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "bundle_b64 TEXT",
+        "blob_key TEXT",
+        "etag TEXT NOT NULL",
+        "updated_at BIGINT NOT NULL",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("deploy_git_repos", ARCHIVES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
+
+export function createPostgresDeployGitArchives(databaseUrl: string): DeployGitArchives {
+  const { get, put, update, delete: remove } = pgRows(databaseUrl, ARCHIVES);
+  return { get, put, update, delete: remove };
+}
+
 export interface DeployGitStoreOptions {
   repoRoot?: string;
   gitBin?: string;
-  archiveStore?: DurableMap<DeployGitArchive>;
+  archiveStore?: DeployGitArchives;
   archiveBytes?: DurableByteStore;
 }
 
@@ -171,7 +214,7 @@ export function createDeployGitStore(opts: DeployGitStoreOptions = {}): DeployGi
   }
 
   async function migrateArchive(archive: DeployGitArchive): Promise<void> {
-    if (!archiveStore?.update || !archiveBytes || archive.bundleB64 == null) return;
+    if (!archiveStore || !archiveBytes || archive.bundleB64 == null) return;
     const { blobKey } = await archiveBytes.put(Buffer.from(archive.bundleB64, "base64"));
     const slim: DeployGitArchive = {
       deploymentId: archive.deploymentId,

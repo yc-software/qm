@@ -1,7 +1,9 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomBytes } from "node:crypto";
 import { mintDeployGitAccess } from "./access-token.ts";
 import type { Deployment, DeploymentVersion, DeployStore } from "./deploy-store.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 
 const PRINCIPAL_PREFIX = "render-deploy:";
 
@@ -16,6 +18,28 @@ export interface StoredRenderDeployCredential {
   principalId: string;
 }
 
+const RENDER_DEPLOY_CREDENTIALS_COLUMNS: RowColumns<StoredRenderDeployCredential, "deploymentId"> = {
+  deploymentId: "text",
+  principalId: "text",
+};
+
+export const RENDER_DEPLOY_CREDENTIALS: RowTable<StoredRenderDeployCredential, "deploymentId"> = {
+  table: "render_deploy_credentials",
+  key: "deploymentId",
+  columns: RENDER_DEPLOY_CREDENTIALS_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "render_deploy_credentials",
+      columns: ["deployment_id TEXT NOT NULL", "principal_id TEXT NOT NULL"],
+      primaryKey: ["deployment_id"],
+      backfill: {
+        ...jsonBackfill("render_deploy_credentials", RENDER_DEPLOY_CREDENTIALS_COLUMNS),
+        deployment_id: "id",
+      },
+    }),
+  ],
+};
+
 export interface RenderDeployArtifacts {
   prepare(deployment: Deployment, version: DeploymentVersion): Promise<RenderDeployArtifactAccess>;
   revoke(deploymentId: string): Promise<void>;
@@ -25,7 +49,7 @@ export interface RenderDeployArtifacts {
 export function createRenderDeployArtifacts(opts: {
   baseUrl: string;
   signingSecret: string;
-  store: DurableMap<StoredRenderDeployCredential>;
+  store: Pick<KeyedRows<StoredRenderDeployCredential>, "get" | "put" | "delete">;
   deployStore: Pick<DeployStore, "versionOf">;
 }): RenderDeployArtifacts {
   return {

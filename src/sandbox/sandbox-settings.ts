@@ -1,12 +1,9 @@
 import { RENDER_SANDBOX_TTL_SEC } from "./render-limits.ts";
-import type { LegacySandboxScopeDefaults } from "./sandbox-resource-upgrade.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
-import { parseScopeId } from "../types.ts";
 import { numEnvStrict, optNum } from "../util/env.ts";
 
 export interface SandboxSettings {
   sandboxBackend: SandboxBackendName;
-  legacySandboxScopeDefaults?: LegacySandboxScopeDefaults;
   awsSandbox: AwsSandboxEnv;
   localSandbox: LocalSandboxEnv;
   spritesSandbox: SpritesSandboxEnv;
@@ -518,18 +515,6 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
         `SANDBOX_TIMEOUT_SEC must stay more than 60 seconds below the ${RENDER_SANDBOX_TTL_SEC} second Render sandbox lifetime`,
       );
   }
-  const legacySandboxScopeDefaults: LegacySandboxScopeDefaults = {};
-  if (env.SANDBOX_SCOPE_BACKENDS) {
-    const values: unknown = JSON.parse(env.SANDBOX_SCOPE_BACKENDS);
-    if (!values || typeof values !== "object" || Array.isArray(values))
-      throw new Error("SANDBOX_SCOPE_BACKENDS must be an object of scope kinds and backend names");
-    for (const [kind, value] of Object.entries(values)) {
-      const parsed = parseScopeId(kind + ":scope").kind;
-      if (!parsed || parsed !== kind || typeof value !== "string" || !value.trim())
-        throw new Error("Invalid SANDBOX_SCOPE_BACKENDS entry: " + kind);
-      legacySandboxScopeDefaults[parsed] = sandboxBackendEnvStrict(value, "SANDBOX_SCOPE_BACKENDS." + kind);
-    }
-  }
   if (sandboxBackend === "superserve" && !env.SUPERSERVE_TEMPLATE?.trim()) {
     throw new Error(
       "SANDBOX_BACKEND=superserve requires SUPERSERVE_TEMPLATE, the ready qm-agent-<release> template that carries the agent toolchain.",
@@ -537,7 +522,6 @@ export function sandboxSettings(env: NodeJS.ProcessEnv): SandboxSettings {
   }
   return {
     sandboxBackend,
-    legacySandboxScopeDefaults,
     awsSandbox: awsSandboxEnv(env),
     localSandbox: localSandboxEnv(env),
     spritesSandbox: spritesSandboxEnv(env),

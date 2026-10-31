@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
-import type { PgPool } from "../persistence/pg-pool.ts";
-import { swallow } from "../util/errors.ts";
+import { pgRows, type RowColumns } from "../persistence/keyed-rows.ts";
+import { APP_PAGE_VIEW_MIGRATIONS } from "./page-views.ts";
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { typedColumns } from "../persistence/typed-columns.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -10,7 +12,6 @@ import {
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
-import { TENANCY_BASE, tenantTables } from "../tenants/migrations.ts";
 
 export interface DeploymentVersion {
   version: number;
@@ -128,91 +129,141 @@ export interface DeployStore {
   repoUrl(id: string): Promise<string>;
 }
 
+export interface DeploymentRows {
+  get(id: string): Promise<Deployment | null>;
+  put(id: string, deployment: Deployment): Promise<void>;
+  merge(id: string, patch: Partial<Deployment>): Promise<unknown>;
+  list(): Promise<Deployment[]>;
+  byName(name: string): Promise<Deployment | null>;
+  touch(id: string, at: number): Promise<boolean>;
+}
+
 export interface DeployStoreBackings {
-  deployments: DurableMap<Deployment>;
+  deployments: DeploymentRows;
   git?: DeployGitStoreOptions;
-  pg: PgPool;
   touchDebounceMs?: number;
 }
 
 const CURRENT_REF = "refs/heads/current";
 const versionRef = (version: number): string => `refs/versions/${version}`;
-const NAME_INDEX = "deployments_name_unique";
+const NAME_INDEX = "deployments_name_key";
 const TOUCH_DEBOUNCE_MS = 60_000;
 
-interface DeployAccess {
-  readOne(id: string): Promise<number | null>;
-  readAll(): Promise<Map<string, number>>;
-  write(id: string, at: number): Promise<boolean>;
-  findByName?(name: string): Promise<Deployment | null>;
-}
+const DEPLOYMENT_COLUMNS: RowColumns<Deployment, "id"> = {
+  id: "text",
+  ownerScopeId: "text",
+  createdBy: "text",
+  createdInScope: "text",
+  defaultAudience: "jsonb",
+  name: "text",
+  displayName: "text",
+  currentVersion: "bigint",
+  status: "text",
+  endpoint: "jsonb",
+  alwaysOn: "boolean",
+  embedAncestors: "text[]",
+  connectors: "text[]",
+  public: "boolean",
+  lastAccessAt: "bigint",
+  appliedVersion: "bigint",
+  versions: "jsonb",
+};
 
-function createPgDeployAccess(pg: PgPool): DeployAccess {
-  const migration = {
-    id: "deploy/access/0001",
+const { lastAccessAt: _lastAccessAt, ...WRITTEN_COLUMNS } = DEPLOYMENT_COLUMNS;
+
+const DEPLOYMENT_MIGRATIONS = [
+  ...APP_PAGE_VIEW_MIGRATIONS,
+  {
+    id: "tenancy/deployment_prep/0001",
     statements: [
-      "CREATE TABLE IF NOT EXISTS deployments (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `CREATE TABLE IF NOT EXISTS deployment_access (
-        id TEXT PRIMARY KEY REFERENCES deployments(id) ON DELETE CASCADE,
-        last_access_at BIGINT NOT NULL
-      )`,
+      `ALTER TABLE IF EXISTS app_page_views DROP CONSTRAINT IF EXISTS app_page_views_deployment_id_fkey`,
+      `DO $prep$ BEGIN
+         IF to_regclass('deployment_access') IS NOT NULL THEN
+           UPDATE deployments d SET json = d.json || jsonb_build_object('lastAccessAt', a.last_access_at)
+             FROM deployment_access a WHERE a.id = d.id;
+           DROP TABLE deployment_access;
+         END IF;
+         IF to_regclass('deployments') IS NOT NULL THEN
+           UPDATE deployments d SET json = d.json - 'name'
+            WHERE EXISTS (
+              SELECT 1 FROM deployments o
+               WHERE o.json->>'name' = d.json->>'name'
+                 AND (COALESCE(CASE WHEN jsonb_typeof(o.json#>'{versions,0,createdAt}') = 'number'
+                           THEN (o.json#>>'{versions,0,createdAt}')::numeric END, 0), o.id)
+                   < (COALESCE(CASE WHEN jsonb_typeof(d.json#>'{versions,0,createdAt}') = 'number'
+                           THEN (d.json#>>'{versions,0,createdAt}')::numeric END, 0), d.id));
+         END IF;
+       END $prep$`,
     ],
-  };
-  const migrations = [
-    TENANCY_BASE,
-    migration,
-    tenantTables("deploy/access/0002-tenants", [{ table: "deployment_access", primaryKey: "id" }]),
-  ];
-  for (const definition of migrations) pg.registerMigration(definition);
-  let readyP: Promise<void> | null = null;
-  function ready(): Promise<void> {
-    if (!readyP) {
-      readyP = (async () => {
-        for (const definition of migrations) await pg.migrate(definition);
-        await pg
-          .q(
-            `CREATE UNIQUE INDEX IF NOT EXISTS ${NAME_INDEX}
-             ON deployments ((json->>'name')) WHERE json->>'name' IS NOT NULL`,
-          )
-          .catch((e) =>
-            swallow(
-              "deploy-store: could not create unique name index on deployments (concurrent boot, or duplicate names)",
-              e,
-            ),
-          );
-      })().catch((e) => {
-        readyP = null;
-        throw e;
-      });
-    }
-    return readyP;
-  }
+  },
+  typedTableMigration({
+    table: "deployments",
+    columns: [
+      "id TEXT NOT NULL",
+      "owner_scope_id TEXT NOT NULL",
+      "created_by TEXT NOT NULL",
+      "created_in_scope TEXT",
+      "default_audience JSONB",
+      "name TEXT",
+      "display_name TEXT",
+      "current_version BIGINT NOT NULL",
+      "status TEXT NOT NULL",
+      "endpoint JSONB",
+      "always_on BOOLEAN",
+      "embed_ancestors TEXT[]",
+      "connectors TEXT[]",
+      "public BOOLEAN",
+      "last_access_at BIGINT",
+      "applied_version BIGINT",
+      "versions JSONB NOT NULL",
+    ],
+    primaryKey: ["id"],
+    backfill: jsonBackfill("deployments", DEPLOYMENT_COLUMNS),
+    indexes: [
+      `CREATE UNIQUE INDEX ${NAME_INDEX} ON deployments (name)`,
+      `CREATE INDEX deployments_resource_search_gin ON deployments USING GIN
+         (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
+    ],
+  }),
+  {
+    id: "tenancy/deployments/0002-page-view-fk",
+    statements: [
+      `DELETE FROM app_page_views v
+        WHERE NOT EXISTS (SELECT 1 FROM deployments d WHERE d.tenant_id = v.tenant_id AND d.id = v.deployment_id)`,
+      `ALTER TABLE app_page_views ADD CONSTRAINT app_page_views_deployment_fkey
+         FOREIGN KEY (tenant_id, deployment_id) REFERENCES deployments(tenant_id, id) ON DELETE CASCADE`,
+    ],
+  },
+];
+
+const withEndpoint = (d: Deployment): Deployment => ({ ...d, endpoint: d.endpoint ?? null });
+
+export function createPostgresDeploymentRows(databaseUrl: string): DeploymentRows {
+  const table = pgRows<Omit<Deployment, "lastAccessAt">, "id">(databaseUrl, {
+    table: "deployments",
+    key: "id",
+    recordKey: true,
+    columns: WRITTEN_COLUMNS,
+    migrations: DEPLOYMENT_MIGRATIONS,
+  });
+  const read = typedColumns<Deployment>(DEPLOYMENT_COLUMNS);
+  const rows = async (where: string, params: unknown[] = []) =>
+    (await table.db.q(`SELECT ${read.names} FROM deployments WHERE ${table.scoped(where)} ORDER BY id`, params))
+      .map((r) => read.fromRow(r))
+      .map(withEndpoint);
   return {
-    async readOne(id) {
-      await ready();
-      const rows = await pg.q("SELECT last_access_at FROM deployment_access WHERE id = $1", [id]);
-      return rows.length ? Number(rows[0]!.last_access_at) : null;
-    },
-    async readAll() {
-      await ready();
-      const rows = await pg.q("SELECT id, last_access_at FROM deployment_access");
-      return new Map(rows.map((row) => [row.id as string, Number(row.last_access_at)]));
-    },
-    async write(id, at) {
-      await ready();
-      const res = await pg.query(
-        `INSERT INTO deployment_access (id, last_access_at)
-         SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
-         ON CONFLICT (tenant_id, id) DO UPDATE SET last_access_at = GREATEST(deployment_access.last_access_at, EXCLUDED.last_access_at)`,
-        [id, at],
-      );
-      return res.rowCount > 0;
-    },
-    async findByName(name) {
-      await ready();
-      const rows = await pg.q("SELECT json FROM deployments WHERE json->>'name' = $1 ORDER BY id LIMIT 1", [name]);
-      return rows.length ? (rows[0]!.json as Deployment) : null;
-    },
+    get: async (id) => (await rows("id = $1", [id]))[0] ?? null,
+    put: table.put,
+    merge: table.merge,
+    list: () => rows("true"),
+    byName: async (name) => (await rows("name = $1", [name]))[0] ?? null,
+    touch: async (id, at) =>
+      (
+        await table.db.query(
+          `UPDATE deployments SET last_access_at = GREATEST(last_access_at, $2) WHERE ${table.scoped("id = $1")}`,
+          [id, at],
+        )
+      ).rowCount > 0,
   };
 }
 
@@ -230,12 +281,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
   const backingMap = backing.deployments;
   const git = createDeployGitStore(backing.git);
   const touchDebounceMs = backing.touchDebounceMs ?? TOUCH_DEBOUNCE_MS;
-  const access = createPgDeployAccess(backing.pg);
   const lastTouch = new Map<string, number>();
-
-  function withAccess(d: Deployment, at: number | null | undefined): Deployment {
-    return at == null ? d : { ...d, lastAccessAt: at };
-  }
 
   async function putNamed(d: Deployment): Promise<void> {
     try {
@@ -338,20 +384,9 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
       await updateVersionRef(id, v);
       return v;
     },
-    async get(id) {
-      const d = await backingMap.get(id);
-      return d ? withAccess(d, await access.readOne(id)) : null;
-    },
-    async getByName(name) {
-      const d = access.findByName
-        ? await access.findByName(name)
-        : ((await backingMap.all()).find((x) => x.name === name) ?? null);
-      return d ? withAccess(d, await access.readOne(d.id)) : null;
-    },
-    async list() {
-      const [ds, accessAt] = await Promise.all([backingMap.all(), access.readAll()]);
-      return ds.map((d) => withAccess(d, accessAt.get(d.id)));
-    },
+    get: (id) => backingMap.get(id),
+    getByName: (name) => backingMap.byName(name),
+    list: () => backingMap.list(),
     async setCurrentVersion(id, version) {
       const d = await backingMap.get(id);
       if (!d) return;
@@ -435,7 +470,7 @@ export function createDeployStore(backing: DeployStoreBackings): DeployStore {
     async touch(id, at) {
       const prev = lastTouch.get(id);
       if (prev !== undefined && at - prev < touchDebounceMs) return;
-      if (await access.write(id, at)) lastTouch.set(id, at);
+      if (await backingMap.touch(id, at)) lastTouch.set(id, at);
     },
     async versionOf(id, version) {
       return (await backingMap.get(id))?.versions.find((v) => v.version === version) ?? null;
