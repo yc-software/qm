@@ -4,13 +4,11 @@ import {
   AGENT_OPENED_TEXT,
   INTERRUPTED_TOOL_RESULT,
   recordedMessageTimestamps,
-  planColdStartSeed,
   reconstructMessagesFromHistory,
   renderOverheard,
-  replayPreamble,
   seedPriorTurns,
   selectOverheardToImport,
-} from "../src/harness/replay.ts";
+} from "../src/agent/replay.ts";
 import type { ConversationTurn, OverheardMessage, SessionEntry } from "../src/types.ts";
 
 function entry(type: SessionEntry["type"], text: string): SessionEntry {
@@ -54,33 +52,6 @@ function assertValidWire(msgs: ReturnType<typeof reconstructMessagesFromHistory>
   }
   assert.equal(open.size, 0, "every tool_use has a matching tool_result");
 }
-
-test("replayPreamble renders user and assistant entries", () => {
-  const out = replayPreamble([entry("user", "send me a pirate flag"), entry("assistant", "done!")]);
-  assert.match(out, /User: send me a pirate flag/);
-  assert.match(out, /Assistant: done!/);
-});
-
-test("replayPreamble is empty when there is nothing to replay", () => {
-  assert.equal(replayPreamble([]), "");
-});
-
-test("replayPreamble EXCLUDES thinking from cold-start context (signature is stored but never replayed)", () => {
-  const thinking: SessionEntry = {
-    sessionId: "s",
-    seq: 1,
-    parentSeq: null,
-    type: "thinking",
-    payload: { thinking: "secret chain of thought", thinkingSignature: "OPAQUE-SIG-BYTES" },
-    scopeLabel: "org:default-org",
-    createdAt: 0,
-  };
-  const out = replayPreamble([entry("user", "hi"), thinking, entry("assistant", "hello")]);
-  assert.match(out, /User: hi/);
-  assert.match(out, /Assistant: hello/);
-  assert.doesNotMatch(out, /secret chain of thought/);
-  assert.doesNotMatch(out, /OPAQUE-SIG-BYTES/);
-});
 
 test("reconstructMessagesFromHistory rebuilds a faithful tool round — a fact in a tool result survives", () => {
   const history: SessionEntry[] = [
@@ -264,18 +235,21 @@ test("reconstructMessagesFromHistory replays a context summary as a user turn an
   assert.equal(msgs.filter((m) => m.role === "toolResult").length, 2);
 });
 
-test("reconstructMessagesFromHistory is empty for empty history (fresh session — nothing to replay)", () => {
-  assert.deepEqual(reconstructMessagesFromHistory([]), []);
+test("a recorded tool call whose wire arguments no longer parse replays with its recorded arguments", () => {
+  const step = { id: "st1", index: 0 };
+  const msgs = reconstructMessagesFromHistory([
+    ent("user", { text: "list files" }, 0),
+    ent("tool_call", { tool: "execute", callId: "c1", command: "ls", step, wire: { argumentsJson: "{not json" } }, 1),
+    ent("tool_result", { tool: "execute", callId: "c1", ok: true, isError: false, result: "a.txt", step }, 2),
+    ent("assistant", { text: "One file.", step: { id: "st2", index: 0 } }, 3),
+  ]);
+  assertValidWire(msgs);
+  const call = msgs.flatMap((m) => (m.role === "assistant" ? m.content : [])).find((b) => b.type === "toolCall");
+  assert.deepEqual(call && call.type === "toolCall" ? call.arguments : undefined, { command: "ls" });
 });
 
-test("planColdStartSeed prefers the faithful rebuild; priorTurns only bootstraps an empty durable log", () => {
-  const oneMsg = [{ role: "user" as const, content: [{ type: "text" as const, text: "hi" }], timestamp: 0 }];
-  assert.equal(planColdStartSeed(oneMsg, true), "structured");
-  assert.equal(planColdStartSeed(oneMsg, false), "structured");
-  assert.equal(planColdStartSeed([], true), "priorTurns");
-  assert.equal(planColdStartSeed(null, true), "priorTurns");
-  assert.equal(planColdStartSeed(null, false), "preamble");
-  assert.equal(planColdStartSeed([], false), "none");
+test("reconstructMessagesFromHistory is empty for empty history (fresh session — nothing to replay)", () => {
+  assert.deepEqual(reconstructMessagesFromHistory([]), []);
 });
 
 test("seedPriorTurns renders thread history as author-attributed <message> tags (own = from agent)", () => {
@@ -470,12 +444,6 @@ test("reconstructMessagesFromHistory skips an empty overheard marker (no blank l
   const texts = msgs.flatMap((m) => m.content.map((c) => (c.type === "text" ? c.text : "")));
   assert.ok(texts.some((t) => /hi/.test(t)));
   assert.ok(!texts.some((t) => /overheard/.test(t)));
-});
-
-test("replayPreamble renders an overheard entry distinctly from a normal user line", () => {
-  const out = replayPreamble([overheardEntry("1", "Bob", "saw this go by"), entry("user", "thanks")]);
-  assert.match(out, /Overheard \(Bob\): saw this go by/);
-  assert.match(out, /User: thanks/);
 });
 
 test("a bytes-only surface call (legacy post / reach) replays with stand-in text, never {action,bytes}", () => {

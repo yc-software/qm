@@ -1,4 +1,3 @@
-import { tenantRows } from "./tenants/memory-rows.ts";
 import { createPgPool } from "./persistence/pg-pool.ts";
 import { typedTableMigration } from "./persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "./tenants/migrations.ts";
@@ -79,32 +78,6 @@ function flagRecord(row: Record<string, unknown>): FeatureFlagRecord {
     enabledScopes: row.enabled_scopes as ScopeId[],
     updatedAt: Number(row.updated_at),
     updatedBy: String(row.updated_by),
-  };
-}
-
-export function createFeatureFlagStore(opts: { now?: () => number } = {}): FeatureFlagStore {
-  const now = opts.now ?? Date.now;
-  const rows = tenantRows<FeatureFlagRecord>();
-  const current = () => [...rows().values()].filter((row) => FEATURE_NAMES.includes(row.featureName));
-  const enabledFor = (scope: ScopeId): ReadonlySet<FeatureName> =>
-    new Set(
-      current()
-        .filter((row) => row.enabledScopes.includes(tenantRootScope()) || row.enabledScopes.includes(scope))
-        .map((row) => row.featureName),
-    );
-  return {
-    list: async () => current(),
-    enabled: async (featureName, scope) => enabledFor(scope).has(featureName),
-    enabledFor: async (scope) => enabledFor(scope),
-    async setEnabled(featureName, scope, on, updatedBy) {
-      validUpdater(updatedBy);
-      const scopes = new Set(rows().get(featureName)?.enabledScopes ?? []);
-      if (on) scopes.add(scope);
-      else scopes.delete(scope);
-      const record = { featureName, enabledScopes: [...scopes].sort(), updatedAt: now(), updatedBy };
-      rows().set(featureName, record);
-      return record;
-    },
   };
 }
 

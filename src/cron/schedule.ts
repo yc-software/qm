@@ -1,5 +1,5 @@
 import { Cron as Croner } from "croner";
-import type { CronSchedule } from "../types.ts";
+import type { CronSchedule } from "../triggers/types.ts";
 
 export const DEFAULT_CRON_TIMEZONE = "America/Los_Angeles";
 

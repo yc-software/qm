@@ -16,14 +16,12 @@ export function turnStartState(turn: {
   input: string;
   surfaceName?: string;
   runtimePurpose?: string;
-  runtime?: { harnessId?: string; modelId?: string };
+  runtime?: { modelId?: string };
   runtimePinned?: boolean;
   continueTurn?: boolean;
   scopeLabel: string;
 }): string {
-  const requested = turn.runtime?.modelId
-    ? [turn.runtime.harnessId, turn.runtime.modelId].filter(Boolean).join("/")
-    : "none (org default applies)";
+  const requested = turn.runtime?.modelId ? turn.runtime.modelId : "none (org default applies)";
   return [
     "Turn context:",
     `- surface: ${turn.surfaceName ?? "unknown"}`,
@@ -82,7 +80,7 @@ export function createDecisionHooks(store: DecisionStore | undefined, backend: D
   };
 }
 
-export async function routeTurnRuntime<C extends { harnessId: string; modelId: string }>(
+export async function routeTurnRuntime<C extends { modelId: string }>(
   decision: DecisionResult | undefined,
   route: (runtime: NonNullable<DecisionResult["runtime"]>) => Promise<C>,
   requested: () => Promise<C>,
@@ -92,6 +90,6 @@ export async function routeTurnRuntime<C extends { harnessId: string; modelId: s
     route(decision.runtime),
     requested().catch(swallowAs("decisions: requested runtime", undefined)),
   ]);
-  const changed = !!otherwise && (otherwise.harnessId !== choice.harnessId || otherwise.modelId !== choice.modelId);
+  const changed = !!otherwise && otherwise.modelId !== choice.modelId;
   return changed ? { choice, routedBy: decision.ruleId } : { choice };
 }

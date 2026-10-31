@@ -2,11 +2,10 @@ import { createHmac, randomUUID } from "node:crypto";
 import type { SkillBundle } from "./skill-bundle-store.ts";
 import type { ScopeId } from "../types.ts";
 import { parseScopeId } from "../types.ts";
-import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { matchesSearchTerms, searchTerms } from "../sessions/entry-search.ts";
 import { assertSafeSkillName, isSafeSkillName } from "./skill-name.ts";
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 
 type SkillStatus = "draft" | "reviewed" | "published" | "archived";
 
@@ -79,7 +78,7 @@ export interface SkillResolution {
 
 export interface SkillStoreOptions {
   signingSecret?: string;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
 }
 
 export type SkillListing = { scope: ScopeId } | { packIds: readonly string[] } | { archivedFor: string };
@@ -187,9 +186,9 @@ export function visibleSkillRows<T extends SkillSummary>(
   return visible;
 }
 
-export function skillStore(skills: SkillRows, opts: SkillStoreOptions = {}): SkillStore {
+export function skillStore(skills: SkillRows, opts: SkillStoreOptions): SkillStore {
   const secret = opts.signingSecret ?? randomUUID();
-  const advisoryLock = opts.advisoryLock ?? createMemoryAdvisoryLock();
+  const advisoryLock = opts.advisoryLock;
   const withNameLock = <T>(scopeId: ScopeId, name: string, fn: () => Promise<T>) =>
     advisoryLock.withLock(`skill-name:${currentTenant()}:${scopeId}:${name}`, fn);
 
@@ -358,45 +357,3 @@ export function skillStore(skills: SkillRows, opts: SkillStoreOptions = {}): Ski
   };
 }
 
-function memorySkillRows(): SkillRows {
-  const skills = tenantRows<Skill>();
-  const where = async (keep: (skill: Skill) => boolean) => sortedRows(skills()).filter(keep);
-  return {
-    get: async (id) => skills().get(id) ?? null,
-    save: async (skill) => void skills().set(skill.id, skill),
-    delete: async (id) => void skills().delete(id),
-    async touch(id, at) {
-      const skill = skills().get(id);
-      if (skill) skills().set(id, { ...skill, lastUsedAt: at });
-    },
-    inScopes: (scopes, name) =>
-      where((s) => scopes.includes(s.scopeId) && (name === undefined || s.manifest.name === name)),
-    publishedNamed: (names) => where((s) => s.status === "published" && names.includes(s.manifest.name)),
-    fromPacks: (packIds) => where((s) => s.pack !== undefined && packIds.includes(s.pack.packId)),
-    async activePackIds() {
-      const published = await where((s) => s.status === "published" && s.pack !== undefined);
-      return [...new Set(published.map((s) => s.pack!.packId))].sort();
-    },
-    archivedFor(scopes, creators) {
-      const scopeKeys = new Set(scopes.map((scope) => scope.toLowerCase()));
-      const creatorKeys = new Set(creators.map((creator) => creator.toLowerCase()));
-      return where(
-        (s) =>
-          s.status === "archived" &&
-          (scopeKeys.has(s.scopeId.toLowerCase()) || creatorKeys.has(s.createdBy.toLowerCase())),
-      );
-    },
-    async search(query, limit) {
-      const terms = searchTerms(query);
-      return (await where((s) => matchesSearchTerms(`${s.manifest.name} ${s.manifest.description}`, terms))).slice(
-        0,
-        limit,
-      );
-    },
-    listAll: async () => sortedRows(skills()),
-  };
-}
-
-export function createSkillStore(opts: SkillStoreOptions = {}): SkillStore {
-  return skillStore(memorySkillRows(), opts);
-}

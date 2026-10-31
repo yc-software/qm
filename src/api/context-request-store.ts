@@ -1,5 +1,4 @@
-import type { SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
-import { tenantRows } from "../tenants/memory-rows.ts";
+import type { SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -52,31 +51,6 @@ const CONTEXT_REQUESTS_MIGRATION = typedTableMigration({
        WHERE status = 'pending'`,
   ],
 });
-
-export function createContextRequestStore(): ContextRequestStore {
-  const rows = tenantRows<SurfaceContextRequest>();
-  const pendingRows = () => [...rows().values()].filter((r) => r.status === "pending");
-  return {
-    create: async (request) => void rows().set(request.id, request),
-    get: async (id) => rows().get(id) ?? null,
-    delete: async (id) => void rows().delete(id),
-    async settle(id, outcome) {
-      const current = rows().get(id);
-      if (!current) return false;
-      const { result: _result, error: _error, ...rest } = current;
-      rows().set(id, { ...rest, ...outcome });
-      return true;
-    },
-    async pending(source, createdSince) {
-      return pendingRows().filter((r) => r.source === source && r.createdAt >= createdSince);
-    },
-    async expirePending(createdBefore) {
-      const stale = pendingRows().filter((r) => r.createdAt < createdBefore);
-      for (const r of stale) rows().delete(r.id);
-      return stale.map((r) => r.id);
-    },
-  };
-}
 
 const COLUMNS = "id, source, created_at, status, query, result, error";
 

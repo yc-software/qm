@@ -2,13 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { scopeId, type Destination, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { SESSION_BUSY_FIRE_TEXT } from "../src/core/failure-copy.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 const toChannel: Destination = { type: "slack", target: "C1:169.7", audienceScopeId: scopeId("channel", "C1") };
 
@@ -34,8 +30,8 @@ function directory(member: boolean) {
 function deps(run: (req: TurnRequest) => Promise<TurnResult>, dir?: ReturnType<typeof directory>): TriggerDeps {
   return {
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(),
-    identity: createIdentityService(),
+    idempotency: testIdempotencyStore(),
+    identity: testIdentityService(),
     run,
     ...(dir ? { directory: dir } : {}),
   };
@@ -206,7 +202,7 @@ describe("runTrigger: a monitor fire runs first-class live and delivers its own 
 });
 
 describe("runTrigger: an autonomous cron does NOT go live (it may be conditionally silent by design)", () => {
-  it("threads grants only for crons homed in and delivering to their owner's own DM", async () => {
+  it("threads grants only for crons homed in their owner's own DM, wherever the output goes", async () => {
     const requests: TurnRequest[] = [];
     const d = deps(async (request) => {
       requests.push(request);
@@ -232,7 +228,11 @@ describe("runTrigger: an autonomous cron does NOT go live (it may be conditional
     assert.deepEqual(requests[0]?.unattendedGrants, ["admin.sessions.read"]);
     assert.equal(requests[1]?.unattendedGrants, undefined);
     assert.equal(requests[2]?.unattendedGrants, undefined);
-    assert.equal(requests[3]?.unattendedGrants, undefined, "a personal cron delivering to a room carries no grants");
+    assert.deepEqual(
+      requests[3]?.unattendedGrants,
+      ["admin.sessions.read"],
+      "the owner chose where the output goes; the grants stay with the owner's home",
+    );
     assert.equal(requests[4]?.unattendedGrants, undefined, "a cron homed in someone else's DM carries no grants");
   });
 

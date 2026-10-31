@@ -10,15 +10,15 @@ import type { ArtifactHome, ArtifactType } from "../src/api/artifact-share.ts";
 import type { RecipientResolution } from "../src/directory/directory-store.ts";
 import { shareArtifact as shareRoute } from "../src/api/routes/surface.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { createSkillStore } from "../src/skills/skill-store.ts";
 import { splitToScope, triggerBlocksSharedSkill } from "../src/api/artifact-share.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
+import { type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testSkillStore } from "./support/typed-stores.ts";
 
 const ORG = "default-org";
 
@@ -110,7 +110,7 @@ const cap = (actorId: string, scope?: ScopeId, liveActor = true): CapabilityClai
   }) as CapabilityClaims;
 
 function baseState(over: Partial<FakeState> = {}): FakeState {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   const state: FakeState = {
     artifacts: {},
     scopesByPrincipal: {},
@@ -120,7 +120,7 @@ function baseState(over: Partial<FakeState> = {}): FakeState {
     recipients: {},
     privateChannels: new Set(),
     files,
-    acl: createAclStore(undefined, {
+    acl: createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
       manages: (p, s, a) => manages(s, a ?? "", p),
       resolveFiles: (refs) => files.resolveByIds(refs),
     }),
@@ -683,7 +683,7 @@ test("splitToScope: tool and route classify identically — a real scope id vs a
 });
 
 test("SkillStore.move changes the home scope in place; org move is refused (use promote)", async () => {
-  const store = createSkillStore();
+  const store = testSkillStore();
   const created = await store.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },
@@ -698,7 +698,7 @@ test("SkillStore.move changes the home scope in place; org move is refused (use 
 });
 
 test("SkillStore.promote supersedes an existing same-name org record instead of duplicating it", async () => {
-  const store = createSkillStore();
+  const store = testSkillStore();
   const src = await store.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "tidy", description: "d", requiredCapabilities: [], body: "b" },
@@ -710,8 +710,6 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   const second = await store.promote(src.id, scopeId("org", ORG));
   assert.equal(second.id, first.id, "retry re-uses the org record");
   assert.equal(second.version, first.version + 1);
-  const orgRecords = (await store.listAll()).filter(
-    (x) => x.scopeId === scopeId("org", ORG) && x.status === "published",
-  );
+  const orgRecords = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status === "published");
   assert.equal(orgRecords.length, 1);
 });

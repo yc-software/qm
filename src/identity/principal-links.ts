@@ -1,5 +1,5 @@
-import { createMemoryAdvisoryLock, type AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { tenantRows } from "../tenants/memory-rows.ts";
+import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
+import { createTtlRefresh } from "../util/async.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -50,25 +50,6 @@ function principalLink(row: Record<string, unknown>): PrincipalLink {
     evidence: String(row.evidence),
     linkedBy: String(row.linked_by),
     createdAt: Number(row.created_at),
-  };
-}
-
-export function createPrincipalLinkStore(): PrincipalLinkStore {
-  const rows = tenantRows<PrincipalLink>();
-  return {
-    list: async () => [...rows().values()],
-    async insertIfAbsent(link) {
-      const principalId = foldPrincipalId(link.principalId);
-      const existing = rows().get(principalId);
-      if (existing) return existing;
-      rows().set(principalId, { ...link, principalId });
-      return { ...link, principalId };
-    },
-    async take(principalId) {
-      const link = rows().get(foldPrincipalId(principalId)) ?? null;
-      rows().delete(foldPrincipalId(principalId));
-      return link;
-    },
   };
 }
 
@@ -136,14 +117,9 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(
-  store: PrincipalLinkStore = createPrincipalLinkStore(),
-  lock: AdvisoryLock = createMemoryAdvisoryLock(),
-): PrincipalLinkService {
+export function createPrincipalLinkService(store: PrincipalLinkStore, lock: AdvisoryLock): PrincipalLinkService {
   const byAlias = new Map<string, PrincipalLink>();
   const byCanonical = new Map<string, PrincipalLink[]>();
-  let refreshedAt = 0;
-  let refreshP: Promise<void> | null = null;
 
   function index(rows: PrincipalLink[]): void {
     byAlias.clear();
@@ -157,21 +133,7 @@ export function createPrincipalLinkService(
     }
   }
 
-  async function refresh(force = false): Promise<void> {
-    if (refreshP && !force) return refreshP;
-    while (refreshP) await refreshP;
-    if (!force && Date.now() - refreshedAt < REFRESH_TTL_MS) return Promise.resolve();
-    refreshP = store
-      .list()
-      .then(index)
-      .then(() => {
-        refreshedAt = Date.now();
-      })
-      .finally(() => {
-        refreshP = null;
-      });
-    return refreshP;
-  }
+  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.list()));
 
   return {
     canonical(key) {

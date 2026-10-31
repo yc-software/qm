@@ -1928,7 +1928,7 @@ async function showSession(
   const pane = splitInterceptsOpen(s);
   closeSidebarOnNarrowView();
   if (projectName(s.scopeId) && sessionsState.collapsedProjectScopes.delete(s.scopeId)) renderList();
-  return openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
+  await openSessionInto(pane ?? mainConversation(), s, entriesPrefetch, approvalsPrefetch, true);
 }
 
 export async function openSessionInto(
@@ -1937,17 +1937,17 @@ export async function openSessionInto(
   entriesPrefetch?: Promise<TranscriptPage | null>,
   approvalsPrefetch?: Promise<{ approvals: PendingApproval[] } | null>,
   tracked = conv === mainConversation(),
-): Promise<void> {
-  if (pendingForkThreads.has(s.threadRef)) return;
+): Promise<boolean> {
+  if (pendingForkThreads.has(s.threadRef)) return false;
   if (keptUnreadId !== s.id) keptUnreadId = null;
   if (!s.id) {
     if (conv.state.threadRef !== s.threadRef) {
       conv.mountContinuable(s.threadRef, null, s.scopeId || null, [], s.channelName ?? null);
       renderList();
     }
-    return;
+    return true;
   }
-  if (s.id === conv.state.sessionId && !entriesPrefetch) return;
+  if (s.id === conv.state.sessionId && !entriesPrefetch) return true;
   const started = Date.now();
 
   refreshSessionsOnOpen();
@@ -1955,7 +1955,7 @@ export async function openSessionInto(
 
   const cached = entriesPrefetch ? undefined : cachedTranscript(s.id);
   if (cached) {
-    if (!isLiveConversation(conv)) return;
+    if (!isLiveConversation(conv)) return false;
     if (tracked) sessionsState.openingKey = null;
     conv.mountLoadingPane();
     const approvals = s.canContinue === true ? fetchSessionApprovals(s.id) : null;
@@ -1972,7 +1972,7 @@ export async function openSessionInto(
     void reconcileCachedTranscript(conv, s, cached, approvals, conv.transcriptAnchor()).catch((error: unknown) =>
       reportHandledError("web:transcript_reconcile", error),
     );
-    return;
+    return true;
   }
 
   const opening = s.id;
@@ -1980,7 +1980,7 @@ export async function openSessionInto(
     sessionsState.openingKey = opening;
     renderList();
   }
-  if (!isLiveConversation(conv)) return;
+  if (!isLiveConversation(conv)) return false;
   const isCurrent = conv.mountLoadingPane();
 
   const fetchEntries = (): Promise<TranscriptPage | null> =>
@@ -1994,7 +1994,7 @@ export async function openSessionInto(
         return r ?? fetchEntries();
       })
     : fetchEntries());
-  if (!isLiveConversation(conv) || !isCurrent()) return;
+  if (!isLiveConversation(conv) || !isCurrent()) return false;
   const fetched = Date.now();
   const reportPainted = () =>
     reportSwitchPainted(started, {
@@ -2007,12 +2007,12 @@ export async function openSessionInto(
     });
 
   if (tracked) {
-    if (sessionsState.openingKey !== opening) return;
+    if (sessionsState.openingKey !== opening) return false;
     sessionsState.openingKey = null;
   }
   if (!entriesPrefetch && conv.state.sessionId === s.id) {
     renderList();
-    return;
+    return true;
   }
 
   if (!entriesRes) {
@@ -2020,13 +2020,14 @@ export async function openSessionInto(
     conv.mountLoadError(() => void openSessionInto(conv, s, undefined, undefined, tracked));
     renderList();
     reportPainted();
-    return;
+    return false;
   }
 
   storeTranscript(s.id, entriesRes);
   mountTranscript(conv, s, entriesRes, approvals);
   renderList();
   reportPainted();
+  return true;
 }
 
 function reportSwitchPainted(

@@ -84,7 +84,7 @@ Read and write operations use separate OAuth client-credential pairs. Omit `writ
 
 ## Migrating from the retired `BRAIN_*` variables
 
-Earlier releases wired an external knowledge server through `BRAIN=mcp`, `BRAIN_MCP_URL`, `BRAIN_QUERY_TOOL`, and the `BRAIN_RO_*`/`BRAIN_RW_*` OAuth client pairs, exposing `read_brain` and `write_brain` tools. Those variables are ignored now; startup logs a `[config]` warning while any of them is still set. Express the same server as an `mcp` provider above: `url` takes the old `BRAIN_MCP_URL`, `read.tool` the old `BRAIN_QUERY_TOOL`, and `read`/`write` name the env variables holding each OAuth client pair. Static bearer tokens (`BRAIN_AUTH=bearer`) have no equivalent; the provider framework authenticates with client credentials only.
+Earlier releases wired an external knowledge server through `BRAIN=mcp`, `BRAIN_MCP_URL`, `BRAIN_QUERY_TOOL`, and the `BRAIN_RO_*`/`BRAIN_RW_*` OAuth client pairs, exposing `read_brain` and `write_brain` tools. Those variables are ignored. Express the same server as an `mcp` provider above: `url` takes the old `BRAIN_MCP_URL`, `read.tool` the old `BRAIN_QUERY_TOOL`, and `read`/`write` name the env variables holding each OAuth client pair. Static bearer tokens (`BRAIN_AUTH=bearer`) have no equivalent; the provider framework authenticates with client credentials only.
 
 ## Procedural memory (Memorable)
 

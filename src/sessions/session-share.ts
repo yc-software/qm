@@ -1,5 +1,4 @@
 import type { SessionEntry } from "../types.ts";
-import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -71,17 +70,6 @@ const SESSION_SHARES_MIGRATION = typedTableMigration({
     AND json->'visibility'->>'minCreatedAt' IS NOT NULL AND json->'visibility'->>'maxCreatedAt' IS NOT NULL
     AND jsonb_typeof(json->'messages') = 'array' AND jsonb_typeof(json->'files') = 'array'`,
 });
-
-export function createSessionShareStore(): SessionShareStore {
-  const rows = tenantRows<SessionShare>();
-  return {
-    async create(share) {
-      if (rows().has(share.token)) throw new Error(`session share ${share.token} already exists`);
-      rows().set(share.token, share);
-    },
-    get: async (token) => rows().get(token) ?? null,
-  };
-}
 
 export function createPostgresSessionShareStore(connectionString: string): SessionShareStore {
   const { q, close } = createPgPool(connectionString, [TENANCY_BASE, SESSION_SHARES_MIGRATION]);

@@ -10,7 +10,7 @@ import type { SessionEntry } from "../types.ts";
 
 function operation(url: string, spec: McpMemoryOperationConfig, timeoutMs: number): McpMemoryOperation {
   return {
-    client: createMcpClient({ url, auth: { mode: "client-credentials", ...spec.auth } }),
+    client: createMcpClient({ url, auth: { mode: "client-credentials", ...spec.auth }, fetch }),
     tool: spec.tool,
     timeoutMs,
     ...(spec.queryArg ? { queryArg: spec.queryArg } : {}),

@@ -1,15 +1,14 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import {
-  createMemoryAckEmojiPickStore,
-  createPostgresAckEmojiPickStore,
-  type AckEmojiPickStore,
-} from "../src/surface-cache/ack-emoji-pick-store.ts";
+import { createPostgresAckEmojiPickStore, type AckEmojiPickStore } from "../src/surface-cache/ack-emoji-pick-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenantsSeeded } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const pgSkip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres ack-emoji-pick tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
@@ -92,13 +91,13 @@ async function contract(store: AckEmojiPickStore): Promise<void> {
 }
 
 test("memory ack-emoji-pick store: record + list contract", async () => {
-  const store = createMemoryAckEmojiPickStore();
+  const store = createPostgresAckEmojiPickStore(testDatabaseUrl());
   await contract(store);
   await store.close();
 });
 
 test("memory ack-emoji-pick store: bounded at 5000 rows", async () => {
-  const store = createMemoryAckEmojiPickStore();
+  const store = createPostgresAckEmojiPickStore(testDatabaseUrl());
   for (let i = 0; i < 5010; i++)
     await store.record({ surface: "slack", channel: "C1", ts: String(i), outcome: "declined", createdAt: i });
   const all = await store.list({ limit: 1000 });

@@ -51,12 +51,11 @@ async function withCanvas(
     fetch: async () =>
       Response.json({
         scopeId: "personal:tester",
-        approvedHarnesses: ["pi"],
-        modelsByHarness: { pi: [] },
+        models: [],
         modelCatalog: {},
         fastModeModelIds: [],
         interactiveFastMode: false,
-        effective: { harnessId: "pi", modelId: "" },
+        effective: { modelId: "" },
         sessions: [],
         items: [],
       }),

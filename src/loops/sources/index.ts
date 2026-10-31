@@ -1,4 +1,4 @@
-import type { LoopItem } from "../../types.ts";
+import type { LoopItem } from "../types.ts";
 import { gmailAdapter } from "./gmail.ts";
 import { slackAdapter } from "./slack.ts";
 import type { LoopSourceAdapter } from "./adapter.ts";

@@ -3,31 +3,32 @@ import assert from "node:assert/strict";
 import { createScheduler, type Scheduler } from "../src/cron/scheduler.ts";
 import { createPgBossCronQueue } from "../src/cron/job-queue.ts";
 import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
-import { createMemoryCronFireStore, type CronFireStore } from "../src/cron/fire-store.ts";
+import { type CronFireStore, createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createIdempotencyStore, type IdempotencyRecord } from "../src/idempotency/idempotency-store.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { scopeId, type Cron, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { testTenantsSeeded } from "./support/tenant.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the cron queue tests";
 
 const SCHEMA = "pgboss_cron_queue_test";
 const CRONS_TABLE = "cron_queue_test_crons";
-const idempotency = createIdempotencyStore();
+const IDEM_TABLE = "cron_queue_test_idempotency";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
   await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
   await p.query(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}`);
+  await p.query(`DROP TABLE IF EXISTS ${CRONS_TABLE}, ${IDEM_TABLE}`);
   await p.end();
 });
 
@@ -36,9 +37,13 @@ async function until(cond: () => boolean, ms: number): Promise<void> {
   while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
 }
 
-function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { scheduler: Scheduler; crons: CronStore } {
+function instance(
+  calls: TurnRequest[],
+  turnMs: number,
+  fires: CronFireStore,
+): { scheduler: Scheduler; crons: CronStore } {
   const maps = createPostgresMapFactory(URL!);
-  const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), fires ? { fires } : undefined);
+  const crons = createCronStore(maps.map<Cron>(CRONS_TABLE), { fires });
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);
     if (turnMs) await new Promise((r) => setTimeout(r, turnMs));
@@ -48,8 +53,8 @@ function instance(calls: TurnRequest[], turnMs = 0, fires?: CronFireStore): { sc
     ...singleProcessDeps(),
     crons,
     deliveries: createDeliveryStore(),
-    idempotency,
-    identity: createIdentityService(),
+    idempotency: createIdempotencyStore(maps.map<IdempotencyRecord>(IDEM_TABLE)),
+    identity: testIdentityService(),
     run,
     jobQueue: createPgBossCronQueue(URL ?? "", SCHEMA),
   });
@@ -61,7 +66,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createMemoryCronFireStore();
+    const fires = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 12_000, fires);
     const b = instance(calls, 12_000, fires);
     a.scheduler.start(1000);
@@ -94,8 +99,9 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const a = instance(calls);
-    const b = instance(calls);
+    const fireStore = createPostgresCronFireStore(testDatabaseUrl());
+    const a = instance(calls, 0, fireStore);
+    const b = instance(calls, 0, fireStore);
     a.scheduler.start(1000);
     b.scheduler.start(1000);
     try {
@@ -131,7 +137,7 @@ test(
   { skip, timeout: 120_000 },
   async () => {
     const calls: TurnRequest[] = [];
-    const fires = createMemoryCronFireStore();
+    const fires = createPostgresCronFireStore(testDatabaseUrl());
     const a = instance(calls, 0, fires);
     const b = instance(calls, 0, fires);
     const cron = await a.crons.create({

@@ -8,6 +8,8 @@ import { createServer } from "../src/api/server.ts";
 import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "reach-thread-secret".repeat(3);
 const TS = "1723497600.123456";
@@ -37,7 +39,10 @@ describe("POST /v1/reach with threadTs", () => {
       { principalId: "U-alice", displayName: "Alice", type: "internal" },
     ]);
     await built.app.upsertChannels([{ channelId: "C-eng", name: "eng" }]);
-    server = createServer(built.app, { signingSecret: SECRET });
+    server = createServer(built.app, {
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

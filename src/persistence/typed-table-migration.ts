@@ -1,5 +1,5 @@
 import type { PgMigrationDefinition } from "./pg-pool.ts";
-import { tenantPolicies } from "../tenants/migrations.ts";
+import { TENANT, tenantPolicies } from "../tenants/migrations.ts";
 
 export interface TypedTableSpec {
   table: string;
@@ -27,7 +27,7 @@ export function typedTableMigration(spec: TypedTableSpec): PgMigrationDefinition
       `ALTER INDEX ${table}_pkey RENAME TO ${old}_pkey`,
       `SELECT qm_tenant_column('${old}')`,
       `CREATE TABLE ${table}(
-         tenant_id UUID NOT NULL DEFAULT qm_tenant_id() REFERENCES tenants,
+         tenant_id UUID NOT NULL DEFAULT ${TENANT} REFERENCES tenants,
          ${[...spec.columns, ...(spec.constraints ?? []), `PRIMARY KEY (tenant_id, ${spec.primaryKey.join(", ")})`].join(",\n         ")}
        )`,
       `INSERT INTO ${table}(tenant_id, ${targets.join(", ")})

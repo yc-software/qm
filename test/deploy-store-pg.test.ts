@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createPostgresMapFactory, type PostgresArtifactMaps } from "../src/persistence/durable-map.ts";
 import { createDeployStore, type Deployment, type DeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
+import { testDeployBackings } from "./support/test-database.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
@@ -48,12 +49,14 @@ function makeFactory(): PostgresArtifactMaps {
 
 function makeStore(opts: { touchDebounceMs?: number } = {}): { store: DeployStore; factory: PostgresArtifactMaps } {
   const factory = makeFactory();
-  const store = createDeployStore({
-    deployments: factory.map<Deployment>("deployments"),
-    pg: factory.pool,
-    git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
-    ...opts,
-  });
+  const store = createDeployStore(
+    testDeployBackings({
+      deployments: factory.map<Deployment>("deployments"),
+      pg: factory.pool,
+      git: { repoRoot: mkdtempSync(join(tmpdir(), "deploy-pg-")) },
+      ...opts,
+    }),
+  );
   return { store, factory };
 }
 

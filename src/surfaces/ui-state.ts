@@ -1,4 +1,3 @@
-import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool, withPgTransaction, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -52,39 +51,6 @@ const jsonValue = (state: PersistedUiState) => pgJsonText(state.value ?? null);
 function uiState(rows: Rows): PersistedUiState | null {
   const row = rows[0];
   return row ? { value: row.value, updatedAt: Number(row.updated_at) } : null;
-}
-
-export function createUiStateStore(): UiStateStore {
-  const rows = tenantRows<PersistedUiState>();
-  const id = (principalId: string, key: string) => `${principalId}#${key}`;
-  const take = (principalId: string, key: string) => {
-    const state = rows().get(id(principalId, key)) ?? null;
-    rows().delete(id(principalId, key));
-    return state;
-  };
-  return {
-    get: async (principalId, key) => rows().get(id(principalId, key)) ?? null,
-    put: async (principalId, key, state) => void rows().set(id(principalId, key), state),
-    async putIfAbsent(principalId, key, state) {
-      const existing = rows().get(id(principalId, key));
-      if (existing) return existing;
-      rows().set(id(principalId, key), state);
-      return state;
-    },
-    async putNewer(principalId, key, state) {
-      const existing = rows().get(id(principalId, key));
-      if (existing && existing.updatedAt > state.updatedAt) return { ok: false, updatedAt: existing.updatedAt };
-      rows().set(id(principalId, key), state);
-      return { ok: true, updatedAt: state.updatedAt };
-    },
-    async modify(principalId, key, apply) {
-      const next = apply(rows().get(id(principalId, key)) ?? null);
-      rows().set(id(principalId, key), next);
-      return next;
-    },
-    take: async (principalId, key) => take(principalId, key),
-    delete: async (principalId, key) => void take(principalId, key),
-  };
 }
 
 export function createPostgresUiStateStore(connectionString: string): UiStateStore {

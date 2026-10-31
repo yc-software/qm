@@ -40,10 +40,8 @@ import type { LedgerEventBus, OwnedLedgerEvent } from "../loops/ledger-events.ts
 import type { SubscribeOptions } from "../util/event-bus.ts";
 import type { RunActivityEntry, RunActivityStore } from "../runs/run-activity-store.ts";
 import type { RunSignal, RunSignalStore } from "../runs/run-signal-store.ts";
-import type { ModelGateway } from "../model/model-gateway.ts";
-import type { ModelCredentialStore } from "../model/model-credential-store.ts";
+import type { CustomProviderStore, ModelCredentialStore } from "../model/model-credential-store.ts";
 import type { UserModelCredentialStore } from "../model/user-model-credential-store.ts";
-import type { CustomProviderStore } from "../model/custom-provider-store.ts";
 import type { McpServerStore } from "../mcp/mcp-server-store.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { AclStore } from "../acl/acl-store.ts";
@@ -70,17 +68,9 @@ import type {
   GroupMembership,
   RecipientResolution,
 } from "../directory/directory-store.ts";
-import type {
-  Cron,
-  CronFireLogEntry,
-  CronFireNote,
-  Delivery,
-  Destination,
-  SurfaceContextQuery,
-  SurfaceContextRequest,
-  SurfaceContextResult,
-  Webhook,
-} from "../types.ts";
+import type { Delivery, Destination } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, Webhook } from "../triggers/types.ts";
+import type { SurfaceContextQuery, SurfaceContextRequest, SurfaceContextResult } from "../reach/reach.ts";
 import type {
   ActiveThread,
   CachedMessage,
@@ -105,13 +95,13 @@ import type {
   ReachOptions,
   DeploymentGrantee,
 } from "../deploy/deploy-service.ts";
-import type { ApprovalStore } from "../core/approval-store.ts";
+import type { ApprovalStore } from "../slack/approval-store.ts";
 import type { ContextRequestStore } from "./context-request-store.ts";
 import type { AmbientCursorStore } from "./ambient-cursor-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Environment, EnvironmentAttachment, EnvironmentStore } from "../environments/environment-store.ts";
 import type { ModelProviderAvailability } from "../model/pi-models.ts";
-import type { RuntimeChoice } from "../harness/harness.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
 import { type ReachOpts, type ReachResolution, type ReachTarget } from "../reach/reach.ts";
 import { type Project, type ProjectStore } from "../projects/project-store.ts";
 import type { SearchHit } from "../search/core-search.ts";
@@ -440,7 +430,7 @@ export interface App extends SkillMethods {
     claims: Pick<CapabilityClaims, "actorId" | "scopeId" | "scopeVersion" | "botActor" | "liveActor" | "members">,
   ): Promise<boolean>;
   openFileForViewer(id: string, principalId: string): Promise<OpenedFile | null>;
-  grant(g: Grant): Promise<void>;
+  grant(g: Grant, opts?: { notify?: boolean }): Promise<void>;
   revokeGrant(ownerScopeId: ScopeId, ref: string, granteeScopeId: ScopeId, revokedBy: string): Promise<void>;
   promoteSkill(id: string, targetScopeId: ScopeId, actorId: string, liveActor: boolean): Promise<Skill>;
   belongsToScope(principalId: string, scope: ScopeId): Promise<boolean>;
@@ -519,6 +509,7 @@ export interface App extends SkillMethods {
     opts?: { reason?: "messages" | "scheduled" },
   ): Promise<AmbientDecision>;
   ackDelivery(id: string, slackApiMs?: number): Promise<void>;
+  failDelivery(id: string, reason: string): Promise<Delivery | null>;
   ackDeliveryByKey(idempotencyKey: string): Promise<void>;
   setRunDeliveryState(runId: string, state: RunDeliveryState): Promise<boolean>;
   upsertDirectory(members: DirectoryMember[], syncedAt?: number): Promise<boolean>;
@@ -582,11 +573,13 @@ export interface App extends SkillMethods {
     grantee: ScopeId,
     permission: Permission | null,
     actor: { createdBy: string },
+    opts?: { notify?: boolean },
   ): Promise<DeploymentGrantee[]>;
   inviteToDeployment(
     idOrName: string,
     email: string,
     actorId: string,
+    opts?: { notify?: boolean },
   ): Promise<{
     grantees: DeploymentGrantee[];
     invitation: DeploymentInvitation;
@@ -619,7 +612,7 @@ export interface AppDeps {
   externalSlackPolicies?: ExternalSlackPolicies;
   admittedWork?: AdmittedWork;
   shutdown?: () => AbortSignal;
-  resourceSearch?: ResourceSearchStore;
+  resourceSearch: ResourceSearchStore;
   swarms?: SwarmService;
   identity: IdentityService;
   publicWebUrl?: string;
@@ -635,7 +628,6 @@ export interface AppDeps {
   runStreamEvents?: EventBus<RunStreamEvent>;
   runActivity?: RunActivityStore;
   signals?: RunSignalStore;
-  modelGateway: ModelGateway;
   modelCredentials?: ModelCredentialStore;
   userModelCredentials?: UserModelCredentialStore;
   mcpServers?: McpServerStore;
@@ -651,7 +643,7 @@ export interface AppDeps {
   skillPacks?: SkillPackStore;
   skillFetcher?: SkillPackFetcher;
   skillBundles?: SkillBundleStore;
-  advisoryLock?: AdvisoryLock;
+  advisoryLock: AdvisoryLock;
   auditLog: AuditLog;
   config: ScopedConfigStore;
   crons: CronStore;
@@ -669,7 +661,7 @@ export interface AppDeps {
   approvals?: ApprovalStore;
   sessionStateBus?: SessionStateBus;
   ledgerEventBus?: LedgerEventBus;
-  contextRequests?: ContextRequestStore;
+  contextRequests: ContextRequestStore;
   environments?: EnvironmentStore;
   processes?: ProcessRegistry;
   monitors?: MonitorStore;
@@ -683,7 +675,6 @@ export interface AppDeps {
   ambientJudgments?: AmbientJudgmentStore;
   ackEmojiPicks?: AckEmojiPickStore;
   judgeModelId?: () => string;
-  harnessId?: string;
   modelProviders?: ModelProviderAvailability;
   providerKeys?: ModelProviderAvailability;
   runtimeFallback?: RuntimeChoice;

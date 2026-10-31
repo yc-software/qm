@@ -4,7 +4,8 @@ import { claimManagedCron, nightlyAt, type ManagedCronClaim } from "../cron/mana
 import type { Scheduler } from "../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
 import { reportFailure } from "../util/errors.ts";
-import { parseScopeId, scopeActor, type Cron, type ScopeId } from "../types.ts";
+import { parseScopeId, scopeActor, type ScopeId } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 import type { MemoryService } from "./memory-service.ts";
 
 const MEMORY_TIDY_TASK = `Tidy this conversation's memory notebook. Read it with the memory tool, then make one careful pass:

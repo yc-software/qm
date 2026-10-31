@@ -1,4 +1,3 @@
-import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -40,15 +39,6 @@ const AMBIENT_CURSORS_MIGRATION = typedTableMigration({
          AND newer.json->>'lastJudgedTs' IS NOT NULL
          AND (newer.json->>'lastJudgedTs', newer.id) > (${OLD}.json->>'lastJudgedTs', ${OLD}.id))`,
 });
-
-export function createAmbientCursorStore(): AmbientCursorStore {
-  const rows = tenantRows<AmbientCursor>();
-  const key = (surface: string, container: string) => JSON.stringify([surface, container]);
-  return {
-    get: async (surface, container) => rows().get(key(surface, container)) ?? null,
-    put: async (surface, container, cursor) => void rows().set(key(surface, container), cursor),
-  };
-}
 
 export function createPostgresAmbientCursorStore(connectionString: string): AmbientCursorStore {
   const { q, close } = createPgPool(connectionString, [TENANCY_BASE, AMBIENT_CURSORS_MIGRATION]);

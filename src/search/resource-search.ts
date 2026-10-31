@@ -1,6 +1,7 @@
 import type { PgPool } from "../persistence/pg-pool.ts";
-import { matchesSearchTerms, searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
-import type { Cron, ScopeId } from "../types.ts";
+import { searchSnippet, searchTerms, tsPrefixQuery } from "../sessions/entry-search.ts";
+import type { ScopeId } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 
 export type ResourceKind = "skills" | "crons" | "deploys" | "webhooks";
 export type IndexedResourceKind = Exclude<ResourceKind, "skills">;
@@ -86,20 +87,6 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
         [terms, limit],
       );
       return rows as unknown as ResourceCandidate[];
-    },
-  };
-}
-
-export function createMemoryResourceSearch(
-  list: (kind: IndexedResourceKind) => Promise<ResourceCandidate[]>,
-): ResourceSearchStore {
-  return {
-    async search(kind, query, limit) {
-      const terms = searchTerms(query);
-      return (await list(kind))
-        .filter((row) => matchesSearchTerms(`${row.title} ${row.description}`, terms))
-        .sort((a, b) => a.id.localeCompare(b.id))
-        .slice(0, limit);
     },
   };
 }

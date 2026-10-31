@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -28,16 +27,6 @@ export interface SkillBundleStore {
   put(bundle: SkillBundle): Promise<void>;
   delete(packId: string): Promise<void>;
   close?(): Promise<void>;
-}
-
-export function createSkillBundleStore(): SkillBundleStore {
-  const bundles = tenantRows<SkillBundle>();
-  return {
-    get: async (packId) => bundles().get(packId) ?? null,
-    forPacks: async (packIds) => sortedRows(bundles()).filter((bundle) => packIds.includes(bundle.packId)),
-    put: async (bundle) => void bundles().set(bundle.packId, bundle),
-    delete: async (packId) => void bundles().delete(packId),
-  };
 }
 
 export const SKILL_BUNDLES_MIGRATION = typedTableMigration({

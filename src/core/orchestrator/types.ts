@@ -1,18 +1,17 @@
 import type { TraceCarrier } from "../../../plugins/chassis/src/error-reporting.ts";
-import type { GoalCreateInput } from "../../harness/goal.ts";
+import type { GoalCreateInput } from "../../agent/goal.ts";
 import type { RunStop } from "../../runs/run-store.ts";
 import type { ExternalSlackPolicies } from "../../resolution/external-slack.ts";
-import type { RuntimeService } from "../../harness/runtime-types.ts";
+import type { RuntimeService } from "../../agent/runtime-types.ts";
 import type { SandboxResources } from "../../sandbox/sandbox-resources.ts";
 import type { AwsRoleBroker } from "../../auth/aws-role-broker.ts";
 import type {
   Conversation,
   Principal,
-  SurfaceContextQuery,
-  SurfaceContextResult,
   TurnRequest,
   TurnResult,
 } from "../../types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { IdentityService } from "../../identity/identity-service.ts";
 import type { ResolutionService } from "../../resolution/resolution-service.ts";
@@ -36,13 +35,12 @@ import type { ConnectorTokenStore, Keychain, ServiceCredentialStore } from "../.
 import type { FeatureFlagStore } from "../../feature-flags.ts";
 import type { TeamStore } from "../../teams/teams.ts";
 import type { CredentialUsageSink } from "../../admin/credential-usage-sink.ts";
-import type { ModelGateway } from "../../model/model-gateway.ts";
 import type { AuditLog } from "../../audit/audit-log.ts";
 import type { SecurityScreener } from "../../security/security-screener.ts";
 import type { RateLimiter } from "../../ratelimit/rate-limiter.ts";
 import type { BudgetTracker } from "../../ratelimit/budget.ts";
 import type { ControlService } from "../../api/control-service.ts";
-import type { Harness } from "../../harness/harness.ts";
+import type { Agent } from "../../agent/agent.ts";
 import type { AdminService } from "../../admin/admin-service.ts";
 import type { ErrorLog } from "../../admin/error-log.ts";
 import type { RunSignalStore } from "../../runs/run-signal-store.ts";
@@ -53,10 +51,9 @@ import type { MemoryService } from "../../memory/memory-service.ts";
 import type { McpToolService } from "../../mcp/mcp-tool-service.ts";
 import type { MemoryStrategy } from "../../memory/strategy.ts";
 import type { MemoryPolicy } from "../../memory/policy.ts";
-import type { ApprovalStore } from "../approval-store.ts";
+import type { ApprovalStore } from "../../slack/approval-store.ts";
 import type { ApprovalGrantStore } from "../approval-grant-store.ts";
 import type { BlobTransferStore } from "../../persistence/blob-transfer.ts";
-import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { SkillStore } from "../../skills/skill-store.ts";
 import type { OAuthClientResolver } from "../../connectors/oauth.ts";
 import type { SkillBundleStore } from "../../skills/skill-bundle-store.ts";
@@ -118,8 +115,6 @@ export interface OrchestratorDeps {
   identity: IdentityService;
   resolution: ResolutionService;
   config?: ScopedConfigStore;
-  /** The deployment's fallback harness (wiring's config.harness) — used when no org runtime selection exists. */
-  defaultHarness?: string;
   defaultTurnWallClockMs?: number;
   userModelCredentials?: UserModelCredentialStore;
   brandingDefault?: OrgBranding;
@@ -132,7 +127,6 @@ export interface OrchestratorDeps {
   toolOutput?: ToolOutputStore;
   sandbox: Sandbox;
   sandboxResources?: SandboxResources;
-  modelGateway: ModelGateway;
   auditLog: AuditLog;
   rateLimiter: RateLimiter;
   budget?: BudgetTracker;
@@ -146,15 +140,13 @@ export interface OrchestratorDeps {
   backgroundJobTtlMs?: number;
   sandboxCapabilityTtlMs?: number;
   backgroundJobTtlMaxMs?: number;
-  harness: Harness;
+  agent: Agent;
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   apiBaseUrl?: string;
   sandboxModels?: boolean;
   publicWebUrl?: string;
-  /** The public base for an inbound webhook URL (PUBLIC_WEB_URL ?? api url) — what the webhook
-   *  tool hands the user to point the sender at; matches the HTTP webhook route's base exactly. */
   webhookPublicUrl?: string;
   deploy: DeployService;
   acl: AclStore;
@@ -166,7 +158,6 @@ export interface OrchestratorDeps {
   skills?: SkillStore;
   skillBundles?: SkillBundleStore;
   skillsReady?: () => Promise<void>;
-  advisoryLock?: AdvisoryLock;
   approvals: ApprovalStore;
   approvalGrants: ApprovalGrantStore;
   errors?: ErrorLog;
@@ -183,7 +174,7 @@ export interface OrchestratorDeps {
   runtime?: RuntimeService;
   validateScheduledRuntime?: (
     scope: import("../../types.ts").ScopeId,
-    choice: import("../../harness/harness.ts").RuntimeChoice,
+    choice: import("../../agent/agent.ts").RuntimeChoice,
     purpose?: import("../../resolution/config-store.ts").RuntimePurpose,
   ) => Promise<string | null>;
   connectorTokens?: ConnectorTokenStore;
@@ -210,7 +201,6 @@ export interface OrchestratorDeps {
   brokeredTools?: readonly BrokeredLayerTool[];
   deploymentLayer?: DeploymentLayerRuntime;
   surfaceContext?: SurfaceContextPuller;
-  surfaceSearch?: SurfaceSearchStore;
   surfaceCache?: SurfaceCache;
   channelPolicy?: ChannelPolicyStore;
   surfaceDebugFooter?: boolean;
@@ -219,22 +209,6 @@ export interface OrchestratorDeps {
 export interface SurfaceContextPuller {
   pull(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
   searchLive?(source: string, query: SurfaceContextQuery): Promise<SurfaceContextResult | null>;
-}
-
-interface SurfaceSearchStore {
-  search(query: SurfaceSearchQuery): Promise<SurfaceSearchStoreHit[]>;
-}
-interface SurfaceSearchQuery {
-  surface: string;
-  container: string;
-  query: string;
-  limit: number;
-}
-interface SurfaceSearchStoreHit {
-  ref?: string;
-  author?: string;
-  when?: string;
-  snippet: string;
 }
 
 export interface Orchestrator {

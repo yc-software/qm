@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -47,38 +46,6 @@ export interface SkillPackStore {
   remove(id: string): Promise<void>;
   recordImport(id: string, result: ImportRecord): Promise<void>;
   close?(): Promise<void>;
-}
-
-export function createSkillPackStore(opts: { now?: () => number } = {}): SkillPackStore {
-  const packs = tenantRows<SkillPack>();
-  const now = opts.now ?? (() => Date.now());
-  const merge = (id: string, patch: Partial<SkillPack>) => {
-    const pack = packs().get(id);
-    if (!pack) return null;
-    const merged = Object.fromEntries(
-      Object.entries({ ...pack, ...patch, id }).filter(([, value]) => value !== undefined),
-    ) as unknown as SkillPack;
-    packs().set(id, merged);
-    return merged;
-  };
-  return {
-    async create(input) {
-      const pack: SkillPack = { ...input, id: randomUUID(), createdAt: now() };
-      packs().set(pack.id, pack);
-      return pack;
-    },
-    get: async (id) => packs().get(id) ?? null,
-    list: async () => sortedRows(packs()),
-    async update(id, patch) {
-      const merged = merge(id, patch);
-      if (!merged) throw new Error(`unknown skill pack: ${id}`);
-      return merged;
-    },
-    remove: async (id) => void packs().delete(id),
-    async recordImport(id, result) {
-      merge(id, { lastImport: result });
-    },
-  };
 }
 
 const IMPORT_COMPLETE =

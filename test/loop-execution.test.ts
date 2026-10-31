@@ -3,13 +3,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { createLoopFireService } from "../src/loops/loop-fire.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testIdempotencyStore } from "./support/typed-stores.ts";
 
 for (const checkResult of ["passed", "failed", "missing"] as const) {
   test(`loop intake executes with granted credentials and ${checkResult} checks gate held outputs`, async () => {
@@ -43,7 +40,7 @@ for (const checkResult of ["passed", "failed", "missing"] as const) {
       trigger: {
         identity: built.identity,
         deliveries: built.deliveries,
-        idempotency: createIdempotencyStore(),
+        idempotency: testIdempotencyStore(),
         run: async (req) => {
           const stage = /^\[Loop (\w+)\]/.exec(req.text ?? "")?.[1];
           assert.ok(stage);

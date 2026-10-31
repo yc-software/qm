@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPostgresApprovalStore, type ApprovalStore } from "../src/core/approval-store.ts";
+import { createPostgresApprovalStore, type ApprovalStore } from "../src/slack/approval-store.ts";
 import { createDeliveryStore, type DeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { withTenant } from "../src/tenants/context.ts";

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { spawnSync } from "node:child_process";
 import { ensureDeps } from "../scripts/dev/lib/deps.ts";
@@ -37,20 +37,12 @@ import {
 } from "../scripts/dev/lib/lease.ts";
 import { assembleEnv, completeDevSecuritySecrets } from "../scripts/dev/lib/envctx.ts";
 import { buildChildSpecs, type SpecInputs } from "../scripts/dev/supervisor/specs.ts";
-import { loadConfig, providerKeysPresent } from "../src/config.ts";
 import type { LeaseInfo } from "../scripts/dev/lib/types.ts";
 
 function tmpStore(): string {
   const store = mkdtempSync(join(tmpdir(), "qm-dev-test-"));
   ensureStore(store);
   return store;
-}
-
-function oauthIdToken(accountId: string): string {
-  const payload = Buffer.from(
-    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
-  ).toString("base64url");
-  return `header.${payload}.signature`;
 }
 
 function addSlot(store: string, n: number, extra = ""): void {
@@ -289,7 +281,7 @@ test("legacy lease (no heartbeat) keeps the not-today age reclaim rule", () => {
   rmSync(store, { recursive: true, force: true });
 });
 
-test("env assembly precedence: caller > login shell > dev.env > worktree .env; harness gates", async () => {
+test("env assembly precedence: caller > login shell > dev.env > worktree .env", async () => {
   const worktree = mkdtempSync(join(tmpdir(), "qm-wt-"));
   mkdirSync(join(worktree, ".git"));
   writeFileSync(
@@ -311,63 +303,8 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   });
   assert.equal(fromCaller.env.ANTHROPIC_API_KEY, "from-caller");
   assert.equal(fromCaller.env.BOTH, "caller");
-  assert.equal(fromCaller.harness, "pi");
-  assert.equal(fromCaller.env.HARNESS, "pi");
   assert.equal(fromCaller.env.PI_CAPTURE_REQUESTS, "1");
   assert.equal(fromCaller.anthropicKeySource, "your shell export");
-
-  for (const legacy of ["opencode", "codex"]) {
-    const legacyHarness = await assembleEnv({
-      worktree,
-      callerEnv: { ANTHROPIC_API_KEY: "from-caller", HARNESS: legacy },
-      log,
-      probeLoginShell: async () => "",
-    });
-    assert.equal(legacyHarness.harness, "pi");
-    assert.equal(legacyHarness.env.HARNESS, "pi");
-  }
-  const defaultCodexHome = join(worktree, "default-codex");
-  mkdirSync(defaultCodexHome, { recursive: true });
-  const oauthAuth = JSON.stringify({
-    auth_mode: "chatgpt",
-    tokens: {
-      access_token: "access",
-      refresh_token: "refresh",
-      account_id: "account",
-      id_token: oauthIdToken("account"),
-    },
-  });
-  writeFileSync(join(defaultCodexHome, "auth.json"), oauthAuth);
-  chmodSync(join(defaultCodexHome, "auth.json"), 0o600);
-  const implicit = await assembleEnv({
-    worktree,
-    callerEnv: { ANTHROPIC_API_KEY: "from-caller", CODEX_HOME: defaultCodexHome },
-    log,
-    probeLoginShell: async () => "",
-  });
-  assert.equal(implicit.codexAuthSource, "");
-  assert.equal(implicit.env.CODEX_AUTH_FILE, undefined);
-  const oauthAuthFile = join(worktree, "codex-auth.json");
-  writeFileSync(oauthAuthFile, oauthAuth);
-  chmodSync(oauthAuthFile, 0o600);
-  const companyChatGPT = await assembleEnv({
-    worktree,
-    callerEnv: { ANTHROPIC_API_KEY: "from-caller", CODEX_AUTH_FILE: oauthAuthFile },
-    log,
-    probeLoginShell: async () => "",
-  });
-  assert.equal(companyChatGPT.harness, "pi");
-  assert.equal(companyChatGPT.env.CODEX_AUTH_FILE, oauthAuthFile);
-  assert.equal(companyChatGPT.codexAuthSource, oauthAuthFile);
-
-  const claude = await assembleEnv({
-    worktree,
-    callerEnv: { HARNESS: "claude" },
-    log,
-    probeLoginShell: async () => "",
-  });
-  assert.equal(claude.harness, "claude");
-  assert.equal(claude.env.HARNESS, "claude");
 
   const fromLiveEnv = await assembleEnv({
     worktree,
@@ -406,7 +343,7 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
   writeFileSync(join(worktree, ".env"), "");
   await assert.rejects(
     assembleEnv({ worktree, callerEnv: {}, log, probeLoginShell: async () => "" }),
-    /ANTHROPIC_API_KEY, OPENAI_API_KEY, or a ChatGPT login/,
+    /ANTHROPIC_API_KEY or OPENAI_API_KEY is required/,
   );
   const openaiOnly = await assembleEnv({
     worktree,
@@ -414,7 +351,6 @@ test("env assembly precedence: caller > login shell > dev.env > worktree .env; h
     log,
     probeLoginShell: async () => "",
   });
-  assert.equal(openaiOnly.harness, "pi");
   assert.equal(openaiOnly.env.MODEL_PROVIDER, "openai");
   if (prevLive === undefined) delete process.env.QM_DEV_ENV;
   else process.env.QM_DEV_ENV = prevLive;
@@ -432,41 +368,6 @@ test("dev security secrets are stable, complete, and distinct", () => {
     () => completeDevSecuritySecrets({ CORE_SIGNING_SECRET: "same", CAPABILITY_SECRET: "same" }, "postgres://dev"),
     /must be distinct/,
   );
-});
-
-test("harness config is strict and a ChatGPT auth file feeds the company subscription", () => {
-  assert.equal(
-    loadConfig({ HARNESS: "claude", CLAUDE_MODEL: "claude-opus-4-8", CLAUDE_BIN: "/bin/claude" }).claudeModel,
-    "claude-opus-4-8",
-  );
-  assert.equal(loadConfig({ HARNESS: "claude", CLAUDE_BIN: "/bin/claude" }).claudeBinPath, "/bin/claude");
-  const source = mkdtempSync(join(tmpdir(), "qm-codex-config-"));
-  const authFile = join(source, "auth.json");
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: "access",
-        refresh_token: "refresh",
-        account_id: "account",
-        id_token: oauthIdToken("account"),
-      },
-    }),
-  );
-  chmodSync(authFile, 0o600);
-  const oauthConfig = loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: authFile });
-  assert.equal(oauthConfig.codexAuthFile, authFile);
-  assert.equal(providerKeysPresent(oauthConfig).openai, false);
-  assert.equal(providerKeysPresent(oauthConfig).codexOAuth, true);
-  assert.throws(
-    () => loadConfig({ HARNESS: "pi", CODEX_AUTH_FILE: join(source, "missing.json") }),
-    /CODEX_AUTH_FILE is unusable/,
-  );
-  rmSync(source, { recursive: true, force: true });
-  assert.throws(() => loadConfig({ HARNESS: "bogus" }), /use pi or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "PI" }), /use pi or claude/);
-  assert.throws(() => loadConfig({ HARNESS: "opencode" }), /use pi or claude/);
 });
 
 test("envSha is order-independent and value-sensitive", () => {
@@ -493,16 +394,13 @@ test("supervised children share the selected dev org", () => {
     ports: slotPorts("pool1"),
     baseEnv: {
       DEV_INSTANCE_ORG_ID: "beta",
-      CODEX_AUTH_FILE: "/tmp/codex-auth.json",
       HOME: "/tmp/home",
       CODEX_HOME: "/tmp/home/.codex",
     },
     watch: false,
     webUiBasePath: "/",
     slack: { botToken: "xoxb-test", appToken: "xapp-test" },
-    sessionStore: "memory",
-    runStore: "memory",
-    databaseUrl: "",
+    databaseUrl: "postgres://localhost/qm",
     adminGrantsSeed: "",
     coreSigningSecret: "",
     portalSessionSecret: "secret",
@@ -511,9 +409,7 @@ test("supervised children share the selected dev org", () => {
   };
   const specs = buildChildSpecs(inputs);
   assert.equal(specs.find((spec) => spec.name === "core")!.env.ORG_ID, "beta");
-  assert.equal(specs.find((spec) => spec.name === "core")!.env.CODEX_AUTH_FILE, "/tmp/codex-auth.json");
   for (const spec of specs.filter((spec) => spec.name !== "core")) {
-    assert.equal(spec.env.CODEX_AUTH_FILE, "");
     assert.equal(spec.env.HOME, undefined);
     assert.equal(spec.env.CODEX_HOME, undefined);
   }
@@ -532,9 +428,7 @@ test("child specs disable environment Slack tokens when no Slack tokens are supp
     baseEnv: { SLACK_BOT_TOKEN: "inherited-bot", SLACK_APP_TOKEN: "inherited-app" },
     watch: false,
     webUiBasePath: "/",
-    sessionStore: "memory",
-    runStore: "memory",
-    databaseUrl: "",
+    databaseUrl: "postgres://localhost/qm",
     adminGrantsSeed: "",
     coreSigningSecret: "",
     portalSessionSecret: "secret",

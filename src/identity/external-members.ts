@@ -1,4 +1,3 @@
-import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -70,18 +69,6 @@ function externalMember(row: Record<string, unknown>): ExternalMember {
     invitedBy: String(row.invited_by),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
-  };
-}
-
-export function createExternalMemberStore(): ExternalMemberStore {
-  const rows = tenantRows<ExternalMember>();
-  return {
-    list: async () => [...rows().values()],
-    put: async (member) =>
-      void rows().set(foldPrincipalId(member.email), { ...member, email: foldPrincipalId(member.email) }),
-    async remove(emails) {
-      for (const email of emails) rows().delete(foldPrincipalId(email));
-    },
   };
 }
 

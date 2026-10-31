@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryProcessRegistry, type ProcessRecord } from "../src/processes/process-registry.ts";
+import { type ProcessRecord, createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { createProcessReaper, createReaperKillHook } from "../src/processes/process-reaper.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
 import type { ProcessSandbox, SandboxHandle, ProvisionOptions, TeardownOptions } from "../src/sandbox/sandbox.ts";
 import type { WorkspaceLayer } from "../src/types.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -49,7 +50,7 @@ function killSpySandbox(opts?: { diesOn?: "TERM" | "KILL" | "never"; vanished?: 
 const bgId = (n: number) => `00000000-0000-0000-0000-${n.toString(16).padStart(12, "0")}`;
 
 test("reaper flips expired sessions and calls kill for each", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -72,7 +73,7 @@ test("reaper flips expired sessions and calls kill for each", async () => {
 });
 
 test("reaper calls onReaped for each reaped record (so a reaped run's death can notify the conversation)", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -98,7 +99,7 @@ test("reaper calls onReaped for each reaped record (so a reaped run's death can 
 });
 
 test("a row deleted mid-sweep (a run that finished between snapshot and mark) is neither counted nor notified", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -122,7 +123,7 @@ test("a row deleted mid-sweep (a run that finished between snapshot and mark) is
 });
 
 test("an onReaped failure does not abort the sweep or un-reap the record", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -144,7 +145,7 @@ test("an onReaped failure does not abort the sweep or un-reap the record", async
 });
 
 test("reaper leaves unexpired sessions alone", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -159,7 +160,7 @@ test("reaper leaves unexpired sessions alone", async () => {
 });
 
 test("a kill failure does not abort the sweep, leaves the record running, and is retried next sweep", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: bgId(1),
     scopeId: "s",
@@ -195,7 +196,7 @@ test("a kill failure does not abort the sweep, leaves the record running, and is
 });
 
 test("kill hook SIGTERMs every expired kind — background, build, and dev-server alike", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: bgId(1),
     scopeId: "personal:A",
@@ -247,7 +248,7 @@ test("kill hook SIGTERMs every expired kind — background, build, and dev-serve
 });
 
 test("kill hook escalates TERM → KILL when the grace period passes without an exit", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -272,7 +273,7 @@ test("kill hook escalates TERM → KILL when the grace period passes without an 
 });
 
 test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visible, kill retried)", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -300,7 +301,7 @@ test("a process that survives TERM+KILL is NOT marked reaped (zombie stays visib
 });
 
 test("only the leader instance's interval sweep reaps (one replica kills, not all of them)", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -338,7 +339,7 @@ test("only the leader instance's interval sweep reaps (one replica kills, not al
 });
 
 test("a vanished process session counts as a confirmed kill", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: ID,
     scopeId: "s",
@@ -360,7 +361,7 @@ test("a vanished process session counts as a confirmed kill", async () => {
 });
 
 test("an expired job with no recorded computer is retired without touching the scope's current computer", async () => {
-  const reg = createMemoryProcessRegistry();
+  const reg = createPostgresProcessRegistry(testDatabaseUrl());
   await reg.register({
     processId: bgId(9),
     scopeId: "personal:A",

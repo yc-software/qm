@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
-import { sortedRows, tenantRows } from "../tenants/memory-rows.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
@@ -356,31 +355,6 @@ function projectStore(backing: ProjectRows, opts: ProjectStoreOptions): ProjectS
     },
     ...(backing.close ? { close: backing.close } : {}),
   };
-}
-
-function memoryProjectRows(): ProjectRows {
-  const projects = tenantRows<Project>();
-  const where = async (keep: (project: Project) => boolean) =>
-    sortedRows(projects())
-      .filter(keep)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-  return {
-    get: async (id) => projects().get(id) ?? null,
-    async insert(project) {
-      const existing = projects().get(project.id);
-      if (existing) return existing;
-      projects().set(project.id, project);
-      return project;
-    },
-    save: async (project) => void projects().set(project.id, project),
-    forMember: (principalId) =>
-      where((p) => p.memberIds.includes(principalId) || !!p.channelMemberIds?.includes(principalId)),
-    linked: () => where((p) => p.slackChannel !== undefined),
-  };
-}
-
-export function createProjectStore(opts: ProjectStoreOptions): ProjectStore {
-  return projectStore(memoryProjectRows(), opts);
 }
 
 const SLACK_LINK_COMPLETE = ["channelId", "channelName", "linkedBy", "linkedAt"]

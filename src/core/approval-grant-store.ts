@@ -1,5 +1,4 @@
 import type { CommandApprovalGrant } from "../types.ts";
-import { tenantRows } from "../tenants/memory-rows.ts";
 import { createPgPool, type Rows } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
@@ -36,17 +35,6 @@ const APPROVAL_GRANTS_MIGRATION = typedTableMigration({
     AND json->>'scope' IN ('session', 'always') AND json->>'createdAt' IS NOT NULL`,
   indexes: ["CREATE INDEX approval_grants_by_actor ON approval_grants(tenant_id, lower(actor_id))"],
 });
-
-export function createApprovalGrantStore(): ApprovalGrantStore {
-  const rows = tenantRows<CommandApprovalGrant>();
-  return {
-    async forActors(actorIds) {
-      const wanted = new Set(actorIds.map((id) => id.toLowerCase()));
-      return [...rows().values()].filter((grant) => wanted.has(grant.actorId.toLowerCase()));
-    },
-    put: async (id, grant) => void rows().set(id, grant),
-  };
-}
 
 function fromRow(row: Rows[number]): CommandApprovalGrant {
   return {

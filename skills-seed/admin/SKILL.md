@@ -45,7 +45,7 @@ Limits the API enforces (don't offer what it will refuse):
   a cron can carry **unattended read grants** (`unattendedGrants` on the cron tool;
   see [Scheduling admin-reading work](#scheduling-admin-reading-work)) — set only on a
   live turn by the cron's owner, who must be a current org admin, on a cron that lives
-  in and delivers only to their own DM (never a channel, group or another person).
+  in their own DM. Only that owner, live, can then change where its output goes.
   Each grant opens exactly its own GET
   routes to that cron's autonomous fires, audited as the owner
   (re-checked live — revoking their admin grant closes it). Other mutations work
@@ -242,14 +242,20 @@ reads admin data, settle the grants at creation, not after the first fire fails:
    (`GET /v1/admin/unattended-grants`, org admins on a live turn only). It is built
    from the routes themselves: each entry gives the grant, method, path, summary and,
    where one exists, the admin tool action. Reads it doesn't list have no grant.
-3. Create the cron from a live turn in the admin's own DM, delivering to that DM, with
-   exactly the grants those reads need in `unattendedGrants`.
-4. If a needed action or route has no grant, or the cron can't carry grants (not the
-   owner's own DM, not a live turn by a current org admin, or delivery to a channel,
-   group or another person), tell the admin plainly before or at creation which part
-   won't work unattended. Don't create a cron that will fail on its first fire without
-   saying so.
-5. After creating it, confirm the grants appear in the cron's details (the create
+3. Create the cron from a live turn in the admin's own DM, with exactly the grants
+   those reads need in `unattendedGrants`. Don't pass `channel` or `participants`:
+   those move the cron's home into the room, and a cron homed there can't carry grants.
+4. Before its output goes anywhere but the admin's own DM (a `recipient`, or later a
+   `retarget` from a room's conversation), tell the admin plainly that the cron will
+   read admin data unattended as them and that everyone there will see whatever it
+   posts, with nothing re-checking each post. Weigh the room: say so if it is shared
+   with outsiders or isolated from their personal context. Proceed only on their
+   explicit yes; the move is audited and appears in the cron's history.
+5. If a needed action or route has no grant, or the cron can't carry grants (not homed
+   in the owner's own DM, or not a live turn by a current org admin), tell the admin
+   plainly before or at creation which part won't work unattended. Don't create a
+   cron that will fail on its first fire without saying so.
+6. After creating it, confirm the grants appear in the cron's details (the create
    result or `get`).
 
 ## Failure modes

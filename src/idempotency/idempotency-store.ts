@@ -34,7 +34,7 @@ const IDEMPOTENCY_MIGRATION = typedTableMigration({
   indexes: ["CREATE INDEX idempotency_by_committed_at ON idempotency(tenant_id, committed_at)"],
 });
 
-function idempotencyStore(log: CommitLog | undefined, opts: IdempotencyStoreOptions): IdempotencyStore {
+function idempotencyStore(log: CommitLog, opts: IdempotencyStoreOptions): IdempotencyStore {
   const retentionMs = opts.retentionMs ?? DEFAULT_RETENTION_MS;
   const pruneIntervalMs = opts.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
   const now = opts.now ?? Date.now;
@@ -50,7 +50,7 @@ function idempotencyStore(log: CommitLog | undefined, opts: IdempotencyStoreOpti
     lastPruneAt.set(tenant, t);
     const cutoff = t - retentionMs;
     for (const [key, at] of done) if (at < cutoff) done.delete(key);
-    log?.prune(cutoff).catch((e: unknown) => {
+    log.prune(cutoff).catch((e: unknown) => {
       console.error("[idempotency] retention prune failed:", errMessage(e));
     });
   }
@@ -59,7 +59,7 @@ function idempotencyStore(log: CommitLog | undefined, opts: IdempotencyStoreOpti
     const cutoff = now() - retentionMs;
     const cached = done.get(tenantKey(key));
     if (cached != null && cached >= cutoff) return true;
-    const at = log ? await log.committedAt(key) : null;
+    const at = await log.committedAt(key);
     if (at != null && at >= cutoff) {
       done.set(tenantKey(key), at);
       return true;
@@ -76,7 +76,7 @@ function idempotencyStore(log: CommitLog | undefined, opts: IdempotencyStoreOpti
         if (await isCommitted(key)) return false;
         await fn();
         const at = now();
-        await log?.commit(key, at);
+        await log.commit(key, at);
         done.set(slot, at);
         pruneIfDue(at);
         return true;
@@ -86,10 +86,6 @@ function idempotencyStore(log: CommitLog | undefined, opts: IdempotencyStoreOpti
     },
     committed: isCommitted,
   };
-}
-
-export function createIdempotencyStore(opts: IdempotencyStoreOptions = {}): IdempotencyStore {
-  return idempotencyStore(undefined, opts);
 }
 
 export function createPostgresIdempotencyStore(

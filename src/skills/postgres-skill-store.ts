@@ -4,10 +4,9 @@ import { tsPrefixQuery } from "../sessions/entry-search.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import type { ScopeId } from "../types.ts";
 import { pgJsonText, pgTextSafe } from "../util/text.ts";
-import { createPostgresSkillBundleStore, createSkillBundleStore, type SkillBundleStore } from "./skill-bundle-store.ts";
-import { createPostgresSkillPackStore, createSkillPackStore, type SkillPackStore } from "./skill-pack-store.ts";
+import { createPostgresSkillBundleStore, type SkillBundleStore } from "./skill-bundle-store.ts";
+import { createPostgresSkillPackStore, type SkillPackStore } from "./skill-pack-store.ts";
 import {
-  createSkillStore,
   skillStore,
   type Skill,
   type SkillFile,
@@ -226,21 +225,14 @@ export function createPostgresSkillRows(connectionString: string): SkillRows {
   };
 }
 
-export function createPostgresSkillStore(connectionString: string, opts: SkillStoreOptions = {}): SkillStore {
+export function createPostgresSkillStore(connectionString: string, opts: SkillStoreOptions): SkillStore {
   return skillStore(createPostgresSkillRows(connectionString), opts);
 }
 
 export function createSkillStores(
-  databaseUrl: string | undefined,
+  databaseUrl: string,
   opts: SkillStoreOptions,
 ): { skills: SkillStore; skillPacks: SkillPackStore; skillBundles: SkillBundleStore } {
-  if (!databaseUrl) {
-    return {
-      skills: createSkillStore(opts),
-      skillPacks: createSkillPackStore(),
-      skillBundles: createSkillBundleStore(),
-    };
-  }
   return {
     skills: createPostgresSkillStore(databaseUrl, opts),
     skillPacks: createPostgresSkillPackStore(databaseUrl),

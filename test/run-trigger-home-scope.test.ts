@@ -2,13 +2,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runTrigger, type TriggerDeps } from "../src/triggers/run-trigger.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createCurrentScopeMembers } from "../src/resolution/scope-membership.ts";
 import { scopeId, type ScopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 
 const OWNER = "pat@example.com";
 const CHAN = "C0PRIVATE";
@@ -18,6 +14,8 @@ function unknownChannelDirectory() {
   return {
     channelMember: async (_c: string, _pid: string) => false,
     groupMember: async (_g: string, _pid: string) => false,
+    channelMembership: async (): Promise<boolean | undefined> => undefined,
+    groupMembership: async (): Promise<boolean | undefined> => undefined,
     listChannelsFor: async (): Promise<{ channelId: string; name: string }[]> => [],
     channelPrivacy: async (): Promise<boolean | undefined> => undefined,
     list: async () => [{ principalId: OWNER, displayName: "Pete" }],
@@ -35,8 +33,8 @@ function deps(
   };
   return {
     deliveries: createDeliveryStore(),
-    idempotency: createIdempotencyStore(),
-    identity: createIdentityService(),
+    idempotency: testIdempotencyStore(),
+    identity: testIdentityService(),
     run,
     directory: dir,
     currentScopeMembers: createCurrentScopeMembers({ directory: dir }),
@@ -163,8 +161,8 @@ describe("runTrigger home-scope gate for group homes", () => {
     };
     const d: TriggerDeps = {
       deliveries: createDeliveryStore(),
-      idempotency: createIdempotencyStore(),
-      identity: createIdentityService(),
+      idempotency: testIdempotencyStore(),
+      identity: testIdentityService(),
       run: async () => {
         ranTurn = true;
         return { status: "ok", reply: "posted" };

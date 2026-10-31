@@ -57,8 +57,11 @@ Do not put user-specific data into names, descriptions, or schemas.
 
 `credentialHost` explicitly authorizes sending that connector's user token to the
 registered server. Only register a trusted service permitted to receive those
-tokens. Per-user endpoints require HTTPS, except on loopback for local development.
-HTTP redirects are rejected for every MCP authentication mode. Updating an endpoint
+tokens. Per-user endpoints require HTTPS. Core refuses MCP server, OAuth discovery,
+and OAuth token endpoints that resolve to loopback, link-local, private, or
+unspecified addresses, checked on the address actually dialed. HTTP redirects are
+rejected for every MCP authentication mode, and OAuth token requests do not follow
+redirects. Updating an endpoint
 or credential host is an administrative trust decision. Tool call auditing records
 the initiating actor as before; authentication does not expand the audience allowed
 to receive the result.

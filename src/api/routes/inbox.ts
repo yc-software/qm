@@ -1,6 +1,7 @@
 import { migrateInbox } from "../../loops/inbox-migration.ts";
 import { canonicalPerson } from "../../directory/person.ts";
-import { scopeId, type Loop } from "../../types.ts";
+import { scopeId } from "../../types.ts";
+import type { Loop } from "../../loops/types.ts";
 import { ensureDefaultInboxLoops, findInboxLoop } from "../../loops/inbox-loop.ts";
 import {
   compareKeys,

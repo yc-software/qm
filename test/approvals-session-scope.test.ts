@@ -1,14 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../src/api/app.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createApprovalStore } from "../src/core/approval-store.ts";
-import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
+import { type DurableMap } from "../src/persistence/durable-map.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testIdentityService } from "./support/typed-stores.ts";
 
 const approval = (sessionId: string, actor: string, command: string, blocksInput = true): PendingApprovalRecord => ({
   sessionId,
@@ -23,30 +20,42 @@ const approval = (sessionId: string, actor: string, command: string, blocksInput
   },
 });
 
-test("session approvals list only the session's own records and respect viewer visibility", async () => {
-  const sessions = createMemorySessionStore();
+test("session approvals are read by session id, never by scanning every approval", async () => {
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const mine = await sessions.getOrCreateByThread("dm:alice:t1", "dm", "personal:alice");
   const other = await sessions.getOrCreateByThread("dm:bob:t1", "dm", "personal:bob");
   await sessions.addParticipant(mine.id, "alice");
   await sessions.addParticipant(mine.id, "bob");
-  const approvals = createApprovalStore(createDeliveryStore());
-  await approvals.put("a-blocking", approval(mine.id, "alice", "git push --force"));
-  await approvals.put("a-input", approval(mine.id, "alice", "ask", false));
-  await approvals.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
-  await approvals.put("orphan", approval("no-such-session", "alice", "noop"));
-  await approvals.put("unicode", approval("sesión-ü", "alice", "echo"));
-  const expected = ["a-blocking", "a-input"];
+  const backing = testMap<PendingApprovalRecord>();
+  await backing.put("a-blocking", approval(mine.id, "alice", "git push --force"));
+  await backing.put("a-input", approval(mine.id, "alice", "ask", false));
+  await backing.put("b-blocking", approval(other.id, "bob", "rm -rf /"));
+  await backing.put("orphan", approval("no-such-session", "alice", "noop"));
+  await backing.put("unicode", approval("sesión-ü", "alice", "echo"));
+  const expectedFromFullScan = (await backing.entries()).filter(([, r]) => r.sessionId === mine.id).map(([id]) => id);
 
+  let fullReads = 0;
+  const approvals: DurableMap<PendingApprovalRecord> = {
+    ...backing,
+    async entries() {
+      fullReads++;
+      return backing.entries();
+    },
+    async all() {
+      fullReads++;
+      return backing.all();
+    },
+  };
   const app = createApp({
     sessions,
     approvals,
-    identity: createIdentityService(),
+    identity: testIdentityService(),
   } as unknown as Parameters<typeof createApp>[0]);
 
   const listed = await app.listSessionApprovals(mine.id, "alice");
   assert.deepEqual(
     listed.map((a) => a.requestId),
-    expected,
+    expectedFromFullScan,
     "the filtered read returns exactly what the old full scan + filter did",
   );
   assert.deepEqual(
@@ -62,4 +71,5 @@ test("session approvals list only the session's own records and respect viewer v
     ["a-blocking"],
     "blockingOnly still drops non-blocking approvals",
   );
+  assert.equal(fullReads, 0, "no caller read the whole approvals map");
 });
