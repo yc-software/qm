@@ -12,7 +12,8 @@ import type { ApiCtx, Route } from "./route.ts";
 async function putTenantSettings(ctx: ApiCtx): Promise<void> {
   if (!requireOperatorControl(ctx)) return;
   const { deps, body, res } = ctx;
-  if (!deps.tenantSettings || !deps.modelCredentials || !deps.config) return sendJson(res, 404, { error: "not_found" });
+  if (!deps.tenantSettings || !deps.modelCredentials || !deps.config || !deps.featureFlags)
+    return sendJson(res, 404, { error: "not_found" });
   const env = isObj(body) ? body.env : undefined;
   if (!isObj(env) || Object.values(env).some((value) => typeof value !== "string"))
     return sendJson(res, 400, { error: "bad_request", message: "env must be an object of string values" });
@@ -27,6 +28,7 @@ async function putTenantSettings(ctx: ApiCtx): Promise<void> {
       importTenantSettings(env as Record<string, string>, {
         settings: deps.tenantSettings!,
         modelCredentials: deps.modelCredentials!,
+        featureFlags: deps.featureFlags!,
         config: deps.config!,
         rootScope: scopeId("org", orgId()),
         actor: "operator settings push",

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { importTenantSettings, tenantEnvPresent } from "../src/tenants/settings-import.ts";
@@ -14,6 +15,7 @@ async function deps() {
   return {
     settings: await testSettingsStore(),
     modelCredentials: createModelCredentialStore({ backing: testMap(), keyMaterial: KEY }),
+    featureFlags: createFeatureFlagStore(testMap<FeatureFlagRecord>()),
     config: testConfigStore("acme", { connectorSecretKey: KEY }),
     rootScope: root,
     actor: "import-test",
@@ -102,5 +104,38 @@ test("the import never replaces values an admin already stored", async () => {
     assert.equal(await d.config.getSecurityPostureDurable(root), "strict");
     assert.deepEqual(await d.config.getBrandingDurable(root), { orgName: "Admin Name", accent: "#ff6600" });
     assert.equal((await d.config.getConnectorClientSecret(root, "google"))?.clientId, "admin-id");
+  });
+});
+
+test("the import turns the web UI allowlists into access flags once, lowercasing email ids", async () => {
+  const d = await deps();
+  await withTenant(THIRD_TENANT, async () => {
+    await importTenantSettings(
+      { WEB_UI_PRINCIPALS: "", LOOPS_USERS: "Ada@Example.com, bo@example.com", WEB_UI_VOICE_USERS: "all" },
+      d,
+    );
+    assert.deepEqual((await d.featureFlags.get("web_ui"))?.enabledScopes, [root]);
+    assert.deepEqual((await d.featureFlags.get("loops"))?.enabledScopes, [
+      scopeId("personal", "ada@example.com"),
+      scopeId("personal", "bo@example.com"),
+    ]);
+    assert.deepEqual((await d.featureFlags.get("voice"))?.enabledScopes, [root]);
+    await d.featureFlags.setEnabled("web_ui", root, false, "admin");
+    await importTenantSettings({ WEB_UI_PRINCIPALS: "", LOOPS_USERS: "cy@example.com" }, d);
+    assert.deepEqual((await d.featureFlags.get("web_ui"))?.enabledScopes, []);
+    assert.equal((await d.featureFlags.get("loops"))?.enabledScopes.length, 2);
+  });
+});
+
+test("a listed web UI allowlist becomes per-person sign-in, and an absent one changes nothing", async () => {
+  const d = await deps();
+  await withTenant(THIRD_TENANT, async () => {
+    await importTenantSettings({ WEB_UI_PRINCIPALS: "Ada@Example.com,U123" }, d);
+    assert.deepEqual((await d.featureFlags.get("web_ui"))?.enabledScopes, [
+      scopeId("personal", "ada@example.com"),
+      scopeId("personal", "u123"),
+    ]);
+    assert.equal(await d.featureFlags.get("voice"), null);
+    assert.equal(await d.featureFlags.get("loops"), null);
   });
 });

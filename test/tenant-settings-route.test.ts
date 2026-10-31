@@ -30,6 +30,7 @@ async function fixture(secret: string | undefined = controlSecret) {
     tenantSettings: built.tenantSettings,
     modelCredentials: built.modelCredentials,
     config: built.config,
+    featureFlags: built.featureFlags,
     replayDedupe: built.replayDedupe,
   });
   server.listen(0);
