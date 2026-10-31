@@ -4,6 +4,7 @@ import { planIngest, importPack, type FetchedRepo } from "../src/skills/ingest.t
 import { createSkillStore } from "../src/skills/skill-store.ts";
 import { createSkillPackStore } from "../src/skills/skill-pack-store.ts";
 import { scopeId } from "../src/types.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 const md = (front: string, body = "# Body\ntext") => `---\n${front}\n---\n${body}`;
 
@@ -55,7 +56,7 @@ test("planIngest classifies eligibility with reasons and excludes by config", ()
 });
 
 test("importPack publishes eligible skills with provenance + assets; native publish untouched", async () => {
-  const store = createSkillStore();
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
   const org = scopeId("org", "acme");
   const native = await store.create({
     scopeId: org,
@@ -65,7 +66,7 @@ test("importPack publishes eligible skills with provenance + assets; native publ
   await store.review(native.id, "system:skills-reviewer", []);
   await store.publish(native.id);
 
-  const packs = createSkillPackStore();
+  const packs = createSkillPackStore({ backing: testMap() });
   const pack = await packs.create({
     kind: "git",
     url: "u",
@@ -92,8 +93,8 @@ test("importPack publishes eligible skills with provenance + assets; native publ
 });
 
 test("re-import is idempotent (all skipped on the second run)", async () => {
-  const store = createSkillStore();
-  const packs = createSkillPackStore();
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const packs = createSkillPackStore({ backing: testMap() });
   const pack = await packs.create({
     kind: "git",
     url: "u",
@@ -114,8 +115,8 @@ test("re-import is idempotent (all skipped on the second run)", async () => {
 });
 
 test("a shared bundle cannot clobber a skill record in another scope", async () => {
-  const store = createSkillStore();
-  const packs = createSkillPackStore();
+  const store = createSkillStore({ advisoryLock: testAdvisoryLock(), backing: testMap() });
+  const packs = createSkillPackStore({ backing: testMap() });
   const pack = await packs.create({
     kind: "git",
     url: "u",

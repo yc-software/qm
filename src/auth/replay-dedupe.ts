@@ -1,30 +1,10 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 
 export interface ReplayDedupe {
-  readonly durable: boolean;
   claim(eventId: string, expiresAtMs: number): Promise<boolean>;
 }
 
 const PRUNE_INTERVAL_MS = 60_000;
-
-export function createMemoryReplayDedupe(now: () => number = Date.now): ReplayDedupe {
-  const seen = new Map<string, number>();
-  let nextPruneAt = Number.NEGATIVE_INFINITY;
-  return {
-    durable: false,
-    async claim(eventId, expiresAtMs) {
-      const t = now();
-      if (t >= nextPruneAt) {
-        nextPruneAt = t + PRUNE_INTERVAL_MS;
-        for (const [id, exp] of seen) if (exp < t) seen.delete(id);
-      }
-      const existing = seen.get(eventId);
-      if (existing !== undefined && existing >= t) return false;
-      seen.set(eventId, expiresAtMs);
-      return true;
-    },
-  };
-}
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS source_auth_replay (
@@ -35,10 +15,9 @@ const SCHEMA = [
 ];
 
 export function createPostgresReplayDedupe(connectionString: string): ReplayDedupe {
-  const pg = createPgPool(connectionString, "auth/replay-dedupe/0001", SCHEMA);
+  const pg = createPgPool(connectionString, [{ id: "auth/replay-dedupe/0001", statements: SCHEMA }]);
   let nextPruneAt = Number.NEGATIVE_INFINITY;
   return {
-    durable: true,
     async claim(eventId, expiresAtMs) {
       const t = Date.now();
       if (t >= nextPruneAt) {

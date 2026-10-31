@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { testMap } from "./support/test-database.ts";
 
 const installation = {
   botToken: "xoxb-test",
@@ -22,7 +22,7 @@ const event = {
 };
 
 async function fixture(t: test.TestContext, appId = "A123") {
-  const map = createMemoryMap();
+  const map = testMap();
   const store = createSlackInstallationStore(
     "company",
     map as Parameters<typeof createSlackInstallationStore>[1],
@@ -150,7 +150,7 @@ test("failed delivery withholds acknowledgment", async (t) => {
 });
 
 test("installation launch restricts redirect origin and hides service credentials", async () => {
-  const store = createSlackInstallationStore("company", createMemoryMap(), "test-key");
+  const store = createSlackInstallationStore("company", testMap(), "test-key");
   const bridge = createManagedSlack({
     serviceUrl: "https://slack.example.com",
     token: "company-token",
@@ -232,7 +232,7 @@ test("explicit app pin still rejects another app at installation", async (t) => 
 test("managed Slack refuses a service credential that a bearer header cannot carry", () => {
   const store = createSlackInstallationStore(
     "company",
-    createMemoryMap() as Parameters<typeof createSlackInstallationStore>[1],
+    testMap() as Parameters<typeof createSlackInstallationStore>[1],
     "test-encryption-key",
   );
   for (const token of ["", "company-token\n", " company-token"]) {

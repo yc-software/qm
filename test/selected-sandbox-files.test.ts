@@ -17,7 +17,7 @@ function plan(id: string, ownerScopeId: string, crossScope = false): SandboxAcce
   } as unknown as SandboxAccessPlan;
 }
 
-function harness(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDeps> } = {}) {
+function agent(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContextDeps> } = {}) {
   const disks = new Map<string, Map<string, string>>([
     ["default", new Map([["notes.md", "default copy"]])],
     [
@@ -85,7 +85,7 @@ function harness(opts: { access?: SandboxAccessPlan; extra?: Partial<ToolContext
 }
 
 test("a selected sandbox read never falls back to the default computer", async () => {
-  const h = harness({ access: plan("sb1", conversation) });
+  const h = agent({ access: plan("sb1", conversation) });
   assert.deepEqual(await h.ctx.read("notes.md", undefined, "sb1"), {
     content: "selected copy",
     sourceScopeId: conversation,
@@ -96,7 +96,7 @@ test("a selected sandbox read never falls back to the default computer", async (
 });
 
 test("a selected write persists to that computer's backing store, not the conversation default", async () => {
-  const h = harness({ access: plan("sb1", conversation) });
+  const h = agent({ access: plan("sb1", conversation) });
   await h.ctx.write("notes.md", "edited", "sb1");
   assert.equal(h.disks.get("selected")!.get("notes.md"), "edited");
   assert.equal(h.disks.get("default")!.get("notes.md"), "default copy");
@@ -105,7 +105,7 @@ test("a selected write persists to that computer's backing store, not the conver
 });
 
 test("another conversation's computer can be read but not written", async () => {
-  const h = harness({ access: plan("sb2", other, true) });
+  const h = agent({ access: plan("sb2", other, true) });
   assert.equal((await h.ctx.read("notes.md", undefined, "sb2")).sourceScopeId, other);
   await assert.rejects(h.ctx.write("notes.md", "x", "sb2"), /owned by this conversation/);
   assert.equal(h.disks.get("selected")!.get("notes.md"), "selected copy");
@@ -113,7 +113,7 @@ test("another conversation's computer can be read but not written", async () => 
 });
 
 test("publish reads files from the selected sandbox while the app stays owned by its creator", async () => {
-  const h = harness({ access: plan("sb2", other, true) });
+  const h = agent({ access: plan("sb2", other, true) });
   await h.ctx.publish({ dir: "app", entrypoint: "node server.js", name: "site", sandboxId: "sb2" });
   assert.equal(h.provisions(), 0);
   const [deploy] = h.deployed;
@@ -126,7 +126,7 @@ test("publish reads files from the selected sandbox while the app stays owned by
 });
 
 test("metadata-only publish needs no computer but still rejects an unknown sandbox", async () => {
-  const h = harness();
+  const h = agent();
   await h.ctx.publish({ name: "site", rollbackTo: 1 });
   assert.equal(h.provisions(), 0);
   await assert.rejects(h.ctx.publish({ name: "site", rollbackTo: 1, sandboxId: "missing" }), /sandbox not found/);
@@ -135,7 +135,7 @@ test("metadata-only publish needs no computer but still rejects an unknown sandb
 
 test("naming the default sandbox explicitly persists exactly like omitting it", async () => {
   const access = plan("sb1", conversation);
-  const h = harness({
+  const h = agent({
     access,
     extra: {
       provision: async () => ({ ...selectedBox, resourceId: "sb1" }),
@@ -148,7 +148,7 @@ test("naming the default sandbox explicitly persists exactly like omitting it", 
 });
 
 test("an absolute path inside a computer's workspace reads and writes like its workspace path", async () => {
-  const h = harness({ access: plan("sb1", conversation) });
+  const h = agent({ access: plan("sb1", conversation) });
   assert.equal((await h.ctx.read("/workspace/notes.md", undefined, "sb1")).content, "selected copy");
   assert.equal((await h.ctx.read("/workspace/./notes.md")).content, "default copy");
   await h.ctx.write("/workspace/notes.md", "edited", "sb1");
@@ -157,7 +157,7 @@ test("an absolute path inside a computer's workspace reads and writes like its w
 });
 
 test("an absolute path outside the workspace reads nothing and says so", async () => {
-  const h = harness({ access: plan("sb1", conversation) });
+  const h = agent({ access: plan("sb1", conversation) });
   for (const path of ["/elsewhere/notes.md", "/workspace/../etc/notes.md"])
     assert.deepEqual(await h.ctx.read(path, undefined, "sb1"), {
       content: null,

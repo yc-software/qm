@@ -1,4 +1,4 @@
-import { compactTranscript } from "../src/harness/context-compaction.ts";
+import { compactTranscript } from "../src/agent/context-compaction.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { memoryRecallDelta, shownFacts } from "../src/memory/recall-delta.ts";

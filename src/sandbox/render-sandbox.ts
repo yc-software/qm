@@ -85,9 +85,9 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
   const withLifecycle = <T>(name: string, fn: () => Promise<T>): Promise<T> =>
     advisoryLock.withLock(lifecycleKey(name), fn);
   const withUse = <T>(name: string, fn: () => Promise<T>): Promise<T> => advisoryLock.withLock(useKey(name), fn);
-  const tryLock = advisoryLock.tryWithLock ?? advisoryLock.withLock;
+  const tryLock = advisoryLock.tryWithLock;
   const tryUse = <T>(name: string, fn: () => Promise<T>): Promise<T | null> => tryLock(useKey(name), fn);
-  const shared = advisoryLock.withSharedLock ?? advisoryLock.withLock;
+  const shared = advisoryLock.withSharedLock;
   const lockHandle =
     <Args extends unknown[], Result>(
       operation: (handle: SandboxHandle, ...args: Args) => Promise<Result>,

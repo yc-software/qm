@@ -5,19 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOrchestrator, type OrchestratorInput } from "../src/core/orchestrator.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createResolutionService } from "../src/resolution/resolution-service.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
-import { createModelGateway } from "../src/model/model-gateway.ts";
-import { createAuditLog } from "../src/audit/audit-log.ts";
-import { createRateLimiter } from "../src/ratelimit/rate-limiter.ts";
-import { defineHarness } from "../src/harness/harness.ts";
+import type { Agent } from "../src/agent/agent.ts";
 import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDockerDeployProvider } from "../src/deploy/docker-deploy-provider.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
@@ -25,6 +17,14 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
+import { createPostgresRateLimiter } from "../src/ratelimit/postgres-rate-limiter.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testConfigStore, testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 
 const ORG = "default-org";
 const actor: Principal = { id: "U1", type: "internal" };
@@ -56,73 +56,63 @@ function buildScenario(interruptAfterToolResult = false) {
   const continued: Array<boolean | undefined> = [];
   const environments: Array<string | undefined> = [];
   const sandbox = fakeSandbox();
-  const harness = defineHarness(
-    {
-      id: "pi",
-      controlTransport: "in-process",
-      toolTransport: "in-process",
-      transcriptFormat: "pi",
-      capabilities: new Set(),
-    },
-    {
-      async runTurn(turn) {
-        turns.push(turn.input);
-        continued.push(turn.continueTurn);
-        environments.push(turn.environment);
-        if (!turn.continueTurn)
-          await turn.emit({
-            type: "user",
-            payload: { text: turn.input },
-            scopeLabel: turn.scopeLabel,
-          });
-        if (interruptAfterToolResult && turns.length === 1) {
-          await turn.emit({
-            type: "tool_call",
-            payload: { tool: "execute", callId: "c1", command: "ls" },
-            scopeLabel: turn.scopeLabel,
-          });
-          await turn.emit({
-            type: "tool_result",
-            payload: { tool: "execute", callId: "c1", result: "a.txt" },
-            scopeLabel: turn.scopeLabel,
-          });
-          throw new Error("interrupted after recording a tool result");
-        }
-        const reply = "it runs on this conversation's computer";
+  const agent: Agent = {
+    async runTurn(turn) {
+      turns.push(turn.input);
+      continued.push(turn.continueTurn);
+      environments.push(turn.environment);
+      if (!turn.continueTurn)
         await turn.emit({
-          type: "assistant",
-          payload: { text: reply },
+          type: "user",
+          payload: { text: turn.input },
           scopeLabel: turn.scopeLabel,
         });
-        return { reply, modelCalls: 1 };
-      },
-      async screenSecurity() {
-        return { decision: "auto" as const };
-      },
+      if (interruptAfterToolResult && turns.length === 1) {
+        await turn.emit({
+          type: "tool_call",
+          payload: { tool: "execute", callId: "c1", command: "ls" },
+          scopeLabel: turn.scopeLabel,
+        });
+        await turn.emit({
+          type: "tool_result",
+          payload: { tool: "execute", callId: "c1", result: "a.txt" },
+          scopeLabel: turn.scopeLabel,
+        });
+        throw new Error("interrupted after recording a tool result");
+      }
+      const reply = "it runs on this conversation's computer";
+      await turn.emit({
+        type: "assistant",
+        payload: { text: reply },
+        scopeLabel: turn.scopeLabel,
+      });
+      return { reply, modelCalls: 1 };
     },
-  );
-  const sessions = createMemorySessionStore();
-  const { runs } = createMemoryRunStore();
-  const acl = createAclStore();
-  const auditLog = createAuditLog();
+    async screenSecurity() {
+      return { decision: "auto" as const };
+    },
+  };
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
+  const auditLog = createPostgresAuditLog(testDatabaseUrl());
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "retry-replay-")));
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
-    identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+    resolution: createResolutionService(ORG, testConfigStore(ORG), acl),
     sessions,
     runs,
     workspace,
-    files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),
+    files: createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore()),
     sandbox,
-    modelGateway: createModelGateway(),
     auditLog,
-    rateLimiter: createRateLimiter({ maxPerWindow: 100, windowMs: 60_000 }),
-    harness,
-    memory: createMemoryService(workspace),
+    rateLimiter: createPostgresRateLimiter(testDatabaseUrl(), { maxPerWindow: 100, windowMs: 60_000 }),
+    agent,
+    memory: createPostgresMemoryService(testDatabaseUrl()),
     deploy: createDeployService({
       ...singleProcessDeps(),
-      deployStore: createDeployStore(),
+      deployStore: createDeployStore(testDeployBackings()),
       provider: createDockerDeployProvider(),
       deployDir: join(tmpdir(), "retry-replay-deploy"),
       auditLog,
@@ -286,7 +276,7 @@ test("a turn that recorded no reply replays as silent, not as an empty answer", 
   assert.equal(turns.length, 0);
 });
 
-test("a resume whose recorded work ends at a tool result asks the harness to continue the assistant turn", async () => {
+test("a resume whose recorded work ends at a tool result asks the agent to continue the assistant turn", async () => {
   const { orchestrator, runs, turns, continued, environments, input, asks } = buildScenario(true);
   const run = (await runs.enqueue({ sessionId: conversation.threadRef, request: input(ASK) })).run;
   await assert.rejects(
@@ -298,7 +288,7 @@ test("a resume whose recorded work ends at a tool result asks the harness to con
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [undefined, true], "unchanged inventories preserve assistant continuation");
   assert.doesNotMatch(environments[1]!, /## Where you are|Environment changes/);
-  assert.equal(turns[1], ASK, "only the original request travels, as the harness's fallback");
+  assert.equal(turns[1], ASK, "only the original request travels, as the agent's fallback");
   assert.equal((await asks()).length, 1);
 });
 
@@ -314,7 +304,7 @@ test("a resume whose last tool call has no recorded result settles it and contin
   const retry = await orchestrator.handleTurn(input(ASK, { runId: run.id, attempt: 2 }));
   assert.equal(retry.status, "ok");
   assert.deepEqual(continued, [true]);
-  assert.equal(turns[0], ASK, "only the original request travels, as the harness's fallback");
+  assert.equal(turns[0], ASK, "only the original request travels, as the agent's fallback");
   const settled = (await sessions.getEntries((await sessions.getByThread(conversation.threadRef))!.id)).find(
     (e) => e.type === "tool_result",
   );

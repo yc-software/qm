@@ -1,24 +1,24 @@
 import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import * as mockHarness from "./support/mock-harness.ts";
-import { recordSteerIntake } from "../src/harness/harness-shared.ts";
-import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
+import * as mockAgent from "./support/mock-agent.ts";
+import { recordSteerIntake } from "../src/agent/turn-support.ts";
+import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
-let exercise: ((turn: HarnessTurnInput) => Promise<HarnessTurnResult | void>) | undefined;
-mock.module("./support/mock-harness.ts", {
+let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
+mock.module("./support/mock-agent.ts", {
   namedExports: {
-    ...mockHarness,
-    createMockHarness: () => {
-      const harness = mockHarness.createMockHarness();
-      const run = harness.turns.runTurn;
-      harness.turns.runTurn = async (turn) => {
+    ...mockAgent,
+    createMockAgent: () => {
+      const agent = mockAgent.createMockAgent();
+      const run = agent.runTurn;
+      agent.runTurn = async (turn) => {
         if (!exercise) return run(turn);
         return (await exercise(turn)) ?? { reply: "Done" };
       };
-      return harness;
+      return agent;
     },
   },
 });
@@ -43,7 +43,7 @@ for (const mode of ["retry", "handoff"] as const) {
         return {
           reply: "",
           runtimeHandoff: {
-            choice: { harnessId: turn.runtime!.harnessId!, modelId: turn.runtime!.modelId! },
+            choice: { modelId: turn.runtime!.modelId! },
             lifetime: "task",
           },
         };

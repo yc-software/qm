@@ -17,25 +17,23 @@ async function main(): Promise<void> {
   assert.ok(process.env.QM_CORE_CONTAINER, "the candidate core container name is required");
   assert.ok(process.env.EXPECTED_SOURCE_SHA, "the expected source pin is required");
   assert.equal(process.env.GIT_SHA, process.env.EXPECTED_SOURCE_SHA, "candidate image does not match the source pin");
+  assert.ok(process.env.DATABASE_URL, "DATABASE_URL must point at a Postgres server");
   const config = loadConfig();
   const built = buildApp({
     ...config,
     dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
-    sessionStore: "memory",
-    runStore: "memory",
-    harness: "pi",
+    databaseUrl: process.env.DATABASE_URL,
     sandboxBackend: "local",
 
     backgroundWorkEnabled: false,
     turnWallClockMs: 180_000,
-    localSandbox: { ...config.localSandbox, coreContainer: process.env.QM_CORE_CONTAINER },
   });
   const actorId = `provider-qualification-${randomUUID()}`;
   const scopeId = `personal:${actorId}`;
   const name = `local-${randomUUID()}`;
   const failures: unknown[] = [];
   try {
-    await built.identity.hydrate();
+    await built.identity.refresh();
     await built.deploymentLayerReady;
     await built.sandboxResources.initialize();
     await setOnboardingStatus(built.memory, scopeId, "completed", new Date().toISOString().slice(0, 10), actorId);

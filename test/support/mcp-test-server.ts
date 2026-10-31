@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { addressGuardedFetch } from "../../src/util/network.ts";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -186,3 +187,5 @@ export async function startMcpTestServer(
     revokeTokens: () => tokens.clear(),
   };
 }
+
+export const loopbackFetch = addressGuardedFetch(() => false);

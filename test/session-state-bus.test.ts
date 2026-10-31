@@ -1,41 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemorySessionStateBus, type SessionStateEvent } from "../src/runs/session-state-bus.ts";
+import { type SessionStateEvent } from "../src/runs/session-state-bus.ts";
 import { createPostgresSessionStateBus } from "../src/runs/postgres-session-state-bus.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
-const PG = process.env.DATABASE_URL;
-const pgSkip = PG ? false : "set DATABASE_URL to run the Postgres session-state bus test";
-
-test("memory bus: subscribers receive emitted events", () => {
-  const bus = createMemorySessionStateBus();
-  const got: SessionStateEvent[] = [];
-  const off = bus.subscribe((e) => got.push(e));
-  bus.emit({ threadRef: "web:u:a", sessionId: "s1", state: "working", at: 111 });
-  bus.emit({ threadRef: "web:u:a", sessionId: "s1", state: "awaiting_approval", at: 222 });
-  assert.deepEqual(
-    got.map((e) => e.state),
-    ["working", "awaiting_approval"],
-  );
-  off();
-  bus.emit({ threadRef: "web:u:a", sessionId: "s1", state: "idle", at: 333 });
-  assert.equal(got.length, 2, "an unsubscribed listener hears nothing");
-});
-
-test("memory bus: a throwing subscriber does not break the others", () => {
-  const bus = createMemorySessionStateBus();
-  const got: string[] = [];
-  bus.subscribe(() => {
-    throw new Error("boom");
-  });
-  bus.subscribe((e) => got.push(e.state));
-  bus.emit({ threadRef: "web:u:b", state: "working", at: 1 });
-  assert.deepEqual(got, ["working"]);
-});
-
-test("[postgres] events cross bus instances (pg_notify)", { skip: pgSkip }, async () => {
-  const a = createPostgresSessionStateBus(PG!);
-  const b = createPostgresSessionStateBus(PG!);
+test("events cross bus instances (pg_notify)", async () => {
+  const url = testDatabaseUrl();
+  const a = createPostgresSessionStateBus(url);
+  const b = createPostgresSessionStateBus(url);
   try {
     const got: SessionStateEvent[] = [];
     const ready = new Promise<void>((resolve) => {
@@ -87,9 +60,10 @@ test("encodeWirePayload measures UTF-8 bytes and sheds participants before dropp
   assert.equal(encodeWirePayload(pathological), null, "an event that cannot fit even bare is dropped");
 });
 
-test("[postgres] a re-established LISTEN connection announces a resync to subscribers", { skip: pgSkip }, async () => {
-  const bus = createPostgresSessionStateBus(PG!);
-  const admin = createPgPool(PG!, []);
+test("a re-established LISTEN connection announces a resync to subscribers", async () => {
+  const url = testDatabaseUrl();
+  const bus = createPostgresSessionStateBus(url);
+  const admin = createPgPool(url, []);
   try {
     const listenerPids = async (): Promise<Set<number>> => {
       const rows = await admin.q("SELECT pid FROM pg_stat_activity WHERE query = 'LISTEN session_state'");

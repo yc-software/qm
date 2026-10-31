@@ -72,7 +72,7 @@ async function putBlob(ctx: BaseCtx): Promise<void> {
   }
   const authz = await authorizeBlob(ctx, "write", null);
   if (!authz) return;
-  if (authz.via === "capability") extendBodyDeadline(req, STAGE_UPLOAD_DEADLINE_MS);
+  extendBodyDeadline(req, STAGE_UPLOAD_DEADLINE_MS);
   try {
     const info = await deps.blobTransfer.put(req, {
       maxBytes: authz.via === "capability" ? MAX_STAGE_BLOB_BYTES : MAX_BLOB_BYTES,

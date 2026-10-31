@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
-import { createMemoryMap, type DurableMap } from "../persistence/durable-map.ts";
+import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PackConfig } from "./normalize.ts";
 
 type PackKind = "git";
@@ -44,10 +44,8 @@ export interface SkillPackStore {
   recordImport(id: string, result: ImportRecord): Promise<void>;
 }
 
-export function createSkillPackStore(
-  opts: { backing?: DurableMap<SkillPack>; now?: () => number } = {},
-): SkillPackStore {
-  const packs = opts.backing ?? createMemoryMap<SkillPack>();
+export function createSkillPackStore(opts: { backing: DurableMap<SkillPack>; now?: () => number }): SkillPackStore {
+  const packs = opts.backing;
   const now = opts.now ?? (() => Date.now());
   return {
     async create(input) {

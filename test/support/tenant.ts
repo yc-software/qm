@@ -18,14 +18,15 @@ export async function seedTenant(url: string, id = TEST_TENANT): Promise<void> {
   }
 }
 
+export async function seedTestTenants(url: string): Promise<void> {
+  await seedTenant(url, TEST_TENANT);
+  await seedTenant(url, OTHER_TENANT);
+}
+
 export function bindTestTenant(): void {
   enterTenant(TEST_TENANT);
   const url = process.env.DATABASE_URL;
-  if (url)
-    before(async () => {
-      await seedTenant(url, TEST_TENANT);
-      await seedTenant(url, OTHER_TENANT);
-    });
+  if (url) before(() => seedTestTenants(url));
 }
 
 export function boundUrl(url: string, id = TEST_TENANT): string {
