@@ -7,7 +7,6 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
-import { scopeId } from "../src/types.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 

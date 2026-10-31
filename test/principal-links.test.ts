@@ -40,7 +40,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signedCoreHeaders, signedFetcher } from "./support/signed-core.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testKeychainRows } from "./support/typed-stores.ts";

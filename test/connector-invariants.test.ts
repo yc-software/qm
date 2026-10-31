@@ -22,7 +22,6 @@ import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 import { TEST_TENANT } from "./support/tenant.ts";
-import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 

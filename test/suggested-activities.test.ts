@@ -7,7 +7,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testCronRows } from "./support/typed-stores.ts";
 import { testActivityProfiles } from "./support/typed-stores.ts";

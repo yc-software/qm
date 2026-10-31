@@ -11,7 +11,7 @@ import { cachedArtifactData } from "../src/files/artifact-data-cache.ts";
 import type { ExternalMember } from "../src/identity/external-members.ts";
 import { tenantScopedBus } from "../src/tenants/bus.ts";
 import { createMemoryEventBus } from "../src/util/event-bus.ts";
-import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock } from "./support/test-database.ts";
 
 const A = "00000000-0000-4000-8000-00000000000a";
 const B = "00000000-0000-4000-8000-00000000000b";

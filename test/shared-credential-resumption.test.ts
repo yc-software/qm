@@ -8,7 +8,7 @@ import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keych
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testKeychainRows, testCronRows } from "./support/typed-stores.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";

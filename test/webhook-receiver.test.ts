@@ -5,7 +5,6 @@ import { createWebhookReceiver, type DeliverResult } from "../src/webhooks/webho
 import { createWebhookStore } from "../src/webhooks/webhook-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
-import { testMap } from "./support/test-database.ts";
 import { testWebhookRows } from "./support/typed-stores.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 

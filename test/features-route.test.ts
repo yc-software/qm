@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { featureRoutes } from "../src/api/routes/features.ts";
 import { testFeatureFlagStore } from "./support/typed-stores.ts";
-import { testMap } from "./support/test-database.ts";
 import { scopeId } from "../src/types.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";

@@ -9,7 +9,7 @@ import type { ProcessSandbox, ProcessSession, SandboxHandle } from "../src/sandb
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { testMonitorRows } from "./support/typed-stores.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
 

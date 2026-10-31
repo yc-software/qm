@@ -9,7 +9,6 @@ import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.
 import { createScheduler } from "../src/cron/scheduler.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createIdentityService } from "../src/identity/identity-service.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { createWakeSweep } from "../src/wake/sweep.ts";
 import { claimAcrossTenants, eachTenant, inTenantOf, type EachTenant } from "../src/tenants/claim.ts";
@@ -19,7 +18,7 @@ import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { scopeId, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { OTHER_TENANT, seedTestTenants, TEST_TENANT } from "./support/tenant.ts";
 import { testCronRows, testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";

@@ -23,7 +23,7 @@ import {
   modelSupported,
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
-import { testConfigStore, testConfigTables, testMap } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 import { testModelTables } from "./support/typed-stores.ts";
 
 const definition = {

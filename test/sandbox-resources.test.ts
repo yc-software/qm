@@ -12,10 +12,6 @@ import { currentTenant, withTenant } from "../src/tenants/context.ts";
 
 const [TENANT_A, TENANT_B] = ["00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-00000000000b"];
 
-function localUpgrade(available: SandboxBackendName[]) {
-  return async () => ({ available, legacyBackend: () => "local" as const });
-}
-
 type ResourceOptions = Parameters<typeof createSandboxResources>[0];
 
 function wired(options: ResourceOptions, backends: ResourceOptions["backends"], name: SandboxBackendName) {

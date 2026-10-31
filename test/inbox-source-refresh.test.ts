@@ -4,7 +4,7 @@ import { createInboxSourceRefresh as createRefresh } from "../src/loops/inbox-so
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import type { IngressEntry } from "../src/loops/ingress.ts";
 import { createPostgresErrorLog } from "../src/admin/postgres-error-log.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { testItemRows } from "./support/typed-stores.ts";
 import { testFeatureFlagStore } from "./support/typed-stores.ts";
 

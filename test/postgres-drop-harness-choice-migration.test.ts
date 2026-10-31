@@ -41,10 +41,6 @@ const migrate = (url: string) =>
     },
   });
 
-const rows = async (pool: pg.Pool, table: string) =>
-  Object.fromEntries(
-    (await pool.query(`SELECT id, json FROM ${table}`)).rows.map((row) => [row.id, row.json]),
-  ) as Record<string, Record<string, unknown>>;
 
 test("stored harness choices are dropped while their runtime selections stay recognised", { skip }, async () => {
   await withDatabase(async (url, admin) => {

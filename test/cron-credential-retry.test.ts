@@ -6,7 +6,7 @@ import { createAskExpirySweep, fireAskResolution, type AskResolutionDeps } from 
 import { createKeychain, type KeychainAsk } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import type { TurnRequest, TurnResult } from "../src/types.ts";
-import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testKeychainRows, testCronRows } from "./support/typed-stores.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";

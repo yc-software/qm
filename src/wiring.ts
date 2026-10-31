@@ -38,7 +38,7 @@ import { loadConnectorSdk } from "./sandbox/connector-sdk.ts";
 import { createFlyTunnelManager, parseFlyWireguardPeers } from "./deploy/fly-tunnel-manager.ts";
 import { FLY_PEER_CLAIMS } from "./deploy/fly-peer-claims.ts";
 import { createRunStreamBus, emitRunReasoning, emitRunText, serveRunStreamSync } from "./runs/run-stream-events.ts";
-import { boundTenant, perTenant, currentTenant, tenantKey, withoutTenant, tenantRootScope, onFirstBind, withTenant } from "./tenants/context.ts";
+import { perTenant, currentTenant, tenantKey, withoutTenant, tenantRootScope, onFirstBind, withTenant } from "./tenants/context.ts";
 import { createPostgresResourceSearch } from "./search/resource-search.ts";
 import { createPostgresSessionMailbox } from "./sessions/session-mailbox.ts";
 import { createLoopIngress, type LoopIngressService } from "./loops/ingress.ts";
@@ -103,7 +103,7 @@ import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skil
 import { installSeedSkills, lazySkillBoot } from "./skills/seed.ts";
 import { eachTenant, inTenantOf, type EachTenant } from "./tenants/claim.ts";
 import { pgTenants } from "./tenants/resolver.ts";
-import { createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import { createPostgresMapFactory } from "./persistence/durable-map.ts";
 import { createPostgresModelTables } from "./model/model-tables.ts";
 import { createPostgresLinkTables, type ComposioReturnRows } from "./connectors/link-tables.ts";
 import { createPostgresKeychainRows } from "./credentials/keychain-pg.ts";
@@ -564,8 +564,6 @@ export function buildApp(
     resolveFiles: (refs) => files.resolveByIds(refs),
   });
   const pgArtifactMap = createPostgresMapFactory(databaseUrl);
-  const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
-    pgArtifactMap.map<T>(table, indexedFields);
   const modelTables = createPostgresModelTables(databaseUrl);
   const linkTables = createPostgresLinkTables(databaseUrl);
   const tenantSettings =

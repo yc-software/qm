@@ -5,7 +5,7 @@ import { createCronStore } from "../src/cron/cron-store.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
-import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 import { testCronRows } from "./support/typed-stores.ts";
 import { testIdempotencyStore } from "./support/typed-stores.ts";
 

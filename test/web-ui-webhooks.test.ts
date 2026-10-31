@@ -13,7 +13,6 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { scopeId } from "../src/types.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { TEST_TENANT } from "./support/tenant.ts";
 

@@ -2,7 +2,6 @@ import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
-import { reportFailureAs } from "../util/errors.ts";
 import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
 import { migrateTenantStorageOnce } from "../tenants/storage-migration.ts";
 

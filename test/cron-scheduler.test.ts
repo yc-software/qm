@@ -12,7 +12,7 @@ import type { CronFireJob, CronJobQueue } from "../src/cron/job-queue.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testCronRows, testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";

@@ -10,12 +10,12 @@ import {
   DEPLOYMENT_LAYER,
 } from "../src/deployment/deployment-layer-store.ts";
 import { emptyDeploymentLayer, resolvedDeploymentLayer } from "../src/deployment/load-layer.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { type ScopeId } from "../src/types.ts";
 import { createNoopAdvisoryLock, type AdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { computeBundleHash } from "../src/skills/skill-bundle-store.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
-import { testDatabaseUrl, testMap, testRows } from "./support/test-database.ts";
+import { testDatabaseUrl, testRows } from "./support/test-database.ts";
 import { testSkillBundleStore, testSkillStore } from "./support/typed-stores.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 

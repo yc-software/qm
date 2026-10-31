@@ -1,4 +1,3 @@
-import { boundTenant } from "../tenants/context.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { misconfiguredSandboxError, type MisconfiguredSandboxBackends } from "./tenant-credentials.ts";
 import { randomUUID } from "node:crypto";

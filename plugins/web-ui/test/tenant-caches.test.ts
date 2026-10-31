@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ServerResponse } from "node:http";
 import { withTenant } from "../../../src/tenants/context.ts";
-import { TENANT_HEADER } from "../../chassis/src/source-auth-sign.ts";
 import { addDeliveryClient, connectedUsers, deliveryClientsOf } from "../server/delivery-clients.ts";
 import { activeRuns, forgetRun, rememberRun } from "../server/active-runs.ts";
 

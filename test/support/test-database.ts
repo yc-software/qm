@@ -12,7 +12,6 @@ import { createConfigStore } from "../../src/resolution/config-store.ts";
 import type { ConfigTables } from "../../src/resolution/config-tables.ts";
 import { createPostgresConfigTables } from "../../src/resolution/config-tables-pg.ts";
 import { tenantRootScope } from "../../src/tenants/context.ts";
-import { createIdentityService, type IdentityService } from "../../src/identity/identity-service.ts";
 
 function baseDatabaseUrl(): URL {
   const base = process.env.DATABASE_URL;

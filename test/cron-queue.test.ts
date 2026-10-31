@@ -6,7 +6,6 @@ import { createCronStore, type CronStore } from "../src/cron/cron-store.ts";
 import { createPostgresCronRows } from "../src/cron/cron-table.ts";
 import { type CronFireStore, createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -40,7 +39,6 @@ function instance(
   turnMs: number,
   fires: CronFireStore,
 ): { scheduler: Scheduler; crons: CronStore } {
-  const maps = createPostgresMapFactory(URL!);
   const crons = createCronStore(createPostgresCronRows(CRON_DB), { fires });
   const run = async (req: TurnRequest): Promise<TurnResult> => {
     calls.push(req);

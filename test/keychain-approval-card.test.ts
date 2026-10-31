@@ -13,7 +13,7 @@ import type { App } from "../src/api/app.ts";
 import type { Directory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
 import { testKeychainRows } from "./support/typed-stores.ts";
 import type { KeychainAskRows } from "../src/credentials/keychain-rows.ts";
 

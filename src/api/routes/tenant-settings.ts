@@ -1,7 +1,6 @@
 import { withTenant } from "../../tenants/context.ts";
 import { importTenantSettings, unknownTenantImportKeys } from "../../tenants/settings-import.ts";
 import { PLUGIN_SETTING_KEYS } from "../../tenants/settings.ts";
-import { scopeId } from "../../types.ts";
 import { errMessage } from "../../util/errors.ts";
 import { sendJson } from "../http.ts";
 import { requireOperatorControl } from "./background-work.ts";

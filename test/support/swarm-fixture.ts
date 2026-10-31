@@ -10,11 +10,8 @@ import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap, testSandboxResourceStores } from "./test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testSandboxResourceStores } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
-import { TEST_TENANT } from "./tenant-seed.ts";
-
-bindTestTenant();
 
 export async function swarmFixture(
   options: {

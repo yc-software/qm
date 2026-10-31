@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { randomUUID } from "node:crypto";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import {
   CRON_SEARCH_DESCRIPTION,

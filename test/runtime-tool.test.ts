@@ -6,7 +6,7 @@ import { createModelCredentialStore } from "../src/model/model-credential-store.
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/agent/agent.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testModelTables } from "./support/typed-stores.ts";
 

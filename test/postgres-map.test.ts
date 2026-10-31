@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { scopeId } from "../src/types.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { testMap } from "./support/test-database.ts";
 import { testTenantsSeeded } from "./support/tenant.ts";

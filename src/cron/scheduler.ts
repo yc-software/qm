@@ -20,7 +20,7 @@ import { hashId } from "../util/crypto.ts";
 import { utcMinute } from "../util/time.ts";
 import { errMessage, reportFailure, reportFailureAs } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
-import { eachTenant, inTenantOf, type EachTenant } from "../tenants/claim.ts";
+import { inTenantOf, type EachTenant } from "../tenants/claim.ts";
 import { currentTenant } from "../tenants/context.ts";
 
 const TICK_LEASE_KEY = "cron:scheduler:tick";

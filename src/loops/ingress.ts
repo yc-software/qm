@@ -1,6 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IngressDeliveryRows, IngressSourceRows } from "./ingress-table.ts";
-import { withTenant } from "../tenants/context.ts";
 import type { RowTenants } from "../tenants/row-tenant.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Loop, LoopItem } from "./types.ts";
