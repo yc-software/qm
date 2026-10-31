@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerFeatures } from "./core-features.ts";
 
-const core = createServer((_req, res) => {
+const core = createServer((req, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   res.writeHead(200, { "content-type": "application/json" });
   res.end("{}");
 });
@@ -12,7 +14,6 @@ await new Promise<void>((r) => core.listen(0, r));
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 delete process.env.CORE_SIGNING_SECRET;
 delete process.env.PORTAL_IDENTITY_SECRET;
-process.env.WEB_UI_PRINCIPALS = "alice";
 process.env.ALLOW_UNSIGNED_TEST_IDENTITY = "0";
 
 const { handler } = await import("../server/index.ts");
@@ -52,12 +53,12 @@ test("a bare principal id — not just an email — can sign in", async () => {
   assert.equal(body.mode, "dev");
 });
 
-test("a principal outside the allowlist is refused with a message naming the env var", async () => {
+test("a principal without the web_ui flag is refused with a message naming the setting", async () => {
   const r = await signin("mallory");
   assert.equal(r.status, 403);
   const body = await r.json();
   assert.equal(body.error, "not_allowed");
-  assert.match(body.message, /WEB_UI_PRINCIPALS/);
+  assert.match(body.message, /Admin → Feature flags/);
   assert.match(body.message, /mallory/);
 });
 

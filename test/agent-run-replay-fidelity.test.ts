@@ -13,7 +13,7 @@ import { createPostgresToolOutputStore, type ToolOutputStore } from "../src/sess
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, boundUrl, seedTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -570,8 +570,9 @@ async function withPgSession(
   await admin.query(`CREATE SCHEMA ${schema}`);
   const url = new globalThis.URL(PG_URL!);
   url.searchParams.set("options", `-c search_path=${schema}`);
+  await seedTenant(url.toString());
   const store = createPostgresSessionStore(url.toString());
-  const raw = new pg.Pool({ connectionString: url.toString() });
+  const raw = new pg.Pool({ connectionString: boundUrl(url.toString()) });
   try {
     const session = await store.getOrCreateByThread(
       "web:replay",
@@ -580,7 +581,6 @@ async function withPgSession(
     );
     const { lease } = await store.acquireLease(session.id);
     assert.ok(lease);
-    await raw.query("INSERT INTO qm_settings(key,value) VALUES('tool_result_inline_tokens','256')");
     await fn({
       toolOutput: createPostgresToolOutputStore({
         pool: { q: async (sql, params) => (await raw.query(sql, params)).rows },

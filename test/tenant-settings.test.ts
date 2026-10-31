@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { tenantReady, withTenant } from "../src/tenants/context.ts";
+import { tenantReady, withTenant, withoutTenant } from "../src/tenants/context.ts";
 import {
-  createTenantSettingsStore,
   openTenantSecret,
   requireTenantSetting,
   sealTenantSecret,
@@ -12,9 +13,9 @@ import {
 } from "../src/tenants/settings.ts";
 
 test("each tenant reads only the settings written under its own binding", async () => {
-  const store = createTenantSettingsStore({ harness: "pi" });
-  const a = randomUUID();
-  const b = randomUUID();
+  const store = await testSettingsStore();
+  const a = TEST_TENANT;
+  const b = OTHER_TENANT;
   await withTenant(a, () => store.update({ SPRITES_TOKEN: "token-a", SANDBOX_BACKEND: "sprites" }));
   await withTenant(b, () => store.update({ E2B_API_KEY: "key-b", SANDBOX_BACKEND: "e2b" }));
   const seenByA = await withTenant(a, () => store.get());
@@ -27,14 +28,16 @@ test("each tenant reads only the settings written under its own binding", async 
 });
 
 test("reading settings with no tenant bound fails closed", async () => {
-  const store = createTenantSettingsStore({ harness: "pi" });
-  await assert.rejects(async () => store.get(), /No tenant is bound/);
-  await assert.rejects(async () => store.update({ PI_MODEL: "x" }), /No tenant is bound/);
+  const store = await testSettingsStore();
+  await withoutTenant(async () => {
+    await assert.rejects(async () => store.get(), /No tenant is bound/);
+    await assert.rejects(async () => store.update({ PI_MODEL: "x" }), /No tenant is bound/);
+  });
 });
 
 test("a missing setting fails closed with the setting's name", async () => {
-  const store = createTenantSettingsStore({ harness: "pi" });
-  const settings = await withTenant(randomUUID(), () => store.get());
+  const store = await testSettingsStore();
+  const settings = await withTenant(THIRD_TENANT, () => store.get());
   assert.throws(
     () => requireTenantSetting(settings, "SPRITES_TOKEN"),
     (error: unknown) =>
@@ -44,8 +47,8 @@ test("a missing setting fails closed with the setting's name", async () => {
 });
 
 test("updates are validated against the merged settings and empty values clear", async () => {
-  const store = createTenantSettingsStore({ harness: "pi" });
-  await withTenant(randomUUID(), async () => {
+  const store = await testSettingsStore();
+  await withTenant(THIRD_TENANT, async () => {
     await assert.rejects(store.update({ SANDBOX_BACKEND: "nope" }), /SANDBOX_BACKEND="nope" is not recognized/);
     await assert.rejects(
       store.update({ MODEL_GATEWAY_URL: "https://gw.example" }),
@@ -70,8 +73,8 @@ test("a sealed secret opens only for the tenant and setting it was sealed for", 
 });
 
 test("a tenant first bound after start has its settings loaded before its work runs", async () => {
-  const tenant = randomUUID();
-  const store = createTenantSettingsStore({ harness: "pi", initial: { [tenant]: { PI_MODEL: "claude-opus-5-5" } } });
+  const tenant = THIRD_TENANT;
+  const store = await testSettingsStore({ [tenant]: { PI_MODEL: "claude-opus-5-5" } });
   store.start();
   try {
     const model = await withTenant(tenant, async () => {

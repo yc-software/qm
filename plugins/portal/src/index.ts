@@ -1600,7 +1600,7 @@ async function signInOidc(res: ServerResponse): Promise<TenantOidc | null> {
   if (typeof resolved !== "string" && !resolved.problems.length) return resolved;
   const problems = typeof resolved === "string" ? [resolved] : resolved.problems;
   for (const p of problems) console.error(`[portal] sign-in unavailable: ${p}`);
-  sendHtml(res, 503, signInErrorHtml(`sign-in is not configured for this workspace: ${problems.join("; ")}`));
+  sendHtml(res, 503, signInErrorHtml("sign-in is not configured for this workspace"));
   return null;
 }
 

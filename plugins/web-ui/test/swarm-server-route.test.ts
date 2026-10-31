@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
+import { answerFeatures } from "./core-features.ts";
 
 const calls: { method: string; url: string; body: string; identity: boolean }[] = [];
 const core = createServer((req: IncomingMessage, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
   req.on("end", () => {
@@ -23,7 +25,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "swarm-route-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => void handler(req, res));

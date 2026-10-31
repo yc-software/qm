@@ -38,7 +38,7 @@ import type {
 } from "./session-store.ts";
 import { tsPrefixQuery } from "./entry-search.ts";
 import { SESSION_SCHEMA, SPEND_INDEXABLE } from "./session-schema.ts";
-import { TENANT, TENANT_MIGRATIONS } from "../tenants/migrations.ts";
+import { TENANT, TENANT_MIGRATIONS as TENANCY } from "../tenants/migrations.ts";
 import {
   cronIdOf,
   promptEnvelopeBody,
@@ -404,7 +404,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          SELECT * FROM rollup ORDER BY day, scope_id, origin, cron_id, model`;
 
-  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA, ...TENANT_MIGRATIONS]);
+  const { pool, q, query } = createPgPool(connectionString, [...DIRECTORY_MIGRATIONS, SESSION_SCHEMA, ...TENANCY]);
 
   const lockSession = (client: PoolClient, sessionId: string) =>
     client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [sessionId]);
@@ -524,7 +524,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
         ...(surface ? { surface } : {}),
       };
       await q(
-        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (thread_ref) DO NOTHING",
+        "INSERT INTO sessions(id, type, scope_id, thread_ref, created_at, channel_name, surface, last_activity, messages, turns, origin, origin_id, client_tools) VALUES ($1,$2,$3,$4,$5,$6,$7,$5,0,0,$8,$9,$10::jsonb) ON CONFLICT (tenant_id, thread_ref) DO NOTHING",
         [
           session.id,
           session.type,
@@ -610,7 +610,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
           const granted = await client.query(
             `INSERT INTO session_leases(session_id, token, expires_at, holder, acquired_at)
                SELECT $1, $2, $3, $5, $4 WHERE EXISTS (SELECT 1 FROM sessions WHERE id = $1)
-             ON CONFLICT (session_id) DO UPDATE
+             ON CONFLICT (tenant_id, session_id) DO UPDATE
                SET token = $2, expires_at = $3, holder = $5, acquired_at = $4
                WHERE session_leases.expires_at <= $4
              RETURNING token`,
@@ -713,7 +713,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                                      active_since, completion_note, cancel_note, governor, pause_reason,
                                      created_at, updated_at)
            VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
-           ON CONFLICT (session_id) DO UPDATE SET
+           ON CONFLICT (tenant_id, session_id) DO UPDATE SET
              objective = EXCLUDED.objective, status = EXCLUDED.status, floor = EXCLUDED.floor,
              token_cap = EXCLUDED.token_cap, tokens_used = EXCLUDED.tokens_used, active_ms = EXCLUDED.active_ms,
              active_since = EXCLUDED.active_since, completion_note = EXCLUDED.completion_note,
@@ -803,7 +803,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
       if (envelope) {
         await q(
           `INSERT INTO llm_prompt_envelopes(hash, body, created_at) VALUES ($1,$2,$3)
-           ON CONFLICT (hash) DO UPDATE SET created_at = EXCLUDED.created_at
+           ON CONFLICT (tenant_id, hash) DO UPDATE SET created_at = EXCLUDED.created_at
             WHERE llm_prompt_envelopes.created_at < EXCLUDED.created_at - ${ENVELOPE_TOUCH_MS}`,
           [envelope.hash, envelope.body, now()],
           { signal },
@@ -935,7 +935,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
          )
          INSERT INTO participants(session_id, principal_id, valid_from, valid_to, valid_from_seq, valid_to_seq, title)
          SELECT $1,$2,$3,NULL,boundary.seq,NULL,$4 FROM boundary
-         ON CONFLICT (session_id, principal_id) DO UPDATE
+         ON CONFLICT (tenant_id, session_id, principal_id) DO UPDATE
            SET valid_from = CASE
                  WHEN $5 THEN 0
                  WHEN participants.valid_to IS NULL THEN participants.valid_from
@@ -1142,11 +1142,11 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
                      THEN i.body ->> 'name' END AS author,
                 i.text, ${msOf("i.created_at")} AS created_at,
                 s.scope_id, COALESCE(p.title, s.title) AS title, s.channel_name, s.surface, p.archived
-           FROM items i
+           FROM qm_search_items(to_tsquery('simple', $2)) hit
+           JOIN items i ON i.tenant_id = ${TENANT} AND i.session_id = hit.session_id AND i.seq = hit.seq
            JOIN participants p ON p.session_id = i.session_id AND p.principal_id = $1
            JOIN sessions s ON s.id = i.session_id
-          WHERE i.tenant_id = ${TENANT} AND i.search @@ to_tsquery('simple', $2)
-            AND ${SEARCHABLE_ITEM("i")}
+          WHERE ${SEARCHABLE_ITEM("i")}
             AND ${withinParticipantWindow("i", "p")}
           ORDER BY i.created_at DESC, i.session_id, i.seq DESC
           LIMIT $3`,
@@ -1370,7 +1370,7 @@ export function createPostgresSessionStore(connectionString: string, opts: Store
             const rows = await client.query(spendSql, [Number(day) * 86_400_000, (Number(day) + 1) * 86_400_000]);
             await client.query(
               `INSERT INTO session_spend_days(day, rows, updated_at) VALUES ($1, $2, $3)
-               ON CONFLICT (day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
+               ON CONFLICT (tenant_id, day) DO UPDATE SET rows = EXCLUDED.rows, updated_at = EXCLUDED.updated_at`,
               [day, jsonbStringify(rows.rows), updatedAt],
             );
           });

@@ -8,7 +8,7 @@ const turns: Record<string, unknown>[] = [];
 const inboxRequests: string[] = [];
 let inboxAvailable = true;
 let inboxAccessStatus = 200;
-let inboxAccessBody = JSON.stringify({ enabled: true });
+let inboxAccessBody = JSON.stringify({ enabled: ["web_ui", "inbox_loops"] });
 const accessRequests: string[] = [];
 let inboxPages = 1;
 let longPreview = false;
@@ -16,7 +16,7 @@ const core = createServer((req: IncomingMessage, res) => {
   let raw = "";
   req.on("data", (chunk) => (raw += chunk));
   req.on("end", () => {
-    if (req.url?.startsWith("/v1/inbox/access?")) {
+    if (req.url?.startsWith("/v1/features?")) {
       accessRequests.push(req.url);
       res.writeHead(inboxAccessStatus, { "content-type": "application/json" });
       res.end(inboxAccessBody);
@@ -61,7 +61,6 @@ await new Promise<void>((resolve) => core.listen(0, resolve));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "turn-idempotency-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const { handler } = await import("../server/index.ts");
 const surface = createServer((req, res) => {
@@ -297,11 +296,11 @@ test("inbox steering refreshes the caller's inbox context", async () => {
 
 test("inbox turns and steering fail closed when the existing feature flag is off or unavailable", async () => {
   try {
-    for (const [status, body] of [
-      [200, JSON.stringify({ enabled: false })],
-      [200, JSON.stringify({})],
-      [200, "invalid json"],
-      [503, JSON.stringify({ enabled: true })],
+    for (const [status, body, denied] of [
+      [200, JSON.stringify({ enabled: ["web_ui"] }), 403],
+      [200, JSON.stringify({}), 401],
+      [200, "invalid json", 401],
+      [503, JSON.stringify({ enabled: ["web_ui", "inbox_loops"] }), 401],
     ] as const) {
       inboxAccessStatus = status;
       inboxAccessBody = body;
@@ -313,23 +312,21 @@ test("inbox turns and steering fail closed when the existing feature flag is off
           headers,
           body: JSON.stringify({ kind: "steer", text: "Summarize", threadRef: "web:alice:inbox" }),
         });
-        assert.equal(response.status, 403);
-        assert.equal((await response.json()).error, "feature_disabled");
+        assert.equal(response.status, denied);
+        if (denied === 403) assert.equal((await response.json()).error, "feature_disabled");
         assert.equal(new URL(accessRequests.at(-1)!, "http://core").searchParams.get("principalId"), "alice");
       }
       assert.equal(inboxRequests.length, reads);
       assert.equal(turns.length, submitted);
-      const accessCount = accessRequests.length;
       const ordinary = await fetch(`${base}/api/turn`, {
         method: "POST",
         headers,
         body: JSON.stringify({ text: "Hello", threadRef: "web:alice:ordinary" }),
       });
-      assert.equal(ordinary.status, 202);
-      assert.equal(accessRequests.length, accessCount);
+      assert.equal(ordinary.status, denied === 403 ? 202 : 401);
     }
   } finally {
     inboxAccessStatus = 200;
-    inboxAccessBody = JSON.stringify({ enabled: true });
+    inboxAccessBody = JSON.stringify({ enabled: ["web_ui", "inbox_loops"] });
   }
 });

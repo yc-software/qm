@@ -18,10 +18,12 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { orgId } from "../src/config.ts";
 
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
+await built.featureFlags.setEnabled("web_ui", scopeId("org", orgId()), true, "test");
 await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -37,7 +39,6 @@ const coreBase = `http://localhost:${corePort}`;
 
 process.env.CORE_API_URL = coreBase;
 process.env.CORE_SIGNING_SECRET = SECRET;
-process.env.WEB_UI_PRINCIPALS = "";
 const { handler } = await import("../plugins/web-ui/server/index.ts");
 const web = createHttpServer(handler);
 web.listen(0);

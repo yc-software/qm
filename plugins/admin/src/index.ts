@@ -105,19 +105,6 @@ function portalIdentityHeader(): Record<string, string> {
   return t ? { [PORTAL_IDENTITY_HEADER]: t } : {};
 }
 
-async function inboxPermissions(principal: string): Promise<string[]> {
-  const corePath = `/v1/inbox/access?principalId=${encodeURIComponent(principal)}`;
-  try {
-    const r = await fetch(`${CORE}${corePath}`, {
-      headers: { ...signedHeaders("GET", corePath, ""), ...portalIdentityHeader() },
-      signal: AbortSignal.timeout(2_000),
-    });
-    return r.ok && ((await r.json()) as { enabled?: unknown }).enabled === true ? ["inbox"] : [];
-  } catch {
-    return [];
-  }
-}
-
 function pipeBody(res: ServerResponse, body: Response["body"]): void {
   if (!body) return void res.end();
   const stream = Readable.fromWeb(body as Parameters<typeof Readable.fromWeb>[0]);
@@ -409,9 +396,9 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (method === "GET" && (pathname === "/api/me" || pathname === "/api/whoami")) {
     const p = cookiePrincipal(req);
     if (!p) return json(res, 401, { error: "signed_out" });
-    const [who, permissions] = await Promise.all([coreWhoami(p), inboxPermissions(p)]);
+    const who = await coreWhoami(p);
     if (!who) return json(res, 502, { error: "core_unreachable", message: "could not verify admin status" });
-    return json(res, 200, { principal: p, org: ORG, ...who, permissions });
+    return json(res, 200, { principal: p, org: ORG, ...who });
   }
   if (method === "POST" && pathname === "/api/logout") {
     res.writeHead(200, {
@@ -525,7 +512,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (method === "GET" && ["/design-system", "/design-system/", "/design", "/design/"].includes(pathname)) {
     const viewer = cookiePrincipal(req);
-    if (!viewer || !(await inboxPermissions(viewer)).length) {
+    if (!viewer || !(await coreWhoami(viewer))?.isAdmin) {
       return json(res, 404, { error: "not_found" });
     }
     return serveShell();

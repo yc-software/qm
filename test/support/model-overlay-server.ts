@@ -4,6 +4,11 @@ import { serverDeps } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { buildApp, testTenantSettings } from "./build-app.ts";
 import { testConfig } from "./test-config.ts";
+import { enterTenant } from "../../src/tenants/context.ts";
+import { seedTenant, TEST_TENANT } from "./tenant-seed.ts";
+
+await seedTenant(process.env.MODEL_OVERLAY_TEST_DATABASE_URL!);
+enterTenant(TEST_TENANT);
 
 const config = testConfig({
   databaseUrl: process.env.MODEL_OVERLAY_TEST_DATABASE_URL,

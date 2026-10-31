@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPgPool, migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 import { TENANCY_BASE, TENANT_SETTINGS_MIGRATION } from "../src/tenants/migrations.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withTenant, withoutTenant } from "../src/tenants/context.ts";
 import { createTenantSettingsStore } from "../src/tenants/settings.ts";
 
 const URL = process.env.DATABASE_URL;
@@ -47,7 +47,7 @@ async function withSettingsDb(
 
 test("tenant settings are stored per tenant, sealed at rest, and never read across tenants", { skip }, async () => {
   await withSettingsDb(async ({ app, admin, a, b }) => {
-    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, harness: "pi", cacheMs: 0 });
+    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, cacheMs: 0 });
     await withTenant(a, () =>
       store.update({ SPRITES_TOKEN: "sprites-a", SANDBOX_BACKEND: "sprites", PI_MODEL: "m-a" }),
     );
@@ -67,7 +67,9 @@ test("tenant settings are stored per tenant, sealed at rest, and never read acro
     assert.ok(Buffer.isBuffer(sealed));
     assert.equal(sealed.includes(Buffer.from("sprites-a")), false);
     assert.equal((await withTenant(b, () => app.q(`SELECT tenant_id FROM tenant_settings`))).length, 1);
-    await assert.rejects(app.q(`SELECT * FROM tenant_settings`), /No tenant is bound to this transaction/);
+    await withoutTenant(() =>
+      assert.rejects(app.q(`SELECT * FROM tenant_settings`), /No tenant is bound to this transaction/),
+    );
     const stolen = await withTenant(b, () =>
       app.q(`UPDATE tenant_settings SET pi_model = 'stolen' WHERE tenant_id = $1 RETURNING 1`, [a]),
     );
@@ -78,7 +80,7 @@ test("tenant settings are stored per tenant, sealed at rest, and never read acro
 
 test("a sealed secret copied into another tenant's row does not open there", { skip }, async () => {
   await withSettingsDb(async ({ app, admin, a, b }) => {
-    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, harness: "pi", cacheMs: 0 });
+    const store = createTenantSettingsStore({ db: app, keyMaterial: KEY, cacheMs: 0 });
     await withTenant(a, () => store.update({ SPRITES_TOKEN: "sprites-a" }));
     await withTenant(b, () => store.update({ PI_MODEL: "m-b" }));
     await admin.query(
@@ -86,7 +88,7 @@ test("a sealed secret copied into another tenant's row does not open there", { s
         WHERE tenant_id = $2`,
       [a, b],
     );
-    const reader = createTenantSettingsStore({ db: app, keyMaterial: KEY, harness: "pi" });
+    const reader = createTenantSettingsStore({ db: app, keyMaterial: KEY });
     await assert.rejects(
       withTenant(b, () => reader.get()),
       /Unsupported state or unable to authenticate data/,

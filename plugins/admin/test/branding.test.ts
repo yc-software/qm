@@ -8,10 +8,9 @@ import type { AddressInfo } from "node:net";
 
 let coreBranding = { accent: "#f0652f", mark: "Y", selfLabel: "QM" };
 const core = createServer((req: IncomingMessage, res) => {
-  if ((req.url ?? "").startsWith("/v1/inbox/access?")) {
-    const principal = new URL(req.url ?? "", "http://core").searchParams.get("principalId");
+  if ((req.url ?? "").startsWith("/v1/admin/whoami")) {
     res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ enabled: principal === "U-admin" }));
+    return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" }));
   }
   if ((req.url ?? "").startsWith("/v1/surface-config")) {
     res.writeHead(200, { "content-type": "application/json" });
@@ -116,7 +115,7 @@ test("design system routes embed the shared component library and retain the scr
   }
 });
 
-test("design system routes follow the inbox feature flag", async () => {
+test("design system routes are admin-only", async () => {
   for (const path of ["/design-system", "/design-system/", "/design", "/design/"]) {
     const denied = await fetch(base + path, { headers: { cookie: "admin=U-rando" } });
     assert.equal(denied.status, 404);
