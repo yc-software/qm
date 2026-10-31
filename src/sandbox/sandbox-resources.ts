@@ -99,8 +99,6 @@ export async function accessConversationSandbox(
   return resource;
 }
 
-const namedBackends = new WeakSet<Sandbox>();
-
 export function createSandboxResources(opts: {
   records: SandboxResourceRecords;
   defaults: SandboxDefaults;
@@ -123,11 +121,8 @@ export function createSandboxResources(opts: {
   };
   const providerNameFor = (backend: SandboxBackendName, backingScopeId: string) =>
     opts.records.providerName(backend, backingScopeId);
-  for (const [name, backend] of Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox | undefined]>) {
-    if (!backend?.useStoredNames || namedBackends.has(backend)) continue;
-    namedBackends.add(backend);
-    backend.useStoredNames((scopeId) => providerNameFor(name, scopeId));
-  }
+  for (const [name, backend] of Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox | undefined]>)
+    backend?.useStoredNames?.((scopeId) => providerNameFor(name, scopeId));
   const authorize = async (actorId: string, scopeId: ScopeId): Promise<void> => {
     if (!parseScopeId(scopeId).kind || !(await opts.canUseScope(actorId, scopeId)))
       throw new SandboxAccessError("sandbox access requires permission to use its owning scope");
@@ -299,6 +294,7 @@ export function createSandboxResources(opts: {
             throw new Error("sandbox reservation ownership mismatch");
           if (existing.state === "ready") return existing;
           if (existing.state === "retired") throw new Error("sandbox reservation is retired");
+          if (existing.providerName) record.providerName = existing.providerName;
         }
         await opts.records.put(id, record);
         const sandbox = opts.backends[record.backend]!;

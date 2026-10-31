@@ -109,34 +109,45 @@ test("sandbox resources and defaults stay inside their tenant", { skip }, async 
   });
 });
 
-test("existing computers keep today's provider names and new names are never overwritten", { skip }, async () => {
-  await withTypedTableDb(createSandboxResourceStores, async ({ store, admin, tenant, otherTenant }) => {
-    await withTenant(tenant, async () => {
-      await store.records.put("legacy", resource("legacy", { backingScopeId: "personal:alice", legacy: true }));
-      await store.records.put("named", resource("named", { providerName: "qmt-tenant-name" }));
-      await store.records.put("modal", resource("modal", { backend: "modal" }));
+test(
+  "existing computers get today's provider names once, and stored names are never overwritten",
+  { skip },
+  async () => {
+    await withTypedTableDb(createSandboxResourceStores, async ({ store, admin, tenant, otherTenant }) => {
+      await withTenant(tenant, async () => {
+        await store.records.put("legacy", resource("legacy", { backingScopeId: "personal:alice", legacy: true }));
+        await store.records.put("named", resource("named", { providerName: "qmt-tenant-name" }));
+        await store.records.put("modal", resource("modal", { backend: "modal" }));
+      });
+      await withTenant(otherTenant, () =>
+        store.records.put("smol", resource("smol", { backend: "smolmachines", backingScopeId: "sandbox-b" })),
+      );
+      const config = {
+        databaseUrl: String(admin.options.connectionString),
+        spritesSandbox: { namePrefix: "qmt" },
+        smolmachinesSandbox: { namePrefix: "a-very-long-deployment-prefix-that-eats-the-budget" },
+      } as unknown as Config;
+      assert.equal(await backfillProviderNames(config), 2);
+      await withTenant(tenant, () =>
+        store.records.put("late", resource("late", { backingScopeId: "personal:late", legacy: true })),
+      );
+      assert.equal(await backfillProviderNames(config), 0);
+      await withTenant(tenant, async () => {
+        assert.equal(await store.records.providerName("sprites", "personal:alice"), "qmt-personal-alice-84c212");
+        assert.equal(await store.records.providerName("sprites", "sandbox-named"), "qmt-tenant-name");
+        assert.equal(await store.records.providerName("modal", "sandbox-modal"), null);
+        assert.equal(await store.records.providerName("sprites", "personal:late"), null);
+        assert.equal(await store.records.providerName("smolmachines", "sandbox-b"), null);
+      });
+      await withTenant(otherTenant, async () => {
+        assert.equal(
+          await store.records.providerName("smolmachines", "sandbox-b"),
+          "a-very-long-deployment-prefix-that-eats-the-budget-sandb-206483",
+        );
+      });
     });
-    await withTenant(otherTenant, () =>
-      store.records.put("smol", resource("smol", { backend: "smolmachines", backingScopeId: "sandbox-b" })),
-    );
-    const config = {
-      databaseUrl: String(admin.options.connectionString),
-      spritesSandbox: { namePrefix: "qmt" },
-      smolmachinesSandbox: {},
-    } as unknown as Config;
-    assert.equal(await backfillProviderNames(config), 2);
-    assert.equal(await backfillProviderNames(config), 0);
-    await withTenant(tenant, async () => {
-      assert.equal(await store.records.providerName("sprites", "personal:alice"), "qmt-personal-alice-84c212");
-      assert.equal(await store.records.providerName("sprites", "sandbox-named"), "qmt-tenant-name");
-      assert.equal(await store.records.providerName("modal", "sandbox-modal"), null);
-      assert.equal(await store.records.providerName("smolmachines", "sandbox-b"), null);
-    });
-    await withTenant(otherTenant, async () => {
-      assert.equal(await store.records.providerName("smolmachines", "sandbox-b"), "qm-sandbox-b-56c472");
-    });
-  });
-});
+  },
+);
 
 test("the deployment layer row backfills and stays per tenant", { skip }, async () => {
   const layer: StoredDeploymentLayer = {
