@@ -207,9 +207,10 @@ async function runTurn(deps: TurnRunnerDeps, held: HeldTurn): Promise<void> {
         await sleep(Math.min(FINISH_RETRY_MS * attempt, FINISH_RETRY_MAX_MS));
       }
     }
-    console.warn(
-      `[turns] turn ${run.id} ended after ${claim.lost() ? "losing its claim" : Date.now() >= giveUpAt ? "its claim lapsed while saving" : "shutdown"}; its result was not recorded`,
-    );
+    let why = "shutdown";
+    if (claim.lost()) why = "losing its claim";
+    else if (Date.now() >= giveUpAt) why = "its claim lapsed while saving";
+    console.warn(`[turns] turn ${run.id} ended after ${why}; its result was not recorded`);
   };
   let ended: { kind: "result"; result: TurnResult } | { kind: "error"; err: unknown };
   try {
