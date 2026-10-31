@@ -1,9 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolveBranding, sanitizeBranding } from "../src/resolution/branding.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const ORG = TEST_ROOT_SCOPE;
 

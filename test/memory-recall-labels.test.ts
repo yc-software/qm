@@ -1,9 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { memoryRecallLabels } from "../src/memory/recall-labels.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const project = "group:web-project-example";
 

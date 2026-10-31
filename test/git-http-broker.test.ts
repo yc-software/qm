@@ -7,9 +7,6 @@ import { brokerGitHttp } from "../src/api/git-http-broker.ts";
 import { CAPABILITY_TTL_MS, CREDENTIAL_BROKER_AUD } from "../src/auth/capability-token.ts";
 import type { BaseCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function req(headers: Record<string, string>, body = ""): IncomingMessage {
   const r = Readable.from(body ? [body] : []) as IncomingMessage;

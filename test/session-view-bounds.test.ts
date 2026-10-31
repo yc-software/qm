@@ -9,9 +9,6 @@ import { buildApp } from "./support/build-app.ts";
 import { windowedTranscript, type Lease, type SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId, type ScopeId, type SessionEntry, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-view-bounds-"));

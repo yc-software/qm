@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { findTrailingPartialTurn, resumeStrategy, runtimeSwitchNote, turnAtSeq } from "../src/core/turn-resume.ts";
 import { unrecordedToolResult } from "../src/agent/context-compaction.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function ent(type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry {
   return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: TEST_ROOT_SCOPE, createdAt: seq };

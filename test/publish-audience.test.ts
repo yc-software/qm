@@ -2,9 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { defaultPublishAudience } from "../src/resolution/publish-audience.ts";
 import { scopeId, type Principal } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const ORG = TEST_ROOT_SCOPE;
 const internal = (id: string): Principal => ({ id, type: "internal" });

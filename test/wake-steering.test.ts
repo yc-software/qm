@@ -10,9 +10,6 @@ import { jsonbStringify } from "../src/util/text.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function freshApp(securityScreener?: SecurityScreener) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-wake-"));

@@ -2,9 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { compilePath, findRoute, type Route, type BaseCtx } from "../src/api/routes/route.ts";
 import { apiRoutes } from "../src/api/routes/index.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function matched(path: string, pathname: string): Record<string, string> | null {
   const out: Record<string, string> = {};

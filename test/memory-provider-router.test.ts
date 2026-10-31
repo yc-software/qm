@@ -3,9 +3,6 @@ import assert from "node:assert/strict";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import type { MemoryCaptureContext, MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
 import { recallText } from "./support/recall-text.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function provider(name: string, calls: string[]): MemoryService {
   return {

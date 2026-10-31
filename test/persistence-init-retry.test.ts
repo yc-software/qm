@@ -4,9 +4,6 @@ import { createPgPool, type PgPool, type Rows } from "../src/persistence/pg-pool
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createAdminGrantStore, type AdminGrant, type AdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the live-pool tests";

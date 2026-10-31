@@ -16,9 +16,7 @@ import { withTimeout } from "../src/util/async.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
 import type { AddressInfo } from "node:net";
 import type { TurnRequest } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const screenedPayloads: string[] = [];
 let exerciseTurn: ((turn: AgentTurnInput) => Promise<void | { stopped: true }>) | undefined;

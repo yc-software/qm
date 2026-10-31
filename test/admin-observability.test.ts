@@ -11,9 +11,7 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { SECURITY_SCREEN_STEP } from "../src/security/security-posture.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function start(overrides: Parameters<typeof testConfig>[0] = {}) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-obs-")), ...overrides });

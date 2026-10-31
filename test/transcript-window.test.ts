@@ -13,9 +13,6 @@ import { ENTRY_STRING_BUDGET, windowedTranscript } from "../src/sessions/session
 import type { SessionEntry } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 function entry(seq: number, type: SessionEntry["type"]): SessionEntry {
   return {

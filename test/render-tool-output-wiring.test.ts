@@ -3,9 +3,6 @@ import { mock, test } from "node:test";
 import { S3Client } from "@aws-sdk/client-s3";
 import * as toolOutput from "../src/sessions/tool-output.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 type ToolOutputOptions = Parameters<typeof toolOutput.createPostgresToolOutputStore>[0];
 let bytesFor: ToolOutputOptions["bytesFor"] | undefined;

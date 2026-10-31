@@ -13,9 +13,6 @@ import { createToolContext, type ToolContext, type ToolContextDeps } from "../sr
 import { scopeId, type TurnRequest, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const scopedHandle: SandboxHandle = { id: "scoped-box", rootDir: "/workspace" };
 const scratchHandle: SandboxHandle = { id: "scratch-box", rootDir: "/workspace", scratch: true };

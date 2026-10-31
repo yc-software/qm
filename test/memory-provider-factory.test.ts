@@ -5,9 +5,7 @@ import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { recallText } from "./support/recall-text.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const defaultMemory: MemoryService = {
   async recall() {

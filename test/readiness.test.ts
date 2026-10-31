@@ -8,9 +8,6 @@ import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 async function fixture(checkReadiness?: (signal: AbortSignal) => Promise<void>) {
   const config = testConfig({ signingSecret: "readiness-test-source-secret".repeat(3) });

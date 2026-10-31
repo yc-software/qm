@@ -2,9 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { turnAtSeq } from "../src/core/turn-resume.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("a steered mid-turn message does not hide the turn's answer", () => {
   const ent = (type: SessionEntry["type"], payload: unknown, seq: number): SessionEntry => ({

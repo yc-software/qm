@@ -2,9 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { compactTranscript, INTERRUPTED_TOOL_RESULT } from "../src/agent/context-compaction.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function ent(type: SessionEntry["type"], payload: unknown, seq = 0, createdAt = 0): SessionEntry {
   return { sessionId: "s", seq, parentSeq: null, type, payload, scopeLabel: TEST_ROOT_SCOPE, createdAt };

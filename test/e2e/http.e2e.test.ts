@@ -11,9 +11,6 @@ import { buildApp } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { scopeId } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
-import { bindTestTenant } from "../support/tenant.ts";
-
-bindTestTenant();
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 

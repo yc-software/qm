@@ -14,9 +14,6 @@ import { createInsecureTestServer } from "../../src/api/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
-import { bindTestTenant } from "../support/tenant.ts";
-
-bindTestTenant();
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 const DB = process.env.MEMORABLE_E2E_DB_URL;

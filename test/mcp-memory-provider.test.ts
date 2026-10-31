@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import type { McpClient } from "../src/mcp/mcp-client.ts";
 import { recallText } from "./support/recall-text.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function client(calls: Array<{ tool: string; args: Record<string, unknown> }>, text = "result"): McpClient {
   return {

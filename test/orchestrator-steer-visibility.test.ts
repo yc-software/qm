@@ -6,9 +6,6 @@ import { recordSteerIntake } from "../src/agent/turn-support.ts";
 import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
 mock.module("./support/mock-agent.ts", {

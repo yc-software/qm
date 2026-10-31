@@ -18,9 +18,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { fakeSprites } from "./support/auto-fake-sprites.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
-import { OTHER_TENANT, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { OTHER_TENANT } from "./support/tenant.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 

@@ -2,9 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { answerWebContextRequest, webConversationWindow } from "../src/api/web-context.ts";
 import type { SessionEntry } from "../src/types.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 const ROOT = "fb7eddc8";
 const TARGET = `web:carol@acme.com:${ROOT}`;

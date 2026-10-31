@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 const events: string[] = [];
 let invalidIndexes = false;

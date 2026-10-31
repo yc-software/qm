@@ -2,9 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { filterConnectorSkills } from "../src/core/orchestrator.ts";
 import type { SkillResolution } from "../src/skills/skill-store.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 function skill(name: string): SkillResolution {
   return {

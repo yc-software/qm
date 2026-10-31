@@ -9,9 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 async function withDefaultComputer(built: ReturnType<typeof buildApp>) {
   const computer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "default");
