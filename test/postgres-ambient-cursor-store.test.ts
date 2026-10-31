@@ -44,7 +44,7 @@ test(
         const { rows } = await admin.query(
           `SELECT tenant_id::text AS tenant, surface, container, to_regclass('ambient_cursors_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'ambient_cursors') AS versions
-           FROM ambient_cursors ORDER BY container`,
+           FROM ambient_cursors ORDER BY container COLLATE "C"`,
         );
         assert.deepEqual(rows, [
           { tenant, surface: "slack", container: "C1", dropped: true, versions: 0 },

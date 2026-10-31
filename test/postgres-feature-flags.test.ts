@@ -78,7 +78,7 @@ test("the conversion carries flags into the instance tenant and the store hides 
         `SELECT tenant_id::text AS tenant, feature_name, enabled_scopes, updated_at::text AS at, updated_by,
                 to_regclass('feature_flags_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'feature_flags') AS versions
-           FROM feature_flags ORDER BY feature_name`,
+           FROM feature_flags ORDER BY feature_name COLLATE "C"`,
       );
       assert.deepEqual(rows, [
         {

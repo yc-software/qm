@@ -102,7 +102,7 @@ test("the conversion splits principal and key on the last separator and drops th
       const { rows } = await admin.query(
         `SELECT tenant_id::text AS tenant, principal_id, key, updated_at::text AS at, to_regclass('web_ui_state_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'web_ui_state') AS versions
-           FROM web_ui_state ORDER BY principal_id, key`,
+           FROM web_ui_state ORDER BY principal_id COLLATE "C", key COLLATE "C"`,
       );
       assert.deepEqual(rows, [
         { tenant, principal_id: "U#1", key: "canvas:s1", at: "3", dropped: true, versions: 0 },

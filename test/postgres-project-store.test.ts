@@ -125,7 +125,7 @@ test(
         const { rows } = await admin.query(
           `SELECT tenant_id::text AS tenant, id, to_regclass('projects_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'projects') AS versions
-           FROM projects ORDER BY id`,
+           FROM projects ORDER BY id COLLATE "C"`,
         );
         assert.deepEqual(rows, [
           { tenant, id: "halfLink", dropped: true, versions: 0 },

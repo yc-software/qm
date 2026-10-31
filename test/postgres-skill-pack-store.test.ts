@@ -103,7 +103,7 @@ test("the conversion backfills skill packs into the instance tenant and drops th
       const { rows } = await admin.query(
         `SELECT tenant_id::text AS tenant, id, to_regclass('skill_packs_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'skill_packs') AS versions
-           FROM skill_packs ORDER BY id`,
+           FROM skill_packs ORDER BY id COLLATE "C"`,
       );
       assert.deepEqual(
         rows.map((row) => row.id),

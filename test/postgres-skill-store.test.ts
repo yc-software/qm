@@ -185,7 +185,7 @@ test("the conversion backfills skills into the instance tenant and drops the old
         `SELECT tenant_id::text AS tenant, id, name, required_capabilities, files IS NULL AS no_files,
                 to_regclass('skills_kv') IS NULL AS dropped,
                 (SELECT count(*)::int FROM durable_map_versions WHERE tbl = 'skills') AS versions
-           FROM skills ORDER BY id`,
+           FROM skills ORDER BY id COLLATE "C"`,
       );
       assert.deepEqual(
         await withTenant(tenant, async () => [(await store.get("broken"))?.status, (await store.get("badpack"))?.pack]),

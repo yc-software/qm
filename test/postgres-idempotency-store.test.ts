@@ -43,7 +43,11 @@ test("retention prunes only the current tenant's expired rows", { skip }, async 
       t = 500;
       await withTenant(tenant, () => store.once("fresh", async () => {}));
       const keys = async () =>
-        (await admin.query(`SELECT tenant_id::text AS tenant, key FROM idempotency ORDER BY key, tenant_id`)).rows;
+        (
+          await admin.query(
+            `SELECT tenant_id::text AS tenant, key FROM idempotency ORDER BY key COLLATE "C", tenant_id`,
+          )
+        ).rows;
       for (let i = 0; i < 50 && (await keys()).length === 3; i++) await new Promise((r) => setTimeout(r, 20));
       assert.deepEqual(await keys(), [
         { tenant, key: "fresh" },
