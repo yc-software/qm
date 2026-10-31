@@ -2,6 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { text, outboundFilesSchema, outboundSandboxSchema, type ToolKit } from "./kit.ts";
 import { MAX_TOOL_RESULT_CHARS } from "./record.ts";
+import { SLACK_MENTION_SYNTAX } from "../../surfaces/slack/adapter.ts";
 
 function capText(t: string): string {
   return t.length > MAX_TOOL_RESULT_CHARS ? `${t.slice(0, MAX_TOOL_RESULT_CHARS)}…[truncated]` : t;
@@ -45,9 +46,7 @@ export function surfaceTool(kit: ToolKit) {
         Type.String({
           description:
             "post/reach: the message to send. edit: the new message content. Use Markdown, including [label](url) links; the surface renders it." +
-            (surfaceName === "slack"
-              ? " To @-mention on Slack, use `<@U…>` for a person or `<!subteam^S…>` for a user group (ids appear in the conversation roster and in read / search results). A typed `@name` is plain text and pings no one; @here/@channel/@everyone never ping."
-              : ""),
+            (surfaceName === "slack" ? ` ${SLACK_MENTION_SYNTAX}` : ""),
         }),
       ),
       channel: Type.Optional(
