@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { testSettingsStore } from "./support/tenant-settings.ts";
-import { randomUUID } from "node:crypto";
+import { FIFTH_TENANT, FOURTH_TENANT, testSettingsStore, THIRD_TENANT } from "./support/tenant-settings.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,9 +26,9 @@ interface FakeClient {
 
 async function twoTenants() {
   const store = await testSettingsStore();
-  const a = randomUUID();
-  const b = randomUUID();
-  const none = randomUUID();
+  const a = TEST_TENANT;
+  const b = OTHER_TENANT;
+  const none = THIRD_TENANT;
   await withTenant(a, () => store.update({ SANDBOX_BACKEND: "e2b", E2B_API_KEY: "key-a" }));
   await withTenant(b, () => store.update({ SANDBOX_BACKEND: "sprites", E2B_API_KEY: "key-b", SPRITES_TOKEN: "tok-b" }));
   await withTenant(none, () => store.update({ SANDBOX_BACKEND: "e2b" }));
@@ -139,14 +139,14 @@ test("the default backend and usable backends come from the bound tenant's setti
   assert.deepEqual(await resolve(a), { usable: ["local", "e2b"], default: "e2b" });
   assert.deepEqual(await resolve(b), { usable: ["local", "sprites", "e2b"], default: "sprites" });
   await assert.rejects(resolve(none), /E2B_API_KEY is not set in this tenant's settings/);
-  const unset = randomUUID();
+  const unset = FOURTH_TENANT;
   await assert.rejects(
     withTenant(unset, async () => tenantDefaultSandboxBackend(await store.get(), constructed)),
     (error: unknown) =>
       error instanceof TenantSettingMissingError &&
       error.message === "SANDBOX_BACKEND is not set in this tenant's settings",
   );
-  const render = randomUUID();
+  const render = FIFTH_TENANT;
   await withTenant(render, () =>
     store.update({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "k", RENDER_SANDBOX_WORKSPACE_ID: "w" }),
   );
@@ -158,7 +158,7 @@ test("the default backend and usable backends come from the bound tenant's setti
 
 test("a misconfigured backend stays listed but fails loudly when a tenant selects it", async () => {
   const store = await testSettingsStore();
-  const tenant = randomUUID();
+  const tenant = THIRD_TENANT;
   await withTenant(tenant, () =>
     store.update({ SANDBOX_BACKEND: "render", RENDER_SANDBOX_API_KEY: "k", RENDER_SANDBOX_WORKSPACE_ID: "w" }),
   );
@@ -179,7 +179,7 @@ test("a misconfigured backend stays listed but fails loudly when a tenant select
 
 test("selecting a backend without egress enforcement warns once per tenant", async (t) => {
   const store = await testSettingsStore();
-  const tenant = randomUUID();
+  const tenant = THIRD_TENANT;
   await withTenant(tenant, () => store.update({ SANDBOX_BACKEND: "sprites", SPRITES_TOKEN: "t" }));
   const routing = tenantSandboxRouting(() => store.get(), { sprites: { profile: { egressEnforcement: "none" } } });
   const warn = t.mock.method(console, "warn", () => undefined);

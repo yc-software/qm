@@ -7,7 +7,7 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import pg from "pg";
 import { buildApp } from "./support/build-app.ts";
-import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
@@ -16,10 +16,11 @@ const path = "/v1/tenant-settings";
 
 async function fixture(secret: string | undefined = controlSecret) {
   const config = testConfig({ signingSecret: sourceSecret });
-  const owner = new pg.Pool({ connectionString: config.databaseUrl });
-  await owner.query("DELETE FROM tenants WHERE id = $1", [OTHER_TENANT]);
-  await owner.end();
   const built = buildApp(config);
+  await built.tenantSettings.get();
+  const owner = new pg.Pool({ connectionString: config.databaseUrl });
+  await owner.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
+  await owner.end();
   const server = createServer(built.app, {
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),

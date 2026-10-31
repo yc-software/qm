@@ -9,11 +9,12 @@ import { createAgent } from "../src/agent/agent-run.ts";
 import { configuredModelFor } from "../src/model/tenant-models.ts";
 import type { BuiltApp } from "../src/wiring.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
+import { THIRD_TENANT } from "./support/tenant-settings.ts";
 import { testConfig } from "./support/test-config.ts";
 
-const TENANT_B = "00000000-0000-4000-8000-00000000000b";
-const TENANT_C = "00000000-0000-4000-8000-00000000000c";
+const TENANT_B = OTHER_TENANT;
+const TENANT_C = THIRD_TENANT;
 
 interface SeenRequest {
   path: string;
