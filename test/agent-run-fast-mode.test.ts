@@ -338,8 +338,7 @@ async function runTurn(
   const payloads: Array<Record<string, unknown>> = [];
   const betas: Array<string | null> = [];
   const agent = createAgent({
-    apiKey: "sk-anthropic-test",
-    openaiApiKey: "sk-openai-test",
+    resolveProviderKeys: async () => ({ anthropic: "sk-anthropic-test", openai: "sk-openai-test" }),
     ...(gateway
       ? {
           resolveModelGateway: async () => ({
@@ -547,8 +546,7 @@ test("an unavailable gateway model fails the turn without fallback (no structure
 
 test("compaction retries a refused summary on the configured fallback model", async () => {
   const agent = createAgent({
-    apiKey: "sk-anthropic-test",
-    openaiApiKey: "sk-openai-test",
+    resolveProviderKeys: async () => ({ anthropic: "sk-anthropic-test", openai: "sk-openai-test" }),
     modelId: "claude-sonnet-5",
     resolveFallbackRuntime: () => ({ modelId: "gpt-6-sol" }),
   });

@@ -103,6 +103,7 @@ function buildOrchestrator(
     isCurrentSharedScopeMember?: IsCurrentSharedScopeMember;
   } = {},
 ) {
+  const { securityScreener, ...rest } = extra;
   const config = testConfigStore(ORG);
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const auditLog = createPostgresAuditLog(testDatabaseUrl());

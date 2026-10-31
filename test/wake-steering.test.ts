@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { jsonbStringify } from "../src/util/text.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -265,7 +265,7 @@ test("Auto screens the author label that is injected with an unprompted mid-turn
 });
 
 test("spine ON: the steer signal carries the message's real surface ts (so the agent can persist + dedupe it)", async () => {
-  const built = freshApp();
+  const built = await freshApp();
   const channel = "C8";
   const root = "800.8";
   const first = await built.app.turn(mention("@bot start", channel, root));

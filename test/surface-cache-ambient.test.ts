@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { settle } from "./support/settle.ts";
 import { testConfig } from "./support/test-config.ts";
 

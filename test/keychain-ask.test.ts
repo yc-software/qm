@@ -9,8 +9,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT } from "./support/build-app.ts";
-import { enterTenant } from "../src/tenants/context.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { keychainRoutes } from "../src/api/routes/keychain.ts";
 import {
@@ -41,8 +40,6 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { testAdvisoryLock, testMap, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-
-enterTenant(TEST_TENANT);
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);

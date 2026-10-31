@@ -23,6 +23,8 @@ import {
 } from "../src/agent/agent-run.ts";
 import { DEFAULT_AGENT_MODEL_ID, auxiliaryModelFor, getRequiredModel, resolveModel } from "../src/model/pi-models.ts";
 import { modelGatewayRequest } from "../src/model/provider-endpoints.ts";
+import { defaultModelFor } from "../src/model/tenant-models.ts";
+import { parseTenantSettings } from "../src/tenants/settings-parse.ts";
 import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import type { SessionEntry } from "../src/types.ts";
 import type { DetectInput, TurnLlmRequestRecord } from "../src/agent/agent.ts";
@@ -112,16 +114,6 @@ test("seedRawMessagesIntoSession is a no-op for empty input and degrades gracefu
 test("agentConfigOptions maps every Config knob the agent consumes, field by field", () => {
   const opts = agentConfigOptions(
     testConfig({
-      modelId: "model-base",
-      detectModelId: "model-detect",
-      titleModelId: "model-title",
-      anthropicApiKey: "sk-test",
-      modelGateway: {
-        url: "http://gateway.internal:8080",
-        apiKey: "gateway-key",
-        apiKeyHeader: "api-key",
-        models: { "claude-opus-5": "router/opus" },
-      },
       captureLlmRequests: false,
 
       reachExecEnabled: true,
@@ -167,10 +159,10 @@ test("agentConfigOptions leaves controlTools off unless a self-API (signing secr
   );
 });
 
-test("agentConfigOptions carries the deployment provider into Pi auxiliary model selection", () => {
-  const opts = agentConfigOptions(testConfig({ modelProvider: "openai", openaiApiKey: "sk-openai-test" }));
-  assert.equal(opts.defaultModelId, "gpt-6.1-sol");
-  assert.equal(auxiliaryModelFor(opts.defaultModelId!), "gpt-5.6-luna");
+test("the tenant's model provider carries into Pi auxiliary model selection", () => {
+  const defaultModelId = defaultModelFor(parseTenantSettings({ MODEL_PROVIDER: "openai" }));
+  assert.equal(defaultModelId, "gpt-6.1-sol");
+  assert.equal(auxiliaryModelFor(defaultModelId), "gpt-5.6-luna");
 });
 
 test("Pi title generation returns no title without an auxiliary-model credential", async () => {
@@ -447,7 +439,13 @@ test(
 
 test("agentConfigOptions omits the optional fields when the config leaves them unset", () => {
   const opts = agentConfigOptions(testConfig());
-  for (const key of ["defaultModelId", "detectModelId", "titleModelId", "apiKey"] as const) {
+  for (const key of [
+    "defaultModelId",
+    "detectModelId",
+    "titleModelId",
+    "resolveProviderKeys",
+    "resolveModelGateway",
+  ] as const) {
     assert.equal(key in opts, false, `${key} must be omitted, not undefined`);
   }
 });
@@ -617,7 +615,10 @@ test("oneShot routes configured models through the model gateway without mutatin
     modelId: "claude-haiku-4-5",
     headers: { "x-model-marker": "preserved" },
   });
-  const agent = createAgent({ defaultModelId: "claude-haiku-4-5", modelGateway });
+  const agent = createAgent({
+    defaultModelId: "claude-haiku-4-5",
+    resolveModelGateway: async () => modelGateway,
+  });
   const compact = agent.compactHistory!;
   const input: Parameters<typeof compact>[0] = {
     session: { id: "summary-session" } as Parameters<typeof compact>[0]["session"],

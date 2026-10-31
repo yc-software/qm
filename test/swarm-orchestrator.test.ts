@@ -5,7 +5,7 @@ import * as modalClient from "../src/sandbox/modal-client.ts";
 import * as mockAgent from "./support/mock-agent.ts";
 import { installFakeModal } from "./support/fake-modal.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testMigratedDatabaseUrl } from "./support/test-database.ts";
 import { runResultDelivery } from "../src/delivery/run-result-delivery.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { createServer } from "../src/api/server.ts";
@@ -191,12 +191,11 @@ test("wired swarm outbox drives the real orchestrator, durable runs, and authent
 });
 
 test("HTTP root spawns three peers and receives their replies using real orchestrator-issued credentials", async () => {
-  const databaseUrl = testDatabaseUrl();
+  const databaseUrl = testMigratedDatabaseUrl();
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: databaseUrl });
   const config = testConfig({
     databaseUrl,
-    modalSandbox: { tokenId: "test", tokenSecret: "test" },
     signingSecret: "swarm-http-source-signing-key-distinct",
     portalIdentitySecret: "swarm-http-portal-identity-key-distinct",
     apiBaseUrl: "http://core.test",
@@ -655,7 +654,7 @@ test("a worker with an open goal answers messages as a goal turn without the swa
 });
 
 test("a worker's wake:false reply waits in the root's mailbox and reaches the root's next human turn once", async () => {
-  const built = buildApp(testConfig({ modalSandbox: { tokenId: "test", tokenSecret: "test" } }));
+  const built = buildApp(testConfig());
   try {
     const rootComputer = await built.sandboxResources.create("U1", "personal:U1", "sprites", "Root");
     await built.sandboxResources.setDefault("U1", "personal:U1", rootComputer.id);

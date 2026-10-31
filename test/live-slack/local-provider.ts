@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { buildApp } from "../../src/wiring.ts";
 import { enterTenant } from "../../src/tenants/context.ts";
-import { TEST_TENANT, testTenantSettings } from "../support/build-app.ts";
+import { TENANT_SETTING_KEYS, type TenantSettingValues } from "../../src/tenants/settings.ts";
+import { testTenantSettings } from "../support/build-app.ts";
+import { TEST_TENANT } from "../support/tenant.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
@@ -21,15 +23,24 @@ async function main(): Promise<void> {
   assert.equal(process.env.GIT_SHA, process.env.EXPECTED_SOURCE_SHA, "candidate image does not match the source pin");
   assert.ok(process.env.DATABASE_URL, "DATABASE_URL must point at a Postgres server");
   const config = loadConfig();
-  const built = buildApp({
-    ...config,
-    dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
-    databaseUrl: process.env.DATABASE_URL,
-    sandboxBackend: "local",
+  enterTenant(TEST_TENANT);
+  const fromEnv: TenantSettingValues = Object.fromEntries(
+    TENANT_SETTING_KEYS.flatMap((key) => (process.env[key] ? [[key, process.env[key]]] : [])),
+  );
+  const built = buildApp(
+    {
+      ...config,
+      dataDir: mkdtempSync(join(tmpdir(), "provider-qualification-")),
+      databaseUrl: process.env.DATABASE_URL,
 
-    backgroundWorkEnabled: false,
-    turnWallClockMs: 180_000,
-  });
+      backgroundWorkEnabled: false,
+      turnWallClockMs: 180_000,
+    },
+    { tenantSettings: testTenantSettings({ ...fromEnv, SANDBOX_BACKEND: "local" }, process.env.DATABASE_URL) },
+  );
+  if (process.env.ANTHROPIC_API_KEY) {
+    await built.modelCredentials.set("anthropic", process.env.ANTHROPIC_API_KEY, "qualification");
+  }
   const actorId = `provider-qualification-${randomUUID()}`;
   const scopeId = `personal:${actorId}`;
   const name = `local-${randomUUID()}`;

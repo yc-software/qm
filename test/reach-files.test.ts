@@ -6,8 +6,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT } from "./support/build-app.ts";
-import { enterTenant } from "../src/tenants/context.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { reachEnqueue } from "../src/reach/reach.ts";
@@ -19,8 +18,6 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
-
-enterTenant(TEST_TENANT);
 
 describe("POST /v1/reach with files", () => {
   let server: Server;

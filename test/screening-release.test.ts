@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createMockAgent } from "./support/mock-agent.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
-import type { TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
 let executions = 0;

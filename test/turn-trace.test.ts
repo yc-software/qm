@@ -82,7 +82,7 @@ test("a Pi tool step is traced as model requests, first tokens, and a step gap t
   t.after(() => {
     globalThis.fetch = realFetch;
   });
-  const agent = createAgent({ apiKey: "sk-test" });
+  const agent = createAgent({ resolveProviderKeys: async () => ({ anthropic: "sk-test" }) });
   t.after(() => agent.close?.());
   let seq = 0;
   const result = await traceQueued(undefined, "run", { "qm.origin": "human" }, () =>

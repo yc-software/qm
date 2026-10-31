@@ -6,8 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT } from "./support/build-app.ts";
-import { enterTenant } from "../src/tenants/context.ts";
+import { buildApp } from "./support/build-app.ts";
 import { createServer, createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { verifyCapabilityToken } from "../src/auth/capability-token.ts";
@@ -17,8 +16,6 @@ import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-
-enterTenant(TEST_TENANT);
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";

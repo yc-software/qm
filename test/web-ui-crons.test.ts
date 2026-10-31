@@ -17,6 +17,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 const SECRET = "core-signing-secret".repeat(3);
 
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "webui-cron-")) }));
+await built.modelCredentials.set("anthropic", "test-anthropic-key", "admin");
 const core = createServer(built.app, {
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,

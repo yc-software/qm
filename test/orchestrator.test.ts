@@ -79,7 +79,7 @@ function freshApp(
   config.spritesSandbox.namePrefix ??= `test-${hashId([config.dataDir]).slice(0, 10)}`;
   return buildApp(config, {
     ...(securityScreener ? { securityScreener } : {}),
-    ...(settings ? { tenantSettings: testTenantSettings(settings, config.harness) } : {}),
+    ...(settings ? { tenantSettings: testTenantSettings(settings, config.databaseUrl) } : {}),
   });
 }
 
@@ -1130,7 +1130,7 @@ test("an OpenAI deployment provisions managed browser access without its provide
     apiBaseUrl: "https://core.example.com",
   });
   const { app, sandbox, modelCredentials } = buildApp(config, {
-    tenantSettings: testTenantSettings({ PI_MODEL: "gpt-5.6-sol" }, config.harness),
+    tenantSettings: testTenantSettings({ PI_MODEL: "gpt-5.6-sol" }, config.databaseUrl),
   });
   await modelCredentials.set("openai", "openai-org-key", "admin");
   let captured: ProvisionOptions | undefined;
