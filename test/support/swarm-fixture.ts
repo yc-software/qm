@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createSandboxResources, type SandboxResource } from "../../src/sandbox/sandbox-resources.ts";
+import { createSandboxResources } from "../../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../../src/sandbox/sandbox-routing.ts";
 import type { Sandbox } from "../../src/sandbox/sandbox.ts";
 import { createSwarmStore, type SwarmStore } from "../../src/swarms/swarm-store.ts";
@@ -10,7 +10,7 @@ import type { RunStore } from "../../src/runs/run-store.ts";
 import type { AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
-import { testAdvisoryLock, testDatabaseUrl, testMap } from "./test-database.ts";
+import { testAdvisoryLock, testDatabaseUrl, testMap, testSandboxResourceStores } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 
 export async function swarmFixture(
@@ -28,7 +28,7 @@ export async function swarmFixture(
   const runs = options.runs ?? createPostgresRunStore(url).runs;
   const lock = options.lock ?? testAdvisoryLock();
   const store = options.store ?? createSwarmStore(createPostgresSwarmRows(url));
-  const records = testMap<SandboxResource>();
+  const { records, defaults } = testSandboxResourceStores();
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
   const state = { allowed: true, failProvision: false };
@@ -65,7 +65,7 @@ export async function swarmFixture(
   };
   const sandboxes = createSandboxResources({
     records,
-    defaults: testMap(),
+    defaults,
     backends: { modal: backend },
     defaultBackend: async () => "modal",
     lock,
@@ -145,6 +145,7 @@ export async function swarmFixture(
     sandbox,
     backend,
     records,
+    defaults,
     disks,
     provisioned,
     state,

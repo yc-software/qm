@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createRenderAppNetwork } from "../src/deploy/render-app-network.ts";
 import { RenderApiError } from "../src/deploy/render-api.ts";
-import type { StoredRenderDeploy } from "../src/deploy/render-deploy-provider.ts";
+import { type StoredRenderDeploy, RENDER_DEPLOY_BODIES } from "../src/deploy/render-deploy-provider.ts";
 import { createFakeRenderApi, fakeDeployment, type FakeRenderApiCall } from "./support/fake-render.ts";
-import { testMap } from "./support/test-database.ts";
+import { testRows } from "./support/test-database.ts";
 
 interface Environment {
   id: string;
@@ -15,7 +15,7 @@ interface Environment {
 
 function fixture(handle: (call: FakeRenderApiCall, environment: Environment) => unknown) {
   const deployment = fakeDeployment();
-  const store = testMap<StoredRenderDeploy>();
+  const store = testRows(RENDER_DEPLOY_BODIES);
   const initial: StoredRenderDeploy = {
     deploymentId: deployment.id,
     appRegion: "oregon",

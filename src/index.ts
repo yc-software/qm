@@ -33,7 +33,6 @@ if (retiredEnv.length)
   );
 const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);
-await built.sandboxResources.initialize();
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);

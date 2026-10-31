@@ -221,18 +221,6 @@ test("the sandbox backend and provider keys are not read from the environment", 
   assert.equal(loadConfig({ ...env, DEPLOY_PROVIDER: "e2b" }).e2bSandbox.deployApiKey, "e2b-env-key");
 });
 
-test("SUPERSERVE_CONFIG_GENERATION accepts only nonnegative safe integers", () => {
-  for (const value of ["9007199254740993", "-1", "0.5", "NaN", "Infinity"]) {
-    assert.throws(() => loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }), /SUPERSERVE_CONFIG_GENERATION/, value);
-  }
-  for (const value of [undefined, "", "  "]) {
-    assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, undefined);
-  }
-  for (const value of ["0", "7", " 42 ", String(Number.MAX_SAFE_INTEGER)]) {
-    assert.equal(loadConfig({ SUPERSERVE_CONFIG_GENERATION: value }).superserveSandbox.configGeneration, Number(value));
-  }
-});
-
 test("Fly identity and Slack runtime settings are parsed once into Config", () => {
   const config = loadConfig({
     FLY_APP_NAME: "qm-core",
@@ -341,16 +329,16 @@ test("PORTER_DEPLOY_VISIBILITY=internal is accepted and refuses an apps domain",
   );
 });
 
-test("a Porter token locates the API and shares the deploy provider's token", () => {
-  assert.throws(() => loadConfig({ PORTER_DEPLOY_API_TOKEN: "tok" }), /PORTER_DEPLOY_PROJECT_ID/);
+test("DEPLOY_PROVIDER=porter locates the API with the deploy token", () => {
+  assert.throws(
+    () => loadConfig({ DEPLOY_PROVIDER: "porter", PORTER_DEPLOY_API_TOKEN: "tok" }),
+    /PORTER_DEPLOY_PROJECT_ID/,
+  );
   const inCluster = loadConfig({
     DEPLOY_PROVIDER: "porter",
     PORTER_DEPLOY_API_TOKEN: "tok",
     PORTER_CLUSTER_ID: "3",
-    PORTER_SANDBOX_TTL_SEC: "120",
   });
-  assert.equal(inCluster.porterSandbox.token, "tok");
-  assert.equal(inCluster.porterSandbox.ttlSec, 120);
   assert.equal(inCluster.porterDeploy.token, "tok");
 });
 
@@ -484,28 +472,6 @@ test("suggestion generation defaults on and can be explicitly disabled", () => {
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "true" }).suggestedActivitiesEnabled, true);
   assert.equal(loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "false" }).suggestedActivitiesEnabled, false);
   assert.throws(() => loadConfig({ SUGGESTED_ACTIVITIES_ENABLED: "maybe" }));
-});
-
-test("legacy sandbox scope defaults are parsed for upgrade", () => {
-  const credentials = {
-    SPRITES_TOKEN: "unit-test-sprites",
-    MODAL_TOKEN_ID: "unit-test-modal-id",
-    MODAL_TOKEN_SECRET: "unit-test-modal-secret",
-  };
-  assert.deepEqual(
-    loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"sprites"}' })
-      .legacySandboxScopeDefaults,
-    { personal: "modal", channel: "sprites" },
-  );
-  for (const value of [
-    "[]",
-    "null",
-    '{"personal:someone":"modal"}',
-    '{"personal":"missing"}',
-    '{"unknown":"sprites"}',
-    '{"personal":""}',
-  ])
-    assert.throws(() => loadConfig({ ...credentials, SANDBOX_SCOPE_BACKENDS: value }));
 });
 
 test("Fly shared application name is passed to the deployment provider", () => {

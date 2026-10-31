@@ -6,8 +6,9 @@ import { join } from "node:path";
 import {
   createRenderSandbox,
   type StoredRenderSandbox,
-  type StoredRenderCleanup,
-  type StoredRenderScratch,
+  RENDER_SANDBOX_BODIES,
+  RENDER_SCRATCH_BODIES,
+  RENDER_SANDBOX_CLEANUP,
 } from "../src/sandbox/render-sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createLocalBlobTransferStore } from "../src/persistence/blob-transfer.ts";
@@ -19,7 +20,7 @@ import { AWS_CLI_ENSURE } from "../src/sandbox/aws-cli.ts";
 import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
-import { testMap, testAdvisoryLock } from "./support/test-database.ts";
+import { testAdvisoryLock, testRows, testSandboxResourceStores } from "./support/test-database.ts";
 
 function setup(
   t: TestContext,
@@ -31,9 +32,9 @@ function setup(
   const dir = mkdtempSync(join(tmpdir(), "render-ws-"));
   const workspace = createLocalWorkspaceStore(dir);
   const blobTransfer = createLocalBlobTransferStore(join(dir, "blobs"));
-  const store = testMap<StoredRenderSandbox>();
-  const scratchStore = testMap<StoredRenderScratch>();
-  const cleanupStore = testMap<StoredRenderCleanup>();
+  const store = testRows(RENDER_SANDBOX_BODIES);
+  const scratchStore = testRows(RENDER_SCRATCH_BODIES);
+  const cleanupStore = testRows(RENDER_SANDBOX_CLEANUP);
   const advisoryLock = testAdvisoryLock();
   const errors: Array<{ code: string; message: string }> = [];
   const make = (checkpointIntervalMs = -1) =>
@@ -341,8 +342,7 @@ test("Render turns share one computer through the sandbox router", { timeout: 60
   const { make, fake, layers, scope, advisoryLock } = setup(t);
   const render = make();
   const resources = createSandboxResources({
-    records: testMap(),
-    defaults: testMap(),
+    ...testSandboxResourceStores(),
     backends: { render },
     defaultBackend: async () => "render",
     lock: advisoryLock,

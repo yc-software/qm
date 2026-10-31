@@ -174,17 +174,9 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
   {
     name: "PORTER_DEPLOY_API_TOKEN",
     service: "core",
-    required: {
-      when: {
-        kind: "any",
-        conditions: [
-          { kind: "sandbox-backend", backend: "porter" },
-          { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "porter" },
-        ],
-      },
-    },
+    required: { when: { kind: "env-equals", service: "core", name: "DEPLOY_PROVIDER", value: "porter" } },
     description:
-      "Admin-role Porter API token for the sandbox backend and the per-deployment app publisher — Developer-role tokens fail mid-deployment with PERMISSION_DENIED.",
+      "Admin-role Porter API token for the per-deployment app publisher — Developer-role tokens fail mid-deployment with PERMISSION_DENIED.",
     generate:
       "create an Admin-role API token in the Porter dashboard (https://dashboard.porter.run → Settings → API tokens)",
   },
@@ -228,20 +220,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     required: { when: { kind: "sandbox-backend", backend: "smolmachines" } },
     description: "smolmachines API key for the agent-computer substrate.",
     generate: "create an API key in the smolmachines console (https://smolmachines.com/console)",
-  },
-  {
-    name: "AGENT37_API_KEY",
-    service: "core",
-    required: { when: { kind: "sandbox-backend", backend: "agent37" } },
-    description: "Agent37 API key for the agent-computer substrate.",
-    generate: "mint a key in the Agent37 dashboard (https://agent37.com/dashboard/cloud/api-keys)",
-  },
-  {
-    name: "SUPERSERVE_API_KEY",
-    service: "core",
-    required: { when: { kind: "sandbox-backend", backend: "superserve" } },
-    description: "API key for Superserve sandboxes.",
-    generate: "create an API key in the Superserve console (https://console.superserve.ai/api-keys)",
   },
   {
     name: "DATABASE_URL",

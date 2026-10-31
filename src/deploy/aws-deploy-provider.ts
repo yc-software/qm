@@ -1,10 +1,12 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -66,6 +68,41 @@ export interface StoredDeployBody {
   replacementMicrovmId?: string;
 }
 
+const AWS_DEPLOY_BODIES_COLUMNS: RowColumns<StoredDeployBody, "deploymentId"> = {
+  deploymentId: "text",
+  microvmId: "text",
+  endpoint: "text",
+  createdAtMs: "bigint",
+  lastSnapshotMs: "bigint",
+  dataCredsAtMs: "bigint",
+  rotateNotBeforeMs: "bigint",
+  replacementMicrovmId: "text",
+};
+
+export const AWS_DEPLOY_BODIES: RowTable<StoredDeployBody, "deploymentId"> = {
+  table: "aws_deploy_bodies",
+  key: "deploymentId",
+  recordKey: true,
+  columns: AWS_DEPLOY_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "aws_deploy_bodies",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "microvm_id TEXT NOT NULL",
+        "endpoint TEXT NOT NULL",
+        "created_at_ms BIGINT NOT NULL",
+        "last_snapshot_ms BIGINT",
+        "data_creds_at_ms BIGINT",
+        "rotate_not_before_ms BIGINT",
+        "replacement_microvm_id TEXT",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("aws_deploy_bodies", AWS_DEPLOY_BODIES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
+
 export interface AwsDeployProviderOptions {
   region: string;
   profile?: string;
@@ -86,7 +123,7 @@ export interface AwsDeployProviderOptions {
   dataPrefix?: string;
   snapshotIntervalMs?: number;
   dataRoleArn?: string;
-  store: DurableMap<StoredDeployBody>;
+  store: Pick<KeyedRows<StoredDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   api?: AwsMicrovmApi;
   fetchImpl?: typeof fetch;

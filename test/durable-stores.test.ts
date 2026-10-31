@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-import { testMap, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
+import { testMap, testDatabaseUrl, testDeployBackings, testDeploymentRows } from "./support/test-database.ts";
 import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { testCronRows } from "./support/typed-stores.ts";
 
@@ -28,7 +28,7 @@ test("crons persist to the backing map (a second store instance reads them back)
 });
 
 test("deployments persist with immutable versions across store instances", async () => {
-  const map = testMap<Deployment>();
+  const map = testDeploymentRows();
   const s1 = createDeployStore(testDeployBackings({ deployments: map }));
   const d = await s1.create({
     ownerScopeId: scopeId("team", "T1"),

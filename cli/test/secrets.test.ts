@@ -199,19 +199,10 @@ test("the sprites token is a catalog secret when the sandbox backend is sprites"
       .required,
   );
   assert.ok(
-    !computedSecrets(makeConfig({ target: "aws", sandbox: { backend: "aws" } })).some(
+    !computedSecrets(makeConfig({ target: "aws", sandbox: { backend: "e2b" } })).some(
       (secret) => secret.name === "SPRITES_TOKEN",
     ),
   );
-});
-
-test("the Agent37 key is required for either way of selecting the agent37 sandbox", () => {
-  for (const config of [
-    makeConfig({ env: { core: { SANDBOX_BACKEND: "agent37" } } }),
-    makeConfig({ sandbox: { backend: "agent37" } }),
-  ]) {
-    assert.equal(secretByName(config, "AGENT37_API_KEY").required, true);
-  }
 });
 
 test("naming a base model provider makes that provider's key a required deployment secret", () => {
@@ -393,14 +384,14 @@ test("combined auth rejects two source secrets for the same environment name", (
 test("the retired SANDBOX_SCOPE_BACKENDS map no longer requires provider credentials", () => {
   const config = makeConfig({
     env: {
-      core: { SANDBOX_BACKEND: "sprites", SANDBOX_SCOPE_BACKENDS: '{"personal":"modal","channel":"superserve"}' },
+      core: { SANDBOX_BACKEND: "sprites", SANDBOX_SCOPE_BACKENDS: '{"personal":"modal"}' },
     },
   });
   const required = computedSecrets(config)
     .filter((secret) => secret.required)
     .map((secret) => secret.name);
   assert.ok(required.includes("SPRITES_TOKEN"));
-  for (const name of ["MODAL_TOKEN_ID", "SUPERSERVE_API_KEY"]) assert.ok(!required.includes(name), name);
+  assert.ok(!required.includes("MODAL_TOKEN_ID"));
 });
 
 test("shared Fly publishing requires private peers only when selected", () => {

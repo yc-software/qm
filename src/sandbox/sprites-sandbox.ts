@@ -1,7 +1,9 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import { APIError, SpritesClient, type Checkpoint, type SpriteCheck, type StreamMessage } from "@fly/sprites";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import { retryAfterMs, retryOperation, withTimeout } from "../util/async.ts";
@@ -112,6 +114,29 @@ export function processKeepaliveScript(processId: string): string {
   return `LOOP=${shq(loop)}; if command -v setsid >/dev/null 2>&1; then setsid sh -c "$LOOP" >/dev/null 2>&1 & else sh -c "$LOOP" >/dev/null 2>&1 & fi; echo OK`;
 }
 
+export interface SpritesInitialization {
+  pending: boolean;
+}
+
+const SPRITES_INITIALIZATION_COLUMNS: RowColumns<SpritesInitialization, "name"> = {
+  name: "text",
+  pending: "boolean",
+};
+
+export const SPRITES_INITIALIZATION: RowTable<SpritesInitialization, "name"> = {
+  table: "sprites_initialization",
+  key: "name",
+  columns: SPRITES_INITIALIZATION_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "sprites_initialization",
+      columns: ["name TEXT NOT NULL", "pending BOOLEAN NOT NULL"],
+      primaryKey: ["name"],
+      backfill: { ...jsonBackfill("sprites_initialization", SPRITES_INITIALIZATION_COLUMNS), name: "id" },
+    }),
+  ],
+};
+
 export interface SpritesSandboxOptions extends BlobStagingOptions {
   token: () => Promise<string>;
   baseUrl?: string;
@@ -122,7 +147,7 @@ export interface SpritesSandboxOptions extends BlobStagingOptions {
   memoryMb?: number;
   checkpointIntervalMs?: number;
   snapshots?: HomeSnapshotStore;
-  initializationStore: DurableMap<{ pending: boolean }>;
+  initializationStore: Pick<KeyedRows<SpritesInitialization>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   extraTools?: string[];
   credentialPaths?: CredentialPathSpec[];

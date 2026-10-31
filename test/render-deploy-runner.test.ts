@@ -9,12 +9,9 @@ import { connect, type AddressInfo } from "node:net";
 import { mock, test, type TestContext } from "node:test";
 import { createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import {
-  createRenderDeployArtifacts,
-  type StoredRenderDeployCredential,
-} from "../src/deploy/render-deploy-artifacts.ts";
+import { createRenderDeployArtifacts, RENDER_DEPLOY_CREDENTIALS } from "../src/deploy/render-deploy-artifacts.ts";
 import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
@@ -26,7 +23,7 @@ import { Duplex } from "node:stream";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
-import { testMap, testDatabaseUrl, testPgPool } from "./support/test-database.ts";
+import { testMap, testDatabaseUrl, testRows, testDeploymentRows } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
 
@@ -44,11 +41,11 @@ const signingSecret = "render-runner-secret".repeat(3);
 async function fixture(t: TestContext, appSource?: string, entrypoint = "node app.cjs") {
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
-  const deployments = testMap<Deployment>();
+  const deployments = testDeploymentRows();
   const archiveStore = testMap<DeployGitArchive>();
-  const credentials = testMap<StoredRenderDeployCredential>();
+  const credentials = testRows(RENDER_DEPLOY_CREDENTIALS);
   const gitDir = join(root, "writer");
-  const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore }, pg: testPgPool() });
+  const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore } });
   const d = await deployStore.create({
     ownerScopeId: scopeId("personal", "U1"),
     createdBy: "U1",
@@ -85,7 +82,6 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
   const readerStore = createDeployStore({
     deployments,
     git: { repoRoot: join(root, "reader"), archiveStore },
-    pg: testPgPool(),
   });
   const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({

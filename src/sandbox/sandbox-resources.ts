@@ -2,12 +2,12 @@ import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { misconfiguredSandboxError, type MisconfiguredSandboxBackends } from "./tenant-credentials.ts";
 import { randomUUID } from "node:crypto";
 import { boundTenant } from "../tenants/context.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
+import type { SandboxDefaults, SandboxResourceRecords } from "./sandbox-resource-store.ts";
 
 export interface SandboxResource {
   id: string;
@@ -19,8 +19,8 @@ export interface SandboxResource {
   createdAt: string;
   legacy: boolean;
   state: "unverified" | "provisioning" | "ready" | "failed" | "retired";
-  availableActions?: string[];
   machineId?: string;
+  providerName?: string;
   cleanupPending?: boolean;
   holders?: string[];
   spec?: AgentComputerSpec;
@@ -52,12 +52,11 @@ interface SandboxProviderProfile {
 export interface SandboxResources {
   profiles(): Promise<SandboxProviderProfile[]>;
   forTurn(turn: { actorId: string; scopeId: ScopeId; isCurrent: () => Promise<boolean> }): SandboxResources;
-  initialize(): Promise<void>;
   list(
     actorId: string,
     scopeId: ScopeId,
   ): Promise<{
-    sandboxes: SandboxResource[];
+    sandboxes: Array<SandboxResource & { availableActions: string[] }>;
     defaultSandboxId: string | null;
     defaultMode: "none" | "selected";
     providers: SandboxProviderProfile[];
@@ -104,9 +103,8 @@ export async function accessConversationSandbox(
 }
 
 export function createSandboxResources(opts: {
-  upgrade?: () => Promise<void>;
-  records: DurableMap<SandboxResource>;
-  defaults: DurableMap<SandboxDefault>;
+  records: SandboxResourceRecords;
+  defaults: SandboxDefaults;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: () => Promise<SandboxBackendName>;
   usableBackends?: () => Promise<readonly SandboxBackendName[]>;
@@ -117,20 +115,6 @@ export function createSandboxResources(opts: {
   lock: AdvisoryLock;
   canUseScope(actorId: string, scopeId: ScopeId): Promise<boolean>;
 }): SandboxResources {
-  const upgraded = new Map<string, Promise<void>>();
-  const initialize = async (): Promise<void> => {
-    if (!opts.upgrade) return;
-    const tenant = boundTenant() ?? "";
-    let upgrade = upgraded.get(tenant);
-    if (!upgrade) {
-      upgrade = opts.upgrade().catch((error: unknown) => {
-        upgraded.delete(tenant);
-        throw error;
-      });
-      upgraded.set(tenant, upgrade);
-    }
-    await upgrade;
-  };
   const actionsFor = (backend: Sandbox | undefined): string[] => {
     if (!backend) return [];
     return [
@@ -145,7 +129,6 @@ export function createSandboxResources(opts: {
       throw new SandboxAccessError("sandbox access requires permission to use its owning scope");
   };
   const get = async (id: string): Promise<SandboxResource> => {
-    await initialize();
     const record = await opts.records.get(id);
     if (!record) throw new SandboxAccessError(`sandbox not found: ${id}`);
     return record;
@@ -204,7 +187,6 @@ export function createSandboxResources(opts: {
           withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
     defaultBackend: opts.defaultBackend,
-    initialize,
     get,
     use,
     async hold(id, runId) {
@@ -230,7 +212,6 @@ export function createSandboxResources(opts: {
       return live.includes(true);
     },
     async retire(actorId, id) {
-      await initialize();
       const record = await agentRecord(actorId, id);
       await opts.lock.withLock(`sandbox-resource:${id}`, () =>
         opts.lock.withLock(`sandbox-default:${record.ownerScopeId}`, async () => {
@@ -244,10 +225,7 @@ export function createSandboxResources(opts: {
         }),
       );
     },
-    async jobComputers() {
-      await initialize();
-      return (await opts.records.all()).filter((record) => record.jobOnly);
-    },
+    jobComputers: () => opts.records.jobComputers(),
     async retireJobComputer(id, seenState) {
       await opts.lock.withLock(`sandbox-resource:${id}`, async () => {
         const current = await get(id);
@@ -264,7 +242,6 @@ export function createSandboxResources(opts: {
       return use(id, () => backend.computerStatus!(record.backingScopeId));
     },
     async restart(actorId, id) {
-      await initialize();
       const record = await agentRecord(actorId, id);
       if (record.state === "retired") throw new Error("sandbox has been retired");
       const backend = opts.backends[record.backend];
@@ -272,17 +249,17 @@ export function createSandboxResources(opts: {
       await use(id, () => backend.restartComputer!(record.backingScopeId), true);
     },
     async resolve(scopeId) {
-      await initialize();
       const route = await opts.defaults.get(scopeId);
       return route?.sandboxId ? get(route.sandboxId) : null;
     },
     async list(actorId, scopeId) {
       await authorize(actorId, scopeId);
-      await initialize();
       const route = await opts.defaults.get(scopeId);
-      const sandboxes: SandboxResource[] = [];
-      for (const record of await opts.records.all()) {
-        if (record.jobOnly || !(await opts.canUseScope(actorId, record.ownerScopeId))) continue;
+      const owners: string[] = [];
+      for (const owner of await opts.records.owners())
+        if (await opts.canUseScope(actorId, owner as ScopeId)) owners.push(owner);
+      const sandboxes: Array<SandboxResource & { availableActions: string[] }> = [];
+      for (const record of await opts.records.ownedBy(owners)) {
         const backend = opts.backends[record.backend];
         let availableActions = actionsFor(backend).filter((action) => action !== "create");
         if (record.state === "retired")
@@ -297,7 +274,6 @@ export function createSandboxResources(opts: {
       };
     },
     async create(actorId, scopeId, backend, name, reservationId, jobOnly) {
-      await initialize();
       await authorize(actorId, scopeId);
       const misconfigured = opts.misconfigured?.[backend as SandboxBackendName];
       if (misconfigured) throw misconfiguredSandboxError(backend, misconfigured);
@@ -359,7 +335,6 @@ export function createSandboxResources(opts: {
       });
     },
     async setDefault(actorId, scopeId, id) {
-      await initialize();
       await authorize(actorId, scopeId);
       await opts.lock.withLock(`sandbox-default:${scopeId}`, async () => {
         if (id !== null) {

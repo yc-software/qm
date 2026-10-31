@@ -1,3 +1,5 @@
+import { typedTableMigration } from "../persistence/typed-table-migration.ts";
+import { jsonBackfill } from "../persistence/typed-statements.ts";
 import { randomUUID } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
@@ -16,7 +18,7 @@ import {
 } from "./shared-deploy-provider.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import { E2bSandboxGoneError, runE2bScript, type E2bClient, type E2bSession } from "../sandbox/e2b-client.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -43,6 +45,35 @@ export interface StoredE2bDeployBody {
   createdAtMs: number;
 }
 
+const E2B_DEPLOY_BODIES_COLUMNS: RowColumns<StoredE2bDeployBody, "deploymentId"> = {
+  deploymentId: "text",
+  sandboxId: "text",
+  host: "text",
+  trafficAccessToken: "text",
+  createdAtMs: "bigint",
+};
+
+export const E2B_DEPLOY_BODIES: RowTable<StoredE2bDeployBody, "deploymentId"> = {
+  table: "e2b_deploy_bodies",
+  key: "deploymentId",
+  recordKey: true,
+  columns: E2B_DEPLOY_BODIES_COLUMNS,
+  migrations: [
+    typedTableMigration({
+      table: "e2b_deploy_bodies",
+      columns: [
+        "deployment_id TEXT NOT NULL",
+        "sandbox_id TEXT NOT NULL",
+        "host TEXT NOT NULL",
+        "traffic_access_token TEXT",
+        "created_at_ms BIGINT NOT NULL",
+      ],
+      primaryKey: ["deployment_id"],
+      backfill: { ...jsonBackfill("e2b_deploy_bodies", E2B_DEPLOY_BODIES_COLUMNS), deployment_id: "id" },
+    }),
+  ],
+};
+
 export interface E2bDeployProviderOptions {
   client: E2bClient;
   namePrefix?: string;
@@ -50,7 +81,7 @@ export interface E2bDeployProviderOptions {
   readyWindowSec?: number;
   idleTimeoutSec?: number;
   resolveCacheMs?: number;
-  store: DurableMap<StoredE2bDeployBody>;
+  store: Pick<KeyedRows<StoredE2bDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }

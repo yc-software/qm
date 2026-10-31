@@ -8,9 +8,6 @@ export const isTarget = (value: unknown): value is Target =>
 export const SANDBOX_BACKENDS = {
   local: "Docker containers on the deployment host",
   sprites: "Fly Sprites",
-  aws: "Lambda MicroVM sandboxes",
-  agent37: "",
-  superserve: "Superserve sandboxes",
   e2b: "E2B sandboxes",
   render: "Render Sandboxes",
 } as const;
@@ -29,9 +26,9 @@ export interface SandboxBackendPolicy {
 
 /** Keyed by hosting target so adding a target forces a sandbox-backend decision. */
 export const SANDBOX_BACKEND_POLICY: Record<Target, SandboxBackendPolicy> = {
-  docker: { allowed: ["local", "sprites", "agent37", "superserve", "e2b"], requireExplicit: false },
-  fly: { allowed: ["sprites", "agent37", "superserve", "e2b"], requireExplicit: false },
-  aws: { allowed: ["sprites", "aws", "agent37", "superserve", "e2b"], requireExplicit: true },
+  docker: { allowed: ["local", "sprites", "e2b"], requireExplicit: false },
+  fly: { allowed: ["sprites", "e2b"], requireExplicit: false },
+  aws: { allowed: ["sprites", "e2b"], requireExplicit: true },
   render: { allowed: ["render"], requireExplicit: false },
 };
 

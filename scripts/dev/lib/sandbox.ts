@@ -1,6 +1,5 @@
 import { existsSync, openSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { writePidFile } from "./lease.ts";
 import { run } from "./proc.ts";
@@ -122,74 +121,6 @@ export async function resolveSandbox(opts: {
     };
   }
 
-  if (backend === "agent37") {
-    const apiKey = opts.baseEnv.AGENT37_API_KEY;
-    if (!apiKey)
-      throw new Error(
-        "--sandbox agent37 requires AGENT37_API_KEY in the environment (mint one at https://agent37.com/dashboard/cloud/api-keys)",
-      );
-    let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
-    if (!apiUrl) {
-      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
-      if (!apiUrl)
-        warnings.push(
-          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
-        );
-    }
-    const env: Record<string, string> = {
-      SANDBOX_BACKEND: "agent37",
-      AGENT37_API_KEY: apiKey,
-      AGENT37_NAME_PREFIX: opts.baseEnv.AGENT37_NAME_PREFIX || "qmdev",
-    };
-    if (opts.baseEnv.AGENT37_API_BASE_URL) env.AGENT37_API_BASE_URL = opts.baseEnv.AGENT37_API_BASE_URL;
-    if (opts.baseEnv.AGENT37_TEMPLATE) env.AGENT37_TEMPLATE = opts.baseEnv.AGENT37_TEMPLATE;
-    if (opts.baseEnv.AGENT37_EGRESS_PROXY_URL) env.AGENT37_EGRESS_PROXY_URL = opts.baseEnv.AGENT37_EGRESS_PROXY_URL;
-    else
-      warnings.push(
-        "AGENT37_EGRESS_PROXY_URL unset -- agent37 sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
-      );
-    if (apiUrl) env.PUBLIC_API_URL = apiUrl;
-    return { backend: "agent37", env, detail: "Agent37 (api.agent37.com)", publicApiUrl: apiUrl, warnings };
-  }
-
-  if (backend === "superserve") {
-    const apiKey = opts.baseEnv.SUPERSERVE_API_KEY?.trim();
-    const template = opts.baseEnv.SUPERSERVE_TEMPLATE?.trim();
-    if (!apiKey)
-      throw new Error(
-        "--sandbox superserve requires SUPERSERVE_API_KEY in the environment (create an API key in the Superserve console)",
-      );
-    if (!template)
-      throw new Error(
-        "--sandbox superserve requires SUPERSERVE_TEMPLATE in the environment (the ready qm-agent-<release> template that carries the agent toolchain)",
-      );
-    let apiUrl = opts.baseEnv.PUBLIC_API_URL || null;
-    if (!apiUrl) {
-      apiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
-      if (!apiUrl)
-        warnings.push(
-          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
-        );
-    }
-    const env: Record<string, string> = {
-      SANDBOX_BACKEND: "superserve",
-      SUPERSERVE_API_KEY: apiKey,
-      SUPERSERVE_TEMPLATE: template,
-      SUPERSERVE_NAME_PREFIX:
-        opts.baseEnv.SUPERSERVE_NAME_PREFIX ||
-        `qmdev-${createHash("sha1").update(opts.worktree).digest("hex").slice(0, 12)}`,
-    };
-    if (opts.baseEnv.SUPERSERVE_BASE_URL) env.SUPERSERVE_BASE_URL = opts.baseEnv.SUPERSERVE_BASE_URL;
-    if (opts.baseEnv.SUPERSERVE_EGRESS_ALLOW) env.SUPERSERVE_EGRESS_ALLOW = opts.baseEnv.SUPERSERVE_EGRESS_ALLOW;
-    if (opts.baseEnv.SUPERSERVE_EGRESS_DENY) env.SUPERSERVE_EGRESS_DENY = opts.baseEnv.SUPERSERVE_EGRESS_DENY;
-    if (!opts.baseEnv.SUPERSERVE_EGRESS_ALLOW && !opts.baseEnv.SUPERSERVE_EGRESS_DENY)
-      warnings.push(
-        "SUPERSERVE_EGRESS_ALLOW/SUPERSERVE_EGRESS_DENY unset -- superserve sandbox runs with open egress; set one to QA the enforced path",
-      );
-    if (apiUrl) env.PUBLIC_API_URL = apiUrl;
-    return { backend: "superserve", env, detail: `Superserve (template ${template})`, publicApiUrl: apiUrl, warnings };
-  }
-
   if (backend === "do-managed-agents") {
     const managedAgentsToken = opts.baseEnv.DO_AGENTS_API_TOKEN?.trim();
     if (!managedAgentsToken)
@@ -224,48 +155,6 @@ export async function resolveSandbox(opts: {
       env,
       detail: `Managed Agents (${opts.baseEnv.DO_AGENTS_API_BASE_URL || "api.digitalocean.com"})`,
       publicApiUrl: managedAgentsApiUrl,
-      warnings,
-    };
-  }
-
-  if (backend === "porter") {
-    const porterToken = opts.baseEnv.PORTER_DEPLOY_API_TOKEN;
-    const projectId = opts.baseEnv.PORTER_DEPLOY_PROJECT_ID;
-    const clusterId = opts.baseEnv.PORTER_DEPLOY_CLUSTER_ID;
-    if (!porterToken || !projectId || !clusterId)
-      throw new Error(
-        "--sandbox porter requires PORTER_DEPLOY_API_TOKEN, PORTER_DEPLOY_PROJECT_ID, and PORTER_DEPLOY_CLUSTER_ID in the environment (create an API token in the Porter dashboard)",
-      );
-    let porterApiUrl = opts.baseEnv.PUBLIC_API_URL || null;
-    if (!porterApiUrl) {
-      porterApiUrl = await startQuickTunnel(opts.corePort, opts.lock, opts.log);
-      if (!porterApiUrl)
-        warnings.push(
-          "cloudflared tunnel didn't come up -- agent self-API (crons/sends) won't be reachable from the sandbox",
-        );
-    }
-    const env: Record<string, string> = {
-      SANDBOX_BACKEND: "porter",
-      PORTER_DEPLOY_API_TOKEN: porterToken,
-      PORTER_DEPLOY_PROJECT_ID: projectId,
-      PORTER_DEPLOY_CLUSTER_ID: clusterId,
-      PORTER_SANDBOX_NAME_PREFIX: opts.baseEnv.PORTER_SANDBOX_NAME_PREFIX || "qmdev",
-      PORTER_DEPLOY_VISIBILITY: opts.baseEnv.PORTER_DEPLOY_VISIBILITY || "private",
-    };
-    if (opts.baseEnv.PORTER_DEPLOY_URL) env.PORTER_DEPLOY_URL = opts.baseEnv.PORTER_DEPLOY_URL;
-    if (opts.baseEnv.PORTER_SANDBOX_IMAGE) env.PORTER_SANDBOX_IMAGE = opts.baseEnv.PORTER_SANDBOX_IMAGE;
-    if (opts.baseEnv.PORTER_SANDBOX_EGRESS_PROXY_URL)
-      env.PORTER_SANDBOX_EGRESS_PROXY_URL = opts.baseEnv.PORTER_SANDBOX_EGRESS_PROXY_URL;
-    else
-      warnings.push(
-        "PORTER_SANDBOX_EGRESS_PROXY_URL unset -- porter sandbox runs with NO egress enforcement; set it to QA the forced-proxy path",
-      );
-    if (porterApiUrl) env.PUBLIC_API_URL = porterApiUrl;
-    return {
-      backend: "porter",
-      env,
-      detail: `Porter (project ${projectId}, cluster ${clusterId})`,
-      publicApiUrl: porterApiUrl,
       warnings,
     };
   }
