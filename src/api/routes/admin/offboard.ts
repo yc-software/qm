@@ -281,6 +281,8 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     if (deps.identity?.deactivationSource(principalId) === "manual")
       principal = await deps.identity.recordOffboarded(principalId, actor.id, [recorded]);
   }
+  if (!principal && deps.identity?.deactivationSource(principalId) === "manual")
+    principal = await deps.identity.recordOffboarded(principalId, actor.id, []);
   const failed = changes.filter((c) => c.result === "failed").length;
   audit(deps, {
     principalId: actor.id,

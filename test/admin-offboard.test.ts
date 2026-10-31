@@ -256,6 +256,12 @@ test("offboarding refuses non-admins, the admin themselves, and unknown body fie
     await s.built.identity.deactivate("already-gone@example.com");
     const gone: any = await (await s.offboard("already-gone@example.com", {})).json();
     assert.deepEqual(gone.changes, [], "someone already deactivated gets an empty plan, not a 404");
+    const marked: any = await (await s.offboard("already-gone@example.com", { apply: true })).json();
+    assert.equal(
+      marked.principal?.offboarded,
+      true,
+      "applying an empty plan to someone signed out by hand still marks them offboarded",
+    );
     assert.equal(s.built.identity.deactivationSource("nobody-by-that-name"), undefined);
     const deniedReactivate = await fetch(`${s.base}/v1/admin/users/U1/reactivate`, {
       method: "POST",
