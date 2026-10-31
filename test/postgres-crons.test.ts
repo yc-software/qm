@@ -136,9 +136,10 @@ test("due crons are claimed across tenants and each slot is claimed once", { ski
         (await crons.due(Date.now())).map((c) => c.id),
         [a.id],
       );
-      assert.deepEqual(await withTenant(otherTenant, () => crons.scheduled()).then((c) => c.map((x) => x.tenantId)), [
-        otherTenant,
-      ]);
+      await assert.rejects(
+        withTenant(otherTenant, () => crons.scheduled()),
+        /A cross-tenant claim cannot run while a tenant is bound/,
+      );
     },
   );
 });

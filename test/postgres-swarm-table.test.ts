@@ -62,9 +62,9 @@ test("writes round-trip every field and pending claims page across tenants", { s
       ["s3"],
     );
     assert.equal((await store.pending(undefined, 1)).length, 1);
-    assert.deepEqual(
-      (await withTenant(tenant, () => store.pending(undefined, 10))).map((row) => [row.id, row.tenantId]),
-      [["s1", tenant]],
+    await assert.rejects(
+      withTenant(tenant, () => store.pending(undefined, 10)),
+      /A cross-tenant claim cannot run while a tenant is bound/,
     );
     await withTenant(tenant, () => store.write("s1", (current) => ({ ...current!, pending: false })));
     assert.deepEqual(

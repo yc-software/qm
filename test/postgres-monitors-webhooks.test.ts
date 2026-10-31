@@ -54,9 +54,9 @@ test("monitors are watched per thread, claimed across tenants and swept only whe
         new Set((await monitors.enabled()).map((m) => `${m.tenantId}/${m.id}`)),
         new Set([`${tenant}/${a.id}`, `${otherTenant}/${b.id}`]),
       );
-      assert.deepEqual(
-        (await withTenant(tenant, () => monitors.enabled())).map((m) => m.id),
-        [a.id],
+      await assert.rejects(
+        withTenant(tenant, () => monitors.enabled()),
+        /A cross-tenant claim cannot run while a tenant is bound/,
       );
       await withTenant(otherTenant, () => monitors.setEnabled(b.id, false));
       assert.equal(await monitors.deleteDefunct(Date.now()), 0);
