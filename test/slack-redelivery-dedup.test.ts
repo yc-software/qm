@@ -94,6 +94,7 @@ test("a message folded as a steer is not re-run as a fresh turn after that run e
     const runId = (first as { runId: string }).runId;
     const claimed = await built.runs.claim("w1", 30_000);
     await built.app.turn(slackTurn("fold me", "t2"));
+    assert.equal((await built.signals.takePending(runId)).length, 1);
     await built.runs.complete(runId, claimed!.leaseToken!, { status: "silent" });
     const late = await built.app.turn(slackTurn("fold me", "t2"));
     assert.equal(late.status, "silent");

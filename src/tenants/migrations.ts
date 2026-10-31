@@ -1,6 +1,6 @@
 import type { PgMigrationDefinition } from "../persistence/pg-pool.ts";
 
-export const TENANT = "qm_tenant_id()";
+export const TENANT = "qm_bound_tenant()";
 const MATCH = `tenant_id = ${TENANT}`;
 
 const TENANT_FUNCTIONS = [
@@ -8,8 +8,8 @@ const TENANT_FUNCTIONS = [
      AS $qm_tenant_unbound$ BEGIN
        RAISE 'No tenant is bound to this transaction' USING ERRCODE = 'insufficient_privilege';
      END $qm_tenant_unbound$`,
-  `CREATE OR REPLACE FUNCTION qm_tenant_id() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
-     AS $qm_tenant_id$ SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, qm_tenant_unbound()) $qm_tenant_id$`,
+  `CREATE OR REPLACE FUNCTION qm_bound_tenant() RETURNS uuid LANGUAGE sql STABLE PARALLEL SAFE
+     AS $qm_bound_tenant$ SELECT COALESCE(NULLIF(current_setting('qm.tenant_id', true), '')::uuid, qm_tenant_unbound()) $qm_bound_tenant$`,
 ];
 
 function grantsWhereAllowed(statements: readonly string[]): string {
@@ -97,7 +97,7 @@ export const TENANCY_BASE: PgMigrationDefinition = {
        ELSIF NOT present THEN
          EXECUTE format('ALTER TABLE %s ADD COLUMN tenant_id UUID NOT NULL', target);
        END IF;
-       EXECUTE format('ALTER TABLE %s ALTER COLUMN tenant_id SET DEFAULT qm_tenant_id()', target);
+       EXECUTE format('ALTER TABLE %s ALTER COLUMN tenant_id SET DEFAULT qm_bound_tenant()', target);
        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = target AND contype = 'f'
                         AND confrelid = 'tenants'::regclass) THEN
          EXECUTE format('ALTER TABLE %s ADD FOREIGN KEY (tenant_id) REFERENCES tenants', target);
@@ -228,7 +228,7 @@ const ITEM_SEARCH = [
      EXECUTE format($create$
        CREATE OR REPLACE FUNCTION qm_search_items(query tsquery) RETURNS TABLE(session_id text, seq bigint)
          LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp
-         AS $body$ SELECT i.session_id, i.seq FROM items i WHERE i.tenant_id = qm_tenant_id() AND i.search @@ query $body$
+         AS $body$ SELECT i.session_id, i.seq FROM items i WHERE i.tenant_id = qm_bound_tenant() AND i.search @@ query $body$
      $create$, current_schema());
    END $qm_search_items$`,
   grantsWhereAllowed([
@@ -239,7 +239,7 @@ const ITEM_SEARCH = [
 
 export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
   {
-    id: "sessions/store/0047-tenants",
+    id: "sessions/store/0048-tenants",
     statements: [
       `SET LOCAL lock_timeout = '5s'`,
       ...TENANT_FUNCTIONS,
@@ -253,11 +253,12 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
             WHERE EXISTS (SELECT 1 FROM sessions) AND NOT EXISTS (SELECT 1 FROM tenants);
          END IF;
        END $qm_tenant_seed$`,
+      `DROP FUNCTION IF EXISTS qm_tenant_id()`,
       `DROP TABLE IF EXISTS qm_tenant`,
     ],
   },
   tenantTables(
-    "sessions/store/0048-tenant-sessions",
+    "sessions/store/0049-tenant-sessions",
     [
       {
         table: "sessions",
@@ -297,7 +298,7 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
     },
   ),
   {
-    id: "sessions/store/0049-agent-reply-index",
+    id: "sessions/store/0050-agent-reply-index",
     statements: [
       `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_agent_reply
          ON items(tenant_id, session_id, created_at DESC) WHERE kind = 'AgentMessage'`,

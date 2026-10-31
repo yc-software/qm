@@ -1,5 +1,5 @@
 import { isCronRuntime } from "../../cron/runtime.ts";
-import type { Cron } from "../../types.ts";
+import type { Cron } from "../../triggers/types.ts";
 import type { CreateCronInput, CronPatch } from "../../cron/cron-store.ts";
 import { describeRunNowRefusal } from "../../cron/scheduler.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody } from "../../cron/schedule.ts";

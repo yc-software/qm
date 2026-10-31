@@ -1,8 +1,7 @@
-import type { ShipGrant } from "../types.ts";
+import type { ShipGrant } from "./types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, num, present, text, type Row } from "./pg-values.ts";
 
 export interface ShipGrantRows {
@@ -130,22 +129,5 @@ export function createPostgresShipGrantRows(connectionString: string): ShipGrant
       await q(`DELETE FROM loop_ship_grants WHERE ${MINE} AND loop_id = $1`, [loopId]);
     },
     close,
-  };
-}
-
-export function createMemoryShipGrantRows(): ShipGrantRows {
-  const rows = createMemoryRows<ShipGrant>();
-  return {
-    async insertIfAbsent(grant) {
-      rows.insertIfAbsent(grant);
-      return rows.get(grant.id) ?? grant;
-    },
-    get: async (id) => rows.get(id),
-    byLoop: async (loopId) => rows.where((grant) => grant.loopId === loopId),
-    update: async (id, apply) => rows.update(id, apply),
-    delete: async (id) => rows.delete(id),
-    async deleteByLoop(loopId) {
-      for (const grant of rows.where((candidate) => candidate.loopId === loopId)) rows.delete(grant.id);
-    },
   };
 }

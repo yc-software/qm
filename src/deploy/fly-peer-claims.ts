@@ -14,7 +14,6 @@ export async function claimFlyPeer(opts: {
 }): Promise<string> {
   if (!opts.taskArn || !opts.peerIds.length || new Set(opts.peerIds).size !== opts.peerIds.length)
     throw new Error("Fly peer claims require a task identity and distinct peer IDs");
-  if (!opts.claims.update) throw new Error("Fly peer claims require atomic ownership updates");
   const desired = { taskArn: opts.taskArn };
   for (const id of opts.peerIds) {
     if ((await opts.claims.get(id))?.taskArn === opts.taskArn) return id;
@@ -53,7 +52,6 @@ export async function recordStoppedFlyPeers(opts: {
   claims: DurableMap<FlyPeerClaim>;
   taskStopped: (taskArn: string) => Promise<boolean>;
 }): Promise<void> {
-  if (!opts.claims.update) throw new Error("Fly peer claims require atomic ownership updates");
   for (const id of opts.peerIds) {
     const previous = await opts.claims.get(id);
     if (!previous || previous.stoppedConfirmedAt || !(await opts.taskStopped(previous.taskArn))) continue;

@@ -150,12 +150,7 @@ import { showStateError } from "./error-banner";
 import { splitLinks } from "./linkify";
 import { slackWireToPlain, splitSlackWire, stripSlackDirectives } from "./slack-text";
 import { installMarkdownSanitizer } from "./markdown-sanitize";
-import {
-  transcriptModel,
-  defaultEffortForModel,
-  harnessSupportsEffort,
-  harnessSupportsFastMode,
-} from "./model-options";
+import { transcriptModel, defaultEffortForModel } from "./model-options";
 import {
   attachmentGallery,
   avatarTpl,
@@ -718,11 +713,9 @@ export function createChatSurface(
     if (!selected) throw new Error("No model is available");
     const target = { scopeId: chatState.scopeId, channelName: chatState.contextName };
     if (ctx.composer.followsDefault()) return target;
-    const harness = selected.harnessId;
     return {
-      ...(harnessSupportsEffort(harness) ? { effortLevel: ctx.composer.state.effortLevel } : {}),
-      ...(harnessSupportsFastMode(harness) ? { fastMode: ctx.composer.state.fastMode } : {}),
-      harness,
+      effortLevel: ctx.composer.state.effortLevel,
+      fastMode: ctx.composer.state.fastMode,
       ...target,
     };
   }
@@ -1036,12 +1029,7 @@ export function createChatSurface(
     return (work: WorkBlock) => {
       if (agent !== chatState.agent) return;
       appendConsumedSteers(agent.state.messages, work);
-      if (
-        work.runtime &&
-        switchedDefault(work.runtime) &&
-        (work.runtime.harnessId !== chatState.turnRuntime?.harnessId ||
-          work.runtime.modelId !== chatState.turnRuntime.modelId)
-      )
+      if (work.runtime && switchedDefault(work.runtime) && work.runtime.modelId !== chatState.turnRuntime?.modelId)
         void ctx.composer.followScopeDefault(agent);
       if (work.runtime) chatState.turnRuntime = work.runtime;
       else if (work !== chatState.liveWork) chatState.turnRuntime = null;

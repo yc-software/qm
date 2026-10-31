@@ -1,8 +1,6 @@
 import { createPgPool, withPgTransaction, type PoolClient } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
-import type { Run, RunStore } from "../runs/run-store.ts";
-import type { SessionStore } from "../sessions/session-store.ts";
-import { currentTenant } from "../tenants/context.ts";
+import type { Run } from "../runs/run-store.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { jsonbStringify } from "../util/text.ts";
 import { assertSwarmRun, type SwarmRunFence } from "./swarm-fence.ts";
@@ -123,7 +121,7 @@ async function fenceRun(client: PoolClient, fence: SwarmRunFence): Promise<Run |
   const run = result.rows[0] ?? null;
   assertSwarmRun(fence, run);
   const session = await client.query(
-    "SELECT id FROM sessions WHERE tenant_id = qm_tenant_id() AND id=$1 AND scope_id=$2 AND thread_ref=$3 FOR SHARE",
+    "SELECT id FROM sessions WHERE tenant_id = qm_bound_tenant() AND id=$1 AND scope_id=$2 AND thread_ref=$3 FOR SHARE",
     [fence.sessionId, fence.scopeId, fence.threadRef],
   );
   if (!session.rowCount) throw new Error("capability session mismatch");
@@ -176,52 +174,5 @@ export function createPostgresSwarmRows(connectionString: string): SwarmRows {
       return rows.map((row) => ({ ...swarmFromRow(row), tenantId: row.tenant_id as string }));
     },
     close,
-  };
-}
-
-export function createMemorySwarmRows(authority?: {
-  runs: Pick<RunStore, "get">;
-  sessions: Pick<SessionStore, "get">;
-}): SwarmRows {
-  const tenants = new Map<string, Map<string, SwarmStorage>>();
-  const mine = (): Map<string, SwarmStorage> => {
-    const tenant = currentTenant();
-    if (!tenants.has(tenant)) tenants.set(tenant, new Map());
-    return tenants.get(tenant)!;
-  };
-  const stored = (swarm: SwarmStorage) =>
-    structuredClone(Object.fromEntries(Object.entries(swarm).filter(([, value]) => value != null))) as SwarmStorage;
-  return {
-    async get(id) {
-      const swarm = mine().get(id);
-      return swarm ? structuredClone(swarm) : null;
-    },
-    async write(id, mutate, fence) {
-      const swarms = mine();
-      let run: Run | null = null;
-      if (fence) {
-        if (!authority) throw new Error("swarm run validation unavailable");
-        const session = await authority.sessions.get(fence.sessionId);
-        if (!session || session.scopeId !== fence.scopeId || session.threadRef !== fence.threadRef)
-          throw new Error("capability session mismatch");
-        run = await authority.runs.get(fence.runId);
-        assertSwarmRun(fence, run);
-      }
-      const current = swarms.get(id);
-      const next = stored({ ...mutate(current ? structuredClone(current) : null), id });
-      if (fence) assertSwarmRun(fence, run);
-      swarms.set(id, next);
-      return structuredClone(next);
-    },
-    async pending(afterId, limit) {
-      return [...tenants.entries()]
-        .flatMap(([tenantId, swarms]) =>
-          [...swarms.values()]
-            .filter((swarm) => swarm.pending && (afterId === undefined || swarm.id > afterId))
-            .map((swarm) => ({ ...structuredClone(swarm), tenantId })),
-        )
-        .sort((a, b) => (a.id < b.id ? -1 : Number(a.id > b.id)))
-        .slice(0, limit);
-    },
   };
 }

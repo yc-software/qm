@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
-import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { scopeId } from "../src/types.ts";
 import {
   createConnectorClientResolver,
@@ -10,6 +9,7 @@ import {
   deriveConnectorKey,
 } from "../src/connectors/connector-client-store.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
+import { testConfigStore } from "./support/test-database.ts";
 
 const orgScope = (o: string) => scopeId("org", o);
 const envWithSlack = {
@@ -54,7 +54,7 @@ test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decr
 });
 
 test("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {
-  const store = createMemoryConfigStore("default-org", { connectorSecretKey: "persistent-key" });
+  const store = testConfigStore("default-org", { connectorSecretKey: "persistent-key" });
   await store.setConnectorClient(orgScope("default-org"), "google", {
     clientId: "org-cid",
     clientSecret: "org-secret",
@@ -86,7 +86,7 @@ test("BYO record wins over env; the secret is encrypted at rest and never echoed
 });
 
 test("a provider with no org record falls back to env", async () => {
-  const store = createMemoryConfigStore("default-org", { connectorSecretKey: "k" });
+  const store = testConfigStore("default-org", { connectorSecretKey: "k" });
   const resolve = createConnectorClientResolver({
     reader: store,
     orgScopeId: orgScope,
@@ -99,7 +99,7 @@ test("a provider with no org record falls back to env", async () => {
 });
 
 test("a disabled org connector is refused (grays out the app grid)", async () => {
-  const store = createMemoryConfigStore("default-org", { connectorSecretKey: "k" });
+  const store = testConfigStore("default-org", { connectorSecretKey: "k" });
   await store.setConnectorClient(orgScope("default-org"), "google", {
     clientId: "c",
     clientSecret: "s",
@@ -110,7 +110,7 @@ test("a disabled org connector is refused (grays out the app grid)", async () =>
 });
 
 test("deleting a connector record falls back to env / unconfigured", async () => {
-  const store = createMemoryConfigStore("default-org", { connectorSecretKey: "k" });
+  const store = testConfigStore("default-org", { connectorSecretKey: "k" });
   await store.setConnectorClient(orgScope("default-org"), "google", { clientId: "c", clientSecret: "s" });
   assert.equal((await store.listConnectorClients(orgScope("default-org"))).length, 1);
   await store.deleteConnectorClient(orgScope("default-org"), "google");

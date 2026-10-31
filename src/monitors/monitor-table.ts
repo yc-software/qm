@@ -1,8 +1,7 @@
-import type { Monitor } from "../types.ts";
+import type { Monitor } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
-import { currentTenant } from "../tenants/context.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type TenantMonitor = Monitor & { tenantId: string };
@@ -147,31 +146,33 @@ export function createPostgresMonitorRows(connectionString: string): MonitorRows
       await q(`INSERT INTO monitors(${COLUMNS}) VALUES (${VALUES})`, monitorParams(monitor));
     },
     async get(id) {
-      return (await many(`${SELECT} WHERE tenant_id = qm_tenant_id() AND id = $1`, [id]))[0] ?? null;
+      return (await many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]))[0] ?? null;
     },
     ownedBy: (scopeId) =>
-      many(`${SELECT} WHERE tenant_id = qm_tenant_id() AND owner_scope_id = $1 ORDER BY id`, [scopeId]),
+      many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND owner_scope_id = $1 ORDER BY id`, [scopeId]),
     async watching(threadRefs) {
       if (!threadRefs.length) return [];
       return many(
-        `${SELECT} WHERE tenant_id = qm_tenant_id() AND enabled AND thread_ref = ANY($1::text[]) ORDER BY id`,
+        `${SELECT} WHERE tenant_id = qm_bound_tenant() AND enabled AND thread_ref = ANY($1::text[]) ORDER BY id`,
         [[...threadRefs]],
       );
     },
     async update(id, apply) {
       return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE tenant_id = qm_tenant_id() AND id = $1 FOR UPDATE`, [id]);
+        const current = await client.query(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1 FOR UPDATE`, [
+          id,
+        ]);
         if (!current.rows[0]) return null;
         const next = { ...apply(rowToMonitor(current.rows[0])), id };
         await client.query(
-          `UPDATE monitors SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_tenant_id() AND id = $1`,
+          `UPDATE monitors SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
           monitorParams(next),
         );
         return next;
       });
     },
     async delete(id) {
-      await q(`DELETE FROM monitors WHERE tenant_id = qm_tenant_id() AND id = $1`, [id]);
+      await q(`DELETE FROM monitors WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]);
     },
     async enabled() {
       const rows = await q(`${SELECT} WHERE enabled ORDER BY created_at, tenant_id, id`);
@@ -179,62 +180,6 @@ export function createPostgresMonitorRows(connectionString: string): MonitorRows
     },
     async deleteDisabledBefore(cutoff) {
       return (await query(`DELETE FROM monitors WHERE NOT enabled AND ${LAST_ACTIVITY} <= $1`, [cutoff])).rowCount;
-    },
-  };
-}
-
-export function createMemoryMonitorRows(): MonitorRows {
-  const tenants = new Map<string, Map<string, Monitor>>();
-  const mine = (): Map<string, Monitor> => {
-    const tenant = currentTenant();
-    if (!tenants.has(tenant)) tenants.set(tenant, new Map());
-    return tenants.get(tenant)!;
-  };
-  const all = (): Monitor[] =>
-    [...mine().entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, monitor]) => structuredClone(monitor));
-  return {
-    async insert(monitor) {
-      mine().set(monitor.id, structuredClone(monitor));
-    },
-    async get(id) {
-      const monitor = mine().get(id);
-      return monitor ? structuredClone(monitor) : null;
-    },
-    async ownedBy(scopeId) {
-      return all().filter((m) => m.ownerScopeId === scopeId);
-    },
-    async watching(threadRefs) {
-      const refs = new Set(threadRefs);
-      return all().filter((m) => m.enabled && refs.has(m.threadRef));
-    },
-    async update(id, apply) {
-      const monitors = mine();
-      const current = monitors.get(id);
-      if (!current) return null;
-      const next = { ...apply(structuredClone(current)), id };
-      monitors.set(id, structuredClone(next));
-      return next;
-    },
-    async delete(id) {
-      mine().delete(id);
-    },
-    async enabled() {
-      return [...tenants.entries()]
-        .flatMap(([tenantId, monitors]) =>
-          [...monitors.values()].filter((m) => m.enabled).map((m) => ({ ...structuredClone(m), tenantId })),
-        )
-        .sort((a, b) => a.createdAt - b.createdAt);
-    },
-    async deleteDisabledBefore(cutoff) {
-      let deleted = 0;
-      for (const monitors of tenants.values()) {
-        for (const [id, m] of monitors) {
-          if (m.enabled || Math.max(m.expiresAt, m.lastFiredAt ?? 0, m.createdAt) > cutoff) continue;
-          monitors.delete(id);
-          deleted++;
-        }
-      }
-      return deleted;
     },
   };
 }

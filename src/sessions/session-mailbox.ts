@@ -1,7 +1,6 @@
 import type { OrchestratorInput } from "../core/orchestrator/types.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
-import { perTenant } from "../tenants/context.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
@@ -109,30 +108,5 @@ export function createPostgresSessionMailbox(connectionString: string): SessionM
       );
     },
     close,
-  };
-}
-
-export function createSessionMailbox(): SessionMailbox {
-  const mine = perTenant(() => new Map<string, SessionMessage>());
-  return {
-    async send(message) {
-      const messages = mine();
-      if (messages.has(message.id)) return;
-      const stored = Object.fromEntries(Object.entries(message).filter(([, value]) => value != null));
-      messages.set(message.id, structuredClone(stored) as unknown as SessionMessage);
-    },
-    async pending(recipientId) {
-      return [...mine().values()]
-        .filter((message) => message.recipientId === recipientId && !message.consumed)
-        .map((message) => structuredClone(message))
-        .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
-    },
-    async acknowledge(recipientId, ids) {
-      const messages = mine();
-      for (const id of ids) {
-        const message = messages.get(id);
-        if (message?.recipientId === recipientId) message.consumed = true;
-      }
-    },
   };
 }

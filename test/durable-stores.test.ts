@@ -1,18 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryMap, createPostgresMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createCronStore } from "../src/cron/cron-store.ts";
-import { createMemoryCronRows } from "../src/cron/cron-table.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
 import { createDeployStore, type Deployment } from "../src/deploy/deploy-store.ts";
 import { scopeId } from "../src/types.ts";
-
-bindTestTenant();
+import { testMap, testAdvisoryLock, testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
+import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
+import { testCronRows } from "./support/typed-stores.ts";
 
 test("crons persist to the backing map (a second store instance reads them back)", async () => {
-  const rows = createMemoryCronRows();
-  const s1 = createCronStore(rows);
+  const map = testCronRows();
+  const s1 = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const c = await s1.create({
     schedule: { everyMs: 60_000 },
     action: "summarize signups",
@@ -23,23 +22,23 @@ test("crons persist to the backing map (a second store instance reads them back)
   });
   await s1.markFired(c.id, 123);
 
-  const s2 = createCronStore(rows);
+  const s2 = createCronStore(map, { fires: createPostgresCronFireStore(testDatabaseUrl()) });
   const got = await s2.get(c.id);
   assert.equal(got?.action, "summarize signups");
   assert.equal(got?.lastFiredAt, 123);
 });
 
 test("skills persist AND verify with a stable signing secret across store instances", async () => {
-  const map = createMemoryMap<Skill>();
+  const map = testMap<Skill>();
   const secret = "stable-test-secret";
-  const s1 = createSkillStore({ signingSecret: secret, backing: map });
+  const s1 = createSkillStore({ advisoryLock: testAdvisoryLock(), signingSecret: secret, backing: map });
   const sk = await s1.create({
     scopeId: scopeId("personal", "U1"),
     manifest: { name: "digest", description: "make a digest", requiredCapabilities: [], body: "..." },
     createdBy: "U1",
   });
 
-  const s2 = createSkillStore({ signingSecret: secret, backing: map });
+  const s2 = createSkillStore({ advisoryLock: testAdvisoryLock(), signingSecret: secret, backing: map });
   const got = await s2.get(sk.id);
   assert.ok(got, "skill is readable through a second store instance");
   assert.equal(got!.manifest.name, "digest");
@@ -47,8 +46,8 @@ test("skills persist AND verify with a stable signing secret across store instan
 });
 
 test("skill mutations reject names that could escape or collide when materialized", async () => {
-  const backing = createMemoryMap<Skill>();
-  const skills = createSkillStore({ backing });
+  const backing = testMap<Skill>();
+  const skills = createSkillStore({ advisoryLock: testAdvisoryLock(), backing });
   const manifest = (name: string) => ({ name, description: "d", requiredCapabilities: [], body: "b" });
   for (const name of ["..", "foo/bar", "foo\\bar", "foo bar", ".hidden", "foo."]) {
     await assert.rejects(
@@ -72,8 +71,8 @@ test("skill mutations reject names that could escape or collide when materialize
 });
 
 test("deployments persist with immutable versions across store instances", async () => {
-  const map = createMemoryMap<Deployment>();
-  const s1 = createDeployStore(map);
+  const map = testMap<Deployment>();
+  const s1 = createDeployStore(testDeployBackings({ deployments: map }));
   const d = await s1.create({
     ownerScopeId: scopeId("team", "T1"),
     createdBy: "U1",
@@ -82,29 +81,15 @@ test("deployments persist with immutable versions across store instances", async
   });
   await s1.addVersion(d.id, { entrypoint: "node server.js --v2", snapshotDir: "/snap/2" });
 
-  const s2 = createDeployStore(map);
+  const s2 = createDeployStore(testDeployBackings({ deployments: map }));
   const got = await s2.get(d.id);
   assert.equal(got?.versions.length, 2);
   assert.equal(got?.currentVersion, 2);
   assert.equal((await s2.versionOf(d.id, 1))?.snapshotDir, "/snap/1");
 });
 
-test("a fresh in-memory map is the unchanged default (ephemeral, no durability required)", async () => {
-  const s = createCronStore();
-  const c = await s.create({
-    schedule: { everyMs: 1000 },
-    action: "x",
-    ownerScopeId: scopeId("personal", "U1"),
-    owner: "U1",
-    createdBy: "U1",
-    destination: { type: "dm", target: "U1" },
-  });
-  assert.equal((await s.list()).length, 1);
-  assert.equal((await s.get(c.id))?.action, "x");
-});
-
 test("map iteration is deterministic id order — metadata updates (recordUse-style merges) must not reorder", async () => {
-  const map = createMemoryMap<{ name: string; lastUsedAt?: number }>();
+  const map = testMap<{ name: string; lastUsedAt?: number }>();
   await map.put("b", { name: "beta" });
   await map.put("c", { name: "gamma" });
   await map.put("a", { name: "alpha" });
@@ -126,8 +111,8 @@ interface SelectRow {
   nested: { keep: string };
 }
 
-test("memory map select filters case-insensitively on one field and strips omitted top-level keys", async () => {
-  const map = createMemoryMap<SelectRow>();
+test("map select filters case-insensitively on one field and strips omitted top-level keys", async () => {
+  const map = testMap<SelectRow>();
   await map.put("b", { id: "b", owner: "U1", secretEnc: "enc-b", nested: { keep: "b" } });
   await map.put("a", { id: "a", owner: "u1", secretEnc: "enc-a", nested: { keep: "a" } });
   await map.put("c", { id: "c", owner: "Alice@X.com", secretEnc: "enc-c", nested: { keep: "c" } });
@@ -147,7 +132,7 @@ test("memory map select filters case-insensitively on one field and strips omitt
 });
 
 test("select sweeps non-ASCII field values into the candidate set — SQL and JS case folding disagree there, so the caller's exact refilter decides", async () => {
-  const map = createMemoryMap<SelectRow>();
+  const map = testMap<SelectRow>();
   await map.put("t", { id: "t", owner: "İstanbul@X.com", nested: { keep: "t" } });
   await map.put("u", { id: "u", owner: "U1", nested: { keep: "u" } });
   const candidates = await map.select({ where: { field: "owner", anyOfFold: ["no-such-owner"] } });
@@ -158,8 +143,8 @@ test("select sweeps non-ASCII field values into the candidate set — SQL and JS
   );
 });
 
-test("memory map select returns clones — mutating a result cannot poison the store", async () => {
-  const map = createMemoryMap<SelectRow>();
+test("map select returns clones — mutating a result cannot poison the store", async () => {
+  const map = testMap<SelectRow>();
   await map.put("x", { id: "x", owner: "U1", nested: { keep: "x" } });
   const [row] = await map.select({ where: { field: "owner", anyOfFold: ["u1"] } });
   row!.nested.keep = "EVIL";

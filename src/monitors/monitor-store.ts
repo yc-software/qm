@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { Monitor } from "../types.ts";
+import type { Monitor } from "../triggers/types.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
   type CreateTriggerInput,
   withFields,
 } from "../triggers/trigger-store.ts";
-import { createMemoryMonitorRows, type MonitorRows, type TenantMonitor } from "./monitor-table.ts";
+import { type MonitorRows, type TenantMonitor } from "./monitor-table.ts";
 
 interface CreateMonitorInput extends CreateTriggerInput {
   processId: string;
@@ -35,7 +35,7 @@ export interface MonitorStore {
 
 const DEFUNCT_MONITOR_GRACE_MS = 7 * 24 * 60 * 60_000;
 
-export function createMonitorStore(rows: MonitorRows = createMemoryMonitorRows()): MonitorStore {
+export function createMonitorStore(rows: MonitorRows): MonitorStore {
   const edit = async (id: string, fields: Partial<Monitor>) => {
     await rows.update(id, (monitor) => withFields(monitor, fields));
   };

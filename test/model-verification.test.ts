@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
 
 const spec = {
   id: "verify-future",
@@ -14,7 +13,7 @@ const spec = {
 };
 
 test("no model can be enabled without provider verification", async () => {
-  const store = createModelOverlayStore(createMemoryMap());
+  const store = createModelOverlayStore(testMap());
   await assert.rejects(store.upsert(spec, "admin"), /verification/i);
   assert.deepEqual(await store.statuses(), []);
 });
@@ -26,7 +25,8 @@ import {
   createModelVerifier,
   type ModelVerifier,
 } from "../src/model/model-verification.ts";
-import { setModelOverlays, resolveModel, modelUnavailableReason } from "../src/model/pi-models.ts";
+import { resolveModel, modelUnavailableReason } from "../src/model/pi-models.ts";
+import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import type { StoredModelOverlay } from "../src/model/model-overlay-store.ts";
 import { ProviderTurnError, type ProviderErrorCode } from "../src/core/turn-error.ts";
 import { GatewayModelUnavailableError } from "../src/model/provider-endpoints.ts";
@@ -35,7 +35,7 @@ const verified: ModelVerifier = async () => ({ fingerprint: "test-context", prob
 afterEach(() => setModelOverlays([]));
 
 test("legacy unverified rows remain unavailable and statuses never expose proof fingerprints", async () => {
-  const backing = createMemoryMap<StoredModelOverlay>();
+  const backing = testMap<StoredModelOverlay>();
   const store = createModelOverlayStore(backing, undefined, verified);
   await backing.put(spec.id, { spec, disabled: false, updatedAt: 1, updatedBy: "admin" } as StoredModelOverlay);
   await store.refresh();
@@ -52,7 +52,7 @@ test("legacy unverified rows remain unavailable and statuses never expose proof 
 
 test("failed probes never publish new models or replace previously verified definitions", async () => {
   let fail = false;
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
+  const store = createModelOverlayStore(testMap(), undefined, async () => ({
     fingerprint: "context",
     probe: async () => {
       if (fail)
@@ -76,7 +76,7 @@ test("failed probes never publish new models or replace previously verified defi
 
 test("credential rotation invalidates availability and a successful recheck restores it", async () => {
   let fingerprint = "key-a";
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
+  const store = createModelOverlayStore(testMap(), undefined, async () => ({
     fingerprint,
     probe: async () => {},
   }));
@@ -99,7 +99,7 @@ test("a deletion while verification runs cannot be undone by its late success", 
     entered = r;
   });
   let hold = false;
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
+  const store = createModelOverlayStore(testMap(), undefined, async () => ({
     fingerprint: "context",
     probe: async () => {
       if (hold) {
@@ -122,7 +122,7 @@ test("a deletion while verification runs cannot be undone by its late success", 
 
 test("a changed serving context during a probe is not certified", async () => {
   let fingerprint = "old";
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
+  const store = createModelOverlayStore(testMap(), undefined, async () => ({
     fingerprint,
     probe: async () => {
       fingerprint = "new";
@@ -157,20 +157,21 @@ test("probe failures map from structured codes and error names, never provider t
 
 import "./support/auto-fake-sprites.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
-import { probeModel } from "../src/harness/pi-harness.ts";
 import { modelFromOverlay } from "../src/model/pi-models.ts";
 import { parseModelOverlay } from "../src/model/model-overlay.ts";
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
+
+const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
 test("live API verifies exact serving credentials, blocks denied models, rechecks edits, and invalidates rotated keys", async () => {
   const upstream = await verificationUpstream();
   const config = testConfig({
     openaiApiKey: "verification-test-key",
-    harness: "pi",
     providerBaseUrls: { openai: upstream.url + "/v1", anthropic: upstream.url },
   });
   const built = buildApp(config, { modelCredentialFetch: async () => Response.json({ data: [] }) });
@@ -238,7 +239,6 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     assert.equal((await put({ ...spec, name: "Verified edit", verify: true })).status, 200);
     assert.equal(upstream.requests.length, beforeEdit + 1);
     await built.config.setRuntimeSelection("personal:admin-alice@default-org", {
-      harnessId: "pi",
       modelId: spec.id,
     });
     await built.modelCredentials.set("openai", "rotated-test-key", "admin-alice");
@@ -325,7 +325,7 @@ test("the streaming probe aborts a nonresponsive provider and never accepts an i
 
 test("a failed recheck of the saved definition removes its prior certification", async () => {
   let fail = false;
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
+  const store = createModelOverlayStore(testMap(), undefined, async () => ({
     fingerprint: "context",
     probe: async () => {
       if (fail) throw new ProviderTurnError("403", { code: "auth", status: 403, retryable: false, raw: "" });
@@ -360,7 +360,7 @@ test("endpoint, template metadata, credential revision, and model edits change v
 });
 
 test("corrupt persisted rows and copied proofs cannot enable a different model ID", async () => {
-  const backing = createMemoryMap<StoredModelOverlay>();
+  const backing = testMap<StoredModelOverlay>();
   const verifier: ModelVerifier = async (value) => ({ fingerprint: JSON.stringify(value), probe: async () => {} });
   const store = createModelOverlayStore(backing, undefined, verifier);
   await store.upsert(spec, "admin");
@@ -381,7 +381,7 @@ test("concurrent successful probes cannot silently overwrite a newer saved defin
     entered = r;
   });
   let holding = false;
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async (value) => ({
+  const store = createModelOverlayStore(testMap(), undefined, async (value) => ({
     fingerprint: JSON.stringify(value),
     probe: async () => {
       if (holding && value.name === "Slow edit") {
@@ -408,7 +408,7 @@ test("a model stays unavailable until its pending probe completes", async () => 
   const started = new Promise<void>((r) => {
     entered = r;
   });
-  const store = createModelOverlayStore(createMemoryMap(), undefined, async () => ({
+  const store = createModelOverlayStore(testMap(), undefined, async () => ({
     fingerprint: "context",
     probe: async () => {
       entered();
@@ -486,7 +486,7 @@ test("verification fingerprints use a memory-hard credential-bound MAC key", asy
 
 test("environment and gateway credential changes invalidate cached fingerprints", async () => {
   const fallback = { openai: "first-environment-test-key" };
-  const credentials = createModelCredentialStore({ backing: createMemoryMap(), keyMaterial: "test-key", fallback });
+  const credentials = createModelCredentialStore({ backing: testMap(), keyMaterial: "test-key", fallback });
   const candidate = parseModelOverlay(spec);
   const modelGateway = {
     url: "https://gateway.example.invalid/v1",
@@ -509,6 +509,8 @@ test("environment and gateway credential changes invalidate cached fingerprints"
 });
 
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
+import { probeModel } from "../src/model/model-runtime.ts";
+import { testMap } from "./support/test-database.ts";
 
 test("legacy fingerprint versions stay unavailable until a successful new verification", async () => {
   const built = buildApp(testConfig({ openaiApiKey: "test-key" }));
@@ -525,7 +527,7 @@ test("legacy fingerprint versions stay unavailable until a successful new verifi
       }),
     )
     .digest("hex");
-  const backing = createMemoryMap<StoredModelOverlay>();
+  const backing = testMap<StoredModelOverlay>();
   await backing.put(spec.id, {
     spec: candidate,
     disabled: false,

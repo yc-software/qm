@@ -1,6 +1,5 @@
 import type { ManagedCronClaim, ManagedCronProfiles } from "../cron/managed.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
-import { perTenant } from "../tenants/context.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 
@@ -22,7 +21,7 @@ const toProfile = (r: Record<string, unknown>): MemoryTidyProfile => ({
   ...(r.arming ? { arming: true } : {}),
 });
 
-const SELECT = "SELECT cron_id, arming FROM memory_tidy_profiles WHERE tenant_id = qm_tenant_id() AND scope_id = $1";
+const SELECT = "SELECT cron_id, arming FROM memory_tidy_profiles WHERE tenant_id = qm_bound_tenant() AND scope_id = $1";
 
 export function createPostgresMemoryTidyProfiles(
   connectionString: string,
@@ -50,34 +49,11 @@ export function createPostgresMemoryTidyProfiles(
         const next = apply(toProfile(current.rows[0]));
         await client.query(
           `UPDATE memory_tidy_profiles SET cron_id = $2, arming = $3
-            WHERE tenant_id = qm_tenant_id() AND scope_id = $1`,
+            WHERE tenant_id = qm_bound_tenant() AND scope_id = $1`,
           [scopeId, next.cronId ?? null, next.arming === true],
         );
         return next;
       });
-    },
-  };
-}
-
-export function createMemoryTidyProfiles(): ManagedCronProfiles<MemoryTidyProfile> {
-  const mine = perTenant(() => new Map<string, MemoryTidyProfile>());
-  return {
-    async get(key) {
-      const profile = mine().get(key);
-      return profile ? structuredClone(profile) : null;
-    },
-    async insertIfAbsent(key, initial) {
-      const profiles = mine();
-      if (!profiles.has(key)) profiles.set(key, structuredClone(initial));
-      return structuredClone(profiles.get(key)!);
-    },
-    async update(key, apply) {
-      const profiles = mine();
-      const current = profiles.get(key);
-      if (!current) return null;
-      const next = apply(structuredClone(current));
-      profiles.set(key, structuredClone(next));
-      return next;
     },
   };
 }

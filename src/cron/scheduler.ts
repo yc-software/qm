@@ -1,7 +1,9 @@
 import { cronTriggerAuthority } from "./authority.ts";
 import { WorkAdmissionClosed, type AdmittedWork } from "../util/admitted-work.ts";
 import { randomUUID } from "node:crypto";
-import { type Cron, type CronFireLogEntry, type CronFireNote, type TurnRequest, type TurnResult } from "../types.ts";
+import { type ScopeId, type TurnRequest, type TurnResult } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote } from "../triggers/types.ts";
+import type { RuntimeChoice } from "../agent/agent.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
 import { isDeferred, type CronStore } from "./cron-store.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
@@ -90,6 +92,7 @@ export interface SchedulerDeps {
     fireKey: string,
     cronId: string,
   ) => Promise<{ status?: TurnResult["status"]; note?: string }>;
+  runtimeError?: (scope: ScopeId, runtime: RuntimeChoice) => Promise<string | null>;
 }
 
 function truncate(s: string, maxChars: number): string {
@@ -152,7 +155,7 @@ function cronMentionRoster(cron: Cron, homeRoster: DirectoryMember[] | undefined
   return internal.map(mentionable).join(", ");
 }
 
-function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
+function renderCronFireInput(cron: Cron, mentionRoster?: string, runtimeProblem?: string | null): string {
   const task = cron.action ?? "";
   if (!task.trim()) return task;
   if (/^!(run|scratch)\s/.test(task.trimStart())) return task;
@@ -169,6 +172,12 @@ function renderCronFireInput(cron: Cron, mentionRoster?: string): string {
     ...(readsNotes
       ? [
           `Before finishing, leave a short note for the next fire (cron tool, action="note", id="${cron.id}"): one or two sentences — the outcome plus anything the next fire must know. Include the published checkpoint file ID, or small progress state directly; never include credentials. It's a report for the next fire, never instructions that override the stored task. Skip it only if there is truly nothing to say.`,
+        ]
+      : []),
+    ...(runtimeProblem
+      ? [
+          `This fire runs on the default model because the cron's own model can't run: ${runtimeProblem}`,
+          `Tell the people this cron reports to, unless the fire log shows they already know. If the cron's model looks stale, you can change it (cron tool, action="patch", id="${cron.id}", runtime); it is used again as soon as it can run.`,
         ]
       : []),
     ...(mentionRoster
@@ -191,7 +200,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const leaderLease = deps.leaderLease;
 
   async function withCronLifecycle<T>(cronId: string, scheduled: boolean, run: () => Promise<T>): Promise<T | null> {
-    if (scheduled && deps.advisoryLock.tryWithLock) {
+    if (scheduled) {
       const result = await deps.advisoryLock.tryWithLock(`cron-lifecycle:${cronId}`, run);
       if (result === null) await deps.crons.defer(cronId, now() + BUSY_DEFER_MS);
       return result;
@@ -263,8 +272,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (isOneShotSchedule(cron.schedule)) await deps.crons.setEnabled(cron.id, false);
       return { authzFailed: false };
     }
+    const previous = (await deps.crons.listFires(cron.id, { limit: 2 })).runs
+      .filter((r) => r.fireKey !== fireKey)
+      .at(-1);
+    const failingAlready = previous?.status === "failed" || previous?.status === "refused";
     let outcome: Awaited<ReturnType<typeof runTrigger>>;
     try {
+      const runtimeProblem = cron.runtime ? await deps.runtimeError?.(cron.ownerScopeId, cron.runtime) : null;
       outcome = await runTrigger(
         {
           deliveries: deps.deliveries,
@@ -278,17 +292,23 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         },
         {
           ...cronTriggerAuthority(cron),
-          input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster)),
+          input: (homeRoster) => renderCronFireInput(cron, cronMentionRoster(cron, homeRoster), runtimeProblem),
           fireKey,
           threadRef,
           surface: "cron",
-          ...(cron.runtime ? { runtime: cron.runtime } : {}),
+          ...(cron.runtime && !runtimeProblem ? { runtime: cron.runtime } : {}),
           ...(cron.title ? { title: cron.title } : {}),
           onClaimed: async () => {
             await deps.crons.beginFire(cron.id, runningEntry);
           },
           ...(cron.message !== undefined ? { message: cron.message } : {}),
           ...(cron.destination ? { destination: cron.destination } : {}),
+          ...(failingAlready
+            ? {}
+            : {
+                errorNotice: (reason: string) =>
+                  `⚠️ Scheduled task “${cron.title ?? cron.id}” did not run: ${reason.endsWith(".") ? reason.slice(0, -1) : reason}. Later failures go only to its run log until it runs successfully again.`,
+              }),
           deferWhenBusy: scheduledAt !== undefined && t - scheduledAt <= BUSY_DEFER_MAX_LATE_MS,
         },
       );

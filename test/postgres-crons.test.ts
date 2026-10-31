@@ -3,8 +3,10 @@ import test from "node:test";
 import { createCronStore } from "../src/cron/cron-store.ts";
 import { createPostgresCronRows } from "../src/cron/cron-table.ts";
 import { withTenant } from "../src/tenants/context.ts";
-import { scopeId, type Cron } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
+import type { Cron } from "../src/triggers/types.ts";
 import { PG_URL, seedKeyValueTable, skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
+import { testCronFires } from "./support/typed-stores.ts";
 
 const skip = skipWithoutPg;
 
@@ -52,7 +54,7 @@ test("cron rows round-trip through typed columns and the indexed lookups", { ski
   await withTypedTableDb(
     (url) => createPostgresCronRows(url),
     async ({ store: rows, tenant }) => {
-      const crons = createCronStore(rows);
+      const crons = createCronStore(rows, { fires: testCronFires() });
       await withTenant(tenant, async () => {
         const created = await crons.create(
           input({ destination: { type: "slack", target: "C9" }, unattendedGrants: ["x"], sessionRef: "web:s1" }),
@@ -105,9 +107,9 @@ test("due crons are claimed across tenants and each slot is claimed once", { ski
   await withTypedTableDb(
     (url) => createPostgresCronRows(url),
     async ({ store: rows, url, tenant, otherTenant }) => {
-      const crons = createCronStore(rows);
+      const crons = createCronStore(rows, { fires: testCronFires() });
       const ownerRows = createPostgresCronRows(ownerUrl(url));
-      const claims = createCronStore(ownerRows);
+      const claims = createCronStore(ownerRows, { fires: testCronFires() });
       const first = Date.now() - HOUR;
       const a = await withTenant(tenant, () =>
         crons.create(input({ schedule: { everyMs: HOUR, firstFireAt: first } })),
@@ -156,7 +158,7 @@ test(
     await withTypedTableDb(
       (url) => createPostgresCronRows(url),
       async ({ store: rows, tenant, otherTenant }) => {
-        const crons = createCronStore(rows);
+        const crons = createCronStore(rows, { fires: testCronFires() });
         const mine = await withTenant(tenant, () => crons.create(input()));
         await withTenant(otherTenant, async () => {
           assert.equal(await crons.get(mine.id), null);

@@ -1,9 +1,8 @@
-import type { Cron } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { CRON_SEARCH_DESCRIPTION, CRON_SEARCH_TITLE } from "../search/resource-search.ts";
-import { currentTenant } from "../tenants/context.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
 
 export type TenantCron = Cron & { tenantId: string };
@@ -176,17 +175,17 @@ export function createPostgresCronRows(connectionString: string): CronRows & { c
       return rowToCron(rows[0]!);
     },
     async get(id) {
-      return (await many(`${SELECT} WHERE tenant_id = qm_tenant_id() AND id = $1`, [id]))[0] ?? null;
+      return (await many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]))[0] ?? null;
     },
-    list: () => many(`${SELECT} WHERE tenant_id = qm_tenant_id() ORDER BY id`),
+    list: () => many(`${SELECT} WHERE tenant_id = qm_bound_tenant() ORDER BY id`),
     ownedBy: (scopeId) =>
-      many(`${SELECT} WHERE tenant_id = qm_tenant_id() AND owner_scope_id = $1 ORDER BY id`, [scopeId]),
+      many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND owner_scope_id = $1 ORDER BY id`, [scopeId]),
     async tiedTo(threadRefs) {
       if (!threadRefs.length) return [];
       return many(
-        `${SELECT} WHERE tenant_id = qm_tenant_id() AND session_ref = ANY($1::text[])
+        `${SELECT} WHERE tenant_id = qm_bound_tenant() AND session_ref = ANY($1::text[])
          UNION
-         ${SELECT} WHERE tenant_id = qm_tenant_id() AND destination IS NOT NULL
+         ${SELECT} WHERE tenant_id = qm_bound_tenant() AND destination IS NOT NULL
            AND destination->>'target' = ANY($1::text[])
          ORDER BY id`,
         [[...threadRefs]],
@@ -194,18 +193,20 @@ export function createPostgresCronRows(connectionString: string): CronRows & { c
     },
     async update(id, apply) {
       return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE tenant_id = qm_tenant_id() AND id = $1 FOR UPDATE`, [id]);
+        const current = await client.query(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1 FOR UPDATE`, [
+          id,
+        ]);
         if (!current.rows[0]) return null;
         const next = { ...apply(rowToCron(current.rows[0])), id };
         await client.query(
-          `UPDATE crons SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_tenant_id() AND id = $1`,
+          `UPDATE crons SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
           cronParams(next),
         );
         return next;
       });
     },
     async delete(id) {
-      await q(`DELETE FROM crons WHERE tenant_id = qm_tenant_id() AND id = $1`, [id]);
+      await q(`DELETE FROM crons WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]);
     },
     async scheduled() {
       return (await q(`${SELECT} WHERE enabled AND archived IS NOT TRUE ORDER BY tenant_id, id`)).map(tenantRow);
@@ -219,69 +220,6 @@ export function createPostgresCronRows(connectionString: string): CronRows & { c
         [now],
       );
       return rows.map(tenantRow);
-    },
-  };
-}
-
-export function createMemoryCronRows(): CronRows {
-  const tenants = new Map<string, Map<string, Cron>>();
-  const mine = (): Map<string, Cron> => {
-    const tenant = currentTenant();
-    if (!tenants.has(tenant)) tenants.set(tenant, new Map());
-    return tenants.get(tenant)!;
-  };
-  const all = (): Cron[] =>
-    [...mine().entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, cron]) => structuredClone(cron));
-  const scheduled = (): TenantCron[] =>
-    [...tenants.entries()].flatMap(([tenantId, crons]) =>
-      [...crons.values()]
-        .filter((cron) => cron.enabled && cron.archived !== true)
-        .map((cron) => ({ ...structuredClone(cron), tenantId })),
-    );
-  return {
-    async insertIfAbsent(cron) {
-      const crons = mine();
-      if (!crons.has(cron.id)) crons.set(cron.id, structuredClone(cron));
-      return structuredClone(crons.get(cron.id)!);
-    },
-    async get(id) {
-      const cron = mine().get(id);
-      return cron ? structuredClone(cron) : null;
-    },
-    async list() {
-      return all();
-    },
-    async ownedBy(scopeId) {
-      return all().filter((cron) => cron.ownerScopeId === scopeId);
-    },
-    async tiedTo(threadRefs) {
-      const refs = new Set(threadRefs);
-      return all().filter(
-        (cron) =>
-          (cron.sessionRef !== undefined && refs.has(cron.sessionRef)) ||
-          (cron.destination !== undefined && refs.has(cron.destination.target)),
-      );
-    },
-    async update(id, apply) {
-      const crons = mine();
-      const current = crons.get(id);
-      if (!current) return null;
-      const next = { ...apply(structuredClone(current)), id };
-      crons.set(id, structuredClone(next));
-      return next;
-    },
-    async delete(id) {
-      mine().delete(id);
-    },
-    async scheduled() {
-      return scheduled();
-    },
-    async dueCandidates(now) {
-      return scheduled().filter(
-        (cron) =>
-          (cron.nextFireAt === undefined || cron.nextFireAt <= now) &&
-          (cron.deferUntil === undefined || cron.deferUntil <= now),
-      );
     },
   };
 }

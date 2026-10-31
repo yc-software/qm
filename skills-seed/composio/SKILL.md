@@ -65,7 +65,7 @@ async function apps(path, body) {
 Large pulls (a month of email, a full channel history) fail when one call asks for too much: an oversized page either times out (`cause: "timeout"`) or is rejected by the provider (`providerStatus: 413`). Page conservatively instead:
 
 - List first, fetch second: request IDs or metadata only (for Gmail, `ids_only` or `include_payload: false`), then fetch bodies in batches of about 25 for just the messages you need.
-- On a `502`, read the JSON body (`cause`, `providerStatus`, `message`); with Python, catch `urllib.error.HTTPError` and read `e.read()`. Back off and shrink the page rather than repeating the same request.
+- On a `502`, read the JSON body (`cause`, `providerStatus`, `message`); with curl, use `--fail-with-body` or skip `-f` so the body survives. Back off and shrink the page rather than repeating the same request.
 - For long pulls, write progress (page token, fetched IDs) to a file so the job can resume, and run it in the background.
 
 The API checks active account ownership and toolkit on every execution. Personal connections are available only in authorized contexts. Shared conversations require explicit sharing; unattended work needs its existing owner-keychain authorization. A denial is not permission to switch credentials, accounts, identities, or access paths.

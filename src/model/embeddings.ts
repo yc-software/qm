@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EmbeddingModel } from "./model-overlay.ts";
 import { modelGatewayRequest, type ModelGatewayTransportConfig } from "./provider-endpoints.ts";
-import { providerTurnError } from "../harness/provider-error.ts";
+import { providerTurnError } from "./provider-error.ts";
 import { httpFailure } from "../util/errors.ts";
 
 export interface MemoryEmbedder {

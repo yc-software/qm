@@ -1,4 +1,4 @@
-import type { Webhook } from "../types.ts";
+import type { Webhook } from "../triggers/types.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -6,7 +6,7 @@ import {
   type CreateTriggerInput,
   withFields,
 } from "../triggers/trigger-store.ts";
-import { createMemoryWebhookRows, type WebhookEvent, type WebhookRows } from "./webhook-table.ts";
+import { type WebhookEvent, type WebhookRows } from "./webhook-table.ts";
 import { currentTenant } from "../tenants/context.ts";
 import { hashId } from "../util/crypto.ts";
 import { getVerifier } from "./verifiers.ts";
@@ -31,7 +31,7 @@ export interface WebhookStore {
   recordFire(id: string, info: { at: number; deliveryId?: string; error?: string }): Promise<void>;
 }
 
-export function createWebhookStore(rows: WebhookRows = createMemoryWebhookRows()): WebhookStore {
+export function createWebhookStore(rows: WebhookRows): WebhookStore {
   const edit = (id: string, fields: Partial<Webhook>) => rows.update(id, (webhook) => withFields(webhook, fields));
   return {
     async recordEvent(id, event) {

@@ -1,20 +1,20 @@
 import "./support/auto-fake-sprites.ts";
 import { mock, test } from "node:test";
 import assert from "node:assert/strict";
-import * as mockHarness from "./support/mock-harness.ts";
-import type { HarnessTurnInput, HarnessTurnResult } from "../src/harness/harness.ts";
+import * as mockAgent from "./support/mock-agent.ts";
+import type { AgentTurnInput, AgentTurnResult } from "../src/agent/agent.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
-let exercise: ((turn: HarnessTurnInput) => Promise<HarnessTurnResult | void>) | undefined;
-mock.module("./support/mock-harness.ts", {
+let exercise: ((turn: AgentTurnInput) => Promise<AgentTurnResult | void>) | undefined;
+mock.module("./support/mock-agent.ts", {
   namedExports: {
-    ...mockHarness,
-    createMockHarness: () => {
-      const harness = mockHarness.createMockHarness();
-      const run = harness.turns.runTurn;
-      harness.turns.runTurn = async (turn) => (exercise ? ((await exercise(turn)) ?? { reply: "Done" }) : run(turn));
-      return harness;
+    ...mockAgent,
+    createMockAgent: () => {
+      const agent = mockAgent.createMockAgent();
+      const run = agent.runTurn;
+      agent.runTurn = async (turn) => (exercise ? ((await exercise(turn)) ?? { reply: "Done" }) : run(turn));
+      return agent;
     },
   },
 });
@@ -53,9 +53,9 @@ async function artifactText(built: Awaited<ReturnType<typeof scopeWithoutDefault
   return Buffer.concat(chunks);
 }
 
-test("without a default sandbox, native images and documents still reach the harness", async () => {
+test("without a default sandbox, native images and documents still reach the agent", async () => {
   const { built, base, files } = await scopeWithoutDefault();
-  let seen: HarnessTurnInput | undefined;
+  let seen: AgentTurnInput | undefined;
   exercise = async (turn) => {
     seen = turn;
   };
@@ -74,7 +74,7 @@ test("without a default sandbox, native images and documents still reach the har
 
 test("without a default sandbox, a steered upload is registered and surfaced without a computer", async () => {
   const { built, base, files } = await scopeWithoutDefault();
-  let steered: Awaited<ReturnType<NonNullable<HarnessTurnInput["prepareSteer"]>>> | undefined;
+  let steered: Awaited<ReturnType<NonNullable<AgentTurnInput["prepareSteer"]>>> | undefined;
   exercise = async (turn) => {
     steered = await turn.prepareSteer!("also this", { ...base, text: "also this", attachments: await files() });
   };

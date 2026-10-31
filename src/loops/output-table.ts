@@ -1,8 +1,7 @@
-import type { LoopOutput } from "../types.ts";
+import type { LoopOutput } from "./types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
 export interface OutputRows {
@@ -196,34 +195,5 @@ export function createPostgresOutputRows(connectionString: string): OutputRows {
       await q(`DELETE FROM loop_outputs WHERE ${MINE} AND loop_id = $1`, [loopId]);
     },
     close,
-  };
-}
-
-export function createMemoryOutputRows(): OutputRows {
-  const rows = createMemoryRows<LoopOutput>();
-  const byCreated = (a: LoopOutput, b: LoopOutput) => a.createdAt - b.createdAt;
-  return {
-    async insertIfAbsent(output) {
-      rows.insertIfAbsent(output);
-      return rows.get(output.id) ?? output;
-    },
-    get: async (id) => rows.get(id),
-    byLoop: async (loopId) => rows.where((output) => output.loopId === loopId),
-    byItem: async (itemId) => rows.where((output) => output.itemId === itemId),
-    byAttempt: async (itemId, attemptId) =>
-      rows.where((output) => output.itemId === itemId && output.attemptId === attemptId),
-    ready: async (loopId, createdBefore) =>
-      rows
-        .where(
-          (output) =>
-            output.loopId === loopId &&
-            output.state === "ready" &&
-            (createdBefore === undefined || output.createdAt < createdBefore),
-        )
-        .sort(byCreated),
-    update: async (id, apply) => rows.update(id, apply),
-    async deleteByLoop(loopId) {
-      for (const output of rows.where((candidate) => candidate.loopId === loopId)) rows.delete(output.id);
-    },
   };
 }

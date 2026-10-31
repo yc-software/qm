@@ -245,12 +245,7 @@ export function createSuperserveSandbox(workspace: WorkspaceStore, opts: Superse
   }
 
   async function forget(scope: string, sandboxId: string): Promise<void> {
-    if (store.deleteIf) {
-      await store.deleteIf(scope, (record) => record.sandboxId === sandboxId);
-      return;
-    }
-    const stored = await store.get(scope);
-    if (stored?.sandboxId === sandboxId) await store.delete(scope);
+    await store.deleteIf(scope, (record) => record.sandboxId === sandboxId);
   }
 
   async function reconnect(

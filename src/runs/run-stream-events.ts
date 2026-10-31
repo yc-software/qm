@@ -33,6 +33,5 @@ export function reasoningKey(block: { step: string; index: number }): string {
 }
 
 function* notifyChunks(text: string): Generator<[number, string]> {
-  // JSON escaping can cost six bytes per UTF-16 unit; stay below NOTIFY's byte limit.
   for (let at = 0; at < text.length; at += 1_000) yield [at, text.slice(at, at + 1_000)];
 }

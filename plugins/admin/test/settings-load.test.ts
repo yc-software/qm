@@ -58,7 +58,6 @@ test("catalog completion appends options only to the requesting settings view", 
   for (const stale of [false, true]) {
     const completion = Promise.withResolvers<unknown>();
     const options = [{ id: "configured", name: "Configured" }];
-    const harnessOptions = [...options];
     let rendered = 0;
     const context = vm.createContext({
       r: { data: { modelCatalogRefreshing: true } },
@@ -69,7 +68,6 @@ test("catalog completion appends options only to the requesting settings view", 
       requestedView: "models",
       view: "models",
       opts: options,
-      modelsByHarness: { pi: harnessOptions },
       refreshModelChoices: [
         () => {
           rendered++;
@@ -86,16 +84,11 @@ test("catalog completion appends options only to the requesting settings view", 
       ok: true,
       data: {
         baseModelOptions: [{ id: "new", name: "New model" }],
-        modelsByHarness: { pi: [{ id: "new", name: "New model" }] },
       },
     });
     await setImmediate();
     assert.deepEqual(
       options.map((model) => model.id),
-      stale ? ["configured"] : ["configured", "new"],
-    );
-    assert.deepEqual(
-      harnessOptions.map((model) => model.id),
       stale ? ["configured"] : ["configured", "new"],
     );
     assert.equal(rendered, stale ? 0 : 1);
@@ -313,12 +306,10 @@ test("models view saves runtime rows through the composer picker and real page h
     f.ui.mountCards();
     const data = {
       baseModelDefault: "model",
-      baseModelOptions: [{ id: "model" }],
-      harnessOptions: ["pi"],
-      modelsByHarness: { pi: [{ id: "model" }, { id: "fast" }] },
+      baseModelOptions: [{ id: "model" }, { id: "fast" }],
       modelCatalog: { model: meta("model"), fast: meta("fast") },
       fastModeModelIds: ["fast"],
-      runtime: { harnessId: "pi", modelId: "fast", effortLevel: "auto", fastMode: false },
+      runtime: { modelId: "fast", effortLevel: "auto", fastMode: false },
       cronRuntime: null,
       subagentRuntime: null,
       fallbackRuntime: null,
@@ -367,7 +358,6 @@ test("models view saves runtime rows through the composer picker and real page h
       assert.equal(row("cron-runtime").querySelector(preset), null);
     row("cron-runtime").querySelector<HTMLButtonElement>(".loadout-pick")!.click();
     assert.deepEqual(plain(f.ui.collect("cron-runtime")), {
-      harnessId: "pi",
       modelId: "model",
       effortLevel: "auto",
       fastMode: false,
@@ -380,7 +370,6 @@ test("models view saves runtime rows through the composer picker and real page h
       .find((button) => button.textContent!.trim() === "High")!
       .click();
     assert.deepEqual(plain(f.ui.collect("runtime")), {
-      harnessId: "pi",
       modelId: "fast",
       effortLevel: "high",
       fastMode: true,
@@ -400,16 +389,8 @@ test("models view saves runtime rows through the composer picker and real page h
 
     await save();
     assert.deepEqual(plain(requests.map(([method, path, body]) => [method, path, body])), [
-      [
-        "PUT",
-        "/api/scopes/org%3Atest/runtime",
-        { harnessId: "pi", modelId: "fast", effortLevel: "high", fastMode: true },
-      ],
-      [
-        "PUT",
-        "/api/scopes/org%3Atest/cron-runtime",
-        { harnessId: "pi", modelId: "model", effortLevel: "auto", fastMode: false },
-      ],
+      ["PUT", "/api/scopes/org%3Atest/runtime", { modelId: "fast", effortLevel: "high", fastMode: true }],
+      ["PUT", "/api/scopes/org%3Atest/cron-runtime", { modelId: "model", effortLevel: "auto", fastMode: false }],
       ["PUT", "/api/scopes/org%3Atest/memory-embedding-model", { modelId: "gateway/embed" }],
     ]);
     for (const key of ["runtime", "cron-runtime", "memory-embedding-model"])

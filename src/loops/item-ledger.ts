@@ -8,9 +8,9 @@ import type {
   LoopProposal,
   LoopSourcePayload,
   LoopThreadMessage,
-} from "../types.ts";
+} from "./types.ts";
 import { isResolved } from "./ledger-view.ts";
-import { createMemoryItemRows, type ItemRows } from "./item-table.ts";
+import { type ItemRows } from "./item-table.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -210,7 +210,7 @@ function mergeIngest(item: LoopItem, entry: IngestEntryInput, now: number): Loop
 }
 
 export function createLoopItemLedger(
-  rows: ItemRows = createMemoryItemRows(),
+  rows: ItemRows,
   onEvent?: (event: LedgerEvent) => void,
   coordination?: {
     lock: import("../persistence/advisory-lock.ts").AdvisoryLock;

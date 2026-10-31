@@ -1,8 +1,7 @@
-import type { LoopItem } from "../types.ts";
+import type { LoopItem } from "./types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
 type ItemSummary = Omit<LoopItem, "proposal" | "agentDrafts" | "thread" | "sourcePayload"> &
@@ -299,66 +298,5 @@ export function createPostgresItemRows(connectionString: string): ItemRows {
       await q(`DELETE FROM loop_items WHERE ${MINE} AND loop_id = $1`, [loopId]);
     },
     close,
-  };
-}
-
-export function createMemoryItemRows(): ItemRows {
-  const rows = createMemoryRows<LoopItem>();
-  const strip = (
-    { proposal: _p, agentDrafts: _d, thread: _t, sourcePayload, ...item }: LoopItem,
-    keys?: readonly string[],
-  ) =>
-    present<ItemSummary>({
-      ...item,
-      sourcePayload:
-        keys && sourcePayload && typeof sourcePayload === "object" && !Array.isArray(sourcePayload)
-          ? Object.fromEntries(Object.entries(sourcePayload).filter(([key]) => keys.includes(key)))
-          : undefined,
-    });
-  return {
-    get: async (id) => rows.get(id),
-    byLoop: async (loopId) => rows.where((item) => item.loopId === loopId),
-    summaries: async (loopIds, payloadKeys) =>
-      rows.where((item) => loopIds.includes(item.loopId)).map((item) => strip(item, payloadKeys)),
-    idsBySourceKey: async (loopId, sourceKeys) =>
-      rows
-        .where((item) => item.loopId === loopId && sourceKeys.includes(item.sourceKey))
-        .map(({ id, sourceKey }) => ({ id, sourceKey })),
-    lifecycle: async (loopId) =>
-      rows
-        .where((item) => item.loopId === loopId)
-        .map(({ id, status, createdAt, updatedAt, actedAt }) =>
-          present<ItemLifecycle>({ id, status, createdAt, updatedAt, actedAt }),
-        ),
-    queued: async (loopId, staleClaimBefore, limit) => {
-      const queued = rows
-        .where(
-          (item) =>
-            item.loopId === loopId &&
-            (item.status === "queued" || (item.status === "in_progress" && (item.claimedAt ?? 0) <= staleClaimBefore)),
-        )
-        .sort((a, b) => a.createdAt - b.createdAt);
-      return limit === undefined ? queued : queued.slice(0, limit);
-    },
-    insertIfAbsent: async (item) => rows.insertIfAbsent(item),
-    update: async (id, apply) => rows.update(id, apply),
-    async mutateMany(updates) {
-      const staged = new Map<string, LoopItem>();
-      const results = updates.map(({ id, apply }) => {
-        const next = { ...apply(structuredClone(staged.get(id) ?? rows.get(id) ?? null)), id };
-        staged.set(id, next);
-        return next;
-      });
-      for (const [id, item] of staged) {
-        if (!rows.update(id, () => item)) rows.insertIfAbsent(item);
-      }
-      return results;
-    },
-    async delete(ids) {
-      for (const id of ids) rows.delete(id);
-    },
-    async deleteByLoop(loopId) {
-      for (const item of rows.where((candidate) => candidate.loopId === loopId)) rows.delete(item.id);
-    },
   };
 }

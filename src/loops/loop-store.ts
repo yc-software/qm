@@ -1,3 +1,4 @@
+import type { Destination } from "../types.ts";
 import type {
   Loop,
   LoopCaps,
@@ -5,10 +6,9 @@ import type {
   LoopHealth,
   LoopState,
   LoopTriageConfig,
-  Destination,
   ShipActionPolicy,
-} from "../types.ts";
-import { createMemoryLoopRows, type LoopRows, type TenantLoop } from "./loop-table.ts";
+} from "./types.ts";
+import { type LoopRows, type TenantLoop } from "./loop-table.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
 import {
   assertNoEscalation,
@@ -143,7 +143,7 @@ function mergeTriage(current: LoopTriageConfig | undefined, patch: LoopTriageCon
   return next;
 }
 
-export function createLoopStore(rows: LoopRows = createMemoryLoopRows()): LoopStore {
+export function createLoopStore(rows: LoopRows): LoopStore {
   const atomicUpdate = (id: string, apply: (loop: Loop) => Loop) => rows.update(id, apply);
   const merge = (id: string, fields: Partial<Loop>) => atomicUpdate(id, (loop) => ({ ...loop, ...fields }));
 

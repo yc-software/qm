@@ -1,8 +1,7 @@
-import type { Loop } from "../types.ts";
+import type { Loop } from "./types.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
 export type TenantLoop = Loop & { tenantId: string };
@@ -269,35 +268,5 @@ export function createPostgresLoopRows(connectionString: string): LoopRows {
       return rows.map(tenantRow);
     },
     close,
-  };
-}
-
-export function createMemoryLoopRows(): LoopRows {
-  const rows = createMemoryRows<Loop>();
-  const first = (match: (loop: Loop) => boolean): Loop | null => rows.where(match)[0] ?? null;
-  return {
-    async insertIfAbsent(loop) {
-      if (rows.insertIfAbsent(loop)) return { loop, created: true };
-      return { loop: rows.get(loop.id) ?? loop, created: false };
-    },
-    get: async (id) => rows.get(id),
-    list: async () => rows.where(() => true),
-    byCron: async (cronId) => first((loop) => loop.cronId === cronId),
-    byOwner: async (owner, surface) => first((loop) => loop.owner === owner && loop.surface === surface),
-    byScope: async (scope, surface) => first((loop) => loop.ownerScopeId === scope && loop.surface === surface),
-    update: async (id, apply) => rows.update(id, apply),
-    delete: async (id) => rows.delete(id),
-    inboxLoops: async () =>
-      rows.acrossTenants(
-        (loop) =>
-          (loop.surface === "inbox" || loop.surface?.startsWith("inbox:") === true) && loop.state !== "archived",
-      ),
-    staleGoverned: async (now) =>
-      rows.acrossTenants(
-        (loop) =>
-          loop.state === "enabled" &&
-          loop.governor?.staleFireMs !== undefined &&
-          now - (loop.lastFiredAt ?? loop.createdAt) > loop.governor.staleFireMs,
-      ),
   };
 }

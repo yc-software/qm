@@ -1,11 +1,7 @@
-import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule, Destination } from "../types.ts";
-import { createMemoryCronRows, type CronRows, type TenantCron } from "./cron-table.ts";
-import {
-  createMemoryCronFireStore,
-  type BeginFireResult,
-  type CronFireRecord,
-  type CronFireStore,
-} from "./fire-store.ts";
+import type { Destination } from "../types.ts";
+import type { Cron, CronFireLogEntry, CronFireNote, CronSchedule } from "../triggers/types.ts";
+import type { CronRows, TenantCron } from "./cron-table.ts";
+import type { BeginFireResult, CronFireRecord, CronFireStore } from "./fire-store.ts";
 import {
   assertNoEscalation,
   buildTriggerBase,
@@ -161,12 +157,9 @@ function claimed(cron: Cron, scheduledAt: number, at: number): Cron | null {
   });
 }
 
-export function createCronStore(
-  rows: CronRows = createMemoryCronRows(),
-  opts?: { staleRunningMs?: number; fires?: CronFireStore },
-): CronStore {
-  const staleRunningMs = opts?.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
-  const fires = opts?.fires ?? createMemoryCronFireStore();
+export function createCronStore(rows: CronRows, opts: { staleRunningMs?: number; fires: CronFireStore }): CronStore {
+  const staleRunningMs = opts.staleRunningMs ?? DEFAULT_FIRE_RUNNING_STALE_MS;
+  const fires = opts.fires;
   const edit = async (id: string, fields: Partial<Cron>) => rows.update(id, (cron) => withFields(cron, fields));
   return {
     async create(input) {

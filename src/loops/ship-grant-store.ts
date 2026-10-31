@@ -1,5 +1,5 @@
-import type { ShipGrant } from "../types.ts";
-import { createMemoryShipGrantRows, type ShipGrantRows } from "./ship-grant-table.ts";
+import type { ShipGrant } from "./types.ts";
+import { type ShipGrantRows } from "./ship-grant-table.ts";
 
 export interface ShipGrantStore {
   put(grant: ShipGrant): Promise<ShipGrant>;
@@ -10,7 +10,7 @@ export interface ShipGrantStore {
   deleteByLoop(loopId: string): Promise<void>;
 }
 
-export function createShipGrantStore(rows: ShipGrantRows = createMemoryShipGrantRows()): ShipGrantStore {
+export function createShipGrantStore(rows: ShipGrantRows): ShipGrantStore {
   return {
     async put(grant) {
       const existing = await rows.insertIfAbsent(grant);

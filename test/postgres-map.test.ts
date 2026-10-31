@@ -1,7 +1,8 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { createMemoryMap, createPostgresMapFactory } from "../src/persistence/durable-map.ts";
+import pg from "pg";
+import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { scopeId } from "../src/types.ts";
 import {
   createKeychain,
@@ -13,12 +14,15 @@ import {
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { applyPgMigrations, definePgMigration } from "../src/persistence/pg-pool.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
+import { testTenantsSeeded } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres map tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });
@@ -167,7 +171,7 @@ test("pg map: select mirrors the memory map — folded field filter, projection,
   ];
   const factory = createPostgresMapFactory(URL!);
   let pgMap = factory.map<Owned>("map_widgets");
-  const memMap = createMemoryMap<Owned>();
+  const memMap = testMap<Owned>();
   for (const [id, row] of rows) {
     await pgMap.put(id, row);
     await memMap.put(id, row);
@@ -275,18 +279,22 @@ test("pg map: original folded-index migration upgrades without changing its ledg
   const factory = createPostgresMapFactory(URL!);
   const unindexed = factory.map<{ owner: string }>("map_wide_widgets");
   await unindexed.put("legacy", { owner: "short" });
-  const legacy = definePgMigration("durable-map/map_wide_widgets/select-owner", [
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_fold
+  const legacy = definePgMigration({
+    id: "durable-map/map_wide_widgets/select-owner",
+    statements: [
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_fold
            ON map_wide_widgets (lower(json->>'owner'))`,
-    `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_unicode
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS map_wide_widgets_owner_unicode
            ON map_wide_widgets (id) WHERE json->>'owner' ~ '[^\\x01-\\x7f]'`,
-  ]);
+    ],
+  });
   try {
     await factory.pool.q("DROP INDEX IF EXISTS map_wide_widgets_owner_fold, map_wide_widgets_owner_unicode");
     await factory.pool.q(
       "DELETE FROM qm_schema_migrations WHERE id LIKE 'durable-map/map_wide_widgets/%' AND id <> 'durable-map/map_wide_widgets/0001'",
     );
-    await applyPgMigrations(await factory.pool.pool(), [legacy]);
+    const migrator = new pg.Pool({ connectionString: URL });
+    await applyPgMigrations(migrator, [legacy]).finally(() => migrator.end());
     const ledger = await factory.pool.q("SELECT * FROM qm_schema_migrations WHERE id = $1", [legacy.id]);
     const indexed = factory.map<{ owner: string }>("map_wide_widgets", ["owner"]);
     const owner = randomBytes(3000).toString("hex");
@@ -306,7 +314,7 @@ test("pg map: original folded-index migration upgrades without changing its ledg
 test("pg keychain: listByOwner is a per-owner projected read with no secret material", { skip }, async () => {
   const factory = createPostgresMapFactory(URL!);
   const keychain = createKeychain({
-    lock: createMemoryAdvisoryLock(),
+    lock: testAdvisoryLock(),
     creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
     grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
     asks: factory.map<KeychainAsk>("map_keychain_asks"),
@@ -338,13 +346,47 @@ test("pg keychain: listByOwner is a per-owner projected read with no secret mate
   }
 });
 
+test("pg keychain: separate processes refresh a rotating connector token once", { skip }, async () => {
+  const factories = [createPostgresMapFactory(URL!), createPostgresMapFactory(URL!)];
+  const provider = { valid: "rt-0", calls: 0 };
+  const keychains = factories.map((factory) =>
+    createKeychain({
+      lock: createPostgresAdvisoryLock(factory.pool, { pollMs: 10 }),
+      creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
+      grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
+      asks: factory.map<KeychainAsk>("map_keychain_asks"),
+      key: deriveConnectorKey("postgres-keychain-test-key"),
+      refreshConnector: async (_host, token) => {
+        provider.calls++;
+        await new Promise((r) => setTimeout(r, 50));
+        if (token.refreshToken !== provider.valid) throw new Error("invalid_grant");
+        provider.valid = `rt-${provider.calls}`;
+        return { accessToken: `at-${provider.calls}`, refreshToken: provider.valid, expiresAt: Date.now() + 3_600_000 };
+      },
+    }),
+  );
+  try {
+    const host = "gmail.googleapis.com";
+    await keychains[0]!.setConnectorToken(host, "U-refresh", {
+      accessToken: "at-0",
+      refreshToken: "rt-0",
+      expiresAt: Date.now() - 1,
+    });
+    const tokens = await Promise.all(keychains.map((k) => k.connectorAccessToken(host, "U-refresh")));
+    assert.deepEqual(tokens, ["at-1", "at-1"]);
+    assert.equal(provider.calls, 1);
+  } finally {
+    await Promise.all(factories.map((factory) => factory.pool.close()));
+  }
+});
+
 test("pg map: concurrent keychain instances claim a once grant exactly once", { skip }, async () => {
   const first = createPostgresMapFactory(URL!);
   const second = createPostgresMapFactory(URL!);
   const key = deriveConnectorKey("postgres-keychain-test-key");
   const build = (factory: ReturnType<typeof createPostgresMapFactory>) =>
     createKeychain({
-      lock: createMemoryAdvisoryLock(),
+      lock: testAdvisoryLock(),
       creds: factory.map<KeychainCredential>("map_keychain_creds", ["ownerId"]),
       grants: factory.map<KeychainGrant>("map_keychain_grants", ["ownerId"]),
       asks: factory.map<KeychainAsk>("map_keychain_asks"),
@@ -391,7 +433,7 @@ for (const postgres of [false, true]) {
     async () => {
       type Row = { owner: string; secret: string; payload?: Record<string, unknown> | null };
       const factory = postgres ? createPostgresMapFactory(URL!) : undefined;
-      const map = factory ? factory.map<Row>("map_widgets") : createMemoryMap<Row>();
+      const map = factory ? factory.map<Row>("map_widgets") : testMap<Row>();
       const payload = { source: "gmail", automated: true, body: "x".repeat(64_000), nil: null };
       const rows: Row[] = [
         { owner: "projection", secret: "hidden", payload },

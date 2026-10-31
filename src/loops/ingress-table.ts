@@ -2,7 +2,6 @@ import type { IngressDelivery, LoopIngress } from "./ingress.ts";
 import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
-import { createMemoryRows } from "./memory-rows.ts";
 import { columnList, json, kvBigint, kvJsonb, kvTexts, num, present, text, texts, type Row } from "./pg-values.ts";
 
 type TenantIngress = LoopIngress & { tenantId: string };
@@ -292,35 +291,5 @@ export function createPostgresIngressDeliveryRows(connectionString: string): Ing
       return (await query(`DELETE FROM loop_ingress_deliveries WHERE completed_at < $1`, [before])).rowCount;
     },
     close,
-  };
-}
-
-export function createMemoryIngressSourceRows(): IngressSourceRows {
-  const rows = createMemoryRows<LoopIngress>();
-  return {
-    get: async (id) => rows.get(id),
-    byLoop: async (loopId) => rows.where((source) => source.loopId === loopId),
-    async insert(source) {
-      if (!rows.insertIfAbsent(source)) throw new Error(`loop ingress ${source.id} already exists`);
-    },
-    update: async (id, apply) => rows.update(id, apply),
-    enabled: async () => rows.acrossTenants((source) => source.enabled),
-    gmailWatching: async (email) =>
-      rows.acrossTenants((source) => source.enabled && source.kind === "gmail" && source.gmail?.email === email),
-  };
-}
-
-export function createMemoryIngressDeliveryRows(): IngressDeliveryRows {
-  const rows = createMemoryRows<IngressDelivery>();
-  return {
-    insertIfAbsent: async (delivery) => void rows.insertIfAbsent(delivery),
-    pending: async (queueKey, now, limit) =>
-      rows
-        .where((delivery) => delivery.queueKey === queueKey && !delivery.completedAt && delivery.nextAttemptAt <= now)
-        .sort((a, b) => a.receivedAt - b.receivedAt)
-        .slice(0, limit),
-    update: async (id, apply) => rows.update(id, apply),
-    pruneCompleted: async (before) =>
-      rows.purgeAcrossTenants((delivery) => delivery.completedAt !== undefined && delivery.completedAt < before),
   };
 }

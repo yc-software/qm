@@ -9,7 +9,7 @@ import { createSwarmStore, SWARM_LIMITS } from "../src/swarms/swarm-store.ts";
 import { createPostgresSwarmRows, type SwarmRows } from "../src/swarms/swarm-table.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { bindTestTenant, seedTenant } from "./support/tenant.ts";
+import { bindTestTenant, seedTenant, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -25,6 +25,7 @@ const swarmRows = (): SwarmRows => {
   return rows;
 };
 before(async () => {
+  await testTenantsSeeded();
   if (!baseUrl) return;
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: baseUrl });
@@ -316,7 +317,7 @@ test("Postgres session, message, reservation and outbox recovery deduplicate dur
       requestId: "unicode",
       audience: [],
       text: "body\u0000\ud800",
-      notify: false,
+      wake: false,
     });
     assert.equal(
       (await fixture.service.read(fixture.caller, { after: binaryText.seq - 1 }))[0]!.text,

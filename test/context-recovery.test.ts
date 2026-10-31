@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createCompaction } from "../src/core/orchestrator/compaction.ts";
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
-import { estimateHistoryTokens, forModelContext } from "../src/harness/context-compaction.ts";
+import { estimateHistoryTokens, forModelContext } from "../src/agent/context-compaction.ts";
 
 import { contextSummaryPayload, createContextSummaryPayload } from "../src/sessions/session-store.ts";
-import { reconstructMessagesFromHistory } from "../src/harness/replay.ts";
+import { reconstructMessagesFromHistory } from "../src/agent/replay.ts";
 import { countTokens } from "../src/util/tokens.ts";
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 async function fixture() {
-  const sessions = createMemorySessionStore();
+  const sessions = createPostgresSessionStore(testDatabaseUrl());
   const session = await sessions.getOrCreateByThread("recovery", "dm", "personal:test");
   const { lease } = await sessions.acquireLease(session.id);
   assert.ok(lease);
@@ -21,23 +22,18 @@ async function fixture() {
       scopeLabel: "personal:test",
     });
   let resets = 0;
-  const harness = {
-    models: {
-      compactHistory: async (): Promise<string> => {
-        throw new Error("summary unavailable");
-      },
+  const agent = {
+    compactHistory: async (): Promise<string> => {
+      throw new Error("summary unavailable");
     },
-    turns: {
-      resetSession: () => {
-        resets++;
-      },
+    resetSession: () => {
+      resets++;
     },
   };
   const compaction = createCompaction({
     sessions,
-    harness,
+    agent,
     maxContextTokens: 500,
-    modelGateway: { recordCall() {} },
   } as unknown as OrchestratorDeps);
   const input = {
     session,
@@ -47,7 +43,7 @@ async function fixture() {
     orgScopeId: "org:test",
     actorId: "test",
   };
-  return { sessions, harness, compaction, input, resets: () => resets };
+  return { sessions, agent, compaction, input, resets: () => resets };
 }
 
 test("mandatory summarizer failure recovers instead of wedging the pending turn", async () => {
@@ -82,7 +78,7 @@ test("recent recovery preserves a fitting saved summary without a model call", a
     });
     await refresh(f);
     let calls = 0;
-    f.harness.models.compactHistory = async () => {
+    f.agent.compactHistory = async () => {
       calls++;
       return "unexpected";
     };
@@ -105,7 +101,7 @@ for (const failure of ["throw", "empty", "oversized"] as const) {
   test(`foreground ${failure} summary uses deterministic recovery`, async () => {
     const f = await fixture();
     try {
-      f.harness.models.compactHistory = async () => {
+      f.agent.compactHistory = async () => {
         if (failure === "throw") throw new Error("provider refused");
         return failure === "empty" ? "" : "x".repeat(20000);
       };
@@ -124,7 +120,7 @@ for (const stage of ["before", "during", "abort-error"] as const) {
     const abort = new AbortController();
     try {
       if (stage === "before") abort.abort();
-      f.harness.models.compactHistory = async () => {
+      f.agent.compactHistory = async () => {
         if (stage === "during") abort.abort();
         throw new DOMException("cancelled", "AbortError");
       };
@@ -144,12 +140,12 @@ for (const stage of ["append", "reset"] as const) {
     const f = await fixture();
     try {
       let calls = 0;
-      f.harness.models.compactHistory = async () => {
+      f.agent.compactHistory = async () => {
         calls++;
         return "Summary.";
       };
       if (stage === "reset")
-        f.harness.turns.resetSession = () => {
+        f.agent.resetSession = () => {
           throw new Error("storage unavailable");
         };
       else

@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { createLoopStore, isRunnable, validLoopIcon } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger, loopItemId } from "../src/loops/item-ledger.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testItemRows, testLoopRows } from "./support/typed-stores.ts";
 
 const base = {
   owner: "U1",
@@ -17,7 +15,7 @@ const base = {
 };
 
 test("creating the same loop twice is deduped to one record", async () => {
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const first = await store.create(base);
   const second = await store.create(base);
   assert.equal(first.created, true);
@@ -27,7 +25,7 @@ test("creating the same loop twice is deduped to one record", async () => {
 });
 
 test("a new loop starts enabled, healthy, and runnable", async () => {
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const { loop } = await store.create(base);
   assert.equal(loop.state, "enabled");
   assert.equal(loop.enabled, true);
@@ -36,7 +34,7 @@ test("a new loop starts enabled, healthy, and runnable", async () => {
 });
 
 test("state is authoritative and keeps the trigger enabled flag in step", async () => {
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const { loop } = await store.create(base);
   const quarantined = await store.setState(loop.id, "quarantined");
   assert.equal(quarantined?.enabled, false);
@@ -47,7 +45,7 @@ test("state is authoritative and keeps the trigger enabled flag in step", async 
 });
 
 test("editing the playbook versions it and records who changed it", async () => {
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const { loop } = await store.create(base);
   const edited = await store.editPlaybook(loop.id, {
     playbook: "read the issue, cluster it, then fix",
@@ -65,7 +63,7 @@ test("editing the playbook versions it and records who changed it", async () => 
 });
 
 test("a playbook edit that changes nothing does not manufacture a version", async () => {
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const { loop } = await store.create(base);
   const edited = await store.editPlaybook(loop.id, { playbook: base.playbook, by: "U2" });
   assert.equal(edited?.playbookVersion, 1);
@@ -73,7 +71,7 @@ test("a playbook edit that changes nothing does not manufacture a version", asyn
 });
 
 test("consecutive failed fires accumulate and a clean fire resets them", async () => {
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const { loop } = await store.create(base);
   await store.recordFireOutcome(loop.id, "failed");
   const twice = await store.recordFireOutcome(loop.id, "failed");
@@ -83,7 +81,7 @@ test("consecutive failed fires accumulate and a clean fire resets them", async (
 });
 
 test("a transient fire failure neither counts toward quarantine nor clears earlier failures", async () => {
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const { loop } = await store.create(base);
   await store.recordFireOutcome(loop.id, "failed");
   const transient = await store.recordFireOutcome(loop.id, "transient");
@@ -92,7 +90,7 @@ test("a transient fire failure neither counts toward quarantine nor clears earli
 });
 
 test("re-enqueueing the same source key never doubles the work", async () => {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testItemRows());
   const first = await ledger.enqueue({ loopId: "L1", sourceKey: "SENTRY-42", sourceSummary: "TypeError in checkout" });
   const second = await ledger.enqueue({ loopId: "L1", sourceKey: "SENTRY-42", sourceSummary: "TypeError in checkout" });
   assert.equal(first.created, true);
@@ -102,7 +100,7 @@ test("re-enqueueing the same source key never doubles the work", async () => {
 });
 
 test("the same source key in two different loops is two items", async () => {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testItemRows());
   await ledger.enqueue({ loopId: "L1", sourceKey: "SENTRY-42" });
   await ledger.enqueue({ loopId: "L2", sourceKey: "SENTRY-42" });
   assert.equal((await ledger.byLoop("L1")).length, 1);
@@ -111,7 +109,7 @@ test("the same source key in two different loops is two items", async () => {
 });
 
 test("claiming an item counts the attempt and records the run", async () => {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testItemRows());
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const claimed = await ledger.claim(item.id);
   assert.equal(claimed?.status, "in_progress");
@@ -121,7 +119,7 @@ test("claiming an item counts the attempt and records the run", async () => {
 });
 
 test("two racing claims on one queued item yield exactly one winner", async () => {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testItemRows());
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const [first, second] = await Promise.all([ledger.claim(item.id), ledger.claim(item.id)]);
   assert.equal([first, second].filter(Boolean).length, 1);
@@ -129,7 +127,7 @@ test("two racing claims on one queued item yield exactly one winner", async () =
 });
 
 test("a parked item leaves the queue without blocking the rest of it", async () => {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testItemRows());
   const stuck = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const next = await ledger.enqueue({ loopId: "L1", sourceKey: "S2" });
   const claimed = await ledger.claim(stuck.item.id);
@@ -143,7 +141,7 @@ test("a parked item leaves the queue without blocking the rest of it", async () 
 });
 
 test("returning an output puts the item back to work carrying the reviewer's note", async () => {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testItemRows());
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const claimed = await ledger.claim(item.id);
   await ledger.markReady(item.id, ["out-1"], claimed!.claimToken!);
@@ -158,7 +156,7 @@ test("returning an output puts the item back to work carrying the reviewer's not
 });
 
 test("a stale item claim cannot mark ready after the lease is reclaimed", async () => {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testItemRows());
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   const stale = await ledger.claim(item.id, 1_000);
   const current = await ledger.claim(item.id, 601_000);
@@ -170,7 +168,7 @@ test("a stale item claim cannot mark ready after the lease is reclaimed", async 
 });
 
 test("queue stats report depth and the age of the oldest waiting item", async () => {
-  const ledger = createLoopItemLedger();
+  const ledger = createLoopItemLedger(testItemRows());
   const { item } = await ledger.enqueue({ loopId: "L1", sourceKey: "S1" });
   await ledger.enqueue({ loopId: "L1", sourceKey: "S2" });
   const stats = await ledger.stats("L1", item.createdAt + 60_000);
@@ -179,7 +177,7 @@ test("queue stats report depth and the age of the oldest waiting item", async ()
 });
 
 test("loop icons persist and reset without changing identity or automation policy", async () => {
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const { loop } = await store.create({ ...base, icon: "bug" });
   assert.equal((await store.get(loop.id))!.icon, "bug");
   await store.update(loop.id, { icon: "rocket" });
@@ -197,7 +195,7 @@ test("custom loop icons persist as bounded PNGs and reset to the source default"
   const icon =
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=";
   assert.equal(validLoopIcon(icon), true);
-  const store = createLoopStore();
+  const store = createLoopStore(testLoopRows());
   const { loop } = await store.create({ ...base, icon });
   assert.equal((await store.get(loop.id))!.icon, icon);
   await store.update(loop.id, { icon: "bug" });

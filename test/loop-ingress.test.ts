@@ -2,20 +2,23 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHmac } from "node:crypto";
 import { conversationEvent, createLoopIngress, type LoopIngress, type IngressDelivery } from "../src/loops/ingress.ts";
-import { createMemoryIngressDeliveryRows, createMemoryIngressSourceRows } from "../src/loops/ingress-table.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createGmailPushClient, type GmailCursor } from "../src/loops/gmail-push.ts";
 import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock } from "./support/test-database.ts";
+import {
+  testIngressDeliveryRows,
+  testIngressSourceRows,
+  testItemRows,
+  testLoopRows,
+  testOutputRows,
+} from "./support/typed-stores.ts";
 
 function inspectableSources() {
-  const rows = createMemoryIngressSourceRows();
+  const rows = testIngressSourceRows();
   const ids = new Set<string>();
   return {
     ...rows,
@@ -30,7 +33,7 @@ function inspectableSources() {
 }
 
 function inspectableDeliveries() {
-  const rows = createMemoryIngressDeliveryRows();
+  const rows = testIngressDeliveryRows();
   const ids = new Set<string>();
   const get = (id: string) => rows.update(id, (delivery) => delivery);
   return {
@@ -47,8 +50,8 @@ function inspectableDeliveries() {
 async function world() {
   const sources = inspectableSources();
   const deliveries = inspectableDeliveries();
-  const loops = createLoopStore();
-  const items = createLoopItemLedger();
+  const loops = createLoopStore(testLoopRows());
+  const items = createLoopItemLedger(testItemRows());
   const { loop } = await loops.create({
     owner: "alice",
     createdBy: "alice",
@@ -64,8 +67,8 @@ async function world() {
     deliveries,
     loops,
     items,
-    outputs: createLoopOutputStore(),
-    lock: createMemoryAdvisoryLock(),
+    outputs: createLoopOutputStore(testOutputRows()),
+    lock: testAdvisoryLock(),
     fire: {
       fire: async (
         loopId: string,

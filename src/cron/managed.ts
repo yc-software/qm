@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Cron } from "../types.ts";
+import type { Cron } from "../triggers/types.ts";
 import type { CreateCronInput, CronStore } from "./cron-store.ts";
 import type { Scheduler } from "./scheduler.ts";
 

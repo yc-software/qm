@@ -8,23 +8,23 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
-import { baseModelProviders, configuredModelForHarness, providerKeysPresent } from "../src/config.ts";
-import { defaultModelForHarness, modelProviderAvailabilityFor } from "../src/model/pi-models.ts";
+import { baseModelProviders, configuredModel, providerKeysPresent } from "../src/config.ts";
+import { defaultModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { stopAtEnd } from "./support/build-app.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
 function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
-  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), harness: "pi", ...overrides });
-  const built = buildApp(config);
+  const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), ...overrides });
+  const built = stopAtEnd(buildApp(config));
   const server = createInsecureTestServer(built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,
     acl: built.acl,
     modelCredentials: built.modelCredentials,
-    harnessId: "pi",
-    baseModelDefault: defaultModelForHarness("pi", configuredModelForHarness(config, "pi"), baseModelProviders(config)),
+    baseModelDefault: defaultModel(configuredModel(config), baseModelProviders(config)),
     providerKeys: providerKeysPresent(config),
   });
   server.listen(0);
@@ -60,12 +60,11 @@ test("base-model set rejects a model whose provider key is absent (would fail pr
   }
 });
 
-test("ChatGPT OAuth stays separate from OpenAI API-key availability on Pi", () => {
-  const config = testConfig({ harness: "pi", codexAuthFile: "/tmp/chatgpt-auth.json" });
+test("ChatGPT OAuth stays separate from OpenAI API-key availability", () => {
+  const config = testConfig({ codexAuthCredential: "company-chatgpt" });
   const configured = providerKeysPresent(config);
   assert.equal(configured.openai, false);
   assert.equal(configured.codexOAuth, true);
-  assert.equal(modelProviderAvailabilityFor("pi", configured).openai, false);
 });
 
 test("a deployment that declares a provider runs that provider's base model", async () => {
@@ -122,11 +121,11 @@ test("company ChatGPT-only deployments offer their plain GPT default through man
     assert.equal(res.status, 200);
     const body = (await res.json()) as {
       effective: { modelId: string };
-      modelsByHarness: Record<string, string[]>;
+      models: string[];
       unavailableReason?: string;
     };
     assert.equal(body.effective.modelId, "gpt-6.1-sol");
-    assert.ok(body.modelsByHarness.pi?.includes("gpt-6.1-sol"));
+    assert.ok(body.models.includes("gpt-6.1-sol"));
     assert.equal(body.unavailableReason, undefined);
   } finally {
     await srv.close();

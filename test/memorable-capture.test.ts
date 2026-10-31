@@ -73,7 +73,7 @@ test("captureSession cuts one workflow per prompt, not one per session", () => {
 test("captureSession drops a prompt that produced no tool calls", () => {
   const entries: SessionEntry[] = [
     entry("user", { text: "hey, what does this repo do?" }, 1),
-    entry("assistant", { text: "it is a harness" }, 2),
+    entry("assistant", { text: "it is a agent" }, 2),
     entry("user", { text: "ok, fix the order tests" }, 3),
     ...work(4, "t"),
   ];

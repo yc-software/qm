@@ -1,4 +1,4 @@
-import type { GoalCreateInput } from "../harness/goal.ts";
+import type { GoalCreateInput } from "../agent/goal.ts";
 import { NonRetryableTurnError } from "../core/turn-error.ts";
 import type { SwarmRunFence } from "./swarm-fence.ts";
 import type { SwarmRows } from "./swarm-table.ts";

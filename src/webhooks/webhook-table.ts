@@ -1,7 +1,6 @@
-import type { Webhook } from "../types.ts";
+import type { Webhook } from "../triggers/types.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { WEBHOOK_SEARCH_DESCRIPTION, WEBHOOK_SEARCH_TITLE } from "../search/resource-search.ts";
-import { perTenant } from "../tenants/context.ts";
 import { TENANCY_BASE, tenantPolicies } from "../tenants/migrations.ts";
 import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
 import { jsonbStringify, pgTextSafe } from "../util/text.ts";
@@ -125,7 +124,7 @@ export const WEBHOOK_EVENTS_MIGRATION: PgMigrationDefinition = {
     `CREATE TABLE IF NOT EXISTS webhook_history(id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
     `SELECT qm_tenant_column('webhook_history')`,
     `CREATE TABLE webhook_events(
-       tenant_id UUID NOT NULL DEFAULT qm_tenant_id() REFERENCES tenants,
+       tenant_id UUID NOT NULL DEFAULT qm_bound_tenant() REFERENCES tenants,
        webhook_id TEXT NOT NULL,
        delivery_id TEXT NOT NULL,
        received_at BIGINT NOT NULL,
@@ -150,9 +149,6 @@ export const WEBHOOK_EVENTS_MIGRATION: PgMigrationDefinition = {
   ],
 };
 
-const eventOrder = (a: WebhookEvent, b: WebhookEvent): number =>
-  b.receivedAt - a.receivedAt || a.deliveryId.localeCompare(b.deliveryId);
-
 export function createPostgresWebhookRows(connectionString: string): WebhookRows & { close(): Promise<void> } {
   const { q, pool, close } = createPgPool(connectionString, [
     TENANCY_BASE,
@@ -172,18 +168,20 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
       return rowToWebhook(rows[0]!);
     },
     async get(id) {
-      return (await many(`${SELECT} WHERE tenant_id = qm_tenant_id() AND id = $1`, [id]))[0] ?? null;
+      return (await many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1`, [id]))[0] ?? null;
     },
-    list: () => many(`${SELECT} WHERE tenant_id = qm_tenant_id() ORDER BY id`),
+    list: () => many(`${SELECT} WHERE tenant_id = qm_bound_tenant() ORDER BY id`),
     ownedBy: (scopeId) =>
-      many(`${SELECT} WHERE tenant_id = qm_tenant_id() AND owner_scope_id = $1 ORDER BY id`, [scopeId]),
+      many(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND owner_scope_id = $1 ORDER BY id`, [scopeId]),
     async update(id, apply) {
       return withPgTransaction(await pool(), async (client) => {
-        const current = await client.query(`${SELECT} WHERE tenant_id = qm_tenant_id() AND id = $1 FOR UPDATE`, [id]);
+        const current = await client.query(`${SELECT} WHERE tenant_id = qm_bound_tenant() AND id = $1 FOR UPDATE`, [
+          id,
+        ]);
         if (!current.rows[0]) return null;
         const next = { ...apply(rowToWebhook(current.rows[0])), id };
         await client.query(
-          `UPDATE webhooks SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_tenant_id() AND id = $1`,
+          `UPDATE webhooks SET (${COLUMNS}) = (${VALUES}) WHERE tenant_id = qm_bound_tenant() AND id = $1`,
           webhookParams(next),
         );
         return next;
@@ -197,8 +195,8 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
           [webhookId, pgTextSafe(event.deliveryId), Math.round(event.receivedAt), pgTextSafe(event.payload)],
         );
         await client.query(
-          `DELETE FROM webhook_events WHERE tenant_id = qm_tenant_id() AND webhook_id = $1 AND delivery_id IN (
-             SELECT delivery_id FROM webhook_events WHERE tenant_id = qm_tenant_id() AND webhook_id = $1
+          `DELETE FROM webhook_events WHERE tenant_id = qm_bound_tenant() AND webhook_id = $1 AND delivery_id IN (
+             SELECT delivery_id FROM webhook_events WHERE tenant_id = qm_bound_tenant() AND webhook_id = $1
               ORDER BY received_at DESC, delivery_id OFFSET $2)`,
           [webhookId, WEBHOOK_EVENTS_KEPT],
         );
@@ -207,7 +205,7 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
     async listEvents(webhookId) {
       const rows = await q(
         `SELECT delivery_id, received_at, payload FROM webhook_events
-          WHERE tenant_id = qm_tenant_id() AND webhook_id = $1
+          WHERE tenant_id = qm_bound_tenant() AND webhook_id = $1
           ORDER BY received_at DESC, delivery_id LIMIT $2`,
         [webhookId, WEBHOOK_EVENTS_KEPT],
       );
@@ -216,46 +214,6 @@ export function createPostgresWebhookRows(connectionString: string): WebhookRows
         receivedAt: Number(r.received_at),
         payload: r.payload as string,
       }));
-    },
-  };
-}
-
-export function createMemoryWebhookRows(): WebhookRows {
-  const mine = perTenant(() => ({ webhooks: new Map<string, Webhook>(), events: new Map<string, WebhookEvent[]>() }));
-  const all = (): Webhook[] =>
-    [...mine().webhooks.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, w]) => structuredClone(w));
-  return {
-    async insertIfAbsent(webhook) {
-      const { webhooks } = mine();
-      if (!webhooks.has(webhook.id)) webhooks.set(webhook.id, structuredClone(webhook));
-      return structuredClone(webhooks.get(webhook.id)!);
-    },
-    async get(id) {
-      const webhook = mine().webhooks.get(id);
-      return webhook ? structuredClone(webhook) : null;
-    },
-    async list() {
-      return all();
-    },
-    async ownedBy(scopeId) {
-      return all().filter((w) => w.ownerScopeId === scopeId);
-    },
-    async update(id, apply) {
-      const { webhooks } = mine();
-      const current = webhooks.get(id);
-      if (!current) return null;
-      const next = { ...apply(structuredClone(current)), id };
-      webhooks.set(id, structuredClone(next));
-      return next;
-    },
-    async recordEvent(webhookId, event) {
-      const { events } = mine();
-      const list = events.get(webhookId) ?? [];
-      if (list.some((e) => e.deliveryId === event.deliveryId)) return;
-      events.set(webhookId, [...list, { ...event }].sort(eventOrder).slice(0, WEBHOOK_EVENTS_KEPT));
-    },
-    async listEvents(webhookId) {
-      return structuredClone(mine().events.get(webhookId) ?? []);
     },
   };
 }

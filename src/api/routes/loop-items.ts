@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { Cron, Loop, LoopItem, LoopSourcePayload } from "../../types.ts";
+import type { Cron } from "../../triggers/types.ts";
+import type { Loop, LoopItem, LoopSourcePayload } from "../../loops/types.ts";
 import { isAccountType } from "../../connectors/oauth.ts";
 import { canonicalJson } from "../../../cli/src/canonical-json.ts";
 import { errMessage } from "../../util/errors.ts";
@@ -29,7 +30,7 @@ import {
   INBOX_SYNC_DEFAULT_EVERY_MS,
 } from "../../loops/inbox-loop.ts";
 import { migrateInbox } from "../../loops/inbox-migration.ts";
-import { THINKING_LEVELS, isHarnessId } from "../../model/pi-models.ts";
+import { THINKING_LEVELS } from "../../model/pi-models.ts";
 import { principalDestination } from "../../reach/reach.ts";
 
 const MAX_ITEMS_PER_INGEST = 50;
@@ -427,7 +428,6 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
 
 const followUpOptionsSchema = z.object({
   model: z.string().trim().min(1).optional(),
-  harness: z.string().trim().refine(isHarnessId, "unsupported harness").optional(),
   thinkingLevel: z.string().trim().pipe(z.enum(THINKING_LEVELS)).optional(),
   fastMode: z.boolean().optional(),
   attachments: z
@@ -453,6 +453,7 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
   if (!parsed.success)
     return sendJson(ctx.res, 400, { error: "bad_request", message: parsed.error.issues[0]?.message });
   const options = parsed.data;
+  if (ctx.capability && options.attachments?.length) return sendJson(ctx.res, 403, { error: "forbidden" });
   const message = typeof body.message === "string" ? body.message.trim() : "";
   if (!message && !options.attachments?.length)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "message required" });

@@ -2,21 +2,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
-import {
-  createMemoryFileArtifactStore,
-  fileArtifactId,
-  type FileArtifactStore,
-} from "../src/files/file-artifact-store.ts";
+import { fileArtifactId, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = "default-org";
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 const channel = scopeId("channel", "C1");
 
 function makeApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
-  return createApp({ acl, files, identity: createIdentityService() } as unknown as AppDeps);
+  return createApp({
+    acl,
+    files,
+    identity: createIdentityService(testMap(), { externalMembers: testMap() }),
+  } as unknown as AppDeps);
 }
 
 function makeUploadApp(files: FileArtifactStore, acl: ReturnType<typeof createAclStore>) {
@@ -61,8 +64,11 @@ async function drain(stream: NodeJS.ReadableStream): Promise<Buffer> {
 }
 
 test("owner sees their own file in owned[] and can open its bytes", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const app = makeApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const app = makeApp(
+    files,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
+  );
   const id = fileArtifactId("run-1", "out", 0);
   await files.put({
     id,
@@ -87,8 +93,10 @@ test("owner sees their own file in owned[] and can open its bytes", async () => 
 });
 
 test("a grantee sees a shared file in shared[] and can open it; the owner doesn't double-list it", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const app = makeApp(files, acl);
   const owner = scopeId("personal", "U1");
   const id = fileArtifactId("share", "out", 0);
@@ -122,8 +130,11 @@ test("a grantee sees a shared file in shared[] and can open it; the owner doesn'
 });
 
 test("a stranger sees nothing and cannot open the file (404 = null)", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const app = makeApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const app = makeApp(
+    files,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
+  );
   const id = fileArtifactId("run-1", "out", 0);
   await files.put({
     id,
@@ -143,8 +154,10 @@ test("a stranger sees nothing and cannot open the file (404 = null)", async () =
 });
 
 test("an org grant surfaces the file to any org member", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const app = makeApp(files, acl);
   const owner = scopeId("personal", "U1");
   const id = fileArtifactId("orgshare", "out", 0);
@@ -194,14 +207,20 @@ test("openFileForViewer returns null when the bytes are gone (a backfilled histo
     get: async () => row,
     open: async () => null,
   } as unknown as FileArtifactStore;
-  const app = makeApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
+  const app = makeApp(
+    files,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
+  );
 
   assert.equal(await app.openFileForViewer(id, "U1"), null, "owner is authorized but the bytes are unavailable → 404");
 });
 
 test("uploadFileForViewer stores a personal inbound file", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const app = makeUploadApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const app = makeUploadApp(
+    files,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
+  );
 
   const file = await app.uploadFileForViewer("U1", {
     name: "../notes.txt",
@@ -222,8 +241,10 @@ test("uploadFileForViewer stores a personal inbound file", async () => {
 });
 
 test("uploadFileForViewer to a shared context is visible to another context member", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const app = makeUploadApp(files, acl);
 
   const file = await app.uploadFileForViewer("U1", {
@@ -249,8 +270,11 @@ test("uploadFileForViewer to a shared context is visible to another context memb
 });
 
 test("scoped file listing pages within the requested context", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const app = makeUploadApp(files, createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) }));
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const app = makeUploadApp(
+    files,
+    createAclStore(createPostgresGrantStore(testDatabaseUrl()), { resolveFiles: (refs) => files.resolveByIds(refs) }),
+  );
   await app.uploadFileForViewer("U1", {
     name: "personal.txt",
     mimetype: "text/plain",
@@ -272,8 +296,10 @@ test("scoped file listing pages within the requested context", async () => {
 });
 
 test("project files collapse across contributors and turns before paging owned and shared documents", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const app = makeUploadApp(files, acl);
   const ledger: string[] = [];
   for (const [turn, author, documents] of [
@@ -325,8 +351,10 @@ test("project files collapse across contributors and turns before paging owned a
 
 for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
   test("scope resources drain file pages for " + authors.join(" and "), async () => {
-    const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-    const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+    const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+    const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+      resolveFiles: (refs) => files.resolveByIds(refs),
+    });
     const app = makeUploadApp(files, acl);
     for (let n = 0; n < 55; n++) {
       for (const [index, author] of authors.entries()) {
@@ -357,8 +385,10 @@ for (const authors of [["U1"], ["U2"], ["U1", "U2"]]) {
 }
 
 test("file grants name one Files record, not its path or another generation", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const app = makeUploadApp(files, acl);
   const ownerScopeId = scopeId("personal", "U1");
   const input = {

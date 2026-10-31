@@ -16,6 +16,7 @@ import { createPostgresWebhookRows } from "../src/webhooks/webhook-table.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { withTypedTableDb } from "./support/typed-table.ts";
+import { testCronFires } from "./support/typed-stores.ts";
 
 const database = process.env.DATABASE_URL;
 test(
@@ -110,7 +111,7 @@ function searchStores(url: string) {
   const webhookRows = createPostgresWebhookRows(url);
   const pool = createPgPool(url);
   return {
-    crons: createCronStore(cronRows),
+    crons: createCronStore(cronRows, { fires: testCronFires() }),
     webhooks: createWebhookStore(webhookRows),
     search: createPostgresResourceSearch(pool),
     async close() {

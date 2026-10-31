@@ -48,7 +48,7 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
       const config = {
         ...configs.get(change.scopeId)!,
         upgradeAvailable: false,
-        effective: { harnessId: "pi", modelId: "model", effortLevel: "high", fastMode: true },
+        effective: { modelId: "model", effortLevel: "high", fastMode: true },
       };
       configs.set(change.scopeId, config);
       return Response.json(config);
@@ -98,7 +98,7 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
     panes[1]!.composer.state.effortLevel = "auto"; // Explicitly equal to the old default is still a choice.
     panes[1]!.composer.state.fastMode = false;
     panes[1]!.composer.state.draft = "keep my message";
-    contextModelState.pending = "pi:pending-model";
+    contextModelState.pending = "pending-model";
     contextModelState.pendingEffort = "low";
     await saveRuntimeConfig("personal:owner", { inherit: true });
     assert.deepEqual(
@@ -111,7 +111,7 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
     assert.equal(panes[1]!.composer.state.fastMode, false, "explicit off survives a new fast default");
     assert.equal(panes[1]!.composer.state.draft, "keep my message");
     assert.equal(contextModelState.config.upgradeAvailable, false);
-    assert.equal(contextModelState.pending, "pi:pending-model");
+    assert.equal(contextModelState.pending, "pending-model");
     assert.equal(contextModelState.pendingEffort, "low");
     fail = true;
     await assert.rejects(saveRuntimeConfig("personal:owner", { keep: true }), /save failed/);
@@ -138,7 +138,7 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
     // A server refresh uses the same publishing path as a local save.
     configs.set(
       "personal:owner",
-      runtimeConfig("personal:owner", { effective: { harnessId: "pi", modelId: "model", effortLevel: "low" } }),
+      runtimeConfig("personal:owner", { effective: { modelId: "model", effortLevel: "low" } }),
     );
     await loadRuntimeConfig("personal:owner", true);
     assert.equal(panes[0]!.composer.state.effortLevel, "low");

@@ -5,11 +5,9 @@ import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { settle } from "./support/settle.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
-import { createSessionMailbox } from "../src/sessions/session-mailbox.ts";
 import type { Run } from "../src/runs/run-store.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock } from "./support/test-database.ts";
+import { testSessionMailbox } from "./support/typed-stores.ts";
 
 test("a subagent shows its delegated tasks while the parent's completion wake stays hidden", async (t) => {
   const built = buildApp(testConfig({ memoryCapture: "off" }));
@@ -32,10 +30,11 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   await built.config.setPersonalModelAuth("U1", true, "openai");
   await built.featureFlags.setEnabled("responsive_spine", parentSession.scopeId, true, "U1");
   const syscalls = createSessionSyscalls({
+    advisoryLock: testAdvisoryLock(),
     sessions: built.sessions,
     runs: built.runs,
     signals: built.signals,
-    mailbox: createSessionMailbox(),
+    mailbox: testSessionMailbox(),
     maxAttempts: 1,
   }).forTurn({
     session: parentSession,
@@ -68,7 +67,7 @@ test("a subagent shows its delegated tasks while the parent's completion wake st
   assert.equal((await userEntry(wake)).hidden, true);
   assert.equal(wake.request.origin.kind, "human");
 
-  assert.ok((await syscalls.write({ followup: true, target: child.id, text: "Check the tests too" })).ok);
+  assert.ok((await syscalls.write({ wake: true, target: child.id, text: "Check the tests too" })).ok);
   const second = await finished(() => built.runs.latestForThread(child.threadRef));
   assert.deepEqual(await userEntry(second), { hidden: false, display: "Check the tests too" });
 });
@@ -106,10 +105,11 @@ test("human-origin delegated input is screened before model execution", async (t
   const parent = (await built.runs.latestForThread(threadRef))!;
   const session = (await built.sessions.getByThread(threadRef))!;
   const syscalls = createSessionSyscalls({
+    advisoryLock: testAdvisoryLock(),
     sessions: built.sessions,
     runs: built.runs,
     signals: built.signals,
-    mailbox: createSessionMailbox(),
+    mailbox: testSessionMailbox(),
     maxAttempts: 1,
   }).forTurn({ session, scopeId: session.scopeId, request: { ...parent.request, runId: parent.id } });
   const opened = await syscalls.open({ task: "UNTRUSTED_TASK" });

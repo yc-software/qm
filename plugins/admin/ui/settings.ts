@@ -46,10 +46,9 @@ export class SettingsState extends SettingState {
     return structuredClone(this.draft);
   }
   get catalog(): Model[] {
-    return [
-      ...Object.values(this.context.modelsByHarness || {}).flat(),
-      ...(this.context.baseModelOptions || []),
-    ].filter((m: any, i, all) => m?.id && all.findIndex((x: any) => x?.id === m.id) === i) as Model[];
+    return [...(this.context.baseModelOptions || [])].filter(
+      (m: any, i, all) => m?.id && all.findIndex((x: any) => x?.id === m.id) === i,
+    ) as Model[];
   }
   change(field: string, value: unknown) {
     this.draft[field] = value;
@@ -123,7 +122,6 @@ export function load(data: Data, scope: string, only?: string) {
     s.draft = runtimeKeys.includes(key)
       ? {
           ...(key !== "runtime" ? { inherit: !runtime } : {}),
-          harnessId: runtime?.harnessId || data.harnessDefault || "pi",
           modelId: runtime?.modelId || data.baseModel || data.baseModelDefault || "",
           effortLevel: runtime?.effortLevel || "auto",
           fastMode: runtime?.fastMode === true,

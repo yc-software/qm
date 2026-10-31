@@ -1,5 +1,5 @@
-import type { LoopOutput, LoopOutputState, LoopShipResult } from "../types.ts";
-import { createMemoryOutputRows, type OutputRows } from "./output-table.ts";
+import type { LoopOutput, LoopOutputState, LoopShipResult } from "./types.ts";
+import { type OutputRows } from "./output-table.ts";
 import { contentPart } from "../triggers/trigger-store.ts";
 import { hashId } from "../util/crypto.ts";
 import { randomUUID } from "node:crypto";
@@ -86,10 +86,7 @@ export function unresolvedOutput(output: LoopOutput): boolean {
   return output.state === "ready" || output.state === "shipping" || output.state === "unconfirmed";
 }
 
-export function createLoopOutputStore(
-  rows: OutputRows = createMemoryOutputRows(),
-  onEvent?: (output: LoopOutput) => void,
-): LoopOutputStore {
+export function createLoopOutputStore(rows: OutputRows, onEvent?: (output: LoopOutput) => void): LoopOutputStore {
   const update = async (id: string, change: (output: LoopOutput) => LoopOutput): Promise<LoopOutput | null> => {
     const output = await rows.update(id, change);
     if (output) onEvent?.(output);

@@ -3,14 +3,17 @@ import { test } from "node:test";
 import { createHmac } from "node:crypto";
 import { configurePgPooling, createPgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryIngressDeliveryRows, createMemoryIngressSourceRows } from "../src/loops/ingress-table.ts";
 import { createLoopStore } from "../src/loops/loop-store.ts";
 import { createLoopItemLedger } from "../src/loops/item-ledger.ts";
 import { createLoopOutputStore } from "../src/loops/output-store.ts";
 import { createLoopIngress } from "../src/loops/ingress.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import {
+  testIngressDeliveryRows,
+  testIngressSourceRows,
+  testItemRows,
+  testLoopRows,
+  testOutputRows,
+} from "./support/typed-stores.ts";
 
 test(
   "event import and model work reuse one PostgreSQL advisory session",
@@ -20,7 +23,7 @@ test(
     const pg = createPgPool(process.env.DATABASE_URL!);
     try {
       const lock = createPostgresAdvisoryLock(pg);
-      const loops = createLoopStore();
+      const loops = createLoopStore(testLoopRows());
       const { loop } = await loops.create({
         owner: "qa",
         createdBy: "qa",
@@ -29,15 +32,15 @@ test(
         playbook: "Review",
         successCondition: "Reviewed",
       });
-      const items = createLoopItemLedger(undefined, undefined, { lock, accepts: async () => true });
+      const items = createLoopItemLedger(testItemRows(), undefined, { lock, accepts: async () => true });
       let worked = false;
       const ingress = createLoopIngress({
         enabledFor: async () => true,
-        sources: createMemoryIngressSourceRows(),
-        deliveries: createMemoryIngressDeliveryRows(),
+        sources: testIngressSourceRows(),
+        deliveries: testIngressDeliveryRows(),
         loops,
         items,
-        outputs: createLoopOutputStore(),
+        outputs: createLoopOutputStore(testOutputRows()),
         lock,
         fire: {
           fire: async () =>

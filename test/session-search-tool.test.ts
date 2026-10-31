@@ -7,10 +7,11 @@ import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createSessionSyscalls } from "../src/sessions/session-syscalls.ts";
-import { createSessionMailbox } from "../src/sessions/session-mailbox.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
-import { createMemoryRunSignalStore } from "../src/runs/run-signal-store.ts";
 import { scopeId, type Principal } from "../src/types.ts";
+import { testAdvisoryLock, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
+import { testSessionMailbox } from "./support/typed-stores.ts";
 
 const alice: Principal = { id: "alice@example.com", type: "internal" };
 const bob: Principal = { id: "bob@example.com", type: "internal" };
@@ -37,14 +38,15 @@ test("session search reuses indexed search with participant intersection, tenure
     scopeLabel: source.scopeId,
   });
   await sessions.releaseLease(lease);
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   let members: Principal[] | undefined;
   const factory = createSessionSyscalls({
     sessions,
     runs,
-    signals: createMemoryRunSignalStore(),
-    mailbox: createSessionMailbox(),
+    signals: createPostgresRunSignalStore(testDatabaseUrl()),
+    mailbox: testSessionMailbox(),
     maxAttempts: 1,
+    advisoryLock: testAdvisoryLock(),
     prepareRequest: async (request) => ({
       ...request,
       conversation: { ...request.conversation, publishMembers: members },
