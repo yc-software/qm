@@ -9,29 +9,21 @@ import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
 
-async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>): Promise<void> {
+async function withDatabase(run: (url: string, admin: pg.Client) => Promise<void>): Promise<void> {
   const parent = new pg.Pool({ connectionString: databaseUrl });
   const name = `base_schema_${randomUUID().replaceAll("-", "")}`;
   await parent.query(`CREATE DATABASE ${name}`);
   const url = new URL(databaseUrl!);
   url.pathname = `/${name}`;
-  const admin = new pg.Pool({ connectionString: url.toString() });
+  const admin = new pg.Client({ connectionString: url.toString() });
   try {
+    await admin.connect();
     await run(url.toString(), admin);
   } finally {
     await admin.end();
-    await dropWhenIdle(parent, name);
+    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
     await parent.end();
   }
-}
-
-async function dropWhenIdle(parent: pg.Pool, name: string): Promise<void> {
-  const idleBy = Date.now() + 5_000;
-  const sessions = "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1";
-  while ((await parent.query(sessions, [name])).rows[0].n > 0 && Date.now() < idleBy) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
 }
 
 async function migrate(url: string): Promise<void> {
@@ -44,7 +36,7 @@ async function migrate(url: string): Promise<void> {
   }
 }
 
-const present = async (admin: pg.Pool, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
+const present = async (admin: pg.Client, sql: string) => (await admin.query(`SELECT ${sql} AS v`)).rows[0].v as unknown;
 
 test("a fresh database gets the base schema without items.target_seq", { skip }, async () => {
   await withDatabase(async (url, admin) => {
