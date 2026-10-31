@@ -28,6 +28,13 @@ test("jsonbStringify drops NUL characters", () => {
   assert.equal(jsonbStringify({ name: "a\u0000b" }), '{"name":"ab"}');
 });
 
+test("jsonbStringify writes a Date as its ISO string, as JSON.stringify does", () => {
+  const at = new Date(Date.UTC(2026, 9, 30, 12, 0, 0));
+  const value = { at, nested: { list: [at] } };
+  assert.equal(jsonbStringify(value), JSON.stringify(value));
+  assert.equal(JSON.parse(jsonbStringify(value)).at, "2026-10-30T12:00:00.000Z");
+});
+
 test("jsonbStringify replaces a lone surrogate from a cut emoji with U+FFFD", () => {
   const out = JSON.parse(jsonbStringify({ title: "prefix 😀".slice(0, 8) })) as { title: string };
   assert.equal(out.title.isWellFormed(), true);
