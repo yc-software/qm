@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
-import { migrateRegisteredPgSchemas } from "../src/persistence/pg-pool.ts";
+import { applyPgMigrations, migrateRegisteredPgSchemas, registeredPgMigrations } from "../src/persistence/pg-pool.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 const skip = databaseUrl ? false : "set DATABASE_URL (a Postgres) to run the base schema tests";
@@ -30,6 +30,19 @@ async function migrate(url: string): Promise<void> {
   const runs = createPostgresRunStore(url);
   try {
     await migrateRegisteredPgSchemas(url);
+  } finally {
+    await runs.close();
+  }
+}
+
+async function migrateBase(url: string, admin: pg.Pool): Promise<void> {
+  createPostgresSessionStore(url);
+  const runs = createPostgresRunStore(url);
+  try {
+    await applyPgMigrations(
+      admin,
+      registeredPgMigrations(url).filter((m) => !m.id.endsWith("-tenants")),
+    );
   } finally {
     await runs.close();
   }
@@ -61,7 +74,7 @@ test("a fully migrated database skips the base schema and drops only the retired
       CONSTRAINT items_target_seq_kind CHECK (target_seq IS NULL OR kind = 'Retraction'))`);
     await admin.query("CREATE TABLE tool_calls(run_id TEXT)");
     await admin.query("CREATE FUNCTION safe_json(t text) RETURNS json LANGUAGE sql AS 'SELECT t::json'");
-    await migrate(url);
+    await migrateBase(url, admin);
     const columns = await admin.query(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'items' ORDER BY ordinal_position",
     );

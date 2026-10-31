@@ -179,7 +179,7 @@ test(
       assert.equal((await writer.runs.reapExpired()).requeued, 1);
       await until(() => notifications > before);
       await admin.query(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query='LISTEN qm_run_available' AND application_name=$1",
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=current_database() AND query LIKE '%LISTEN qm_run_available' AND application_name=$1",
         [new URL(url).searchParams.get("application_name")],
       );
       ids.push((await writer.runs.enqueue({ sessionId, request })).run.id);
