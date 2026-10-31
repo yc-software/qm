@@ -13,7 +13,7 @@ import {
 import type { PoolClient } from "pg";
 import type { Config } from "../config.ts";
 import { isNoSuchKey, s3Client, type S3Send } from "../persistence/s3.ts";
-import { createPgPool, PG_MIGRATIONS_TABLE } from "../persistence/pg-pool.ts";
+import { createPgPool, ownerDatabaseUrl, PG_MIGRATIONS_TABLE } from "../persistence/pg-pool.ts";
 import { swallowAs } from "../util/errors.ts";
 import { FILES_AREA } from "../files/durable-byte-store.ts";
 import { HOME_SNAPSHOT_AREAS } from "../sandbox/home-snapshot.ts";
@@ -279,7 +279,7 @@ async function moveRootScope(client: PoolClient, config: Config): Promise<void> 
 
 export async function migrateTenantStorageOnce(config: Config): Promise<void> {
   if (!config.databaseUrl) return;
-  const db = createPgPool(config.databaseUrl);
+  const db = createPgPool(ownerDatabaseUrl(config.databaseUrl));
   try {
     const client = await (await db.pool()).connect();
     try {
