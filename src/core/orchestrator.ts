@@ -2389,7 +2389,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.setDeliveryState(input.runId, input.runLeaseToken, { replying: true })
               .catch(swallowAs("orchestrator: persist reply engagement", false));
           }
-          deps.turnStream?.begin(input.runId);
+          deps.turnStream?.begin(input.runId, input.runLeaseToken);
         }
 
         const backgroundBroker =
@@ -3933,7 +3933,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           };
         throw err;
       } finally {
-        if (input.runId) deps.turnStream?.end(input.runId);
+        if (input.runId) deps.turnStream?.end(input.runId, input.runLeaseToken);
         stopLeaseKeepalive();
         if (!tailOwnsCleanup) await reclaimBox();
         if (!leaseReleased) {
