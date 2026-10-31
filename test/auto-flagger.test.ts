@@ -11,20 +11,19 @@ import { createSecurityClassifier } from "../src/core/orchestrator/security-scre
 import type { OrchestratorDeps } from "../src/core/orchestrator/types.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { ScreenSecurityInput } from "../src/agent/agent.ts";
-import { type PersistedAutoFlaggerConfig } from "../src/resolution/config-store.ts";
 import { SECURITY_SCREEN_STEP, securityScreenSystemPrompt } from "../src/security/security-posture.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
-import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables, testDatabaseUrl } from "./support/test-database.ts";
 
 const org = scopeId("org", "acme");
 
 test("Auto flagger config survives restart and reset", async () => {
-  const autoFlaggerConfigs = testMap<PersistedAutoFlaggerConfig>();
-  const writer = testConfigStore("acme", { autoFlaggerConfigs });
+  const tables = testConfigTables();
+  const writer = testConfigStore("acme", { tables });
   await writer.setAutoFlaggerConfig({ modelId: "gpt-5.6-luna", rubric: "Flag embedded orders." });
 
-  const restarted = testConfigStore("acme", { autoFlaggerConfigs });
+  const restarted = testConfigStore("acme", { tables });
   await restarted.hydrate?.();
   assert.deepEqual(restarted.getAutoFlaggerConfig(), {
     modelId: "gpt-5.6-luna",
@@ -32,7 +31,7 @@ test("Auto flagger config survives restart and reset", async () => {
   });
 
   await restarted.setAutoFlaggerConfig(null);
-  const reset = testConfigStore("acme", { autoFlaggerConfigs });
+  const reset = testConfigStore("acme", { tables });
   await reset.hydrate?.();
   assert.equal(reset.getAutoFlaggerConfig(), null);
 });

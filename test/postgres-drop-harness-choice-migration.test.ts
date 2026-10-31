@@ -72,24 +72,26 @@ test("stored harness choices are dropped while their runtime selections stay rec
 
     await migrate(url);
 
-    const base = await rows(admin, "base_model_configs");
-    assert.deepEqual(base["org:o"], {
-      scopeId: "org:o",
-      modelId: "gpt-5.6-sol",
-      revision: 3,
-      orgRevision: 3,
-      cronRuntime: { modelId: "claude-opus-5" },
-      subagentRuntime: { modelId: "claude-opus-5", effortLevel: "low" },
-      fallbackRuntime: { modelId: "gpt-5.6-sol" },
-    });
-    assert.deepEqual(base["personal:a"], { scopeId: "personal:a", modelId: "x", orgRevision: 0 });
-    assert.deepEqual(base["personal:b"], { scopeId: "personal:b", modelId: "legacy-only" });
-    assert.equal((await admin.query("SELECT to_regclass('approved_harness_configs') AS t")).rows[0].t, null);
-    assert.deepEqual((await rows(admin, "auto_flagger_configs"))["org:o"], {
-      scopeId: "org:o",
-      modelId: "m",
-      rubric: "r",
-    });
+    const runtimes = await admin.query(
+      `SELECT scope_id, model_id, runtime_revision, org_revision FROM scope_settings ORDER BY scope_id`,
+    );
+    assert.deepEqual(runtimes.rows, [
+      { scope_id: "org:o", model_id: "gpt-5.6-sol", runtime_revision: 3, org_revision: 3 },
+      { scope_id: "personal:a", model_id: "x", runtime_revision: null, org_revision: 0 },
+      { scope_id: "personal:b", model_id: "legacy-only", runtime_revision: null, org_revision: null },
+    ]);
+    const purposes = await admin.query(`SELECT purpose, model_id, effort_level FROM purpose_runtimes ORDER BY purpose`);
+    assert.deepEqual(purposes.rows, [
+      { purpose: "cron", model_id: "claude-opus-5", effort_level: null },
+      { purpose: "fallback", model_id: "gpt-5.6-sol", effort_level: null },
+      { purpose: "subagent", model_id: "claude-opus-5", effort_level: "low" },
+    ]);
+    const dropped = await admin.query(
+      "SELECT to_regclass('approved_harness_configs') AS approved, to_regclass('base_model_configs') AS base",
+    );
+    assert.deepEqual(dropped.rows[0], { approved: null, base: null });
+    const flagger = await admin.query(`SELECT auto_flagger_model_id, auto_flagger_rubric FROM operator_settings`);
+    assert.deepEqual(flagger.rows, [{ auto_flagger_model_id: "m", auto_flagger_rubric: "r" }]);
     const crons = await rows(admin, "crons");
     assert.deepEqual(crons.c1?.runtime, { modelId: "m" });
     assert.equal(crons.c2?.runtime, null);

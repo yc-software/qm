@@ -5,7 +5,9 @@ import { createAdminGrantStore, type AdminGrant, type AdminGrantStore } from "..
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persistence/advisory-lock.ts";
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
-import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
+import { createConfigStore } from "../../src/resolution/config-store.ts";
+import type { ConfigTables } from "../../src/resolution/config-tables.ts";
+import { createPostgresConfigTables } from "../../src/resolution/config-tables-pg.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
 
@@ -76,8 +78,12 @@ export function testAdvisoryLock(): AdvisoryLock {
   return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
 }
 
+export function testConfigTables(): ConfigTables {
+  return { ...createPostgresConfigTables(testMigratedDatabaseUrl()), fresh: true };
+}
+
 export function testConfigStore(orgId: string, opts: Partial<Parameters<typeof createConfigStore>[1]> = {}) {
-  return createConfigStore(orgId, { ...configStoreMaps(() => testMap<never>()), ...opts });
+  return createConfigStore(orgId, { tables: testConfigTables(), ...opts });
 }
 
 export const TEST_ADMIN_GRANTS = "admin-alice:org_admin,admin-bob:org_admin";
