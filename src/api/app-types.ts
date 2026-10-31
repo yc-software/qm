@@ -804,7 +804,6 @@ export class SoulVersionConflictError extends Error {
 
 export const CONTEXT_REQUEST_EXPIRY_MS = 2 * 60_000;
 
-
 interface SessionPageQuery {
   limit: number;
   before?: { activity: number; id: string };
