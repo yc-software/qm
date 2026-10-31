@@ -9,7 +9,7 @@ import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-s
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
-import { withTenant } from "../src/tenants/context.ts";
+import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
 import { OTHER_TENANT, seedTenant, TEST_TENANT } from "./support/tenant.ts";
 
@@ -54,7 +54,7 @@ async function withTenancy(fn: (ctx: Tenancy) => Promise<void>): Promise<void> {
     appUrl.password = APP_PASSWORD;
     const app = createPgPool(appUrl.toString());
     try {
-      await fn({ app, admin, url, schema, a, b, sessionId: session.id });
+      await withoutTenant(() => fn({ app, admin, url, schema, a, b, sessionId: session.id }));
     } finally {
       await app.close();
     }

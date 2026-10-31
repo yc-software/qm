@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import { availableParallelism } from "node:os";
+import path from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import pg from "pg";
@@ -22,6 +23,7 @@ if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
   throw new Error(`--timeout must be a positive number of seconds, got ${values.timeout}`);
 }
 if (positionals.length === 0) throw new Error("Pass the Postgres test files to run");
+const tenantBoundEntry = new URL("../test/support/tenant-bound-entry.ts", import.meta.url).pathname;
 const files = positionals.toSorted((a, b) => statSync(b).size - statSync(a).size);
 
 const baseUrl = process.env.DATABASE_URL;
@@ -74,9 +76,9 @@ function runFile(file, env) {
       children.delete(child);
       resolve({ file, ok, ms: Date.now() - started, output });
     };
-    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", file], {
+    const child = spawn(process.execPath, ["--experimental-test-module-mocks", "--test", tenantBoundEntry], {
       detached: true,
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...env, QM_TEST_FILE: path.resolve(file) },
     });
     children.add(child);
     child.stdout?.on("data", (chunk) => (output += chunk));
