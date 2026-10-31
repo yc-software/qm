@@ -1,8 +1,7 @@
-import { isBearerSecret, isStrongSigningSecret } from "../auth/source-auth.ts";
+import { isStrongSigningSecret } from "../auth/source-auth.ts";
 
 type SecretGate =
   | "production"
-  | "background-work-control"
   | "sprites"
   | "smolmachines"
   | "e2b"
@@ -35,7 +34,6 @@ export const CORE_SECRET_SPECS: readonly RuntimeSecretSpec[] = [
   { name: "CAPABILITY_SECRET", requiredWhen: "production" },
   { name: "CONNECTOR_SECRET_KEY", requiredWhen: "production" },
   { name: "CORE_SIGNING_SECRET", requiredWhen: "production" },
-  { name: "DEPLOYMENT_CONTROL_SECRET", requiredWhen: "background-work-control" },
   { name: "PORTAL_IDENTITY_SECRET", requiredWhen: "production" },
   { name: "SKILL_SIGNING_SECRET", requiredWhen: "production" },
   { name: "AUTH_ALLOWED_EMAILS", requiredWhen: "email-auth" },
@@ -72,7 +70,6 @@ function sandboxBackendSelected(env: NodeJS.ProcessEnv, backend: string): boolea
 
 const GATE_PREDICATES: Readonly<Record<SecretGate, (env: NodeJS.ProcessEnv) => boolean>> = {
   production: (env) => env.NODE_ENV === "production",
-  "background-work-control": (env) => Boolean(env.BACKGROUND_DEPLOYMENT_ID?.trim()),
   sprites: (env) => sandboxBackendSelected(env, "sprites"),
   smolmachines: (env) => sandboxBackendSelected(env, "smolmachines"),
   e2b: (env) => sandboxBackendSelected(env, "e2b"),
@@ -109,11 +106,9 @@ export function validateCoreSecretEnv(env: NodeJS.ProcessEnv): string[] {
 function isInvalidSecret(name: string, value: string | undefined): boolean {
   const candidate = value?.trim();
   if (!candidate || /^(replace-me|placeholder|changeme|todo)$/i.test(candidate)) return true;
-  if (name === "DEPLOYMENT_CONTROL_SECRET" && !isBearerSecret(value)) return true;
   return (
     (name === "CONNECTOR_SECRET_KEY" ||
       name === "CORE_SIGNING_SECRET" ||
-      name === "DEPLOYMENT_CONTROL_SECRET" ||
       name === "SKILL_SIGNING_SECRET" ||
       name === "AWS_DEPLOY_GATE_SECRET") &&
     !isStrongSigningSecret(candidate)

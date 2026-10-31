@@ -80,7 +80,6 @@ export interface TurnRunnerDeps {
   ready?: EventBus<string>;
   cancels?: EventBus<string>;
   yields?: EventBus<string>;
-  canClaim?: () => boolean;
   errors?: ErrorLog;
   pollMs?: number;
   maxClaims?: number;
@@ -332,7 +331,6 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   const pollMs = deps.pollMs ?? FALLBACK_POLL_MS;
   const inFlight = new Map<string, HeldTurn>();
   const overcommit = Math.max(1, Math.floor(deps.slots / 4));
-  const mayClaim = (): boolean => !stopped && (!deps.canClaim || deps.canClaim());
 
   let stopped = true;
   let loopDone: Promise<void> | null = null;
@@ -390,14 +388,10 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     let idle = 0;
     while (!stopped) {
       const observed = generation;
-      if (deps.canClaim && !deps.canClaim()) {
-        await sleep(pollMs);
-        continue;
-      }
       try {
         let claimedAny = false;
         for (const queue of deps.queues) {
-          while (mayClaim()) {
+          while (!stopped) {
             const people = queue === "turns_people";
             if (inFlight.size >= deps.slots + (people ? overcommit : 0)) break;
             const token = `${processId}:${randomUUID()}`;
@@ -406,7 +400,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
             if (!claim.run) continue;
             const { run } = claim;
             claimedAny = true;
-            if (!mayClaim()) {
+            if (stopped) {
               await deps.ledger.handBack(run, token, { unstarted: true });
               break;
             }

@@ -114,6 +114,10 @@ END $base_schema$`,
       `CREATE INDEX IF NOT EXISTS idx_runs_session_queued ON runs(session_id, claim_priority, created_at, seq) WHERE status = 'queued'`,
     ],
   },
+  {
+    id: "runs/store/0013-drop-lease-expiry",
+    statements: [`SET LOCAL lock_timeout = '60s'`, `ALTER TABLE runs DROP COLUMN IF EXISTS lease_expires_at`],
+  },
 ];
 
 export function createPostgresRunStore(connectionString: string): PostgresRuntime {

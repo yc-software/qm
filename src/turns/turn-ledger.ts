@@ -191,7 +191,7 @@ async function releaseClaim(
   change: { stop: RunStop | null; parks: number; errors: number; unstarted: boolean },
 ): Promise<number | null> {
   const { rows } = await client.query(
-    `UPDATE runs SET status = 'pending', lease_token = NULL, lease_expires_at = NULL, worker_id = NULL,
+    `UPDATE runs SET status = 'pending', lease_token = NULL, worker_id = NULL,
        last_stop = COALESCE($3, last_stop), preemptions = preemptions + $4, error_attempts = error_attempts + $5,
        attempts = attempts - $6,
        started_at = CASE WHEN $6 = 1 AND attempts = 1 THEN NULL ELSE started_at END
@@ -260,7 +260,7 @@ async function begin(
       return "suspended";
     }
     const { rows } = await client.query(
-      `UPDATE runs SET status = 'running', lease_token = $2, lease_expires_at = NULL, worker_id = $3,
+      `UPDATE runs SET status = 'running', lease_token = $2, worker_id = $3,
          attempts = attempts + 1, started_at = COALESCE(started_at, $4), absurd_run_id = $5,
          delivery_state = (delivery_state::jsonb - 'replying')::text
        WHERE id = $1 AND claim_priority = $6 AND status IN ('pending','running')
@@ -301,7 +301,7 @@ async function terminal(
   errorIncrement: number,
 ): Promise<void> {
   await client.query(
-    `UPDATE runs SET status = $2, result = $3, lease_token = NULL, lease_expires_at = NULL, worker_id = NULL,
+    `UPDATE runs SET status = $2, result = $3, lease_token = NULL, worker_id = NULL,
        finished_at = $4, error_attempts = error_attempts + $5,
        idempotency_key = CASE WHEN $6 THEN NULL ELSE idempotency_key END
      WHERE id = $1`,

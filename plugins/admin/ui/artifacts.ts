@@ -1028,33 +1028,3 @@ export function retention(root: HTMLElement, d: Data) {
       )}`,
   );
 }
-export function live(root: HTMLElement, d: Data, c: Context) {
-  const render = renderer(root);
-  const runs = d.runs || [];
-  render(
-    html`${kpis([
-      [d.active ?? 0, "Active now"],
-      [runs.length, "Recent runs"],
-      [runs.filter((r: Data) => r.status === "failed").length, "Failed"],
-      [runs.filter((r: Data) => r.status === "done").length, "Done"],
-    ])}${bareCard(
-      table(
-        ["Run", "Status", "Scope", "Type", "Attempts", "Worker", "Duration", "Started"],
-        runs.map((r: Data) => [
-          { node: c.stacked("Run " + c.shortId(r.id), r.threadRef || "no thread"), cls: "mono" },
-          { node: c.statusBadge(r.status) },
-          r.sessionScope ? c.scopeCell(r.sessionScope) : { text: "-", cls: "mono" },
-          { node: c.typeBadge(r.sessionType) },
-          {
-            node: badge(`${r.attempts}/${r.maxAttempts}`, r.status === "failed" || r.attempts > 1 ? "warn" : "muted"),
-            cls: "num",
-          },
-          { text: r.workerId || "-", cls: "mono" },
-          { text: c.fmtDuration(r.startedAt || r.createdAt, r.finishedAt), cls: "num" },
-          { text: r.startedAt ? c.fmtTime(r.startedAt) : "-", cls: "num" },
-        ]),
-        "No runs.",
-      ),
-    )}`,
-  );
-}

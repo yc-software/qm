@@ -5,7 +5,6 @@ import { TARGET_ENV_DEFAULTS } from "./target-env-defaults.ts";
 import { deploymentSecretValue, isInvalidSecret } from "./util.ts";
 
 type SecretCondition =
-  | { kind: "background-work-control" }
   | { kind: "sandbox-backend"; backend: string }
   | { kind: "env-equals"; service: DeclaredServiceName; name: string; value: string }
   | { kind: "env-absent"; service: DeclaredServiceName; name: string }
@@ -114,13 +113,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     service: "core",
     required: true,
     description: "HMAC key shared by core and surface plugins.",
-    generate: MINT_LOCALLY,
-  },
-  {
-    name: "DEPLOYMENT_CONTROL_SECRET",
-    service: "core",
-    required: { when: { kind: "background-work-control" } },
-    description: "Deployment ownership credential held only by core and the privileged deployment operator.",
     generate: MINT_LOCALLY,
   },
   {
@@ -579,8 +571,6 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
 ];
 
 function conditionMatches(config: QmConfig, condition: SecretCondition): boolean {
-  if (condition.kind === "background-work-control")
-    return config.target === "aws" && config.aws?.backgroundWorkControl === true;
   if (condition.kind === "sandbox-backend") {
     const backend =
       config.env.core?.SANDBOX_BACKEND ??
@@ -713,9 +703,6 @@ export function computedSecrets(config: QmConfig): ComputedSecret[] {
       });
     }
   }
-  const control = byName.get("DEPLOYMENT_CONTROL_SECRET");
-  if (control && (control.services.some((service) => service !== "core") || control.aliases?.length))
-    throw new Error("DEPLOYMENT_CONTROL_SECRET must be delivered only to core under its original name");
   const secrets = [...byName.values()]
     .map((secret) => ({
       ...secret,
@@ -814,7 +801,6 @@ function requiresOtherEmailTransport(config: QmConfig, condition: SecretConditio
 }
 
 function conditionClause(condition: SecretCondition): string {
-  if (condition.kind === "background-work-control") return "aws.backgroundWorkControl is enabled";
   if (condition.kind === "sandbox-backend") return `SANDBOX_BACKEND selects ${condition.backend}`;
   if (condition.kind === "service-enabled") return `the ${condition.service} service is enabled`;
   if (condition.kind === "service-absent") return `the ${condition.service} service is not enabled`;

@@ -4,7 +4,6 @@ import { audit, requireScopedAdmin } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 
 const EGRESS_LIST_LIMIT = 1000;
-const RUNS_LIST_LIMIT = 200;
 const ERRORS_LIST_LIMIT = 200;
 const AUDIT_TAIL_LIMIT = 200;
 const AUDIT_FILTERED_LIMIT = 2000;
@@ -45,40 +44,6 @@ export async function egress(ctx: ApiCtx): Promise<void> {
   const hosts = new Set(records.map((r) => r.host).filter(Boolean)).size;
   const bySource = { broker: brokerRows.length, firewall: firewallRows.length };
   return sendJson(res, 200, { scopeId: scope, records, total: records.length, denied, hosts, bySource });
-}
-
-export async function listAdminRuns(ctx: ApiCtx): Promise<void> {
-  const { res, deps } = ctx;
-  const authz = await requireScopedAdmin(ctx);
-  if (!authz) return;
-  const { actor, scope } = authz;
-  audit(deps, { principalId: actor.id, action: "runs.read", resource: "runs", scopeLabel: scope });
-  const orgWide = parseScopeId(scope).kind === "org";
-  const rawRuns = (await deps.runs?.list({ limit: RUNS_LIST_LIMIT })) ?? [];
-  const byThread = new Map(
-    ((await deps.sessions?.sessionsByThreadRefs(rawRuns.map((r) => r.sessionId))) ?? []).map((s) => [s.threadRef, s]),
-  );
-  const ACTIVE = new Set(["queued", "pending", "running"]);
-  const runs = rawRuns
-    .map((r) => {
-      const s = byThread.get(r.sessionId);
-      return {
-        id: r.id,
-        status: r.status,
-        sessionScope: s?.scopeId ?? null,
-        sessionType: s?.type ?? null,
-        threadRef: r.sessionId,
-        attempts: r.attempts,
-        maxAttempts: r.maxAttempts,
-        workerId: r.workerId,
-        createdAt: r.createdAt,
-        startedAt: r.startedAt,
-        finishedAt: r.finishedAt,
-      };
-    })
-    .filter((r) => orgWide || r.sessionScope === scope)
-    .sort((a, b) => Number(ACTIVE.has(b.status)) - Number(ACTIVE.has(a.status)) || b.createdAt - a.createdAt);
-  return sendJson(res, 200, { scopeId: scope, active: runs.filter((r) => ACTIVE.has(r.status)).length, runs });
 }
 
 export async function listAdminErrors(ctx: ApiCtx): Promise<void> {

@@ -105,9 +105,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   backgroundJobTtlMs: number;
   sandboxCapabilityTtlMs: number;
   backgroundJobTtlMaxMs: number;
-  backgroundWorkEnabled: boolean;
-  backgroundDeploymentId?: string;
-  deploymentControlSecret?: string;
   spendExportToken?: string;
   buildSha?: string;
   monitorPollMs: number;
@@ -155,9 +152,6 @@ export interface Config extends SandboxSettings, DeploySettings {
   memoryCaptureQuietMs: number;
   memoryCaptureMaxTurns?: number;
   workers: number;
-  leaseTtlMs: number;
-  heartbeatIntervalMs: number;
-  reaperIntervalMs: number;
   shutdownDrainMs: number;
   maxAttempts: number;
   maxClaims: number;
@@ -228,7 +222,6 @@ export const CONFIG_DEFAULTS = {
   runMaxAgeMs: 24 * 60 * 60_000,
   backgroundJobTtlSec: 1800,
   backgroundJobTtlMaxSec: 3600,
-  backgroundWorkEnabled: true,
   monitorPollMs: 10_000,
   skillSyncPollMs: 0,
   deployDialTimeoutMs: 20_000,
@@ -240,9 +233,6 @@ export const CONFIG_DEFAULTS = {
   turnLeaseWaitMs: 5_000,
   securityScreenTimeoutMs: 15_000,
   workers: 16,
-  leaseTtlMs: 120_000,
-  heartbeatIntervalMs: 10_000,
-  reaperIntervalMs: 15_000,
   shutdownDrainMs: 30_000,
   maxAttempts: 3,
   maxClaims: 8,
@@ -388,19 +378,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (!isStrongSigningSecret(token) || !isBearerSecret(token) || reused)
       throw new Error(
         "SPEND_EXPORT_TOKEN must be at least 32 characters, have no surrounding whitespace and differ from every other environment value",
-      );
-  }
-  if (env.BACKGROUND_DEPLOYMENT_ID !== undefined) {
-    if (!env.BACKGROUND_DEPLOYMENT_ID.trim() || env.BACKGROUND_DEPLOYMENT_ID.length > 256)
-      throw new Error("BACKGROUND_DEPLOYMENT_ID must be nonempty and at most 256 characters");
-    if (!env.DATABASE_URL) throw new Error("Background ownership requires DATABASE_URL");
-    if (
-      !isStrongSigningSecret(env.CORE_SIGNING_SECRET) ||
-      !isStrongSigningSecret(env.DEPLOYMENT_CONTROL_SECRET) ||
-      env.DEPLOYMENT_CONTROL_SECRET === env.CORE_SIGNING_SECRET
-    )
-      throw new Error(
-        "Background ownership requires a distinct DEPLOYMENT_CONTROL_SECRET of at least 32 characters and CORE_SIGNING_SECRET",
       );
   }
   const swarmDefaults = resolveSwarmSettings(
@@ -584,11 +561,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     backgroundJobTtlMaxMs:
       (numEnvStrict("BACKGROUND_JOB_TTL_MAX_SEC", env.BACKGROUND_JOB_TTL_MAX_SEC) ??
         CONFIG_DEFAULTS.backgroundJobTtlMaxSec) * 1000,
-    backgroundWorkEnabled:
-      boolEnvStrict("BACKGROUND_WORK_ENABLED", env.BACKGROUND_WORK_ENABLED) ?? CONFIG_DEFAULTS.backgroundWorkEnabled,
-    ...(env.BACKGROUND_DEPLOYMENT_ID
-      ? { backgroundDeploymentId: env.BACKGROUND_DEPLOYMENT_ID, deploymentControlSecret: env.DEPLOYMENT_CONTROL_SECRET }
-      : {}),
     ...(env.SPEND_EXPORT_TOKEN ? { spendExportToken: env.SPEND_EXPORT_TOKEN } : {}),
     ...(env.GIT_SHA ? { buildSha: env.GIT_SHA } : {}),
     monitorPollMs: numEnvStrict("MONITOR_POLL_MS", env.MONITOR_POLL_MS) ?? CONFIG_DEFAULTS.monitorPollMs,
@@ -654,11 +626,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cronFireConcurrency:
       numEnvStrict("CRON_FIRE_CONCURRENCY", env.CRON_FIRE_CONCURRENCY) ?? CONFIG_DEFAULTS.cronFireConcurrency,
     workers: numEnvStrict("WORKERS", env.WORKERS) ?? CONFIG_DEFAULTS.workers,
-    leaseTtlMs: numEnvStrict("LEASE_TTL_MS", env.LEASE_TTL_MS) ?? CONFIG_DEFAULTS.leaseTtlMs,
-    heartbeatIntervalMs:
-      numEnvStrict("HEARTBEAT_INTERVAL_MS", env.HEARTBEAT_INTERVAL_MS) ??
-      Math.max(1_000, Math.floor((numEnvStrict("LEASE_TTL_MS", env.LEASE_TTL_MS) ?? CONFIG_DEFAULTS.leaseTtlMs) / 3)),
-    reaperIntervalMs: numEnvStrict("REAPER_INTERVAL_MS", env.REAPER_INTERVAL_MS) ?? CONFIG_DEFAULTS.reaperIntervalMs,
     shutdownDrainMs: numEnvStrict("SHUTDOWN_DRAIN_MS", env.SHUTDOWN_DRAIN_MS) ?? CONFIG_DEFAULTS.shutdownDrainMs,
     maxAttempts: numEnvStrict("MAX_ATTEMPTS", env.MAX_ATTEMPTS) ?? CONFIG_DEFAULTS.maxAttempts,
     maxClaims: numEnvStrict("MAX_CLAIMS", env.MAX_CLAIMS) ?? CONFIG_DEFAULTS.maxClaims,

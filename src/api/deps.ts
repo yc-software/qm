@@ -4,7 +4,6 @@ import type { DecisionStore } from "../decisions/store.ts";
 import type { ExternalSlackPolicies } from "../resolution/external-slack.ts";
 import type { ModelGatewayTransportConfig } from "../model/provider-endpoints.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import type { BackgroundOwnershipControl } from "../runs/background-ownership.ts";
 import type { LoopIngressService } from "../loops/ingress.ts";
 import type { createSuggestedActivityService } from "../suggestions/activities.ts";
 import type { ManagedSlack } from "../surfaces/slack-managed.ts";
@@ -102,7 +101,6 @@ export interface ServerDeps {
   requireSignedPortalIdentity?: boolean;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
-  deploymentLiveSmoke?: () => Promise<void>;
   brokerSessions?: BrokerSessionStore;
   connectorTokens?: ConnectorTokenStore;
   managedSlack?: ManagedSlack;
@@ -187,8 +185,6 @@ export interface ServerDeps {
   sessionShareBytes?: DurableByteStore;
   environments?: EnvironmentStore;
   deploymentLayer?: DeploymentLayerStore;
-  backgroundOwnership?: BackgroundOwnershipControl;
-  deploymentControlSecret?: string;
   spendExportToken?: string;
   deployDialTimeoutMs?: number;
   deployAppsDomain?: string;
