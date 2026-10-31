@@ -53,6 +53,7 @@ export interface MemoryEdit {
 }
 
 export interface MemoryService {
+  attestActor?: boolean;
   withDisclosure?(access: MemoryDisclosure): MemoryService;
   recall(scopeId: ScopeId, context?: MemoryRecallContext): Promise<MemoryCandidate[]>;
   capture(

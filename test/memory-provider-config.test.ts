@@ -172,6 +172,38 @@ test("attestActor is an opt-in boolean on mcp providers only", () => {
   );
 });
 
+test("a write operation maps its facts with factsArg or contentArg, not both", () => {
+  const write = (fields: Record<string, unknown>) => {
+    const parsed = JSON.parse(value) as { providers: Array<{ write: Record<string, unknown> }> };
+    parsed.providers[0]!.write = { ...parsed.providers[0]!.write, ...fields };
+    const provider = parseMemoryProviderConfig(JSON.stringify(parsed), ENV)?.providers[0];
+    return provider?.type === "mcp" ? provider.write : undefined;
+  };
+  assert.equal(write({ factsArg: "facts" })?.factsArg, "facts");
+  assert.equal(write({ contentArg: "text" })?.contentArg, "text");
+  assert.throws(
+    () => write({ factsArg: "facts", contentArg: "text" }),
+    /memory provider knowledge\.write sets both factsArg and contentArg; keep one/,
+  );
+});
+
+test("an attested provider cannot manage a notebook, because notebook reads carry no member", () => {
+  const route = (fields: Record<string, unknown>) => {
+    const parsed = JSON.parse(withProvider({ attestActor: true })) as { routes: Array<Record<string, unknown>> };
+    parsed.routes[1] = { ...parsed.routes[1], ...fields };
+    return parseMemoryProviderConfig(JSON.stringify(parsed), ENV)?.routes[1]?.manage;
+  };
+  assert.equal(route({ manage: false }), false);
+  assert.equal(route({ manage: undefined }), false);
+  assert.throws(
+    () => route({ manage: true }),
+    /memory route 1: provider knowledge sets attestActor, so it cannot manage a notebook; set "manage": false/,
+  );
+  const plain = JSON.parse(value) as { routes: Array<Record<string, unknown>> };
+  plain.routes[1] = { ...plain.routes[1], manage: true };
+  assert.equal(parseMemoryProviderConfig(JSON.stringify(plain), ENV)?.routes[1]?.manage, true);
+});
+
 test("provider URL errors name only the protocol and host and never echo secrets", () => {
   const SENTINEL = "s3ntinel-credential";
   const cases: Array<[string, RegExp]> = [
