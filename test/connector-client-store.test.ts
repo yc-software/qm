@@ -12,6 +12,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 test("AES-GCM secret round-trips and ciphertext differs from plaintext", () => {
   const key = deriveConnectorKey("a-persistent-key");
   const enc = encryptSecret("super-secret", key);

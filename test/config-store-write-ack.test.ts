@@ -1,27 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { scopeId } from "../src/types.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { createMemoryConfigTables, type ConfigTables } from "../src/resolution/config-tables.ts";
 
 bindTestTenant();
 
 const channel = scopeId("channel", "C1");
 
-function withPut<T>(map: DurableMap<T>, put: DurableMap<T>["put"]): DurableMap<T> {
-  return new Proxy(map, { get: (target, key) => (key === "put" ? put : Reflect.get(target, key)) });
+function withUpdate(tables: ConfigTables, update: ConfigTables["updateScopeSetting"]): ConfigTables {
+  return { ...tables, updateScopeSetting: update };
 }
 
 test("a config write resolves only after another instance can read it from the store", async () => {
-  const orgAmbient = createMemoryMap<{ scopeId: ScopeId; on: boolean }>();
-  const slow = withPut(orgAmbient, async (key, value) => {
+  const tables = createMemoryConfigTables();
+  const slow = withUpdate(tables, async (id, fn) => {
     await sleep(20);
-    return orgAmbient.put(key, value);
+    return tables.updateScopeSetting(id, fn);
   });
-  const writer = createMemoryConfigStore({ orgAmbient: slow });
-  const reader = createMemoryConfigStore({ orgAmbient });
+  const writer = createMemoryConfigStore({ tables: slow });
+  const reader = createMemoryConfigStore({ tables });
 
   await writer.setOrgAmbient(false);
 
@@ -29,14 +29,14 @@ test("a config write resolves only after another instance can read it from the s
 });
 
 test("a failed config write rejects and leaves this instance's cache on the stored value", async () => {
-  const egressPolicies = createMemoryMap<{ scopeId: ScopeId; policy: { allowedHosts: string[] } }>();
-  const failing = withPut(egressPolicies, async () => {
+  const tables = createMemoryConfigTables();
+  const failing = withUpdate(tables, async () => {
     throw new Error("database unavailable");
   });
-  const config = createMemoryConfigStore({ egressPolicies: failing });
+  const config = createMemoryConfigStore({ tables: failing });
 
   await assert.rejects(config.setEgress(channel, { allowedHosts: ["api.example.com"] }), /database unavailable/);
 
   assert.equal(config.getEgress(channel), null);
-  assert.equal(await egressPolicies.get(channel), null);
+  assert.equal(await tables.scopeSetting(channel), null);
 });

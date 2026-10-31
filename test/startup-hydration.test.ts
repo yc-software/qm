@@ -5,6 +5,7 @@ import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
 import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
 
 bindTestTenant();
 
@@ -32,9 +33,9 @@ mock.module("../src/resolution/config-store.ts", {
     createMemoryConfigStore: (...args: Parameters<typeof configModule.createMemoryConfigStore>) =>
       configModule.createMemoryConfigStore({
         ...args[0],
-        souls: {
-          ...args[0]!.souls!,
-          all: async () => {
+        tables: {
+          ...createMemoryConfigTables(),
+          scopeSettings: async () => {
             throw configFailure;
           },
         },

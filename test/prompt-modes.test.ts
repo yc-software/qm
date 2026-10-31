@@ -34,6 +34,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 
 function fakeSandbox(): Sandbox {

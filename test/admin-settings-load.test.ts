@@ -17,6 +17,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "x-admin-actor": "admin-alice" };
 
 function start(overrides: Partial<ServerDeps> = {}) {

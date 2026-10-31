@@ -18,6 +18,8 @@ bindTestTenant();
 
 bindTestTenant();
 
+bindTestTenant();
+
 async function freshApp(securityScreener?: SecurityScreener) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-wake-"));
   const built = buildApp(testConfig({ dataDir }), securityScreener ? { securityScreener } : {});

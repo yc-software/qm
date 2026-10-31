@@ -14,7 +14,7 @@ import { createModelVerifier } from "../src/model/model-verification.ts";
 import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import { createMemoryConfigStore, type PersistedBaseModel } from "../src/resolution/config-store.ts";
+import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import {
   setModelOverlays,
   resolveModel,
@@ -27,6 +27,7 @@ import {
 import { recallText } from "./support/recall-text.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 import { memoryModelTables } from "../src/model/model-tables.ts";
+import { createMemoryConfigTables } from "../src/resolution/config-tables.ts";
 
 bindTestTenant();
 
@@ -135,12 +136,12 @@ test("key-scoped gateway embeddings need no chat capabilities and use gateway cr
 });
 
 test("org embedding selection is durable and survives chat runtime replacement and clearing", async () => {
-  const baseModels = createMemoryMap<PersistedBaseModel>();
-  const first = createMemoryConfigStore({ baseModels });
+  const tables = createMemoryConfigTables();
+  const first = createMemoryConfigStore({ tables });
   await first.setEmbeddingModel("gateway/embed");
   await first.setRuntimeSelection("org:test", { harnessId: "pi", modelId: "gpt-5.5" });
   await first.setRuntimeSelection("org:test", null);
-  const restarted = createMemoryConfigStore({ baseModels });
+  const restarted = createMemoryConfigStore({ tables });
   assert.equal(await restarted.getEmbeddingModelDurable(), "gateway/embed");
   await restarted.setEmbeddingModel(null);
   assert.equal(await first.getEmbeddingModelDurable(), null);
