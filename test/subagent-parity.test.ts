@@ -39,8 +39,8 @@ import {
   testDeployBackings,
   testAdvisoryLock,
 } from "./support/test-database.ts";
+import { testRunStore } from "./support/turns.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
-import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-store.ts";
 
 type Call = { tool: string; args: Record<string, unknown> };
@@ -65,7 +65,7 @@ const exceptions = Object.keys(SUBAGENT_EXCEPTIONS) as (keyof AgentToolsOptions)
 
 async function world(flags: FeatureName[], next: (turn: Turn, subagent: boolean) => Call | undefined) {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const { runs } = createPostgresRunStore(testDatabaseUrl());
+  const { runs } = testRunStore();
   const featureFlags = createFeatureFlagStore(testMap());
   for (const flag of flags) await featureFlags.setEnabled(flag, scope, true, "test");
   const sidebar: Session[] = [];

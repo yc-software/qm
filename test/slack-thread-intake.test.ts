@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appLedger, completeTurn } from "./support/turns.ts";
 
 function message(threadTs?: string, text = "Continue", key = crypto.randomUUID()): TurnRequest {
   return {
@@ -19,7 +20,9 @@ function message(threadTs?: string, text = "Continue", key = crypto.randomUUID()
 }
 
 async function fixture() {
-  const built = buildApp(testConfig());
+  const config = testConfig();
+  const built = buildApp(config);
+  const ledger = appLedger(built, config.databaseUrl!);
   const first = await built.app.turn(message("10.1", "Investigate job"));
   const root = (await built.runs.get(first.runId!))!;
   async function legacy(name: string, target = "D1:20.1", actorId = root.request.actor.id) {
@@ -36,7 +39,7 @@ async function fixture() {
       })
     ).run;
   }
-  return { ...built, root, legacy };
+  return { ...built, ledger, root, legacy };
 }
 
 test("top-level messages stay at top level while another thread is active", async () => {
@@ -74,8 +77,7 @@ test("explicit threads steer only their own active conversation", async () => {
 test("changing model accounts queues in the same Slack thread without steering the old account", async () => {
   const b = await fixture();
   try {
-    const prior = (await b.runs.claimById(b.root.id, "test", 60000))!;
-    await b.runs.complete(prior.id, prior.leaseToken!, { status: "ok", reply: "Done" });
+    await completeTurn(b.ledger, b.root.id, { status: "ok", reply: "Done" });
     const old = (
       await b.runs.enqueue({
         sessionId: b.root.sessionId,

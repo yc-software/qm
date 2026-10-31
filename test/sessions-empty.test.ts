@@ -9,10 +9,13 @@ import { buildApp } from "./support/build-app.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appLedger, claimTurn, endTurn } from "./support/turns.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-empty-"));
-  return buildApp(testConfig({ dataDir }));
+  const config = testConfig({ dataDir });
+  const built = buildApp(config);
+  return Object.assign(built, { ledger: appLedger(built, config.databaseUrl!) });
 }
 
 const actor = { externalId: "U1" };
@@ -54,7 +57,7 @@ test("listSessions hides a stranded entry-less session", async () => {
 });
 
 test("an entry-less session with an in-flight turn stays visible", async () => {
-  const { app, sessions, runs } = freshApp();
+  const { app, sessions, runs, ledger } = freshApp();
 
   const thread = "web:U1:fresh";
   const id = await strandShell(sessions, thread);
@@ -63,8 +66,7 @@ test("an entry-less session with an in-flight turn stays visible", async () => {
   const row = (await app.listSessions("U1")).find((s) => s.id === id);
   assert.equal(row?.working, true, "a brand-new chat is visible (and working) while its first turn runs");
 
-  const claimed = await runs.claim("w1", 5_000);
-  await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "failed", reason: "boom" });
+  await endTurn((await claimTurn(ledger))!, { status: "failed", reason: "boom" });
 
   assert.ok(
     !(await app.listSessions("U1")).find((s) => s.id === id),

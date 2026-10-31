@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { after } from "node:test";
 import { isTerminal, type Run, type RunStore } from "../../src/runs/run-store.ts";
 import type { TurnRequest, TurnResult } from "../../src/types.ts";
 import type { App } from "../../src/api/app-types.ts";
 import { createTurnLedger, type TurnLedger } from "../../src/turns/turn-ledger.ts";
 import { registerAbsurdSchema, TURN_QUEUES } from "../../src/turns/absurd-schema.ts";
 import { bindTurnLedger } from "../../src/turns/turn-engine.ts";
+import { createTurnRunner, type TurnRunner, type TurnRunnerDeps } from "../../src/turns/turn-runner.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
 import { testMigratedDatabaseUrl } from "./test-database.ts";
 import { CONFIG_DEFAULTS } from "../../src/config.ts";
@@ -106,4 +108,44 @@ export function testRunStore(databaseUrl = testMigratedDatabaseUrl()): TestRunSt
       await store.close();
     },
   };
+}
+
+/** Ends a claimed turn the way the runner records a turn result: failed results finish failed, the rest done. */
+export async function endTurn(claimed: ClaimedTurn, result: TurnResult): Promise<boolean> {
+  return finishTurn(claimed, result, result.status === "failed" ? "failed" : "done");
+}
+
+/**
+ * A ledger on a built app's database for claiming its turns by hand, reporting terminal turns to the app's run
+ * store. Call after the app's turn runner is stopped (`pauseTurns`) or before anything starts it.
+ */
+export function appLedger(built: { runs: Pick<RunStore, "emitTerminal"> }, databaseUrl: string): TurnLedger {
+  const ledger = createTurnLedger(databaseUrl, { onTerminal: (run) => built.runs.emitTerminal(run) });
+  after(() => ledger.close());
+  return ledger;
+}
+
+/** Stops a built app's turn runner from claiming, so a test can claim and end turns by hand. */
+export async function pauseTurns(built: { runtime: { stopBackgroundClaims(): Promise<void> } }): Promise<void> {
+  await built.runtime.stopBackgroundClaims();
+}
+
+/** A started turn runner over `ledger` that retries at once; stops claiming at the end of the file. */
+export function startTurnRunner(
+  ledger: TurnLedger,
+  orchestrator: TurnRunnerDeps["orchestrator"],
+  opts: Partial<Omit<TurnRunnerDeps, "ledger" | "orchestrator">> = {},
+): TurnRunner {
+  const runner = createTurnRunner({
+    ledger,
+    orchestrator,
+    queues: TURN_QUEUES,
+    slots: 1,
+    pollMs: 20,
+    retryDelayMs: () => 0,
+    ...opts,
+  });
+  runner.start();
+  after(() => runner.stopClaims());
+  return runner;
 }

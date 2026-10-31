@@ -9,10 +9,13 @@ import { buildApp } from "./support/build-app.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { appLedger, claimTurn, endTurn, pauseTurns } from "./support/turns.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-working-"));
-  return buildApp(testConfig({ dataDir }));
+  const config = testConfig({ dataDir });
+  const built = buildApp(config);
+  return Object.assign(built, { ledger: appLedger(built, config.databaseUrl!) });
 }
 
 const actor = { externalId: "U1" };
@@ -31,7 +34,8 @@ function enqueueRequest(): OrchestratorInput {
 }
 
 test("listSessions flags a session with an in-flight turn as working", async () => {
-  const { app, runs } = freshApp();
+  const built = freshApp();
+  const { app, runs } = built;
 
   await app.turn(dm("Just a question", "web:U1:idle"));
 
@@ -39,6 +43,7 @@ test("listSessions flags a session with an in-flight turn as working", async () 
   const busy = await app.turn(dm("Kick something off", busyThread));
   const busyId = busy.sessionId!;
   assert.ok(busyId);
+  await pauseTurns(built);
   assert.notEqual(busyId, busyThread, "session UUID and threadRef are distinct (the trap)");
   await runs.enqueue({ sessionId: busyThread, request: enqueueRequest() });
 
@@ -52,16 +57,18 @@ test("listSessions flags a session with an in-flight turn as working", async () 
 });
 
 test("the working flag clears once the in-flight run settles", async () => {
-  const { app, runs } = freshApp();
+  const built = freshApp();
+  const { app, runs, ledger } = built;
   const thread = "web:U1:settle";
   await app.turn(dm("start", thread));
+  await pauseTurns(built);
   await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
 
   assert.equal((await app.listSessions("U1")).find((r) => r.threadRef === thread)?.working, true);
 
-  const claimed = await runs.claim("w1", 5_000);
-  assert.equal(claimed?.sessionId, thread, "the run is keyed by threadRef");
-  await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "ok", reply: "done" });
+  const claimed = await claimTurn(ledger);
+  assert.equal(claimed?.run.sessionId, thread, "the run is keyed by threadRef");
+  await endTurn(claimed!, { status: "ok", reply: "done" });
 
   assert.ok(
     !(await app.listSessions("U1")).find((r) => r.threadRef === thread)?.working,
@@ -70,16 +77,17 @@ test("the working flag clears once the in-flight run settles", async () => {
 });
 
 test("listSessions flags a subagent whose latest turn failed, and only while it stays failed", async () => {
-  const { app, runs, sessions } = freshApp();
+  const built = freshApp();
+  const { app, runs, sessions, ledger } = built;
   const parent = await app.turn(dm("parent", "web:U1:parent"));
   const child = await app.turn(dm("child", "web:U1:child"));
   const loose = await app.turn(dm("loose", "web:U1:loose"));
+  await pauseTurns(built);
   await sessions.setParentSession(child.sessionId!, parent.sessionId!);
 
   for (const thread of ["web:U1:child", "web:U1:loose"]) {
     await runs.enqueue({ sessionId: thread, request: enqueueRequest() });
-    const claimed = await runs.claim("w1", 5_000);
-    await runs.complete(claimed!.id, claimed!.leaseToken ?? "", { status: "failed", reason: "boom" });
+    await endTurn((await claimTurn(ledger))!, { status: "failed", reason: "boom" });
   }
 
   const list = await app.listSessions("U1");
@@ -87,8 +95,7 @@ test("listSessions flags a subagent whose latest turn failed, and only while it 
   assert.ok(!list.find((s) => s.id === loose.sessionId)?.lastTurnFailed, "only subagents carry the flag");
 
   await runs.enqueue({ sessionId: "web:U1:child", request: enqueueRequest() });
-  const retry = await runs.claim("w1", 5_000);
-  await runs.complete(retry!.id, retry!.leaseToken ?? "", { status: "ok", reply: "fine" });
+  await endTurn((await claimTurn(ledger))!, { status: "ok", reply: "fine" });
   assert.ok(!(await app.listSessions("U1")).find((s) => s.id === child.sessionId)?.lastTurnFailed);
 });
 
