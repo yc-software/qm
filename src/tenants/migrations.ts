@@ -449,7 +449,6 @@ export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {
          auth_allowed_email_domain TEXT,
          trusted_oidc_admin_issuer TEXT,
          suggested_activities_context TEXT,
-         admin_grants TEXT,
          oidc_issuer TEXT,
          oidc_auth_endpoint TEXT,
          oidc_token_endpoint TEXT,

@@ -1636,6 +1636,10 @@ export function buildApp(
     },
   };
   pgArtifactMap.pool.registerMigration({
+    id: "durable-map/0000-versions",
+    statements: ["CREATE TABLE IF NOT EXISTS durable_map_versions (tbl TEXT PRIMARY KEY, v BIGINT NOT NULL)"],
+  });
+  pgArtifactMap.pool.registerMigration({
     id: "durable-map/turn_wall_clock_configs/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS turn_wall_clock_configs",
