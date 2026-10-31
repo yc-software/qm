@@ -6,6 +6,7 @@ import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
 import { resolveAdminUser } from "./users.ts";
+import { grantLive } from "../../../credentials/keychain.ts";
 import type { OffboardedChange, PrincipalRecord, PrincipalSummary } from "../../../identity/identity-service.ts";
 import { followLoopState } from "../loops.ts";
 
@@ -105,7 +106,10 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
       label: firstLine(webhook.action) || webhook.id,
       scopeId: webhook.ownerScopeId,
       action: "disable",
-      run: () => app.setWebhookEnabled(webhook.id, false),
+      run: async () => {
+        await present(app.getWebhook(webhook.id), "the webhook");
+        await app.setWebhookEnabled(webhook.id, false);
+      },
     });
   }
   if (deps.keychain) {
@@ -116,7 +120,7 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
     ]);
     const service = new Map(credentials.map((c) => [c.id, c.service]));
     for (const grant of grants) {
-      if (grant.status !== "active" || (grant.expiresAt !== undefined && grant.expiresAt <= Date.now())) continue;
+      if (!grantLive(grant, Date.now())) continue;
       steps.push({
         kind: "keychain",
         id: grant.id,
@@ -251,7 +255,8 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
   const { steps, kept } = await planOffboarding(ctx, actor.id, principalId);
-  const known = member || deps.identity?.knows(principalId) || kept.length || steps.length > 1;
+  const owns = kept.length > 0 || steps.some((s) => s.kind !== "principal");
+  const known = member || deps.identity?.knows(principalId) || owns;
   if (!known) return sendJson(res, 404, { error: "not_found", message: `nothing is known about ${principalId}` });
   const org = orgScope(deps);
   const view = ({ run: _run, ...change }: Step): Change => change;

@@ -136,12 +136,12 @@ test("offboarding previews, applies only after confirmation, and reports each re
   assert.match(f.root.textContent!, /store unavailable/);
   assert.match(f.root.textContent!, /1 changes failed/);
   assert.ok(button("Reactivate sign-in"), "sign-in shows as deactivated");
-  assert.match(f.root.textContent!, /Offboarded\s+Offboarded 1700000000000 by admin-alice \(2 changes\)/);
+  assert.match(f.root.textContent!, /Offboarded\s+Offboarded 1700000000000 by admin-alice/);
   button("Reactivate sign-in").click();
   await settle();
   assert.match(
     f.root.textContent!,
-    /Reactivated\s+Offboarded 1700000000000 by admin-alice \(2 changes\); reactivated 1700000500000 by admin-bob/,
+    /Reactivated\s+Offboarded 1700000000000 by admin-alice; reactivated 1700000500000 by admin-bob/,
     "reactivating keeps the offboarding record on the card",
   );
   f.dom.window.close();

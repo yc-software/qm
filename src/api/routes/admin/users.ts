@@ -43,24 +43,18 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         Number(b.status === "active") - Number(a.status === "active") ||
         (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
     );
-  for (const member of externalUsers.filter((m) => m.kind === "teammate" && m.status === "active")) {
-    if (!users.some((u) => samePerson(u.principalId, member.email)))
+  const offboarded = ((await deps.identity?.listPrincipals()) ?? []).filter((r) => r.offboarded);
+  for (const principalId of [
+    ...externalUsers.filter((m) => m.kind === "teammate" && m.status === "active").map((m) => m.email),
+    ...offboarded.map((r) => r.principalId),
+  ]) {
+    if (!users.some((u) => samePerson(u.principalId, principalId)))
       users.push({
-        principalId: member.email,
+        principalId,
         sessionCount: 0,
         turnCount: 0,
         lastSeenAt: null,
-        admin: adminStatusFromGrants(grants, member.email),
-      });
-  }
-  for (const record of (await deps.identity?.listPrincipals()) ?? []) {
-    if (record.offboarded && !users.some((u) => samePerson(u.principalId, record.principalId)))
-      users.push({
-        principalId: record.principalId,
-        sessionCount: 0,
-        turnCount: 0,
-        lastSeenAt: null,
-        admin: adminStatusFromGrants(grants, record.principalId),
+        admin: adminStatusFromGrants(grants, principalId),
       });
   }
   const rows = users.map((u) => ({

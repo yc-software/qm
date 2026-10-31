@@ -44,8 +44,8 @@ export function offboardingCard(
         plan = data;
         const failed = plan.changes.filter((c: any) => c.result === "failed").length;
         if (plan.changes.some((c: any) => c.kind === "principal" && c.result === "done")) deactivated = true;
-        if (data.principal)
-          record = { ...data.principal, offboardChanges: [...(record?.offboardChanges || []), ...data.changes] };
+        if (data.principal) record = data.principal;
+        record = { ...data.principal, offboardChanges: [...(record?.offboardChanges || []), ...data.changes] };
         hint = "";
         if (apply) hint = failed ? s.plural(failed, "change") + " failed. Preview again to retry." : "Done.";
       },
@@ -66,7 +66,7 @@ export function offboardingCard(
       () => s.api("POST", path("reactivate")),
       (data) => {
         deactivated = false;
-        record = data.principal ? { ...record, ...data.principal } : record;
+        record = data.principal || record;
         plan = null;
         hint = "Sign-in is back on.";
       },
@@ -79,15 +79,11 @@ export function offboardingCard(
   function history() {
     if (!record?.offboardedAt) return nothing;
     const when = (at: number, by?: string) => s.fmtTime(at) + (by ? " by " + by : "");
-    const changed = s.plural((record.offboardChanges || []).length, "change");
     return html`<p class="obstatus">
       ${record.offboarded ? badge("Offboarded", "warn") : badge("Reactivated", "ok")}
       ${muted(
         "Offboarded " +
           when(record.offboardedAt, record.offboardedBy) +
-          " (" +
-          changed +
-          ")" +
           (record.offboarded || !record.reactivatedAt
             ? ""
             : "; reactivated " + when(record.reactivatedAt, record.reactivatedBy)),
@@ -147,7 +143,7 @@ export function offboardingCard(
           ${
             pending && changes.length
               ? html`<button type="button" class="danger" ?disabled=${busy} @click=${confirmApply}>
-                  Offboard (${changes.length} change${changes.length === 1 ? "" : "s"})
+                  Offboard (${s.plural(changes.length, "change")})
                 </button>`
               : html`<button type="button" ?disabled=${busy} @click=${() => run(false)}>Preview offboarding</button>`
           }
