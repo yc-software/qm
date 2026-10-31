@@ -10,6 +10,8 @@ import {
   FileSpreadsheet,
   FileText,
   FileVideo,
+  LayoutGrid,
+  List,
   Presentation,
   Search,
   Upload,
@@ -55,6 +57,45 @@ let filesNextCursor: string | null = null;
 let filesHost: HTMLElement | null = null;
 let filesRequestSeq = 0;
 let filesLoadAllQueued = false;
+const FILES_LAYOUT_KEY = "qm.files.layout";
+type FilesLayout = "list" | "grid";
+let filesLayout: FilesLayout = readFilesLayout();
+
+function readFilesLayout(): FilesLayout {
+  try {
+    return localStorage.getItem(FILES_LAYOUT_KEY) === "grid" ? "grid" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+function setFilesLayout(layout: FilesLayout): void {
+  if (filesLayout === layout) return;
+  filesLayout = layout;
+  try {
+    localStorage.setItem(FILES_LAYOUT_KEY, layout);
+  } catch {
+    // Storage can be unavailable (private mode); the choice still applies for this page view.
+  }
+  drawFiles();
+}
+
+function layoutToggle() {
+  const option = (layout: FilesLayout, glyph: IconNode, label: string) =>
+    html`<button
+      type="button"
+      class="files-layout-option ${filesLayout === layout ? "active" : ""}"
+      aria-pressed=${filesLayout === layout ? "true" : "false"}
+      aria-label=${label}
+      title=${label}
+      @click=${() => setFilesLayout(layout)}
+    >
+      ${icon(glyph, 16)}
+    </button>`;
+  return html`<div class="files-layout-toggle" role="group" aria-label="File layout">
+    ${option("list", List, "List view")}${option("grid", LayoutGrid, "Grid view")}
+  </div>`;
+}
 
 function fileScope(f: FileItem): string | null {
   return f.createdInScope ?? (f.ownerScopeId?.startsWith("personal:") ? f.ownerScopeId : null) ?? personalScopeId();
@@ -196,6 +237,7 @@ function drawFiles(loading = false): void {
             void loadAllFiles();
           },
         )}
+        ${layoutToggle()}
       </div>
       ${status ? html`<div class="status" aria-live="polite">${status}</div>` : nothing}
       <button
@@ -217,7 +259,11 @@ function drawFiles(loading = false): void {
                 (group) =>
                   html`<section class="file-scope-group">
                     <h2>${scopeTitle(group.scope)}</h2>
-                    ${listRowsTpl(group.files.map(fileRow), "file-list")}
+                    ${
+                      filesLayout === "grid"
+                        ? html`<div class="file-grid">${group.files.map(fileCard)}</div>`
+                        : listRowsTpl(group.files.map(fileRow), "file-list")
+                    }
                   </section>`,
               )}
             </div>`
@@ -251,6 +297,35 @@ function fileRow(f: FileRow) {
         >${content}</a
       >`
     : html`<article class="list-row file-row">${content}</article>`;
+}
+
+function fileCard(f: FileRow) {
+  const contentUrl = fileContentUrl(f.id, f.name);
+  const visual = fileVisual(f);
+  const thumb =
+    f.openable && visual.kind === "image"
+      ? html`<img src=${contentUrl} alt="" loading="lazy" decoding="async" />`
+      : html`<span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 40)}</span>`;
+  const content = html`
+    <span class="file-card-thumb ${visual.kind}">${thumb}</span>
+    <span class="file-card-body">
+      <span class="file-row-icon ${visual.kind}">${icon(visual.glyph, 14)}</span>
+      <span class="file-card-name" dir="auto" title=${f.name}>${f.name}</span>
+    </span>
+    <span class="file-card-meta"
+      >${formatBytes(f.sizeBytes)} · ${relTime(f.createdAt)}${f.openable ? nothing : " · Unavailable"}</span
+    >
+  `;
+  return f.openable
+    ? html`<a
+        class="file-card"
+        href=${contentUrl}
+        target="_blank"
+        rel="noreferrer"
+        @click=${(event: MouseEvent) => previewFile(event, f.name, contentUrl, f.mimetype)}
+        >${content}</a
+      >`
+    : html`<article class="file-card unavailable">${content}</article>`;
 }
 
 async function fileSha256(file: globalThis.File): Promise<string> {
