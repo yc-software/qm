@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { memoryRows } from "../src/persistence/keyed-rows.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { chmod, chown, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
@@ -9,17 +9,12 @@ import { connect, type AddressInfo } from "node:net";
 import { mock, test, type TestContext } from "node:test";
 import { createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
-import { memoryArchives } from "./support/deploy-archives.ts";
-import { createDeployStore, createMemoryDeploymentRows } from "../src/deploy/deploy-store.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
-import {
-  createRenderDeployArtifacts,
-  type StoredRenderDeployCredential,
-} from "../src/deploy/render-deploy-artifacts.ts";
+import { createRenderDeployArtifacts, RENDER_DEPLOY_CREDENTIALS } from "../src/deploy/render-deploy-artifacts.ts";
+import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createDirectoryStore } from "../src/directory/directory-store.ts";
-import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { verifyDeployGitAccess } from "../src/deploy/access-token.ts";
 import { renderGatewayToken } from "../src/deploy/render-deploy-provider.ts";
 import { scopeId } from "../src/types.ts";
@@ -27,9 +22,10 @@ import { createServer as createHttpServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { Duplex } from "node:stream";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
+import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
+import { testMap, testDatabaseUrl, testRows, testDeploymentRows } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const runner = new URL(process.env.QM_RENDER_RUNNER_MODULE ?? "../deploy/render-runner/start.mjs", import.meta.url);
 const sqliteBackupStop = mock.fn(async () => {});
@@ -45,9 +41,9 @@ const signingSecret = "render-runner-secret".repeat(3);
 async function fixture(t: TestContext, appSource?: string, entrypoint = "node app.cjs") {
   const root = await mkdtemp(join(tmpdir(), "qm-render-runner-"));
   await chmod(root, 0o755);
-  const deployments = createMemoryDeploymentRows();
-  const archiveStore = memoryArchives();
-  const credentials = memoryRows<StoredRenderDeployCredential>();
+  const deployments = testDeploymentRows();
+  const archiveStore = testMap<DeployGitArchive>();
+  const credentials = testRows(RENDER_DEPLOY_CREDENTIALS);
   const gitDir = join(root, "writer");
   const deployStore = createDeployStore({ deployments, git: { repoRoot: gitDir, archiveStore } });
   const d = await deployStore.create({
@@ -83,8 +79,11 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     store: credentials,
     deployStore,
   });
-  const readerStore = createDeployStore({ deployments, git: { repoRoot: join(root, "reader"), archiveStore } });
-  const acl = createAclStore();
+  const readerStore = createDeployStore({
+    deployments,
+    git: { repoRoot: join(root, "reader"), archiveStore },
+  });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore: readerStore,
@@ -97,16 +96,20 @@ bypass.listen(Number(process.env.QM_QA_GATEWAY_PORT), "0.0.0.0");`,
     acl,
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
   });
-  const identity = createIdentityService();
+  const identity = createIdentityService(testMap(), { externalMembers: testMap() });
   const app = createApp({
     deploy,
     deploymentGitPrincipals: artifacts,
     acl,
     identity,
-    directory: createDirectoryStore(),
-    sessions: createMemorySessionStore(),
+    directory: createPostgresDirectoryStore(testDatabaseUrl()),
+    sessions: createPostgresSessionStore(testDatabaseUrl()),
   } as unknown as Parameters<typeof createApp>[0]);
-  const server = createServer(app, { signingSecret, identity });
+  const server = createServer(app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+    signingSecret,
+    identity,
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);

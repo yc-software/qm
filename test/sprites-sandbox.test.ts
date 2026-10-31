@@ -1,6 +1,4 @@
 import { SandboxProvisionCleanupError } from "../src/sandbox/sandbox.ts";
-import { memoryRows } from "../src/persistence/keyed-rows.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { pollProcess } from "../src/sandbox/process-poll.ts";
 import { test, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
@@ -25,9 +23,7 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./support/fake-sprites.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -36,8 +32,8 @@ const layers = [{ scopeId: scope, mountPath: "/", mode: "rw" as const }];
 
 function make(extra: Record<string, unknown> = {}): Sandbox {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-ws-"))), {
-    initializationStore: memoryRows(),
-    advisoryLock: createMemoryAdvisoryLock(),
+    initializationStore: testMap(),
+    advisoryLock: testAdvisoryLock(),
     token: FAKE_SPRITES_TOKEN,
     namePrefix: "qmt",
     baseUrl: fake.baseUrl,
@@ -828,8 +824,8 @@ for (const outcome of ["healthy", "unknown", "403", "503"]) {
 
 test("failed hydration and failed deletion remain pending across adapters without overwriting the saved home", async () => {
   const snapshots = createMemorySnapshotStore();
-  const initializationStore = memoryRows<{ pending: boolean }>();
-  const advisoryLock = createMemoryAdvisoryLock();
+  const initializationStore = testMap<{ pending: boolean }>();
+  const advisoryLock = testAdvisoryLock();
   let failOpen = false;
   let opens = 0;
   const wrapped = {

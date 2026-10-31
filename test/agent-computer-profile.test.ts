@@ -5,14 +5,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
+import { createSpritesSandbox, SPRITES_INITIALIZATION } from "../src/sandbox/sprites-sandbox.ts";
 import { effectiveEgressEnforcement } from "../src/sandbox/sandbox.ts";
-import { singleProcessDeps } from "./support/single-process.ts";
-import { memoryRows } from "../src/persistence/keyed-rows.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock, testMap, testRows } from "./support/test-database.ts";
 
 async function withWorkspace<T>(fn: (dir: string) => Promise<T> | T): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "agent-computer-profile-"));
@@ -25,8 +20,8 @@ async function withWorkspace<T>(fn: (dir: string) => Promise<T> | T): Promise<T>
 
 function spritesSandbox(extraTools: string[]) {
   return createSpritesSandbox(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "sprites-profile-"))), {
-    initializationStore: memoryRows(),
-    ...singleProcessDeps(),
+    initializationStore: testRows(SPRITES_INITIALIZATION),
+    advisoryLock: testAdvisoryLock(),
     token: "test-token",
     extraTools,
   });
@@ -36,8 +31,8 @@ test("the sprites sandbox declares the Agent Computer contract (persistent per-s
   await withWorkspace(async (dir) => {
     const workspace = createLocalWorkspaceStore(dir);
     const sprites = createSpritesSandbox(workspace, {
-      initializationStore: memoryRows(),
-      advisoryLock: createMemoryAdvisoryLock(),
+      initializationStore: testMap(),
+      advisoryLock: testAdvisoryLock(),
       token: "test-token",
     });
 
@@ -75,8 +70,8 @@ test("a layer that advertises a tool removes it from notInstalled (no install/no
 test("egress enforcement is effective only when core can mint a reachable proxy token", async () => {
   await withWorkspace((dir) => {
     const sprites = createSpritesSandbox(createLocalWorkspaceStore(dir), {
-      initializationStore: memoryRows(),
-      advisoryLock: createMemoryAdvisoryLock(),
+      initializationStore: testMap(),
+      advisoryLock: testAdvisoryLock(),
       token: "test-token",
       egressProxyUrl: "https://egress-proxy.example.com",
     });

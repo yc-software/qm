@@ -6,7 +6,7 @@ import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
 import { bytes, normalizeRelPath, posixJoin, readTree } from "./deploy-fs.ts";
 import { AwsApiError, createMicrovmApi, createMicrovmClient, type AwsMicrovmApi } from "../sandbox/aws-microvm-api.ts";
-import { type KeyedRows, type RowColumns, type RowTable, memoryRows } from "../persistence/keyed-rows.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue, sleep } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -123,7 +123,7 @@ export interface AwsDeployProviderOptions {
   dataPrefix?: string;
   snapshotIntervalMs?: number;
   dataRoleArn?: string;
-  store?: Pick<KeyedRows<StoredDeployBody>, "get" | "put" | "delete">;
+  store: Pick<KeyedRows<StoredDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   api?: AwsMicrovmApi;
   fetchImpl?: typeof fetch;
@@ -141,7 +141,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
       ...(opts.profile ? { profile: opts.profile } : {}),
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
-  const store = opts.store ?? memoryRows<StoredDeployBody>();
+  const store = opts.store;
   const launchQueue = createKeyedQueue<string>();
   const advisoryLock = opts.advisoryLock;
   const resolveCache = new Map<string, { endpoint: DeployEndpoint; checkedMs: number; usedMs: number }>();
@@ -153,12 +153,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
     inflightResolves.delete(id);
   };
   const detached = async (d: Deployment, fn: () => Promise<void>): Promise<void> => {
-    const run = (): Promise<void> => launchQueue(d.id, fn);
-    if (advisoryLock.tryWithLock) {
-      await advisoryLock.tryWithLock(`deploy:${d.id}`, run);
-      return;
-    }
-    await advisoryLock.withLock(`deploy:${d.id}`, run);
+    await advisoryLock.tryWithLock(`deploy:${d.id}`, () => launchQueue(d.id, fn));
   };
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
@@ -632,9 +627,7 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
             await store.put(d.id, { ...cur, lastSnapshotMs: Date.now() });
             return cur;
           });
-        const cur = advisoryLock.tryWithLock
-          ? await advisoryLock.tryWithLock(`deploy:${d.id}`, claim)
-          : await advisoryLock.withLock(`deploy:${d.id}`, claim);
+        const cur = await advisoryLock.tryWithLock(`deploy:${d.id}`, claim);
         if (cur) await snapshotData(d.id, cur.microvmId, cur.endpoint);
       })().catch((e) => swallow("aws-deploy: periodic data snapshot", e));
     }

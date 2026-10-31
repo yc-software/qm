@@ -1,7 +1,6 @@
 import { createPgPool, withPgTransaction, type PgMigrationDefinition, type Rows } from "./pg-pool.ts";
 import { typedColumns, type ColumnCast, type TypedColumns } from "./typed-columns.ts";
 import { upsertStatement } from "./typed-statements.ts";
-import { perTenant } from "../tenants/context.ts";
 import { TENANCY_BASE, TENANT } from "../tenants/migrations.ts";
 
 export type RowColumns<T, K extends string> = {
@@ -105,45 +104,4 @@ export function pgRows<T, K extends string>(databaseUrl: string, spec: RowTable<
       await db.q(`DELETE FROM ${spec.table} WHERE ${scoped(`${key} = $1`)}`, [id]);
     },
   };
-}
-
-export function memoryRows<T>(global = false): KeyedRows<T> {
-  const shared = new Map<string, T>();
-  const rows = global ? () => shared : perTenant(() => new Map<string, T>());
-  const copy = (value: T | undefined): T | null => (value === undefined ? null : structuredClone(value));
-  return {
-    get: async (id) => copy(rows().get(id)),
-    entries: async () =>
-      [...rows().entries()].sort(([a], [b]) => a.localeCompare(b)).map(([id, value]) => [id, structuredClone(value)]),
-    async put(id, record) {
-      rows().set(id, structuredClone(record));
-    },
-    async putIfAbsent(id, record) {
-      if (!rows().has(id)) rows().set(id, structuredClone(record));
-      return copy(rows().get(id))!;
-    },
-    async merge(id, patch) {
-      const current = rows().get(id) as Fields | undefined;
-      if (!current) return null;
-      for (const [field, value] of Object.entries(patch))
-        if (value === undefined) delete current[field];
-        else current[field] = structuredClone(value);
-      return copy(current as T);
-    },
-    async update(id, fn) {
-      const current = rows().get(id);
-      if (current === undefined) return null;
-      const draft = structuredClone(current);
-      const next = fn(draft);
-      if (next !== draft) rows().set(id, structuredClone(next));
-      return next;
-    },
-    async delete(id) {
-      rows().delete(id);
-    },
-  };
-}
-
-export function keyedRows<T, K extends string>(databaseUrl: string | undefined, spec: RowTable<T, K>): KeyedRows<T> {
-  return databaseUrl ? pgRows(databaseUrl, spec) : memoryRows<T>(spec.global);
 }

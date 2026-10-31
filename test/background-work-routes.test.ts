@@ -7,20 +7,22 @@ import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-t
 import { scopeId } from "../src/types.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
-import { memoryRows } from "../src/persistence/keyed-rows.ts";
-import { createBackgroundOwnershipStore, type BackgroundOwnership } from "../src/runs/background-ownership.ts";
+import { createBackgroundOwnershipStore, createBackgroundOwnershipRows } from "../src/runs/background-ownership.ts";
 import { testConfig } from "./support/test-config.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "deployment-only-secret".repeat(3);
 const path = "/v1/background-work";
 
 async function fixture(secret: string | undefined = controlSecret) {
-  const store = createBackgroundOwnershipStore(memoryRows<BackgroundOwnership>(true));
+  const store = createBackgroundOwnershipStore(createBackgroundOwnershipRows(testDatabaseUrl()));
   await store.set({ ownerDeploymentId: "cohort-a", setBy: "cohort-a" });
   let active = false;
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const server = createServer(built.app, {
+    replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),

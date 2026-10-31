@@ -3,14 +3,13 @@ import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
 import { settle } from "./support/settle.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testTenantsSeeded } from "./support/tenant.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });

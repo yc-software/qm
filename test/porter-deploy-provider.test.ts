@@ -1,21 +1,23 @@
+import type { KeyedRows } from "../src/persistence/keyed-rows.ts";
 import { test, after, beforeEach } from "node:test";
-import { memoryRows, type KeyedRows } from "../src/persistence/keyed-rows.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { createPorterDeployProvider, type StoredPorterDeployBody } from "../src/deploy/porter-deploy-provider.ts";
+import {
+  createPorterDeployProvider,
+  type StoredPorterDeployBody,
+  PORTER_DEPLOY_BODIES,
+} from "../src/deploy/porter-deploy-provider.ts";
 import type { Deployment, DeploymentVersion } from "../src/deploy/deploy-store.ts";
 import type { DeployProvider } from "../src/deploy/deploy-provider.ts";
 import { NotFoundError } from "porter-sandbox";
 import { scopeId } from "../src/types.ts";
 import { installFakePorter, type FakePorter } from "./support/fake-porter.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testRows } from "./support/test-database.ts";
 
 const SERVER = [
   "const fs = require('fs');",
@@ -83,7 +85,7 @@ function make(
 ): void {
   fake?.cleanup();
   fake = installFakePorter(extra.terminateLag ? { terminateLag: extra.terminateLag } : {});
-  store = memoryRows<StoredPorterDeployBody>();
+  store = testRows(PORTER_DEPLOY_BODIES);
   provider = createPorterDeployProvider({
     ...singleProcessDeps(),
     appsDomain: "apps.test",

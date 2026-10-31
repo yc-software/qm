@@ -1,9 +1,6 @@
 import { test } from "node:test";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 test("Render sandboxes can start without S3 storage configuration", async () => {
   const built = buildApp(

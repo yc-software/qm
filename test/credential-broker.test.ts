@@ -1,9 +1,10 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { brokerCredentialCall, type BrokerFetch } from "../src/api/credential-broker.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { DecryptedServiceCredential, ServiceCredentialReader } from "../src/credentials/keychain.ts";
-import { createCredentialUsageSink } from "../src/admin/credential-usage-sink.ts";
+import { createPostgresCredentialUsageSink } from "../src/admin/postgres-credential-usage-sink.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const SECRET = "super-secret-bearer";
 
@@ -56,7 +57,7 @@ const base = (over: Partial<Parameters<typeof brokerCredentialCall>[0]> = {}) =>
 
 test("happy path: injects the secret as Bearer, never exposes it in the result", async () => {
   const cap = captureFetch();
-  const usage = createCredentialUsageSink();
+  const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
   const r = await brokerCredentialCall(base({ fetchImpl: cap.fetch, usage }));
   assert.equal(r.status, 200);
   assert.deepEqual(r.json, { status: 200, contentType: "application/json", body: '{"ok":true}' });
@@ -298,7 +299,7 @@ test("a custom injection header + scheme is honored", async () => {
 });
 
 test("an upstream fetch error is reported generically (never leaks the URL/headers) + recorded", async () => {
-  const usage = createCredentialUsageSink();
+  const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
   const r = await brokerCredentialCall(
     base({
       usage,
@@ -475,10 +476,11 @@ test("generic credential broker cannot bypass Composio identity binding", async 
   assert.equal(cap.calls.length, 0);
 });
 
-test("a daily cap admits that many outbound calls per UTC day, then refuses with 429 without calling out", async () => {
+test("a daily cap admits that many outbound calls per UTC day, then refuses with 429 without calling out", async (t) => {
   const cap = captureFetch();
-  let clock = Date.UTC(2026, 9, 16, 23, 0);
-  const usage = createCredentialUsageSink(() => clock);
+  mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 9, 16, 23, 0) });
+  t.after(() => mock.timers.reset());
+  const usage = createPostgresCredentialUsageSink(testDatabaseUrl());
   const capped = base({
     fetchImpl: cap.fetch,
     usage,
@@ -495,7 +497,7 @@ test("a daily cap admits that many outbound calls per UTC day, then refuses with
   assert.equal((refused.json as { error: string }).error, "daily_cap_reached");
   assert.equal(cap.calls.length, 2);
 
-  clock = Date.UTC(2026, 9, 17, 0, 1);
+  mock.timers.setTime(Date.UTC(2026, 9, 17, 0, 1));
   assert.equal((await brokerCredentialCall(capped)).status, 200);
   assert.equal(cap.calls.length, 3);
 });

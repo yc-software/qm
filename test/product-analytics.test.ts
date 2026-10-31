@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import type { Run } from "../src/runs/run-store.ts";
 import { createProductAnalytics } from "../src/util/product-analytics.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 test("disabled analytics makes no requests", async () => {
   let requests = 0;
@@ -119,7 +120,7 @@ test("terminal listener reports only exhausted failures and accepted completions
     events.push(JSON.parse(String(init?.body)).event);
     return new Response("ok");
   });
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   runs.onTerminal((run) => {
     void analytics.responseFinished(run);
   });
@@ -140,7 +141,7 @@ test("terminal listener reports only exhausted failures and accepted completions
 });
 
 async function humanRun(): Promise<Run> {
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const { run } = await runs.enqueue({
     sessionId: "thread",
     request: {

@@ -2,7 +2,7 @@
 
 Post-merge live scenarios against example.slack.com. The workflow
 (`.github/workflows/live-e2e.yml`) boots the merged commit as a real instance on the GHA
-runner — core (`SESSION_STORE=memory`) + Slack plugin in Socket Mode on a **CI-reserved
+runner — core (with `DATABASE_URL` set) + Slack plugin in Socket Mode on a **CI-reserved
 pool app** (`qm dev --ci`) — then `run.ts` drives the catalog in
 `scenarios.ts` posting as a real example **user** (the "QA Human" account), so every
 message takes the exact path a teammate's would: classification, lazy directory push,

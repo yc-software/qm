@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresEgressAuditSink } from "../src/admin/postgres-egress-audit-sink.ts";
 import { scopeId } from "../src/types.ts";
 import { settle } from "./support/settle.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { bindTestTenant, testTenantsSeeded } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -11,6 +11,7 @@ const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres egress-audit tests";
 
 before(async () => {
+  await testTenantsSeeded();
   if (!URL) return;
   const pg = (await import("pg")).default;
   const p = new pg.Pool({ connectionString: URL });

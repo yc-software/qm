@@ -25,9 +25,8 @@ their own isolated workspace, and can also collaborate with the agent in channel
 Each person and each room has its own scoped memory, files, keychain view, permissions,
 crons, web apps, and durable sandbox.
 
-It's built with open source in mind. Pick your own harness and model and switch between
-them. Pi and Claude Code both drive the same core, and Pi runs models from many
-providers, so a deployment isn't tied to any single vendor.
+It's built with open source in mind. Pick your own model and switch between models; Pi
+runs models from many providers, so a deployment isn't tied to any single vendor.
 
 ## Setup
 
@@ -46,7 +45,7 @@ If you're at a bigger company and are interested in a hosted version of QM, let 
 - **Slack and web.** The same identity and configuration carries between Slack and the
   web app.
 - **Admin control.** Set org-level configuration, security and sharing postures. Choose which
-  harnesses and models are available.
+  models are available.
 - **Web apps.** Spin up custom internal apps and publish them to the right people.
 - **Shared skills.** Skills are scope-owned and shareable by grant, with admin-gated
   promotion to the whole org and skill packs imported from git repositories.
@@ -69,7 +68,7 @@ flowchart LR
 
   subgraph CORE["Headless core"]
     API["API · identity · policy · scheduler"]
-    LOOP["Agent loop<br/>(Pi, Claude Code)"]
+    LOOP["Agent loop<br/>(Pi)"]
     API <--> LOOP
   end
 
@@ -79,8 +78,8 @@ flowchart LR
   LOOP <--> SBX
 ```
 
-For durability, set `DATABASE_URL` and `SESSION_STORE=postgres` — without it, sessions
-live in process memory and vanish on restart. To exercise a branch against a real model and real Postgres, run
+Core requires Postgres: set `DATABASE_URL`. Tests need one too: `DATABASE_URL=<disposable Postgres> npm test` creates a
+throwaway database per test file and per test app. To exercise a branch against a real model and real Postgres, run
 `npm run dev-instance:web` for web/admin or `npm run dev-instance:slack` for Slack.
 Use `npm run dev-instance:both` when testing both surfaces together. Bare
 `npm run dev-instance` defaults to web for new instances and preserves the surface
@@ -88,7 +87,7 @@ on reload. Switch an existing instance with an explicit surface command.
 
 ## How it works
 
-Every turn runs through a central core, which can use a variety of models and harnesses
+Every turn runs through a central core, which can use a variety of models
 to generate the response. A Postgres persistence layer holds user data, session history,
 and other durable state. The agent has a small, fixed tool surface; one of those tools is
 `execute`, which runs commands in the scope's own isolated sandbox — its durable computer,
@@ -103,8 +102,8 @@ uses Bolt; the web UI builds with Vite and renders with Lit.
 
 The core itself is generic. Everything specific to one company — org config, custom tools
 and skills, sandbox image, infrastructure — lives in a **deployment directory** that the
-[`qm` CLI](./cli/README.md) validates and deploys. Every substrate (harness, session
-store, sandbox, memory) sits behind an interface. Memory can also be routed by scope to
+[`qm` CLI](./cli/README.md) validates and deploys. Every substrate (session store,
+sandbox, memory) sits behind an interface. Memory can also be routed by scope to
 [external providers](./docs/memory-providers.md) while retaining the built-in notebook.
 
 ## Security and secrets
@@ -114,7 +113,7 @@ agent acts as the person it's working for, with their credentials and permission
 everything it does is audited. An org picks one security posture, which narrower scopes
 can only tighten:
 
-- **Strict** — every harness tool call pauses for human approval, except the two
+- **Strict** — every agent tool call pauses for human approval, except the two
   no-effect turn enders.
 - **Auto** (default) — blocks private-network access.
 - **Dangerous** — no tool approval gates, and content screening only observes.

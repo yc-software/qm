@@ -1,4 +1,4 @@
-import type { SurfaceContextQuery, SurfaceContextResult } from "../types.ts";
+import type { SurfaceContextQuery, SurfaceContextResult } from "../reach/reach.ts";
 import type { SurfaceContextPuller } from "../core/orchestrator.ts";
 import { sleep } from "../util/async.ts";
 import { swallow } from "../util/errors.ts";

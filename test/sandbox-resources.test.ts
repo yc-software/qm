@@ -1,24 +1,20 @@
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
-import { createMemoryProcessRegistry } from "../src/processes/process-registry.ts";
+import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { supportsProcessSessions } from "../src/sandbox/sandbox.ts";
 import { createTurnSandboxes, type TurnSandboxContext } from "../src/core/orchestrator/sandboxes.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
-import { createMemorySandboxResourceStores } from "../src/sandbox/sandbox-resource-store.ts";
-import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
+import { testAdvisoryLock, testDatabaseUrl, testSandboxResourceStores } from "./support/test-database.ts";
+import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
-bindTestTenant();
-
-function fixture(configure?: (backend: Sandbox) => void, existingScopes = ["personal:alice"]) {
-  const { records, defaults } = createMemorySandboxResourceStores();
+async function fixture(configure?: (backend: Sandbox) => void, existingScopes = ["personal:alice"]) {
+  const { records, defaults } = testSandboxResourceStores();
   for (const scope of existingScopes) {
     const id = `existing-${scope.replace(":", "-")}`;
-    void records.put(id, {
+    await records.put(id, {
       id,
       backend: "local",
       ownerScopeId: scope as `personal:${string}`,
@@ -29,7 +25,7 @@ function fixture(configure?: (backend: Sandbox) => void, existingScopes = ["pers
       legacy: true,
       state: "unverified",
     });
-    void defaults.put(scope, { sandboxId: id });
+    await defaults.put(scope, { sandboxId: id });
   }
   const disks = new Map<string, Map<string, string>>();
   const provisioned: string[] = [];
@@ -70,7 +66,7 @@ function fixture(configure?: (backend: Sandbox) => void, existingScopes = ["pers
     },
   };
   configure?.(backend);
-  const lock = createMemoryAdvisoryLock();
+  const lock = testAdvisoryLock();
   const options = {
     records,
     defaults,
@@ -87,7 +83,7 @@ function fixture(configure?: (backend: Sandbox) => void, existingScopes = ["pers
 }
 
 test("blank sandbox identities coexist and default changes never copy files or redirect existing handles", async () => {
-  const { resources, router, layers } = fixture();
+  const { resources, router, layers } = await fixture();
   const old = await router.provision(layers);
   await router.writeFile(old, "secret", "old disk");
   const first = await resources.create("alice", "personal:alice", "local", "build");
@@ -110,7 +106,7 @@ test("blank sandbox identities coexist and default changes never copy files or r
 });
 
 test("provisioning a running computer does not wait behind a long-running command on it", async () => {
-  const { resources, router, layers } = fixture();
+  const { resources, router, layers } = await fixture();
   const handle = await router.provision(layers);
   const command = Promise.withResolvers<void>();
   const running = resources.use(handle.resourceId!, () => command.promise);
@@ -121,7 +117,7 @@ test("provisioning a running computer does not wait behind a long-running comman
 });
 
 test("a command on a computer reads its inventory record once", async () => {
-  const { records, router, layers } = fixture();
+  const { records, router, layers } = await fixture();
   const handle = await router.provision(layers);
   let reads = 0;
   const get = records.get.bind(records);
@@ -134,7 +130,7 @@ test("a command on a computer reads its inventory record once", async () => {
 });
 
 test("explicit sandbox profiles follow selected storage rather than the parent's default provider", async () => {
-  const { backend, options } = fixture();
+  const { backend, options } = await fixture();
   const modal: Sandbox = { ...backend, profile: { ...backend.profile, backend: "modal" } };
   const backends = { local: backend, modal };
   const resources = createSandboxResources({ ...options, backends });
@@ -151,7 +147,7 @@ test("explicit sandbox profiles follow selected storage rather than the parent's
 });
 
 test("unset defaults remain unset durably while explicit execution remains usable", async () => {
-  const { resources, router, layers, defaults } = fixture();
+  const { resources, router, layers, defaults } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", null);
   assert.equal((await defaults.get("personal:alice"))?.sandboxId, null);
@@ -168,7 +164,7 @@ test("unset defaults remain unset durably while explicit execution remains usabl
 });
 
 test("scope ACL protects inventory and target access and prevents cross-scope default credential relocation", async () => {
-  const { resources } = fixture();
+  const { resources } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await assert.rejects(resources.access("bob", record.id), /permission/);
   await assert.rejects(resources.list("bob", "personal:alice"), /permission/);
@@ -179,7 +175,7 @@ test("scope ACL protects inventory and target access and prevents cross-scope de
 });
 
 test("status and restart resolve the selected backing machine rather than legacy scope", async () => {
-  const { resources, router, provisioned } = fixture();
+  const { resources, router, provisioned } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
   assert.equal((await router.computerStatus!("personal:alice")).machine, record.backingScopeId);
@@ -188,7 +184,7 @@ test("status and restart resolve the selected backing machine rather than legacy
 });
 
 test("listing an untouched scope never invents a legacy machine", async () => {
-  const { resources, provisioned } = fixture(undefined, []);
+  const { resources, provisioned } = await fixture(undefined, []);
   assert.deepEqual(await resources.list("alice", "personal:alice"), {
     sandboxes: [],
     defaultSandboxId: null,
@@ -201,7 +197,7 @@ test("listing an untouched scope never invents a legacy machine", async () => {
 });
 
 test("turn default changes invalidate cached provisioning while explicit calls dedupe and cleanup each computer once", async () => {
-  const { resources, router, layers, backend } = fixture();
+  const { resources, router, layers, backend } = await fixture();
   const released: string[] = [];
   backend.teardown = async (handle) => {
     released.push(handle.id);
@@ -238,7 +234,7 @@ test("turn default changes invalidate cached provisioning while explicit calls d
 });
 
 test("retirement refuses the default, waits for an active command, and prevents future execution", async () => {
-  const { resources, router, backend, layers } = fixture();
+  const { resources, router, backend, layers } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
   await assert.rejects(resources.retire("alice", record.id), /default/);
@@ -278,7 +274,7 @@ test("every handle operation rejects retirement before reaching a backend that c
     backendCalls++;
     throw new Error("backend reached");
   };
-  const { resources, router, layers } = fixture((backend) => {
+  const { resources, router, layers } = await fixture((backend) => {
     backend.profile.processSessions = true;
     backend.startProcess = hit;
     backend.readProcess = hit;
@@ -320,7 +316,7 @@ test("every handle operation rejects retirement before reaching a backend that c
 
 for (const fail of [false, true])
   test(`retirement waits for outstanding creation ${fail ? "failure" : "success"} and remains terminal`, async () => {
-    const { resources, records, backend } = fixture();
+    const { resources, records, backend } = await fixture();
     const provision = backend.provision;
     let release!: () => void;
     let entered!: () => void;
@@ -366,7 +362,7 @@ for (const fail of [false, true])
   });
 
 test("retirement deletes an inferred missing computer without provisioning, status or restore", async () => {
-  const { resources, backend, provisioned } = fixture();
+  const { resources, backend, provisioned } = await fixture();
   const record = await resources.resolve("personal:alice");
   assert.equal(record?.state, "unverified");
   await resources.setDefault("alice", "personal:alice", null);
@@ -387,7 +383,7 @@ test("retirement deletes an inferred missing computer without provisioning, stat
 });
 
 test("unsupported retirement is hidden and refuses before inventory mutation", async () => {
-  const { resources, records } = fixture((backend) => {
+  const { resources, records } = await fixture((backend) => {
     delete backend.destroyScope;
   });
   const record = await resources.create("alice", "personal:alice", "local");
@@ -400,7 +396,7 @@ test("unsupported retirement is hidden and refuses before inventory mutation", a
 });
 
 test("failed retirement stays unroutable and retries cleanup by backing scope after a core restart", async () => {
-  const { resources, backend, records, options } = fixture();
+  const { resources, backend, records, options } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   backend.destroyScope = async () => {
     throw new Error("provider unavailable");
@@ -428,7 +424,7 @@ test("failed retirement stays unroutable and retries cleanup by backing scope af
 });
 
 test("a pending retirement without an error remains retryable after a crash", async () => {
-  const { resources, records, options, backend } = fixture();
+  const { resources, records, options, backend } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await records.put(record.id, { ...record, state: "retired", cleanupPending: true });
   let destroyed = false;
@@ -441,7 +437,7 @@ test("a pending retirement without an error remains retryable after a crash", as
 });
 
 test("retirement preserves core live-work and owning-scope guards before direct deletion", async () => {
-  const { resources, records, options, backend } = fixture();
+  const { resources, records, options, backend } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   let destroyed = false;
   backend.destroyScope = async () => {
@@ -460,7 +456,7 @@ test("retirement preserves core live-work and owning-scope guards before direct 
 });
 
 test("retirement waits for background startup to commit its live registry row", async () => {
-  const { options, backend, layers } = fixture((sandbox) => {
+  const { options, backend, layers } = await fixture((sandbox) => {
     sandbox.profile.processSessions = true;
     sandbox.startProcess = async () => ({ processId: "job" });
     sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
@@ -468,7 +464,7 @@ test("retirement waits for background startup to commit its live registry row", 
     sandbox.signalProcess = async () => {};
     sandbox.listProcesses = async () => [];
   });
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   const resources = createSandboxResources({
     ...options,
     beforeRetire: async (record) => {
@@ -503,7 +499,7 @@ test("retirement waits for background startup to commit its live registry row", 
 });
 
 test("failed background registration kills its process and releases the resource lock", async () => {
-  const { resources, router, backend, layers } = fixture((sandbox) => {
+  const { resources, router, backend, layers } = await fixture((sandbox) => {
     sandbox.profile.processSessions = true;
     sandbox.startProcess = async () => ({ processId: "unregistered" });
     sandbox.readProcess = async () => ({ chunks: "", cursor: 0, status: { state: "running" } });
@@ -514,7 +510,7 @@ test("failed background registration kills its process and releases the resource
   assert.ok(supportsProcessSessions(router));
   const record = await resources.create("alice", "personal:alice", "local");
   const handle = await router.provision(layers, { sandboxId: record.id });
-  const registry = createMemoryProcessRegistry();
+  const registry = createPostgresProcessRegistry(testDatabaseUrl());
   registry.register = async () => {
     throw new Error("registry unavailable");
   };
@@ -536,7 +532,7 @@ for (const [kind, waiting] of [
   ["sprites", "checkpoint"],
 ] as const) {
   test(`${kind} ${waiting} allows other tools while restart waits`, { timeout: 10000 }, async () => {
-    const { options, backend, layers } = fixture();
+    const { options, backend, layers } = await fixture();
     const resources = createSandboxResources({ ...options, backends: { [kind]: backend }, defaultBackend: kind });
     const router = createSandboxRouter({ backends: { [kind]: backend }, defaultBackend: kind, resources });
     const record = await resources.create("alice", "personal:alice", kind);
@@ -588,7 +584,7 @@ for (const [kind, waiting] of [
 }
 
 test("Modal provisioning and destructive cleanup wait for active operations", { timeout: 10000 }, async () => {
-  const { options, backend, layers } = fixture();
+  const { options, backend, layers } = await fixture();
   const resources = createSandboxResources({ ...options, backends: { modal: backend }, defaultBackend: "modal" });
   const router = createSandboxRouter({ backends: { modal: backend }, defaultBackend: "modal", resources });
   const record = await resources.create("alice", "personal:alice", "modal");
@@ -626,7 +622,7 @@ test("Modal provisioning and destructive cleanup wait for active operations", { 
 });
 
 test("concurrent commands on one Sprites computer run together", { timeout: 10000 }, async () => {
-  const { options, backend, layers } = fixture();
+  const { options, backend, layers } = await fixture();
   const resources = createSandboxResources({ ...options, backends: { sprites: backend }, defaultBackend: "sprites" });
   const router = createSandboxRouter({ backends: { sprites: backend }, defaultBackend: "sprites", resources });
   const record = await resources.create("alice", "personal:alice", "sprites");
@@ -650,7 +646,7 @@ test("concurrent commands on one Sprites computer run together", { timeout: 1000
 });
 
 test("parking teardown waits for active commands on the computer", { timeout: 10000 }, async () => {
-  const { options, backend, layers } = fixture();
+  const { options, backend, layers } = await fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
   const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
   const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
@@ -681,7 +677,7 @@ test("parking teardown waits for active commands on the computer", { timeout: 10
 });
 
 test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
-  const { resources, router } = fixture(undefined, []);
+  const { resources, router } = await fixture(undefined, []);
   const scope = "channel:external-slack:T1:policy:C1";
   assert.equal(await resources.resolve(scope), null);
   await assert.rejects(resources.create("alice", scope, "local"), /permission/);
@@ -701,7 +697,7 @@ test("a verified live turn can create only its own new scope computer without di
 });
 
 test("a computer stays held until its last live run releases it, and ended runs stop counting", async () => {
-  const { resources } = fixture();
+  const { resources } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.hold(record.id, "a");
   await resources.hold(record.id, "b");
@@ -717,7 +713,7 @@ test("a computer stays held until its last live run releases it, and ended runs 
 });
 
 test("two concurrent turns on one parking computer: only the last turn to finish parks it", async () => {
-  const { options, backend, layers } = fixture();
+  const { options, backend, layers } = await fixture();
   const parking: Sandbox = { ...backend, profile: { ...backend.profile, parksOnTeardown: true } };
   const resources = createSandboxResources({ ...options, backends: { e2b: parking }, defaultBackend: "e2b" });
   const router = createSandboxRouter({ backends: { e2b: parking }, defaultBackend: "e2b", resources });
@@ -727,7 +723,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
   parking.teardown = async (_handle, opts) => {
     teardowns.push(opts ?? {});
   };
-  const { runs } = createMemoryRunStore();
+  const { runs } = createPostgresRunStore(testDatabaseUrl());
   const start = async (sessionId: string) => {
     await runs.enqueue({ sessionId, request: { origin: { kind: "direct" }, text: "x" } as never });
     return (await runs.claim("worker", 60_000))!;
@@ -763,7 +759,7 @@ test("two concurrent turns on one parking computer: only the last turn to finish
 });
 
 test("same-name skills from distinct sources keep their materialized assets separate", async () => {
-  const { resources, router, layers } = fixture();
+  const { resources, router, layers } = await fixture();
   const record = await resources.create("alice", "personal:alice", "local");
   await resources.setDefault("alice", "personal:alice", record.id);
   const turn = createTurnSandboxes({
@@ -804,7 +800,7 @@ test("same-name skills from distinct sources keep their materialized assets sepa
 });
 
 test("a job computer is invisible and untargetable for everyone, and only the job sweep retires it", async () => {
-  const { resources, router, layers } = fixture();
+  const { resources, router, layers } = await fixture();
   const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
   assert.ok(!(await resources.list("alice", "personal:alice")).sandboxes.some((s) => s.id === job.id));
   const refusal = /belongs to a background job that uses private credentials/;
@@ -827,7 +823,7 @@ test("a job computer is invisible and untargetable for everyone, and only the jo
 });
 
 test("retiring a job computer is skipped when its state moved on, and its backing scope is marked as a job's", async () => {
-  const { resources } = fixture();
+  const { resources } = await fixture();
   const job = await resources.create("alice", "personal:alice", "local", "background job", undefined, true);
   assert.ok(job.backingScopeId.startsWith("job-"));
   await resources.retireJobComputer(job.id, "provisioning");
@@ -844,7 +840,7 @@ test("retiring a job computer is skipped when its state moved on, and its backin
 
 test("a job computer whose destroy fails keeps its record for retry, and is refused where it cannot be retired", async () => {
   let failures = 1;
-  const { resources } = fixture((backend) => {
+  const { resources } = await fixture((backend) => {
     const destroy = backend.destroyScope!.bind(backend);
     backend.destroyScope = async (id) => {
       if (failures-- > 0) throw new Error("provider unavailable");
@@ -860,7 +856,7 @@ test("a job computer whose destroy fails keeps its record for retry, and is refu
   await resources.retireJobComputer(job.id, (await resources.get(job.id)).state);
   assert.deepEqual(await resources.jobComputers(), []);
   await assert.rejects(resources.get(job.id), /sandbox not found/);
-  const { resources: cannotRetire } = fixture((backend) => {
+  const { resources: cannotRetire } = await fixture((backend) => {
     delete backend.destroyScope;
   });
   await assert.rejects(

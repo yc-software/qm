@@ -12,13 +12,12 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 function svc() {
-  const deployStore = createDeployStore();
-  const acl = createAclStore();
+  const deployStore = createDeployStore(testDeployBackings());
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   const deploy = createDeployService({
     ...singleProcessDeps(),
     deployStore,

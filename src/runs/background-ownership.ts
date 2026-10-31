@@ -1,4 +1,4 @@
-import { keyedRows, type KeyedRows, type RowColumns } from "../persistence/keyed-rows.ts";
+import { pgRows, type KeyedRows, type RowColumns } from "../persistence/keyed-rows.ts";
 
 export interface BackgroundOwnership {
   ownerDeploymentId: string | null;
@@ -53,8 +53,8 @@ const BACKGROUND_OWNERSHIP_MIGRATION = {
   ],
 };
 
-export function createBackgroundOwnershipRows(databaseUrl: string | undefined): KeyedRows<BackgroundOwnership> {
-  return keyedRows(databaseUrl, {
+export function createBackgroundOwnershipRows(databaseUrl: string): KeyedRows<BackgroundOwnership> {
+  return pgRows(databaseUrl, {
     table: "background_ownership",
     key: "id",
     global: true,

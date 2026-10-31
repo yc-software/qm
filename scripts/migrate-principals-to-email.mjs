@@ -93,7 +93,6 @@ const LIVE_COLUMNS = [
 const HISTORY_COLUMNS = [
   ["session_llm_requests", ["scope_label"]],
   ["runs", ["request", "result"]],
-  ["tool_calls", ["output"]],
   ["egress_events", ["scope_label", "principal_id"]],
   ["credential_usage", ["scope_label", "principal_id"]],
   ["error_events", ["scope_label"]],

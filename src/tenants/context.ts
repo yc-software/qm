@@ -14,6 +14,10 @@ export function withTenant<T>(id: string, fn: () => T): T {
   return bound.run(tenantId(id), fn);
 }
 
+export function withoutTenant<T>(fn: () => T): T {
+  return bound.exit(fn);
+}
+
 export function enterTenant(id: string): void {
   bound.enterWith(tenantId(id));
 }
@@ -26,13 +30,4 @@ export function currentTenant(): string {
   const id = bound.getStore();
   if (!id) throw new Error("No tenant is bound to this operation");
   return id;
-}
-
-export function perTenant<V>(create: () => V): () => V {
-  const values = new Map<string, V>();
-  return () => {
-    const id = currentTenant();
-    if (!values.has(id)) values.set(id, create());
-    return values.get(id)!;
-  };
 }

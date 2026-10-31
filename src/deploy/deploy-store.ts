@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../types.ts";
 import { pgRows, type RowColumns } from "../persistence/keyed-rows.ts";
+import { APP_PAGE_VIEW_MIGRATIONS } from "./page-views.ts";
 import { typedTableMigration } from "../persistence/typed-table-migration.ts";
 import { typedColumns } from "../persistence/typed-columns.ts";
 import { jsonBackfill } from "../persistence/typed-statements.ts";
-import { perTenant } from "../tenants/context.ts";
 import {
   createDeployGitStore,
   type DeployGitDiff,
@@ -139,7 +139,7 @@ export interface DeploymentRows {
 }
 
 export interface DeployStoreBackings {
-  deployments?: DeploymentRows;
+  deployments: DeploymentRows;
   git?: DeployGitStoreOptions;
   touchDebounceMs?: number;
 }
@@ -172,6 +172,7 @@ const DEPLOYMENT_COLUMNS: RowColumns<Deployment, "id"> = {
 const { lastAccessAt: _lastAccessAt, ...WRITTEN_COLUMNS } = DEPLOYMENT_COLUMNS;
 
 const DEPLOYMENT_MIGRATIONS = [
+  ...APP_PAGE_VIEW_MIGRATIONS,
   {
     id: "tenancy/deployment_prep/0001",
     statements: [
@@ -224,6 +225,15 @@ const DEPLOYMENT_MIGRATIONS = [
          (to_tsvector('simple', coalesce(display_name, name, '') || ' ' || coalesce(name, '')))`,
     ],
   }),
+  {
+    id: "tenancy/deployments/0002-page-view-fk",
+    statements: [
+      `DELETE FROM app_page_views v
+        WHERE NOT EXISTS (SELECT 1 FROM deployments d WHERE d.tenant_id = v.tenant_id AND d.id = v.deployment_id)`,
+      `ALTER TABLE app_page_views ADD CONSTRAINT app_page_views_deployment_fkey
+         FOREIGN KEY (tenant_id, deployment_id) REFERENCES deployments(tenant_id, id) ON DELETE CASCADE`,
+    ],
+  },
 ];
 
 const withEndpoint = (d: Deployment): Deployment => ({ ...d, endpoint: d.endpoint ?? null });
@@ -257,35 +267,6 @@ export function createPostgresDeploymentRows(databaseUrl: string): DeploymentRow
   };
 }
 
-export function createMemoryDeploymentRows(): DeploymentRows {
-  const tenantRows = perTenant(() => new Map<string, Deployment>());
-  const copy = (d: Deployment | undefined) => (d ? structuredClone(d) : null);
-  return {
-    get: async (id) => copy(tenantRows().get(id)),
-    async put(id, d) {
-      const { lastAccessAt, ...rest } = structuredClone(d);
-      const kept = tenantRows().has(id) ? tenantRows().get(id)!.lastAccessAt : lastAccessAt;
-      tenantRows().set(id, kept === undefined ? rest : { ...rest, lastAccessAt: kept });
-    },
-    async merge(id, patch) {
-      const current = tenantRows().get(id);
-      if (!current) return;
-      for (const [field, value] of Object.entries(patch) as Array<[keyof Deployment, unknown]>)
-        if (value === undefined) delete current[field];
-        else Object.assign(current, { [field]: structuredClone(value) });
-    },
-    list: async () =>
-      [...tenantRows().values()].sort((a, b) => a.id.localeCompare(b.id)).map((d) => structuredClone(d)),
-    byName: async (name) => copy([...tenantRows().values()].find((d) => d.name === name)),
-    async touch(id, at) {
-      const current = tenantRows().get(id);
-      if (!current) return false;
-      current.lastAccessAt = Math.max(current.lastAccessAt ?? 0, at);
-      return true;
-    },
-  };
-}
-
 export function deployTouchDebounceMs(reapTtlMs?: number): number {
   if (!reapTtlMs || reapTtlMs <= 0) return TOUCH_DEBOUNCE_MS;
   return Math.min(TOUCH_DEBOUNCE_MS, Math.floor(reapTtlMs / 4));
@@ -296,8 +277,8 @@ function isNameConflict(e: unknown): boolean {
   return err?.code === "23505" && err?.constraint === NAME_INDEX;
 }
 
-export function createDeployStore(backing: DeployStoreBackings = {}): DeployStore {
-  const backingMap = backing.deployments ?? createMemoryDeploymentRows();
+export function createDeployStore(backing: DeployStoreBackings): DeployStore {
+  const backingMap = backing.deployments;
   const git = createDeployGitStore(backing.git);
   const touchDebounceMs = backing.touchDebounceMs ?? TOUCH_DEBOUNCE_MS;
   const lastTouch = new Map<string, number>();

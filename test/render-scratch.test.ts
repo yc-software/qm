@@ -1,25 +1,23 @@
 import assert from "node:assert/strict";
-import { memoryRows, pgRows } from "../src/persistence/keyed-rows.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { createMemoryAdvisoryLock, createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { pgRows } from "../src/persistence/keyed-rows.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { skipWithoutPg, withTypedTableDb } from "./support/typed-table.ts";
 import {
   createRenderSandbox,
-  RENDER_SCRATCH_BODIES,
-  type StoredRenderSandbox,
-  type StoredRenderCleanup,
   type StoredRenderScratch,
+  RENDER_SANDBOX_BODIES,
+  RENDER_SCRATCH_BODIES,
+  RENDER_SANDBOX_CLEANUP,
 } from "../src/sandbox/render-sandbox.ts";
 import { SandboxProvisionCleanupError, type SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createFakeRender } from "./support/fake-render.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testAdvisoryLock, testRows } from "./support/test-database.ts";
 
 function setup(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "render-scratch-"));
@@ -34,10 +32,10 @@ function setup(t: TestContext) {
     }
   });
   const workspace = createLocalWorkspaceStore(dir);
-  const store = memoryRows<StoredRenderSandbox>();
-  const scratchStore = memoryRows<StoredRenderScratch>();
-  const cleanupStore = memoryRows<StoredRenderCleanup>();
-  const advisoryLock = createMemoryAdvisoryLock();
+  const store = testRows(RENDER_SANDBOX_BODIES);
+  const scratchStore = testRows(RENDER_SCRATCH_BODIES);
+  const cleanupStore = testRows(RENDER_SANDBOX_CLEANUP);
+  const advisoryLock = testAdvisoryLock();
   const errors: string[] = [];
   const make = (backing = scratchStore, lock = advisoryLock) =>
     createRenderSandbox(workspace, {
@@ -94,10 +92,11 @@ test("Another Render core can execute and destroy a saved disposable handle", as
 
 test("Another Render core cannot reuse an active disposable allocation", async (t) => {
   const { make, fake } = setup(t);
-  const [a, b] = await Promise.allSettled([make().provision([], options), make().provision([], options)]);
-  assert.equal(a.status, "fulfilled");
-  assert.equal(b.status, "rejected");
-  if (b.status === "rejected") assert.match(b.reason.message, /in use by another core/);
+  const results = await Promise.allSettled([make().provision([], options), make().provision([], options)]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  const rejected = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  assert.equal(rejected.length, 1);
+  assert.match(rejected[0]!.reason.message, /in use by another core/);
   assert.equal(fake.sandboxes.size, 1);
   assert.deepEqual(fake.terminated, []);
 });

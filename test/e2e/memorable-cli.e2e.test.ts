@@ -5,15 +5,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pg from "pg";
-import { createMemoryService } from "../../src/memory/memory-service.ts";
+import { createPostgresMemoryService } from "../../src/memory/postgres-memory-service.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { createConfiguredMemoryService } from "../../src/memory/provider-factory.ts";
-import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { scopeId, type SessionEntry } from "../../src/types.ts";
 import { startExtractionStub } from "./support/memorable-extraction-stub.ts";
 import { recallText } from "../support/recall-text.ts";
+import { enterTenant } from "../../src/tenants/context.ts";
+import { seedTestTenants, TEST_TENANT } from "../support/tenant-seed.ts";
 
 const DB = process.env.MEMORABLE_E2E_DB_URL;
+enterTenant(TEST_TENANT);
 const CLI = process.env.MEMORABLE_E2E_BIN;
 // With both set, the run goes to the real extraction service instead of the local stub.
 const REAL = process.env.MEMORABLE_API_URL && process.env.MEMORABLE_API_KEY ? true : false;
@@ -50,6 +52,7 @@ describe(
 
     before(async () => {
       stub = REAL ? undefined : await startExtractionStub();
+      await seedTestTenants(DB!);
       pool = new pg.Pool({ connectionString: DB });
       await pool.query("DROP TABLE IF EXISTS memorable_procedures, memorable_mode, memorable_stats");
       const env: NodeJS.ProcessEnv = {
@@ -77,7 +80,7 @@ describe(
         env,
       );
       memory = createConfiguredMemoryService({
-        defaultMemory: createMemoryService(createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "memorable-ws-")))),
+        defaultMemory: createPostgresMemoryService(DB!),
         config,
         sessionEntries: async (id) => (id === "s-e2e" ? trace : []),
       });

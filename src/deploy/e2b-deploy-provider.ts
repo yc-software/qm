@@ -18,7 +18,7 @@ import {
 } from "./shared-deploy-provider.ts";
 import { makeTar } from "../sandbox/tar.ts";
 import { E2bSandboxGoneError, runE2bScript, type E2bClient, type E2bSession } from "../sandbox/e2b-client.ts";
-import { type KeyedRows, type RowColumns, type RowTable, memoryRows } from "../persistence/keyed-rows.ts";
+import { type KeyedRows, type RowColumns, type RowTable } from "../persistence/keyed-rows.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createKeyedQueue } from "../util/async.ts";
 import { shq } from "../util/shell.ts";
@@ -81,7 +81,7 @@ export interface E2bDeployProviderOptions {
   readyWindowSec?: number;
   idleTimeoutSec?: number;
   resolveCacheMs?: number;
-  store?: Pick<KeyedRows<StoredE2bDeployBody>, "get" | "put" | "delete">;
+  store: Pick<KeyedRows<StoredE2bDeployBody>, "get" | "put" | "delete">;
   advisoryLock: AdvisoryLock;
   onError?: AppErrorSink;
 }
@@ -93,7 +93,7 @@ export function createE2bDeployProvider(opts: E2bDeployProviderOptions): DeployP
   const readyWindowSec = opts.readyWindowSec ?? READY_WINDOW_SEC_DEFAULT;
   const idleTimeoutMs = (opts.idleTimeoutSec ?? E2B_DEPLOY_IDLE_TIMEOUT_SEC) * 1000;
   const resolveCacheMs = opts.resolveCacheMs ?? RESOLVE_CACHE_MS_DEFAULT;
-  const store = opts.store ?? memoryRows<StoredE2bDeployBody>();
+  const store = opts.store;
   const advisoryLock = opts.advisoryLock;
   const queue = createKeyedQueue<string>();
   const resolveCache = new LRUCache<string, DeployEndpoint>({

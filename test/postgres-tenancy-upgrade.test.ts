@@ -10,7 +10,7 @@ import { withTenant } from "../src/tenants/context.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the tenancy upgrade test";
-const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/(0047|0048|0049)-/;
+const TENANCY = /^0000-tenancy\/|-tenants$|^sessions\/store\/(0048|0049|0050)-/;
 
 async function withSchema(fn: (url: string, db: pg.Pool) => Promise<void>): Promise<void> {
   const schema = `upgrade_${randomUUID().replaceAll("-", "")}`;
@@ -81,5 +81,20 @@ test("a fresh database ends with no tenant row", { skip }, async () => {
     createPostgresGrantStore(url);
     await migrateRegisteredPgSchemas(url);
     assert.deepEqual((await db.query("SELECT count(*)::int AS n FROM tenants")).rows, [{ n: 0 }]);
+  });
+});
+
+test("a booted database without rows keeps its instance uuid as its one tenant", { skip }, async () => {
+  await withSchema(async (url, db) => {
+    createPostgresSessionStore(url);
+    createPostgresRunStore(url);
+    createPostgresGrantStore(url);
+    await applyPgMigrations(
+      db,
+      registeredPgMigrations(url).filter((m) => !TENANCY.test(m.id)),
+    );
+    const instance = String((await db.query("SELECT id FROM qm_tenant")).rows[0].id);
+    await migrateRegisteredPgSchemas(url);
+    assert.deepEqual((await db.query("SELECT id::text AS id FROM tenants")).rows, [{ id: instance }]);
   });
 });

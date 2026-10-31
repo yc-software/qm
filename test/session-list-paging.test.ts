@@ -11,9 +11,6 @@ import { buildApp } from "../src/wiring.ts";
 import type { Principal, Session } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
 
 type Page = { sessions: Session[]; pinned?: Session[]; nextCursor: string | null; hasArchived?: boolean };
 
@@ -34,6 +31,7 @@ async function withServer<T>(
     });
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await built.runtime.stop();
   }
 }
 

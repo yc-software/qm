@@ -1,17 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { cronRef, deployRef, encodeRef, parseRef, serviceCredRef, skillRef } from "../src/acl/resource-ref.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Principal } from "../src/types.ts";
+import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
+import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 
 const ORG = scopeId("org", "default-org");
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });
 
 function aclWith(grantees: string[]) {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   return Promise.all(
     grantees.map((g) =>
       acl.grant({
@@ -132,7 +134,7 @@ test("empty audience is entitled to nothing (fail closed)", async () => {
 });
 
 test("a service-cred grant owned by a NON-org scope is ignored (anti self-grant via the open /v1/grants route)", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   await acl.grant({
     ownerScopeId: scopeId("personal", "attacker"),
     ref: "service-cred:foo",
@@ -166,7 +168,7 @@ test("a service-cred grant owned by a NON-org scope is ignored (anti self-grant 
 });
 
 test("the prefix filters: a deployment grant is never returned for the service-cred prefix", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   await acl.grant({
     ownerScopeId: ORG,
     ref: "deployment:d1",
@@ -192,7 +194,7 @@ test("the prefix filters: a deployment grant is never returned for the service-c
 });
 
 test("file handles exclude non-file grants — a skill/cron/deploy grant never becomes a bogus shared/ file", async () => {
-  const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
+  const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
   await files.put({
     id: "F1",
     ownerScopeId: ORG,
@@ -203,7 +205,9 @@ test("file handles exclude non-file grants — a skill/cron/deploy grant never b
     data: Buffer.from("hello"),
     direction: "out",
   });
-  const acl = createAclStore(undefined, { resolveFiles: (refs) => files.resolveByIds(refs) });
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()), {
+    resolveFiles: (refs) => files.resolveByIds(refs),
+  });
   const grantee = scopeId("channel", "C");
   await acl.grant({
     ownerScopeId: ORG,
@@ -236,7 +240,7 @@ test("file handles exclude non-file grants — a skill/cron/deploy grant never b
 });
 
 test("grantsOfKind selects by kind across all artifact families (one store, four kinds)", async () => {
-  const acl = createAclStore();
+  const acl = createAclStore(createPostgresGrantStore(testDatabaseUrl()));
   await acl.grant({
     ownerScopeId: ORG,
     ref: encodeRef(skillRef("s1")),

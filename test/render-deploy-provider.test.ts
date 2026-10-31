@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
-import { memoryRows } from "../src/persistence/keyed-rows.ts";
 import { test } from "node:test";
 import {
   createRenderDeployProvider,
   type RenderDeployProviderOptions,
-  type StoredRenderDeploy,
+  RENDER_DEPLOY_BODIES,
 } from "../src/deploy/render-deploy-provider.ts";
 import type { Deployment } from "../src/deploy/deploy-store.ts";
 import { fakeDeployment } from "./support/fake-render.ts";
-import { bindTestTenant } from "./support/tenant.ts";
-
-bindTestTenant();
+import { testRows } from "./support/test-database.ts";
 
 const sha = "a".repeat(40);
 const readyProbes = 40;
@@ -22,7 +19,7 @@ const writePaths = {
 };
 
 function fixture(appRegion?: string) {
-  const store = memoryRows<StoredRenderDeploy>();
+  const store = testRows(RENDER_DEPLOY_BODIES);
   const calls: Array<{ method: string; path: string; body: any }> = [];
   let service: any = null;
   let environment: any = null;

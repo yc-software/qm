@@ -70,17 +70,7 @@ const FLY_DEPLOY_PORTS = {
   ],
 };
 
-export function createFlyPortClaims(databaseUrl: string | undefined): FlyPortClaims {
-  if (!databaseUrl) {
-    const owners = new Map<string, string>();
-    return {
-      async claim(appName, port, deploymentId) {
-        const key = `${appName}:${port}`;
-        if (!owners.has(key)) owners.set(key, deploymentId);
-        return owners.get(key)!;
-      },
-    };
-  }
+export function createFlyPortClaims(databaseUrl: string): FlyPortClaims {
   const db = createPgPool(databaseUrl, [TENANCY_BASE, FLY_DEPLOY_PORTS]);
   return {
     claim: async (appName, port, deploymentId) =>

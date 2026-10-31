@@ -9,6 +9,18 @@ const isFileGrant = (g: Grant) => parseRef(g.ref).kind === "file";
 
 type ScopeEntitlement = (p: Principal, scope: ScopeId, sessionScopeId: ScopeId, orgScopeId: ScopeId) => boolean;
 
+function audienceReaches(
+  audience: readonly Principal[],
+  sessionScopeId: ScopeId,
+  orgScopeId: ScopeId,
+  entitled: ScopeEntitlement,
+): (g: Grant) => boolean {
+  const has = (p: Principal, scope: ScopeId) => entitled(p, scope, sessionScopeId, orgScopeId);
+  return (g) =>
+    audience.some((p) => has(p, g.granteeScopeId)) &&
+    audience.every((p) => has(p, g.granteeScopeId) || has(p, g.ownerScopeId));
+}
+
 export type ScopeManagement = (principalId: string, scopeId: ScopeId, authoredBy?: string) => Promise<boolean>;
 
 function ownerOf(scopeId: ScopeId): string | null {
@@ -93,47 +105,11 @@ function sameGrantTuple(a: Grant, b: Grant): boolean {
   return sameGrant(a, b) && a.grantedBy === b.grantedBy;
 }
 
-function sameGrantSet(a: readonly Grant[], b: readonly Grant[]): boolean {
+export function sameGrantSet(a: readonly Grant[], b: readonly Grant[]): boolean {
   return a.length === b.length && a.every((grant) => b.some((candidate) => sameGrantTuple(grant, candidate)));
 }
 
-function createMemoryGrantPersistence(): GrantPersistence {
-  const grants: Grant[] = [];
-  return {
-    async all() {
-      const key = (g: Grant) => `${g.ownerScopeId}\n${g.ref}\n${g.granteeScopeId}\n${g.permission}`;
-      return grants.slice().sort((a, b) => {
-        if (key(a) < key(b)) return -1;
-        if (key(a) > key(b)) return 1;
-        return 0;
-      });
-    },
-    async put(g) {
-      const existing = grants.findIndex((x) => sameGrant(x, g));
-      if (existing === -1) grants.push(g);
-      else grants[existing] = g;
-    },
-    async remove(g) {
-      for (let i = grants.length - 1; i >= 0; i--) {
-        if (sameGrant(grants[i]!, g)) grants.splice(i, 1);
-      }
-    },
-    async replaceForResourceIfCurrent(ownerScopeId, ref, expected, replacement) {
-      const current = grants.filter((grant) => grant.ownerScopeId === ownerScopeId && grant.ref === ref);
-      if (!sameGrantSet(current, expected)) return false;
-      for (let i = grants.length - 1; i >= 0; i--) {
-        if (grants[i]!.ownerScopeId === ownerScopeId && grants[i]!.ref === ref) grants.splice(i, 1);
-      }
-      grants.push(...replacement);
-      return true;
-    },
-  };
-}
-
-export function createAclStore(
-  persist: GrantPersistence = createMemoryGrantPersistence(),
-  opts: AclStoreOptions = {},
-): AclStore {
+export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions = {}): AclStore {
   async function resolveGrantedFiles(grants: readonly Grant[]): Promise<Map<string, FileArtifact>> {
     const refs = grants.filter(isFileGrant).map((g) => ({ id: g.ref, ownerScopeId: g.ownerScopeId }));
     const files = refs.length ? await opts.resolveFiles?.(refs) : [];
@@ -209,17 +185,8 @@ export function createAclStore(
     },
     async handlesForAudience(audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
-      const reaches = (p: Principal, g: Grant) =>
-        entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId) ||
-        entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
-      return handles(
-        (await persist.all()).filter(
-          (g) =>
-            isFileGrant(g) &&
-            audience.some((p) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId)) &&
-            audience.every((p) => reaches(p, g)),
-        ),
-      );
+      const reaches = audienceReaches(audience, sessionScopeId, orgScopeId, entitled);
+      return handles((await persist.all()).filter((g) => isFileGrant(g) && reaches(g)));
     },
     async grantsFor(ownerScopeId, ref) {
       return (await persist.all()).filter((g) => g.ownerScopeId === ownerScopeId && g.ref === ref);
@@ -237,15 +204,8 @@ export function createAclStore(
     async sharedOfKindForAudience(kind, audience, sessionScopeId, orgScopeId, entitled) {
       if (audience.length === 0) return [];
       const prefix = refPrefix(kind);
-      const reaches = (p: Principal, g: Grant) =>
-        entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId) ||
-        entitled(p, g.ownerScopeId, sessionScopeId, orgScopeId);
-      return (await persist.all()).filter(
-        (g) =>
-          g.ref.startsWith(prefix) &&
-          audience.some((p) => entitled(p, g.granteeScopeId, sessionScopeId, orgScopeId)) &&
-          audience.every((p) => reaches(p, g)),
-      );
+      const reaches = audienceReaches(audience, sessionScopeId, orgScopeId, entitled);
+      return (await persist.all()).filter((g) => g.ref.startsWith(prefix) && reaches(g));
     },
     list: () => persist.all(),
   };

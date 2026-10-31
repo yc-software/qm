@@ -1,4 +1,4 @@
-import type { Loop, LoopItem, LoopItemPriority } from "../types.ts";
+import type { Loop, LoopItem, LoopItemPriority } from "./types.ts";
 import type { LoopItemLedger, TriagePatch } from "./item-ledger.ts";
 import { consolidates, isResolved, prioritizes, PRIORITY_RANK } from "./ledger-view.ts";
 

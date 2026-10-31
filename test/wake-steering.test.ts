@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "./support/build-app.ts";
-import { jsonbStringify } from "../src/persistence/durable-map.ts";
+import { jsonbStringify } from "../src/util/text.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
@@ -206,7 +206,7 @@ test("Auto blocks a prompt-injection attempt from an unprompted mid-turn coworke
   assert.equal(
     (await built.signals.takePending(liveRunId)).length,
     0,
-    "flagged steer data never reaches the live harness",
+    "flagged steer data never reaches the live agent",
   );
   assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.steer_block"));
 });
@@ -221,7 +221,7 @@ test("Auto fails open on a mid-turn coworker update when the screener is unavail
   const follow = await built.app.turn(overheard("ordinary update !security-screen-unavailable", channel, root));
   assert.equal(follow.runId, liveRunId);
   const pending = await built.signals.takePending(liveRunId);
-  assert.equal(pending.length, 1, "an unscreenable steer still reaches the live harness (fail open)");
+  assert.equal(pending.length, 1, "an unscreenable steer still reaches the live agent (fail open)");
   assert.match(pending[0]!.text ?? "", /NOT security-screened/);
   assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.steer_failed_open"));
 });
@@ -262,7 +262,7 @@ test("Auto screens the author label that is injected with an unprompted mid-turn
   assert.ok((await built.auditLog.events()).some((event) => event.action === "security_posture.steer_block"));
 });
 
-test("spine ON: the steer signal carries the message's real surface ts (so the harness can persist + dedupe it)", async () => {
+test("spine ON: the steer signal carries the message's real surface ts (so the agent can persist + dedupe it)", async () => {
   const built = freshApp();
   const channel = "C8";
   const root = "800.8";
@@ -842,7 +842,7 @@ test("screening off delivers ambient updates to the existing run without a class
   assert.equal(signals.length, 1);
   assert.equal(signals[0]!.kind, "steer");
   assert.match(signals[0]!.text ?? "", /build finished/);
-  assert.equal(built.modelGateway.audit().filter((rec) => rec.model === "mock-security").length, 0);
+  assert.equal(built.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
 });
 
 test("queued web edits require the author and preserve queue identity", async () => {

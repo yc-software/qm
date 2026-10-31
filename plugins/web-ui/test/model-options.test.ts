@@ -1,32 +1,18 @@
 import { applyRuntimeOptions } from "./runtime-fixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import {
-  defaultModelValue,
-  getModelOptions,
-  harnessOptions,
-  runtimeModelOptions,
-  transcriptModel,
-  harnessSupportsEffort,
-  harnessSupportsFastMode,
-} from "../src/model-options.ts";
+import { defaultModelValue, getModelOptions, runtimeModelOptions, transcriptModel } from "../src/model-options.ts";
 import { metadata } from "./model-metadata.ts";
 
 const catalog = { future: metadata("future", "Future API Model"), custom: metadata("custom", "Custom", "gateway") };
 
 test("server metadata controls picker labels, geometry, price, order and effective selection", async () => {
-  await applyRuntimeOptions(
-    "scope:a",
-    ["pi", "claude"],
-    { pi: ["custom", "future", "custom"], claude: ["future"] },
-    { harnessId: "claude", modelId: "future" },
-    catalog,
-  );
+  await applyRuntimeOptions("scope:a", ["custom", "future", "custom"], { modelId: "future" }, catalog);
   assert.deepEqual(
     getModelOptions("scope:a").map((m) => m.value),
-    ["pi:custom", "pi:future", "claude:future"],
+    ["custom", "future"],
   );
-  assert.equal(defaultModelValue("scope:a"), "claude:future");
+  assert.equal(defaultModelValue("scope:a"), "future");
   const model = getModelOptions("scope:a")[1]!;
   assert.equal(model.label, "Future API Model");
   assert.equal(model.model.contextWindow, 98765);
@@ -34,73 +20,46 @@ test("server metadata controls picker labels, geometry, price, order and effecti
   assert.equal(model.model.baseUrl, "");
 });
 
-test("empty, unknown, missing-metadata and unapproved lists stay empty", async () => {
+test("empty, unknown and missing-metadata lists stay empty", async () => {
   for (const options of [
-    runtimeModelOptions([], { pi: ["future"] }, catalog),
-    runtimeModelOptions(["pi"], { pi: [] }, catalog),
-    runtimeModelOptions(["pi"], { pi: ["future"] }),
-    runtimeModelOptions(["pi"], { pi: ["unknown"] }, catalog),
+    runtimeModelOptions([], catalog),
+    runtimeModelOptions(["future"]),
+    runtimeModelOptions(["unknown"], catalog),
   ])
     assert.deepEqual(options, []);
-  await applyRuntimeOptions("scope:empty", ["pi"], { pi: [] }, { harnessId: "pi", modelId: "future" }, catalog);
+  await applyRuntimeOptions("scope:empty", [], { modelId: "future" }, catalog);
   assert.deepEqual(getModelOptions("scope:empty"), []);
-  assert.equal(defaultModelValue("scope:empty"), "pi:future");
+  assert.equal(defaultModelValue("scope:empty"), "future");
   assert.equal(transcriptModel("scope:empty"), undefined);
-  assert.deepEqual(harnessOptions(getModelOptions("scope:empty")), []);
 });
 
 test("scopes retain independent choices and an unloaded scope does not borrow another policy", async () => {
-  await applyRuntimeOptions("scope:a", ["pi"], { pi: ["future"] }, { harnessId: "pi", modelId: "future" }, catalog);
-  await applyRuntimeOptions(
-    "scope:b",
-    ["claude"],
-    { claude: ["custom"] },
-    { harnessId: "claude", modelId: "custom" },
-    catalog,
-  );
-  assert.equal(defaultModelValue("scope:a"), "pi:future");
-  assert.equal(defaultModelValue("scope:b"), "claude:custom");
+  await applyRuntimeOptions("scope:a", ["future"], { modelId: "future" }, catalog);
+  await applyRuntimeOptions("scope:b", ["custom"], { modelId: "custom" }, catalog);
+  assert.equal(defaultModelValue("scope:a"), "future");
+  assert.equal(defaultModelValue("scope:b"), "custom");
   assert.deepEqual(getModelOptions("scope:new"), []);
 });
 
 test("OpenRouter and custom provider metadata retains provider grouping", async () => {
   const models = { "vendor/new": metadata("vendor/new", "Vendor: New", "openrouter"), custom: catalog.custom };
-  const options = runtimeModelOptions(["pi"], { pi: Object.keys(models) }, models);
+  const options = runtimeModelOptions(Object.keys(models), models);
   assert.deepEqual(
     options.map((m) => m.groupLabel),
     ["Vendor", "Gateway"],
   );
 });
 
-test("harness controls retain their supported surfaces", async () => {
-  assert.equal(harnessSupportsEffort("pi"), true);
-  assert.equal(harnessSupportsEffort("codex"), false);
-  assert.equal(harnessSupportsFastMode("claude"), true);
-  assert.equal(harnessSupportsFastMode("codex"), false);
-});
-
 test("deleted selection retains identity and transcript rendering does not borrow a replacement", async () => {
-  await applyRuntimeOptions(
-    "scope:deleted",
-    ["pi"],
-    { pi: ["custom"] },
-    { harnessId: "pi", modelId: "future" },
-    catalog,
-  );
-  assert.equal(defaultModelValue("scope:deleted"), "pi:future");
+  await applyRuntimeOptions("scope:deleted", ["custom"], { modelId: "future" }, catalog);
+  assert.equal(defaultModelValue("scope:deleted"), "future");
   assert.equal(transcriptModel("scope:deleted"), undefined);
   assert.deepEqual(
     getModelOptions("scope:deleted").map((model) => model.value),
-    ["pi:custom"],
+    ["custom"],
   );
-  await applyRuntimeOptions(
-    "scope:deleted",
-    ["pi"],
-    { pi: ["custom"] },
-    { harnessId: "pi", modelId: "custom" },
-    catalog,
-  );
-  assert.equal(defaultModelValue("scope:deleted"), "pi:custom");
+  await applyRuntimeOptions("scope:deleted", ["custom"], { modelId: "custom" }, catalog);
+  assert.equal(defaultModelValue("scope:deleted"), "custom");
   assert.equal(transcriptModel("scope:deleted")?.id, "custom");
 });
 
@@ -116,12 +75,12 @@ test("gateway choices display model names and brands without changing serving id
   for (const [route, label, provider, group] of cases) {
     const id = `gateway/${route}`;
     const data = metadata(id!, route!, "qm:gateway");
-    const [option] = runtimeModelOptions(["pi"], { pi: [id] }, { [id]: data });
+    const [option] = runtimeModelOptions([id], { [id]: data });
     assert.equal(option?.label, label);
     assert.equal(option?.buttonLabel, label);
     assert.equal(option?.displayProvider, provider);
     assert.equal(option?.groupLabel, group);
-    assert.equal(option?.value, `pi:${id}`);
+    assert.equal(option?.value, id);
     assert.equal(option?.model.provider, "qm:gateway");
     assert.equal(option?.model.id, id);
     assert.deepEqual(option?.model.cost, data.cost);
@@ -133,11 +92,10 @@ test("gateway display preserves explicit labels and leaves unknown families alon
   const custom = { ...metadata(id, "Writing model", "qm:gateway"), buttonLabel: "Writer" };
   const unknownId = "gateway/vendor/special-model";
   const unknown = metadata(unknownId, "Special", "qm:gateway");
-  const [knownOption, unknownOption] = runtimeModelOptions(
-    ["pi"],
-    { pi: [id, unknownId] },
-    { [id]: custom, [unknownId]: unknown },
-  );
+  const [knownOption, unknownOption] = runtimeModelOptions([id, unknownId], {
+    [id]: custom,
+    [unknownId]: unknown,
+  });
   assert.equal(knownOption?.label, "Writing model");
   assert.equal(knownOption?.buttonLabel, "Writer");
   assert.equal(knownOption?.displayProvider, "anthropic");
