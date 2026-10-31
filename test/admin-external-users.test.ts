@@ -22,6 +22,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ALICE = "admin-alice";
 const NOBODY = "user-uma";
 const SECRET = "external-users-test-secret".repeat(2);

@@ -13,10 +13,12 @@ import type { ModelProvider } from "../src/model/pi-models.ts";
 import type { TenantSettingValues } from "../src/tenants/settings.ts";
 import { testConfig } from "./support/test-config.ts";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
-import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { memoryModelTables } from "../src/model/model-tables.ts";
+
+bindTestTenant();
 
 bindTestTenant();
 
@@ -593,13 +595,13 @@ test("a claude harness without any token stays unconfigured", async () => {
 });
 
 test("admin model credentials survive a second app instance on the same durable store", async () => {
-  const backing = createMemoryMap<StoredModelCredential>();
+  const backing = memoryModelTables().credentials;
   const first = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
   await first.set("openrouter", "durable-openrouter-key", "admin-alice");
 
   const second = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
   assert.equal(await second.resolve("openrouter"), "durable-openrouter-key");
-  assert.doesNotMatch(JSON.stringify(await backing.all()), /durable-openrouter-key/);
+  assert.doesNotMatch(JSON.stringify(await backing.get("openrouter")), /durable-openrouter-key/);
   assert.doesNotMatch(JSON.stringify(await second.statuses()), /durable-openrouter-key/);
 });
 

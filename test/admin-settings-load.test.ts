@@ -13,6 +13,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "x-admin-actor": "admin-alice" };
 
 function start(overrides: Partial<ServerDeps> = {}) {

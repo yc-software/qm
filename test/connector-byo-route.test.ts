@@ -18,6 +18,8 @@ import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 function start(socketAppId = "A-ACME", managed = false): { base: string; built: BuiltApp; close: () => Promise<void> } {

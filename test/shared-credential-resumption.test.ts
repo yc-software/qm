@@ -6,19 +6,21 @@ import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts"
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { fireAskResolution, type AskResolutionDeps } from "../src/triggers/keychain-ask.ts";
 import { runTrigger } from "../src/triggers/run-trigger.ts";
 import type { Principal, ScopeId, TurnRequest } from "../src/types.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function keychain(now = Date.now) {
   return createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    ...memoryKeychainRows(),
     key: deriveConnectorKey("shared-credential-resumption-test"),
     now,
   });

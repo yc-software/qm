@@ -3,15 +3,20 @@ import assert from "node:assert/strict";
 import { createMcpClient, mcpResultText } from "../src/mcp/mcp-client.ts";
 import { createMcpServerStore, isValidMcpServerId, type McpServer } from "../src/mcp/mcp-server-store.ts";
 import { createMcpToolService } from "../src/mcp/mcp-tool-service.ts";
-import { createKeychain, type KeychainCredential } from "../src/credentials/keychain.ts";
+import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { settle } from "./support/settle.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { memoryLinkTables } from "../src/connectors/link-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -153,7 +158,7 @@ test("server id validation", () => {
 
 test("tool service exposes namespaced tools and calls through", async (t) => {
   const mcp = await startMcpTestServer(t, { description: "CRM records" });
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ url: `${mcp.url}/mcp` }));
   await service.refresh();
@@ -173,7 +178,7 @@ test("destructive annotations mark MCP tools for approval unless the server over
       { name: "plain", inputSchema: { type: "object" } },
     ],
   });
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   const approvals = async (partial: Partial<McpServer>) => {
     await store.put(server({ url: mcp.url, ...partial }));
@@ -199,7 +204,7 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
     ],
     call: (name, args) => ({ content: [{ type: "text", text: `${name} ${JSON.stringify(args)}` }] }),
   });
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ id: "records", name: "Records", url: mcp.url, catalog: true, attestActor: true }));
   await service.refresh();
@@ -268,7 +273,7 @@ test("a catalog server is one tool that searches, describes, and invokes as the 
 
 test("disabled server's tools disappear and calls fail", async (t) => {
   const mcp = await startMcpTestServer(t);
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   await store.put(server({ url: mcp.url }));
   await service.refresh();
@@ -280,7 +285,7 @@ test("disabled server's tools disappear and calls fail", async (t) => {
 });
 
 test("unknown tool call rejects", async () => {
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 3600_000 });
   await assert.rejects(() => service.call("nope_tool", {}), /unknown MCP tool/);
   service.close();
@@ -289,9 +294,7 @@ test("unknown tool call rejects", async () => {
 function tokenStore() {
   return createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap<KeychainCredential>(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    ...memoryKeychainRows(),
     key: deriveConnectorKey("mcp-test-encryption-key"),
   });
 }
@@ -300,7 +303,7 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
   const mcp = await startMcpTestServer(t, {
     call: (_name, args) => ({ content: [{ type: "text", text: String(args.q) }] }),
   });
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const users = tokenStore();
   const host = "accounts.example.com";
   await users.setConnectorToken(host, "internal:alice", { accessToken: "alice-token" });
@@ -349,7 +352,7 @@ test("per-user calls resolve only the caller's fresh token while discovery uses 
 
 test("per-user mode fails closed without a keychain and shared mode preserves existing behavior", async (t) => {
   const mcp = await startMcpTestServer(t, { authorize: (auth) => auth === "Bearer shared-token" });
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const service = createMcpToolService({ servers: store });
   t.after(() => service.close());
   await store.put(
@@ -397,7 +400,7 @@ test("MCP HTTP transport refuses redirects before sending a user token to anothe
 });
 
 test("per-user connectors select an explicit account slot without falling back to another slot", async (t) => {
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const users = tokenStore();
   const host = "accounts.example.com";
   await users.setConnectorToken(host, "internal:alice", { accessToken: "default-token" });
@@ -423,7 +426,7 @@ test("per-user connectors select an explicit account slot without falling back t
 
 test("background MCP refresh contains registry failures at startup, on change, and on its timer", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
-  const backing = createMemoryMap<McpServer>();
+  const backing = memoryLinkTables().mcpServers;
   const store = createMcpServerStore(backing);
   const mcp = await startMcpTestServer(t);
   const list = t.mock.method(store, "list", async () => {
@@ -433,6 +436,9 @@ test("background MCP refresh contains registry failures at startup, on change, a
   const service = createMcpToolService({ servers: store, refreshIntervalMs: 100 });
   t.after(() => service.close());
   const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+  await tick();
+  assert.equal(list.mock.callCount(), 0);
+  service.start();
   await tick();
   assert.equal(list.mock.callCount(), 1);
   await store.put(server({ url: mcp.url }));
@@ -454,7 +460,7 @@ test("background MCP refresh contains registry failures at startup, on change, a
 });
 
 test("optional intent and locale parameters are left out of the schema the model sees, required ones are kept", async (t) => {
-  const store = createMcpServerStore(createMemoryMap<McpServer>());
+  const store = createMcpServerStore(memoryLinkTables().mcpServers);
   const sent: Array<Record<string, unknown>> = [];
   const mcp = await startMcpTestServer(t, {
     tools: [

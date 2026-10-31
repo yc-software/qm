@@ -593,8 +593,7 @@ async function completeAuth(ctx: ApiCtx): Promise<void> {
     });
   }
   const key = `${userId}:${accountId}`;
-  const saved = await ctx.deps.composioReturns?.get(key);
-  await ctx.deps.composioReturns?.delete(key);
+  const saved = await ctx.deps.composioReturns?.take(key);
   audit(ctx.deps, {
     principalId: access.principal,
     action: "composio.connected",

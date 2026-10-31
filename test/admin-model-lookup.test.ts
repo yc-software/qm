@@ -1,12 +1,14 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
+import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -34,11 +36,10 @@ test("admin lookup recognizes an existing model without asking for a clone templ
 
 import { lookupModel } from "../src/model/model-lookup.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
 import { setModelOverlays } from "../src/model/pi-models.ts";
-import { afterEach } from "node:test";
 
 enterTenant(TEST_TENANT);
 afterEach(() => {
@@ -46,7 +47,7 @@ afterEach(() => {
   setModelOverlays([]);
 });
 async function credentials() {
-  const store = createModelCredentialStore({ backing: createMemoryMap(), keyMaterial: "test-key" });
+  const store = createModelCredentialStore({ backing: memoryModelTables().credentials, keyMaterial: "test-key" });
   await store.set("openai", "test-openai-key", "admin");
   await store.set("anthropic", "test-anthropic-key", "admin");
   return store;
@@ -227,7 +228,6 @@ test("identity schema rejects URL-like and extra inputs before lookup", async ()
 });
 
 import { createServer } from "node:http";
-import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 test("real metadata transport authenticates only the configured endpoint and refuses redirects", async () => {
   let mode = "record";

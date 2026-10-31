@@ -7,10 +7,11 @@ import { composioTwitterMediaRoutes } from "../src/api/routes/composio-twitter-m
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 
 bindTestTenant();
 
@@ -45,9 +46,7 @@ const proxied = (data: unknown, status = 200) => ({ data, status, headers: { "se
 
 async function fixture() {
   const keychain = createKeychain({
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    ...memoryKeychainRows(),
     lock: createMemoryAdvisoryLock(),
     key: deriveConnectorKey("composio-test"),
   });

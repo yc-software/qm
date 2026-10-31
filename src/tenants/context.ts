@@ -32,3 +32,12 @@ export function currentTenant(): string {
 export function tenantRootScope(): ScopeId {
   return scopeId("org", currentTenant());
 }
+
+export function perTenant<V>(create: () => V): () => V {
+  const values = new Map<string, V>();
+  return () => {
+    const id = currentTenant();
+    if (!values.has(id)) values.set(id, create());
+    return values.get(id)!;
+  };
+}

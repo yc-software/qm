@@ -4,7 +4,7 @@ import { createRuntimeService } from "../src/harness/runtime-control.ts";
 import { recoveredRuntime } from "../src/harness/runtime-recovery.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryModelTables } from "../src/model/model-tables.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
@@ -119,7 +119,10 @@ test("individual-account availability does not depend on organization provider k
     {
       config,
       harnessId: "pi",
-      modelCredentials: createModelCredentialStore({ backing: createMemoryMap(), keyMaterial: "test-key" }),
+      modelCredentials: createModelCredentialStore({
+        backing: memoryModelTables().credentials,
+        keyMaterial: "test-key",
+      }),
     },
     { authorizesCapabilityScope: async () => true },
   );

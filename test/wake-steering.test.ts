@@ -6,11 +6,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp, testTenantSettings } from "./support/build-app.ts";
-import { jsonbStringify } from "../src/persistence/durable-map.ts";
+import { jsonbStringify } from "../src/util/text.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 bindTestTenant();
 

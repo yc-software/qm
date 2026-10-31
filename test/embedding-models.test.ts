@@ -26,6 +26,7 @@ import {
 } from "../src/model/pi-models.ts";
 import { recallText } from "./support/recall-text.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+import { memoryModelTables } from "../src/model/model-tables.ts";
 
 bindTestTenant();
 
@@ -43,7 +44,7 @@ afterEach(() => {
 
 test("verified embedding definitions survive registry reload but never become chat models", async () => {
   const credentials = createModelCredentialStore({
-    backing: createMemoryMap(),
+    backing: memoryModelTables().credentials,
     keyMaterial: "test-key",
   });
   await credentials.set("openai", "test-key", "admin");
@@ -56,7 +57,7 @@ test("verified embedding definitions survive registry reload but never become ch
       return Response.json({ data: [{ index: 0, embedding: [3, 4] }] });
     },
   });
-  const backing = createMemoryMap<import("../src/model/model-overlay-store.ts").StoredModelOverlay>();
+  const backing = memoryModelTables().registry;
   const writer = createModelOverlayStore(backing, undefined, verifier);
   await writer.upsert(definition, "admin");
   await assert.rejects(

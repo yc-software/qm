@@ -88,7 +88,7 @@ import {
   type PrincipalLink,
   type PrincipalLinkService,
 } from "./identity/principal-links.ts";
-import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
+import type { SlackAccountLink } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
@@ -102,6 +102,10 @@ import { createSkillBundleStore, type SkillBundle, type SkillBundleStore } from 
 import { createGitFetcher, resolvePackAuth, type SkillPackFetcher } from "./skills/pack-fetcher.ts";
 import { installSeedSkills } from "./skills/seed.ts";
 import { createMemoryMap, createPostgresMapFactory, type DurableMap } from "./persistence/durable-map.ts";
+import { createPostgresModelTables, memoryModelTables } from "./model/model-tables.ts";
+import { createPostgresLinkTables, memoryLinkTables, type ComposioReturnRows } from "./connectors/link-tables.ts";
+import { createPostgresKeychainRows } from "./credentials/keychain-pg.ts";
+import { memoryKeychainRows } from "./credentials/keychain-rows.ts";
 import type { PersistedUiState, UiStateStore } from "./surfaces/ui-state.ts";
 import { installSharedCanvas } from "./surfaces/ui-canvas.ts";
 import { slackUserClientFactory } from "./loops/sources/slack.ts";
@@ -203,7 +207,7 @@ import { createLocalWorkspaceStore, type WorkspaceStore } from "./workspace/work
 import { createMemoryService, type MemoryService } from "./memory/memory-service.ts";
 import { createConfiguredMemoryService } from "./memory/provider-factory.ts";
 import { createPostgresMemoryService } from "./memory/postgres-memory-service.ts";
-import { createMcpServerStore, type McpServer, type McpServerStore } from "./mcp/mcp-server-store.ts";
+import { createMcpServerStore, type McpServerStore } from "./mcp/mcp-server-store.ts";
 import { createMcpToolService, type McpToolService } from "./mcp/mcp-tool-service.ts";
 import {
   createLocalBlobTransferStore,
@@ -254,7 +258,6 @@ import {
   type OAuthToken,
   type Keychain,
   type KeychainAsk,
-  type KeychainCredential,
   type KeychainGrant,
   type ServiceCredentialStore,
 } from "./credentials/keychain.ts";
@@ -264,29 +267,25 @@ import {
   createAskExpirySweep,
   type DropResolution,
 } from "./triggers/keychain-ask.ts";
-import { createSecretDropStore, type SecretDropStore, type SecretDropRecord } from "./credentials/secret-drop.ts";
+import { createSecretDropStore, type SecretDropStore } from "./credentials/secret-drop.ts";
 import {
   createFeatureFlagStore,
   externalAppSharingAllowed,
   type FeatureFlagRecord,
   type FeatureFlagStore,
 } from "./feature-flags.ts";
-import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver, type OAuthState } from "./connectors/oauth.ts";
+import { makeRefresh, withPublicOAuthClients, type OAuthClientResolver } from "./connectors/oauth.ts";
 import {
   createConnectorClientResolver,
   deriveConnectorKey,
   type SecretKey,
 } from "./connectors/connector-client-store.ts";
-import {
-  createBrowserSessionStore,
-  type BrowserSessionStore,
-  type StoredBrowserSession,
-} from "./connectors/browser-session-store.ts";
+import { createBrowserSessionStore, type BrowserSessionStore } from "./connectors/browser-session-store.ts";
 import { createCredentialUsageSink, type CredentialUsageSink } from "./admin/credential-usage-sink.ts";
 import { createPostgresCredentialUsageSink } from "./admin/postgres-credential-usage-sink.ts";
 import { createEgressAuditSink, type EgressAuditSink } from "./admin/egress-audit-sink.ts";
 import { createPostgresEgressAuditSink } from "./admin/postgres-egress-audit-sink.ts";
-import { createConsentLinkStore, type ConsentLinkStore, type ConsentLinkRecord } from "./connectors/consent-link.ts";
+import { createConsentLinkStore, type ConsentLinkStore } from "./connectors/consent-link.ts";
 import { createOAuthFlowStore, type OAuthFlowStore } from "./connectors/oauth-flow-store.ts";
 import { createModelGateway, type ModelGateway } from "./model/model-gateway.ts";
 import { createModelCredentialStore, type ModelCredentialStore } from "./model/model-credential-store.ts";
@@ -513,7 +512,7 @@ export interface BuiltApp {
   identity: IdentityService;
   principalLinks: PrincipalLinkService;
   slackAccounts: DurableMap<SlackAccountLink>;
-  composioReturns: DurableMap<ComposioReturn>;
+  composioReturns: ComposioReturnRows;
   keychain?: Keychain;
   serviceCreds: ServiceCredentialStore;
   deliveries: DeliveryStore;
@@ -610,6 +609,8 @@ export function buildApp(
   const pgArtifactMap = config.databaseUrl ? createPostgresMapFactory(config.databaseUrl) : null;
   const artifactMap = <T>(table: string, indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> =>
     pgArtifactMap ? pgArtifactMap.map<T>(table, indexedFields) : createMemoryMap<T>();
+  const modelTables = config.databaseUrl ? createPostgresModelTables(config.databaseUrl) : memoryModelTables();
+  const linkTables = config.databaseUrl ? createPostgresLinkTables(config.databaseUrl) : memoryLinkTables();
   const tenantSettings =
     overrides.tenantSettings ??
     createTenantSettingsStore({
@@ -629,7 +630,7 @@ export function buildApp(
     label: "tenant settings refresh",
   });
   const directModelCredentials = createModelCredentialStore({
-    backing: artifactMap("model_credentials"),
+    backing: modelTables.credentials,
     keyMaterial: connectorSecretKey,
   });
   const tenantModels = createTenantModels({
@@ -834,7 +835,7 @@ export function buildApp(
     }),
     (scope) => memoryTidy.ensure(scope),
   );
-  const mcpServers = createMcpServerStore(artifactMap<McpServer>("mcp_servers"));
+  const mcpServers = createMcpServerStore(linkTables.mcpServers);
   const errors = withErrorReporting(config.databaseUrl ? createPostgresErrorLog(config.databaseUrl) : createErrorLog());
   const sandboxOnError = (
     e: { category: string; code: string; message: string; scopeLabel?: string },
@@ -1242,19 +1243,8 @@ export function buildApp(
     ...deriveConnectorKey(keychainKeyMaterial, "keychain"),
     ...(legacyCredentialKey ? { fallbacks: [legacyCredentialKey] } : {}),
   };
-  pgArtifactMap?.pool.registerMigration({
-    id: "durable-map/keychain_credentials/0002-delete-auto-captured-logins",
-    statements: [
-      "CREATE TABLE IF NOT EXISTS keychain_credentials (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      "CREATE TABLE IF NOT EXISTS keychain_grants (id TEXT PRIMARY KEY, json JSONB NOT NULL)",
-      `DELETE FROM keychain_grants WHERE json ->> 'credentialId' IN (SELECT id FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture')`,
-      `DELETE FROM keychain_credentials WHERE json ->> 'origin' = 'device-flow-auto-capture'`,
-    ],
-  });
   const credentialStore: Keychain = createKeychain({
-    creds: artifactMap<KeychainCredential>("keychain_credentials", ["ownerId"]),
-    grants: artifactMap<KeychainGrant>("keychain_grants", ["ownerId"]),
-    asks: artifactMap<KeychainAsk>("keychain_asks"),
+    ...(config.databaseUrl ? createPostgresKeychainRows(config.databaseUrl) : memoryKeychainRows()),
     key: credentialKey,
     lock: advisoryLock,
     refreshConnector: (() => {
@@ -1305,12 +1295,12 @@ export function buildApp(
       : {}),
   });
   const browserSessionStore: BrowserSessionStore | undefined = keychainKeyMaterial
-    ? createBrowserSessionStore({ sessions: artifactMap<StoredBrowserSession>("browser_sessions"), key: credentialKey })
+    ? createBrowserSessionStore({ sessions: linkTables.browserSessions, key: credentialKey })
     : undefined;
   const connectorTokens = credentialStore;
-  const consentLinks: ConsentLinkStore = createConsentLinkStore(artifactMap<ConsentLinkRecord>("consent_links"));
-  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(artifactMap<OAuthState>("oauth_flows"));
-  const secretDrops: SecretDropStore = createSecretDropStore(artifactMap<SecretDropRecord>("secret_drops"));
+  const consentLinks: ConsentLinkStore = createConsentLinkStore(linkTables.consentLinks);
+  const oauthFlows: OAuthFlowStore = createOAuthFlowStore(linkTables.oauthFlows);
+  const secretDrops: SecretDropStore = createSecretDropStore(linkTables.secretDrops);
   const modelGateway = createModelGateway();
 
   const sessions: SessionStore =
@@ -1345,7 +1335,7 @@ export function buildApp(
     });
   const customProviders = createCustomProviderStore({
     write: writeModelRegistry,
-    backing: artifactMap("custom_model_providers"),
+    backing: modelTables.customProviders,
     keyMaterial: connectorSecretKey,
   });
   const modelVerifier = createModelVerifier({
@@ -1355,7 +1345,7 @@ export function buildApp(
     probe: overrides.modelVerificationProbe,
     fetchImpl: overrides.modelCredentialFetch,
   });
-  const modelRegistry = createModelOverlayStore(artifactMap("model_registry"), writeModelRegistry, modelVerifier);
+  const modelRegistry = createModelOverlayStore(modelTables.registry, writeModelRegistry, modelVerifier);
   const refreshCustomProviders = async () => {
     setCustomProviders(await customProviders.enabled());
   };
@@ -2819,15 +2809,11 @@ export function buildApp(
   );
   const deployIdleTtlMs = deployProvider.profile.managedScaleToZero ? undefined : config.deployIdleTtlMs;
   const BLOB_TTL_MS = 6 * 60 * 60_000;
-  const composioReturns = artifactMap<ComposioReturn>("composio_returns");
-  const composioReturnSweeper = createSweeper(
-    async () => {
-      for (const [id, entry] of await composioReturns.entries())
-        if (entry.expiresAt <= Date.now()) await composioReturns.delete(id);
-    },
-    30 * 60_000,
-    { label: "Composio consent returns", immediate: true },
-  );
+  const composioReturns = linkTables.composioReturns;
+  const composioReturnSweeper = createSweeper(() => composioReturns.deleteExpired(Date.now()), 30 * 60_000, {
+    label: "Composio consent returns",
+    immediate: true,
+  });
   const blobSweeper = createSweeper(() => blobTransfer.sweep(BLOB_TTL_MS), 30 * 60_000);
   const BLOB_TRANSFER_EXPIRY_DAYS = 1;
   void blobTransfer

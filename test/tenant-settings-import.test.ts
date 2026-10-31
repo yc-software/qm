@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { memoryModelTables } from "../src/model/model-tables.ts";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { createTenantSettingsStore } from "../src/tenants/settings.ts";
@@ -15,7 +15,7 @@ const root = scopeId("org", "acme");
 function deps() {
   return {
     settings: createTenantSettingsStore({ harness: "pi" }),
-    modelCredentials: createModelCredentialStore({ backing: createMemoryMap(), keyMaterial: KEY }),
+    modelCredentials: createModelCredentialStore({ backing: memoryModelTables().credentials, keyMaterial: KEY }),
     config: createMemoryConfigStore({ connectorSecretKey: KEY }),
     rootScope: root,
     actor: "import-test",

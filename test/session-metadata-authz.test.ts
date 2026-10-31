@@ -13,6 +13,8 @@ import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 async function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-session-authz-"));
   const built = buildApp(testConfig({ dataDir }));

@@ -33,6 +33,7 @@ if (retiredEnv.length)
   );
 const tenant = await instanceTenant(config);
 if (tenant) enterTenant(tenant);
+built.mcpToolService.start();
 await built.sandboxResources.initialize();
 const backfilledFires = await built.crons.backfillFires();
 if (backfilledFires > 0) console.log(`[qm] backfilled ${backfilledFires} cron fire log entries into cron_fires`);

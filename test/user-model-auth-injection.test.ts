@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
 import { createUserModelCredentialStore } from "../src/model/user-model-credential-store.ts";
@@ -8,6 +8,10 @@ import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routin
 import { resolveModel } from "../src/model/pi-models.ts";
 import type { UserModelCredential } from "../src/model/user-model-credential-store.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const apikey = (provider: "anthropic" | "openai", apiKey: string): UserModelCredential => ({
   provider,
@@ -32,9 +36,7 @@ const KEY_MATERIAL = "test-key-material-that-is-long-enough";
 function testStore() {
   const keychain = createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    ...memoryKeychainRows(),
     key: deriveConnectorKey(KEY_MATERIAL),
   });
   return { keychain, store: createUserModelCredentialStore({ keychain }) };
@@ -104,9 +106,7 @@ test("stale subscription tokens refresh once (single-flight) inside the keychain
   let refreshCalls = 0;
   const keychain = createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    ...memoryKeychainRows(),
     key: deriveConnectorKey(KEY_MATERIAL),
     refreshConnector: async (host, token) => {
       refreshCalls += 1;

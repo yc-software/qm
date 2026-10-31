@@ -15,6 +15,8 @@ import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
+bindTestTenant();
+
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 afterEach(() => setCustomProviders([]));

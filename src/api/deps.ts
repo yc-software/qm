@@ -83,7 +83,8 @@ import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
 
-import type { SlackAccountLink, ComposioReturn } from "./routes/composio.ts";
+import type { SlackAccountLink } from "./routes/composio.ts";
+import type { ComposioReturnRows } from "../connectors/link-tables.ts";
 
 export interface ServerDeps {
   tenantSettings?: TenantSettingsStore;
@@ -92,7 +93,7 @@ export interface ServerDeps {
   modelGatewayTransport?: () => Promise<ModelGatewayTransportConfig | undefined>;
   resolveBrowserCompanyKeys?: (includeSubscription?: boolean) => Promise<ProviderKeys>;
   slackAccounts?: DurableMap<SlackAccountLink>;
-  composioReturns?: DurableMap<ComposioReturn>;
+  composioReturns?: ComposioReturnRows;
   composioFetch?: typeof fetch;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   production?: boolean;

@@ -1,5 +1,7 @@
-bindTestTenant();
+import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
+bindTestTenant();
 // QA: end-to-end custom-provider lifecycle against a REAL fake upstream.
 // Boots the app, registers a provider pointing at a local OpenAI-compatible
 // server, and proves: validation, catalog surfacing, key hygiene, a real
@@ -19,10 +21,9 @@ import { oneShot } from "../src/harness/pi-harness.ts";
 import { resolveModel, modelSupportedByHarness, modelServiceable } from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { verificationUpstream } from "./support/model-verification-upstream.ts";
-import { bindTestTenant } from "./support/tenant.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
@@ -359,7 +360,7 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
   // In production the backing map is the Postgres artifact store (same as
   // model credentials); a restart is a new store instance over the same
   // rows with the same CONNECTOR_SECRET_KEY. Simulate exactly that.
-  const backing = createMemoryMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
+  const backing = memoryModelTables().customProviders;
   const secret = "restart-secret-restart-secret-restart-secret";
   const first = createCustomProviderStore({ backing, keyMaterial: secret });
   await first.upsert(
@@ -385,7 +386,7 @@ test("QA: registrations survive a restart (shared durable backing + same secret)
 });
 
 test("QA: a corrupt stored key degrades that provider only — admin surface stays intact", async () => {
-  const backing = createMemoryMap<never>() as Parameters<typeof createCustomProviderStore>[0]["backing"];
+  const backing = memoryModelTables().customProviders;
   const writer = createCustomProviderStore({ backing, keyMaterial: "first-secret-first-secret-first-secret-1" });
   await writer.upsert(
     {

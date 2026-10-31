@@ -1,4 +1,4 @@
-import type { DurableMap } from "../persistence/durable-map.ts";
+import type { BrowserSessionRows } from "./link-tables.ts";
 import { encryptSecret, decryptSecret, type SecretKey } from "./connector-client-store.ts";
 import { swallow } from "../util/errors.ts";
 
@@ -14,7 +14,7 @@ export interface StoredBrowserSession {
 }
 
 export function createBrowserSessionStore(deps: {
-  sessions: DurableMap<StoredBrowserSession>;
+  sessions: BrowserSessionRows;
   key: SecretKey;
   now?: () => number;
 }): BrowserSessionStore {
@@ -31,7 +31,7 @@ export function createBrowserSessionStore(deps: {
       }
     },
     async put(principalId, storageStateJson) {
-      await deps.sessions.put(principalId, {
+      await deps.sessions.put({
         principalId,
         stateEnc: encryptSecret(storageStateJson, deps.key),
         updatedAt: now(),

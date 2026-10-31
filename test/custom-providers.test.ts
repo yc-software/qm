@@ -11,8 +11,11 @@ import {
 import { builtInModelCatalog } from "../src/model/model-catalog.ts";
 import { createCustomProviderStore } from "../src/model/custom-provider-store.ts";
 import { modelSupportedByHarness, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
-import type { StoredCustomProvider } from "../src/model/custom-provider-store.ts";
+
+import { memoryModelTables } from "../src/model/model-tables.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 afterEach(() => setCustomProviders([]));
 
@@ -108,7 +111,7 @@ test("spec validation rejects reserved ids, bad slugs, bad URLs, and empty model
 });
 
 test("store round-trip: upsert encrypts the key, statuses never leak it, delete disables", async () => {
-  const backing = createMemoryMap<StoredCustomProvider>();
+  const backing = memoryModelTables().customProviders;
   const store = createCustomProviderStore({ backing, keyMaterial: "test-key-material" });
 
   await store.upsert(GATEWAY, "sk-secret-123", "admin@example.com");
@@ -137,7 +140,7 @@ test("store round-trip: upsert encrypts the key, statuses never leak it, delete 
 
 test("store validates specs on upsert", async () => {
   const store = createCustomProviderStore({
-    backing: createMemoryMap<StoredCustomProvider>(),
+    backing: memoryModelTables().customProviders,
     keyMaterial: "k",
   });
   await assert.rejects(store.upsert({ ...GATEWAY, id: "anthropic" }, "k", "a@b.c"), /reserved/);
@@ -211,7 +214,7 @@ for (const protocol of ["openai", "openai-responses", "anthropic"] as const) {
   for (const reasoning of [undefined, false, true]) {
     test(`custom ${protocol} reasoning=${reasoning} survives persistence and runtime mappings`, async () => {
       const spec = { ...GATEWAY, protocol, models: [{ ...GATEWAY.models[0]!, reasoning }] };
-      const backing = createMemoryMap<StoredCustomProvider>();
+      const backing = memoryModelTables().customProviders;
       const store = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });
       await store.upsert(spec, "local", "admin@example.com");
       const reloaded = createCustomProviderStore({ backing, keyMaterial: "reasoning-test" });

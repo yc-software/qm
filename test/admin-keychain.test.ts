@@ -10,11 +10,12 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { createMemoryMap } from "../src/persistence/durable-map.ts";
+
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { memoryKeychainRows } from "../src/credentials/keychain-rows.ts";
 
 bindTestTenant();
 
@@ -22,9 +23,7 @@ function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-keychain-")) }));
   const keychain = createKeychain({
     lock: createMemoryAdvisoryLock(),
-    creds: createMemoryMap(),
-    grants: createMemoryMap(),
-    asks: createMemoryMap(),
+    ...memoryKeychainRows(),
     key: deriveConnectorKey("admin-keychain-test-key"),
   });
   const server = createInsecureTestServer(built.app, {
