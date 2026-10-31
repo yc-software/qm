@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { boundTenant } from "../tenants/context.ts";
+import { boundTenant, tenantKey } from "../tenants/context.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment, ScopeId } from "../types.ts";
 import type { TurnOrigin } from "../core/turn-origin.ts";
 
@@ -87,7 +87,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
 
   return {
     async enqueue(input) {
-      const existingId = byKey.get(input.idempotencyKey);
+      const existingId = byKey.get(tenantKey(input.idempotencyKey));
       if (existingId) {
         const existing = deliveries.get(existingId)!;
         if (existing.deliveredAt === null && existing.expiredAt !== undefined) {
@@ -120,7 +120,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         ...(input.shadow ? { shadow: true } : {}),
       };
       deliveries.set(delivery.id, delivery);
-      byKey.set(delivery.idempotencyKey, delivery.id);
+      byKey.set(tenantKey(delivery.idempotencyKey), delivery.id);
       if (!delivery.shadow) for (const l of enqueueListeners) l();
       return delivery;
     },
@@ -154,7 +154,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
     },
     async ack(id, at, slackApiMs) {
       const d = deliveries.get(id);
-      if (d && d.deliveredAt === null) {
+      if (d && visible(d) && d.deliveredAt === null) {
         d.deliveredAt = at;
         delete d.expiredAt;
         d.deliverLatencyMs = Math.max(0, at - d.createdAt);
@@ -162,7 +162,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       }
     },
     async ackByKey(idempotencyKey, at) {
-      const existingId = byKey.get(idempotencyKey);
+      const existingId = byKey.get(tenantKey(idempotencyKey));
       if (existingId) {
         const d = deliveries.get(existingId);
         if (d && d.deliveredAt === null) {
@@ -180,10 +180,10 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
         deliveredAt: at,
       };
       deliveries.set(tombstone.id, tombstone);
-      byKey.set(idempotencyKey, tombstone.id);
+      byKey.set(tenantKey(idempotencyKey), tombstone.id);
     },
     async setEditRefByKey(idempotencyKey, editRef) {
-      const existingId = byKey.get(idempotencyKey);
+      const existingId = byKey.get(tenantKey(idempotencyKey));
       const d = existingId ? deliveries.get(existingId) : undefined;
       if (d && d.deliveredAt === null) d.destination = { ...d.destination, editRef };
     },
@@ -191,7 +191,7 @@ export function createDeliveryStore(opts?: { maxAgeMs?: number }): DeliveryStore
       return deliveries.get(id) ?? null;
     },
     async existingKeys(idempotencyKeys) {
-      return new Set(idempotencyKeys.filter((key) => byKey.has(key)));
+      return new Set(idempotencyKeys.filter((key) => byKey.has(tenantKey(key))));
     },
     async recordRecipientThread(id, recipientThreadRef, at) {
       const d = deliveries.get(id);

@@ -7,6 +7,7 @@ import { requestPort } from "../plugins/portal/src/proxy.ts";
 import { createAdminService, parseAdminGrants } from "../src/admin/admin-service.ts";
 import { createAdminGrantStore, createMemoryAdminGrantPersistence } from "../src/admin/admin-grant-store.ts";
 import { scopeId } from "../src/types.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
@@ -15,7 +16,7 @@ test("portal signs /d/ ingress with the principal as the canonical tail (core-ve
   const secret = "portal-source-auth-secret";
   const path = "/d/dep-1/assets/app.js?q=a+b%2Fc&n=1";
   const principal = "U00000001";
-  const headers = signedHeaders(secret, "GET", path, "", principal);
+  const headers = withoutTenant(() => signedHeaders(secret, "GET", path, "", principal));
   const ts = Number(headers["x-timestamp"]);
   assert.equal(headers["x-signature"], signRequest(secret, ts, canonicalPayload("GET", path, principal)));
 });

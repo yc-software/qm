@@ -15,3 +15,5 @@ export function withTenant<T>(tenant: string, fn: () => T): T {
 export function boundTenant(): string | undefined {
   return bound.getStore();
 }
+
+export { bound as tenantStorage };

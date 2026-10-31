@@ -4,6 +4,7 @@ import { createHmac } from "node:crypto";
 import { canonicalPayload, signRequest, signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { withTenant as withChassisTenant } from "../plugins/chassis/src/tenant.ts";
 import { signRequest as legacySignRequest } from "../src/auth/source-auth.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 import { bindTestTenant, OTHER_TENANT, TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
@@ -25,18 +26,13 @@ test("source-auth.signRequest delegates to the single-sourced HMAC", () => {
 });
 
 test("signedRequestHeaders: no secret → just the base; secret → x-timestamp + x-signature", () => {
-  assert.deepEqual(signedRequestHeaders(undefined, "GET", "/p", "", { "content-type": "application/json" }), {
-    "content-type": "application/json",
-  });
-
-  const headers = signedRequestHeaders(
-    "s",
-    "POST",
-    "/v1/blobs",
-    "deadbeef",
-    { "content-type": "application/json" },
-    1000,
+  const base = { "content-type": "application/json" };
+  assert.deepEqual(
+    withoutTenant(() => signedRequestHeaders(undefined, "GET", "/p", "", base)),
+    base,
   );
+
+  const headers = withoutTenant(() => signedRequestHeaders("s", "POST", "/v1/blobs", "deadbeef", base, 1000));
   assert.equal(headers["x-timestamp"], "1000");
   assert.equal(headers["x-signature"], signRequest("s", 1000, canonicalPayload("POST", "/v1/blobs", "deadbeef")));
   assert.equal(headers["content-type"], "application/json");

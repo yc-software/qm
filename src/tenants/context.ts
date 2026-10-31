@@ -1,9 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { tenantStorage as bound } from "../../plugins/chassis/src/tenant.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 
 const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-const bound = new AsyncLocalStorage<string>();
 
 export function isTenantId(id: unknown): id is string {
   return typeof id === "string" && TENANT_ID.test(id);
