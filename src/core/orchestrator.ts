@@ -1068,7 +1068,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const frameVars: PromptVars = {
         botName,
         surfaceTool,
-        surfaceLabel: isWeb ? `the ${botName} web app` : "Slack",
+        surfaceLabel: isWeb ? `the ${botName} web app` : (deps.surfaces?.label(input.surface ?? "slack") ?? "Slack"),
         conversationType: { dm: "private 1:1", group: "group conversation", channel: "channel conversation" }[
           conversation.kind
         ],
