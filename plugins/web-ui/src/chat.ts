@@ -379,8 +379,9 @@ export function createChatSurface(
     if (!speakerId) return undefined;
     const project = contextsState.list.find((c) => c.scopeId === chatState.scopeId)?.project;
     const member = project?.members.find((m) => m.principalId === speakerId);
-    if (member?.avatarUrl) return member;
-    // Slack-originated conversations rarely map to a project; fall back to the directory's Slack photo.
+    if (member?.avatarUrl || !isReadOnlySlackView()) return member;
+    // Slack conversations rarely map to a project. Use the same directory record (Slack users.list
+    // image_72, synced into directory_members.avatar_url) that the inbox reads for its avatars.
     return { principalId: speakerId, avatarUrl: speakerAvatar(speakerId) };
   }
 
