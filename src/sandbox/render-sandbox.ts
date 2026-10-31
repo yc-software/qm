@@ -127,9 +127,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     const stored = await store.get(scope);
     if (!stored) throw new Error(`Render sandbox is not provisioned: ${name}`);
     if (stored.stopped)
-      throw new Error(
-        "This Render computer was saved and stopped after sitting idle; it is restored at the start of the next turn",
-      );
+      throw new Error("This Render computer has stopped; the next turn restores it from its last checkpoint");
     if ((homeDirty && stored.homeDirty !== true) || Date.now() - stored.lastActivityMs >= 60_000)
       await store.merge(scope, { lastActivityMs: Date.now(), ...(homeDirty ? { homeDirty: true } : {}) });
     return stored.sandboxId;
@@ -602,6 +600,11 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
           if (!stored || !due(stored)) return;
           const info = await client.get(stored.sandboxId);
           if (!info || info.status === "terminated" || info.status === "errored") {
+            reportError(
+              "computer_ended",
+              new Error(`Render sandbox ${stored.sandboxId} is ${info?.status ?? "missing"}`),
+              scope,
+            );
             await store.merge(scope, { stopped: true });
             return;
           }

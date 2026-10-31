@@ -806,7 +806,7 @@ test("Render tells a turn that its computer was stopped instead of running on a 
   const handle = await sandbox.provision(layers);
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 1 });
-  await assert.rejects(sandbox.run(handle, "true"), /stopped after sitting idle/);
+  await assert.rejects(sandbox.run(handle, "true"), /has stopped; the next turn restores it from its last checkpoint/);
   const restored = await sandbox.provision(layers);
   assert.equal((await sandbox.run(restored, "echo ok")).stdout, "ok\n");
 });
@@ -887,8 +887,8 @@ test("Render checkpoints at teardown once per interval and skips an unused compu
   assert.ok((await store.get(scope))!.savedAtMs! > stale);
 });
 
-test("Render probes a stopped computer once and leaves it alone until it is provisioned again", async (t) => {
-  const { make, fake, layers, store, scope } = setup(t);
+test("Render reports a computer that ended outside QM, probes it once, and leaves it alone until it is provisioned again", async (t) => {
+  const { make, fake, layers, store, scope, errors } = setup(t);
   const sandbox = make();
   await sandbox.provision(layers);
   const stored = (await store.get(scope))!;
@@ -900,6 +900,7 @@ test("Render probes a stopped computer once and leaves it alone until it is prov
   assert.equal((await store.get(scope))!.stopped, true);
   assert.deepEqual(await sandbox.reapDeepIdle!(3600_000), { reaped: 0 });
   assert.equal(get.mock.callCount(), 1);
+  assert.deepEqual(errors, [{ code: "computer_ended", message: `Render sandbox ${stored.sandboxId} is terminated` }]);
   await sandbox.provision(layers);
   assert.equal((await store.get(scope))!.stopped, undefined);
 });
