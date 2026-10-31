@@ -80,6 +80,13 @@ export const problemLine = (problem: MemoryProviderProblem) =>
 
 export type OutcomeReport = (outcome: MemoryProviderOutcome) => void;
 
+const strictFailures = new WeakSet<object>();
+
+export function strictFailure(error: unknown): unknown {
+  if (typeof error === "object" && error !== null) strictFailures.add(error);
+  return error;
+}
+
 export interface MemoryProviderReport<T> {
   value?: T;
   outcomes: MemoryProviderOutcome[];
@@ -100,7 +107,7 @@ export async function withProviders<T>(
     return { value, outcomes, problems: problems() };
   } catch (error) {
     const notebookFailed = outcomes.some((outcome) => outcome.provider === "default" && problemOf(outcome, false));
-    if (notebookFailed || !problems().length) throw error;
+    if (notebookFailed || !problems().length || !strictFailures.has(error as object)) throw error;
     reportFailure(`memory: provider ${operation}`, error);
     return { outcomes, problems: problems() };
   }

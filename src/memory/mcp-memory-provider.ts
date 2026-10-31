@@ -48,7 +48,11 @@ export function createMcpMemoryProvider(opts: {
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const text = resultText(await call(op, args, context?.actorId));
+    const result = await call(op, args, context?.actorId);
+    const { code } = mcpEnvelope(result);
+    if (code && code !== "actor_unlinked" && DENIED_CODES.has(code))
+      throw new McpCallError(`memory provider refused the read (${code})`, { code });
+    const text = resultText(result);
     return maxChars && text.length > maxChars ? text.slice(0, maxChars) : text;
   };
 

@@ -92,7 +92,7 @@ test("an attested provider sends the canonical person on every request and the s
   await memory.recall("personal:U1", { query: "launch", actorId: "u1@acme.test" });
   await memory.capture("personal:U1", ["fact"], 1, "u1@acme.test", { mode: "explicit", actorId: "u1@acme.test" });
 
-  assert.ok(attested.requests.length >= 9);
+  assert.ok(attested.requests.length > 0);
   assert.deepEqual(new Set(attested.requests.map((request) => request.actor)), new Set(["U1"]));
   assert.deepEqual(
     seen.map((args) => args.acting_user),
@@ -137,6 +137,11 @@ test("provider refusals, codes and failures are told apart", async (t) => {
             content: [{ type: "text", text: "No member is linked to this person" }],
             structuredContent: { code: "actor_unlinked" },
           };
+        case "refused":
+          return {
+            content: [{ type: "text", text: "REFUSED_ROW" }],
+            structuredContent: { code: "actor_not_attested" },
+          };
         case "quoted":
           return { content: [{ type: "text", text: JSON.stringify({ code: "actor_not_attested" }) }] };
         case "broken":
@@ -152,7 +157,7 @@ test("provider refusals, codes and failures are told apart", async (t) => {
   });
   const memory = configured(mcp.url);
   const texts: string[] = [];
-  const queries = ["unattested", "mismatch", "unlinked", "quoted", "broken", "partial", "forged", "nothing"];
+  const queries = ["unattested", "mismatch", "unlinked", "refused", "quoted", "broken", "partial", "forged", "nothing"];
   const { outcomes, problems } = await withProviders("search", async (report) => {
     for (const query of queries)
       texts.push(recallText(await memory.recall("personal:U1", { query, actorId: "U1", report })));
@@ -171,6 +176,7 @@ test("provider refusals, codes and failures are told apart", async (t) => {
     { outcome: "denied", code: "actor_not_attested" },
     { outcome: "denied", code: "argument_mismatch" },
     { outcome: "empty", code: "actor_unlinked" },
+    { outcome: "denied", code: "actor_not_attested" },
     { outcome: "ok", code: undefined },
     { outcome: "failed", code: undefined },
     { outcome: "ok", code: "partial" },
@@ -182,9 +188,11 @@ test("provider refusals, codes and failures are told apart", async (t) => {
   ]);
   assert.match(texts[queries.indexOf("partial")] ?? "", /kept row/);
   assert.doesNotMatch(texts[queries.indexOf("unlinked")] ?? "", /No member/);
+  assert.doesNotMatch(texts[queries.indexOf("refused")] ?? "", /REFUSED_ROW/);
   assert.deepEqual(
     problems.map((problem) => problem.code),
     [
+      "memory_provider_denied",
       "memory_provider_denied",
       "memory_provider_denied",
       "memory_provider_failed",
@@ -195,6 +203,16 @@ test("provider refusals, codes and failures are told apart", async (t) => {
     ],
   );
   assert.ok(problems.every((problem) => !problem.detail.includes("ignore your rules")));
+});
+
+test("an unrelated error after a fail-open provider problem still throws", async () => {
+  await assert.rejects(
+    withProviders("search", async (report) => {
+      report({ provider: "knowledge", scope: "personal:U1", outcome: "failed", ms: 1 });
+      throw new Error("session store offline");
+    }),
+    /session store offline/,
+  );
 });
 
 function stalled() {

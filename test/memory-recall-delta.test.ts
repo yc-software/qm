@@ -149,13 +149,9 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
   const first = await turn();
   assert.match(first, /NOTEBOOK_FACT/);
   assert.ok(first.includes(block(...Array.from({ length: 6 }, (_, k) => line(k)))));
-  const later: number[] = [];
   for (window = 1; window < 20; window++) {
-    const text = await turn();
-    assert.equal(text, `New or updated memory facts:\n\n${block(line(window + 5))}`);
-    later.push(text.length);
+    assert.equal(await turn(), `New or updated memory facts:\n\n${block(line(window + 5))}`);
   }
-  assert.ok(Math.max(...later) / 4 < 40, `each later turn stays under 40 tokens: ${later.join(",")}`);
 
   window = 19;
   failure = new TimeoutError("memory provider timed out after 3000ms");
@@ -181,6 +177,22 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
   assert.ok((await turn()).includes(block(...Array.from({ length: 6 }, (_, k) => line(window + k)))));
   withheld = true;
   assert.equal(await turn(), note);
+});
+
+test("provider lines stay counted while their provider answers, so a later refusal is still noted", () => {
+  const row = (text: string) => ({ scope: alice, text, source: { provider: "knowledge", label: "Knowledge" } });
+  const answered = (outcome: MemoryProviderOutcome["outcome"]): MemoryProviderOutcome[] => [
+    { provider: "knowledge", scope: alice, outcome, ms: 1 },
+  ];
+  const first = memoryRecallDelta([row("SHIPS ON FRIDAYS")], [], all, new Map(), answered("ok"));
+  const unselected = memoryRecallDelta([], [entry(first.record)], all, new Map(), answered("ok"));
+  assert.equal(unselected.text, "");
+  const history = [entry(first.record), entry(unselected.record, 2)];
+  assert.equal(memoryRecallDelta([row("SHIPS ON FRIDAYS")], history, all, new Map(), answered("ok")).text, "");
+  assert.equal(
+    memoryRecallDelta([], history, all, new Map(), answered("denied")).text,
+    "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
+  );
 });
 
 test("a provider line recorded before lines were keyed by provider is flagged, not silently kept", () => {

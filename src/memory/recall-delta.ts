@@ -32,8 +32,6 @@ const stillHeld = (fact: MemoryFact | undefined, shown: Shown) =>
 
 const keyOf = ({ scope, id, hash }: Shown) => JSON.stringify([scope, id ?? null, hash]);
 
-const KEPT_WHEN: ReadonlySet<MemoryProviderOutcome["outcome"]> = new Set(["empty", "timed_out", "failed"]);
-
 export function memoryRecallDelta(
   recalled: readonly RecalledFact[],
   history: readonly SessionEntry[],
@@ -63,7 +61,7 @@ export function memoryRecallDelta(
     } else {
       const outcome = outcomes.find(({ provider, scope }) => provider === shown.provider && scope === shown.scope);
       if (!outcome || outcome.outcome === "denied" || DENIED_CODES.has(outcome.code ?? "")) unauthorized = true;
-      else if (KEPT_WHEN.has(outcome.outcome)) record.shown.push(shown);
+      else record.shown.push(shown);
     }
   }
   return {

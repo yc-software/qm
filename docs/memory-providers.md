@@ -12,8 +12,10 @@ reference data, never instructions: QM escapes triple backticks and closing tags
 block, end the `<environment>` section or pose as a heading. With PostgreSQL and an embedding
 model, facts are ranked by exact cosine similarity to the current message and recent
 dialogue; otherwise the newest facts come first. Later turns add only newly selected facts.
-Provider rows without fact ids are compared line by line by content hash: only new lines are
-added, and a line that drops out is never announced as removed. When a provider that showed
+Provider rows without fact ids are compared line by line by content hash, so a provider should
+return one self-contained fact per line: only new lines are added, a line already shown stays
+counted while its provider keeps answering, and a line that drops out is never announced as
+removed. When a provider that showed
 lines earlier refuses the member, is withheld from the conversation or is no longer routed,
 the turn adds one note not to rely on memory from sources that are not currently authorized.
 
@@ -90,9 +92,9 @@ MCP reads receive `query` and `acting_user` by default. Writes receive `content`
 
 Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. Provider calls time out after `timeoutMs` (3 seconds by default). QM continues to decide readable/writable scopes and passes the acting user to the provider.
 
-External routes fail open by default (`failOpen: true`): a failing or slow provider contributes nothing, the turn continues with the other routes, and the failure is recorded as an [outcome](#provider-outcomes). Set `failOpen: false` on a route to make it strict: any failure of that provider then fails the whole recall, search or write for every scope the route serves, so one provider outage stops memory there. Explicit writes report a provider failure either way, as described under [Provider outcomes](#provider-outcomes).
+External routes fail open by default (`failOpen: true`): a failing or slow provider contributes nothing, the turn continues with the other routes, and the failure is recorded as an [outcome](#provider-outcomes). Set `failOpen: false` on a route to make it strict: any failure of that provider then fails the whole recall or search for every scope the route serves, so one provider outage stops memory there. Explicit writes report a provider failure the same way on either kind of route, as described under [Provider outcomes](#provider-outcomes), because the other routes may already have stored the facts.
 
-Explicit writes (the `memory` tool's `add` and `POST /v1/memory/facts`) send `idempotencyArg`, when it is mapped, a UUID (RFC 9562 version 8) derived from the tenant, the turn, the notebook scope and the fact text, so a retry of the same facts to the same notebook in the same turn carries the same key. Automatic capture keeps sending its own per-turn key. A result whose `structuredContent.status` is `"pending"` is recorded as pending and any other success as committed. A timed-out write is recorded as unknown and is not retried, because the provider may still have stored the facts.
+Explicit writes (the `memory` tool's `add` and `POST /v1/memory/facts`) send `idempotencyArg`, when it is mapped, a UUID (RFC 9562 version 8) derived from the tenant, the turn, the notebook scope and the fact text, so a retry of the same facts to the same notebook in the same turn carries the same key. A write made outside a turn, such as one with a portal token, carries no key. Automatic capture keeps sending its own per-turn key. A result whose `structuredContent.status` is `"pending"` is recorded as pending and any other success as committed. A timed-out write is recorded as unknown and is not retried, because the provider may still have stored the facts.
 
 ### Attesting the member (`attestActor`)
 
@@ -104,23 +106,23 @@ QM attests only ids of 1 to 256 visible ASCII characters (`!` through `~`), the 
 
 Every recall, search and explicit write records one outcome per provider and scope:
 
-| Outcome                | Meaning                                                                                                                                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ok`                   | The provider returned rows.                                                                                                                                                                       |
-| `empty`                | It returned nothing. A `code` in its structured result, such as `actor_unlinked`, is kept, and text sent with a refusal code is ignored.                                                          |
-| `committed`, `pending` | An explicit write was acknowledged; `pending` means the provider finishes it later.                                                                                                               |
-| `unknown`              | A write timed out, so whether the provider stored anything is unknown.                                                                                                                            |
-| `denied`               | HTTP 401 or 403, an OAuth credential error, an error result or a write result coded `actor_not_attested`, `actor_unlinked` or `argument_mismatch`, or an actor QM can't attest (`invalid_actor`). |
-| `timed_out`            | A read took longer than `timeoutMs`.                                                                                                                                                              |
-| `failed`               | Any other error. `code` carries the provider's error code or `http_<status>`.                                                                                                                     |
+| Outcome                | Meaning                                                                                                                                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`                   | The provider returned rows.                                                                                                                                                                               |
+| `empty`                | It returned nothing. A `code` in its structured result is kept; a read coded `actor_unlinked` is empty, and its text is ignored.                                                                          |
+| `committed`, `pending` | An explicit write was acknowledged; `pending` means the provider finishes it later.                                                                                                                       |
+| `unknown`              | A write timed out, so whether the provider stored anything is unknown.                                                                                                                                    |
+| `denied`               | HTTP 401 or 403, an OAuth credential error, any result coded `actor_not_attested` or `argument_mismatch`, an error or write result coded `actor_unlinked`, or an actor QM can't attest (`invalid_actor`). |
+| `timed_out`            | A read took longer than `timeoutMs`.                                                                                                                                                                      |
+| `failed`               | Any other error. `code` carries the provider's error code or `http_<status>`.                                                                                                                             |
 
 QM reads `code` and `status` on a successful result only from `structuredContent`, never from its text, which is memory. An error result's code may sit in `structuredContent` or in a JSON text block, at `code` or `error.code`. A code is kept only when it is 1 to 64 letters, digits, `_`, `.`, `:` or `-`. A provider this conversation may not read is not called and records no outcome.
 
 Where to read them:
 
-- **Stored turns.** When providers are routed, each turn's user entry carries `payload.memoryRecallOutcomes`, a list of `{ provider, scope, outcome, ms, code? }`, even when no memory text was injected. Operators read it in the admin session transcript (`GET /v1/admin/sessions/:id`); member-facing transcripts hide it.
-- **The `memory` tool.** Search and add results start with one line per problem, `[code] detail Fix: …`, and the stored tool result carries the same `problems`. A search with a failed provider never reports "no remembered facts", even on a strict route.
-- **HTTP.** `POST /v1/memory/search` and `POST /v1/memory/facts` answer `502` with an `application/problem+json` body: `status`, `title`, `detail` and `problems`, each `{ code, provider, detail, fix }`, plus the `results` of a search whose failing routes fail open or the `added`, `scopeId` and `outcomes` of a write. A successful write's `200` body carries `outcomes` when providers are routed.
+- **Stored turns.** When providers are routed, each turn's user entry carries `payload.memoryRecallOutcomes`, a list of `{ provider, scope, outcome, ms, code? }`, even when no memory text was injected or the turn failed. A strict route's recall failure fails the turn before any entry is written, so that turn shows up only in the admin Errors log. Operators read it in the admin session transcript (`GET /v1/admin/sessions/:id`); member-facing transcripts hide it.
+- **The `memory` tool.** Search results start with one line per problem, `[code] detail Fix: …`, followed by the hits in one `untrusted-data` block. Add results list the problems after the count of facts remembered, and add one line for each provider that answered `pending`. The stored tool result carries the same `problems`, and an add result also carries the write `outcomes`. A search with a failed provider never reports "no remembered facts", even on a strict route.
+- **HTTP.** `POST /v1/memory/search` and `POST /v1/memory/facts` answer `502` with an `application/problem+json` body: `status`, `title`, `detail` and `problems`, each `{ code, provider, detail, fix }`, plus the `results` of a search whose failing routes fail open or the `added`, `scopeId` and `outcomes` of a write. A successful write's `200` body carries `outcomes` when providers are routed. A write's `502` can follow facts the notebook already stored, so read `added` and the problems before sending the same facts again.
 
 Problem codes are `memory_provider_denied` (a refused write stored nothing), `memory_provider_timeout` and `memory_provider_failed` (whether a write landed is unknown, and the detail says so). A failure of the built-in notebook is not a provider problem: it stays QM's own error, as before.
 

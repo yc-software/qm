@@ -2,7 +2,7 @@ import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
 import type { McpEnvelope } from "../mcp/mcp-client.ts";
 import type { MemoryProviderOutcome, MemoryRecallContext, MemoryService } from "./memory-service.ts";
-import { failedOutcome, withEnvelope } from "./provider-outcome.ts";
+import { failedOutcome, strictFailure, withEnvelope } from "./provider-outcome.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -68,7 +68,7 @@ export function createRoutedMemoryService(opts: {
   }
   const strict = <T>(results: readonly { value: T; error?: unknown }[]): T[] => {
     const failure = results.find((result) => result.error !== undefined);
-    if (failure) throw failure.error;
+    if (failure) throw strictFailure(failure.error);
     return results.map((result) => result.value);
   };
 

@@ -39,7 +39,9 @@ export function promptText(value: string): string {
 }
 
 export function untrustedText(value: string): string {
-  return promptText(value).replace(/\r\n?/g, "\n").replaceAll("</", "<\\/");
+  return promptText(value)
+    .replace(/\r\n?|[\u0085\u2028\u2029]/g, "\n")
+    .replaceAll("</", "<\\/");
 }
 
 export function quotedData(value: string): string {

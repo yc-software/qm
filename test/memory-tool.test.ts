@@ -10,6 +10,7 @@ import type { MemoryService } from "../src/memory/memory-service.ts";
 import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
+import { reportEnvelope } from "../src/memory/provider-outcome.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
@@ -130,7 +131,7 @@ test("createAgentTools exposes ONE `memory` tool: search returns scope-keyed hit
   assert.ok(memoryTool, "the `memory` tool must be on the surface");
 
   const hit = textOf(await call(memoryTool, { action: "search", query: "billing" }));
-  assert.match(hit, /billing service/);
+  assert.match(hit, /^```untrusted-data\n[^\n]*billing service[^\n]*\n```$/);
 
   const miss = textOf(await call(memoryTool, { action: "search", query: "kubernetes" }));
   assert.match(miss, /no remembered facts match/);
@@ -311,6 +312,51 @@ test("explicit capture uses the conversation origin rather than the notebook des
   const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", workspace, memory });
   assert.equal((await tool.memoryAdd(["synthetic fact"]))?.added, 1);
   assert.equal(context?.conversationScopeId, "group:origin");
+});
+
+test("the `memory` tool stores write outcomes and says when a provider stores facts later", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-pending-")));
+  const notebook = createPostgresMemoryService(testDatabaseUrl());
+  const personal = scopeId("personal", "U2");
+  const queued: MemoryService = {
+    async recall() {
+      return [];
+    },
+    async query() {
+      return [];
+    },
+    async capture(_scope, facts) {
+      reportEnvelope({ status: "pending" });
+      return facts.length;
+    },
+    async read() {
+      return "";
+    },
+  };
+  const memory = createRoutedMemoryService({
+    providers: { default: notebook, knowledge: queued },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
+    ],
+  });
+  const emitted: Emitted[] = [];
+  const tool = createAgentTools({
+    current: ctxFor({ scope: personal, workspace, memory: memory as ReturnType<typeof createPostgresMemoryService> }),
+    emit: (e) => {
+      emitted.push(e as Emitted);
+    },
+    scopeLabel: personal,
+  }).find((t) => t.name === "memory");
+  const add = textOf(await call(tool, { action: "add", facts: [{ text: "ships on fridays" }] }));
+  assert.equal(add, "Remembered 1 fact.\nMemory provider knowledge accepted the facts and stores them later.");
+  const stored = emitted.find((e) => e.type === "tool_result")!.payload as {
+    outcomes: Array<{ provider: string; outcome: string }>;
+  };
+  assert.deepEqual(Object.fromEntries(stored.outcomes.map(({ provider, outcome }) => [provider, outcome])), {
+    default: "committed",
+    knowledge: "pending",
+  });
 });
 
 test("memory search and add report provider problems instead of claiming nothing was found", async () => {
