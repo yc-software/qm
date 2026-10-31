@@ -305,6 +305,8 @@ export function serveFakeRenderApi(
   const proxyCommands: string[] = [];
   let groupName: string | undefined = "Default";
   let groupCreatedElsewhere: string | undefined;
+  let groupWithoutDefault = false;
+  let groupCreates = 0;
   const uploads: Array<{ sandboxId: string; path: string; data: Buffer }> = [];
   const lifetimes = new Map<string, { timeoutSeconds: number; createdAt: string }>();
   const sandboxJson = (id: string) => ({
@@ -391,10 +393,11 @@ export function serveFakeRenderApi(
       ownerId: "tea-test",
       name: groupName,
       region: "oregon",
-      isDefault: true,
+      isDefault: !groupWithoutDefault,
       concurrencyLimit: 20,
     });
     if (path === "/sandbox-groups" && request.method === "POST") {
+      groupCreates++;
       if (groupCreatedElsewhere) {
         groupName = groupCreatedElsewhere;
         groupCreatedElsewhere = undefined;
@@ -472,6 +475,8 @@ export function serveFakeRenderApi(
     proxyCommands,
     uploads,
     removeSandboxGroups: () => (groupName = undefined),
+    keepGroupWithoutDefault: () => (groupWithoutDefault = true),
+    groupCreates: () => groupCreates,
     createSandboxGroupDuringNextRequest: (name: string) => (groupCreatedElsewhere = name),
     sandboxGroupName: () => groupName,
   };
