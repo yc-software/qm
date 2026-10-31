@@ -387,53 +387,6 @@ export const TENANT_MIGRATIONS: readonly PgMigrationDefinition[] = [
        END $qm_root_scope$`,
     ],
   },
-  tenantTables(
-    "sessions/store/0048-tenant-sessions",
-    [
-      {
-        table: "sessions",
-        primaryKey: "id",
-        unique: [{ name: "sessions_thread_ref_key", columns: "thread_ref", constraint: true }],
-      },
-      { table: "participants", primaryKey: "session_id, principal_id" },
-      { table: "session_goals", primaryKey: "session_id" },
-      { table: "session_leases", primaryKey: "session_id" },
-      { table: "session_llm_requests", primaryKey: "id" },
-      { table: "session_pins", primaryKey: "id" },
-      { table: "session_spend_days", primaryKey: "day" },
-      {
-        table: "session_spend_dirty",
-        unique: [{ name: "session_spend_dirty_day_writer_key", columns: "day, writer", constraint: true }],
-      },
-      { table: "llm_prompt_envelopes", primaryKey: "hash" },
-    ],
-    {
-      foreignKeys: [
-        {
-          table: "session_goals",
-          name: "session_goals_session_id_fkey",
-          columns: "session_id",
-          references: "sessions(tenant_id, id)",
-          onDelete: "CASCADE",
-        },
-        {
-          table: "items",
-          name: "items_session_id_fkey",
-          columns: "session_id",
-          references: "sessions(tenant_id, id)",
-          onDelete: "CASCADE",
-        },
-      ],
-      after: [...SPEND_TRIGGERS, ...ITEM_SEARCH, `DROP TABLE qm_settings`],
-    },
-  ),
-  {
-    id: "sessions/store/0049-agent-reply-index",
-    statements: [
-      `CREATE INDEX CONCURRENTLY IF NOT EXISTS items_agent_reply
-         ON items(tenant_id, session_id, created_at DESC) WHERE kind = 'AgentMessage'`,
-    ],
-  },
 ];
 
 export const TENANT_SETTINGS_MIGRATION: PgMigrationDefinition = {

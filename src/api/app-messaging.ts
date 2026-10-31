@@ -1,5 +1,5 @@
 import type { ScopeId } from "../types.ts";
-import { currentTenant, perTenant, tenantRootScope } from "../tenants/context.ts";
+import { boundTenant, currentTenant, perTenant, tenantRootScope } from "../tenants/context.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import { personKey, personKeys, samePersonInDirectory, samePersonMatcher } from "../directory/person.ts";
 import type { Destination, SurfaceContextRequest, SurfaceContextResult } from "../types.ts";
@@ -123,7 +123,7 @@ export function createMessagingMethods(
   const { adminBase, resolveReachTargetFor } = h;
   const { judgeAmbientContainer, ambientSelf } = ambient;
   const contextRequests = deps.contextRequests ?? createContextRequestStore();
-  const contextRequestListeners = new Map<(request: SurfaceContextRequest) => void, string>();
+  const contextRequestListeners = new Map<(request: SurfaceContextRequest) => void, string | undefined>();
   const contextRequestTokens = perTenant(() => new Map<string, string>());
   const tokenKey = (id: string) => `${currentTenant()}\u0000${id}`;
   // Principals identity knows about that the Slack directory never sees: the email
@@ -375,11 +375,12 @@ export function createMessagingMethods(
         return request;
       }
       const tenant = currentTenant();
-      for (const [l, t] of contextRequestListeners) if (t === tenant) l(viewerToken ? { ...request, query } : request);
+      for (const [l, t] of contextRequestListeners)
+        if (t === undefined || t === tenant) l(viewerToken ? { ...request, query } : request);
       return request;
     },
     onContextRequestCreated(listener) {
-      contextRequestListeners.set(listener, currentTenant());
+      contextRequestListeners.set(listener, boundTenant());
       return () => contextRequestListeners.delete(listener);
     },
     getContextRequest(id) {

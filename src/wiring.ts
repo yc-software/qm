@@ -1767,25 +1767,28 @@ export function buildApp(
     id: "durable-map/turn_wall_clock_configs/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS turn_wall_clock_configs",
-      "DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'",
+      `DO $drop_version$ BEGIN IF to_regclass('durable_map_versions') IS NOT NULL THEN DELETE FROM durable_map_versions WHERE tbl = 'turn_wall_clock_configs'; END IF; END $drop_version$`,
     ],
   });
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/connector_status/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS connector_status",
-      "DELETE FROM durable_map_versions WHERE tbl = 'connector_status'",
+      `DO $drop_version$ BEGIN IF to_regclass('durable_map_versions') IS NOT NULL THEN DELETE FROM durable_map_versions WHERE tbl = 'connector_status'; END IF; END $drop_version$`,
     ],
   });
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/pinned_skills/0002-drop",
-    statements: ["DROP TABLE IF EXISTS pinned_skills", "DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'"],
+    statements: [
+      "DROP TABLE IF EXISTS pinned_skills",
+      `DO $drop_version$ BEGIN IF to_regclass('durable_map_versions') IS NOT NULL THEN DELETE FROM durable_map_versions WHERE tbl = 'pinned_skills'; END IF; END $drop_version$`,
+    ],
   });
   pgArtifactMap?.pool.registerMigration({
     id: "durable-map/internal_member_overrides/0002-drop",
     statements: [
       "DROP TABLE IF EXISTS internal_member_overrides",
-      "DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'",
+      `DO $drop_version$ BEGIN IF to_regclass('durable_map_versions') IS NOT NULL THEN DELETE FROM durable_map_versions WHERE tbl = 'internal_member_overrides'; END IF; END $drop_version$`,
     ],
   });
   pgArtifactMap?.pool.registerMigration(LEGACY_HARNESS_MIGRATION);

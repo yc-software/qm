@@ -4948,7 +4948,7 @@ test("env.core.SANDBOX_BACKEND adopts the deployment's substrate in the tenant s
     env: { ...config.env, core: { ...config.env.core, SANDBOX_BACKEND: "modal" } },
   };
   assert.equal(serviceEnvironment(modal, "core").SANDBOX_BACKEND, undefined);
-  assert.equal(tenantSettingsEnv(agent37, new Map()).SANDBOX_BACKEND, "modal");
+  assert.equal(tenantSettingsEnv(modal, new Map()).SANDBOX_BACKEND, "modal");
 });
 
 test("env.core.S3_BUCKET adopts a pre-existing snapshot bucket; the derived object store remains the default", () => {
