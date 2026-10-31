@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { buildApp, serverDeps } from "../../src/wiring.ts";
 import { createInsecureTestServer } from "../../src/api/server.ts";
 import { testConfig } from "./test-config.ts";
+import { TEST_TENANT } from "./tenant.ts";
 
 const config = testConfig({
   providerBaseUrls: { openai: `${process.env.MODEL_OVERLAY_TEST_UPSTREAM}/v1` },
