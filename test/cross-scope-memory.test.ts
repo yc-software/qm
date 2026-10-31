@@ -48,7 +48,7 @@ test("one ranking picks across notebooks and groups each under one heading", asy
   );
   assert.equal(
     out,
-    "### channel:b\n- (2026-10-01) 0.99 remote best\n- (2026-10-01) 0.72 remote near tie\n\n### personal:a\n- (2026-10-01) 0.7 local near tie",
+    "### channel:b\n```untrusted-data\n- (2026-10-01) 0.99 remote best\n- (2026-10-01) 0.72 remote near tie\n```\n\n### personal:a\n```untrusted-data\n- (2026-10-01) 0.7 local near tie\n```",
   );
   assert.equal(calls.filter((batch) => batch[0] === "verify").length, 1, "embed the query once, not per scope");
   assert.ok(calls.flat().every((text) => !text.includes("authorized")));
@@ -62,11 +62,11 @@ test("global packing counts source labels, skips oversized rows, deduplicates, a
   const out = renderRecall(
     await recallAcrossScopes(memory, scopes, {
       query: "verify",
-      maxChars: 95,
+      maxChars: 117,
     }),
     new Map(),
   );
-  assert.ok(out.length <= 95);
+  assert.ok(out.length <= 117);
   assert.match(out, /remote high/);
   assert.match(out, /duplicate/);
   assert.equal(out.match(/duplicate/g)?.length, 1);
@@ -187,7 +187,7 @@ test("a recall-only provider's block gets one heading and fills the remaining bu
     ],
   });
   const out = renderRecall(await recallAcrossScopes(routed, ["personal:a"], { query: "x" }), new Map());
-  assert.match(out, /\n### external\nEXTERNAL BLOCK/);
+  assert.match(out, /\n### personal:a · external\n```untrusted-data\nEXTERNAL BLOCK/);
   assert.equal(out.match(/### /g)?.length, 2);
 });
 

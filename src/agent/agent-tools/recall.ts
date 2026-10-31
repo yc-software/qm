@@ -2,6 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { MemoryFactsMissing } from "../../memory/facts.ts";
 import { MemoryDisclosureDenied } from "../../memory/disclosure.ts";
+import { problemLine, providerProblems } from "../../memory/provider-outcome.ts";
 import { text, type ToolKit } from "./kit.ts";
 
 export function recallTools(kit: ToolKit) {
@@ -87,12 +88,14 @@ export function recallTools(kit: ToolKit) {
           case "search": {
             const query = params.query ?? "";
             if (!query.trim()) return fail("memory search requires `query`.");
-            const hits = await tc.memorySearch(query, params.limit, params.scope);
-            if (hits === null) return unavailable();
+            const found = await tc.memorySearch(query, params.limit, params.scope);
+            if (found === null) return unavailable();
+            const { hits, problems } = found;
+            const lines = [...hits, ...problems.map(problemLine)];
             return recordResult(
               callId,
-              { tool: "memory", action, query, count: hits.length },
-              text(hits.length ? hits.join("\n") : `[no remembered facts match "${query}"]`),
+              { tool: "memory", action, query, count: hits.length, ...(problems.length ? { problems } : {}) },
+              text(lines.length ? lines.join("\n") : `[no remembered facts match "${query}"]`),
             );
           }
           case "read": {
@@ -107,16 +110,18 @@ export function recallTools(kit: ToolKit) {
           case "add": {
             const texts = facts.map((fact) => fact.text).filter(Boolean);
             if (!texts.length) return fail("memory add requires `facts` (a non-empty list of {text}).");
-            const added = await tc.memoryAdd(texts);
-            if (added === null) return unavailable();
+            const written = await tc.memoryAdd(texts);
+            if (written === null) return unavailable();
+            const { added } = written;
+            const problems = providerProblems(written.outcomes, true);
+            const lines = problems.map(problemLine);
+            if (added) lines.unshift(`Remembered ${added} fact${added === 1 ? "" : "s"}.`);
+            else if (!problems.length) lines.push("Already remembered — nothing new to save.");
             return recordResult(
               callId,
-              { tool: "memory", action, added },
-              text(
-                added
-                  ? `Remembered ${added} fact${added === 1 ? "" : "s"}.`
-                  : "Already remembered — nothing new to save.",
-              ),
+              { tool: "memory", action, added, ...(problems.length ? { problems } : {}) },
+              text(lines.join("\n")),
+              problems.length > 0 && !added,
             );
           }
           case "edit": {

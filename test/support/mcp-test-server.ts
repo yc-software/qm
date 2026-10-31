@@ -58,9 +58,16 @@ export async function startMcpTestServer(
     authorize?: (authorization: string | undefined) => boolean;
     clients?: Record<string, string>;
     authorizationServer?: string;
-    call?: (name: string, args: Record<string, unknown>, authorization?: string) => CallToolResult;
+    call?: (
+      name: string,
+      args: Record<string, unknown>,
+      authorization?: string,
+    ) => CallToolResult | Promise<CallToolResult>;
     description?: string;
     instructions?: string;
+    stateless?: boolean;
+    deleteStatus?: number;
+    status?: number;
   } = {},
 ): Promise<McpTestServer> {
   const tools = opts.tools ?? DEFAULT_TOOLS;
@@ -135,6 +142,17 @@ export async function startMcpTestServer(
     });
     if (!authorized(authorization)) {
       return json(res, 401, { error: "unauthorized" }, { "www-authenticate": 'Bearer error="invalid_token"' });
+    }
+    if (opts.status) return json(res, opts.status, { error: "refused" });
+    if (req.method === "DELETE" && opts.deleteStatus) return json(res, opts.deleteStatus, { error: "session_gone" });
+    if (opts.stateless) {
+      if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: opts.json ?? false,
+      });
+      await mcpServer().connect(transport);
+      return transport.handleRequest(req, res, parsed);
     }
     const sessionId = req.headers["mcp-session-id"];
     if (typeof sessionId === "string") {

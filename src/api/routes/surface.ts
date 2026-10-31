@@ -1,7 +1,13 @@
 import { isSideChatAnchor } from "../../sessions/side-chat.ts";
 import type { CapabilityClaims } from "../../auth/capability-token.ts";
 import { memoryForRequest } from "./memory-access.ts";
-import type { MemoryEdit, MemoryService } from "../../memory/memory-service.ts";
+import type { MemoryEdit, MemoryProviderOutcome, MemoryService } from "../../memory/memory-service.ts";
+import {
+  problemLine,
+  providerProblems,
+  writeFacts,
+  type MemoryProviderProblem,
+} from "../../memory/provider-outcome.ts";
 import { suggestedActivityRoutes } from "./suggested-activities.ts";
 import { runtimeConfigBody, userRuntimeConfigBody, webuiModelEnabled } from "../runtime-config.ts";
 import { canReadNotebook, searchAcrossScopes } from "../../memory/cross-scope.ts";
@@ -18,11 +24,11 @@ import {
   fastModeModelIds,
 } from "../../model/pi-models.ts";
 import { builtInModelCatalog, selectableCatalog, selectableModelCatalog } from "../../model/model-catalog.ts";
-import { errMessage } from "../../util/errors.ts";
+import { errMessage, swallow } from "../../util/errors.ts";
 import { SideChatAnchorError, SoulUpdateDeniedError, type SessionPageStatus } from "../app-types.ts";
 import { renderAgentApis } from "../agent-api-catalog.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../../auth/capability-token.ts";
-import { contentTypeWithUtf8Charset, pipeToResponse, sendJson } from "../http.ts";
+import { contentTypeWithUtf8Charset, pipeToResponse, sendJson, sendProblem } from "../http.ts";
 import { resolveBranding } from "../../resolution/branding.ts";
 import { audit, isObj, orgScope } from "./shared.ts";
 import {
@@ -775,6 +781,15 @@ const agentMemory =
     return handle(ctx, memory, capability);
   };
 
+function sendProviderProblem(res: ApiCtx["res"], problems: MemoryProviderProblem[], partial: Record<string, unknown>) {
+  return sendProblem(res, 502, {
+    title: "Memory provider failed",
+    detail: problems.map(problemLine).join(" "),
+    problems,
+    ...partial,
+  });
+}
+
 const searchMemory = agentMemory(async (ctx, memory, capability) => {
   const { res, deps, body } = ctx;
   const b = body as { query?: unknown; limit?: unknown; scope?: unknown };
@@ -790,8 +805,14 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
   if (scopes.length === 0) {
     return sendJson(res, 403, { error: "forbidden", message: "memory recall is not enabled for this conversation" });
   }
+  const outcomes: MemoryProviderOutcome[] = [];
   const results = await searchAcrossScopes(memory, scopes, b.query, typeof b.limit === "number" ? b.limit : 20, {
     actorId: capability.actorId,
+    report: (outcome) => void outcomes.push(outcome),
+  }).catch((error: unknown) => {
+    if (!providerProblems(outcomes).length) throw error;
+    swallow("memory: agent search", error);
+    return [];
   });
   audit(deps, {
     principalId: capability.actorId,
@@ -799,6 +820,8 @@ const searchMemory = agentMemory(async (ctx, memory, capability) => {
     resource: "memory",
     scopeLabel: scopes.join(","),
   });
+  const problems = providerProblems(outcomes);
+  if (problems.length) return sendProviderProblem(res, problems, { results });
   return sendJson(res, 200, { results });
 });
 
@@ -844,19 +867,28 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
 const captureFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {
   const facts = parseFacts(body);
   if (typeof facts === "string") return sendJson(res, 400, { error: "bad_request", message: facts });
-  const added = await memory.capture(write, facts, Date.now(), capability.actorId, {
-    mode: "explicit",
-    actorId: capability.actorId,
-    conversationScopeId: capability.scopeId,
-    ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
-  });
+  const { added, outcomes } = await writeFacts(
+    memory,
+    write,
+    facts,
+    capability.actorId,
+    {
+      mode: "explicit",
+      actorId: capability.actorId,
+      conversationScopeId: capability.scopeId,
+      ...(capability.sessionId ? { sessionId: capability.sessionId } : {}),
+    },
+    capability.runId,
+  );
   audit(deps, {
     principalId: capability.actorId,
     action: "memory.agent.capture",
     resource: "memory",
     scopeLabel: write,
   });
-  return sendJson(res, 200, { ok: true, added, scopeId: write });
+  const problems = providerProblems(outcomes, true);
+  if (problems.length) return sendProviderProblem(res, problems, { added, scopeId: write, outcomes });
+  return sendJson(res, 200, { ok: true, added, scopeId: write, ...(outcomes.length ? { outcomes } : {}) });
 });
 
 const editFacts = writeMemory(async ({ res, deps, body }, memory, capability, write) => {

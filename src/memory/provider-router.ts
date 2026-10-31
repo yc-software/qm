@@ -1,6 +1,7 @@
 import { disclosedMemory } from "./disclosure.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
-import type { MemoryService } from "./memory-service.ts";
+import type { MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
+import { failedOutcome } from "./provider-outcome.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -24,6 +25,8 @@ function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit
   return policy === "explicit" && mode === "explicit";
 }
 
+type Sinks = { report?: (outcome: MemoryProviderOutcome) => void };
+
 export function createRoutedMemoryService(opts: {
   providers: Readonly<Record<string, MemoryService>>;
   routes: readonly MemoryProviderRoute[];
@@ -39,6 +42,40 @@ export function createRoutedMemoryService(opts: {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
     return route ? providerFor(route) : undefined;
   };
+  async function attempt<T>(
+    route: MemoryProviderRoute,
+    scopeId: ScopeId,
+    operation: "recall" | "query" | "capture",
+    context: Sinks | undefined,
+    run: (envelope: (envelope: { code?: string; status?: string }) => void) => Promise<T>,
+    settle: (
+      value: T,
+      envelope: { code?: string; status?: string },
+    ) => Pick<MemoryProviderOutcome, "outcome" | "added">,
+    fallback: T,
+  ): Promise<{ value: T; error?: unknown }> {
+    const started = Date.now();
+    const report = (fields: Omit<MemoryProviderOutcome, "provider" | "scope" | "ms">) =>
+      context?.report?.({ provider: route.provider, scope: scopeId, ms: Date.now() - started, ...fields });
+    let received: { code?: string; status?: string } = {};
+    try {
+      const value = await run((envelope) => void (received = envelope));
+      report({ ...settle(value, received), ...(received.code ? { code: received.code } : {}) });
+      return { value };
+    } catch (error) {
+      const failed = failedOutcome(error);
+      report(operation === "capture" && failed.outcome === "timed_out" ? { ...failed, outcome: "unknown" } : failed);
+      if (failed.code === "withheld") return { value: fallback };
+      if (!route.failOpen) return { value: fallback, error };
+      opts.onError?.(error, route.provider, operation);
+      return { value: fallback };
+    }
+  }
+  const strict = <T>(results: readonly { value: T; error?: unknown }[]): T[] => {
+    const failure = results.find((result) => result.error !== undefined);
+    if (failure) throw failure.error;
+    return results.map((result) => result.value);
+  };
 
   return {
     withDisclosure(access) {
@@ -51,55 +88,70 @@ export function createRoutedMemoryService(opts: {
     },
     async recall(scopeId, context) {
       const routes = routesFor(scopeId).filter((route) => route.recall !== false);
-      const batches = await Promise.all(
-        routes.map(async (route) => {
-          try {
-            return { route, rows: await providerFor(route).recall(scopeId, context) };
-          } catch (error) {
-            if (!route.failOpen) throw error;
-            opts.onError?.(error, route.provider, "recall");
-            return { route, rows: [] };
-          }
-        }),
+      const batches = strict(
+        await Promise.all(
+          routes.map((route) =>
+            attempt(
+              route,
+              scopeId,
+              "recall",
+              context,
+              (envelope) => providerFor(route).recall(scopeId, { ...context, envelope }),
+              (rows) => ({ outcome: rows.length ? "ok" : "empty" }),
+              [],
+            ),
+          ),
+        ),
       );
-      const present = batches.filter(({ rows }) => rows.length);
-      return present.flatMap(({ route, rows }) => {
-        const label = route.label ?? (present.length > 1 ? route.provider : undefined);
-        return rows.map((row) => (label && row.id === undefined ? { ...row, text: `### ${label}\n${row.text}` } : row));
-      });
+      return routes.flatMap((route, index) =>
+        batches[index]!.map((row) =>
+          route.provider === "default"
+            ? row
+            : { ...row, source: { provider: route.provider, label: route.label ?? route.provider } },
+        ),
+      );
     },
 
     async capture(scopeId, facts, at, author, context) {
       const mode = context?.mode ?? "explicit";
       const routes = routesFor(scopeId).filter((route) => captureAllowed(route.capture, mode));
-      const counts = await Promise.all(
-        routes.map(async (route) => {
-          try {
+      const counts = strict(
+        await Promise.all(
+          routes.map((route) => {
             const provider = providerFor(route);
-            if (context?.conversationScopeId && context.conversationScopeId !== scopeId && !provider.facts) return 0;
-            return await provider.capture(scopeId, facts, at, author, context);
-          } catch (error) {
-            if (!route.failOpen) throw error;
-            opts.onError?.(error, route.provider, "capture");
-            return 0;
-          }
-        }),
+            if (context?.conversationScopeId && context.conversationScopeId !== scopeId && !provider.facts)
+              return { value: 0 };
+            return attempt(
+              route,
+              scopeId,
+              "capture",
+              context,
+              (envelope) => provider.capture(scopeId, facts, at, author, { ...context, mode, envelope }),
+              (added, envelope) => ({ outcome: envelope.status === "pending" ? "pending" : "committed", added }),
+              0,
+            );
+          }),
+        ),
       );
       return counts.length ? Math.max(...counts) : 0;
     },
 
     async query(scopeId, q, limit = 20, context) {
       const routes = routesFor(scopeId).filter((route) => route.recall !== false);
-      const rows = await Promise.all(
-        routes.map(async (route) => {
-          try {
-            return await providerFor(route).query(scopeId, q, limit, context);
-          } catch (error) {
-            if (!route.failOpen) throw error;
-            opts.onError?.(error, route.provider, "query");
-            return [];
-          }
-        }),
+      const rows = strict(
+        await Promise.all(
+          routes.map((route) =>
+            attempt(
+              route,
+              scopeId,
+              "query",
+              context,
+              (envelope) => providerFor(route).query(scopeId, q, limit, { ...context, envelope }),
+              (hits) => ({ outcome: hits.length ? "ok" : "empty" }),
+              [],
+            ),
+          ),
+        ),
       );
       return [...new Set(rows.flat())].slice(0, limit);
     },

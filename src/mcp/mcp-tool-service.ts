@@ -14,6 +14,7 @@ import { LRUCache } from "lru-cache";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpClient, mcpResultText, type McpAuth, type McpClient, type McpListing } from "./mcp-client.ts";
 import type { McpServer, McpServerStore } from "./mcp-server-store.ts";
+import { attestableActor, canonicalPerson, UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
 
 const REFRESH_INTERVAL_MS = 5 * 60_000;
 const CATALOG_TTL_MS = 60_000;
@@ -138,8 +139,12 @@ function callResource(def: McpToolDescriptor, args: Record<string, unknown>): st
 
 function headersFor(server: McpServer, principalId: string | undefined, approval?: string): Record<string, string> {
   if (!server.attestActor || server.credentialScope === "per-user") return {};
-  if (!principalId) throw new Error(`MCP server ${server.id} needs a signed-in person`);
-  return { "x-qm-actor": principalId, ...(approval ? { "x-qm-approval": approval } : {}) };
+  const actor = attestableActor(principalId && canonicalPerson(principalId));
+  if (!actor)
+    throw new UnattestableActor(
+      `MCP server ${server.id} needs a signed-in person whose principal id QM can attest. ${UNATTESTABLE_ACTOR_FIX}`,
+    );
+  return { "x-qm-actor": actor, ...(approval ? { "x-qm-approval": approval } : {}) };
 }
 
 function catalogSearch(server: McpServer, tools: RemoteTool[], query: string): string {

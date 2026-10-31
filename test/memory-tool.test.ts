@@ -6,7 +6,10 @@ import { join } from "node:path";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createAgentTools, type ToolContextRef } from "../src/agent/agent-tools.ts";
 import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
-import { createMemoryService } from "../src/memory/memory-service.ts";
+import { createMemoryService, type MemoryService } from "../src/memory/memory-service.ts";
+import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
+import { McpCallError } from "../src/mcp/mcp-client.ts";
+import { TimeoutError } from "../src/util/async.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 
@@ -50,11 +53,11 @@ test("memorySearch() queries ONLY the session's resolved memory scope, and is bo
   await memory.capture(personal, ["Owns the billing service", "Prefers terse replies"], at);
 
   const personalCtx = ctxFor({ scope: personal, workspace, memory });
-  assert.deepEqual(await personalCtx.memorySearch("billing"), ["#1 (2026-05-31) Owns the billing service"]);
-  assert.deepEqual(await personalCtx.memorySearch("kubernetes"), []);
+  assert.deepEqual((await personalCtx.memorySearch("billing"))?.hits, ["#1 (2026-05-31) Owns the billing service"]);
+  assert.deepEqual((await personalCtx.memorySearch("kubernetes"))?.hits, []);
 
   const channelCtx = ctxFor({ scope: channel, workspace, memory });
-  assert.deepEqual(await channelCtx.memorySearch("billing"), []);
+  assert.deepEqual((await channelCtx.memorySearch("billing"))?.hits, []);
 });
 
 test("memorySearch() honors the explicit limit and never the model's scope (no scope param exists)", async () => {
@@ -66,9 +69,9 @@ test("memorySearch() honors the explicit limit and never the model's scope (no s
 
   const ctx = ctxFor({ scope: personal, workspace, memory });
   const limited = await ctx.memorySearch("likes", 2);
-  assert.equal(limited?.length, 2);
+  assert.equal(limited?.hits.length, 2);
 
-  assert.deepEqual(await ctx.memorySearch("golang"), ["#2 (2026-05-31) likes golang"]);
+  assert.deepEqual((await ctx.memorySearch("golang"))?.hits, ["#2 (2026-05-31) likes golang"]);
 });
 
 test("memory ops signal unavailable (null) when memory is not wired", async () => {
@@ -233,7 +236,7 @@ test("capture-off policy: search/read work, but add/edit/delete are unavailable"
     memoryScopeId: personal,
     memoryAccess: { read: [personal] },
   });
-  assert.deepEqual(await ctx.memorySearch("billing"), ["#1 (2026-05-31) Owns the billing service"]);
+  assert.deepEqual((await ctx.memorySearch("billing"))?.hits, ["#1 (2026-05-31) Owns the billing service"]);
   assert.match((await ctx.memoryRead()) ?? "", /billing service/);
   assert.equal(await ctx.memoryAdd(["a fact"]), null);
   assert.equal(await ctx.memoryEdit([{ id: "1", text: "x" }]), null);
@@ -272,7 +275,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   );
   assert.equal(await ctx.memoryRead("personal:someone-else"), null);
   assert.equal(await ctx.memorySearch("deploys", 20, "personal:someone-else"), null);
-  assert.deepEqual(await ctx.memorySearch("deploys", 20, org), [
+  assert.deepEqual((await ctx.memorySearch("deploys", 20, org))?.hits, [
     `[${org}] #1 (2026-05-31) deploys are frozen in December`,
   ]);
   const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
@@ -287,7 +290,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   assert.match(textOf(await call(tool, { action: "delete", scope: org, ids: ["1"] })), /scope is only allowed/);
   assert.doesNotMatch(await memory.read(org), /stolen/);
   assert.match(await memory.read(org), /December/);
-  const hits = await ctx.memorySearch("deploys");
+  const hits = (await ctx.memorySearch("deploys"))?.hits;
   assert.deepEqual(hits, [
     `[${personal}] #1 (2026-05-31) deploys happen on Fridays`,
     `[${org}] #1 (2026-05-31) deploys are frozen in December`,
@@ -304,6 +307,48 @@ test("explicit capture uses the conversation origin rather than the notebook des
     return capture(scope, facts, at, author, metadata);
   };
   const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", workspace, memory });
-  assert.equal(await tool.memoryAdd(["synthetic fact"]), 1);
+  assert.equal((await tool.memoryAdd(["synthetic fact"]))?.added, 1);
   assert.equal(context?.conversationScopeId, "group:origin");
+});
+
+test("memory search and add report provider problems instead of claiming nothing was found", async () => {
+  const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-problems-")));
+  const notebook = createMemoryService(workspace);
+  const personal = scopeId("personal", "U1");
+  await workspace.ensureScope(personal);
+  const failing: MemoryService = {
+    async recall() {
+      return [];
+    },
+    async query() {
+      throw new McpCallError("mcp tools/call failed (HTTP 403)", { status: 403 });
+    },
+    async capture() {
+      throw new TimeoutError("memory provider timed out after 3000ms");
+    },
+    async read() {
+      return "";
+    },
+  };
+  const memory = createRoutedMemoryService({
+    providers: { default: notebook, knowledge: failing },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false, failOpen: true },
+    ],
+  });
+  const ctx = ctxFor({ scope: personal, workspace, memory: memory as ReturnType<typeof createMemoryService> });
+  const tool = createAgentTools({ current: ctx, emit: () => {}, scopeLabel: personal }).find(
+    (t) => t.name === "memory",
+  );
+  const search = textOf(await call(tool, { action: "search", query: "nothing matches" }));
+  assert.doesNotMatch(search, /no remembered facts/);
+  assert.match(
+    search,
+    /^\[memory_provider_denied\] Memory provider knowledge refused the request \(http_403\)\. Fix: /m,
+  );
+  const add = textOf(await call(tool, { action: "add", facts: [{ text: "prefers terse replies" }] }));
+  assert.match(add, /^Remembered 1 fact\.$/m);
+  assert.match(add, /^\[memory_provider_timeout\] .*whether it stored the facts is unknown; QM did not retry\. Fix: /m);
+  assert.match(await notebook.read(personal), /prefers terse replies/);
 });

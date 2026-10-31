@@ -5,9 +5,15 @@ QM keeps its built-in notebook memory unless `MEMORY_PROVIDER_CONFIG` defines a 
 ## Prompt memory
 
 Each turn carries at most 6,000 characters of memory, selected across every notebook
-the conversation may read, one heading per notebook. With PostgreSQL and an embedding
+the conversation may read and every provider routed to it. Each notebook, and each external
+provider within it, gets its own heading and its own ```untrusted-data block. Recalled text is
+reference data, never instructions: QM escapes triple backticks and closing tags (`</` becomes
+`<\/`) and prefixes lines that start with `#` with a backslash, so a recalled row cannot close its
+block, end the `<environment>` section or pose as a heading. With PostgreSQL and an embedding
 model, facts are ranked by exact cosine similarity to the current message and recent
 dialogue; otherwise the newest facts come first. Later turns add only newly selected facts.
+Provider rows without fact ids are compared line by line by content hash: only new lines are
+added, and a line that drops out is never announced as removed.
 
 Choose the model with the org setting `memory-embedding-model`
 (`{ "modelId": "gateway/<model>" }`, or `null` to turn ranking off).
@@ -80,7 +86,60 @@ Capture policies are:
 
 MCP reads receive `query` and `acting_user` by default. Writes receive `content` and `acting_user`. Operation entries can map optional fields with `queryArg`, `contentArg`, `actorArg`, `scopeArg`, `maxCharsArg`, `inputArg`, `replyArg`, `capturedAtArg`, `sourceArg`, and `idempotencyArg`. Only configured optional fields are sent, so providers can match strict MCP schemas.
 
-Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. External routes fail open by default so an outage does not block recall; set `failOpen: false` on a route to make it strict. Provider calls time out after `timeoutMs` (3 seconds by default). Explicit writes always fail visibly. QM continues to decide readable/writable scopes and passes the acting user to the provider.
+Read and write operations use separate OAuth client-credential pairs. Omit `write` and set route capture to `off` for a read-only provider. Provider calls time out after `timeoutMs` (3 seconds by default). QM continues to decide readable/writable scopes and passes the acting user to the provider.
+
+External routes fail open by default (`failOpen: true`): a failing or slow provider contributes nothing, the turn continues with the other routes, and the failure is recorded as an [outcome](#provider-outcomes). Set `failOpen: false` on a route to make it strict: any failure of that provider then fails the whole recall, search or write for every scope the route serves, so one provider outage stops memory there. Explicit writes report a provider failure either way, as described under [Provider outcomes](#provider-outcomes).
+
+Explicit writes (the `memory` tool's `add` and `POST /v1/memory/facts`) send `idempotencyArg`, when it is mapped, a UUID (RFC 9562 version 8) derived from the tenant, the turn and the fact text, so a retry of the same facts in the same turn carries the same key. Automatic capture keeps sending its own per-turn key. A result whose `structuredContent.status` is `"pending"` is recorded as pending and any other success as committed. A timed-out write is recorded as unknown and is not retried, because the provider may still have stored the facts.
+
+### Attesting the member (`attestActor`)
+
+By default an MCP provider learns who is asking only from the actor argument (`acting_user`), which it cannot tell apart from any other argument. Set `"attestActor": true` on an `mcp` provider to also send the member's canonical QM person id in the `x-qm-actor` HTTP header on every request of each call; linked principals fold into one id, as described in [principal-links.md](./principal-links.md). The model cannot set this header. The actor argument is still sent, with the same value. The field defaults to `false`, applies to reads and writes, and is rejected on `memorable` providers or when it is not a boolean. A provider should honour the header only from OAuth clients it has granted an attest right.
+
+QM attests only ids of 1 to 256 visible ASCII characters (`!` through `~`), the same rule the credential broker and attested MCP connectors apply. When the member's canonical id breaks it, QM makes no call and records the outcome as `denied` with code `invalid_actor`; link the member to a conforming principal id with `POST /v1/admin/principal-links`.
+
+## Provider outcomes
+
+Every recall, search and explicit write records one outcome per provider and scope:
+
+| Outcome                | Meaning                                                                                                                                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ok`                   | The provider returned rows.                                                                                                                                                                                                    |
+| `empty`                | It returned nothing. A `code` in its structured result, such as `actor_unlinked`, is kept.                                                                                                                                     |
+| `committed`, `pending` | An explicit write was acknowledged; `pending` means the provider finishes it later.                                                                                                                                            |
+| `unknown`              | A write timed out, so whether the provider stored anything is unknown.                                                                                                                                                         |
+| `denied`               | HTTP 401 or 403, an OAuth failure, an error result coded `actor_not_attested`, `actor_unlinked` or `argument_mismatch`, an actor QM can't attest (`invalid_actor`), or a provider this conversation may not read (`withheld`). |
+| `timed_out`            | A read took longer than `timeoutMs`.                                                                                                                                                                                           |
+| `failed`               | Any other error. `code` carries the provider's error code or `http_<status>`.                                                                                                                                                  |
+
+QM reads `code` and `status` on a successful result only from `structuredContent`, never from its text, which is memory. An error result's code may sit in `structuredContent` or in a JSON text block, at `code` or `error.code`.
+
+Where to read them:
+
+- **Stored turns.** When providers are routed, each turn's user entry carries `payload.memoryRecallOutcomes`, a list of `{ provider, scope, outcome, ms, code? }`, even when no memory text was injected. Operators read it in the admin session transcript (`GET /v1/admin/sessions/:id`); member-facing transcripts hide it.
+- **The `memory` tool.** Search and add results append one line per problem, `[code] detail Fix: …`, and the stored tool result carries the same `problems`. A search with a failed provider never reports "no remembered facts".
+- **HTTP.** `POST /v1/memory/search` and `POST /v1/memory/facts` answer `502` with an `application/problem+json` body: `status`, `title`, `detail` and `problems`, each `{ code, provider, detail, fix, sideEffects? }`, plus the partial `results` of a search or the `added`, `scopeId` and `outcomes` of a write. A successful write's `200` body carries `outcomes` when providers are routed.
+
+Problem codes are `memory_provider_denied` (a write's `sideEffects` is `none`), `memory_provider_timeout` and `memory_provider_failed` (a write's `sideEffects` is `unknown`). A `withheld` provider is left out silently and is not a problem.
+
+## Automatic capture timing
+
+Post-turn capture waits for a conversation to go quiet. QM buffers consecutive turns from the same member in the same conversation and extracts facts once no new turn arrives for `MEMORY_CAPTURE_QUIET_MS` (180000, three minutes, by default) or after `MEMORY_CAPTURE_MAX_TURNS` turns (10). Set `MEMORY_CAPTURE_QUIET_MS=0` to capture after every turn. A fact stated in one turn can therefore take three minutes to reach a provider, and the buffer lives in the instance's memory, so a restart or deploy during the quiet period drops the buffered turns.
+
+## Troubleshooting
+
+| Symptom                                                                             | Cause                                                                                   | Fix                                                                                                                        |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Startup fails with `… url (https://host) must not carry credentials or a #fragment` | The provider URL has `user:pass@` or a `#fragment`.                                     | Move credentials to the `clientIdEnv`/`clientSecretEnv` variables and drop the fragment.                                   |
+| Startup fails with `… must use HTTPS or a recognized private HTTP host`             | Plain HTTP to a public host.                                                            | Use `https://`, or HTTP only on `localhost`, `127.0.0.1`, `*.internal`, `*.flycast` or `*.local`.                          |
+| Startup fails with `… is not a valid URL (value not shown)`                         | The URL does not parse; QM never echoes it, since it may hold secrets.                  | Check the value of `url` in `MEMORY_PROVIDER_CONFIG`.                                                                      |
+| Outcome `denied` with `http_401`, `http_403` or an OAuth code                       | The provider rejected QM's OAuth client.                                                | Check the client id and secret variables and the client's grant on the provider.                                           |
+| Outcome `denied` with `actor_not_attested`                                          | `attestActor` is set but the provider has not granted QM's client the attest right.     | Grant that client the attest right on the provider.                                                                        |
+| Outcome `denied` with `invalid_actor`                                               | The member's canonical id is not 1 to 256 visible ASCII characters, so QM made no call. | Link the member to a conforming principal id with `POST /v1/admin/principal-links`.                                        |
+| Outcome `empty` with `actor_unlinked`                                               | The provider has no member linked to this QM person id.                                 | Link the QM person id to their member on the provider.                                                                     |
+| Outcome `timed_out` or write `unknown`                                              | The provider took longer than `timeoutMs`.                                              | Raise `timeoutMs` (up to 30000) or fix the provider's latency; check whether a timed-out write landed before repeating it. |
+| Outcome `failed`                                                                    | Wrong tool name, schema mismatch, or a provider error.                                  | Check the provider's logs and the `tool` and `*Arg` mappings.                                                              |
+| New facts reach the provider minutes late                                           | Automatic capture waits `MEMORY_CAPTURE_QUIET_MS`.                                      | Lower `MEMORY_CAPTURE_QUIET_MS`, or use explicit writes.                                                                   |
 
 ## Migrating from the retired `BRAIN_*` variables
 

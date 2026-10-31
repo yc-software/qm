@@ -1,15 +1,32 @@
 import type { ScopeId } from "../types.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
-import { factLine } from "./facts.ts";
+import { factLine, type MemoryCandidate, type MemorySource } from "./facts.ts";
+import { promptText, quotedData } from "../util/text.ts";
 
 export interface RecalledFact {
   scope: ScopeId;
   id?: string;
   text: string;
+  source?: MemorySource;
 }
 
-const heading = (scope: ScopeId, labels: ReadonlyMap<string, string>) => `### ${labels.get(scope) ?? scope}`;
+type Block = Pick<RecalledFact, "scope" | "source">;
+
+const blockKey = ({ scope, source }: Block) => JSON.stringify([scope, source?.provider ?? null]);
+
+const heading = ({ scope, source }: Block, labels: ReadonlyMap<string, string>) =>
+  `### ${promptText(labels.get(scope) ?? scope)}${source ? ` · ${promptText(source.label)}` : ""}`;
+
+const BLOCK_FRAME = quotedData("").length;
+
+const lines = <T extends MemoryCandidate>(row: T): T[] =>
+  row.id === undefined
+    ? row.text
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((text) => ({ ...row, text }))
+    : [row];
 
 export async function recallAcrossScopes(
   memory: MemoryService,
@@ -23,29 +40,42 @@ export async function recallAcrossScopes(
   const batches = await Promise.all(
     unique.map(async (scope) => (await memory.recall(scope, context)).map((row) => ({ ...row, scope }))),
   );
-  const ranked = batches.flat().sort((a, b) => b.score - a.score || (b.at ?? 0) - (a.at ?? 0));
+  const ranked = batches
+    .flat()
+    .flatMap(lines)
+    .sort((a, b) => b.score - a.score || (b.at ?? 0) - (a.at ?? 0));
   const picked: RecalledFact[] = [];
-  const headed = new Set<ScopeId>();
+  const blocks = new Set<string>();
   const seen = new Set<string>();
   let size = 0;
-  for (const { scope, id, text: full } of ranked) {
+  for (const row of ranked) {
+    const { scope, id, text: full, source } = row;
     if (!full.trim() || seen.has(full)) continue;
-    const overhead = headed.has(scope) ? 1 : (headed.size ? 2 : 0) + heading(scope, labels).length + 1;
+    const overhead = blocks.has(blockKey(row))
+      ? 1
+      : (blocks.size ? 2 : 0) + heading(row, labels).length + 1 + BLOCK_FRAME;
     const text = id === undefined ? full.slice(0, Math.max(0, budget - size - overhead)) : full;
     const cost = text.length + overhead;
     if (!text.trim() || size + cost > budget) continue;
     size += cost;
     seen.add(full);
-    headed.add(scope);
-    picked.push({ scope, ...(id !== undefined ? { id } : {}), text });
+    blocks.add(blockKey(row));
+    picked.push({ scope, ...(id !== undefined ? { id } : {}), text, ...(source ? { source } : {}) });
   }
   return picked;
 }
 
 export function renderRecall(facts: readonly RecalledFact[], labels: ReadonlyMap<string, string>): string {
-  const groups = new Map<ScopeId, string[]>();
-  for (const { scope, text } of facts) groups.set(scope, [...(groups.get(scope) ?? []), text]);
-  return [...groups].map(([scope, rows]) => `${heading(scope, labels)}\n${rows.join("\n")}`).join("\n\n");
+  const blocks = new Map<string, { block: Block; rows: string[] }>();
+  for (const fact of facts) {
+    const key = blockKey(fact);
+    const block = blocks.get(key) ?? { block: fact, rows: [] };
+    block.rows.push(fact.text);
+    blocks.set(key, block);
+  }
+  return [...blocks.values()]
+    .map(({ block, rows }) => `${heading(block, labels)}\n${quotedData(rows.join("\n"))}`)
+    .join("\n\n");
 }
 
 export async function searchAcrossScopes(
@@ -75,9 +105,13 @@ export async function searchNotebooks(
   limit: number | undefined,
   scope: ScopeId | undefined,
   actorId: string | undefined,
+  report?: MemoryRecallContext["report"],
 ): Promise<string[] | null> {
   if (!readable.length || (scope !== undefined && !readable.includes(scope))) return null;
-  const hits = await searchAcrossScopes(memory, scope === undefined ? readable : [scope], query, limit, { actorId });
+  const hits = await searchAcrossScopes(memory, scope === undefined ? readable : [scope], query, limit, {
+    actorId,
+    ...(report ? { report } : {}),
+  });
   return hits.map((hit) => (readable.length > 1 || scope !== undefined ? `[${hit.scopeId}] ${hit.fact}` : hit.fact));
 }
 
