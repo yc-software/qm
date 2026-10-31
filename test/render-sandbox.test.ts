@@ -21,6 +21,10 @@ import { AWS_CLI_ENSURE } from "../src/sandbox/aws-cli.ts";
 import { createSandboxResources } from "../src/sandbox/sandbox-resources.ts";
 import { createSandboxRouter } from "../src/sandbox/sandbox-routing.ts";
 import { createFakeRender, serveFakeRenderApi } from "./support/fake-render.ts";
+import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function setup(
   t: TestContext,
@@ -233,7 +237,7 @@ test("Render restores files from its checkpoint after sandbox expiry and a core 
   const restored = await second.provision(layers);
   assert.equal(restored.coldStart, false);
   assert.equal(fake.createdFrom[1], checkpointId);
-  assert.equal(fake.snapshotSource(checkpointId)?.name, "qm-personal-tester-e41213");
+  assert.equal(fake.snapshotSource(checkpointId)?.name, sandboxScopeName("qm", scope));
   assert.equal(await second.readFile(restored, "nested/work.txt"), "retained");
   assert.equal(await second.readFile(restored, "missing"), null);
   const binary = Buffer.from([0, 255, 4, 0, 128]);

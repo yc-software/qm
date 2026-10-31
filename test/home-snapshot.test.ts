@@ -24,6 +24,9 @@ import {
   type HomeSnapshotStore,
   type SnapshotUpload,
 } from "../src/sandbox/home-snapshot.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 interface Box {
   root: string;

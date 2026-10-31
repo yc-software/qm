@@ -14,6 +14,9 @@ import type { DeployReconcileInput } from "../src/deploy/deploy-provider.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 interface ProviderProbe {
   appliedImages: Array<string | undefined>;

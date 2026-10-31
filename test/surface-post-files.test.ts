@@ -16,6 +16,9 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createMemoryChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
   return {

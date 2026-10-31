@@ -19,6 +19,10 @@ import {
   summarize,
   type BenchResult,
 } from "../src/memory/bench.ts";
+import { randomUUID } from "node:crypto";
+import { enterTenant } from "../src/tenants/context.ts";
+
+enterTenant(randomUUID());
 
 if (!process.env.ANTHROPIC_API_KEY) {
   console.error("ANTHROPIC_API_KEY not set — the benchmark replays extraction and judges with a live model.");

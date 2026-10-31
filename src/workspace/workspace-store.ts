@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, readdir, opendir, rm } from "node:fs/promis
 import { join, resolve, relative, isAbsolute, dirname } from "node:path";
 import type { ScopeId } from "../types.ts";
 import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
+import { tenantDir } from "../tenants/storage.ts";
 
 export interface WorkspaceStore {
   scopeDir(scopeId: ScopeId): string;
@@ -26,7 +27,7 @@ export function createLocalWorkspaceStore(rootDir: string): WorkspaceStore {
   const base = resolve(rootDir, "workspaces");
 
   function scopeDir(scopeId: ScopeId): string {
-    return join(base, scopeStorageKey(scopeId));
+    return join(tenantDir(base), scopeStorageKey(scopeId));
   }
 
   const store: WorkspaceStore = {

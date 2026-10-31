@@ -10,6 +10,10 @@ import { computeBundleHash, type SkillBundle } from "../src/skills/skill-bundle-
 import type { SkillFile, SkillResolution } from "../src/skills/skill-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { randomUUID } from "node:crypto";
+import { enterTenant } from "../src/tenants/context.ts";
+
+enterTenant(randomUUID());
 
 if (!process.env.SPRITES_TOKEN) {
   console.error("set SPRITES_TOKEN (mint one with `sprite login`)");

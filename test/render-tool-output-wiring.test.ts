@@ -3,15 +3,17 @@ import { mock, test } from "node:test";
 import { S3Client } from "@aws-sdk/client-s3";
 import * as toolOutput from "../src/sessions/tool-output.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
+import { withTenant } from "../src/tenants/context.ts";
 
 type ToolOutputOptions = Parameters<typeof toolOutput.createPostgresToolOutputStore>[0];
-let bytesFor: ToolOutputOptions["bytesFor"] | undefined;
+let bytes: ToolOutputOptions["bytes"] | undefined;
 
 mock.module("../src/sessions/tool-output.ts", {
   namedExports: {
     ...toolOutput,
     createPostgresToolOutputStore: (options: ToolOutputOptions) => {
-      bytesFor = options.bytesFor;
+      bytes = options.bytes;
       return toolOutput.createMemoryToolOutputStore();
     },
   },
@@ -44,13 +46,14 @@ test("parked tool output uses the configured S3 endpoint and bucket path", async
   });
   const built = buildApp(config);
   try {
-    assert.ok(bytesFor);
-    const result = await bytesFor("tool-output/test/").put(Buffer.from("complete tool output"));
+    assert.ok(bytes);
+    const store = bytes;
+    const result = await withTenant(TEST_TENANT, () => store.put(Buffer.from("complete tool output")));
     assert.equal(result.sizeBytes, Buffer.byteLength("complete tool output"));
     assert.equal(requests.length, 3);
     for (const request of requests) {
       assert.equal(request.hostname, "minio.internal");
-      assert.equal(request.path, `/qm-storage/tool-output/test/${result.blobKey}`);
+      assert.equal(request.path, `/qm-storage/tool-output/${TEST_TENANT}/${result.blobKey}`);
     }
   } finally {
     await built.runtime.stop();

@@ -11,6 +11,9 @@ import { createConfiguredMemoryService } from "../../src/memory/provider-factory
 import { createLocalWorkspaceStore } from "../../src/workspace/workspace-store.ts";
 import { scopeId, type ScopeId, type SessionEntry } from "../../src/types.ts";
 import { recallText } from "../support/recall-text.ts";
+import { bindTestTenant } from "../support/tenant.ts";
+
+bindTestTenant();
 
 /**
  * Extended live suite against the real Memorable extraction service. Deliberately not run in CI:

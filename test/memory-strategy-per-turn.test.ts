@@ -9,6 +9,9 @@ import { createMemoryStrategy, parseMemoryStrategyKind } from "../src/memory/str
 import { createPerTurnStrategy, MEMORY_EXTRACTION_PROMPT, parseFacts } from "../src/memory/strategies/per-turn.ts";
 import { createMockHarness } from "./support/mock-harness.ts";
 import type { HarnessModelUtilities } from "../src/harness/harness.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SCOPE = "user:U1";
 

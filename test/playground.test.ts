@@ -7,6 +7,9 @@ import {
   normalizePlaygroundTitle,
   validatePlaygroundHtml,
 } from "../src/playgrounds/playground.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const HTML = "<!doctype html><button id='go'>Go</button><script>go.onclick=()=>go.textContent='Done'</script>";
 

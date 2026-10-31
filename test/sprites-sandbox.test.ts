@@ -25,6 +25,9 @@ import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-to
 import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./support/fake-sprites.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { APIError, SpriteCommand } from "@fly/sprites";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 let fake: FakeSprites;
 let sandbox: Sandbox;
@@ -170,7 +173,7 @@ test("background processes inherit the force-through proxy env", async () => {
 test("scope name is stable and slugged", () => {
   const a = sandboxScopeName("qmt", "person:tester");
   assert.equal(a, sandboxScopeName("qmt", "person:tester"));
-  assert.match(a, /^qmt-person-tester-[0-9a-f]{6}$/);
+  assert.match(a, /^qmt-00000000-person-tester-[0-9a-f]{12}$/);
 });
 
 test("scope names fit the 63-char provider limit for long prefixes, scratch included", () => {
@@ -187,11 +190,9 @@ test("scope names fit the 63-char provider limit for long prefixes, scratch incl
     }
     assert.notEqual(sandboxScopeName(prefix, scope), sandboxScopeName(`${prefix}-scratch`, scope));
   }
-  // Names that already fit are unchanged, so existing resident computers keep their identity.
-  assert.equal(sandboxScopeName("qmt", "person:tester"), "qmt-person-tester-7b537e");
   assert.match(
     sandboxScopeName("qm-long-generic-fleet-tenant-prefix", "person:tester"),
-    /^qm-long-generic-fleet-tenant-prefix-person-tester-[0-9a-f]{6}$/,
+    /^qm-long-generic-fleet-tenant-prefix-00000000-[a-z0-9-]*[0-9a-f]{12}$/,
   );
 });
 

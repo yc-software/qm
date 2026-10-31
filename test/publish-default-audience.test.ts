@@ -11,6 +11,9 @@ import { createMemoryConfigStore, type ScopedConfigStore } from "../src/resoluti
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { scopeId, type ConversationKind, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const ORG = "default-org";
 const orgScope = scopeId("org", ORG);

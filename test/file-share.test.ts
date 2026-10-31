@@ -14,6 +14,9 @@ import { scopeId, type Principal } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { createAttachStaging } from "../src/core/orchestrator/attach-tool.ts";
 import { createMemoryBlobTransferStore, collectBlob } from "../src/persistence/blob-transfer.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,

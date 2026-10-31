@@ -12,6 +12,9 @@ import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.
 import { installFakeMicrovm, type FakeMicrovm } from "./support/fake-microvm.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function makeSandbox(fake: FakeMicrovm, opts: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "aws-ws-"));

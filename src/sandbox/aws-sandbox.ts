@@ -6,6 +6,8 @@ import type { WorkspaceStore } from "../workspace/workspace-store.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import { createKeyedQueue } from "../util/async.ts";
+import { hashId } from "../util/crypto.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { scopeStorageKey } from "../../cli/src/scope-storage-key.ts";
 import { swallowAs, errMessage } from "../util/errors.ts";
 import { shq } from "../util/shell.ts";
@@ -30,7 +32,13 @@ import type {
   TeardownOptions,
 } from "./sandbox.ts";
 import { execFailureDetail, visibleNotInstalled, visibleTools } from "./sandbox.ts";
-import { createHomeSnapshotOps, createS3SnapshotStore, HOME_SNAPSHOT_PRUNE, snapshotDue } from "./home-snapshot.ts";
+import {
+  createHomeSnapshotOps,
+  createS3SnapshotStore,
+  HOME_SNAPSHOT_PRUNE,
+  homeSnapshotKey,
+  snapshotDue,
+} from "./home-snapshot.ts";
 import {
   ephemeralCredLinkPaths,
   ephemeralCredLinkScript,
@@ -98,6 +106,8 @@ interface BodyRef {
   endpoint: string;
 }
 
+export const awsHomeArea = (prefix: string | undefined): string => (prefix ?? "sandbox-home").replace(/\/+$/, "");
+
 export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOptions): Sandbox {
   const region = opts.region;
   const api =
@@ -118,7 +128,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
 
   const ingress = opts.ingressConnectorArns?.length ? opts.ingressConnectorArns : [DEFAULT_INGRESS(region)];
   const egress = opts.egressConnectorArns?.length ? opts.egressConnectorArns : [DEFAULT_EGRESS(region)];
-  const s3Prefix = (opts.s3Prefix ?? "sandbox-home").replace(/\/+$/, "");
+  const s3Prefix = awsHomeArea(opts.s3Prefix);
   const agentPort = opts.agentPort ?? 8080;
   const defaultTimeoutSec = opts.defaultTimeoutSec ?? 600;
   const maximumDurationInSeconds = opts.maximumDurationInSeconds ?? 28_800;
@@ -138,7 +148,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     onError?.({ category, code, message, ...(scopeLabel ? { scopeLabel } : {}) });
   }
 
-  const s3KeyFor = (scope: string): string => `${s3Prefix}/${scopeStorageKey(scope)}.tar`;
+  const s3KeyFor = (scope: string): string => homeSnapshotKey(s3Prefix, scope, scopeStorageKey);
 
   const client = createMicrovmClient(api, {
     agentPort,
@@ -180,7 +190,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     homeDir: HOME_DIR,
     homeTarPath: HOME_TAR,
     prunePaths: [...SNAPSHOT_PRUNE, ...ephemeralCredLinkPaths(credentialPaths).map(({ rel }) => `./${rel}`)],
-    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, keyFor: s3KeyFor }),
+    store: createS3SnapshotStore({ bucket: opts.s3Bucket, prefix: s3Prefix, s3, scopeKey: scopeStorageKey }),
     io: {
       runCommand: async (id, script, timeoutMs) => {
         const r = await execRaw(id, script, Math.ceil(timeoutMs / 1000));
@@ -220,7 +230,7 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
         suspendedDurationSeconds: opts.suspendedDurationSeconds ?? 3600,
       },
       maximumDurationInSeconds,
-      clientToken: `${scope ?? "scratch"}-${Date.now()}`,
+      clientToken: hashId([currentTenant(), scope ?? "scratch", String(Date.now())], 32),
     });
     try {
       if (scope)
@@ -300,7 +310,8 @@ export function createAwsSandbox(workspace: WorkspaceStore, opts: AwsSandboxOpti
     });
   }
 
-  async function ensureScratch(key: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
+  async function ensureScratch(scratchKey: string): Promise<{ id: string; endpoint: string; coldStart: boolean }> {
+    const key = `${currentTenant()}:${scratchKey}`;
     return provisionQueue(`scratch:${key}`, async () => {
       const existing = scratchByKey.get(key);
       if (existing) {

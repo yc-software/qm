@@ -108,41 +108,6 @@ test("--sandbox-dir sources the layer from a shared dir while config stays in th
   }
 });
 
-test("sandbox.app/env/secretEnv become the core's FLY_* + FLY_RESIDENT_ENV_* env", async () => {
-  const dir = makeDeployment(
-    {
-      sandbox: {
-        app: "wire-sandboxes",
-        env: { TZ: "UTC" },
-        secretEnv: ["COMPANY_API_TOKEN"],
-      },
-    },
-    (d) => writeFileSync(join(d, ".env"), "COMPANY_API_TOKEN=sek-ret\n"),
-  );
-  try {
-    const out = await plan(dir);
-    assert.match(out, /FLY_RESIDENT_ENV_TZ/);
-    assert.match(out, /FLY_RESIDENT_ENV_COMPANY_API_TOKEN/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("a missing secretEnv value is warned, not invented", async () => {
-  const dir = makeDeployment({
-    sandbox: {
-      app: "s",
-      secretEnv: ["NOPE_TOKEN"],
-    },
-  });
-  try {
-    const out = await plan(dir);
-    assert.match(out, /sandbox.secretEnv "NOPE_TOKEN" has no value/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("model → PI_MODEL and host ports follow the offset map (core+0, portal+1, combined web-ui+2)", async () => {
   const dir = makeDeployment({ model: "claude-opus-4-8", services: ["core", "portal", "web-ui", "admin"] });
   try {

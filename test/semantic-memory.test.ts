@@ -13,6 +13,9 @@ import { createSemanticMemoryService, memoryRecallQuery } from "../src/memory/se
 import { createMemoryEmbedder, unitVector, type MemoryEmbedder } from "../src/model/embeddings.ts";
 import { recallAcrossScopes, renderRecall } from "../src/memory/cross-scope.ts";
 import type { MemoryRecallContext, MemoryService } from "../src/memory/memory-service.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const recall = async (memory: MemoryService, scope: string, context: MemoryRecallContext = {}) =>
   (await recallAcrossScopes(memory, [scope], context)).map((fact) => fact.text).join("\n");
