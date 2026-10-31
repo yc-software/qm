@@ -415,7 +415,7 @@ test("hydration isolates promoted builtins, incompatible providers, missing temp
     ({ spec: value, disabled: false, updatedAt: 1, updatedBy: "admin" }) as StoredModelOverlay;
   await backing.put("gpt-5.5", row({ ...spec, id: "gpt-5.5" }));
   await backing.put("missing-template", row({ ...spec, id: "missing-template", template: "removed-sdk-template" }));
-  await backing.put("corrupt-model", row(null));
+  await backing.put("corrupt-model", row({ id: "corrupt-model", provider: 42 }));
   await store.refresh();
   assert.equal(getRequiredModel("gpt-5.5").contextWindow, builtin.contextWindow);
   assert.deepEqual(getRequiredModel("gpt-5.5").cost, builtin.cost);

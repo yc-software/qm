@@ -366,7 +366,12 @@ test("corrupt persisted rows and copied proofs cannot enable a different model I
   await store.upsert(spec, "admin");
   const saved = (await backing.get(spec.id))!;
   await backing.put("copied-model", saved);
-  await backing.put("null-model", null as unknown as StoredModelOverlay);
+  await backing.put("null-model", {
+    spec: {} as StoredModelOverlay["spec"],
+    disabled: false,
+    updatedAt: 1,
+    updatedBy: "admin",
+  });
   await store.refresh();
   assert.ok(resolveModel(spec.id));
   assert.equal(resolveModel("copied-model"), undefined);
