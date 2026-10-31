@@ -12,6 +12,7 @@ import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -19,7 +20,7 @@ type Snapshot = Awaited<ReturnType<typeof userRuntimeConfigBody>>;
 
 async function setup() {
   const built = buildApp(testConfig());
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     userModelCredentials: built.userModelCredentials,
     modelCredentials: built.modelCredentials,

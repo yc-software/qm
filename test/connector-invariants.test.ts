@@ -21,6 +21,8 @@ import { OTHER_TENANT } from "./support/tenant.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
+import { mintSignedPayload } from "../src/auth/signed-token.ts";
 
 const CATALOG_HOSTS = Object.values(PROVIDERS).flatMap((p) => p.hosts);
 
@@ -74,13 +76,14 @@ test("cross-tenant — the callback rejects sealed state minted for a different 
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
+    const redirectUri = `${base}/v1/connectors/oauth/google/callback`;
     const state = await withTenant(OTHER_TENANT, () =>
       sealOAuthState(
-        { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
+        { provider: "google", principalId: "U1", redirectUri },
         { secret: SECRET },
       ),
     );
-    const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
+    const res = await fetch(`${redirectUri}?code=c&state=${encodeURIComponent(state)}`);
     assert.equal(res.status, 400);
     assert.match(await res.text(), /different tenant/);
     assert.equal(exchanged, false, "exchange must NOT run for a foreign-tenant state");
@@ -103,7 +106,11 @@ test("empty-token guard — an adapter returning no access token fails the conne
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const state = await sealOAuthState(
-      { provider: "google", principalId: "U1", redirectUri: `${base}/v1/connectors/oauth/google/callback` },
+      {
+        provider: "google",
+        principalId: "U1",
+        redirectUri: `${base}/v1/connectors/oauth/google/callback`,
+      },
       { secret: SECRET },
     );
     const res = await fetch(`${base}/v1/connectors/oauth/google/callback?code=c&state=${encodeURIComponent(state)}`);
@@ -127,7 +134,7 @@ test("status/selector parity — a personal-only connection reports connected (m
     { accessToken: "u1-personal", accountType: "personal" },
     "personal",
   );
-  const server = createInsecureTestServer(built.app, { connectorTokens: built.connectorTokens });
+  const server = createInsecureTestServer(TEST_TENANT, built.app, { connectorTokens: built.connectorTokens });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

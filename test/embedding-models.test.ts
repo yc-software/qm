@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
@@ -12,7 +12,7 @@ import { createGatewayCatalog } from "../src/model/gateway-catalog.ts";
 import { gatewayModelsJson, setGatewayModels } from "../src/model/gateway-models.ts";
 import { createMemoryEmbedder } from "../src/model/embeddings.ts";
 import { createModelVerifier } from "../src/model/model-verification.ts";
-import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
+import { createModelOverlayStore, setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { createModelCredentialStore } from "../src/model/model-credential-store.ts";
 import {
   resolveModel,
@@ -22,10 +22,8 @@ import {
   defaultWebuiModelIds,
   modelSupported,
 } from "../src/model/pi-models.ts";
-import { setModelOverlays } from "../src/model/model-overlay-store.ts";
 import { recallText } from "./support/recall-text.ts";
 import { testConfigStore, testConfigTables, testMap } from "./support/test-database.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testModelTables } from "./support/typed-stores.ts";
 
 const definition = {
@@ -152,7 +150,7 @@ test("HTTP embedding selection accepts only known embedding models and survives 
   await built.modelCredentials.set("openai", "test-key", "admin");
   await built.modelRegistry.upsert(definition, "admin");
   await built.refreshModels();
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/scopes/${TEST_ROOT_SCOPE}/memory-embedding-model`;

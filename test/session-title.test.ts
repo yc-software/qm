@@ -15,6 +15,7 @@ import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-title-"));
@@ -107,7 +108,7 @@ test("a rejected title answer is recorded with the rule that rejected it before 
 
 test("POST /v1/sessions/:id/title answers 200 with the fallback title and records why the answer was rejected", async () => {
   const { app, errors, config, admin, auditLog } = freshApp();
-  const server = createInsecureTestServer(app, { config, admin, auditLog });
+  const server = createInsecureTestServer(TEST_TENANT, app, { config, admin, auditLog });
   server.listen(0);
   try {
     const turn = await app.turn(dm("Simulate reply-shaped title", "web:U1:title-route"));

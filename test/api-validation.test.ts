@@ -12,10 +12,11 @@ import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function start(): { base: string; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "apival-")) }));
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(TEST_TENANT, built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, close: () => new Promise<void>((r) => server.close(() => r())) };

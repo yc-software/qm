@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifySignature, type SourceAuth, SOURCE_AUTH_REPLAY_WINDOW_MS } from "../auth/source-auth.ts";
 
 import { json as sendJson } from "../../plugins/chassis/src/http.ts";
+import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 
 export { sendJson };
 
@@ -110,6 +111,11 @@ export async function readRawBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTE
     chunks.push(chunk as Buffer);
   }
   return chunks.length === 0 ? "" : Buffer.concat(chunks).toString("utf8");
+}
+
+export function tenantHeader(req: IncomingMessage): string {
+  const value = req.headers[TENANT_HEADER];
+  return typeof value === "string" ? value : "";
 }
 
 export async function verifyOrReject(

@@ -1,17 +1,16 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp as buildProductionApp, serverDeps } from "../src/wiring.ts";
 import { enterTenant } from "../src/tenants/context.ts";
 import type { Config } from "../src/config.ts";
 import { stopAtEnd, testTenantSettings } from "./support/build-app.ts";
-import { TEST_TENANT } from "./support/tenant.ts";
+import { TEST_TENANT, bindTestTenant, TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
-import { getRequiredModel } from "../src/model/pi-models.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { getRequiredModel, resolveModel, contextTokenBudgetForModel, safeModelMetadata, modelSupported, modelSupportsFastMode, fastModeModelIds, defaultWebuiModelIds } from "../src/model/pi-models.ts";
 
 bindTestTenant();
 
@@ -33,7 +32,7 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
     modelCredentialFetch: async () => Response.json({ data: [] }),
     modelVerificationProbe: async () => {},
   });
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   server.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -56,22 +55,12 @@ test("unknown builtin-provider model fails resolution and a live runtime selecti
   }
 });
 
-import { afterEach } from "node:test";
 import {
   createModelOverlayStore as createStore,
   setModelOverlays,
   validateModelOverlay,
   type StoredModelOverlay,
 } from "../src/model/model-overlay-store.ts";
-import {
-  resolveModel,
-  contextTokenBudgetForModel,
-  safeModelMetadata,
-  modelSupported,
-  modelSupportsFastMode,
-  fastModeModelIds,
-  defaultWebuiModelIds,
-} from "../src/model/pi-models.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { selectableModelCatalog } from "../src/model/model-catalog.ts";
 import { resolveIndividualAuthRouting } from "../src/core/individual-auth-routing.ts";
@@ -214,7 +203,7 @@ test("live admin lifecycle is authorized, audited, immediately selectable and re
     modelVerificationProbe: async () => {},
   });
   await built.modelCredentials.set("openai", "local-test-key", "admin-alice");
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const api = (path: string, method = "GET", body?: unknown, headers = ADMIN) =>
@@ -469,7 +458,7 @@ test("model refresh is limited to dependent routes and admin repair survives sta
       await registry.refresh();
     },
   };
-  const server = createInsecureTestServer(built.app, deps);
+  const server = createInsecureTestServer(TEST_TENANT, built.app, deps);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
@@ -511,7 +500,6 @@ test("overlay resolution preserves canonical personal endpoints and upstream bui
 
 import { resolveRuntimeChoice } from "../src/agent/runtime-choice.ts";
 import { wantsFastMode } from "../src/model/model-runtime.ts";
-import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testModelTables } from "./support/typed-stores.ts";
 
 test("runtime normalization preserves native capabilities and reflects overlay capability edits", async () => {

@@ -15,6 +15,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { scopeId } from "../src/types.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "web-run-ownership-secret".repeat(2);
 
@@ -45,7 +46,7 @@ function as(user: string, init: RequestInit = {}): RequestInit {
     ...init,
     headers: {
       "content-type": "application/json",
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, SECRET),
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: TEST_TENANT, p: user, exp: Date.now() + 60_000 }, SECRET),
       ...init.headers,
     },
   };

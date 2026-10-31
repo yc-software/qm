@@ -11,6 +11,7 @@ import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const org = TEST_ROOT_SCOPE;
 const internalActor = { externalId: "U1" };
@@ -103,7 +104,7 @@ test("a bot assertion can enter the turn pipeline", async () => {
 
 test("admin resource: org-only PUT, read-back, and the surface-config echo", async () => {
   const built = freshApp();
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

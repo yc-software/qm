@@ -1,4 +1,5 @@
 import { before } from "node:test";
+import { TENANT_HEADER } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { enterTenant } from "../../src/tenants/context.ts";
 import { OTHER_TENANT, seedTenant, seedTestTenants, TEST_TENANT } from "./tenant-seed.ts";
 
@@ -11,6 +12,7 @@ export function testTenantsSeeded(): Promise<void> {
   const url = process.env.DATABASE_URL;
   return url ? (seeding ??= seedTestTenants(url)) : Promise.resolve();
 }
+export const TENANT_HEADERS = { [TENANT_HEADER]: TEST_TENANT };
 
 export function bindTestTenant(): void {
   enterTenant(TEST_TENANT);

@@ -15,6 +15,7 @@ import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const DAY = 86_400_000;
 const at = (dayIdx: number, frac = 0.5) => Math.round((dayIdx + frac) * DAY);
@@ -69,7 +70,7 @@ test("computeRetention: empty input yields zeros, never NaN", () => {
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-ret-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { createModelOverlayStore } from "../src/model/model-overlay-store.ts";
+import { test, afterEach } from "node:test";
+import { createModelOverlayStore, setModelOverlays } from "../src/model/model-overlay-store.ts";
 
 const spec = {
   id: "verify-future",
@@ -18,18 +18,16 @@ test("no model can be enabled without provider verification", async () => {
   assert.deepEqual(await store.statuses(), []);
 });
 
-import { afterEach } from "node:test";
 import {
   ModelVerificationError,
   verificationFailure,
   createModelVerifier,
   type ModelVerifier,
 } from "../src/model/model-verification.ts";
-import { resolveModel, modelUnavailableReason } from "../src/model/pi-models.ts";
-import { setModelOverlays } from "../src/model/model-overlay-store.ts";
+import { resolveModel, modelUnavailableReason, modelFromOverlay } from "../src/model/pi-models.ts";
 import type { StoredModelOverlay } from "../src/model/model-overlay-store.ts";
 import { ProviderTurnError, type ProviderErrorCode } from "../src/core/turn-error.ts";
-import { GatewayModelUnavailableError } from "../src/model/provider-endpoints.ts";
+import { GatewayModelUnavailableError, setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 
 const verified: ModelVerifier = async () => ({ fingerprint: "test-context", probe: async () => {} });
 afterEach(() => setModelOverlays([]));
@@ -166,9 +164,7 @@ import { TEST_TENANT } from "./support/tenant.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { AddressInfo } from "node:net";
-import { modelFromOverlay } from "../src/model/pi-models.ts";
 import { parseModelOverlay } from "../src/model/model-overlay.ts";
-import { setProviderBaseUrls } from "../src/model/provider-endpoints.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -192,7 +188,7 @@ test("live API verifies exact serving credentials, blocks denied models, recheck
     { OPENAI_BASE_URL: upstream.url + "/v1", ANTHROPIC_BASE_URL: upstream.url },
     { modelCredentialFetch: async () => Response.json({ data: [] }) },
   );
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(TEST_TENANT, built.app, serverDeps(config, built));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const headers = { "content-type": "application/json", "x-admin-actor": "admin-alice" };

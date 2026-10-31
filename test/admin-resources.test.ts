@@ -13,6 +13,7 @@ import { testConfig } from "./support/test-config.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -42,7 +43,7 @@ function start(withLayer = true): { base: string; built: BuiltApp; close: () => 
       ...(withLayer ? { deploymentLayerDir: credentialLayer() } : {}),
     }),
   );
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     config: built.config,
     admin: built.admin,
     auditLog: built.auditLog,

@@ -14,6 +14,7 @@ import { testConfig } from "./support/test-config.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 type Page = { sessions: Session[]; pinned?: Session[]; nextCursor: string | null; hasArchived?: boolean };
 
@@ -24,7 +25,7 @@ async function withServer<T>(
   ) => Promise<T>,
 ): Promise<T> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "paging-")) }));
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(TEST_TENANT, built.app);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

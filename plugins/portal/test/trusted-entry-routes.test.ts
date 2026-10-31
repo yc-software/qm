@@ -6,6 +6,8 @@ import { createHash } from "node:crypto";
 import { exportJWK, generateKeyPair, SignJWT, compactVerify } from "jose";
 import { deriveKey, openSession } from "../src/session.ts";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 const preferenceEnabled = process.env.TRUSTED_LOGIN_LABEL_TEST !== "0";
 const adminEnabled = process.env.TRUSTED_ADMIN_ROUTE_TEST === "1";
 const claims = new Set<string>();
@@ -17,6 +19,7 @@ const codes = new Map<string, { nonce: string; challenge: string }>();
 const { privateKey, publicKey } = await generateKeyPair("ES256", { extractable: true });
 let issuer = "";
 const upstream = createServer((req, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   void (async () => {
     const url = new URL(req.url!, issuer);
     res.setHeader("content-type", "application/json");
@@ -61,6 +64,7 @@ const upstream = createServer((req, res) => {
       assert.equal(grant.purpose, "trusted-entry-admin");
       assert.equal(grant.subject, "person-7");
       assert.equal(grant.issuer, issuer);
+      assert.equal(grant.tenant, TENANT);
       res.statusCode = adminAvailable ? 200 : 503;
       return res.end(JSON.stringify({ ok: adminAvailable }));
     }
@@ -149,7 +153,7 @@ test("trusted route issues an ordinary scoped session, clears transient cookies,
     .find((cookie) => cookie.startsWith("portal_session="))!
     .split(";")[0]!
     .slice("portal_session=".length);
-  const session = openSession(sessionCookie, deriveKey(sessionSecret, "portal.session.v1"), Date.now());
+  const session = openSession(sessionCookie, deriveKey(sessionSecret, "portal.session.v1"), Date.now(), TENANT);
   assert.ok(session);
   assert.match(session.sub, /^oidc:/);
   assert.notEqual(session.sub, "admin@example.test");

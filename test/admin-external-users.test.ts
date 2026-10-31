@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
+import { withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 import { mintSignedPayload, verifySignedPayload } from "../src/auth/signed-token.ts";
 import "./support/auto-fake-sprites.ts";
 
@@ -15,11 +15,13 @@ import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../src/admin/inv
 import type { Mailer } from "../plugins/chassis/src/resend.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
 import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
+import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -80,7 +82,7 @@ async function start(
         ...deps,
         signingSecret: SECRET,
       })
-    : createInsecureTestServer(built.app, deps);
+    : createInsecureTestServer(TEST_TENANT, built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -721,7 +723,7 @@ test("invitation links work without email delivery and are single use, scoped, a
     const claims: any = await verifySignedPayload(token, SECRET);
     assert.equal((await redeem(token + "tampered")).status, 400);
     assert.equal((await redeem(await mintSignedPayload({ ...claims, exp: Date.now() - 1 }, SECRET))).status, 400);
-    assert.equal((await redeem(await mintSignedPayload({ ...claims, org: "org:other" }, SECRET))).status, 400);
+    assert.equal((await redeem(await mintSignedPayload({ ...claims, tenant: OTHER_TENANT }, SECRET))).status, 400);
     assert.equal(
       (await redeem(await mintSignedPayload({ ...claims, aud: "https://elsewhere.example" }, SECRET))).status,
       400,
@@ -759,7 +761,7 @@ test("invitation redemption requires source authentication before consuming a va
     const token = await mintSignedPayload(
       {
         purpose: "teammate-invite",
-        org: ORG,
+        tenant: TEST_TENANT,
         aud: PORTAL,
         email,
         inviteId,

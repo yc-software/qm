@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 const calls: Array<{ url: string; cookie: unknown; identity: unknown; encoding: unknown }> = [];
 const upstream = createServer((req, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   calls.push({
     url: req.url!,
     cookie: req.headers.cookie,
@@ -18,6 +21,7 @@ process.env.PORTAL_PUBLIC_URL = "http://localhost:18197";
 process.env.PORTAL_SESSION_SECRET = "share-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "share-test-core-secret";
 process.env.WEB_UI_UPSTREAM = `http://localhost:${(upstream.address() as AddressInfo).port}`;
+process.env.CORE_API_URL = process.env.WEB_UI_UPSTREAM;
 process.env.PORTAL_LOCAL_AUTH_BYPASS = "0";
 const { server } = await import("../src/index.ts");
 await new Promise<void>((resolve) => server.listen(0, resolve));

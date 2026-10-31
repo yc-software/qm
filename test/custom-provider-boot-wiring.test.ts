@@ -12,6 +12,7 @@ import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { setCustomProviders } from "../src/model/custom-providers.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -32,7 +33,7 @@ test("serverDeps wires the custom-provider store and resolves a custom boot defa
   assert.equal(deps.customProviders, built.customProviders);
   assert.equal(deps.refreshCustomProviders, built.refreshCustomProviders);
 
-  const server = createInsecureTestServer(built.app, deps);
+  const server = createInsecureTestServer(TEST_TENANT, built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {

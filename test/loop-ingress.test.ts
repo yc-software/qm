@@ -46,6 +46,7 @@ function inspectableDeliveries() {
     all: async () => (await Promise.all([...ids].sort().map(get))).filter((d): d is IngressDelivery => d !== null),
   };
 }
+import { TEST_TENANT } from "./support/tenant.ts";
 
 async function world() {
   const sources = inspectableSources();
@@ -69,6 +70,7 @@ async function world() {
     items,
     outputs: createLoopOutputStore(testOutputRows()),
     lock: testAdvisoryLock(),
+    rowTenants: async () => [TEST_TENANT],
     fire: {
       fire: async (
         loopId: string,

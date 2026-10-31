@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { canonicalPayload, signRequest } from "../../chassis/src/source-auth-sign.ts";
 import { answerFeatures } from "./core-features.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const secret = "session-read-test";
 let bodyStarted: (() => void) | undefined;
@@ -44,7 +45,7 @@ test.after(() => {
 });
 
 test("session route retries interrupted body with the same viewer and fresh valid signatures", async () => {
-  const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, secret);
+  const token = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, secret);
   const response = await fetch(
     `http://127.0.0.1:${(web.address() as AddressInfo).port}/api/sessions/test?sinceSeq=825`,
     { headers: { [PORTAL_IDENTITY_HEADER]: token } },
@@ -58,9 +59,14 @@ test("session route retries interrupted body with the same viewer and fresh vali
     assert.equal(url.searchParams.get("viewer"), "alice");
     assert.equal(url.searchParams.get("sinceSeq"), "825");
     assert.equal(request.headers[PORTAL_IDENTITY_HEADER], token);
+    assert.equal(request.headers["x-qm-tenant"], TEST_TENANT);
     assert.equal(
       request.headers["x-signature"],
-      signRequest(secret, Number(request.headers["x-timestamp"]), canonicalPayload("GET", request.url, "")),
+      signRequest(
+        secret,
+        Number(request.headers["x-timestamp"]),
+        canonicalPayload("GET", request.url, "", TEST_TENANT),
+      ),
     );
   }
 });
@@ -73,7 +79,7 @@ test("closing the browser request cancels core body collection without retry", a
     bodyClosed = resolve;
   });
   const controller = new AbortController();
-  const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, secret);
+  const token = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, secret);
   const pending = fetch(`http://127.0.0.1:${(web.address() as AddressInfo).port}/api/sessions/cancel`, {
     headers: { [PORTAL_IDENTITY_HEADER]: token },
     signal: controller.signal,

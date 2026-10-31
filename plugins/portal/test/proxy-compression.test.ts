@@ -35,6 +35,7 @@ const portal = createServer((req, res) => {
     return;
   }
   proxyToSurface(req, res, {
+    tenant: "00000000-0000-4000-8000-000000000001",
     upstreamBase,
     forwardPath: path,
     search: "",

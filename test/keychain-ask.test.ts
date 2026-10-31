@@ -40,6 +40,8 @@ import { createPostgresCronFireStore } from "../src/cron/fire-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testKeychainRows, testCronRows } from "./support/typed-stores.ts";
 import { testIdempotencyStore, testIdentityService } from "./support/typed-stores.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "./support/tenant.ts";
+import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 
 const KEY = deriveConnectorKey("keychain-ask-test-key");
 const SECRET = "keychain-ask-route-secret".repeat(3);
@@ -679,18 +681,26 @@ describe("/v1/keychain/asks — card approval end to end", async () => {
     ).json()) as any;
     const session = await built.sessions.getOrCreateByThread("ch:C_INFRA-web", "channel", "channel:C_INFRA");
     await built.sessions.addParticipant(session.id, "U_ALICE");
+    const portal = async (p: string) => ({
+      "x-portal-identity": await mintPortalIdentity({ t: TEST_TENANT, p, exp: Date.now() + 60_000 }, SECRET),
+    });
     const inline = async (viewer: string) => {
       const listPath = `/v1/sessions/${session.id}/approvals?viewer=${viewer}`;
-      const r = await fetch(`${base}${listPath}`, { headers: signedRequestHeaders(SECRET, "GET", listPath, "") });
+      const r = await fetch(`${base}${listPath}`, {
+        headers: signedRequestHeaders(SECRET, "GET", listPath, "", { ...TENANT_HEADERS, ...(await portal(viewer)) }),
+      });
       return ((await r.json()) as any).approvals.map((a: any) => a.requestId);
     };
     assert.deepEqual(await inline("U_ALICE"), [`keychain:${ask.id}`], "the owner sees the card inline in the session");
     const path = `/v1/keychain/approvals/${ask.id}`;
-    const signed = (principalId: string) => {
+    const signed = async (principalId: string) => {
       const body = JSON.stringify({ principalId, decision: "standing" });
       return fetch(`${base}${path}`, {
         method: "POST",
-        headers: signedRequestHeaders(SECRET, "POST", path, body),
+        headers: signedRequestHeaders(SECRET, "POST", path, body, {
+          ...TENANT_HEADERS,
+          ...(await portal(principalId)),
+        }),
         body,
       });
     };

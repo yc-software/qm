@@ -24,6 +24,7 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const audits: Array<(e: AuditEvent) => void> = [];
 const onceKeys = new Set<string>();
@@ -43,12 +44,15 @@ const SESSION_SECRET = "portal-session-secret";
 const SESSION_DEPS = {
   deployAppsSessionSecret: SESSION_SECRET,
   deployAppsLoginUrl: "https://portal.example.com",
+  rowTenants: async () => [TEST_TENANT],
 } as const;
 
 function mintPortalSession(sub: string): string {
   const key = createHmac("sha256", SESSION_SECRET).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(JSON.stringify({ k: "session", sub, iat: now, exp: now + 3600 })).toString("base64url");
+  const body = Buffer.from(
+    JSON.stringify({ k: "session", sub, tenant: TEST_TENANT, iat: now, exp: now + 3600 }),
+  ).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
 
@@ -201,7 +205,7 @@ test("subdomain ingress: a capability link grants nothing — reach is the ACL a
     files: [],
     name: "mysite",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,
@@ -267,7 +271,7 @@ test("subdomain ingress: an upstream 429 opens a shield that stops re-dialing th
     files: [],
     name: "throttled",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
@@ -308,7 +312,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
     files: [],
     name: "ratelimited",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     ...SESSION_DEPS,
@@ -337,7 +341,7 @@ test("subdomain ingress: an app's own 429 (with a body) passes through without a
 
 test("subdomain ingress: a non-apps Host is not gated (normal routing proceeds)", async () => {
   const app = appServingUpstream(1);
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
   });
@@ -419,7 +423,7 @@ test("subdomain ingress: the SameSite=None twin is honoured only for framed requ
     files: [],
     name: "framed",
   });
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
     auditLog,

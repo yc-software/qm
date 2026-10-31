@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IngressDeliveryRows, IngressSourceRows } from "./ingress-table.ts";
+import { withTenant } from "../tenants/context.ts";
+import type { RowTenants } from "../tenants/row-tenant.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { Loop, LoopItem } from "./types.ts";
 import type { LoopStore } from "./loop-store.ts";
@@ -108,7 +110,10 @@ export interface LoopIngressDeps {
   gmailConfig?: GmailPushConfig;
   gmailClient?: ReturnType<typeof createGmailPushClient>;
   verifyGoogle?: typeof verifyGmailPush;
+  rowTenants: RowTenants;
 }
+
+export const GMAIL_PUSH_ID = "gmail";
 
 export interface IngressSetup {
   kind: LoopIngress["kind"];
@@ -333,7 +338,7 @@ export function createLoopIngress(deps: LoopIngressDeps) {
     ): Promise<{ status: number; body: string }> {
       if (Buffer.byteLength(request.rawBody) > 64_000)
         return { status: 413, body: "Event payload must be under 64 KB" };
-      if (id === "gmail") {
+      if (id === GMAIL_PUSH_ID) {
         const authorization = request.headers.authorization;
         if (
           !deps.gmailConfig ||

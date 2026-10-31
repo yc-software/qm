@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { answerFeatures } from "./core-features.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const core = createServer((req, res) => {
   if (req.url?.includes("principalId=erin")) return void res.writeHead(500).end();
@@ -52,7 +53,7 @@ test("a webuiuser cookie confers nothing in portal mode", async () => {
 
 test("a verified principal without the web_ui flag is not_allowed, not unauthenticated", async () => {
   for (const p of ["mallory", "erin"]) {
-    const token = mintPortalIdentity({ p, exp: Date.now() + 60_000 }, SECRET);
+    const token = mintPortalIdentity({ t: TEST_TENANT, p, exp: Date.now() + 60_000 }, SECRET);
     const r = await fetch(`${base}/me`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
     assert.equal(r.status, 401);
     const body = await r.json();
@@ -62,7 +63,7 @@ test("a verified principal without the web_ui flag is not_allowed, not unauthent
 });
 
 test("a verified allowed principal gets through and /me reports the mode", async () => {
-  const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET);
+  const token = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, SECRET);
   const r = await fetch(`${base}/me`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
   assert.equal(r.status, 200);
   const body = await r.json();

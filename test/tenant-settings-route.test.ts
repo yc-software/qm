@@ -25,7 +25,6 @@ async function fixture(secret: string | undefined = controlSecret) {
     signingSecret: sourceSecret,
     portalIdentitySecret: "portal-identity-secret".repeat(3),
     capabilitySecret: "capability-only-secret".repeat(3),
-    requireSignedPortalIdentity: true,
     deploymentControlSecret: secret,
     tenantSettings: built.tenantSettings,
     modelCredentials: built.modelCredentials,

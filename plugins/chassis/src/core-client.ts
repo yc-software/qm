@@ -4,6 +4,7 @@ import { pipeline } from "node:stream/promises";
 import { reportBackendError } from "./error-reporting.ts";
 import { gzipAccepted, withVary } from "./http.ts";
 import { signedRequestHeaders } from "./source-auth-sign.ts";
+import { isTenantId } from "./tenant.ts";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -153,4 +154,27 @@ export async function relayCoreStream(
   }
   res.writeHead(upstream.statusCode ?? 502, headers);
   await pipeline(upstream, res).catch(() => undefined);
+}
+
+const HOST_TTL_MS = 60_000;
+const HOSTS_MAX = 1_000;
+const MISS_TTL_MS = 5_000;
+const hosts = new Map<string, { tenant: string | null; until: number }>();
+
+export async function hostTenant(core: string, secret: string | undefined, host: string): Promise<string | null> {
+  const key = host.toLowerCase();
+  const hit = hosts.get(key);
+  if (hit && hit.until > Date.now()) return hit.tenant;
+  const path = withSourceAuthNonce(`/v1/tenants/for-host?host=${encodeURIComponent(key)}`, secret);
+  const response = await fetch(`${core}${path}`, {
+    headers: signedRequestHeaders(secret, "GET", path),
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (response.status !== 404 && !response.ok) throw new Error(`Tenant lookup failed with HTTP ${response.status}`);
+  const tenant = response.status === 404 ? null : ((await response.json()) as { tenant?: unknown }).tenant;
+  if (tenant !== null && !isTenantId(tenant)) throw new Error("Tenant lookup returned an invalid tenant");
+  hosts.delete(key);
+  if (hosts.size >= HOSTS_MAX) hosts.delete(hosts.keys().next().value!);
+  hosts.set(key, { tenant, until: Date.now() + (tenant ? HOST_TTL_MS : MISS_TTL_MS) });
+  return tenant;
 }

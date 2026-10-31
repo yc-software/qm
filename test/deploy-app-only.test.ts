@@ -23,6 +23,7 @@ import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts"
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { testIdentityService } from "./support/typed-stores.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -31,7 +32,7 @@ const guest = "guest@partner.test";
 const key = deriveKey(secret, "portal.session.v1");
 function token(appOnly: unknown = true) {
   const now = Math.floor(Date.now() / 1000);
-  return seal({ k: "session", sub: guest, iat: now, exp: now + 3600, appOnly }, key);
+  return seal({ k: "session", sub: guest, tenant: TEST_TENANT, iat: now, exp: now + 3600, appOnly }, key);
 }
 test("gateway parser keeps app-only authority and rejects malformed signed markers", () => {
   assert.deepEqual(portalSession(`portal_session=${token()}`, secret), { sub: guest, appOnly: true });
@@ -100,6 +101,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     deployGateSecret: "gate",
     deployAppsSessionSecret: secret,
     deployAppsLoginUrl: "https://portal.example.test",
+    rowTenants: async () => [TEST_TENANT],
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;

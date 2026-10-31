@@ -7,6 +7,8 @@ import { mintPortalIdentity } from "../../chassis/src/portal-identity.ts";
 let lastActor: string | null = null;
 let lastSigned = false;
 let lastPortalIdentity: string | null = null;
+let lastTenant: string | null = null;
+const TENANT = "00000000-0000-4000-8000-000000000001";
 let transientWhoamiFailures = 0;
 let whoamiRequests = 0;
 const core = createServer((req: IncomingMessage, res) => {
@@ -20,6 +22,7 @@ const core = createServer((req: IncomingMessage, res) => {
     lastActor = (req.headers["x-admin-actor"] as string) ?? null;
     lastSigned = Boolean(req.headers["x-timestamp"] && req.headers["x-signature"]);
     lastPortalIdentity = (req.headers["x-portal-identity"] as string) ?? null;
+    lastTenant = (req.headers["x-qm-tenant"] as string) ?? null;
     res.writeHead(200, { "content-type": "application/json" });
     const admin = lastActor === "U-admin";
     return void res.end(
@@ -133,10 +136,11 @@ test("a previously-non-allowlisted id (admin-zoe) is now forwarded as identity",
 });
 
 test("a forwarded portal identity is relayed to core (so an enforcing core can verify the admin, not just trust x-admin-actor)", async () => {
-  const token = mintPortalIdentity({ p: "U-admin", exp: Date.now() + 60_000 }, "admin-whoami-test-secret");
+  const token = mintPortalIdentity({ t: TENANT, p: "U-admin", exp: Date.now() + 60_000 }, "admin-whoami-test-secret");
   const r = await fetch(`${base}/api/whoami`, { headers: { "x-portal-identity": token } });
   assert.equal(r.status, 200);
   assert.equal(lastPortalIdentity, token, "x-portal-identity forwarded verbatim to core");
+  assert.equal(lastTenant, TENANT, "the identity's tenant travels to core as the signed tenant header");
   assert.equal(lastActor, "U-admin", "principal decoded from the portal identity, not a cookie");
   assert.deepEqual(await r.json(), {
     principal: "U-admin",
@@ -149,12 +153,17 @@ test("a forwarded portal identity is relayed to core (so an enforcing core can v
 });
 
 test("an unsigned or wrongly-signed portal identity is not accepted as an admin principal", async () => {
-  const claims = Buffer.from(JSON.stringify({ p: "U-admin", exp: Date.now() + 60_000 })).toString("base64url");
+  const claims = Buffer.from(JSON.stringify({ t: TENANT, p: "U-admin", exp: Date.now() + 60_000 })).toString(
+    "base64url",
+  );
+  const tenantless = { p: "U-admin", exp: Date.now() + 60_000 } as unknown as Parameters<typeof mintPortalIdentity>[0];
   for (const token of [
     `${claims}.sig`,
     claims,
-    mintPortalIdentity({ p: "U-admin", exp: Date.now() + 60_000 }, "attacker-key"),
-    mintPortalIdentity({ p: "U-admin", exp: Date.now() - 1_000 }, "admin-whoami-test-secret"),
+    mintPortalIdentity({ t: TENANT, p: "U-admin", exp: Date.now() + 60_000 }, "attacker-key"),
+    mintPortalIdentity({ t: TENANT, p: "U-admin", exp: Date.now() - 1_000 }, "admin-whoami-test-secret"),
+    mintPortalIdentity(tenantless, "admin-whoami-test-secret"),
+    mintPortalIdentity({ t: "acme", p: "U-admin", exp: Date.now() + 60_000 }, "admin-whoami-test-secret"),
   ]) {
     const r = await fetch(`${base}/api/whoami`, { headers: { "x-portal-identity": token } });
     assert.equal(r.status, 401, `forged identity ${token.slice(0, 24)}… must not authenticate`);

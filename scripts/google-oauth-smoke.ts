@@ -214,7 +214,7 @@ try {
   await waitFor(`${webBase}/healthz`, 10_000);
 
   const identity = {
-    [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: actor, exp: Date.now() + 10 * 60_000 }, secret),
+    [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ t: randomUUID(), p: actor, exp: Date.now() + 10 * 60_000 }, secret),
   };
 
   const statusBefore = await fetch(`${webBase}/api/connectors`, { headers: identity });

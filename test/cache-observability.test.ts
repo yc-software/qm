@@ -17,6 +17,7 @@ import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 import { bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function loadViewerCacheHelpers(): {
   callCacheUsage: (q: unknown) => { cacheRead: number; cacheWrite: number; uncachedInput: number } | null;
@@ -65,7 +66,7 @@ function loadViewerCacheHelpers(): {
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "cache-obs-")) }));
-  const server = createInsecureTestServer(built.app, {
+  const server = createInsecureTestServer(TEST_TENANT, built.app, {
     admin: built.admin,
     sessions: built.sessions,
     auditLog: built.auditLog,

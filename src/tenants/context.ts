@@ -1,15 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { boundTenant, isTenantId, tenantId, tenantStore } from "../../plugins/chassis/src/tenant.ts";
 import { scopeId, type ScopeId } from "../types.ts";
 
-const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-const bound = new AsyncLocalStorage<string>();
-
-function tenantId(id: string): string {
-  const normalized = id.toLowerCase();
-  if (!TENANT_ID.test(normalized)) throw new Error(`Invalid tenant id: ${JSON.stringify(id)}`);
-  return normalized;
-}
+export { boundTenant, isTenantId };
 
 const bindHooks = new Set<(tenant: string) => Promise<unknown>>();
 const firstBinds = new Map<string, Promise<void>>();
@@ -36,23 +28,19 @@ export function tenantReady(): Promise<void> {
 }
 
 export function withTenant<T>(id: string, fn: () => T): T {
-  return bound.run(firstBind(tenantId(id)), fn);
+  return tenantStore.run(firstBind(tenantId(id)), fn);
 }
 
 export function withoutTenant<T>(fn: () => T): T {
-  return bound.exit(fn);
+  return tenantStore.exit(fn);
 }
 
 export function enterTenant(id: string): void {
-  bound.enterWith(firstBind(tenantId(id)));
-}
-
-export function boundTenant(): string | undefined {
-  return bound.getStore();
+  tenantStore.enterWith(firstBind(tenantId(id)));
 }
 
 export function currentTenant(): string {
-  const id = bound.getStore();
+  const id = tenantStore.getStore();
   if (!id) throw new Error("No tenant is bound to this operation");
   return id;
 }

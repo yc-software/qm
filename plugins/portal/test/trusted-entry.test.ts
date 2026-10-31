@@ -63,16 +63,21 @@ test("state and cookie binding are checked before claims or network access", asy
       throw new Error("Network should not be called");
     },
   );
-  const start = entry.start("/");
+  const tenant = "00000000-0000-4000-8000-000000000001";
+  const start = entry.start("/", tenant);
   const url = new URL("https://portal.example.com/auth/trusted/callback?code=test&state=wrong");
-  await assert.rejects(entry.finish(start.cookie, url), /Invalid trusted login state/);
+  await assert.rejects(entry.finish(start.cookie, url, tenant), /Invalid trusted login state/);
   url.searchParams.set("state", new URL(start.location).searchParams.get("state")!);
-  await assert.rejects(entry.finish(null, url), /Invalid trusted login state/);
+  await assert.rejects(entry.finish(null, url, tenant), /Invalid trusted login state/);
+  await assert.rejects(
+    entry.finish(start.cookie, url, "00000000-0000-4000-8000-000000000002"),
+    /Invalid trusted login state/,
+  );
   const other = createTrustedEntry(
     trustedEntryConfig(env, "https://portal.example.com")!,
     "different-session-secret",
     async () => true,
   );
-  await assert.rejects(other.finish(start.cookie, url), /Invalid trusted login state/);
+  await assert.rejects(other.finish(start.cookie, url, tenant), /Invalid trusted login state/);
   assert.equal(claims, 0);
 });

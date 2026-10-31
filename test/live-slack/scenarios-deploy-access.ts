@@ -5,6 +5,7 @@ import { assert, type Actor, type Env, type Scenario } from "./harness.ts";
 import { sleep, type SlackMessage } from "./slack.ts";
 import { signedRequestHeaders } from "../../plugins/chassis/src/source-auth-sign.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../src/auth/portal-identity.ts";
+import { TENANT_HEADERS, TEST_TENANT } from "../support/tenant.ts";
 
 const CORE = () => (process.env.CORE_API_URL ?? "http://localhost:8181").replace(/\/+$/, "");
 const SECRET = () => process.env.CORE_SIGNING_SECRET ?? "";
@@ -26,7 +27,9 @@ async function principalOf(env: Env, actor: Actor): Promise<string> {
 function portalSession(sub: string): string {
   const key = createHmac("sha256", SESSION_SECRET()).update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(JSON.stringify({ k: "session", sub, iat: now, exp: now + 3600 })).toString("base64url");
+  const body = Buffer.from(
+    JSON.stringify({ k: "session", sub, tenant: TEST_TENANT, iat: now, exp: now + 3600 }),
+  ).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
 
@@ -63,7 +66,11 @@ async function publishApp(owner: string, slug: string, marker: string): Promise<
   });
   const headers = signedRequestHeaders(SECRET(), "POST", path, body, {
     "content-type": "application/json",
-    [PORTAL_IDENTITY_HEADER]: await mintPortalIdentity({ p: owner, exp: Date.now() + 60_000 }, SECRET()),
+    ...TENANT_HEADERS,
+    [PORTAL_IDENTITY_HEADER]: await mintPortalIdentity(
+      { t: TEST_TENANT, p: owner, exp: Date.now() + 60_000 },
+      SECRET(),
+    ),
   });
   const res = await fetch(`${CORE()}${path}`, { method: "POST", headers, body, signal: AbortSignal.timeout(60_000) });
   assert.equal(res.status, 200, `publish failed: ${(await res.text()).slice(0, 300)}`);

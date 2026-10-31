@@ -14,6 +14,7 @@ import {
   testLoopRows,
   testOutputRows,
 } from "./support/typed-stores.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test(
   "event import and model work reuse one PostgreSQL advisory session",
@@ -42,6 +43,7 @@ test(
         items,
         outputs: createLoopOutputStore(testOutputRows()),
         lock,
+        rowTenants: async () => [TEST_TENANT],
         fire: {
           fire: async () =>
             lock.withLock(`loop-lifecycle:${loop.id}`, async () => {

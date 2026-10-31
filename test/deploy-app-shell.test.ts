@@ -20,6 +20,7 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl, testDeployBackings } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testFeatureFlagStore, testIdentityService } from "./support/typed-stores.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -92,12 +93,13 @@ async function widgetFixture(upstreamHandler?: Parameters<typeof createHttpServe
   });
   await app.shareDeployment(d.id, scopeId("personal", "U-viewer"), "read", { createdBy: "U1" });
   const featureFlags = testFeatureFlagStore();
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     featureFlags,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: GATE_SECRET,
     deployAppsLoginUrl: PORTAL,
     deployAppsSessionSecret: "portal-session-secret",
+    rowTenants: async () => [TEST_TENANT],
   });
   server.listen(0);
   const port = (server.address() as AddressInfo).port;
@@ -112,9 +114,9 @@ const HOST = "mysite.apps.example.com";
 function mintPortalSession(sub: string, expiresInSeconds = 3600): string {
   const key = createHmac("sha256", "portal-session-secret").update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(JSON.stringify({ k: "session", sub, iat: now, exp: now + expiresInSeconds })).toString(
-    "base64url",
-  );
+  const body = Buffer.from(
+    JSON.stringify({ k: "session", sub, tenant: TEST_TENANT, iat: now, exp: now + expiresInSeconds }),
+  ).toString("base64url");
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
 const viewerCookie = () => `portal_session=${mintPortalSession("U-viewer")}`;

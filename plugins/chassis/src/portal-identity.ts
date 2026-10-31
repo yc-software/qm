@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isTenantId, withTenant } from "./tenant.ts";
 
 export interface PortalIdentity {
+  t: string;
   p: string;
   authenticatedAs?: string;
   n?: string;
@@ -31,6 +33,7 @@ export function verifyPortalIdentity(token: string, secret: string, nowMs: numbe
     return null;
   }
   if (!claims || typeof claims.p !== "string" || !claims.p || typeof claims.exp !== "number") return null;
+  if (!isTenantId(claims.t)) return null;
   if (claims.authenticatedAs !== undefined && (typeof claims.authenticatedAs !== "string" || !claims.authenticatedAs))
     return null;
   if (nowMs > claims.exp) return null;
@@ -38,3 +41,8 @@ export function verifyPortalIdentity(token: string, secret: string, nowMs: numbe
 }
 
 export const PORTAL_IDENTITY_HEADER = "x-portal-identity";
+
+export function withIdentityTenant<T>(token: string | undefined, secret: string | undefined, fn: () => T): T {
+  const tenant = token && secret ? verifyPortalIdentity(token, secret, Date.now())?.t : undefined;
+  return tenant ? withTenant(tenant, fn) : fn();
+}

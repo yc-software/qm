@@ -4,13 +4,28 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { answerFeatures } from "./core-features.ts";
+import { canonicalPayload, signRequest, TENANT_HEADER } from "../../chassis/src/source-auth-sign.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
+const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
 
-let lastMemory: { url: string; portalHeader: string | undefined } | null = null;
+let lastMemory: { url: string; portalHeader: string | undefined; tenant?: string; signedForTenant?: boolean } | null =
+  null;
 const core = createServer((req: IncomingMessage, res) => {
   if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   const u = req.url ?? "";
   if (u.startsWith("/v1/memory")) {
-    lastMemory = { url: u, portalHeader: req.headers[PORTAL_IDENTITY_HEADER] as string | undefined };
+    const tenant = req.headers[TENANT_HEADER] as string | undefined;
+    const signature = signRequest(
+      SECRET,
+      Number(req.headers["x-timestamp"]),
+      canonicalPayload(req.method ?? "", u, "", tenant),
+    );
+    lastMemory = {
+      url: u,
+      portalHeader: req.headers[PORTAL_IDENTITY_HEADER] as string | undefined,
+      tenant,
+      signedForTenant: req.headers["x-signature"] === signature,
+    };
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ content: "" }));
   }
@@ -35,15 +50,34 @@ test.after(() => {
 });
 
 test("verifies the portal identity for the local principal and forwards the token to core", async () => {
-  const token = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, SECRET);
+  const token = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, SECRET);
   const r = await fetch(`${base}/api/memory`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
   assert.equal(r.status, 200);
   assert.match(lastMemory?.url ?? "", /principalId=alice/);
   assert.equal(lastMemory?.portalHeader, token);
 });
 
+test("each request carries its identity's tenant to core under the source signature", async () => {
+  for (const tenant of [TEST_TENANT, OTHER_TENANT, TEST_TENANT]) {
+    const token = mintPortalIdentity({ t: tenant, p: "alice", exp: Date.now() + 60_000 }, SECRET);
+    const r = await fetch(`${base}/api/memory`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
+    assert.equal(r.status, 200);
+    assert.equal(lastMemory?.tenant, tenant);
+    assert.equal(lastMemory?.signedForTenant, true);
+  }
+});
+
+test("rejects a correctly signed identity that names no tenant or a malformed one", async () => {
+  for (const t of [undefined, "acme", "00000000-0000-4000-8000-00000000000A"]) {
+    const claims = { ...(t === undefined ? {} : { t }), p: "alice", exp: Date.now() + 60_000 };
+    const token = mintPortalIdentity(claims as Parameters<typeof mintPortalIdentity>[0], SECRET);
+    const r = await fetch(`${base}/api/memory`, { headers: { [PORTAL_IDENTITY_HEADER]: token } });
+    assert.equal(r.status, 401, `tenant ${String(t)} must not authenticate`);
+  }
+});
+
 test("rejects an identity signed with the wrong key", async () => {
-  const forged = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, "attacker-key");
+  const forged = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 }, "attacker-key");
   const r = await fetch(`${base}/api/memory`, { headers: { [PORTAL_IDENTITY_HEADER]: forged } });
   assert.equal(r.status, 401);
 });
@@ -55,13 +89,13 @@ test("rejects an unsigned identity and a payload swapped under a valid signature
     401,
   );
 
-  const signature = mintPortalIdentity({ p: "bob", exp: Date.now() + 60_000 }, SECRET).split(".")[1];
+  const signature = mintPortalIdentity({ t: TEST_TENANT, p: "bob", exp: Date.now() + 60_000 }, SECRET).split(".")[1];
   const spliced = `${claims}.${signature}`;
   assert.equal((await fetch(`${base}/api/memory`, { headers: { [PORTAL_IDENTITY_HEADER]: spliced } })).status, 401);
 });
 
 test("rejects an expired identity signed with the right key", async () => {
-  const stale = mintPortalIdentity({ p: "alice", exp: Date.now() - 1_000 }, SECRET);
+  const stale = mintPortalIdentity({ t: TEST_TENANT, p: "alice", exp: Date.now() - 1_000 }, SECRET);
   const r = await fetch(`${base}/api/memory`, { headers: { [PORTAL_IDENTITY_HEADER]: stale } });
   assert.equal(r.status, 401);
 });

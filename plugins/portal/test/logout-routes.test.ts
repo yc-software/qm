@@ -12,8 +12,10 @@ const idp = createServer((_req, res) => {
 });
 await new Promise<void>((resolve) => idp.listen(0, "127.0.0.1", resolve));
 const issuer = `http://127.0.0.1:${(idp.address() as AddressInfo).port}`;
+const TENANT = "00000000-0000-4000-8000-000000000001";
 const core = createServer((req, res) => {
   const settings = { OIDC_ISSUER: issuer, OIDC_AUTH_ENDPOINT: `${issuer}/authorize`, OIDC_CLIENT_ID: "primary-client" };
+  if (req.url?.startsWith("/v1/tenants/for-host")) return res.end(JSON.stringify({ tenant: TENANT }));
   res.end(req.url?.startsWith("/v1/plugin-settings") ? JSON.stringify({ values: settings }) : "{}");
 });
 await new Promise<void>((resolve) => core.listen(0, "127.0.0.1", resolve));
@@ -37,7 +39,7 @@ test.after(() => {
 });
 function cookie(extra: Record<string, unknown> = {}) {
   const now = Math.floor(Date.now() / 1000);
-  return `portal_session=${seal({ k: "session", sub: "fixture", iat: now, exp: now + 3600, ...extra }, deriveKey(secret, "portal.session.v1"))}`;
+  return `portal_session=${seal({ k: "session", sub: "fixture", tenant: TENANT, iat: now, exp: now + 3600, ...extra }, deriveKey(secret, "portal.session.v1"))}`;
 }
 async function logout(extra: Record<string, unknown> = {}, html = false) {
   return fetch(`${base}/auth/logout?returnTo=https://evil.example`, {

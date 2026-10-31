@@ -13,6 +13,7 @@ import { assertLateJoinerScopes, assertLeanListing } from "./support/participant
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 test("listed sessions leave out spawn metadata; scopes count only sessions with content", async () => {
   await assertLeanListing(createPostgresSessionStore(testDatabaseUrl()), "mem");
@@ -33,7 +34,7 @@ test("GET /v1/sessions rows carry no spawn metadata, client tools or entry flag"
     actor: { id: "U1", type: "internal" },
   } as unknown as SpawnMeta);
   await built.sessions.addParticipant(child.id, "U1", "Research task");
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(TEST_TENANT, built.app);
   server.listen(0);
   try {
     const port = (server.address() as AddressInfo).port;

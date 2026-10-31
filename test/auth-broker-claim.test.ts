@@ -1,5 +1,4 @@
 import type { BrokerSessionStore } from "../src/auth/broker-sessions.ts";
-import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import "./support/auto-fake-sprites.ts";
 
 import { test } from "node:test";
@@ -11,9 +10,10 @@ import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
 import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
-import { signRequest } from "../src/auth/source-auth.ts";
 import type { ReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { signedCoreHeaders } from "./support/signed-core.ts";
 import { testConfig } from "./support/test-config.ts";
+import { OTHER_TENANT, TEST_TENANT } from "./support/tenant.ts";
 
 const SECRET = "auth-broker-claim-test-secret".repeat(2);
 const CLAIM_PATH = "/v1/auth/broker/claim";
@@ -42,7 +42,6 @@ function start(
     signingSecret: SECRET,
     replayDedupe,
     brokerSessions,
-    requireSignedPortalIdentity: true,
     portalIdentitySecret: SECRET + "identity",
     capabilitySecret: SECRET + "capability",
   });
@@ -58,15 +57,12 @@ async function claim(
   base: string,
   body: unknown,
   sign = true,
+  tenant = TEST_TENANT,
 ): Promise<{ status: number; json: { claimed?: unknown; error?: unknown } }> {
   const path = `${CLAIM_PATH}?nonce=${crypto.randomUUID()}`;
   const raw = JSON.stringify(body);
-  const ts = Math.floor(Date.now() / 1000);
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (sign) {
-    headers["x-timestamp"] = String(ts);
-    headers["x-signature"] = signRequest(SECRET, ts, `POST\n${path}\n${raw}`);
-  }
+  const json = { "content-type": "application/json" };
+  const headers = sign ? await signedCoreHeaders(SECRET, "POST", path, raw, { tenant, headers: json }) : json;
   const res = await fetch(`${base}${path}`, { method: "POST", headers, body: raw });
   return { status: res.status, json: (await res.json()) as { claimed?: unknown; error?: unknown } };
 }
@@ -80,6 +76,18 @@ test("the broker claim route hands out each id exactly once", async (t) => {
   assert.equal(first.status, 200);
   assert.equal(first.json.claimed, "link:abc");
   assert.deepEqual((await claim(srv.base, { ids: ["link:abc"], expiresAtMs: soon() })).json, { claimed: null });
+});
+
+test("broker claim ids are namespaced per tenant", async (t) => {
+  const srv = start();
+  t.after(() => srv.close());
+  assert.equal((await claim(srv.base, { ids: ["link:abc"], expiresAtMs: soon() })).json.claimed, "link:abc");
+  const other = await claim(srv.base, { ids: ["link:abc"], expiresAtMs: soon() }, true, OTHER_TENANT);
+  assert.equal(other.json.claimed, "link:abc", "another tenant's identical link id is its own nonce");
+  assert.equal(
+    (await claim(srv.base, { ids: ["link:abc"], expiresAtMs: soon() }, true, OTHER_TENANT)).json.claimed,
+    null,
+  );
 });
 
 test("a batch claims the first free slot and reports exhaustion", async (t) => {
@@ -154,22 +162,10 @@ test("broker sessions cross the production identity gate, but revocation require
   const post = async (suffix: string, data: unknown, actor?: string, signed = true): Promise<Response> => {
     const path = `/v1/auth/broker/sessions${suffix}?nonce=${crypto.randomUUID()}`;
     const body = JSON.stringify(data);
-    const ts = Math.floor(Date.now() / 1000);
-    return fetch(`${srv.base}${path}`, {
-      method: "POST",
-      body,
-      headers: {
-        "content-type": "application/json",
-        ...(signed
-          ? { "x-timestamp": String(ts), "x-signature": signRequest(SECRET, ts, `POST\n${path}\n${body}`) }
-          : {}),
-        ...(actor
-          ? {
-              "x-portal-identity": await mintPortalIdentity({ p: actor, exp: Date.now() + 60000 }, SECRET + "identity"),
-            }
-          : {}),
-      },
-    });
+    const base = { "content-type": "application/json" };
+    const opts = { headers: base, identitySecret: SECRET + "identity", ...(actor ? { actor } : {}) };
+    const headers = signed ? await signedCoreHeaders(SECRET, "POST", path, body, opts) : base;
+    return fetch(`${srv.base}${path}`, { method: "POST", body, headers });
   };
   assert.equal((await post("", { email: "user@example.com", idleS: 30, absoluteS: 90 })).status, 200);
   assert.equal((await post("/use", { token })).status, 200);

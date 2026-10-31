@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
+import { request } from "node:http";
 import type { AddressInfo } from "node:net";
+import { verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+
+const TENANT = "00000000-0000-4000-8000-000000000001";
+const OTHER_TENANT = "00000000-0000-4000-8000-000000000002";
+const TENANT_BY_HOST: Record<string, string> = { localhost: TENANT, "other.test": OTHER_TENANT };
 
 let whoamiProbes = 0;
 let lastConsentClicker: string | null = null;
@@ -15,6 +21,11 @@ const upstream = createServer((req: IncomingMessage, res) => {
   if (req.url?.startsWith("/v1/plugin-settings")) {
     res.writeHead(200, { "content-type": "application/json" });
     return void res.end(JSON.stringify({ values: { OIDC_CLIENT_ID: "test-client" } }));
+  }
+  if (req.url?.startsWith("/v1/tenants/for-host")) {
+    const tenant = TENANT_BY_HOST[new URL(req.url, "http://core").searchParams.get("host") ?? ""];
+    res.writeHead(tenant ? 200 : 404, { "content-type": "application/json" });
+    return void res.end(JSON.stringify(tenant ? { tenant } : { error: "not_found" }));
   }
   if (
     req.url?.startsWith("/v1/deployment-layer") ||
@@ -124,10 +135,26 @@ await new Promise<void>((r) => server.listen(0, r));
 const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 
 const sessionKey = deriveKey("router-test-portal-secret", "portal.session.v1");
-function sessionCookie(sub: string, ageS = 0): string {
+function sessionCookie(sub: string, ageS = 0, tenant = TENANT): string {
   const now = Math.floor(Date.now() / 1000);
   const iat = now - ageS;
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, tenant, iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+}
+
+function onHost(host: string, path: string, cookie?: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      `${base}${path}`,
+      { headers: { host, accept: "application/json", ...(cookie ? { cookie } : {}) } },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
 }
 
 test.after(() => {
@@ -174,6 +201,27 @@ test("no session: JSON request is 401, HTML navigation is 302 to login", async (
   const h = await fetch(`${base}/`, { headers: { accept: "text/html" }, redirect: "manual" });
   assert.equal(h.status, 302);
   assert.match(h.headers.get("location") ?? "", /^\/auth\/login\?returnTo=/);
+});
+
+test("each host serves only its own tenant: a session from one tenant is refused on another and unknown hosts are 404", async () => {
+  const foreign = await onHost("other.test", "/api/x", sessionCookie("U1"));
+  assert.equal(foreign.status, 401);
+  assert.equal(JSON.parse(foreign.body).url, undefined);
+
+  const own = await onHost("other.test", "/api/x", sessionCookie("U1", 0, OTHER_TENANT));
+  assert.equal(own.status, 200);
+  const forwarded = JSON.parse(own.body) as { headers: Record<string, string> };
+  const identity = verifyPortalIdentity(forwarded.headers["x-portal-identity"]!, "router-test-core-secret", Date.now());
+  assert.equal(identity?.t, OTHER_TENANT);
+  assert.equal(identity?.p, "U1");
+
+  const home = await onHost("localhost", "/api/x", sessionCookie("U1", 0, OTHER_TENANT));
+  assert.equal(home.status, 401);
+
+  const unknown = await onHost("unknown.test", "/api/x", sessionCookie("U1"));
+  assert.equal(unknown.status, 404);
+  assert.deepEqual(JSON.parse(unknown.body), { error: "not_found", message: "no tenant serves this host" });
+  assert.equal((await onHost("unknown.test", "/healthz")).status, 200);
 });
 
 test("legacy /web-ui prefix redirects permanently to the same path at the root", async () => {
@@ -427,6 +475,8 @@ test("new human path /drop/:id: form GET reaches the core /v1 drop form with x-d
   assert.match(ob.url, /^\/v1\/keychain\/drops\/drop-1(\?|$)/);
   assert.match(ob.url, /[?&]t=link-token-1/, "the submit leg forwards the token too — the redeem check depends on it");
   assert.equal(ob.headers["x-drop-owner"], "owner@acme");
+  assert.equal(ob.headers["x-qm-tenant"], TENANT);
+  assert.equal(ob.headers["x-drop-owner-org"], undefined);
 });
 
 test("deployments are ON by default — /d/ proxies to core for a signed-in session", async () => {

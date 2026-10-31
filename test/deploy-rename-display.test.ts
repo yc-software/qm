@@ -14,6 +14,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function svc() {
   const deployStore = createDeployStore(testDeployBackings());
@@ -70,13 +71,12 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   const s = svc();
   const app = createApp({ deploy: s.deploy } as unknown as Parameters<typeof createApp>[0]);
   const identitySecret = "deployment-route-identity-secret";
-  const server = createInsecureTestServer(app, {
+  const server = createInsecureTestServer(TEST_TENANT, app, {
     portalIdentitySecret: identitySecret,
-    requireSignedPortalIdentity: true,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  const identity = await mintSignedPayload({ p: "U1", exp: Date.now() + 60_000 }, identitySecret);
+  const identity = await mintSignedPayload({ t: TEST_TENANT, p: "U1", exp: Date.now() + 60_000 }, identitySecret);
   const post = (path: string, body: unknown) =>
     fetch(base + path, {
       method: "POST",

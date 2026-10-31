@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 
+const TENANT = "00000000-0000-4000-8000-000000000001";
+
 const seen: Array<{ url: string; method: string; headers: Record<string, unknown>; body: string }> = [];
 const broker = createServer((req: IncomingMessage, res) => {
   const chunks: Buffer[] = [];
@@ -31,6 +33,7 @@ await new Promise<void>((r) => broker.listen(0, "127.0.0.1", r));
 const brokerUrl = `http://127.0.0.1:${(broker.address() as AddressInfo).port}`;
 
 const surface = createServer((req, res) => {
+  if (req.url?.startsWith("/v1/tenants/for-host")) return void res.end(JSON.stringify({ tenant: TENANT }));
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ surface: req.url }));
 });
@@ -238,7 +241,7 @@ test("logout clears the remembered cookie and everywhere requires an authenticat
   assert.equal(unsigned.status, 401);
   const now = Date.now();
   const cookie = seal(
-    { k: "session", sub: "user@example.com", iat: now, exp: now + 60000 },
+    { k: "session", sub: "user@example.com", tenant: TENANT, iat: now, exp: now + 60000 },
     deriveKey(process.env.PORTAL_SESSION_SECRET!, "portal.session.v1"),
   );
   const signed = await fetch(`${base}/auth/logout?everywhere=1`, {

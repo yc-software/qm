@@ -80,6 +80,8 @@ import type { BudgetTracker } from "../ratelimit/budget.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import type { AppPageViewLog } from "../deploy/page-views.ts";
 import type { SlackInstallationStore, SlackSocketAppIdReader } from "../surfaces/slack-installation.ts";
+import type { TenantResolver } from "../tenants/resolver.ts";
+import type { RowTenants } from "../tenants/row-tenant.ts";
 
 import type { SlackAccountLink } from "./routes/composio.ts";
 import type { ComposioReturnRows } from "../connectors/link-tables.ts";
@@ -97,12 +99,12 @@ export interface ServerDeps {
   composioFetch?: typeof fetch;
   suggestedActivities?: ReturnType<typeof createSuggestedActivityService>;
   production?: boolean;
-  allowUnauthenticatedCore?: boolean;
+  tenants?: TenantResolver;
+  rowTenants?: RowTenants;
   signingSecret?: string;
   capabilitySecret?: string;
   capabilityTokenCompression?: boolean;
   portalIdentitySecret?: string;
-  requireSignedPortalIdentity?: boolean;
   control: ControlService;
   replayDedupe?: ReplayDedupe;
   deploymentLiveSmoke?: () => Promise<void>;

@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { answerFeatures } from "./core-features.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 process.env.CORE_SIGNING_SECRET = "voice-route-test";
 process.env.WEB_UI_PUBLIC_URL = "https://qm.example.test";
@@ -16,7 +17,10 @@ const surface = createServer((req, res) => void handler(req, res));
 await new Promise<void>((resolve) => surface.listen(0, resolve));
 const base = `http://localhost:${(surface.address() as AddressInfo).port}`;
 const identity = (user = "alice") => ({
-  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: user, exp: Date.now() + 60_000 }, "voice-route-test"),
+  [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+    { t: TEST_TENANT, p: user, exp: Date.now() + 60_000 },
+    "voice-route-test",
+  ),
 });
 const headers = { ...identity(), "content-type": "application/json", origin: "https://qm.example.test" };
 const offer = JSON.stringify({ sdp: "v=0\r\no=offer" });
@@ -61,7 +65,10 @@ test("voice route authenticates and gates accounts before spending", async () =>
     { ...headers, origin: "null" },
     {
       cookie: "webuiuser=alice",
-      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity({ p: "alice", exp: Date.now() - 60_000 }, "voice-route-test"),
+      [PORTAL_IDENTITY_HEADER]: mintPortalIdentity(
+        { t: TEST_TENANT, p: "alice", exp: Date.now() - 60_000 },
+        "voice-route-test",
+      ),
     },
   ];
   for (const rejectedHeaders of rejectedRequests) {

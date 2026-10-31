@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER } from "../../chassis/src/portal-identity.ts";
 import { answerFeatures } from "./core-features.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const core = createServer((req: IncomingMessage, res) => {
   if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
@@ -34,7 +35,10 @@ test.after(() => {
 });
 
 test("in-surface deployment preview is sandboxed to an opaque origin (no same-origin XSS)", async () => {
-  const identity = mintPortalIdentity({ p: "alice", exp: Date.now() + 60_000 }, "deployment-preview-test-secret");
+  const identity = mintPortalIdentity(
+    { t: TEST_TENANT, p: "alice", exp: Date.now() + 60_000 },
+    "deployment-preview-test-secret",
+  );
   const r = await fetch(`${base}/deployments/some-app/`, { headers: { [PORTAL_IDENTITY_HEADER]: identity } });
   assert.equal(r.status, 200);
   const csp = r.headers.get("content-security-policy") ?? "";

@@ -3,6 +3,7 @@ import { after, test } from "node:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mintPortalIdentity, verifyPortalIdentity } from "../../chassis/src/portal-identity.ts";
+const TEST_TENANT = "00000000-0000-4000-8000-000000000001";
 
 const identitySecret = "combined-admin-identity-secret-0123456789";
 const calls: Array<{ actor: string | undefined; principal: string | undefined; path: string }> = [];
@@ -42,7 +43,7 @@ after(() => {
 });
 
 const headers = (principal: string) => ({
-  "x-portal-identity": mintPortalIdentity({ p: principal, exp: Date.now() + 60_000 }, identitySecret),
+  "x-portal-identity": mintPortalIdentity({ t: TEST_TENANT, p: principal, exp: Date.now() + 60_000 }, identitySecret),
 });
 
 test("combined admin rejects a forged admin cookie before calling a privileged core API", async () => {
