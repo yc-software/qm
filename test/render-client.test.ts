@@ -161,6 +161,19 @@ test("Render SDK adapter imports an image into the default group and starts a sa
   assert.deepEqual([failed.status, failed.failureReason], ["failed", "import failed"]);
 });
 
+test("Render SDK adapter creates the default sandbox group of a workspace that has none", async (t) => {
+  const fake = createFakeRender();
+  t.after(() => fake.cleanup());
+  const source = "ghcr.io/acme/base:0123456789abcdef0123456789abcdef01234567";
+  fake.publishImage(source, `sha256:${"b".repeat(64)}`);
+  const http = serveFakeRenderApi(t, fake);
+  http.removeSandboxGroups();
+  const client = createSdkRenderClient({ apiKey: "secret", workspaceId: "tea-test" });
+  assert.equal((await client.importImage(source, "qm-sandbox-base-0123456")).status, "succeeded");
+  assert.equal(http.sandboxGroupName(), "qm");
+  assert.equal((await client.importImage(source, "qm-sandbox-base-0123456")).status, "succeeded");
+});
+
 test("Render SDK adapter runs scripts with the environment of the QM sandbox base image", async (t) => {
   const fake = createFakeRender();
   t.after(() => fake.cleanup());

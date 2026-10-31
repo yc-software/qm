@@ -772,6 +772,16 @@ test("Render saves a home in use without stopping its sandbox and stops it once 
   assert.equal(await next.readFile(restored, "latest"), "retained before stopping");
 });
 
+test("Render clears a stale stopped mark when its computer is still running", async (t) => {
+  const { make, layers, store, scope } = setup(t);
+  const sandbox = make();
+  await sandbox.provision(layers);
+  await store.merge(scope, { stopped: true });
+  const handle = await sandbox.provision(layers);
+  assert.equal((await store.get(scope))!.stopped, undefined);
+  assert.equal((await sandbox.run(handle, "echo ok")).stdout, "ok\n");
+});
+
 test("Render clears temporary credentials before the checkpoint of an idle stop", async (t) => {
   const { make, fake, layers, store, scope } = setup(t);
   const sandbox = make();

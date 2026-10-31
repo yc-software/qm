@@ -131,6 +131,7 @@ export function createRenderBase(opts: RenderBaseOptions): RenderBase {
     async prepare(signal) {
       while (!signal.aborted) {
         const progress = await hold(step).catch((error: unknown): Progress => {
+          if (signal.aborted) return "failed";
           opts.onError?.({ category: "sandbox_image", code: "base_image_failed", message: errMessage(error) });
           return "failed";
         });

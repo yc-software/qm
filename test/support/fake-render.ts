@@ -303,6 +303,7 @@ export function serveFakeRenderApi(
 ) {
   const tokenRequests: FakeRenderTokenRequest[] = [];
   const proxyCommands: string[] = [];
+  let groupName: string | undefined = "Default";
   const uploads: Array<{ sandboxId: string; path: string; data: Buffer }> = [];
   const lifetimes = new Map<string, { timeoutSeconds: number; createdAt: string }>();
   const sandboxJson = (id: string) => ({
@@ -384,20 +385,21 @@ export function serveFakeRenderApi(
       const body = (await request.json()) as { name: string };
       return Response.json(snapshotJson(await fake.client.createSnapshot(match[1]!, body.name)), { status: 201 });
     }
-    if (path === "/sandbox-groups" && request.method === "GET")
-      return Response.json([
-        {
-          sandboxGroup: {
-            id: "sbg-test",
-            ownerId: "tea-test",
-            name: "Default",
-            region: "oregon",
-            isDefault: true,
-            concurrencyLimit: 20,
-          },
-          cursor: "sbg-test",
-        },
-      ]);
+    const group = () => ({
+      id: "sbg-test",
+      ownerId: "tea-test",
+      name: groupName,
+      region: "oregon",
+      isDefault: true,
+      concurrencyLimit: 20,
+    });
+    if (path === "/sandbox-groups" && request.method === "POST") {
+      if (groupName) return Response.json({ message: "name taken" }, { status: 409 });
+      groupName = ((await request.json()) as { name: string }).name;
+      return Response.json(group(), { status: 201 });
+    }
+    if (path === "/sandbox-groups")
+      return Response.json(groupName ? [{ sandboxGroup: group(), cursor: "sbg-test" }] : []);
     if (path === "/sandbox-groups/sbg-test/builds" && request.method === "POST") {
       const body = (await request.json()) as { name: string; sourceImage: string };
       return Response.json(imageJson(fake.startImport(body.sourceImage, body.name).id), { status: 201 });
@@ -460,5 +462,11 @@ export function serveFakeRenderApi(
     if (proxy) return sandboxProxy(request, proxy[1]!, url);
     throw new Error(`Unexpected request ${request.method} ${request.url}`);
   });
-  return { tokenRequests, proxyCommands, uploads };
+  return {
+    tokenRequests,
+    proxyCommands,
+    uploads,
+    removeSandboxGroups: () => (groupName = undefined),
+    sandboxGroupName: () => groupName,
+  };
 }

@@ -260,7 +260,7 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
     if (stored) stored = await cleanupRetired(scope, stored);
     const info = stored ? await client.get(stored.sandboxId) : null;
     if (!stored || info?.status !== "running") return withUse(name, () => replace(scope, stored, info, onStatus));
-    await store.merge(scope, { lastActivityMs: Date.now() });
+    await store.merge(scope, { lastActivityMs: Date.now(), ...(stored.stopped ? { stopped: undefined } : {}) });
     return { coldStart: false };
   }
 
@@ -614,7 +614,9 @@ export function createRenderSandbox(workspace: WorkspaceStore, opts: RenderSandb
             stored.lastActivityMs <= cutoff &&
             (await tryUse(name, async () => {
               if (await hasLiveProcesses(info.id)) return false;
-              await clearCredentials(info.id);
+              await clearCredentials(info.id).catch((error: unknown) =>
+                reportError("credential_clear_failed", error, scope),
+              );
               await checkpoint(scope, current, false);
               await client.terminate(info.id);
               await store.merge(scope, { stopped: true });
