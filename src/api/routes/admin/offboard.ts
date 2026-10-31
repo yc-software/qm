@@ -229,6 +229,12 @@ async function planOffboarding(ctx: ApiCtx, actorId: string, principalId: string
   return { steps, kept };
 }
 
+const summary = (record: PrincipalRecord | null): PrincipalSummary | null => {
+  if (!record) return null;
+  const { offboardChanges: _changes, ...rest } = record;
+  return rest;
+};
+
 export async function offboardUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
   const actor = await authorizeAdmin(ctx, orgScope(deps));
@@ -245,12 +251,7 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
   if (samePerson(principalId, actor.id))
     return sendJson(res, 400, { error: "bad_request", message: "you cannot offboard yourself" });
   const { steps, kept } = await planOffboarding(ctx, actor.id, principalId);
-  const known =
-    member ||
-    deps.identity?.externalMember(principalId) ||
-    deps.identity?.deactivationSource(principalId) ||
-    kept.length ||
-    steps.some((s) => s.kind !== "principal");
+  const known = member || deps.identity?.knows(principalId) || kept.length || steps.length > 1;
   if (!known) return sendJson(res, 404, { error: "not_found", message: `nothing is known about ${principalId}` });
   const org = orgScope(deps);
   const view = ({ run: _run, ...change }: Step): Change => change;
@@ -285,15 +286,9 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     scopeLabel: org,
   });
   const signedOut = deps.identity?.deactivationSource(principalId) === "manual";
-  const principal = signedOut ? await deps.identity!.recordOffboarded(principalId, actor.id, changes) : null;
+  const principal = signedOut ? summary(await deps.identity!.recordOffboarded(principalId, actor.id, changes)) : null;
   return sendJson(res, 200, { principalId, applied: true, changes, kept, principal });
 }
-
-const summary = (record: PrincipalRecord | null): PrincipalSummary | null => {
-  if (!record) return null;
-  const { offboardChanges: _changes, ...rest } = record;
-  return rest;
-};
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
   const { res, deps, params } = ctx;

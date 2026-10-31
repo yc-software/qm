@@ -44,19 +44,19 @@ export function offboardingCard(
         plan = data;
         const failed = plan.changes.filter((c: any) => c.result === "failed").length;
         if (plan.changes.some((c: any) => c.kind === "principal" && c.result === "done")) deactivated = true;
-        if (data.principal) record = data.principal;
+        if (data.principal)
+          record = { ...data.principal, offboardChanges: [...(record?.offboardChanges || []), ...data.changes] };
         hint = "";
         if (apply) hint = failed ? s.plural(failed, "change") + " failed. Preview again to retry." : "Done.";
       },
     );
   function confirmApply() {
-    const n = plan?.changes?.length || 0;
     const message =
       "Offboard " +
       principal +
       "? This applies the " +
-      n +
-      " change(s) listed. Retired computers lose their disks. Conversations, memory and files are kept.";
+      s.plural(plan?.changes?.length || 0, "change") +
+      " listed. Retired computers lose their disks. Conversations, memory and files are kept.";
     if (s.confirm(message)) void run(true);
   }
   function reactivate() {
@@ -81,7 +81,7 @@ export function offboardingCard(
     const when = (at: number, by?: string) => s.fmtTime(at) + (by ? " by " + by : "");
     const changed = s.plural((record.offboardChanges || []).length, "change");
     return html`<p class="obstatus">
-      ${record.offboarded ? badge("offboarded", "warn") : badge("reactivated", "ok")}
+      ${record.offboarded ? badge("Offboarded", "warn") : badge("Reactivated", "ok")}
       ${muted(
         "Offboarded " +
           when(record.offboardedAt, record.offboardedBy) +
@@ -106,7 +106,7 @@ export function offboardingCard(
         ${
           deactivated
             ? html`<p class="obstatus">
-                Sign-in: ${badge("deactivated", "warn")}
+                Sign-in: ${badge("Deactivated", "warn")}
                 <button type="button" class="link" ?disabled=${busy} @click=${reactivate}>Reactivate sign-in</button>
               </p>`
             : nothing

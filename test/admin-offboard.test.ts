@@ -203,13 +203,14 @@ test("offboarding previews, then disables, revokes, archives and retires what th
 
     assert.equal(applied.principal.offboarded, true);
     assert.equal(applied.principal.offboardedBy, "admin-alice");
+    assert.equal("offboardChanges" in applied.principal, false, "the response lists the changes once");
+    const detail: any = await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: ADMIN })).json();
+    assert.equal(detail.principal.offboarded, true);
     assert.deepEqual(
-      applied.principal.offboardChanges.map((c: any) => [c.id, c.result]),
+      detail.principal.offboardChanges.map((c: any) => [c.id, c.result]),
       applied.changes.map((c: any) => [c.id, c.result]),
       "the person's record keeps what changed",
     );
-    const detail: any = await (await fetch(`${s.base}/v1/admin/users/U1`, { headers: ADMIN })).json();
-    assert.equal(detail.principal.offboarded, true);
     const listed: any = await (await fetch(`${s.base}/v1/admin/users`, { headers: ADMIN })).json();
     const row = listed.users.find((u: any) => u.principalId === "U1");
     assert.deepEqual([row?.offboarded, row?.deactivated], [true, true], "the users list marks them");

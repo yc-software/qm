@@ -51,6 +51,7 @@ export interface IdentityService extends IdentityProvider {
   deactivationSource(externalId: string): DeactivationSource | undefined;
   reactivate(externalId: string, by?: string): Promise<void>;
   deactivated(externalId: string): boolean;
+  knows(externalId: string): boolean;
   offboarded(externalId: string): boolean;
   principal(externalId: string): Promise<PrincipalRecord | null>;
   listPrincipals(): Promise<PrincipalSummary[]>;
@@ -163,6 +164,10 @@ export function createIdentityService(
     },
     reactivate: (externalId, by) => exclusive(() => reactivateNow(externalId, by)),
     deactivated: deactivatedNow,
+    knows(externalId: string): boolean {
+      const key = personKey(externalId);
+      return deactivated.has(key) || externals.has(key) || principals.has(key);
+    },
     offboarded(externalId: string): boolean {
       return principals.get(personKey(externalId))?.offboarded === true;
     },
