@@ -6,7 +6,13 @@ import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
 import { createEngagedRegistry } from "../src/wake/engaged-registry.ts";
 import { createMemorySessionStateBus } from "../src/runs/session-state-bus.ts";
 import { createMemoryLedgerEventBus } from "../src/loops/ledger-events.ts";
-import { createRunStreamBus } from "../src/runs/run-stream-events.ts";
+import {
+  createRunStreamBus,
+  emitRunText,
+  serveRunStreamSync,
+  type RunStreamEvent,
+} from "../src/runs/run-stream-events.ts";
+import { createTurnStream } from "../src/runs/turn-stream.ts";
 import { cachedArtifactData } from "../src/files/artifact-data-cache.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { tenantScopedBus } from "../src/tenants/bus.ts";
@@ -91,7 +97,8 @@ test("event buses deliver only to subscribers of the emitting tenant", () => {
   withTenant(B, () => bus.subscribe((e) => seen.push(["b", e.tenant])));
   withTenant(A, () => bus.emit({ threadRef: "t", state: "idle", at: 1 }));
   assert.deepEqual(seen, [["a", A]]);
-  assert.throws(() => bus.emit({ threadRef: "t", state: "idle", at: 2 }), /No tenant is bound/);
+  bus.emit({ threadRef: "t", state: "idle", at: 2 });
+  assert.deepEqual(seen, [["a", A]]);
   assert.throws(() => bus.subscribe(() => {}), /No tenant is bound/);
 
   const ledger = createMemoryLedgerEventBus();
@@ -122,6 +129,29 @@ test("a subscriber runs bound to its own tenant whatever context delivers the ev
   withTenant(A, () => inner.emit({ n: 1, tenant: B }));
   inner.emit({ n: 2 });
   assert.deepEqual(seen, [B]);
+});
+
+test("a run-stream sync from one tenant never replays another tenant's run text", () => {
+  const bus = createRunStreamBus();
+  const stream = createTurnStream({
+    onDelta: (runId, text, offset, startOffset) => emitRunText(bus, runId, text, offset, startOffset),
+  });
+  serveRunStreamSync(bus, stream);
+  withTenant(A, () => {
+    stream.begin("run-a");
+    stream.publish("run-a", "secret from tenant a");
+  });
+  const seenByB: RunStreamEvent[] = [];
+  withTenant(B, () => bus.subscribe((e) => seenByB.push(e)));
+  withTenant(B, () => bus.emit({ runId: "run-a", kind: "sync", offset: 0 }));
+  assert.deepEqual(
+    seenByB.filter((e) => e.kind === "delta"),
+    [],
+  );
+  const seenByA: RunStreamEvent[] = [];
+  withTenant(A, () => bus.subscribe((e) => seenByA.push(e)));
+  withTenant(A, () => bus.emit({ runId: "run-a", kind: "sync", offset: 0 }));
+  assert.ok(seenByA.some((e) => e.kind === "delta" && e.text === "secret from tenant a"));
 });
 
 test("artifact data cache does not serve another tenant's load", async () => {

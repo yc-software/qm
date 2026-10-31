@@ -3,7 +3,7 @@ import { createEnvSecretSource, type SecretSource } from "../credentials/secret-
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
-import { swallow } from "../util/errors.ts";
+import { reportFailureAs, swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
 import { perTenant } from "../tenants/context.ts";
 
@@ -534,7 +534,7 @@ export async function publicOAuthClientsReady(): Promise<void> {
   const source = publicClientSource;
   if (!source || Date.now() - state.loadedAt < PUBLIC_CLIENTS_TTL_MS) return;
   state.loading ??= source()
-    .then(setPublicOAuthClients)
+    .then(setPublicOAuthClients, reportFailureAs("oauth: load public clients", undefined))
     .finally(() => {
       state.loading = undefined;
     });

@@ -4,6 +4,9 @@ import { randomUUID } from "node:crypto";
 import { createPostgresNotifyBus } from "../src/persistence/postgres-notify-bus.ts";
 import { emitRunText, type RunStreamEvent } from "../src/runs/run-stream-events.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const database = process.env.DATABASE_URL;
 
