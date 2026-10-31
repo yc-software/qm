@@ -3991,11 +3991,12 @@ const turnFailure = (e: { type: string; payload: unknown }): { message: string }
     : null;
 
 test("a terminal turn failure is recorded durably and never replays to the model", async () => {
-  const { app, errors } = freshApp();
+  const built = freshApp();
+  const { app, errors } = built;
   const t1 = await app.turn(dm("please summarize the attendee chats"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
+  assert.match(await ownTurnError(built, dm("!refuse")), /reduce refusals/);
 
   const recorded = (await errors.list()).find((e) => e.category === "turn" && e.code === "error");
   assert.ok(recorded, "the failure is recorded in the error log");
@@ -4016,12 +4017,13 @@ test("a terminal turn failure is recorded durably and never replays to the model
 });
 
 test("a failure before the agent records the user message back-fills it — no orphan error in the transcript", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
   const t1 = await app.turn(dm("hello"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(
-    app.turn(dm("use the fancy model", { model: "not-a-real-model", liveActor: true })),
+  assert.match(
+    await ownTurnError(built, dm("use the fancy model", { model: "not-a-real-model", liveActor: true })),
     /not approved/,
   );
 
@@ -4043,12 +4045,13 @@ test("a failure before the agent records the user message back-fills it — no o
 });
 
 test("repeated terminal failures keep failing loudly — history is never rewritten", async () => {
-  const { app } = freshApp();
+  const built = freshApp();
+  const { app } = built;
   const t1 = await app.turn(dm("please summarize the attendee chats"));
   assert.equal(t1.status, "ok");
 
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
-  await assert.rejects(app.turn(dm("!refuse")), /reduce refusals/);
+  for (let failure = 0; failure < 2; failure++)
+    assert.match(await ownTurnError(built, dm("!refuse")), /reduce refusals/);
 
   const found = await app.getSession(t1.sessionId!);
   assert.equal(found!.entries.filter((e) => turnFailure(e)).length, 2, "each failure leaves its own durable trace");
