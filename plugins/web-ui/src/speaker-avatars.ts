@@ -1,3 +1,4 @@
+import { errMessage } from "../../chassis/src/errors";
 import { api } from "./core-bridge";
 
 const RETRY_AFTER_MS = 60_000;
@@ -30,7 +31,7 @@ export function speakerAvatar(principalId: string | undefined): string | undefin
       },
       (error: unknown) => {
         failedAt.set(principalId, Date.now());
-        console.warn(`Slack avatar lookup failed for ${principalId}`, error);
+        console.warn(`Slack avatar lookup failed for ${principalId}: ${errMessage(error)}`);
         return null;
       },
     )
