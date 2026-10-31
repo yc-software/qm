@@ -42,8 +42,8 @@ test("a fly config's sandbox block rewrites the core fly.toml [env] (app, image,
     "secretEnv value/name must not be written to the toml",
   );
 
-  const admin = derivedTomlFor(cfg, "admin", repoRoot);
-  assert.doesNotMatch(admin, /FLY_RESIDENT_ENV_TZ/);
+  const webUi = derivedTomlFor(cfg, "web-ui", repoRoot);
+  assert.doesNotMatch(webUi, /FLY_RESIDENT_ENV_TZ/);
 });
 
 test("the fly target routes security screen proxy configuration only to core", () => {
@@ -70,7 +70,7 @@ test("the fly target routes security screen proxy configuration only to core", (
     },
   );
   assert.deepEqual(
-    Object.keys(generatedEnv(derivedTomlFor(screened, "admin", repoRoot))).filter((name) =>
+    Object.keys(generatedEnv(derivedTomlFor(screened, "web-ui", repoRoot))).filter((name) =>
       name.startsWith("SECURITY_SCREEN_"),
     ),
     [],

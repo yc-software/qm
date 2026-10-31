@@ -14,11 +14,11 @@ test("Slack onboarding launches directly and verifies connection on return", asy
   });
   const launches: RequestInit[] = [];
   globalThis.fetch = async (input, init) => {
-    if (String(input) === "/admin/api/slack-installation") {
+    if (String(input) === "/api/admin/slack-installation") {
       await initialStatus;
       return Response.json(status, { status: statusCode });
     }
-    if (String(input) === "/admin/api/slack-installation/start") {
+    if (String(input) === "/api/admin/slack-installation/start") {
       launches.push(init!);
       return Response.json({ url: "https://slack-service.example/install/launch?ticket=test" }, { status: launchCode });
     }
@@ -48,7 +48,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     });
     element.querySelector<HTMLButtonElement>("button")!.click();
     await settle();
-    assert.deepEqual(browserUrls, ["/admin/slack-settings?slack=install"]);
+    assert.deepEqual(browserUrls, ["/settings/slack-settings?slack=install"]);
     assert.equal(launches.length, 0);
     Reflect.deleteProperty(window, "qmDesktop");
     let submitted: HTMLFormElement | undefined;
@@ -121,7 +121,7 @@ test("Slack onboarding launches directly and verifies connection on return", asy
     const count = launches.length;
     element.querySelector<HTMLButtonElement>(".welcome-slack")!.click();
     await settle();
-    assert.equal(fallback.location.href, "/admin/slack-settings?setup=slack");
+    assert.equal(fallback.location.href, "/settings/slack-settings?setup=slack");
     assert.equal(launches.length, count);
   } finally {
     releaseStatus();

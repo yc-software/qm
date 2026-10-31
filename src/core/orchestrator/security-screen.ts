@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ScopeId } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
-import {
-  securityScreenSystemPrompt,
-  UNSCREENED_REASON,
-  type SecurityScreenVerdict,
-} from "../../security/security-posture.ts";
+import { UNSCREENED_REASON, type SecurityScreenVerdict } from "../../security/security-posture.ts";
 import { estimateCostUsd } from "../../ratelimit/budget.ts";
 import type { TurnLlmRequestRecord } from "../../agent/agent.ts";
 import { swallowAs } from "../../util/errors.ts";
@@ -117,15 +113,8 @@ export function createSecurityClassifier(deps: OrchestratorDeps): SecurityClassi
           signal,
         });
       }
-      const flagger = deps.config?.getAutoFlaggerConfig();
       const verdict = await model!({
         payload: request ? JSON.stringify({ request, payload }) : payload,
-        ...(flagger
-          ? {
-              modelId: flagger.modelId,
-              systemPrompt: securityScreenSystemPrompt(flagger.rubric),
-            }
-          : {}),
         signal,
         recordModelCall: (rec) => {
           if (!observe) void deps.budget?.record(actorId, estimateCostUsd(rec.inputTokens));

@@ -10,7 +10,6 @@ import "./onboarding-welcome";
 import { welcomeIdeasPrompt } from "./welcome-ideas";
 import { setupContent } from "./setup-widget";
 import { isWelcomeConversation } from "./welcome-session";
-import { ADMIN_BASE } from "./shell";
 import { connectorCard } from "./connector-widget";
 import {
   activityDescription,
@@ -1454,7 +1453,6 @@ export function createChatSurface(
             .onMoreIdeas=${showWelcomeIdeas}
             .ideasDisabled=${ideasUnavailable()}
             .base=${withBase("")}
-            .adminBase=${ADMIN_BASE}
           ></qm-onboarding-welcome>
         </div>
       </article>
@@ -2376,7 +2374,6 @@ export function createChatSurface(
               html`<qm-onboarding-welcome
                 .me=${appState.me}
                 .base=${withBase("")}
-                .adminBase=${ADMIN_BASE}
                 .widget=${part.type === "setup" ? "apps" : part.type}
                 .toolkit=${part.type === "setup" ? (part.toolkit ?? "") : ""}
                 .onConnected=${continueAfterConnection}

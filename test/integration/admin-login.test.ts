@@ -11,7 +11,7 @@ const env = envPath ? (JSON.parse(readFileSync(envPath, "utf8")) as Record<strin
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
 test(
-  "operator login against real QM core, Postgres, admin, portal, and email broker",
+  "operator login against real QM core, Postgres, web-ui, portal, and email broker",
   {
     skip: !env && "Set QM_ADMIN_LOGIN_ENV_FILE to the isolated live deployment environment JSON",
   },
@@ -60,7 +60,7 @@ test(
     await t.test("all services start without email, and email sign-in reports its unavailable state", async () => {
       assert.equal(env.RESEND_API_KEY ?? "", "");
       assert.equal(env.AUTH_EMAIL_FROM ?? "", "");
-      for (const base of [env.CORE_API_URL!, env.ADMIN_UPSTREAM!, env.AUTH_BROKER_UPSTREAM!, publicUrl]) {
+      for (const base of [env.CORE_API_URL!, env.WEB_UI_UPSTREAM!, env.AUTH_BROKER_UPSTREAM!, publicUrl]) {
         assert.equal((await fetch(`${base}/healthz`)).status, 200, base);
       }
       const redirect = await fetch(`${publicUrl}/auth/login`, { redirect: "manual" });
@@ -80,7 +80,7 @@ test(
       assert.match(await confirmation.text(), /Only continue if you generated this link/);
       const res = await post(tokenOf(url));
       assert.equal(res.status, 303);
-      assert.equal(res.headers.get("location"), "/admin/");
+      assert.equal(res.headers.get("location"), "/settings/history");
       const cookie = cookieOf(res);
       const claims = openSession(
         decodeURIComponent(cookie.slice("portal_session=".length)),
@@ -90,7 +90,7 @@ test(
       );
       assert.equal(claims?.sub, configuredAdmin);
       assert.ok(res.headers.getSetCookie().some((value) => value.startsWith("portal_impersonate=;")));
-      const whoami = await fetch(`${publicUrl}/admin/api/whoami`, { headers: { cookie } });
+      const whoami = await fetch(`${publicUrl}/api/admin/whoami`, { headers: { cookie } });
       assert.equal(whoami.status, 200);
       assert.equal(((await whoami.json()) as { isAdmin: boolean }).isAdmin, true);
       assert.equal((await post(tokenOf(url))).status, 400);

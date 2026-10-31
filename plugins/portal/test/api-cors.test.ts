@@ -8,9 +8,9 @@ import { isChatApiRoute, parseAllowedOrigins } from "../src/cors.ts";
 const upstream = createServer((req: IncomingMessage, res) => {
   req.resume();
   req.on("end", () => {
-    if (req.url === "/api/whoami") {
+    if (req.url?.startsWith("/v1/admin/whoami")) {
       res.writeHead(200, { "content-type": "application/json" });
-      return void res.end(JSON.stringify({ isAdmin: (req.headers.cookie ?? "").includes("admin=U-admin") }));
+      return void res.end(JSON.stringify({ isAdmin: req.headers["x-admin-actor"] === "U-admin@acme" }));
     }
     res.writeHead(200, { "content-type": "application/json", vary: "accept-encoding" });
     res.end(JSON.stringify({ url: req.url, method: req.method, cookie: req.headers.cookie ?? null }));
@@ -26,7 +26,6 @@ process.env.PORTAL_PUBLIC_URL = PUBLIC;
 process.env.PORTAL_SESSION_SECRET = "api-cors-test-portal-secret-0123456789";
 process.env.CORE_SIGNING_SECRET = "api-cors-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_API_ALLOWED_ORIGINS = `${EMBEDDER}, http://localhost:5173`;
 const SESSION_TTL_S = 28800;
@@ -76,7 +75,7 @@ test("a preflight from an unlisted origin, or for a route outside the chat API, 
     await preflight("/api/turn", STRANGER),
     await preflight("/api/memory", EMBEDDER, "PUT"),
     await preflight("/auth/logout", EMBEDDER),
-    await preflight("/admin/api/whoami", EMBEDDER, "GET"),
+    await preflight("/settings/users", EMBEDDER, "GET"),
     await preflight("/api/turn", EMBEDDER, "DELETE"),
   ]) {
     assert.equal(r.headers.get("access-control-allow-origin"), null);

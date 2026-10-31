@@ -24,10 +24,6 @@ const upstream = createServer((req: IncomingMessage, res) => {
     });
     return;
   }
-  if (req.url === "/api/whoami") {
-    res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ isAdmin: false }));
-  }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({ url: req.url, cookie: req.headers.cookie ?? null }));
 });
@@ -38,7 +34,6 @@ process.env.PORTAL_PUBLIC_URL = "http://localhost:18196";
 process.env.PORTAL_SESSION_SECRET = "playground-test-portal-secret";
 process.env.CORE_SIGNING_SECRET = "playground-test-core-secret";
 process.env.WEB_UI_UPSTREAM = upstreamUrl;
-process.env.ADMIN_UPSTREAM = upstreamUrl;
 process.env.CORE_API_URL = upstreamUrl;
 process.env.PORTAL_PLAYGROUND = "1";
 process.env.PORTAL_PLAYGROUND_MINTS_PER_IP = "3";
@@ -86,13 +81,16 @@ test("API requests without a session still require sign-in", async () => {
   assert.equal(post.status, 401);
 });
 
-test("anonymous sessions are refused the admin surface", async () => {
+test("anonymous sessions reach settings paths only as their own playground principal", async () => {
   const visit = await fetch(`${base}/`, { headers: HTML, redirect: "manual" });
   const cookie = sessionCookieOf(visit);
-  const admin = await fetch(`${base}/admin/`, { headers: { ...HTML, cookie } });
-  assert.equal(admin.status, 403);
-  const adminApi = await fetch(`${base}/admin/api/me`, { headers: { accept: "application/json", cookie } });
-  assert.equal(adminApi.status, 403);
+  const principal = /webuiuser=(playground-[0-9a-f]+)/.exec(((await visit.json()) as { cookie: string }).cookie)?.[1];
+  assert.ok(principal);
+  for (const path of ["/settings/users", "/admin/api/me"]) {
+    const r = await fetch(`${base}${path}`, { headers: { accept: "application/json", cookie } });
+    assert.equal(r.status, 200);
+    assert.equal(((await r.json()) as { cookie: string }).cookie, `webuiuser=${principal}; webuiuser_name=Guest`);
+  }
 });
 
 test("explicit sign-in still goes to the identity provider", async () => {

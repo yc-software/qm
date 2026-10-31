@@ -21,8 +21,6 @@ jobs:
             dockerfile: deploy/core/Dockerfile
           - name: web-ui
             dockerfile: deploy/web-ui/Dockerfile
-          - name: admin
-            dockerfile: deploy/admin/Dockerfile
           - name: portal
             dockerfile: deploy/portal/Dockerfile
           - name: auth

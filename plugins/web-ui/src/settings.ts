@@ -12,9 +12,12 @@ import {
   withBase,
 } from "./core-bridge";
 import { html, nothing, render, type TemplateResult } from "lit";
-import { Download, ExternalLink, LogOut, Monitor, Moon, ShieldUser, Sun, type IconNode } from "lucide";
+import { Download, LogOut, Monitor, Moon, Sun, type IconNode } from "lucide";
 import { icon } from "./icons";
-import { ADMIN_HOME_URL, appState, can, signOut } from "./shell";
+import { appState, can, signOut } from "./shell";
+import { isPlainLeftClick, UI_BASE } from "./deep-link";
+import { brandName } from "./ui";
+import { ADMIN_SECTIONS, VIEW_TITLE, adminMounter, settingsRoute } from "./admin/sections";
 import { sessionsState, setWebOnly } from "./sessions";
 import { errMessage, swallowAs } from "../../chassis/src/errors";
 import { importTheme, isPalette, themeCss, themeTokens, type Palette } from "./theme-import";
@@ -510,20 +513,6 @@ function aiAccountsRow(): TemplateResult {
   `;
 }
 
-function adminRow(): TemplateResult {
-  return html`
-    <div class="settings-row">
-      <div class="settings-row-copy">
-        <div class="settings-row-title">Admin</div>
-        <div class="settings-row-note">Org settings, people, and policy.</div>
-      </div>
-      <a class="btn settings-row-action" href=${ADMIN_HOME_URL}>
-        ${icon(ShieldUser, 15)}<span>Open admin</span>${icon(ExternalLink, 14)}
-      </a>
-    </div>
-  `;
-}
-
 function desktopRow(): TemplateResult {
   return html`
     <div class="settings-row">
@@ -555,14 +544,83 @@ function accountRow(): TemplateResult {
   `;
 }
 
-function settingsPane(): TemplateResult {
+const SETTINGS_BASE = `${UI_BASE}/settings`;
+
+let adminHost: HTMLElement | null = null;
+let adminView = "";
+
+const settingsSection = () => (can("admin") ? settingsRoute(SETTINGS_BASE).view : "general");
+
+function settingsGo(url: string, replace = false): void {
+  history[replace ? "replaceState" : "pushState"](null, "", url);
+  renderSettings();
+}
+
+function followSettingsLink(e: MouseEvent): void {
+  const link = (e.target as Element).closest?.("a[href]") as HTMLAnchorElement | null;
+  if (!link || link.target || !isPlainLeftClick(e) || link.origin !== location.origin) return;
+  if (!link.pathname.startsWith(SETTINGS_BASE)) return;
+  e.preventDefault();
+  settingsGo(link.pathname + link.search);
+}
+
+const mountAdmin = adminMounter({
+  base: SETTINGS_BASE,
+  apiBase: withBase("/api/admin"),
+  org: () => appState.me?.org ?? "",
+  go: settingsGo,
+  host: (view) => {
+    if (view !== adminView || !adminHost) {
+      adminView = view;
+      adminHost = Object.assign(document.createElement("div"), { id: "app-view", className: "admin-app" });
+      adminHost.dataset.subview = view;
+      adminHost.innerHTML = '<div class="admin-main"><div class="admin-inner"></div></div>';
+      drawSettings();
+    }
+    return adminHost.querySelector<HTMLElement>(".admin-inner")!;
+  },
+});
+
+function navItem(view: string, section: string): TemplateResult {
+  const href = view === "general" ? SETTINGS_BASE : `${SETTINGS_BASE}/${encodeURIComponent(view)}`;
+  const active =
+    view === section ||
+    (view === "judgments" && section === "ackemoji") ||
+    (view === "users" && (section === "user" || section === "keychain"));
   return html`
-    <div class="list-page-head">
-      <h1 class="pane-title">Settings</h1>
-    </div>
+    <a
+      class="settings-nav-item ${active ? "active" : ""}"
+      href=${href}
+      aria-current=${active ? "page" : nothing}
+      @click=${(e: MouseEvent) => {
+        if (!isPlainLeftClick(e)) return;
+        e.preventDefault();
+        settingsGo(href);
+      }}
+      >${VIEW_TITLE[view] ?? view}</a
+    >
+  `;
+}
+
+function settingsNav(section: string): TemplateResult {
+  return html`
+    <nav class="settings-nav" aria-label="Settings sections">
+      ${navItem("general", section)}
+      ${ADMIN_SECTIONS.map(
+        (group) => html`
+          <div class="settings-nav-label">${group.label}</div>
+          ${group.views.map((view) => navItem(view, section))}
+        `,
+      )}
+    </nav>
+  `;
+}
+
+function generalPane(): TemplateResult {
+  return html`
     <div class="settings-group">
       ${aiAccountsRow()} ${themeRow()} ${openBehaviorRow()} ${pinPromptRow()} ${sendWhileWorkingRow()}
-      ${sidebarSurfaceRow()} ${can("admin") ? adminRow() : nothing} ${desktopRow()} ${accountRow()}
+      ${sidebarSurfaceRow()} ${desktopRow()} ${accountRow()}
       <div class="settings-row settings-slack-account">
         <qm-slack-account .user=${`${appState.me?.org}:${appState.me?.user}`}></qm-slack-account>
       </div>
@@ -579,6 +637,28 @@ function settingsPane(): TemplateResult {
   `;
 }
 
+function settingsPane(): TemplateResult {
+  const section = settingsSection();
+  const general = section === "general";
+  return html`
+    <h1 class="settings-page-title">Settings</h1>
+    ${
+      can("admin")
+        ? html`<p class="settings-tip">
+            Tip: the easiest way to change settings is usually to ask ${brandName()} in a DM. It can make the edit for
+            you and confirm what changed.
+          </p>`
+        : nothing
+    }
+    <div class="settings-layout ${can("admin") ? "with-nav" : ""}">
+      ${can("admin") ? settingsNav(section) : nothing}
+      <div class="settings-content" @click=${followSettingsLink}>
+        ${general ? generalPane() : (adminHost ?? nothing)}
+      </div>
+    </div>
+  `;
+}
+
 function drawSettings(): void {
   if (appState.currentView !== "settings" || !appState.mainEl) return;
   if (!settingsHost || settingsHost.parentElement !== appState.mainEl) {
@@ -590,6 +670,8 @@ function drawSettings(): void {
 }
 
 export function renderSettings(): void {
+  if (!can("admin") && settingsRoute(SETTINGS_BASE).view !== "general") history.replaceState(null, "", SETTINGS_BASE);
   drawSettings();
+  if (settingsSection() !== "general") void mountAdmin();
   void loadAiStatus();
 }

@@ -13,7 +13,7 @@ const config: QmConfig = {
   target: "fly",
   region: "sjc",
   flyOrg: "personal",
-  services: ["core", "slack", "web-ui", "admin", "portal"],
+  services: ["core", "slack", "web-ui", "portal"],
   plugins: [],
   skills: [],
   env: {},
@@ -25,7 +25,7 @@ const slackOidcConfig: QmConfig = {
   env: { portal: { OIDC_AUTH_ENDPOINT: "https://slack.com/openid/connect/authorize" } },
 };
 
-test("email-first outputs return the bot and web/admin URLs without advertising Slack SSO", () => {
+test("email-first outputs return the bot, web, and settings URLs without advertising Slack SSO", () => {
   const dir = mkdtempSync(join(tmpdir(), "qm-outputs-"));
   try {
     renderSlackFiles(config, dir);
@@ -34,8 +34,8 @@ test("email-first outputs return the bot and web/admin URLs without advertising 
     assert.equal(output.providerAccountOrOrganization, "personal");
     assert.equal(output.region, "sjc");
     assert.equal(output.webUiUrl, "https://qm.acme.example");
-    assert.equal(output.adminOnboardingUrl, "https://qm.acme.example/admin/onboarding");
-    assert.equal(output.adminConnectorsUrl, "https://qm.acme.example/admin/connectors");
+    assert.equal(output.adminOnboardingUrl, "https://qm.acme.example/settings/onboarding");
+    assert.equal(output.adminConnectorsUrl, "https://qm.acme.example/settings/connectors");
     assert.equal(output.userConnectionsUrl, "https://qm.acme.example/keychain");
     assert.equal(output.healthUrl, "https://qm.acme.example/healthz");
     assert.equal(output.slack.bot.manifest, join(dir, "slack-app-manifest.yml"));
@@ -91,6 +91,6 @@ test("outputs rejects stale manifests and slack render repairs them", () => {
 test("outputs requires the hosted user surfaces", () => {
   assert.throws(
     () => deploymentOutputs({ ...config, services: ["core"] }, "/tmp"),
-    /requires the slack, web-ui, admin, and portal services/,
+    /requires the slack, web-ui, and portal services/,
   );
 });

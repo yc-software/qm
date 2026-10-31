@@ -318,7 +318,7 @@ test("deployment notice fires only for a fully green main push and holds no repo
   );
   assert.ok(
     job.includes(
-      "needs: [core, cli, lint, dependency-audit, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin]",
+      "needs: [core, cli, lint, dependency-audit, core-postgres, web-ui-plugin, auth-plugin, portal-plugin]",
     ),
   );
   assert.ok(job.includes("permissions: {}"));
@@ -340,7 +340,7 @@ test("receipt is an isolated immutable checkout with no secrets, artifacts, cach
   assert.ok(job.includes("permissions:\n      contents: read"));
   assert.ok(
     job.includes(
-      "needs: [core, cli, lint, core-postgres, admin-plugin, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]",
+      "needs: [core, cli, lint, core-postgres, web-ui-plugin, auth-plugin, portal-plugin, coauthor-trailers]",
     ),
   );
   assert.equal([...job.matchAll(/^ {6}- /gm)].length, 3);
@@ -362,7 +362,6 @@ test("inline receipt eligibility rejects missing or failed prerequisites, not an
     "cli",
     "lint",
     "core-postgres",
-    "admin-plugin",
     "web-ui-plugin",
     "auth-plugin",
     "portal-plugin",

@@ -218,12 +218,6 @@ export const adminOperations = {
     "/model-registry/:id",
     { id: string, value: object },
   ),
-  auto_flagger_test: operation(
-    "Test a candidate security screener on recent samples (billable).",
-    "POST",
-    "/scopes/:scope/auto-flagger/test",
-    { ...scope, value: object },
-  ),
   shadow_deliveries: operation("Read shadow-delivery diagnostics.", "GET", "/deliveries/shadow", scope),
   slack_mirror: operation("List mirrored Slack containers.", "GET", "/slack-mirror", scope),
   slack_messages: operation("Read mirrored Slack messages.", "GET", "/slack-mirror/messages", {

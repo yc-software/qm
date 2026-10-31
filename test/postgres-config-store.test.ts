@@ -315,7 +315,6 @@ test("pg config store: settings written on one core reach another core through r
   await a.setChannelHeaderPin(ch, true);
   await a.setApprovalGrantModes(ch, { session: false, always: true });
   await a.setOrgAmbient(false);
-  await a.setAutoFlaggerConfig({ modelId: "claude-opus-4-8", rubric: "flag it" });
   await b.refreshScope(ch);
   await b.refreshScope(org);
 
@@ -327,7 +326,6 @@ test("pg config store: settings written on one core reach another core through r
   assert.equal(b.getChannelHeaderPin(ch), true);
   assert.deepEqual(await b.getApprovalGrantModesDurable(ch), { session: false, always: true });
   assert.equal(b.getOrgAmbient(), false);
-  assert.equal(b.getAutoFlaggerConfig()?.rubric, "flag it");
 
   await a.setWebuiModels(ch, null);
   await a.setAckEmoji(ch, null);

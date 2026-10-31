@@ -98,7 +98,7 @@ export function renderServiceEnv(
     ...hostedServiceEnv(config.services, config.env, service),
     ...(service === "core" ? virtualServiceEnv(config.services, config.env) : {}),
     ...plugin?.env,
-    ...orgEnv(service, config.orgId, config.publicUrl, config.services.includes("portal"), brandEnvOf(config)),
+    ...orgEnv(service, config.orgId, config.publicUrl, brandEnvOf(config)),
     PORT: "8080",
     ...(coreAccess ? { CORE_API_URL: connections.coreUrl } : {}),
   };
@@ -152,10 +152,7 @@ export function renderServiceEnv(
     Object.assign(out, renderStorageEnv(connections.storage));
   }
   if (service === "portal") {
-    Object.assign(out, {
-      ...(connections.webUiUrl ? { WEB_UI_UPSTREAM: connections.webUiUrl } : {}),
-      ADMIN_UPSTREAM: connections.webUiUrl && config.services.includes("admin") ? `${connections.webUiUrl}/admin` : "",
-    });
+    if (connections.webUiUrl) out.WEB_UI_UPSTREAM = connections.webUiUrl;
     if (config.services.includes("auth")) {
       for (const key of ["AUTH_ALLOWED_EMAIL_DOMAIN", "OIDC_ALLOWED_EMAIL_DOMAIN"])
         out[key] = config.env.auth?.AUTH_ALLOWED_EMAIL_DOMAIN ?? "";

@@ -4247,7 +4247,6 @@ test("default screening does not invoke a model for inbound data or tool results
   );
   assert.equal(result.status, "ok");
   assert.match(result.reply ?? "", /screening-default-ok/);
-  assert.equal(built.screenSecurity, undefined);
   const claims = await verifyCapabilityToken(captured!.egressToken!, TEST_CAPABILITY_SECRET);
   assert.equal(claims?.egress?.denyPrivateNetworks, true);
   assert.equal(built.modelCalls.filter((rec) => rec.model === "mock-security").length, 0);
