@@ -19,6 +19,8 @@ import { flyDeploymentLayerTransport } from "../src/backends/fly.ts";
 import { expectedDescriptors, runConformance } from "../src/commands/conformance.ts";
 
 const SECRET = "conformance-test-secret";
+const CONTROL = "conformance-control-secret-0000000000";
+process.env.DEPLOYMENT_CONTROL_SECRET = CONTROL;
 
 function writeLayer(dir: string): void {
   mkdirSync(join(dir, "sandbox", "skills", "a"), { recursive: true });
@@ -140,6 +142,7 @@ interface CapturedRequest {
   url: string;
   timestamp: string;
   signature: string;
+  authorization: string;
   body: string;
 }
 
@@ -160,6 +163,7 @@ function startCoreStub(
       url: url.pathname + url.search,
       timestamp: headers.get("x-timestamp") ?? "",
       signature: headers.get("x-signature") ?? "",
+      authorization: headers.get("authorization") ?? "",
       body: typeof init?.body === "string" ? init.body : "",
     });
     const result = response();
@@ -313,6 +317,7 @@ test("conformance passes against a live core: base-port override, signed request
       .update(`v0:${request.timestamp}:GET\n/v1/deployment-layer\n\n`)
       .digest("hex");
     assert.equal(request.signature, `v0=${expected}`, "v0 HMAC over METHOD\\npath\\ntenant\\nbody");
+    assert.equal(request.authorization, `Bearer ${CONTROL}`);
   } finally {
     await new Promise<void>((resolve) => server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
