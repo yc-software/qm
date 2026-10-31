@@ -23,6 +23,7 @@ async function withSettingsDb(
   try {
     await migrateRegisteredPgSchemas(schemaUrl.toString());
     await admin.query(`ALTER ROLE qm_app PASSWORD 'app'`);
+    await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO qm_app`);
     const a = randomUUID();
     const b = randomUUID();
     await admin.query(`INSERT INTO tenants(id, slug, name) VALUES ($1, 'first', 'First'), ($2, 'second', 'Second')`, [
