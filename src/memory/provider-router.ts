@@ -1,7 +1,8 @@
-import { disclosedMemory } from "./disclosure.ts";
+import { disclosedMemory, MemoryRecallWithheld } from "./disclosure.ts";
 import { parseScopeId, type ScopeId, type ScopeKind } from "../types.ts";
-import type { MemoryProviderOutcome, MemoryService } from "./memory-service.ts";
-import { failedOutcome } from "./provider-outcome.ts";
+import type { McpEnvelope } from "../mcp/mcp-client.ts";
+import type { MemoryProviderOutcome, MemoryRecallContext, MemoryService } from "./memory-service.ts";
+import { failedOutcome, withEnvelope } from "./provider-outcome.ts";
 
 export type MemoryCapturePolicy = "off" | "explicit" | "automatic";
 
@@ -25,8 +26,6 @@ function captureAllowed(policy: MemoryCapturePolicy | undefined, mode: "explicit
   return policy === "explicit" && mode === "explicit";
 }
 
-type Sinks = { report?: (outcome: MemoryProviderOutcome) => void };
-
 export function createRoutedMemoryService(opts: {
   providers: Readonly<Record<string, MemoryService>>;
   routes: readonly MemoryProviderRoute[];
@@ -46,26 +45,22 @@ export function createRoutedMemoryService(opts: {
     route: MemoryProviderRoute,
     scopeId: ScopeId,
     operation: "recall" | "query" | "capture",
-    context: Sinks | undefined,
-    run: (envelope: (envelope: { code?: string; status?: string }) => void) => Promise<T>,
-    settle: (
-      value: T,
-      envelope: { code?: string; status?: string },
-    ) => Pick<MemoryProviderOutcome, "outcome" | "added">,
+    context: Pick<MemoryRecallContext, "report"> | undefined,
+    run: () => Promise<T>,
+    settle: (value: T, envelope: McpEnvelope) => Pick<MemoryProviderOutcome, "outcome" | "added">,
     fallback: T,
   ): Promise<{ value: T; error?: unknown }> {
     const started = Date.now();
     const report = (fields: Omit<MemoryProviderOutcome, "provider" | "scope" | "ms">) =>
       context?.report?.({ provider: route.provider, scope: scopeId, ms: Date.now() - started, ...fields });
-    let received: { code?: string; status?: string } = {};
     try {
-      const value = await run((envelope) => void (received = envelope));
-      report({ ...settle(value, received), ...(received.code ? { code: received.code } : {}) });
+      const { value, envelope } = await withEnvelope(run);
+      report({ ...settle(value, envelope), ...(envelope.code ? { code: envelope.code } : {}) });
       return { value };
     } catch (error) {
+      if (error instanceof MemoryRecallWithheld) return { value: fallback };
       const failed = failedOutcome(error);
       report(operation === "capture" && failed.outcome === "timed_out" ? { ...failed, outcome: "unknown" } : failed);
-      if (failed.code === "withheld") return { value: fallback };
       if (!route.failOpen) return { value: fallback, error };
       opts.onError?.(error, route.provider, operation);
       return { value: fallback };
@@ -96,7 +91,7 @@ export function createRoutedMemoryService(opts: {
               scopeId,
               "recall",
               context,
-              (envelope) => providerFor(route).recall(scopeId, { ...context, envelope }),
+              () => providerFor(route).recall(scopeId, context),
               (rows) => ({ outcome: rows.length ? "ok" : "empty" }),
               [],
             ),
@@ -126,7 +121,7 @@ export function createRoutedMemoryService(opts: {
               scopeId,
               "capture",
               context,
-              (envelope) => provider.capture(scopeId, facts, at, author, { ...context, mode, envelope }),
+              () => provider.capture(scopeId, facts, at, author, context),
               (added, envelope) => ({ outcome: envelope.status === "pending" ? "pending" : "committed", added }),
               0,
             );
@@ -146,7 +141,7 @@ export function createRoutedMemoryService(opts: {
               scopeId,
               "query",
               context,
-              (envelope) => providerFor(route).query(scopeId, q, limit, { ...context, envelope }),
+              () => providerFor(route).query(scopeId, q, limit, context),
               (hits) => ({ outcome: hits.length ? "ok" : "empty" }),
               [],
             ),

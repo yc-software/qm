@@ -68,7 +68,7 @@ function fakeToolContext(sink?: { lastExecOpts?: Parameters<ToolContext["execute
       return "# Memory\n- (2026-05-31) Owns the billing service\n";
     },
     async memoryAdd(facts) {
-      return { added: facts.length, outcomes: [] };
+      return { added: facts.length, outcomes: [], problems: [] };
     },
     async memoryEdit() {
       return true;

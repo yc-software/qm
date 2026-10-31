@@ -13,6 +13,7 @@ import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { recallAcrossScopes } from "../src/memory/cross-scope.ts";
 import { McpCallError } from "../src/mcp/mcp-client.ts";
 import { TimeoutError } from "../src/util/async.ts";
+import { reportEnvelope } from "../src/memory/provider-outcome.ts";
 
 const alice = "personal:alice";
 const memoryFact = (id: string, text: string): MemoryFact => ({
@@ -106,9 +107,14 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
   const line = (i: number) => `provider line ${i}: ${"detail ".repeat(6).trim()}`;
   let window = 0;
   let failure: Error | undefined;
+  let unlinked = false;
   const knowledge: MemoryService = {
     async recall() {
       if (failure) throw failure;
+      if (unlinked) {
+        reportEnvelope({ code: "actor_unlinked" });
+        return [];
+      }
       return [{ text: Array.from({ length: 6 }, (_, k) => line(window + k)).join("\n"), score: 0.2 }];
     },
     async capture() {
@@ -167,4 +173,10 @@ test("id-less provider lines inject only new lines over 20 turns, and timeouts o
   const restored = await turn();
   assert.ok(restored.includes(block(...Array.from({ length: 6 }, (_, k) => line(window + k)))));
   assert.doesNotMatch(restored, /NOTEBOOK_FACT|consolidated or removed/);
+
+  unlinked = true;
+  assert.equal(
+    await turn(),
+    "Some previously recalled memory sources are no longer included. Do not rely on memory from sources that are not currently authorized.",
+  );
 });

@@ -1,9 +1,10 @@
 import { retainedSnapshot } from "../agent/context-snapshot.ts";
 import type { SessionEntry } from "../types.ts";
-import { promptText } from "../util/text.ts";
+import { untrustedText } from "../util/text.ts";
 import { renderRecall, type RecalledFact } from "./cross-scope.ts";
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
 import type { MemoryProviderOutcome } from "./memory-service.ts";
+import { refused } from "./provider-outcome.ts";
 
 interface Shown {
   scope: string;
@@ -61,7 +62,7 @@ export function memoryRecallDelta(
       else withdrawn.set(shown.scope, (withdrawn.get(shown.scope) ?? 0) + 1);
     } else {
       const outcome = outcomes.find(({ provider, scope }) => provider === shown.provider && scope === shown.scope);
-      if (outcome?.outcome === "denied") unauthorized = true;
+      if (outcome && refused(outcome)) unauthorized = true;
       else if (outcome && KEPT_WHEN.has(outcome.outcome)) record.shown.push(shown);
     }
   }
@@ -71,7 +72,7 @@ export function memoryRecallDelta(
       [...withdrawn]
         .map(
           ([scope, n]) =>
-            `${promptText(labels.get(scope) ?? scope)}: ${n} earlier ${n === 1 ? "fact was" : "facts were"} consolidated or removed; rely only on the current list.`,
+            `${untrustedText(labels.get(scope) ?? scope)}: ${n} earlier ${n === 1 ? "fact was" : "facts were"} consolidated or removed; rely only on the current list.`,
         )
         .join("\n"),
       unauthorized

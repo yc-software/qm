@@ -68,6 +68,7 @@ export async function startMcpTestServer(
     stateless?: boolean;
     deleteStatus?: number;
     status?: number;
+    tokenStatus?: number;
   } = {},
 ): Promise<McpTestServer> {
   const tools = opts.tools ?? DEFAULT_TOOLS;
@@ -125,6 +126,7 @@ export async function startMcpTestServer(
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
     const body = req.method === "POST" ? await readBody(req) : "";
+    if (path === "/token" && opts.tokenStatus) return json(res, opts.tokenStatus, { error: "server_error" });
     if (path === "/token" && opts.clients) return token(req, body, res);
     if (path.startsWith("/.well-known/oauth-protected-resource") && opts.authorizationServer) {
       return json(res, 200, { resource: `${url}/mcp`, authorization_servers: [opts.authorizationServer] });

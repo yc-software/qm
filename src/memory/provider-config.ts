@@ -67,8 +67,10 @@ function string(value: unknown, at: string): string {
   return value;
 }
 
-const URL_HELP =
-  "Accepted: https://<host>, or http:// on localhost, 127.0.0.1, *.internal, *.flycast or *.local; see docs/memory-providers.md#troubleshooting.";
+const PRIVATE_HOSTS = ["localhost", "127.0.0.1"];
+const PRIVATE_SUFFIXES = [".internal", ".flycast", ".local"];
+const ACCEPTED_HOSTS = [...PRIVATE_HOSTS, ...PRIVATE_SUFFIXES.map((suffix) => `*${suffix}`)];
+const URL_HELP = `Accepted: https://<host>, or http:// on ${ACCEPTED_HOSTS.slice(0, -1).join(", ")} or ${ACCEPTED_HOSTS.at(-1)}; see docs/memory-providers.md#troubleshooting.`;
 
 function privateMcpUrl(value: unknown, at: string): string {
   const raw = string(value, at);
@@ -81,11 +83,7 @@ function privateMcpUrl(value: unknown, at: string): string {
   const shown = `${url.protocol}//${url.hostname}`;
   const privateHttp =
     url.protocol === "http:" &&
-    (url.hostname === "localhost" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname.endsWith(".internal") ||
-      url.hostname.endsWith(".flycast") ||
-      url.hostname.endsWith(".local"));
+    (PRIVATE_HOSTS.includes(url.hostname) || PRIVATE_SUFFIXES.some((suffix) => url.hostname.endsWith(suffix)));
   if (url.username || url.password || url.hash)
     throw new Error(`${at} (${shown}) must not carry credentials or a #fragment. ${URL_HELP}`);
   if (url.protocol !== "https:" && !privateHttp)

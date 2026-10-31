@@ -60,7 +60,8 @@ Links live in the `principal_links` durable map of the company database.
 Memory providers with `attestActor` and attested MCP connectors receive the
 canonical id in the `x-qm-actor` header, so every linked sign-in reaches them
 as one person. QM attests only ids of 1 to 256 visible ASCII characters (`!`
-through `~`), the rule the credential broker also applies to its actor. Slack
+through `~`), the rule the credential broker also applies to its actor; the
+broker checks the turn's own principal id and sends it unchanged. Slack
 ids and OIDC principals (`oidc:<issuer hash>:<subject>`) are ASCII; an email
 principal with non-ASCII characters, or any id over 256 characters, is not
 attested. QM makes no call for such a member and reports `invalid_actor`;

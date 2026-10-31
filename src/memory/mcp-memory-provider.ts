@@ -1,8 +1,9 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { mcpEnvelope, mcpResultText, type McpClient } from "../mcp/mcp-client.ts";
 import { withTimeout } from "../util/async.ts";
-import { attestableActor, canonicalPerson, UNATTESTABLE_ACTOR_FIX, UnattestableActor } from "../directory/person.ts";
-import type { MemoryService } from "./memory-service.ts";
+import { attestedPerson } from "../directory/person.ts";
+import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
+import { DENIED_CODES, reportEnvelope } from "./provider-outcome.ts";
 
 export interface McpMemoryOperation {
   client: McpClient;
@@ -22,7 +23,7 @@ export interface McpMemoryOperation {
 
 function resultText(result: CallToolResult): string {
   const text = mcpResultText(result);
-  if (text || mcpEnvelope(result).code) return text;
+  if (text || DENIED_CODES.has(mcpEnvelope(result).code ?? "")) return text;
   return result.structuredContent == null ? "" : JSON.stringify(result.structuredContent);
 }
 
@@ -32,31 +33,21 @@ export function createMcpMemoryProvider(opts: {
   attestActor?: boolean;
 }): MemoryService {
   const call = async (op: McpMemoryOperation, args: Record<string, unknown>, actorId: string | undefined) => {
-    const person = opts.attestActor ? attestableActor(actorId && canonicalPerson(actorId)) : actorId;
-    if (opts.attestActor && !person)
-      throw new UnattestableActor(`memory provider can't attest this actor. ${UNATTESTABLE_ACTOR_FIX}`);
+    const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
     if (person) args[op.actorArg ?? "acting_user"] = person;
     const headers = opts.attestActor && person ? { "x-qm-actor": person } : undefined;
-    return withTimeout(() => op.client.callTool(op.tool, args, headers), op.timeoutMs, "memory provider");
+    const result = await withTimeout(() => op.client.callTool(op.tool, args, headers), op.timeoutMs, "memory provider");
+    reportEnvelope(mcpEnvelope(result));
+    return result;
   };
 
-  const read = async (
-    scopeId: string,
-    query: string,
-    context?: {
-      actorId?: string;
-      maxChars?: number;
-      envelope?: (envelope: { code?: string; status?: string }) => void;
-    },
-  ): Promise<string> => {
+  const read = async (scopeId: string, query: string, context?: MemoryRecallContext): Promise<string> => {
     const op = opts.read;
     const args: Record<string, unknown> = { [op.queryArg ?? "query"]: query };
     if (op.scopeArg) args[op.scopeArg] = scopeId;
     const maxChars = context?.maxChars;
     if (maxChars && op.maxCharsArg) args[op.maxCharsArg] = maxChars;
-    const result = await call(op, args, context?.actorId);
-    context?.envelope?.(mcpEnvelope(result));
-    const text = resultText(result);
+    const text = resultText(await call(op, args, context?.actorId));
     return maxChars && text.length > maxChars ? text.slice(0, maxChars) : text;
   };
 
@@ -76,8 +67,7 @@ export function createMcpMemoryProvider(opts: {
       if (op.sourceArg) args[op.sourceArg] = context?.mode ?? "explicit";
       if (context?.idempotencyKey && op.idempotencyArg) args[op.idempotencyArg] = context.idempotencyKey;
       if (op.scopeArg) args[op.scopeArg] = scopeId;
-      const result = await call(op, args, context?.actorId ?? author);
-      context?.envelope?.(mcpEnvelope(result));
+      await call(op, args, context?.actorId ?? author);
       return facts.length;
     },
 

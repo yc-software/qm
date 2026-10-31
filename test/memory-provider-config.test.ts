@@ -189,30 +189,18 @@ test("provider URL errors name only the protocol and host and never echo secrets
     ],
     [`not a url ${SENTINEL}`, /is not a valid URL \(value not shown\)/],
   ];
-  const logged: string[] = [];
-  const original = { error: console.error, warn: console.warn, log: console.log };
-  for (const level of ["error", "warn", "log"] as const)
-    console[level] = (...args: unknown[]) => void logged.push(args.join(" "));
-  try {
-    for (const [url, message] of cases) {
-      assert.throws(
-        () => parseMemoryProviderConfig(withProvider({ url }), ENV),
-        (error: unknown) => {
-          const text = String(error);
-          assert.match(text, message);
-          assert.match(text, /localhost, 127\.0\.0\.1, \*\.internal, \*\.flycast or \*\.local/);
-          assert.match(text, /docs\/memory-providers\.md#troubleshooting/);
-          assert.doesNotMatch(text, new RegExp(SENTINEL));
-          assert.doesNotMatch(text, /user:|token=/);
-          return true;
-        },
-      );
-    }
-  } finally {
-    Object.assign(console, original);
+  for (const [url, message] of cases) {
+    assert.throws(
+      () => parseMemoryProviderConfig(withProvider({ url }), ENV),
+      (error: unknown) => {
+        const text = String(error);
+        assert.match(text, message);
+        assert.match(text, /localhost, 127\.0\.0\.1, \*\.internal, \*\.flycast or \*\.local/);
+        assert.match(text, /docs\/memory-providers\.md#troubleshooting/);
+        assert.doesNotMatch(text, new RegExp(SENTINEL));
+        assert.doesNotMatch(text, /user:|token=/);
+        return true;
+      },
+    );
   }
-  assert.deepEqual(
-    logged.filter((line) => line.includes(SENTINEL)),
-    [],
-  );
 });

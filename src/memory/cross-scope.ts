@@ -2,7 +2,7 @@ import type { ScopeId } from "../types.ts";
 import type { MemoryService, MemoryRecallContext } from "./memory-service.ts";
 import { RECALL_MAX_CHARS } from "./notebook.ts";
 import { factLine, type MemoryCandidate, type MemorySource } from "./facts.ts";
-import { promptText, quotedData } from "../util/text.ts";
+import { quotedData, untrustedText } from "../util/text.ts";
 
 export interface RecalledFact {
   scope: ScopeId;
@@ -16,17 +16,18 @@ type Block = Pick<RecalledFact, "scope" | "source">;
 const blockKey = ({ scope, source }: Block) => JSON.stringify([scope, source?.provider ?? null]);
 
 const heading = ({ scope, source }: Block, labels: ReadonlyMap<string, string>) =>
-  `### ${promptText(labels.get(scope) ?? scope)}${source ? ` · ${promptText(source.label)}` : ""}`;
+  `### ${untrustedText(labels.get(scope) ?? scope)}${source ? ` · ${untrustedText(source.label)}` : ""}`;
 
 const BLOCK_FRAME = quotedData("").length;
 
-const lines = <T extends MemoryCandidate>(row: T): T[] =>
-  row.id === undefined
-    ? row.text
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((text) => ({ ...row, text }))
-    : [row];
+const quotedLength = (text: string) => quotedData(text).length - BLOCK_FRAME;
+
+const lines = <T extends MemoryCandidate>(row: T, origin: number) =>
+  (row.id === undefined ? row.text.split("\n").filter((line) => line.trim()) : [row.text]).map((text) => ({
+    ...row,
+    text,
+    origin,
+  }));
 
 export async function recallAcrossScopes(
   memory: MemoryService,
@@ -46,19 +47,21 @@ export async function recallAcrossScopes(
     .sort((a, b) => b.score - a.score || (b.at ?? 0) - (a.at ?? 0));
   const picked: RecalledFact[] = [];
   const blocks = new Set<string>();
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   let size = 0;
   for (const row of ranked) {
-    const { scope, id, text: full, source } = row;
-    if (!full.trim() || seen.has(full)) continue;
+    const { scope, id, text: full, source, origin } = row;
+    if (!full.trim() || (seen.get(full) ?? origin) !== origin) continue;
     const overhead = blocks.has(blockKey(row))
       ? 1
       : (blocks.size ? 2 : 0) + heading(row, labels).length + 1 + BLOCK_FRAME;
-    const text = id === undefined ? full.slice(0, Math.max(0, budget - size - overhead)) : full;
-    const cost = text.length + overhead;
+    const room = Math.max(0, budget - size - overhead);
+    const clipped = full.slice(0, room);
+    const text = id === undefined ? clipped.slice(0, room - (quotedLength(clipped) - clipped.length)) : full;
+    const cost = quotedLength(text) + overhead;
     if (!text.trim() || size + cost > budget) continue;
     size += cost;
-    seen.add(full);
+    seen.set(full, origin);
     blocks.add(blockKey(row));
     picked.push({ scope, ...(id !== undefined ? { id } : {}), text, ...(source ? { source } : {}) });
   }

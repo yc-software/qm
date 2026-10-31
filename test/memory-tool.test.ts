@@ -351,4 +351,21 @@ test("memory search and add report provider problems instead of claiming nothing
   assert.match(add, /^Remembered 1 fact\.$/m);
   assert.match(add, /^\[memory_provider_timeout\] .*whether it stored the facts is unknown; QM did not retry\. Fix: /m);
   assert.match(await notebook.read(personal), /prefers terse replies/);
+
+  const strict = createRoutedMemoryService({
+    providers: { default: notebook, knowledge: failing },
+    routes: [
+      { provider: "default", scopes: ["personal"], capture: "automatic" },
+      { provider: "knowledge", scopes: ["personal"], capture: "explicit", manage: false },
+    ],
+  });
+  const strictTool = createAgentTools({
+    current: ctxFor({ scope: personal, workspace, memory: strict as ReturnType<typeof createMemoryService> }),
+    emit: () => {},
+    scopeLabel: personal,
+  }).find((t) => t.name === "memory");
+  assert.match(
+    textOf(await call(strictTool, { action: "search", query: "terse" })),
+    /^\[memory_provider_denied\] Memory provider knowledge refused the request \(http_403\)\. Fix: /,
+  );
 });

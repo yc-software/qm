@@ -61,13 +61,14 @@ import { TURN_FILES_DIR, type OutboundFile } from "../core/attachments.ts";
 import { errMessage, withCleanup } from "../util/errors.ts";
 import type { FileArtifactStore } from "../files/file-artifact-store.ts";
 import type { ScopedConfigStore } from "../resolution/config-store.ts";
+import { MEMORY_FILE, type MemoryEdit, type MemoryService } from "../memory/memory-service.ts";
 import {
-  MEMORY_FILE,
-  type MemoryEdit,
-  type MemoryProviderOutcome,
-  type MemoryService,
-} from "../memory/memory-service.ts";
-import { providerProblems, writeFacts, type MemoryProviderProblem } from "../memory/provider-outcome.ts";
+  withProviders,
+  writeFacts,
+  type MemoryProviderProblem,
+  type MemoryWrite,
+  type OutcomeReport,
+} from "../memory/provider-outcome.ts";
 import type { McpToolService } from "../mcp/mcp-tool-service.ts";
 import type { ReachResolution } from "../resolution/scope-reach.ts";
 import type {
@@ -248,7 +249,7 @@ export interface ToolContext extends SurfaceToolDeps {
     scope?: ScopeId,
   ): Promise<{ hits: string[]; problems: MemoryProviderProblem[] } | null>;
   memoryRead(scope?: ScopeId): Promise<string | null>;
-  memoryAdd(facts: string[]): Promise<{ added: number; outcomes: MemoryProviderOutcome[] } | null>;
+  memoryAdd(facts: string[]): Promise<MemoryWrite | null>;
   memoryEdit(edits: MemoryEdit[]): Promise<true | null>;
   memoryDelete(ids: string[]): Promise<true | null>;
   history(q: string, limit?: number): Promise<string[]>;
@@ -1129,13 +1130,15 @@ export function createToolContext(deps: ToolContextDeps): ToolContext {
     },
 
     async memorySearch(q: string, limit?: number, scope?: ScopeId) {
-      const outcomes: MemoryProviderOutcome[] = [];
-      const report = (outcome: MemoryProviderOutcome) => void outcomes.push(outcome);
-      const hits = deps.context
-        ? await deps.context.searchMemory(q, limit, scope, report)
+      const context = deps.context;
+      const search = context
+        ? (report: OutcomeReport) => context.searchMemory(q, limit, scope, report)
         : memory &&
-          (await searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy, report));
-      return hits ? { hits, problems: providerProblems(outcomes) } : null;
+          ((report: OutcomeReport) =>
+            searchNotebooks(memory, deps.memoryAccess?.read ?? [], q, limit, scope, deps.createdBy, report));
+      if (!search) return null;
+      const { value: hits, problems } = await withProviders("search", search);
+      return hits === null ? null : { hits: hits ?? [], problems };
     },
 
     async memoryRead(scope?: ScopeId): Promise<string | null> {

@@ -8,6 +8,14 @@ import { swallowAs } from "../util/errors.ts";
 
 const MAX_TOOLS = 64;
 const CALL_TIMEOUT_MS = 300_000;
+const OAUTH_DENIALS: ReadonlySet<string> = new Set([
+  "invalid_client",
+  "invalid_grant",
+  "unauthorized_client",
+  "invalid_token",
+  "insufficient_scope",
+  "access_denied",
+]);
 
 export class McpCallError extends Error {
   readonly status: number | undefined;
@@ -37,7 +45,7 @@ function envelopeOf(value: unknown): McpEnvelope {
   const nested = error && typeof error === "object" ? error.code : undefined;
   const found = typeof code === "string" ? code : nested;
   return {
-    ...(typeof found === "string" ? { code: found } : {}),
+    ...(typeof found === "string" && /^[\w.:-]{1,64}$/.test(found) ? { code: found } : {}),
     ...(typeof status === "string" ? { status } : {}),
   };
 }
@@ -60,7 +68,8 @@ function errorCode(result: CallToolResult): string | undefined {
 
 function httpStatus(error: unknown): number | undefined {
   if (error instanceof StreamableHTTPError && (error.code ?? 0) > 0) return error.code;
-  if (error instanceof UnauthorizedError || error instanceof OAuthError) return 401;
+  if (error instanceof UnauthorizedError) return 401;
+  if (error instanceof OAuthError && OAUTH_DENIALS.has(error.errorCode)) return 401;
   return undefined;
 }
 
@@ -161,10 +170,10 @@ export function createMcpClient(opts: { url: string; auth: McpAuth }): McpClient
       )) as CallToolResult;
       if (result.isError) {
         const code = errorCode(result);
-        throw new McpCallError(
-          `mcp tool ${name} error: ${mcpResultText(result) || "(no detail)"}`,
-          code ? { code } : {},
-        );
+        const detail =
+          mcpResultText(result) ||
+          (result.structuredContent ? JSON.stringify(result.structuredContent) : "(no detail)");
+        throw new McpCallError(`mcp tool ${name} error: ${detail}`, code ? { code } : {});
       }
       return result;
     },

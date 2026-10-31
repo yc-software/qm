@@ -28,12 +28,11 @@ export interface MemoryProviderOutcome {
   added?: number;
 }
 
-interface MemoryProviderSinks {
+interface MemoryOutcomeSink {
   report?: (outcome: MemoryProviderOutcome) => void;
-  envelope?: (envelope: { code?: string; status?: string }) => void;
 }
 
-export interface MemoryRecallContext extends MemoryProviderSinks {
+export interface MemoryRecallContext extends MemoryOutcomeSink {
   query?: string;
   disclosedFacts?: ReadonlyMap<ScopeId, readonly MemoryFact[]>;
   actorId?: string;
@@ -42,7 +41,7 @@ export interface MemoryRecallContext extends MemoryProviderSinks {
   autonomous?: boolean;
 }
 
-export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryProviderSinks {
+export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
   mode: "explicit" | "automatic";
   actorId?: string;
   input?: string;

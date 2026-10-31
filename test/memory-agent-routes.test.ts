@@ -563,14 +563,15 @@ describe("agent memory routes report provider failures as problem+json", () => {
     assert.equal(write.headers.get("content-type"), "application/problem+json");
     const written = (await write.json()) as {
       added: number;
-      problems: Array<{ code: string; sideEffects?: string; fix: string }>;
+      problems: Array<{ code: string; detail: string; fix: string }>;
       outcomes: Array<{ provider: string; outcome: string }>;
     };
     assert.equal(written.added, 1);
     assert.deepEqual(
-      written.problems.map(({ code, sideEffects }) => ({ code, sideEffects })),
-      [{ code: "memory_provider_timeout", sideEffects: "unknown" }],
+      written.problems.map(({ code }) => code),
+      ["memory_provider_timeout"],
     );
+    assert.match(written.problems[0]?.detail ?? "", /whether it stored the facts is unknown; QM did not retry/);
     assert.deepEqual(
       written.outcomes
         .map(({ provider, outcome }) => ({ provider, outcome }))

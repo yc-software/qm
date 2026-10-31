@@ -33,6 +33,13 @@ export function attestableActor(id: unknown): string | undefined {
   return typeof id === "string" && /^[\x21-\x7e]{1,256}$/.test(id) ? id : undefined;
 }
 
+export function attestedPerson(id: string | undefined, callee: string): string {
+  const actor = attestableActor(id && canonicalPerson(id));
+  if (!actor)
+    throw new UnattestableActor(`${callee} needs a signed-in person QM can attest. ${UNATTESTABLE_ACTOR_FIX}`);
+  return actor;
+}
+
 export function personIds(id: string): string[] {
   const key = foldPrincipalId(id);
   if (!key) return [];
