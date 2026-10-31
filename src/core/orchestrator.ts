@@ -1430,19 +1430,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           resource: "scratch execution",
         });
       };
-      const resolvedCredential = (materialized: import("../credentials/keychain.ts").MaterializedCred) => {
+      const resolvedCredential = (
+        materialized: import("../credentials/keychain.ts").MaterializedCred,
+        writeback: boolean,
+      ) => {
         if (materialized.kind === "env") return { env: materialized.env };
         return {
           env: [],
           files: {
             files: materialized.files,
             save: (files: import("../credentials/keychain.ts").CredentialFile[]) =>
-              deps.keychain!.updateFiles(materialized, files),
+              deps.keychain!.updateFiles({ ...materialized, writeback }, files),
             source: {
               credentialId: materialized.credentialId,
               ownerId: materialized.ownerId,
               service: materialized.service,
               ...(materialized.grantId ? { grantId: materialized.grantId } : {}),
+              writeback,
             },
           },
         };
@@ -1478,7 +1482,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               resolve: async () => {
                 const prepared = await keychain.prepareMaterialize(grant.id, scopeId, actor.id);
                 return {
-                  ...resolvedCredential(prepared.materialized),
+                  ...resolvedCredential(prepared.materialized, samePerson(credential.ownerId, actor.id)),
                   commit: prepared.commit,
                   singleUse: prepared.singleUse,
                 };
@@ -1500,6 +1504,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   await authorizeOwnerCredentials();
                   return resolvedCredential(
                     await keychain.materializeOwnById(actor.id, credential.id, personalScope(actor.id)),
+                    true,
                   );
                 },
               },

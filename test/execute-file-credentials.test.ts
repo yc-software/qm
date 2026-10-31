@@ -95,8 +95,9 @@ async function fixture(t: TestContext) {
               env: [],
               files: {
                 files: materialized.files,
-                save: (updated: CredentialFile[]) => keychain.updateFiles(materialized, updated),
-                source: { credentialId: materialized.credentialId, ownerId: owner, service: "aws" },
+                save: (updated: CredentialFile[]) =>
+                  keychain.updateFiles({ ...materialized, writeback: true }, updated),
+                source: { credentialId: materialized.credentialId, ownerId: owner, service: "aws", writeback: true },
               },
             };
           },
@@ -188,8 +189,8 @@ test("concurrent file updates cannot overwrite a newer credential or its grants"
   const a = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   const b = await f.keychain.materializeOwnById(owner, f.credential.id, scope);
   if (a.kind !== "file" || b.kind !== "file") throw new Error("Expected files");
-  await f.keychain.updateFiles(a, files("newer"));
-  await assert.rejects(f.keychain.updateFiles(b, files("stale")), /changed during execution/);
+  await f.keychain.updateFiles({ ...a, writeback: true }, files("newer"));
+  await assert.rejects(f.keychain.updateFiles({ ...b, writeback: true }, files("stale")), /changed during execution/);
   assert.equal((await f.keychain.getGrant(grant.id))?.status, "active");
 });
 

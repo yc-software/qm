@@ -436,6 +436,7 @@ interface MaterializedFileCred {
   origin?: string;
   grantId?: string;
   purpose?: string;
+  writeback?: boolean;
 }
 
 export type MaterializedCred = ({ kind: "env" } & MaterializedEnvCred) | ({ kind: "file" } & MaterializedFileCred);
@@ -521,6 +522,7 @@ export interface FileCredentialSource {
   ownerId: string;
   service: string;
   grantId?: string;
+  writeback?: boolean;
 }
 
 export function credentialFilesFingerprint(files: CredentialFile[]): string {
@@ -1142,7 +1144,7 @@ export function createKeychain(deps: {
     save: saveCredential,
 
     async updateFiles(materialized, files) {
-      if (materialized.grantId) return;
+      if (!materialized.writeback) return;
       const normalized = checkedFiles(files.map((file) => ({ ...file, path: keychainFilePath(file.path) })));
       if (!normalized.length) throw new KeychainError(409, "Refreshed credential files are missing");
       const fingerprint = credentialFilesFingerprint;
@@ -1181,6 +1183,7 @@ export function createKeychain(deps: {
         service: current.service,
         files,
         ...(source.grantId ? { grantId: source.grantId } : {}),
+        ...(source.writeback ? { writeback: true } : {}),
       };
     },
 
