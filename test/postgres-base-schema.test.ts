@@ -20,9 +20,18 @@ async function withDatabase(run: (url: string, admin: pg.Pool) => Promise<void>)
     await run(url.toString(), admin);
   } finally {
     await admin.end();
-    await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
+    await dropWhenIdle(parent, name);
     await parent.end();
   }
+}
+
+async function dropWhenIdle(parent: pg.Pool, name: string): Promise<void> {
+  const idleBy = Date.now() + 5_000;
+  const sessions = "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1";
+  while ((await parent.query(sessions, [name])).rows[0].n > 0 && Date.now() < idleBy) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await parent.query(`DROP DATABASE ${name} WITH (FORCE)`);
 }
 
 async function migrate(url: string): Promise<void> {
