@@ -31,9 +31,9 @@ mock.module("../src/resolution/config-store.ts", {
     createConfigStore: (...args: Parameters<typeof configModule.createConfigStore>) =>
       configModule.createConfigStore({
         ...args[0],
-        souls: {
-          ...args[0].souls,
-          all: async () => {
+        tables: {
+          ...args[0].tables,
+          scopeSettings: async () => {
             reads.config++;
             throw configFailure;
           },

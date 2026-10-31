@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { composeSoul, createResolutionService } from "../src/resolution/resolution-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
-import type { PersistedEgressPolicy, PersistedSoul } from "../src/resolution/config-store.ts";
-import { testConfigStore, testMap, testDatabaseUrl } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
@@ -106,15 +105,14 @@ test("resolution carries the durable effective security posture", async () => {
 });
 
 test("resolution refreshes security config written by another instance", async () => {
-  const souls = testMap<PersistedSoul>();
-  const egressPolicies = testMap<PersistedEgressPolicy>();
-  const reader = testConfigStore({ souls, egressPolicies });
+  const tables = testConfigTables();
+  const reader = testConfigStore({ tables });
   const personal = scopeId("personal", "U1");
-  await souls.put(personal, { scopeId: personal, content: "FLEET_LIVE", version: 1 });
-  await egressPolicies.put(personal, {
-    scopeId: personal,
-    policy: { allowedHosts: [], deniedHosts: ["blocked.example"] },
-  });
+  await tables.appendSoul({ scopeId: personal, content: "FLEET_LIVE", version: 1, updatedAt: 1 }, 0, 0);
+  await tables.updateScopeSetting(personal, (row) => ({
+    ...row,
+    egress: { allowedHosts: [], deniedHosts: ["blocked.example"] },
+  }));
   const res = createResolutionService(reader, createAclStore(createPostgresGrantStore(testDatabaseUrl())));
   const conv: Conversation = { kind: "dm", threadRef: "dm:U1:t1", audience: [actor] };
   const resolved = await res.resolve(conv, actor);

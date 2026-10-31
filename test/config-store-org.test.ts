@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { testConfigStore, testMap } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 
 test("purpose runtimes persist independently without manufacturing a conversation default", async () => {
-  const baseModels = testMap<import("../src/resolution/config-store.ts").PersistedBaseModel>();
-  const store = testConfigStore({ baseModels });
+  const tables = testConfigTables();
+  const store = testConfigStore({ tables });
   const org = TEST_ROOT_SCOPE;
   const cron = { modelId: "gpt-5.5", fastMode: false };
   const subagent = { modelId: "claude-opus-5", effortLevel: "low" };
@@ -14,7 +14,7 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   await store.setPurposeRuntime("subagent", subagent);
   assert.equal(store.getBaseModel(org), null);
   assert.equal(await store.getRuntimeSelectionDurable(org), null);
-  const reader = testConfigStore({ baseModels });
+  const reader = testConfigStore({ tables });
   await reader.hydrate!();
   assert.deepEqual(reader.getPurposeRuntime("cron"), cron);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
@@ -33,5 +33,6 @@ test("purpose runtimes persist independently without manufacturing a conversatio
   assert.equal(await reader.getPurposeRuntimeDurable("cron"), undefined);
   assert.deepEqual(await reader.getPurposeRuntimeDurable("subagent"), subagent);
   await store.clearPurposeRuntime("subagent");
-  assert.equal(await baseModels.get(org), null);
+  assert.deepEqual(await tables.purposeRuntimes(), {});
+  assert.equal(await tables.scopeSetting(org).then((row) => row?.modelId ?? null), null);
 });

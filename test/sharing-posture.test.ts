@@ -8,12 +8,11 @@ import {
   MAX_OPEN_SHARED_SCOPES,
   sharingSourcesForTurn,
 } from "../src/resolution/sharing-access.ts";
-import { type PersistedSharingPosture } from "../src/resolution/config-store.ts";
 import { scopeId, type Principal, type Session } from "../src/types.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
-import { testConfigStore, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables, testDatabaseUrl } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("sharing posture is isolated by default and isolated wins composition", () => {
@@ -33,10 +32,10 @@ test("sharing posture is isolated by default and isolated wins composition", () 
 });
 
 test("durable sharing policy composes organization, personal, and room vetoes and refreshes replicas", async () => {
-  const sharingPostures = testMap<PersistedSharingPosture>();
-  const writer = testConfigStore({ sharingPostures });
-  const reader = testConfigStore({ sharingPostures });
-  const org = TEST_ROOT_SCOPE;
+  const tables = testConfigTables();
+  const writer = testConfigStore({ tables });
+  const reader = testConfigStore({ tables });
+  const org = scopeId("org", "acme");
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
 
@@ -52,17 +51,17 @@ test("durable sharing policy composes organization, personal, and room vetoes an
   await writer.setSharingPosture(org, "isolated");
   assert.equal(await reader.resolveSharingPostureDurable(personal, room), "isolated");
 
-  const restarted = testConfigStore({ sharingPostures });
+  const restarted = testConfigStore({ tables });
   await restarted.hydrate?.();
   assert.equal(await restarted.getSharingPostureOwnDurable(personal), "open");
   assert.equal(await restarted.getSharingPostureOwnDurable(room), "open");
 });
 
 test("Open membership re-checks durable organization, person, room, and membership restrictions", async () => {
-  const store = testMap<PersistedSharingPosture>();
-  const writer = testConfigStore({ sharingPostures: store });
-  const reader = testConfigStore({ sharingPostures: store });
-  const org = TEST_ROOT_SCOPE;
+  const tables = testConfigTables();
+  const writer = testConfigStore({ tables });
+  const reader = testConfigStore({ tables });
+  const org = scopeId("org", "acme");
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
   let member = true;

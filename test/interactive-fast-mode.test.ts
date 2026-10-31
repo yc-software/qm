@@ -1,13 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { type PersistedScopedFlag } from "../src/resolution/config-store.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("interactive fast mode defaults off and persists across instances", async () => {
-  const interactiveFastMode = testMap<PersistedScopedFlag>();
-  const first = testConfigStore({ interactiveFastMode });
+  const tables = testConfigTables();
+  const first = testConfigStore({ tables });
   await first.hydrate!();
   assert.equal(first.getInteractiveFastMode(), false);
   assert.equal(await first.getInteractiveFastModeDurable(), false);
@@ -15,7 +14,7 @@ test("interactive fast mode defaults off and persists across instances", async (
   await first.setInteractiveFastMode(true);
   assert.equal(first.getInteractiveFastMode(), true);
 
-  const second = testConfigStore({ interactiveFastMode });
+  const second = testConfigStore({ tables });
   await second.hydrate!();
   assert.equal(second.getInteractiveFastMode(), true);
   assert.equal(await second.getInteractiveFastModeDurable(), true);
@@ -30,11 +29,11 @@ test("the org default reaches only human turns that expressed no preference", ()
 });
 
 test("refreshScope picks up an interactive fast mode change written elsewhere", async () => {
-  const interactiveFastMode = testMap<PersistedScopedFlag>();
-  const store = testConfigStore({ interactiveFastMode });
+  const tables = testConfigTables();
+  const store = testConfigStore({ tables });
   await store.hydrate!();
   const org = TEST_ROOT_SCOPE;
-  await interactiveFastMode.put(org, { scopeId: org, on: true });
+  await tables.updateScopeSetting(org, (row) => ({ ...row, interactiveFastMode: true }));
   await store.refreshScope(org);
   assert.equal(store.getInteractiveFastMode(), true);
 });

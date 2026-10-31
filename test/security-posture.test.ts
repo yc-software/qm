@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { scopeId } from "../src/types.ts";
-import { type PersistedApprovalGrantModes, type PersistedSecurityPosture } from "../src/resolution/config-store.ts";
 import {
   composeSecurityPosture,
   parseSecurityPosture,
@@ -13,7 +12,7 @@ import {
   securityScreenChunks,
   securityScreenPayload,
 } from "../src/security/security-posture.ts";
-import { testConfigStore, testMap } from "./support/test-database.ts";
+import { testConfigStore, testConfigTables } from "./support/test-database.ts";
 import { TEST_ROOT_SCOPE } from "./support/tenant.ts";
 
 test("security posture parses only the three named modes", () => {
@@ -158,18 +157,18 @@ test("auto screens only data-bearing inputs and parses a strict downgrade", () =
 });
 
 test("scoped postures persist and resolve against the org floor", async () => {
-  const backing = testMap<PersistedSecurityPosture>();
+  const tables = testConfigTables();
   const org = TEST_ROOT_SCOPE;
   const channel = scopeId("channel", "C1");
   const first = testConfigStore({
-    securityPostures: backing,
+    tables,
     defaultSecurityPosture: "dangerous",
   });
   await first.setSecurityPosture(org, "auto");
   await first.setSecurityPosture(channel, "strict");
 
   const restarted = testConfigStore({
-    securityPostures: backing,
+    tables,
     defaultSecurityPosture: "dangerous",
   });
   await restarted.hydrate?.();
@@ -178,14 +177,18 @@ test("scoped postures persist and resolve against the org floor", async () => {
 
   await restarted.setSecurityPosture(channel, "dangerous");
   assert.equal(await restarted.getSecurityPostureDurable(channel), "auto", "a scope cannot weaken the org floor");
-  assert.equal((await backing.get(channel))?.posture, "auto", "the store does not retain a latent weaker preference");
+  assert.equal(
+    (await tables.scopeSetting(channel))?.securityPosture,
+    "auto",
+    "the store does not retain a latent weaker preference",
+  );
 });
 
 test("approval grant modes default to all-on and compose tighten-only", async () => {
-  const backing = testMap<PersistedApprovalGrantModes>();
+  const tables = testConfigTables();
   const org = TEST_ROOT_SCOPE;
   const channel = scopeId("channel", "C1");
-  const store = testConfigStore({ approvalGrantModes: backing });
+  const store = testConfigStore({ tables });
 
   assert.deepEqual(await store.getApprovalGrantModesDurable(org), { session: true, always: true });
   assert.deepEqual(await store.getApprovalGrantModesDurable(channel), { session: true, always: true });
@@ -209,7 +212,7 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
     "the scope's tightening never leaks back to the org",
   );
 
-  const restarted = testConfigStore({ approvalGrantModes: backing });
+  const restarted = testConfigStore({ tables });
   await restarted.hydrate?.();
   assert.deepEqual(
     await restarted.getApprovalGrantModesDurable(channel),

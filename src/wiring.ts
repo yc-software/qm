@@ -93,7 +93,9 @@ import type { SlackAccountLink } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import { createPostgresExternalMemberStore } from "./identity/external-members.ts";
 import { resendMailer } from "../plugins/chassis/src/resend.ts";
-import { configStoreMaps, createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { boundTenant } from "./tenants/context.ts";
+import { createConfigStore, type ScopedConfigStore } from "./resolution/config-store.ts";
+import { createPostgresConfigTables } from "./resolution/config-tables-pg.ts";
 import { createResolutionService } from "./resolution/resolution-service.ts";
 import { createAclStore, type AclStore } from "./acl/acl-store.ts";
 import { createPostgresGrantStore } from "./acl/postgres-grant-store.ts";
@@ -615,7 +617,7 @@ export function buildApp(
   });
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore({
-    ...configStoreMaps(artifactMap),
+    tables: createPostgresConfigTables(databaseUrl),
     connectorSecretKey,
   });
   const { skills, skillPacks, skillBundles } = createSkillStores(databaseUrl, {

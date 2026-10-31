@@ -8,7 +8,9 @@ import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { pgRows, type RowTable } from "../../src/persistence/keyed-rows.ts";
 import { createPostgresDeploymentRows } from "../../src/deploy/deploy-store.ts";
 import { createSandboxResourceStores } from "../../src/sandbox/sandbox-resource-store.ts";
-import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
+import { createConfigStore } from "../../src/resolution/config-store.ts";
+import type { ConfigTables } from "../../src/resolution/config-tables.ts";
+import { createPostgresConfigTables } from "../../src/resolution/config-tables-pg.ts";
 import { tenantRootScope } from "../../src/tenants/context.ts";
 
 function baseDatabaseUrl(): URL {
@@ -78,8 +80,12 @@ export function testAdvisoryLock(): AdvisoryLock {
   return createPostgresAdvisoryLock(createPgPool(testDatabaseUrl()));
 }
 
+export function testConfigTables(): ConfigTables {
+  return { ...createPostgresConfigTables(testMigratedDatabaseUrl()), fresh: true };
+}
+
 export function testConfigStore(opts: Partial<Parameters<typeof createConfigStore>[0]> = {}) {
-  return createConfigStore({ ...configStoreMaps(() => testMap<never>()), ...opts });
+  return createConfigStore({ tables: testConfigTables(), ...opts });
 }
 
 export const TEST_ADMIN_GRANTS = "admin-alice:org_admin,admin-bob:org_admin";
