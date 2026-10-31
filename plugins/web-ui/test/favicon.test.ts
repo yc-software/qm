@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { answerFeatures } from "./core-features.ts";
 
-const core = createServer((_req, res) => {
+const core = createServer((req, res) => {
+  if (answerFeatures(req, res, { alice: ["web_ui"] })) return;
   res.writeHead(200, { "content-type": "application/json" });
   res.end("{}");
 });
@@ -14,7 +16,6 @@ await new Promise<void>((r) => core.listen(0, r));
 
 process.env.CORE_API_URL = `http://localhost:${(core.address() as AddressInfo).port}`;
 process.env.CORE_SIGNING_SECRET = "web-ui-favicon-test";
-process.env.WEB_UI_PRINCIPALS = "alice";
 
 const distDir = join(dirname(fileURLToPath(import.meta.url)), "..", "dist-web");
 const distIndex = join(distDir, "index.html");

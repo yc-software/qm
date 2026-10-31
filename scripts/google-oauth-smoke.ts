@@ -198,6 +198,7 @@ const core = createServer(built.app, {
 let web: ChildProcessWithoutNullStreams | null = null;
 try {
   await new Promise<void>((resolveListen) => core.listen(corePort, "127.0.0.1", () => resolveListen()));
+  await built.featureFlags.setEnabled("web_ui", scopeId("personal", actor), true, "google-oauth-smoke");
   web = spawn(process.execPath, ["plugins/web-ui/server/index.ts"], {
     cwd: process.cwd(),
     env: {
@@ -209,13 +210,9 @@ try {
       CORE_SIGNING_SECRET: secret,
       PORT: String(webPort),
       WEB_UI_PUBLIC_URL: webBase,
-      WEB_UI_PRINCIPALS: actor,
     },
   });
-  web.stderr.on("data", (chunk) => {
-    const text = String(chunk);
-    if (!/WEB_UI_PRINCIPALS unset/.test(text)) process.stderr.write(`[web-ui] ${text}`);
-  });
+  web.stderr.on("data", (chunk) => process.stderr.write(`[web-ui] ${String(chunk)}`));
   await waitFor(`${webBase}/healthz`, 10_000);
 
   const identity = {
