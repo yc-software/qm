@@ -60,3 +60,8 @@ export function currentTenant(): string {
 export function tenantRootScope(): ScopeId {
   return scopeId("org", currentTenant());
 }
+
+export function tenantKey(key: string): string {
+  const tenant = boundTenant();
+  return tenant ? `${tenant}:${key}` : key;
+}

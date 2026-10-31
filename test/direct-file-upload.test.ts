@@ -7,6 +7,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { scopeId } from "../src/types.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 const checksum = (text: string) => createHash("sha256").update(text).digest("base64");
 function fixture() {
@@ -44,6 +45,10 @@ function fixture() {
       return [...rows.values()].filter(
         (r) => r.expiresAt <= now && r.state !== "complete" && r.state !== "aborted" && r.state !== "failed",
       );
+    },
+    async completingUploadId(id) {
+      const row = rows.get(id);
+      return row?.state === "completing" ? row.uploadId : null;
     },
   };
   const files = createPostgresFileArtifactStore(testDatabaseUrl(), createMemoryDurableByteStore());
@@ -330,7 +335,7 @@ test("missing multipart upload and object become terminal instead of retrying fo
   f.advance();
   await f.service.sweep();
   assert.equal((await f.store.get(row.id))!.state, "failed");
-  assert.equal((await f.store.expired(Date.now())).length, 0);
+  assert.equal((await withoutTenant(() => f.store.expired(Date.now()))).length, 0);
   assert.equal(await f.files.get(row.id), null);
   await f.service.abort(row.id);
   await assert.rejects(f.service.complete(row.id), /no longer available/);

@@ -367,6 +367,7 @@ test("timed-out pending selection stays single-flight until the query settles", 
   try {
     for (let iteration = 0; iteration < 6; iteration++) {
       const sweep = assert.rejects(service.sweep(), /swarm pending batch timed out/);
+      await new Promise<void>((resolve) => setImmediate(resolve));
       context.mock.timers.tick(SWARM_LIMITS.reconcileMs + 1);
       await sweep;
     }

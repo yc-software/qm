@@ -9,6 +9,7 @@ import {
 } from "../src/files/file-upload-store.ts";
 import { scopeId } from "../src/types.ts";
 import { bindTestTenant } from "./support/tenant.ts";
+import { withoutTenant } from "../src/tenants/context.ts";
 
 bindTestTenant();
 
@@ -51,7 +52,7 @@ test(
       second.transition(accepted.id, ["pending"], "aborting"),
     ]);
     assert.equal(claims.filter(Boolean).length, 1);
-    assert.ok((await second.expired(Date.now() + 120_000)).some((r) => r.id === accepted.id));
+    assert.ok((await withoutTenant(() => second.expired(Date.now() + 120_000))).some((r) => r.id === accepted.id));
     for (const item of uploads) await first.transition(item.id, ["pending", "completing", "aborting"], "aborted");
     await second.insert(row());
   },
@@ -81,15 +82,15 @@ test("expired upload batches rotate durably without starving later rows", { skip
       expiresAt: i,
     });
   }
-  const batch1 = await first.expired(now);
-  const batch2 = await second.expired(now);
+  const batch1 = await withoutTenant(() => first.expired(now));
+  const batch2 = await withoutTenant(() => second.expired(now));
   assert.equal(batch1.length, 100);
   assert.ok(batch2.length >= 3);
   assert.ok(batch2.every((r) => !batch1.some((earlier) => earlier.id === r.id)));
   const seen = new Set([...batch1, ...batch2].map((r) => r.id));
   assert.ok(ids.every((id) => seen.has(id)));
   for (const id of ids) await first.transition(id, ["completing"], "failed");
-  assert.ok(!(await second.expired(now + 120_000)).some((r) => ids.includes(r.id)));
+  assert.ok(!(await withoutTenant(() => second.expired(now + 120_000))).some((r) => ids.includes(r.id)));
 });
 
 test("terminal failed uploads release active quota", { skip: !url }, async () => {

@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { createRunPreemption, createWorker } from "../src/runs/worker.ts";

@@ -49,6 +49,7 @@ test("building the app reads no identity or configuration until startup hydrates
   try {
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(reads, { identity: 0, config: 0 });
+    await assert.rejects(built.boot());
     for (let attempt = 0; attempt < 2; attempt++) {
       await assert.rejects(built.identity.refresh(), (error: unknown) => error === identityFailure);
       await assert.rejects(built.config.hydrate!(), (error: unknown) => error === configFailure);

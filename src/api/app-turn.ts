@@ -36,7 +36,7 @@ const PARTICIPANT_REHYDRATE_TIMEOUT_MS = 5_000;
 import { unscreenedNotice } from "../security/security-posture.ts";
 import type { AppHelpers } from "./app-helpers.ts";
 import type { AmbientHelpers } from "./app-ambient.ts";
-import { tenantRootScope } from "../tenants/context.ts";
+import { tenantRootScope, tenantKey } from "../tenants/context.ts";
 
 const USER_STOP = "by user";
 
@@ -96,7 +96,7 @@ export function createTurnMethods(
       if (run.status === "pending") await deps.runs.withdraw(run.id);
       return true;
     };
-    return deps.advisoryLock.withLock("session-tree-admission", stop);
+    return deps.advisoryLock.withLock(tenantKey("session-tree-admission"), stop);
   }
   return {
     async turn(req: TurnRequest, replay?: { signalDedupKey: string }): Promise<TurnResult> {
@@ -758,7 +758,7 @@ export function createTurnMethods(
         if (!session || !deps.signals || (viewer && !(await sessionForViewer(session.id, viewer)))) return false;
         return stopSessionTree({ sessions: deps.sessions, runs: deps.runs, signals: deps.signals }, session, USER_STOP);
       };
-      return deps.advisoryLock.withLock("session-tree-admission", stop);
+      return deps.advisoryLock.withLock(tenantKey("session-tree-admission"), stop);
     },
 
     async activeRunForThread(threadRef, viewer) {

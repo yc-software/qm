@@ -280,3 +280,50 @@ test("acl grant caches and version bumps stay per tenant", { skip }, async () =>
     );
   });
 });
+
+test(
+  "row-limited queries, queries in a transaction opened unbound, and streams all bind or refuse",
+  { skip },
+  async () => {
+    await withTenancy(async ({ app, sessionId, a: tenant }) => {
+      const other = randomUUID();
+      await withTenant(tenant, () => app.q(insertItem, [sessionId, 0]));
+      const pool = await app.pool();
+      const limited = await withTenant(tenant, () =>
+        pool.query({
+          text: "SELECT seq::int AS seq FROM items WHERE session_id = $1",
+          values: [sessionId],
+          rows: 1,
+        } as pg.QueryConfig),
+      );
+      assert.deepEqual(limited.rows, [{ seq: 0 }]);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        assert.deepEqual((await withTenant(tenant, () => client.query(countItems, [sessionId]))).rows, [{ n: 1 }]);
+        await assert.rejects(
+          withTenant(other, () => client.query(countItems, [sessionId])),
+          /This transaction is bound to another tenant/,
+        );
+        await client.query("ROLLBACK");
+        const stream = () =>
+          new Promise<number>((resolve, reject) => {
+            const query = new pg.Query(countItems, [sessionId]);
+            query.on("row", (row: { n: number }) => resolve(row.n));
+            query.on("error", reject);
+            query.on("end", () => resolve(-1));
+            client.query(query);
+          });
+        await assert.rejects(
+          withTenant(tenant, () => stream()),
+          /Streaming queries for a tenant must run inside a transaction bound to that tenant/,
+        );
+        await withTenant(tenant, () => client.query("BEGIN"));
+        assert.equal(await withTenant(tenant, () => stream()), 1);
+        await client.query("ROLLBACK");
+      } finally {
+        client.release();
+      }
+    });
+  },
+);

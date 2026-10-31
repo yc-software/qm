@@ -8,7 +8,7 @@ function recordingSource(over: Partial<SweepSource> = {}): { source: SweepSource
   const swept: string[] = [];
   const source: SweepSource = {
     async engagedSessions() {
-      return ["A"];
+      return [{ threadRef: "A" }];
     },
     async sweepSession(threadRef) {
       swept.push(threadRef);
@@ -43,9 +43,15 @@ test("the engaged registry: engage adds, settle removes, list reflects current (
   reg.engage("ch:C1:1");
   reg.engage("ch:C1:1");
   reg.engage("ch:C2:2");
-  assert.deepEqual(reg.list().sort(), ["ch:C1:1", "ch:C2:2"]);
+  assert.deepEqual(
+    reg.list().map(({ threadRef }) => threadRef),
+    ["ch:C1:1", "ch:C2:2"],
+  );
   reg.settle("ch:C1:1");
-  assert.deepEqual(reg.list(), ["ch:C2:2"]);
+  assert.deepEqual(
+    reg.list().map(({ threadRef }) => threadRef),
+    ["ch:C2:2"],
+  );
 });
 
 test("nothing engaged ⇒ a pass does no work", async () => {

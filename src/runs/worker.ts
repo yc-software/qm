@@ -19,6 +19,7 @@ import {
 import { errMessage, errorAlreadyReported, reportFailure, swallow } from "../util/errors.ts";
 import { sleep } from "../util/async.ts";
 import { retryDelay } from "./retry-delay.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 import { traceQueued } from "../../plugins/chassis/src/error-reporting.ts";
 
 export interface ProcessDeps {
@@ -39,21 +40,23 @@ export async function processRun(
   opts?: { background?: boolean; shutdown?: AbortSignal },
 ): Promise<TurnResult> {
   const { trace, ...request } = run.request;
-  return traceQueued(
-    trace,
-    "run",
-    {
-      "messaging.system": "qm",
-      "messaging.destination.name": "runs",
-      "messaging.message.id": run.id,
-      "messaging.message.retry.count": Math.max(0, run.attempts - 1),
-      "messaging.message.receive.latency":
-        run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
-      "qm.surface": request.surface,
-      "qm.origin": resolveTurnOrigin(request).kind,
-    },
-    () => attemptRun(deps, { ...run, request }, opts),
-    (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
+  return inTenantOf(run.tenantId, () =>
+    traceQueued(
+      trace,
+      "run",
+      {
+        "messaging.system": "qm",
+        "messaging.destination.name": "runs",
+        "messaging.message.id": run.id,
+        "messaging.message.retry.count": Math.max(0, run.attempts - 1),
+        "messaging.message.receive.latency":
+          run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
+        "qm.surface": request.surface,
+        "qm.origin": resolveTurnOrigin(request).kind,
+      },
+      () => attemptRun(deps, { ...run, request }, opts),
+      (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
+    ),
   );
 }
 
@@ -241,9 +244,9 @@ export function createWorker(deps: WorkerDeps): Worker {
       }
       if (stopped || (deps.canClaim && !deps.canClaim())) {
         if (run.leaseToken !== null)
-          await deps.runs
-            .releaseLease(run.id, run.leaseToken)
-            .catch((e) => swallow("worker: post-stop claim handback failed", e));
+          await inTenantOf(run.tenantId, () => deps.runs.releaseLease(run.id, run.leaseToken!)).catch((e) =>
+            swallow("worker: post-stop claim handback failed", e),
+          );
         claimed();
         claimDone = null;
         break;

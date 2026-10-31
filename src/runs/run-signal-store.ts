@@ -24,7 +24,7 @@ export interface RunSignalStore {
   acknowledge(runId: string, id: string): Promise<void>;
   takePending(runId: string): Promise<RunSignal[]>;
   steerAuthors(runId: string): Promise<string[]>;
-  pendingRunIds(): Promise<string[]>;
+  pendingRuns(): Promise<Array<{ runId: string; tenantId?: string }>>;
   prune(olderThanMs: number): Promise<void>;
   onSignal(runId: string, cb: () => void): () => void;
   close?(): Promise<void>;

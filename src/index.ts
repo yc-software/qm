@@ -12,8 +12,6 @@ import { errMessage, reportFailureAs } from "./util/errors.ts";
 import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin } from "./slack/index.ts";
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
-import { instanceTenant } from "./tenants/instance.ts";
-import { enterTenant } from "./tenants/context.ts";
 import { retiredEnvPresent, tenantEnvPresent } from "./tenants/settings-import.ts";
 
 const config = loadConfig();
@@ -31,8 +29,7 @@ if (retiredEnv.length)
   console.warn(
     `[qm] ${retiredEnv.join(", ")} ${retiredEnv.length === 1 ? "is" : "are"} no longer read; add broker credentials and connector tokens in admin settings, and save ChatGPT or Claude logins as keychain credentials named by CODEX_AUTH_CREDENTIAL or CLAUDE_AUTH_CREDENTIAL.`,
   );
-const tenant = await instanceTenant(config);
-if (tenant) enterTenant(tenant);
+await built.boot();
 const envSlackConfig = slackPluginConfigFromEnv(process.env);
 const slackConfig = envSlackConfig;
 const envSlackAttempted = Boolean(process.env.SLACK_BOT_TOKEN || process.env.SLACK_APP_TOKEN);
@@ -54,11 +51,6 @@ const server = createServer(built.app, {
   managedSlack,
 });
 
-await built.config.hydrate?.();
-await built.refreshCustomProviders();
-await built.identity.refresh();
-await built.deploymentLayerReady();
-void built.skillsReady();
 built.deploymentLayerRefresh.start();
 built.runtime.start();
 

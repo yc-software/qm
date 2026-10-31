@@ -5,6 +5,8 @@ import { createPostgresApprovalStore } from "../../src/slack/approval-store.ts";
 import { createPostgresApprovalGrantStore } from "../../src/core/approval-grant-store.ts";
 import { createDeliveryStore } from "../../src/delivery/delivery-store.ts";
 import { testDatabaseUrl } from "./test-database.ts";
+import { eachTenant } from "../../src/tenants/claim.ts";
+import { TEST_TENANT } from "./tenant-seed.ts";
 
 export const singleProcessDeps = (url = testDatabaseUrl()) => ({
   advisoryLock: createNoopAdvisoryLock(),
@@ -12,4 +14,5 @@ export const singleProcessDeps = (url = testDatabaseUrl()) => ({
   approvals: createPostgresApprovalStore(url, createDeliveryStore()),
   approvalGrants: createPostgresApprovalGrantStore(url),
   blobTransfer: createMemoryBlobTransferStore(),
+  tenants: eachTenant(async () => [TEST_TENANT]),
 });

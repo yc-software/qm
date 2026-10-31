@@ -12,6 +12,8 @@ import type { OrchestratorInput } from "../../src/core/orchestrator.ts";
 import { createPostgresSessionStore } from "../../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap, testSandboxResourceStores } from "./test-database.ts";
 import { createPostgresRunStore } from "../../src/runs/postgres-run-store.ts";
+import { eachTenant } from "../../src/tenants/claim.ts";
+import { TEST_TENANT } from "./tenant-seed.ts";
 
 export async function swarmFixture(
   options: {
@@ -110,7 +112,15 @@ export async function swarmFixture(
       exp: Date.now() + 60_000,
     },
   };
-  const serviceOptions = { store, sessions, runs, sandboxes, lock, authorize: async () => state.allowed };
+  const serviceOptions = {
+    store,
+    sessions,
+    runs,
+    sandboxes,
+    lock,
+    authorize: async () => state.allowed,
+    tenants: eachTenant(async () => [TEST_TENANT]),
+  };
   const service = createSwarmService(serviceOptions);
   const workerCaller = async (id: string): Promise<SwarmCaller> => {
     const swarm = (await store.get(root.id))!;

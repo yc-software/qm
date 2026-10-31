@@ -13,6 +13,7 @@ export type Rows = Record<string, unknown>[];
 interface PgPoolingConfig {
   databaseUrl?: string;
   poolUrl?: string;
+  ownerUrl?: string;
   caCert?: string;
   queryMax?: number;
   sessionMax?: number;
@@ -37,7 +38,9 @@ const migrationQueue = createKeyedQueue();
 
 const sharedPools = new Map<string, { pool: Pool; users: number }>();
 
-async function retainPool(connectionString: string, kind: "query" | "session" | "migration"): Promise<Pool> {
+type PoolKind = "query" | "session" | "migration" | "owner";
+
+async function retainPool(connectionString: string, kind: PoolKind): Promise<Pool> {
   const pg = (await import("pg")).default;
   const key = `${kind}:${connectionString}`;
   const existing = sharedPools.get(key);
@@ -46,7 +49,12 @@ async function retainPool(connectionString: string, kind: "query" | "session" | 
     return existing.pool;
   }
   const setting = kind === "query" ? "DATABASE_POOL_MAX" : "DATABASE_DIRECT_POOL_MAX";
-  const max = { query: poolingConfig.queryMax ?? 10, session: poolingConfig.sessionMax ?? 32, migration: 1 }[kind];
+  const max = {
+    query: poolingConfig.queryMax ?? 10,
+    session: poolingConfig.sessionMax ?? 32,
+    migration: 1,
+    owner: poolingConfig.queryMax ?? 10,
+  }[kind];
   if (!Number.isInteger(max) || max < 1 || max > 100)
     throw new Error(`${setting} must be an integer between 1 and 100`);
   const connection = pgConnectionOptions(
@@ -65,11 +73,7 @@ function guardedPool(pool: Pool): Pool {
   return pool;
 }
 
-async function releasePool(
-  connectionString: string,
-  pool: Pool,
-  kind: "query" | "session" | "migration",
-): Promise<void> {
+async function releasePool(connectionString: string, pool: Pool, kind: PoolKind): Promise<void> {
   const key = `${kind}:${connectionString}`;
   const entry = sharedPools.get(key);
   if (!entry || entry.pool !== pool) return;
@@ -115,6 +119,7 @@ export interface PgQueryOptions {
 export interface PgPool {
   pool(): Promise<Pool>;
   sessionPool(): Promise<Pool>;
+  ownerPool(): Promise<Pool>;
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   registerMigration(migration: PgMigrationDefinition): void;
@@ -423,8 +428,13 @@ export function createPgPool(
   let readyP: Promise<void> | null = null;
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
+  let ownerPoolP: Promise<Pool> | null = null;
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
+  const ownerUrl =
+    poolingConfig.ownerUrl && connectionString === poolingConfig.databaseUrl
+      ? poolingConfig.ownerUrl
+      : connectionString;
   async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
     return migrationQueue(connectionString, async () => {
       const instance = await retainPool(connectionString, "migration");
@@ -455,6 +465,11 @@ export function createPgPool(
     await ready();
     if (closed) throw new Error("Postgres store is closed");
     return (sessionPoolP ??= retainPool(connectionString, "session"));
+  }
+  async function ownerPool(): Promise<Pool> {
+    await ready();
+    if (closed) throw new Error("Postgres store is closed");
+    return (ownerPoolP ??= retainPool(ownerUrl, "owner"));
   }
   async function query(
     text: string,
@@ -505,6 +520,7 @@ export function createPgPool(
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
+      ownerPoolP?.then((instance) => releasePool(ownerUrl, instance, "owner")),
     ]);
   }
   async function migrate(definition: PgMigrationDefinition): Promise<void> {
@@ -517,5 +533,5 @@ export function createPgPool(
   function registerMigration(definition: PgMigrationDefinition): void {
     registerPgMigration(connectionString, definePgMigration(definition));
   }
-  return { pool, sessionPool, q, query, registerMigration, migrate, close };
+  return { pool, sessionPool, ownerPool, q, query, registerMigration, migrate, close };
 }

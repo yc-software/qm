@@ -12,6 +12,8 @@ import { settle } from "./support/settle.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { testAdvisoryLock } from "./support/test-database.ts";
 import { testKeychainRows, testLinkTables } from "./support/typed-stores.ts";
+import { eachTenant } from "../src/tenants/claim.ts";
+import { TEST_TENANT } from "./support/tenant.ts";
 
 function server(partial?: Partial<McpServer>): McpServer {
   return {
@@ -426,7 +428,7 @@ test("per-user connectors select an explicit account slot without falling back t
   await assert.rejects(service.call("crm_query", {}, "internal:alice"), /Connect your account/);
 });
 
-test("background MCP refresh contains registry failures at startup, on change, and on its timer", async (t) => {
+test("background MCP refresh contains registry failures on change and on its timer", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const backing = testLinkTables().mcpServers;
   const store = createMcpServerStore(backing);
@@ -435,18 +437,23 @@ test("background MCP refresh contains registry failures at startup, on change, a
     throw new Error("registry unavailable");
   });
   const errors = t.mock.method(console, "error", () => {});
-  const service = createMcpToolService({ fetch: loopbackFetch, servers: store, refreshIntervalMs: 100 });
+  const service = createMcpToolService({
+    fetch: loopbackFetch,
+    servers: store,
+    refreshIntervalMs: 100,
+    tenants: eachTenant(async () => [TEST_TENANT]),
+  });
   t.after(() => service.close());
   const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
   await tick();
-  assert.equal(list.mock.callCount(), 1);
+  assert.equal(list.mock.callCount(), 0);
   await store.put(server({ url: mcp.url }));
   await tick();
-  assert.equal(list.mock.callCount(), 2);
+  assert.equal(list.mock.callCount(), 1);
   t.mock.timers.tick(100);
   await tick();
-  assert.equal(list.mock.callCount(), 3);
-  assert.equal(errors.mock.callCount(), 3);
+  assert.equal(list.mock.callCount(), 2);
+  assert.equal(errors.mock.callCount(), 2);
   await assert.rejects(service.refresh(), /registry unavailable/);
   list.mock.restore();
   t.mock.timers.tick(100);

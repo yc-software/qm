@@ -38,7 +38,7 @@ import {
   type SessionSearchHit,
 } from "./app-types.ts";
 import type { AppHelpers } from "./app-helpers.ts";
-import { tenantRootScope } from "../tenants/context.ts";
+import { tenantRootScope, tenantKey } from "../tenants/context.ts";
 
 const MAX_SESSION_PINS = 50;
 const MAX_PIN_TEXT_CHARS = 2000;
@@ -1004,8 +1004,8 @@ export function createSessionMethods(
         await deps.sessions.setParentSession(sessionId, null);
         return { detached: true as const };
       };
-      return deps.advisoryLock.withLock("session-tree-admission", () =>
-        deps.advisoryLock.withLock("session-run-admission", detach),
+      return deps.advisoryLock.withLock(tenantKey("session-tree-admission"), () =>
+        deps.advisoryLock.withLock(tenantKey("session-run-admission"), detach),
       );
     },
 

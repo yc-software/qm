@@ -1,7 +1,7 @@
+import { boundTenant } from "../tenants/context.ts";
 import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
 import { misconfiguredSandboxError, type MisconfiguredSandboxBackends } from "./tenant-credentials.ts";
 import { randomUUID } from "node:crypto";
-import { boundTenant } from "../tenants/context.ts";
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { parseScopeId, type CommandPolicy, type EgressPolicy, type ScopeId } from "../types.ts";
 import type { SandboxBackendName } from "./sandbox-routing.ts";

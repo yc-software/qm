@@ -18,13 +18,16 @@ import { loadConfig } from "../src/config.ts";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { enterTenant } from "../src/tenants/context.ts";
-import { instanceTenant } from "../src/tenants/instance.ts";
+import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { createNoopAdvisoryLock } from "../src/persistence/advisory-lock.ts";
 import { createPostgresMonitorRows } from "../src/monitors/monitor-table.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required");
-enterTenant((await instanceTenant({ databaseUrl }))!);
+const tenantDb = createPgPool(databaseUrl);
+const [tenantRow] = await tenantDb.q("SELECT id::text AS id FROM tenants");
+await tenantDb.close();
+enterTenant(String(tenantRow!.id));
 const maps = createPostgresMapFactory(databaseUrl);
 const smokeMap = <T>(name: string) => maps.map<T>(`smoke_${name}_${Date.now()}`);
 
