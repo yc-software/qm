@@ -17,7 +17,6 @@ function freshApp() {
 
 const actor = { externalId: "U1" };
 
-/** Resolves once the turn's first attempt has failed and the runner has handed it back for a retry. */
 async function awaitingRetry(built: ReturnType<typeof freshApp>): Promise<void> {
   await eventually(() => built.runs.list({ limit: 10 }), {
     until: (runs) => runs.some((run) => run.errorAttempts === 1 && run.status === "pending"),

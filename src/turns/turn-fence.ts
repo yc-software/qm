@@ -20,10 +20,6 @@ function fenceSql(lock: boolean): string {
 const LOCKED_FENCE_SQL = fenceSql(true);
 const OBSERVED_FENCE_SQL = fenceSql(false);
 
-/**
- * Inside a caller's transaction the fence rows stay share-locked until it commits. Outside one (`lock: false`) the
- * lock would end with the statement, and taking it can deadlock against a turn ending, so the check only reads.
- */
 export async function turnFenceHeld(
   db: FenceQueryable,
   turnId: string,

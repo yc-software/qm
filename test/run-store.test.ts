@@ -95,8 +95,6 @@ test("activeForThread returns the in-flight run, null once terminal", () =>
 test("inFlightForThread puts the live turn first and the queue behind it in send order", () =>
   withStore(async ({ runs, ledger }) => {
     assert.deepEqual(await runs.inFlightForThread("sQ"), [], "nothing in flight");
-    // Six enqueues inside (usually) one millisecond: createdAt ties, so send order is only as
-    // real as the store's tie handling, and each claim must take exactly the displayed head.
     const created = [];
     for (let i = 0; i < 6; i++) created.push((await runs.enqueue({ sessionId: "sQ", request: turn(`m${i}`) })).run);
     const expected = created.map((r) => r.id);

@@ -1768,7 +1768,6 @@ test("pg run store: Unicode stays jsonb-safe through enqueue, edit and both stee
     attachments: [{ name: unsafe, mimetype: "text/plain", sizeBytes: 5, blobId: "notes-blob" }],
   };
   try {
-    // The conversation's active turn; the runs below wait behind it, so they stay editable.
     await runs.enqueue({ sessionId: thread, request: turn("working") });
     const first = (await runs.enqueue({ sessionId: thread, request })).run;
     assert.equal(first.status, "queued");
@@ -1996,9 +1995,6 @@ test("pg run store: enqueue retries when a conflicting key is released before lo
   const raw = new pg.Pool({ connectionString: databaseUrl });
   const key = `released-${randomUUID()}`;
   try {
-    // Admission looks the key up first, then inserts. An interloper takes the key between the two
-    // (BEFORE INSERT) and releases it before the retried lookup (AFTER INSERT): admission must loop
-    // back and insert rather than return a phantom dedup hit or fail.
     await raw.query(`CREATE FUNCTION insert_conflicting_run_key() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
         IF pg_trigger_depth() = 1 AND NOT EXISTS (SELECT 1 FROM runs WHERE id = 'interloper') THEN
@@ -2173,7 +2169,6 @@ test(
     const { runs, ledger, databaseUrl, close } = testRunStore();
     try {
       // created_at is Date.now(), so six quick enqueues tie; seq breaks the tie in insertion
-      // order. The queue read and the turn ledger agree on it, so what a surface shows as next IS next.
       const created = [];
       for (let i = 0; i < 6; i++) created.push((await runs.enqueue({ sessionId: "sSeq", request: turn(`m${i}`) })).run);
       const expected = created.map((r) => r.id);
@@ -2224,9 +2219,6 @@ test("pg run store: withdraw and claim cannot both win the same queued run", { s
   try {
     const live = (await runs.enqueue({ sessionId: "sWd", request: turn("live") })).run;
     assert.ok(await claimTurn(ledger, live.id));
-    // Eight withdrawals of one queued run: the delete is guarded under the conversation's
-    // pointer lock, so exactly one can report success — the surface never shows a message as
-    // both removed and running.
     const queued = (await runs.enqueue({ sessionId: "sWd", request: turn("queued") })).run;
     const results = await Promise.all(Array.from({ length: 8 }, () => runs.withdraw(queued.id)));
     assert.equal(results.filter(Boolean).length, 1, "exactly one withdrawal wins");

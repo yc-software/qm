@@ -9,7 +9,6 @@ const invalidRuns: Record<string, Partial<Run>> = {
   "wrong token": { leaseToken: "replacement" },
   "missing token": { leaseToken: null },
 };
-// "lost claim": the row still looks live, but the turn's Absurd claim is no longer held under this token.
 for (const [name, fields, lost] of [
   ...Object.entries(invalidRuns).map(([name, fields]) => [name, fields, false] as const),
   ["lost claim", {}, true] as const,
