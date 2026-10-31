@@ -22,7 +22,7 @@ test("parseAckEmoji: normalizes colons/case, splits on commas and spaces, drops 
 });
 
 test("config store: ack emoji set/get/clear roundtrip, durable read included", async () => {
-  const config = createMemoryConfigStore(ORG);
+  const config = createMemoryConfigStore();
   assert.equal(config.getAckEmoji(ORG), null);
   assert.equal(await config.getAckEmojiDurable(ORG), null);
   await config.setAckEmoji(ORG, ["custom_thinking", "custom_ok"]);

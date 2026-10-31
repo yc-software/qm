@@ -11,8 +11,11 @@ import { buildApp } from "../src/wiring.ts";
 import { baseModelProviders, configuredModelForHarness, providerKeysPresent } from "../src/config.ts";
 import { defaultModelForHarness, modelProviderAvailabilityFor } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+bindTestTenant();
+
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 function start(overrides: Parameters<typeof testConfig>[0] = { anthropicApiKey: "deployment-anthropic-key" }) {
   const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "base-model-svc-")), harness: "pi", ...overrides });
@@ -41,7 +44,7 @@ async function effectiveModel(base: string): Promise<string> {
 test("base-model set rejects a model whose provider key is absent (would fail provider-side)", async () => {
   const srv = start();
   try {
-    const bad = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+    const bad = await fetch(`${srv.base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/base-model`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ modelId: "gpt-5.6-sol" }),
@@ -49,7 +52,7 @@ test("base-model set rejects a model whose provider key is absent (would fail pr
     assert.equal(bad.status, 400);
     assert.match(((await bad.json()) as { message?: string }).message ?? "", /serviceable|provider key/i);
 
-    const ok = await fetch(`${srv.base}/v1/admin/scopes/org:default-org/base-model`, {
+    const ok = await fetch(`${srv.base}/v1/admin/scopes/${TEST_ROOT_SCOPE}/base-model`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ modelId: "claude-opus-4-8" }),

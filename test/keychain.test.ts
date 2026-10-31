@@ -30,6 +30,9 @@ import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { materializeGrant } from "./support/materialize-grant.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const KEY = deriveConnectorKey("keychain-test-key");
 
@@ -70,7 +73,7 @@ test("listAllMetadata returns person-facing metadata only", async () => {
   const k = kc();
   const meta = await k.save(GH);
   await k.setConnectorToken("github.com", "U1", { accessToken: "gho_managed" });
-  await k.setServiceCredential(scopeId("org", "default-org"), {
+  await k.setServiceCredential(TEST_ROOT_SCOPE, {
     slug: "serp",
     name: "SERP",
     secret: "s3",
@@ -109,7 +112,7 @@ test("listing and per-owner reads use the store's projected select and never a f
     asks: createMemoryMap(),
     key: KEY,
   });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await k.save({ ...GH, ownerId: "Alice@X.com" });
   await k.save(GH);
   await k.setConnectorToken("gmail.googleapis.com", "U1", { accessToken: "ya29.u1" });
@@ -293,7 +296,7 @@ test("a grant row pointing at a broker credential cannot materialize (defense in
   const creds = createMemoryMap<import("../src/credentials/keychain.ts").KeychainCredential>();
   const grants = createMemoryMap<import("../src/credentials/keychain.ts").KeychainGrant>();
   const k = createKeychain({ lock: createMemoryAdvisoryLock(), creds, grants, asks: createMemoryMap(), key: KEY });
-  const ORG = scopeId("org", "default-org");
+  const ORG = TEST_ROOT_SCOPE;
   await k.setServiceCredential(ORG, { slug: "serp", name: "SERP", secret: "s3", host: "api.serper.dev" });
   const broker = (await creds.all()).find((c) => c.kind === "broker")!;
   await grants.put("g-broker", {

@@ -16,8 +16,9 @@ import { createAclStore } from "../src/acl/acl-store.ts";
 import { createMemoryFileArtifactStore, type FileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import type { ManagesArtifactHome } from "../src/resolution/scope-membership.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
 
 interface FakeState {
   artifacts: Record<string, ArtifactHome & { type: ArtifactType }>;
@@ -59,7 +60,7 @@ function fakeApp(state: FakeState): App {
     async belongsToScope(principalId: string, scope: ScopeId) {
       if (parseScopeId(scope).kind === "org") return true;
       if (scope === scopeId("personal", principalId)) return true;
-      const mine = state.scopesByPrincipal[principalId] ?? [scopeId("personal", principalId), scopeId("org", ORG)];
+      const mine = state.scopesByPrincipal[principalId] ?? [scopeId("personal", principalId), TEST_ROOT_SCOPE];
       return mine.includes(scope);
     },
     canManageArtifactHome(homeScopeId: ScopeId, createdBy: string, principalId: string) {
@@ -147,8 +148,8 @@ async function ownerState(): Promise<FakeState> {
       "cron:K1": home("cron", "K1"),
     },
     scopesByPrincipal: {
-      U1: [scopeId("personal", "U1"), scopeId("org", ORG), scopeId("channel", "C1")],
-      U2: [scopeId("personal", "U2"), scopeId("org", ORG)],
+      U1: [scopeId("personal", "U1"), TEST_ROOT_SCOPE, scopeId("channel", "C1")],
+      U2: [scopeId("personal", "U2"), TEST_ROOT_SCOPE],
     },
     recipients: { carol: { kind: "one", member: { principalId: "U-carol", displayName: "Carol", type: "internal" } } },
   });
@@ -293,7 +294,7 @@ test("an org admin CAN cede a skill to the org — share to org promotes", async
     assert.equal(r.verb, "promote");
     assert.equal(r.id, "org-S1", "the promoted org record's id is returned, not the source's");
   }
-  assert.deepEqual(state.promotes, [{ id: "S1", targetScopeId: scopeId("org", ORG), actorId: "U1" }]);
+  assert.deepEqual(state.promotes, [{ id: "S1", targetScopeId: TEST_ROOT_SCOPE, actorId: "U1" }]);
 });
 
 test("an org admin can promote a TEAMMATE'S skill org-wide — admin-ness, not ownership, is the authority", async () => {
@@ -302,7 +303,7 @@ test("an org admin can promote a TEAMMATE'S skill org-wide — admin-ness, not o
   const svc = createControlService(fakeApp(state));
   const r = await svc.shareArtifact({ type: "skill", id: "S1", scope: "org" }, cap("U9"));
   assert.equal(r.ok, true);
-  assert.deepEqual(state.promotes, [{ id: "S1", targetScopeId: scopeId("org", ORG), actorId: "U9" }]);
+  assert.deepEqual(state.promotes, [{ id: "S1", targetScopeId: TEST_ROOT_SCOPE, actorId: "U9" }]);
 });
 
 test("an autonomous trigger (no liveActor) cannot cede a skill to the org, even as an admin", async () => {
@@ -334,7 +335,7 @@ test("a non-member can't share into a scope they're not in (forbidden)", async (
 
 test("only the owner may share a personal-homed artifact — a non-creator is forbidden (no transitive re-share)", async () => {
   const state = await ownerState();
-  state.scopesByPrincipal["U2"] = [scopeId("personal", "U2"), scopeId("org", ORG), scopeId("channel", "C1")];
+  state.scopesByPrincipal["U2"] = [scopeId("personal", "U2"), TEST_ROOT_SCOPE, scopeId("channel", "C1")];
   const svc = createControlService(fakeApp(state));
   const r = await svc.shareArtifact({ type: "file", id: "F1", scope: scopeId("channel", "C1") }, cap("U2"));
   assert.equal(r.ok, false);
@@ -353,7 +354,7 @@ test("a member of a shared home (private channel/group) can share it even if the
   };
   state.scopesByPrincipal["U2"] = [
     scopeId("personal", "U2"),
-    scopeId("org", ORG),
+    TEST_ROOT_SCOPE,
     scopeId("channel", "C1"),
     scopeId("group", "G9"),
   ];
@@ -378,7 +379,7 @@ test("an author who LEFT a private channel can no longer share its artifact (par
     createdBy: "U1",
     grantRef: "skill:CS",
   };
-  state.scopesByPrincipal["U1"] = [scopeId("personal", "U1"), scopeId("org", ORG)];
+  state.scopesByPrincipal["U1"] = [scopeId("personal", "U1"), TEST_ROOT_SCOPE];
   const svc = createControlService(fakeApp(state));
   const r = await svc.shareArtifact({ type: "skill", id: "CS", scope: "org" }, cap("U1"));
   assert.equal(r.ok, false, "the ex-member author must not pass the manage check on a private channel");
@@ -408,7 +409,7 @@ test("a PUBLIC-channel artifact's author can share it end to end — both authz 
   assert.ok(r.ok, `a public-channel author must share their own cron end to end: ${JSON.stringify(r)}`);
   const g = (await grantsOf(state)).find((x) => x.ref === "cron:PK");
   assert.ok(g, "the grant is actually persisted through the real acl guard");
-  assert.equal(g!.granteeScopeId, scopeId("org", ORG));
+  assert.equal(g!.granteeScopeId, TEST_ROOT_SCOPE);
   assert.equal(g!.grantedBy, "U1");
 });
 
@@ -421,7 +422,7 @@ test("a non-owner non-member CANNOT share a PUBLIC-channel artifact — the auth
     createdBy: "U1",
     grantRef: "cron:PK",
   };
-  state.scopesByPrincipal["U2"] = [scopeId("personal", "U2"), scopeId("org", ORG), scopeId("channel", "C2")];
+  state.scopesByPrincipal["U2"] = [scopeId("personal", "U2"), TEST_ROOT_SCOPE, scopeId("channel", "C2")];
   const svc = createControlService(fakeApp(state));
   const r = await svc.shareArtifact({ type: "cron", id: "PK", scope: "org" }, cap("U2"));
   assert.equal(r.ok, false, "a non-author public-channel member must not share it");
@@ -442,7 +443,7 @@ test("a non-member of a shared home cannot share it (membership-gated, not just 
     createdBy: "U1",
     grantRef: "skill:CS",
   };
-  state.scopesByPrincipal["U3"] = [scopeId("personal", "U3"), scopeId("org", ORG)];
+  state.scopesByPrincipal["U3"] = [scopeId("personal", "U3"), TEST_ROOT_SCOPE];
   const svc = createControlService(fakeApp(state));
   const r = await svc.shareArtifact({ type: "skill", id: "CS", scope: "org" }, cap("U3"));
   assert.equal(r.ok, false);
@@ -476,13 +477,13 @@ test("sharing a non-skill to the org is a plain visibility grant (org is everyon
   const svc = createControlService(fakeApp(state));
   const r = await svc.shareArtifact({ type: "deploy", id: "D1", scope: "org" }, cap("U1"));
   assert.ok(r.ok);
-  assert.equal(r.target.scope, scopeId("org", ORG));
-  assert.equal((await grantsOf(state))[0]!.granteeScopeId, scopeId("org", ORG));
+  assert.equal(r.target.scope, TEST_ROOT_SCOPE);
+  assert.equal((await grantsOf(state))[0]!.granteeScopeId, TEST_ROOT_SCOPE);
 });
 
 test("sharing into a TEAM the actor belongs to is frictionless (team is a my_scopes context, §3)", async () => {
   const state = await ownerState();
-  state.scopesByPrincipal["U1"] = [scopeId("personal", "U1"), scopeId("org", ORG), scopeId("team", "T1")];
+  state.scopesByPrincipal["U1"] = [scopeId("personal", "U1"), TEST_ROOT_SCOPE, scopeId("team", "T1")];
   const svc = createControlService(fakeApp(state));
   const r = await svc.shareArtifact({ type: "file", id: "F1", scope: scopeId("team", "T1") }, cap("U1"));
   assert.ok(r.ok, JSON.stringify(r));
@@ -509,7 +510,7 @@ test("a move records the acting principal in the audit, not the artifact's creat
   };
   state.scopesByPrincipal["U2"] = [
     scopeId("personal", "U2"),
-    scopeId("org", ORG),
+    TEST_ROOT_SCOPE,
     scopeId("channel", "C1"),
     scopeId("group", "G9"),
   ];
@@ -534,7 +535,7 @@ test("an automated trigger (no liveActor) cannot MOVE a skill out of its shared 
   };
   state.scopesByPrincipal["U2"] = [
     scopeId("personal", "U2"),
-    scopeId("org", ORG),
+    TEST_ROOT_SCOPE,
     scopeId("channel", "C1"),
     scopeId("group", "G9"),
   ];
@@ -568,11 +569,11 @@ test("a team member who didn't create a team-owned skill can share it onward; a 
   };
   state.scopesByPrincipal["U2"] = [
     scopeId("personal", "U2"),
-    scopeId("org", ORG),
+    TEST_ROOT_SCOPE,
     scopeId("team", "alpha"),
     scopeId("channel", "C7"),
   ];
-  state.scopesByPrincipal["U3"] = [scopeId("personal", "U3"), scopeId("org", ORG), scopeId("channel", "C7")];
+  state.scopesByPrincipal["U3"] = [scopeId("personal", "U3"), TEST_ROOT_SCOPE, scopeId("channel", "C7")];
   const svc = createControlService(fakeApp(state));
 
   const shared = await svc.shareArtifact(
@@ -604,7 +605,7 @@ test("skill mutations from an automated trigger are blocked for team homes, like
 
 test("a trigger (no liveActor) cannot MOVE a personal skill INTO a shared scope either — a move that authors a group-wide skill is guarded like create", async () => {
   const state = await ownerState();
-  state.scopesByPrincipal["U1"] = [scopeId("personal", "U1"), scopeId("org", ORG), scopeId("channel", "C1")];
+  state.scopesByPrincipal["U1"] = [scopeId("personal", "U1"), TEST_ROOT_SCOPE, scopeId("channel", "C1")];
   const svc = createControlService(fakeApp(state));
   const trigger = cap("U1", scopeId("personal", "U1"), false);
   const blocked = await svc.shareArtifact(
@@ -691,7 +692,7 @@ test("SkillStore.move changes the home scope in place; org move is refused (use 
   assert.equal(moved.version, created.version, "version unchanged by a move");
   assert.equal(moved.createdBy, "U1", "creator is immutable");
   assert.equal(moved.scopeId, scopeId("channel", "C1"), "home scope changed");
-  await assert.rejects(() => store.move(created.id, scopeId("org", ORG)), /admin-gated/);
+  await assert.rejects(() => store.move(created.id, TEST_ROOT_SCOPE), /admin-gated/);
 });
 
 test("SkillStore.promote supersedes an existing same-name org record instead of duplicating it", async () => {
@@ -703,10 +704,10 @@ test("SkillStore.promote supersedes an existing same-name org record instead of 
   });
   await store.review(src.id, "R1", []);
   await store.publish(src.id);
-  const first = await store.promote(src.id, scopeId("org", ORG));
-  const second = await store.promote(src.id, scopeId("org", ORG));
+  const first = await store.promote(src.id, TEST_ROOT_SCOPE);
+  const second = await store.promote(src.id, TEST_ROOT_SCOPE);
   assert.equal(second.id, first.id, "retry re-uses the org record");
   assert.equal(second.version, first.version + 1);
-  const orgRecords = (await store.list()).filter((x) => x.scopeId === scopeId("org", ORG) && x.status === "published");
+  const orgRecords = (await store.list()).filter((x) => x.scopeId === TEST_ROOT_SCOPE && x.status === "published");
   assert.equal(orgRecords.length, 1);
 });

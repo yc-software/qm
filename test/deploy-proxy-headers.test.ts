@@ -7,6 +7,9 @@ import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function appWith(endpoint: Record<string, unknown>): App {
   return { reachDeployment: async () => ({ status: "ok", endpoint }) } as unknown as App;
@@ -424,7 +427,7 @@ test("admin deployment proxy bypasses deployment ACL after admin auth and audits
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
     const path = "/v1/admin/deployments/d1/proxy/hello?x=1";
-    const actor = "admin-alice@default-org";
+    const actor = "admin-alice";
     const ts = Math.floor(Date.now() / 1000);
     const res = await fetch(`${base}${path}`, {
       headers: {

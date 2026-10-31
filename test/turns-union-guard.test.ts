@@ -10,6 +10,9 @@ import { createServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "turns-union-")) }));

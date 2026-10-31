@@ -10,8 +10,10 @@ import {
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { scopeId } from "../src/types.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
 const channel = scopeId("channel", "C1");
 
@@ -161,7 +163,7 @@ test("an org grant surfaces the file to any org member", async () => {
   await acl.grant({
     ownerScopeId: owner,
     ref: id,
-    granteeScopeId: scopeId("org", ORG),
+    granteeScopeId: TEST_ROOT_SCOPE,
     permission: "read",
     grantedBy: "U1",
   });

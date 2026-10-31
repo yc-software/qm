@@ -26,8 +26,9 @@ import type { SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Conversation, type Principal } from "../src/types.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { FEATURE_NAMES } from "../src/feature-flags.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
 
 const actor: Principal = { id: "U1", type: "internal", displayName: "Alice" };
 
@@ -76,9 +77,9 @@ async function buildOrchestrator(
     brandingDefault?: OrgBranding;
   } = {},
 ) {
-  const config = createMemoryConfigStore(ORG);
-  if (opts.orgSoul !== undefined) await config.setSoul(scopeId("org", ORG), opts.orgSoul);
-  if (opts.branding) await config.setBranding(scopeId("org", ORG), opts.branding);
+  const config = createMemoryConfigStore();
+  if (opts.orgSoul !== undefined) await config.setSoul(TEST_ROOT_SCOPE, opts.orgSoul);
+  if (opts.branding) await config.setBranding(TEST_ROOT_SCOPE, opts.branding);
 
   const acl = createAclStore();
   const auditLog = createAuditLog();
@@ -92,7 +93,7 @@ async function buildOrchestrator(
     auditLog,
     acl,
   });
-  const resolution = createResolutionService(ORG, config, acl);
+  const resolution = createResolutionService(config, acl);
 
   if (opts.scopeSoulFor) {
     const scope = resolution.scopeFor(opts.scopeSoulFor.conversation, actor);

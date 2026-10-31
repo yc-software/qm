@@ -28,8 +28,10 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import type { Conversation, Principal } from "../src/types.ts";
 import { refusalNote } from "../src/slack/lib.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const ADMIN = "https://portal.example.com";
 const actor: Principal = { id: "U1", type: "internal" };
 
@@ -56,7 +58,7 @@ function fakeSandbox(): Sandbox {
 }
 
 function buildOrchestrator(sessions: SessionStore) {
-  const config = createMemoryConfigStore(ORG);
+  const config = createMemoryConfigStore();
   const acl = createAclStore();
   const auditLog = createAuditLog();
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ral-")));
@@ -71,7 +73,7 @@ function buildOrchestrator(sessions: SessionStore) {
   return createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, config, acl),
+    resolution: createResolutionService(config, acl),
     sessions,
     workspace,
     files: createMemoryFileArtifactStore(createMemoryDurableByteStore()),

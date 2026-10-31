@@ -15,6 +15,9 @@ import {
 } from "../src/persistence/durable-map.ts";
 import { defaultOrgPolicy } from "../src/policy/command-policy.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres config-store tests";
@@ -50,8 +53,8 @@ const maps = (f: PostgresArtifactMaps) => configStoreMaps(f.map);
 test("SOUL compare-and-set permits only one writer and keeps current plus history in one durable row", async () => {
   const souls = createMemoryMap<PersistedSoul>();
   const legacyHistory = createMemoryMap<PersistedSoulRevision>();
-  const left = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
-  const right = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
+  const left = createMemoryConfigStore({ souls, soulHistory: legacyHistory });
+  const right = createMemoryConfigStore({ souls, soulHistory: legacyHistory });
   const channel = scopeId("channel", "CAS");
 
   const results = await Promise.all([
@@ -71,7 +74,7 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
   }
   assert.equal((await souls.get(channel))?.history?.length, 30, "the canonical row retains the full durable history");
   assert.equal(left.soulHistory(channel).length, 25, "the operator view remains bounded");
-  const fresh = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
+  const fresh = createMemoryConfigStore({ souls, soulHistory: legacyHistory });
   await fresh.hydrate?.();
   assert.equal(fresh.soulHistory(channel)[0]?.content, fresh.getSoul(channel));
   await right.refreshScope(channel);
@@ -84,8 +87,8 @@ test("SOUL compare-and-set permits only one writer and keeps current plus histor
 
 test("SOUL snapshot restore preserves the canonical version and history byte-for-byte across cores", async () => {
   const souls = createMemoryMap<PersistedSoul>();
-  const left = createMemoryConfigStore("default-org", { souls });
-  const right = createMemoryConfigStore("default-org", { souls });
+  const left = createMemoryConfigStore({ souls });
+  const right = createMemoryConfigStore({ souls });
   const channel = scopeId("channel", "snapshot");
   await left.setSoul(channel, "one", "alice");
   await left.setSoul(channel, "two", "bob");
@@ -104,8 +107,8 @@ test("SOUL snapshot restore preserves the canonical version and history byte-for
 
 test("setSoul advances the canonical row without trusting a stale instance cache", async () => {
   const souls = createMemoryMap<PersistedSoul>();
-  const left = createMemoryConfigStore("default-org", { souls });
-  const right = createMemoryConfigStore("default-org", { souls });
+  const left = createMemoryConfigStore({ souls });
+  const right = createMemoryConfigStore({ souls });
   const channel = scopeId("channel", "latest");
 
   assert.equal(await left.setSoul(channel, "left", "alice"), 1);
@@ -127,7 +130,7 @@ test("the first write after upgrade retains a canonical revision that predates e
   const souls = createMemoryMap<PersistedSoul>();
   const channel = scopeId("channel", "pre-history-upgrade");
   await souls.put(channel, { scopeId: channel, content: "pre-upgrade", version: 8 });
-  const store = createMemoryConfigStore("default-org", { souls });
+  const store = createMemoryConfigStore({ souls });
 
   assert.equal(await store.setSoul(channel, "post-upgrade", "alice"), 9);
   assert.deepEqual(
@@ -167,7 +170,7 @@ test("refreshScope merges legacy SOUL history into a canonical row and migrates 
     updatedAt: 30,
     updatedBy: "bob",
   });
-  const store = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
+  const store = createMemoryConfigStore({ souls, soulHistory: legacyHistory });
 
   await store.hydrate?.();
   await store.refreshScope(channel);
@@ -195,8 +198,8 @@ test("embedded history prevents a stale core from re-injecting legacy revisions 
   await souls.put(restored, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${restored}:4`, { scopeId: restored, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${restored}:3`, { scopeId: restored, content: "legacy prior", version: 3, updatedAt: 30 });
-  const left = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
-  const stale = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
+  const left = createMemoryConfigStore({ souls, soulHistory: legacyHistory });
+  const stale = createMemoryConfigStore({ souls, soulHistory: legacyHistory });
   await Promise.all([left.hydrate?.(), stale.hydrate?.()]);
 
   const restoredSnapshot: PersistedSoul = {
@@ -244,7 +247,7 @@ test("legacy migration rechecks the canonical marker inside the atomic update", 
   await souls.put(channel, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${channel}:4`, { scopeId: channel, content: "legacy current", version: 4, updatedAt: 40 });
   await legacyHistory.put(`${channel}:3`, { scopeId: channel, content: "legacy prior", version: 3, updatedAt: 30 });
-  const stale = createMemoryConfigStore("default-org", { souls, soulHistory: legacyHistory });
+  const stale = createMemoryConfigStore({ souls, soulHistory: legacyHistory });
   await stale.hydrate?.();
 
   restoreBeforeUpdate = true;
@@ -261,11 +264,11 @@ test(
   async () => {
     const f = createPostgresMapFactory(URL!);
     const ch = scopeId("channel", "C1");
-    const org = scopeId("org", "default-org");
+    const org = TEST_ROOT_SCOPE;
     const policy = defaultOrgPolicy();
 
     const m = maps(f);
-    const a = createMemoryConfigStore("default-org", m);
+    const a = createMemoryConfigStore(m);
     const version = await a.setSoul(ch, "a channel-specific soul");
     await a.setCommandPolicy(ch, policy);
     await a.setSecurityPosture(ch, "strict");
@@ -289,7 +292,7 @@ test(
         (await m.browseModels.get(ch))?.modelId === "claude-sonnet-4-6",
     );
 
-    const b = createMemoryConfigStore("default-org", maps(f));
+    const b = createMemoryConfigStore(maps(f));
     assert.equal(b.getSoul(ch), null, "a cold instance has no scoped soul until it hydrates");
     await b.hydrate?.();
 
@@ -317,7 +320,7 @@ test(
     const f = createPostgresMapFactory(URL!);
     const ch = scopeId("channel", "C2");
     const m = maps(f);
-    const a = createMemoryConfigStore("default-org", m);
+    const a = createMemoryConfigStore(m);
 
     let lastVersion = 0;
     for (let i = 1; i <= 8; i++) {
@@ -339,7 +342,7 @@ test(
         !(await m.browseModels.get(ch)),
     );
 
-    const b = createMemoryConfigStore("default-org", maps(f));
+    const b = createMemoryConfigStore(maps(f));
     await b.hydrate?.();
     assert.equal(b.getSoul(ch), "soul v8", "the durable soul ends on the last write, not a reordered earlier one");
     assert.equal(b.soulVersion(ch), lastVersion);
@@ -357,9 +360,9 @@ test(
 test("pg config store: settings written on one core reach another core through refreshScope", { skip }, async () => {
   const f = createPostgresMapFactory(URL!);
   const ch = scopeId("channel", "C4");
-  const org = scopeId("org", "default-org");
-  const a = createMemoryConfigStore("default-org", maps(f));
-  const b = createMemoryConfigStore("default-org", maps(f));
+  const org = TEST_ROOT_SCOPE;
+  const a = createMemoryConfigStore(maps(f));
+  const b = createMemoryConfigStore(maps(f));
   await a.hydrate?.();
   await b.hydrate?.();
 

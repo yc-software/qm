@@ -17,6 +17,9 @@ import {
 } from "../src/persistence/durable-map.ts";
 import { oauthRevoke } from "../src/api/routes/connectors.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const KEY = deriveConnectorKey("test-connector-key-aaaaaaaaaaaaaaaa");
 
@@ -158,7 +161,7 @@ test("connector token refresh: concurrent callers single-flight; connection meta
       accessToken: "stale",
       refreshToken: "rt",
       expiresAt: 5_000,
-      clientRef: "org:default-org:google",
+      clientRef: `${TEST_ROOT_SCOPE}:google`,
       accountType: "company",
     },
     "company",
@@ -170,7 +173,7 @@ test("connector token refresh: concurrent callers single-flight; connection meta
   release();
   assert.deepEqual(await Promise.all([p1, p2]), ["fresh", "fresh"]);
   assert.equal(calls, 1, "a provider that rotates refresh tokens must not see two racing refreshes");
-  assert.deepEqual(lastCtx, { accountType: "company", clientRef: "org:default-org:google" });
+  assert.deepEqual(lastCtx, { accountType: "company", clientRef: `${TEST_ROOT_SCOPE}:google` });
 
   nowAt = 2_000_000;
   let secondToken: OAuthToken | undefined;
@@ -191,14 +194,14 @@ test("connector token refresh: concurrent callers single-flight; connection meta
       accessToken: "fresh",
       refreshToken: "rt-rotated",
       expiresAt: 1_000_000,
-      clientRef: "org:default-org:google",
+      clientRef: `${TEST_ROOT_SCOPE}:google`,
       accountType: "company",
     },
     "company",
   );
   assert.equal(await again.connectorAccessToken("gmail.googleapis.com", "U1", "company"), "fresh-2");
   assert.equal(secondToken?.refreshToken, "rt-rotated");
-  assert.equal(secondToken?.clientRef, "org:default-org:google");
+  assert.equal(secondToken?.clientRef, `${TEST_ROOT_SCOPE}:google`);
   assert.equal(seen.length, 1);
 });
 

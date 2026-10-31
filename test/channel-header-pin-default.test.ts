@@ -1,14 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { type ScopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const org = scopeId("org", "acme");
+bindTestTenant();
+
+const org = TEST_ROOT_SCOPE;
 const channel = "channel:C123" as ScopeId;
 const other = "channel:C456" as ScopeId;
 
 async function freshStore() {
-  const store = createMemoryConfigStore("acme", {});
+  const store = createMemoryConfigStore({});
   await store.hydrate!();
   return store;
 }

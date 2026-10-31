@@ -13,8 +13,11 @@ import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { getRequiredModel, MODEL_REGISTRY, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
+bindTestTenant();
+
+const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice" };
 
 function start(
   config: Parameters<typeof testConfig>[0] = {},
@@ -82,14 +85,16 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
         { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter" },
       ],
     });
-    const scopeBefore = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    const scopeBefore = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`, {
+      headers: ADMIN,
+    });
     assert.equal(scopeBefore.status, 200);
     const beforeOptions = ((await scopeBefore.json()) as { baseModelOptions: Array<{ id: string }> }).baseModelOptions;
     assert.ok(!beforeOptions.some((model) => model.id === "gpt-5.6-sol"));
 
     const denied = await fetch(`${srv.base}/v1/admin/model-providers/openai`, {
       method: "PUT",
-      headers: { "content-type": "application/json", "x-admin-actor": "nobody@default-org" },
+      headers: { "content-type": "application/json", "x-admin-actor": "nobody" },
       body: JSON.stringify({ apiKey: "denied-openai-key" }),
     });
     assert.equal(denied.status, 403);
@@ -102,7 +107,9 @@ test("admin model credentials are encrypted, write-only, live, and removable", a
     assert.equal(saved.status, 200);
     assert.doesNotMatch(await saved.text(), /admin-openai-key/);
     assert.equal(await srv.built.modelCredentials.resolve("openai"), "admin-openai-key");
-    const scopeAfter = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    const scopeAfter = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`, {
+      headers: ADMIN,
+    });
     assert.equal(scopeAfter.status, 200);
     const afterOptions = ((await scopeAfter.json()) as { baseModelOptions: Array<{ id: string }> }).baseModelOptions;
     assert.ok(afterOptions.some((model) => model.id === "gpt-5.6-sol"));
@@ -185,7 +192,7 @@ test("model gateway credentials stay separate and advertise only routed models",
     },
   });
   try {
-    const selected = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/runtime`, {
+    const selected = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/runtime`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ harnessId: "pi", modelId: "claude-opus-5" }),
@@ -288,15 +295,17 @@ test("OpenRouter catalog exposes runtime-supported tool models as selectable bas
     assert.deepEqual(dynamic.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
     assert.equal(requested, "https://openrouter.ai/api/v1/models?supported_parameters=tools&sort=most-popular");
 
-    const selected = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org/base-model`, {
+    const selected = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}/base-model`, {
       method: "PUT",
       headers: ADMIN,
       body: JSON.stringify({ modelId: "stealth/ox-alpha" }),
     });
     assert.equal(selected.status, 200);
-    assert.equal(srv.built.config.getBaseModel("org:default-org"), "stealth/ox-alpha");
+    assert.equal(srv.built.config.getBaseModel(TEST_ROOT_SCOPE), "stealth/ox-alpha");
 
-    const governance = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    const governance = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`, {
+      headers: ADMIN,
+    });
     assert.equal(governance.status, 200);
     const governanceBody = (await governance.json()) as {
       baseModelOptions: Array<{ id: string; name: string }>;
@@ -353,7 +362,7 @@ test("web turns keep a persisted OpenRouter model enabled when the refreshed cat
     }),
   );
   try {
-    await srv.built.config.setBaseModel("org:default-org", "anthropic/claude-sonnet-4.5");
+    await srv.built.config.setBaseModel(TEST_ROOT_SCOPE, "anthropic/claude-sonnet-4.5");
     const turn = (threadRef: string, model: string) =>
       srv.built.app.turn({
         surface: "web",
@@ -409,8 +418,10 @@ test("an oversized OpenRouter catalog falls back to the built-in models", async 
 test("admin scope keeps the selected runtime model visible when its provider is unavailable", async () => {
   const srv = start();
   try {
-    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-5" });
-    const response = await fetch(`${srv.base}/v1/admin/scopes/org%3Adefault-org`, { headers: ADMIN });
+    await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { harnessId: "pi", modelId: "claude-opus-5" });
+    const response = await fetch(`${srv.base}/v1/admin/scopes/${encodeURIComponent(TEST_ROOT_SCOPE)}`, {
+      headers: ADMIN,
+    });
     assert.equal(response.status, 200);
     const data = (await response.json()) as {
       runtime: { harnessId: string; modelId: string };
@@ -496,7 +507,7 @@ test("surface-config reports whether any model provider is configured", async ()
     assert.equal(before.status, 200);
     assert.equal(((await before.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, false);
 
-    await srv.built.modelCredentials.set("anthropic", "working-admin-key", "admin-alice@default-org");
+    await srv.built.modelCredentials.set("anthropic", "working-admin-key", "admin-alice");
     const after = await fetch(`${srv.base}/v1/surface-config`);
     assert.equal(((await after.json()) as { modelProviderConfigured?: boolean }).modelProviderConfigured, true);
   } finally {
@@ -576,7 +587,7 @@ test("a claude harness without any token stays unconfigured", async () => {
 test("admin model credentials survive a second app instance on the same durable store", async () => {
   const backing = createMemoryMap<StoredModelCredential>();
   const first = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
-  await first.set("openrouter", "durable-openrouter-key", "admin-alice@default-org");
+  await first.set("openrouter", "durable-openrouter-key", "admin-alice");
 
   const second = createModelCredentialStore({ backing, keyMaterial: "shared-model-key" });
   assert.equal(await second.resolve("openrouter"), "durable-openrouter-key");
@@ -587,8 +598,8 @@ test("admin model credentials survive a second app instance on the same durable 
 test("a stored scope runtime remains usable outside the legacy configured picker", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
-    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { harnessId: "pi", modelId: "claude-opus-4-8" });
+    await srv.built.config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-4-6"]);
     await srv.built.config.setRuntimeSelection("personal:alice", {
       harnessId: "pi",
       modelId: "claude-haiku-4-5",
@@ -620,8 +631,8 @@ test("a stored scope runtime remains usable outside the legacy configured picker
 test("inbox runtime overrides use the web model allowlist without changing defaults", async () => {
   const srv = start({ anthropicApiKey: "deployment-anthropic-key" });
   try {
-    await srv.built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "claude-opus-4-8" });
-    await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
+    await srv.built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { harnessId: "pi", modelId: "claude-opus-4-8" });
+    await srv.built.config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-4-6"]);
     const rejected = await srv.built.app.turn({
       surface: "loop",
       actor: { externalId: "alice" },
@@ -634,7 +645,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
     });
     assert.equal(rejected.status, "refused");
     assert.match(rejected.reason ?? "", /runtime is no longer available/);
-    assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.modelId, "claude-opus-4-8");
+    assert.equal((await srv.built.config.getRuntimeSelectionDurable(TEST_ROOT_SCOPE))?.modelId, "claude-opus-4-8");
     assert.equal(await srv.built.config.getRuntimeSelectionDurable("personal:alice"), null);
   } finally {
     await srv.close();

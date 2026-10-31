@@ -9,6 +9,9 @@ import * as mockHarness from "./support/mock-harness.ts";
 import type { HarnessTurnInput } from "../src/harness/harness.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const turns: HarnessTurnInput[] = [];
 let piOptions: Parameters<typeof piHarness.createPiHarness>[0];
@@ -153,7 +156,7 @@ test("personal web selections reject wrong providers, harnesses, policy exclusio
     ["unknown", "pi"],
   ])
     assert.equal((await submit(model!, harness!)).status, "refused");
-  await built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
+  await built.config.setWebuiModels(TEST_ROOT_SCOPE, ["gpt-5.6-sol"]);
   assert.equal((await submit("gpt-5.6-terra")).status, "refused");
   await built.userModelCredentials.delete("U1", "openai");
   assert.equal((await submit("gpt-5.6-sol")).status, "refused");
@@ -231,7 +234,7 @@ test("web subscription selections use the namespaced model and personal OAuth on
 test("partial personal web choices queue the complete validated scoped runtime", async () => {
   const built = buildApp(testConfig());
   await built.config.setApprovedHarnesses(["pi"]);
-  await built.config.setRuntimeSelection("org:default-org", { harnessId: "pi", modelId: "gpt-5.6-sol" });
+  await built.config.setRuntimeSelection(TEST_ROOT_SCOPE, { harnessId: "pi", modelId: "gpt-5.6-sol" });
   await built.config.setRuntimeSelection("personal:U1", { harnessId: "pi", modelId: "gpt-5.6-terra" });
   await built.userModelCredentials.setApiKey("U1", "openai", "personal-openai");
   await built.config.setPersonalModelAuth("U1", true, "openai");

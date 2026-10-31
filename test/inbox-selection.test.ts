@@ -23,7 +23,7 @@ function world(enabled = true, sourceRefresh?: ApiCtx["deps"]["inboxSourceRefres
     outputs: createLoopOutputStore(),
     grants: createShipGrantStore(),
     crons: createCronStore(),
-    config: createMemoryConfigStore("org"),
+    config: createMemoryConfigStore(),
   };
   const uiState = createMemoryMap<PersistedUiState>();
   const call = async (method = "GET", body: unknown = null, query = "", actor = "alice") => {

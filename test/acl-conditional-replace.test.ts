@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import type { Grant } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const owner = "org:default-org";
+bindTestTenant();
+
+const owner = TEST_ROOT_SCOPE;
 const ref = "service-cred:k";
 
 test("conditional grant compensation preserves a newer full-tuple write", async () => {

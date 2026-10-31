@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
 import type { AuditEvent } from "../src/audit/audit-log.ts";
 import { scopeId } from "../src/types.ts";
-import { bindTestTenant } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -91,8 +91,8 @@ test("pg audit log: recordOnce is durable and idempotent across instances", { sk
   await reset(true);
   const first = createPostgresAuditLog(URL!);
   const second = createPostgresAuditLog(URL!);
-  await first.recordOnce!("deployment-layer:org:default-org:1", ev(1, "layer-updated"));
-  await second.recordOnce!("deployment-layer:org:default-org:1", ev(2, "duplicate"));
+  await first.recordOnce!(`deployment-layer:${TEST_ROOT_SCOPE}:1`, ev(1, "layer-updated"));
+  await second.recordOnce!(`deployment-layer:${TEST_ROOT_SCOPE}:1`, ev(2, "duplicate"));
   const events = await first.events();
   assert.equal(events.length, 1);
   assert.equal(events[0]?.action, "layer-updated");

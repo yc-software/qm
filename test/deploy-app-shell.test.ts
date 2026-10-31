@@ -20,6 +20,9 @@ import { scopeId } from "../src/types.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createFeatureFlagStore, type FeatureFlagRecord } from "../src/feature-flags.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const auditLog = { record() {}, events: async () => [], tail: async () => [] };
 const GATE_SECRET = "gate-secret";
@@ -112,9 +115,9 @@ const HOST = "mysite.apps.example.com";
 function mintPortalSession(sub: string, expiresInSeconds = 3600): string {
   const key = createHmac("sha256", "portal-session-secret").update("portal.session.v1").digest();
   const now = Math.floor(Date.now() / 1000);
-  const body = Buffer.from(
-    JSON.stringify({ k: "session", sub, org: "acme", iat: now, exp: now + expiresInSeconds }),
-  ).toString("base64url");
+  const body = Buffer.from(JSON.stringify({ k: "session", sub, iat: now, exp: now + expiresInSeconds })).toString(
+    "base64url",
+  );
   return `${body}.${createHmac("sha256", key).update(body).digest("base64url")}`;
 }
 const viewerCookie = () => `portal_session=${mintPortalSession("U-viewer")}`;

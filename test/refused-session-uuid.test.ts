@@ -4,12 +4,15 @@ import { createApp, type AppDeps } from "../src/api/app.ts";
 import { createMemoryRunStore } from "../src/runs/memory-run-store.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("getRun resolves the threadRef to the real UUID and builds the admin link from publicWebUrl", async () => {
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const threadRef = "ch:C_UUID_FIXTURE:100.1";
-  const session = await sessions.getOrCreateByThread(threadRef, "channel", scopeId("org", "default-org"));
+  const session = await sessions.getOrCreateByThread(threadRef, "channel", TEST_ROOT_SCOPE);
 
   const { run } = await runs.enqueue({ sessionId: threadRef, request: {} as never });
   const claimed = await runs.claimById(run.id, "w1", 60_000);
@@ -32,7 +35,7 @@ test("getRun omits the admin link when no portal (publicWebUrl) is configured", 
   const sessions = createMemorySessionStore();
   const { runs } = createMemoryRunStore();
   const threadRef = "ch:C2:2.2";
-  await sessions.getOrCreateByThread(threadRef, "channel", scopeId("org", "default-org"));
+  await sessions.getOrCreateByThread(threadRef, "channel", TEST_ROOT_SCOPE);
   const { run } = await runs.enqueue({ sessionId: threadRef, request: {} as never });
   const claimed = await runs.claimById(run.id, "w1", 60_000);
   await runs.fail(run.id, claimed!.leaseToken!, "An unknown error occurred", { retry: false });

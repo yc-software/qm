@@ -1,5 +1,7 @@
 import { installGlobalFakeSprites } from "./support/fake-sprites.ts";
 
+bindTestTenant();
+
 const fakeSprites = installGlobalFakeSprites();
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -14,6 +16,7 @@ import { scopeId } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
 const SECRET = "reach-files-secret".repeat(3);
 

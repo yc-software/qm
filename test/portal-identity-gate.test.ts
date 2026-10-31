@@ -14,6 +14,9 @@ import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import { authBrokerRoutes } from "../src/api/routes/auth-broker.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SOURCE = "shared-source-auth-secret-for-tests-0001";
 const CAP = "core-only-capability-secret-for-tests-01";
@@ -333,7 +336,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
       assert.equal(response.status, 403, `deployment ${suffix}`);
     }
 
-    await built.config.setCommandPolicy(scopeId("org", "default-org"), {
+    await built.config.setCommandPolicy(TEST_ROOT_SCOPE, {
       mode: "denylist",
       rules: [{ pattern: "printf", decision: "require_approval" }],
     });
@@ -388,10 +391,7 @@ describe("user-scoped routes require a portal-verified actor when enforcement is
   });
 
   it("an admin route with no portal identity is rejected (x-admin-actor alone no longer suffices)", async () => {
-    assert.equal(
-      (await fetch(`${base}/v1/admin/whoami`, { headers: { "x-admin-actor": "U1@default-org" } })).status,
-      401,
-    );
+    assert.equal((await fetch(`${base}/v1/admin/whoami`, { headers: { "x-admin-actor": "U1" } })).status, 401);
   });
 
   it("POST /v1/session-cap mints a REAL capability token for the portal-verified user", async () => {

@@ -9,6 +9,9 @@ import { harnessToolContext } from "../src/harness/harness-shared.ts";
 import type { ScopeId, SessionEntry } from "../src/types.ts";
 
 import { createMemoryRunSignalStore, startSignalPoll } from "../src/runs/run-signal-store.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const scope = "personal:goal@example.com" as ScopeId;
 
@@ -45,7 +48,7 @@ function stubTurn(emitted: SessionEntry[], extra: Partial<HarnessTurnInput> = {}
     history: [],
     tools: {},
     scopeLabel: scope,
-    orgScopeId: "org:acme" as ScopeId,
+    orgScopeId: TEST_ROOT_SCOPE as ScopeId,
     emit: async (entry: { type: SessionEntry["type"]; payload: unknown; scopeLabel: ScopeId }) => {
       const stored = { ...entry, sessionId: "s1", seq: seq++, parentSeq: null, createdAt: 1000 + seq } as SessionEntry;
       emitted.push(stored);

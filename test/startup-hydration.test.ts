@@ -5,6 +5,9 @@ import * as identityModule from "../src/identity/identity-service.ts";
 import * as configModule from "../src/resolution/config-store.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const identityFailure = new Error("identity persistence unavailable");
 const configFailure = new Error("configuration persistence unavailable");
@@ -28,11 +31,11 @@ mock.module("../src/resolution/config-store.ts", {
   namedExports: {
     ...configModule,
     createMemoryConfigStore: (...args: Parameters<typeof configModule.createMemoryConfigStore>) =>
-      configModule.createMemoryConfigStore(args[0], {
-        ...args[1],
-        deploymentIdentity: {
-          ...args[1]!.deploymentIdentity!,
-          putIfAbsent: async () => {
+      configModule.createMemoryConfigStore({
+        ...args[0],
+        souls: {
+          ...args[0]!.souls!,
+          all: async () => {
             throw configFailure;
           },
         },

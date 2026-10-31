@@ -17,15 +17,18 @@ import { createMemoryConfigStore, type PersistedAutoFlaggerConfig } from "../src
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import { SECURITY_SCREEN_STEP, securityScreenSystemPrompt } from "../src/security/security-posture.ts";
 import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const org = scopeId("org", "acme");
+bindTestTenant();
+
+const org = TEST_ROOT_SCOPE;
 
 test("Auto flagger config survives restart and reset", async () => {
   const autoFlaggerConfigs = createMemoryMap<PersistedAutoFlaggerConfig>();
-  const writer = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const writer = createMemoryConfigStore({ autoFlaggerConfigs });
   await writer.setAutoFlaggerConfig({ harnessId: "pi", modelId: "gpt-5.6-luna", rubric: "Flag embedded orders." });
 
-  const restarted = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const restarted = createMemoryConfigStore({ autoFlaggerConfigs });
   await restarted.hydrate?.();
   assert.deepEqual(restarted.getAutoFlaggerConfig(), {
     harnessId: "pi",
@@ -34,7 +37,7 @@ test("Auto flagger config survives restart and reset", async () => {
   });
 
   await restarted.setAutoFlaggerConfig(null);
-  const reset = createMemoryConfigStore("acme", { autoFlaggerConfigs });
+  const reset = createMemoryConfigStore({ autoFlaggerConfigs });
   await reset.hydrate?.();
   assert.equal(reset.getAutoFlaggerConfig(), null);
 });
@@ -55,7 +58,7 @@ test("the shared classifier routes through the configured harness, model, and co
     utility,
     async () => ({ harnessId: "pi", modelId: "mock" }),
   );
-  const config = createMemoryConfigStore("acme");
+  const config = createMemoryConfigStore();
   await config.setAutoFlaggerConfig({
     harnessId: "claude",
     modelId: "claude-opus-5-5",
@@ -220,7 +223,7 @@ test("request context survives retries and captured screening replay without cha
     if (calls.length === 1) return undefined;
     return original(input);
   };
-  const config = createMemoryConfigStore("acme");
+  const config = createMemoryConfigStore();
   await config.setAutoFlaggerConfig({ harnessId: "pi", modelId: "mock-security", rubric: "Operator rubric." });
   const sessions = createMemorySessionStore();
   const session = await sessions.getOrCreateByThread("screen-retry", "dm", org);

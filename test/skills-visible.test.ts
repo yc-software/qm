@@ -11,11 +11,13 @@ import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill } from "../src/skills/skill-store.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function freshApp() {
   const config: Config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "ap-skvis-")),
-    orgId: "acme",
     seedSkills: false,
   });
   return buildApp(config);
@@ -39,17 +41,17 @@ async function publish(
 test("listVisibleSkills returns a principal's personal + org skills with scope labels", async () => {
   const { app, skills } = freshApp();
   await publish(skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
-  await publish(skills, scopeId("org", "default-org"), "deploy-bot", "ship the bot to prod");
+  await publish(skills, TEST_ROOT_SCOPE, "deploy-bot", "ship the bot to prod");
 
   const visible = await app.listVisibleSkills("U1");
   const byName = new Map(visible.map((r) => [r.skill!.manifest.name, r]));
   assert.equal(byName.get("make-digest")!.skill!.scopeId, scopeId("personal", "U1"));
-  assert.equal(byName.get("deploy-bot")!.skill!.scopeId, scopeId("org", "default-org"));
+  assert.equal(byName.get("deploy-bot")!.skill!.scopeId, TEST_ROOT_SCOPE);
 });
 
 test("a personal skill shadows a same-named org skill (most-specific wins, shadow surfaced)", async () => {
   const { app, skills } = freshApp();
-  await publish(skills, scopeId("org", "default-org"), "notes", "the org-wide notes skill");
+  await publish(skills, TEST_ROOT_SCOPE, "notes", "the org-wide notes skill");
   await publish(skills, scopeId("personal", "U1"), "notes", "U1's own notes skill");
 
   const visible = await app.listVisibleSkills("U1");
@@ -57,7 +59,7 @@ test("a personal skill shadows a same-named org skill (most-specific wins, shado
   assert.equal(notes.length, 1, "one winner per name");
   assert.equal(notes[0]!.skill!.scopeId, scopeId("personal", "U1"), "personal wins over org");
   assert.equal(notes[0]!.shadowed.length, 1, "the org skill it shadows is surfaced");
-  assert.equal(notes[0]!.shadowed[0]!.scopeId, scopeId("org", "default-org"));
+  assert.equal(notes[0]!.shadowed[0]!.scopeId, TEST_ROOT_SCOPE);
 });
 
 test("another principal does not see U1's personal skill (scope boundary)", async () => {
@@ -97,7 +99,7 @@ test("visibleFor reads the requested scopes once, not once per skill name", asyn
   };
   const skills = createSkillStore({ backing });
 
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const personal = scopeId("personal", "U1");
   for (let i = 0; i < 200; i++) {
     const scope = i % 2 === 0 ? org : personal;

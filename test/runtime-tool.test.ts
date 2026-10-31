@@ -6,6 +6,9 @@ import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
 import type { RuntimeChoice } from "../src/harness/harness.ts";
 import type { SessionEntry } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const active: RuntimeChoice = { harnessId: "pi", modelId: "claude-opus-5", effortLevel: "high", fastMode: false };
 const claims: CapabilityClaims = {
@@ -15,9 +18,9 @@ const claims: CapabilityClaims = {
   exp: Date.now() + 60000,
 };
 async function setup(allowed = true) {
-  const config = createMemoryConfigStore("default-org");
+  const config = createMemoryConfigStore();
   await config.setApprovedHarnesses(["pi", "claude"]);
-  await config.setRuntimeSelection("org:default-org", active);
+  await config.setRuntimeSelection(TEST_ROOT_SCOPE, active);
   const service = createRuntimeService(
     { config, harnessId: "pi", baseModelDefault: active.modelId },
     {
@@ -131,7 +134,7 @@ test("individual-account availability does not depend on organization provider k
 test("a saved override removed from the model picker cannot be newly selected", async () => {
   const { config, service } = await setup();
   await config.setRuntimeSelection(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
-  await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
+  await config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-5"]);
   assert.deepEqual(await service(claims, active, { action: "set", model: "Astra" }), {
     ok: false,
     error: "model_not_enabled",
@@ -230,7 +233,7 @@ test("cron task handoffs still enforce actor, access, model and account policy",
   );
   assert.equal(result.ok, false);
   await config.setRuntimeSelection(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
-  await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
+  await config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-5"]);
   assert.deepEqual(
     await service(cronClaims, active, { action: "set", model: "Astra" }, undefined, false, undefined, true),
     { ok: false, error: "model_not_enabled" },
@@ -240,7 +243,7 @@ test("cron task handoffs still enforce actor, access, model and account policy",
 test("cron inherit cannot select a saved model removed from policy", async () => {
   const { service, config } = await setup();
   await config.setRuntimeSelection(claims.scopeId, { ...active, modelId: "gpt-6-astra" });
-  await config.setWebuiModels("org:default-org", ["claude-sonnet-5"]);
+  await config.setWebuiModels(TEST_ROOT_SCOPE, ["claude-sonnet-5"]);
   assert.deepEqual(
     await service(
       { ...claims, liveActor: false, triggered: true },

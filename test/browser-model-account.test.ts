@@ -11,6 +11,9 @@ import { resolveBrowserModel } from "../src/model/browser-model.ts";
 import { BrowserCompletionError, nativeBrowserCompletion } from "../src/model/browser-completion.ts";
 import { zeroUsage } from "../src/harness/replay.ts";
 import type { Context, ModelsSimpleStreamOptions } from "@earendil-works/pi-ai";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("browser follows durable user AI access and personal model defaults", async () => {
   const built = buildApp(testConfig());

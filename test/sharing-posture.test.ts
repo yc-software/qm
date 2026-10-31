@@ -14,6 +14,9 @@ import { scopeId, type Principal, type Session } from "../src/types.ts";
 import { createMemoryFileArtifactStore } from "../src/files/file-artifact-store.ts";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createIsCurrentSharedScopeMember } from "../src/resolution/scope-membership.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("sharing posture is isolated by default and isolated wins composition", () => {
   assert.equal(parseSharingPosture("open"), "open");
@@ -33,9 +36,9 @@ test("sharing posture is isolated by default and isolated wins composition", () 
 
 test("durable sharing policy composes organization, personal, and room vetoes and refreshes replicas", async () => {
   const sharingPostures = createMemoryMap<PersistedSharingPosture>();
-  const writer = createMemoryConfigStore("acme", { sharingPostures });
-  const reader = createMemoryConfigStore("acme", { sharingPostures });
-  const org = scopeId("org", "acme");
+  const writer = createMemoryConfigStore({ sharingPostures });
+  const reader = createMemoryConfigStore({ sharingPostures });
+  const org = TEST_ROOT_SCOPE;
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
 
@@ -51,7 +54,7 @@ test("durable sharing policy composes organization, personal, and room vetoes an
   await writer.setSharingPosture(org, "isolated");
   assert.equal(await reader.resolveSharingPostureDurable(personal, room), "isolated");
 
-  const restarted = createMemoryConfigStore("acme", { sharingPostures });
+  const restarted = createMemoryConfigStore({ sharingPostures });
   await restarted.hydrate?.();
   assert.equal(await restarted.getSharingPostureOwnDurable(personal), "open");
   assert.equal(await restarted.getSharingPostureOwnDurable(room), "open");
@@ -59,9 +62,9 @@ test("durable sharing policy composes organization, personal, and room vetoes an
 
 test("Open membership re-checks durable organization, person, room, and membership restrictions", async () => {
   const store = createMemoryMap<PersistedSharingPosture>();
-  const writer = createMemoryConfigStore("acme", { sharingPostures: store });
-  const reader = createMemoryConfigStore("acme", { sharingPostures: store });
-  const org = scopeId("org", "acme");
+  const writer = createMemoryConfigStore({ sharingPostures: store });
+  const reader = createMemoryConfigStore({ sharingPostures: store });
+  const org = TEST_ROOT_SCOPE;
   const personal = scopeId("personal", "U1");
   const room = scopeId("channel", "C1");
   let member = true;
@@ -87,7 +90,7 @@ test("Open membership re-checks durable organization, person, room, and membersh
 });
 
 test("open sources accept live human-authored ambient turns and bind carry to the authenticated actor", async () => {
-  const config = createMemoryConfigStore("acme", { defaultSharingPosture: "open" });
+  const config = createMemoryConfigStore({ defaultSharingPosture: "open" });
   const sessions = { listByParticipant: async () => [] };
   const targetScope = scopeId("channel", "C1");
   const actor: Principal = { id: "U2", type: "internal" };
@@ -147,7 +150,7 @@ test("current membership resolves directory identity aliases and fails closed wh
 });
 
 test("DM carry is recent, bounded, non-transitive, source-vetoed, and revoked by current membership", async () => {
-  const config = createMemoryConfigStore("acme", { defaultSharingPosture: "open" });
+  const config = createMemoryConfigStore({ defaultSharingPosture: "open" });
   const actor: Principal = { id: "U1", type: "internal" };
   const personal = scopeId("personal", actor.id);
   const sessions: Session[] = Array.from({ length: 30 }, (_, index) => ({
@@ -244,7 +247,7 @@ test("carried file handles expose only selected source scopes read-only without 
 });
 
 test("Open examines a bounded candidate window even when every membership is revoked", async () => {
-  const config = createMemoryConfigStore("acme", { defaultSharingPosture: "open" });
+  const config = createMemoryConfigStore({ defaultSharingPosture: "open" });
   let checks = 0;
   let requestedLimit = 0;
   const candidates = Array.from({ length: 1000 }, (_, i) => ({

@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createModelGateway } from "../src/model/model-gateway.ts";
-import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const rec = (at: number) => ({
   at,
-  scopeLabel: scopeId("org", "default-org"),
+  scopeLabel: TEST_ROOT_SCOPE,
   model: "m",
   inputTokens: 1,
   entryCount: 1,

@@ -1,9 +1,8 @@
 import { brokerCredentialCall, realBrokerFetch, type BrokerAudit } from "../credential-broker.ts";
 import { brokerConnectorCall } from "../connector-broker.ts";
-import { scopeId as makeScopeId } from "../../types.ts";
 import { sendJson } from "../http.ts";
 import type { ApiCtx, Route } from "./route.ts";
-import { orgId as configOrgId } from "../../config.ts";
+import { tenantRootScope } from "../../tenants/context.ts";
 
 async function brokerCredential(ctx: ApiCtx): Promise<void> {
   const { res, deps, body, capability, app } = ctx;
@@ -21,7 +20,7 @@ async function brokerCredential(ctx: ApiCtx): Promise<void> {
     return sendJson(res, result.status, result.json);
   }
   if (!deps.serviceCreds) return sendJson(res, 404, { error: "not_found" });
-  const orgScope = makeScopeId("org", configOrgId());
+  const orgScope = tenantRootScope();
   const result = await brokerCredentialCall({
     claims: capability!,
     body: body as Record<string, unknown>,

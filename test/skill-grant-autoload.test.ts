@@ -6,8 +6,11 @@ import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { createMemoryMap, type DurableMap } from "../src/persistence/durable-map.ts";
 import { createSkillStore, type Skill, type SkillManifest, type SkillStore } from "../src/skills/skill-store.ts";
 import { scopeId, type Principal, type ScopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = scopeId("org", "default-org");
+bindTestTenant();
+
+const ORG = TEST_ROOT_SCOPE;
 const JOSH = scopeId("personal", "josh");
 const ERIC = scopeId("personal", "eric");
 const P = (id: string, teamIds: string[] = []): Principal => ({ id, type: "internal", teamIds });

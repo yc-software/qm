@@ -11,12 +11,14 @@ import { buildApp } from "./support/build-app.ts";
 import { scopeId, type ScopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function start() {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "skills-http-")),
-      orgId: "acme",
       seedSkills: false,
     }),
   );
@@ -61,7 +63,7 @@ interface SkillView {
 test("GET /v1/skills returns metadata only; authorized detail fetch returns the body", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("org", "default-org"), "deploy-bot", "ship the bot to prod");
+    await publish(srv.skills, TEST_ROOT_SCOPE, "deploy-bot", "ship the bot to prod");
     await publish(srv.skills, scopeId("personal", "U1"), "make-digest", "assemble a morning digest");
 
     const res = await fetch(`${srv.base}/v1/skills?principalId=${encodeURIComponent("U1")}`);
@@ -293,7 +295,7 @@ test("GET /v1/skills without principalId is a 400", async () => {
 test("GET /v1/skills surfaces the shadowed flag when a personal skill overrides an org one", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("org", "default-org"), "notes", "org notes");
+    await publish(srv.skills, TEST_ROOT_SCOPE, "notes", "org notes");
     await publish(srv.skills, scopeId("personal", "U1"), "notes", "U1 notes");
 
     const res = await fetch(`${srv.base}/v1/skills?principalId=U1`);
@@ -310,7 +312,7 @@ test("GET /v1/skills surfaces the shadowed flag when a personal skill overrides 
 test("GET /v1/skills can include every active scope variant without changing the default projection", async () => {
   const srv = start();
   try {
-    await publish(srv.skills, scopeId("org", "default-org"), "notes", "org notes");
+    await publish(srv.skills, TEST_ROOT_SCOPE, "notes", "org notes");
     await publish(srv.skills, scopeId("personal", "U1"), "notes", "personal notes");
 
     const normal = (await (await fetch(`${srv.base}/v1/skills?principalId=U1`)).json()) as { skills: SkillView[] };
@@ -422,7 +424,6 @@ async function startSecure() {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "skills-http-cap-")),
-      orgId: "acme",
       seedSkills: false,
       signingSecret: SECRET,
     }),
@@ -868,7 +869,7 @@ test("a group-DM skill is editable by any group member (the group-DM analog of a
 test("POST /v1/skills refuses to home a skill directly in an org or team scope (promotion path only)", async () => {
   const srv = await startSecure();
   try {
-    for (const home of [scopeId("org", "default-org"), scopeId("team", "T1")]) {
+    for (const home of [TEST_ROOT_SCOPE, scopeId("team", "T1")]) {
       const res = await fetch(`${srv.base}/v1/skills`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-agent-capability": await srv.cap("author", home) },
@@ -911,7 +912,7 @@ test("GET /v1/skills shows a group-DM skill to a member known only via directory
 test("an ORG- or TEAM-homed skill is never inline-managed, even by its author (promotion/admin only)", async () => {
   const srv = await startSecure();
   try {
-    for (const home of [scopeId("org", "default-org"), scopeId("team", "T1")]) {
+    for (const home of [TEST_ROOT_SCOPE, scopeId("team", "T1")]) {
       const sk = await srv.skills.create({
         scopeId: home,
         manifest: { name: `wide-${home.replace(":", "-")}`, description: "v1", requiredCapabilities: [], body: "# v1" },

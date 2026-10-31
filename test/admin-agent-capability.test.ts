@@ -27,9 +27,12 @@ import {
 import { testConfig } from "./support/test-config.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { createMemoryAdvisoryLock } from "../src/persistence/advisory-lock.ts";
+import { TEST_ROOT_SCOPE, TEST_TENANT, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "agent-admin-test-secret".repeat(3);
-const ORG = scopeId("org", "default-org");
+const ORG = TEST_ROOT_SCOPE;
 
 function start(withConfig = true) {
   const built = buildApp(
@@ -136,7 +139,7 @@ test("a large channel's capability passes HTTP parsing and retains admin authori
       exp: Date.now() + CAPABILITY_TTL_MS,
     };
     const url = `${s.base}/v1/admin/memory?scope=${encodeURIComponent(ORG)}`;
-    const legacy = await mintSignedPayload({ orgId: "default-org", ...claims }, SECRET);
+    const legacy = await mintSignedPayload(claims, SECRET);
     const rejected = await fetch(url, { headers: { "x-agent-capability": legacy } });
     assert.equal(rejected.status, 431);
     await rejected.text();
@@ -173,10 +176,16 @@ test("whoami answers an agent capability token for admins and non-admins alike",
     const admin = await fetch(`${s.base}/v1/admin/whoami`, {
       headers: { "x-agent-capability": await capFor("admin-alice") },
     });
-    assert.deepEqual(await admin.json(), { isAdmin: true, role: "org_admin", scopeId: ORG, permissions: ["admin"] });
+    assert.deepEqual(await admin.json(), {
+      isAdmin: true,
+      role: "org_admin",
+      scopeId: ORG,
+      permissions: ["admin"],
+      tenant: TEST_TENANT,
+    });
 
     const user = await fetch(`${s.base}/v1/admin/whoami`, { headers: { "x-agent-capability": await capFor("U1") } });
-    assert.deepEqual(await user.json(), { isAdmin: false, permissions: [] });
+    assert.deepEqual(await user.json(), { isAdmin: false, permissions: [], tenant: TEST_TENANT });
   } finally {
     await s.close();
   }
@@ -204,7 +213,7 @@ test("x-admin-actor cannot escalate a capability token — the header is the por
   const s = start();
   try {
     const cap = await capFor("U1");
-    const spoof = { "x-agent-capability": cap, "x-admin-actor": "admin-alice@default-org" };
+    const spoof = { "x-agent-capability": cap, "x-admin-actor": "admin-alice" };
 
     const whoami = await fetch(`${s.base}/v1/admin/whoami`, { headers: spoof });
     assert.equal(
@@ -829,7 +838,7 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
       assert.equal(
         (
           await fetch(`${s.base}${path}`, {
-            headers: { "x-agent-capability": nonAdmin, "x-admin-actor": "admin-alice@default-org" },
+            headers: { "x-agent-capability": nonAdmin, "x-admin-actor": "admin-alice" },
           })
         ).status,
         403,

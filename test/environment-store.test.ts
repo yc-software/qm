@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { createMemoryEnvironmentStore, resolveEnvironmentId } from "../src/environments/environment-store.ts";
 import { sandboxScopeName } from "../src/sandbox/exec-sandbox-base.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 describe("environments (the computer a conversation points at)", () => {
   let t = 1_000;

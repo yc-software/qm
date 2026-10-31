@@ -15,19 +15,19 @@ import type { Resolution, Session } from "../src/types.ts";
 import { renderRecall } from "../src/memory/cross-scope.ts";
 import { createSemanticMemoryService } from "../src/memory/semantic-recall.ts";
 import { scoredMemoryIndex } from "./support/scored-memory-index.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function fixture() {
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "turn-context-")));
   const memory = createMemoryService(workspace);
-  const config = createMemoryConfigStore("test", { defaultSharingPosture: "open" });
+  const config = createMemoryConfigStore({ defaultSharingPosture: "open" });
   const files = createMemoryFileArtifactStore(createMemoryDurableByteStore());
   const auditLog = createAuditLog();
   let member = true;
   const resolution = {
-    layers: [
-      { scopeId: "personal:alice", mode: "rw", mountPath: "" },
-      { scopeId: "org:test", mode: "ro", mountPath: "global" },
-    ],
+    layers: [{ scopeId: "personal:alice", mode: "rw", mountPath: "" }],
     orgScopeId: "org:test",
     sharingPosture: "open",
     grantedHandles: [],

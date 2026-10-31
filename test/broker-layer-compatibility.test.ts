@@ -9,6 +9,9 @@ import { testConfig } from "./support/test-config.ts";
 import { parseToolDescriptor } from "../src/deployment/deployment-layer.ts";
 import { BASE_EPHEMERAL_CRED_LINKS, BASE_RESIDENT_AUTH_PATHS } from "../src/credentials/resident-paths.ts";
 import { evaluateCommandWithLayer } from "../src/policy/command-policy.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const credentialFile = (path: string) => ({ path, kind: "file" as const });
 const credentialDirectory = (path: string) => ({ path, kind: "directory" as const });
@@ -267,7 +270,7 @@ const BROKERED_ACME = {
 };
 
 test("a layer installed after boot reaches the app that booted without one", () => {
-  const built = buildApp(testConfig({ orgId: "acme" }));
+  const built = buildApp(testConfig());
   assert.equal(
     built.brokeredTools.length,
     0,

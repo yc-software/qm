@@ -2,12 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createMemoryConfigStore, type PersistedScopedFlag } from "../src/resolution/config-store.ts";
-import { scopeId } from "../src/types.ts";
 import { resolveTurnFastMode } from "../src/core/turn-options.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("interactive fast mode defaults off and persists across instances", async () => {
   const interactiveFastMode = createMemoryMap<PersistedScopedFlag>();
-  const first = createMemoryConfigStore("org", { interactiveFastMode });
+  const first = createMemoryConfigStore({ interactiveFastMode });
   await first.hydrate!();
   assert.equal(first.getInteractiveFastMode(), false);
   assert.equal(await first.getInteractiveFastModeDurable(), false);
@@ -15,7 +17,7 @@ test("interactive fast mode defaults off and persists across instances", async (
   await first.setInteractiveFastMode(true);
   assert.equal(first.getInteractiveFastMode(), true);
 
-  const second = createMemoryConfigStore("org", { interactiveFastMode });
+  const second = createMemoryConfigStore({ interactiveFastMode });
   await second.hydrate!();
   assert.equal(second.getInteractiveFastMode(), true);
   assert.equal(await second.getInteractiveFastModeDurable(), true);
@@ -31,9 +33,9 @@ test("the org default reaches only human turns that expressed no preference", ()
 
 test("refreshScope picks up an interactive fast mode change written elsewhere", async () => {
   const interactiveFastMode = createMemoryMap<PersistedScopedFlag>();
-  const store = createMemoryConfigStore("org", { interactiveFastMode });
+  const store = createMemoryConfigStore({ interactiveFastMode });
   await store.hydrate!();
-  const org = scopeId("org", "org");
+  const org = TEST_ROOT_SCOPE;
   await interactiveFastMode.put(org, { scopeId: org, on: true });
   await store.refreshScope(org);
   assert.equal(store.getInteractiveFastMode(), true);

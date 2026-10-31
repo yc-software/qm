@@ -11,6 +11,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const DAY = 86_400_000;
 const at = (dayIdx: number, frac = 0.5) => Math.round((dayIdx + frac) * DAY);
@@ -75,7 +78,7 @@ function start() {
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
 }
 
-const ALICE = { "x-admin-actor": "admin-alice@default-org" };
+const ALICE = { "x-admin-actor": "admin-alice" };
 const get = (base: string, path: string, headers: Record<string, string> = ALICE) => fetch(base + path, { headers });
 
 test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rejected", async () => {
@@ -92,7 +95,7 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
     const ok = await get(s.base, "/v1/admin/retention");
     assert.equal(ok.status, 200);
     const d = (await ok.json()) as any;
-    assert.equal(d.scopeId, "org:default-org");
+    assert.equal(d.scopeId, TEST_ROOT_SCOPE);
     assert.ok(d.active.dau >= 1, "the just-driven turn counts as active today");
     assert.ok(Array.isArray(d.cohorts), "cohorts present");
     assert.ok(d.perUser?.sessions && d.perUser?.turns, "per-user distributions present");
@@ -100,8 +103,8 @@ test("retention endpoint: org-wide, org_admin-gated, audited; non-org scopes rej
 
     assert.equal((await get(s.base, "/v1/admin/retention?scope=channel:eng")).status, 400);
 
-    assert.equal((await get(s.base, "/v1/admin/retention", { "x-admin-actor": "user-uma@default-org" })).status, 403);
-    assert.equal((await get(s.base, "/v1/admin/retention", { "x-admin-actor": "nobody@default-org" })).status, 403);
+    assert.equal((await get(s.base, "/v1/admin/retention", { "x-admin-actor": "user-uma" })).status, 403);
+    assert.equal((await get(s.base, "/v1/admin/retention", { "x-admin-actor": "nobody" })).status, 403);
 
     assert.ok(
       (await s.built.auditLog.events()).some((e) => e.action === "retention.read"),

@@ -13,6 +13,9 @@ import { buildApp } from "./support/build-app.ts";
 import { SideChatAnchorError } from "../src/api/app-types.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-fork-"));

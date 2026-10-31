@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
 import { createMemoryConfigStore } from "../src/resolution/config-store.ts";
-import { scopeId } from "../src/types.ts";
 import {
   createConnectorClientResolver,
   encryptSecret,
@@ -10,8 +9,10 @@ import {
   deriveConnectorKey,
 } from "../src/connectors/connector-client-store.ts";
 import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const orgScope = (o: string) => scopeId("org", o);
+bindTestTenant();
+
 const envWithSlack = {
   SLACK_OAUTH_CLIENT_ID: "env-sid",
   SLACK_OAUTH_CLIENT_SECRET: "env-ssecret",
@@ -54,8 +55,8 @@ test("new ciphertexts are v2 (HKDF) and legacy sha256-key ciphertexts still decr
 });
 
 test("BYO record wins over env; the secret is encrypted at rest and never echoed", async () => {
-  const store = createMemoryConfigStore("default-org", { connectorSecretKey: "persistent-key" });
-  await store.setConnectorClient(orgScope("default-org"), "google", {
+  const store = createMemoryConfigStore({ connectorSecretKey: "persistent-key" });
+  await store.setConnectorClient(TEST_ROOT_SCOPE, "google", {
     clientId: "org-cid",
     clientSecret: "org-secret",
     scopes: ["custom.scope"],
@@ -63,7 +64,7 @@ test("BYO record wins over env; the secret is encrypted at rest and never echoed
     updatedBy: "admin-alice",
   });
 
-  const pub = await store.listConnectorClients(orgScope("default-org"));
+  const pub = await store.listConnectorClients(TEST_ROOT_SCOPE);
   assert.equal(pub.length, 1);
   assert.equal(pub[0]!.provider, "google");
   assert.equal(pub[0]!.clientId, "org-cid");
@@ -74,7 +75,6 @@ test("BYO record wins over env; the secret is encrypted at rest and never echoed
 
   const resolve = createConnectorClientResolver({
     reader: store,
-    orgScopeId: orgScope,
     secrets: createEnvSecretSource(envWithSlack),
   });
   const c = await resolve("google", {});
@@ -82,14 +82,13 @@ test("BYO record wins over env; the secret is encrypted at rest and never echoed
   assert.equal(c.secret, "org-secret");
   assert.deepEqual(c.scopes, ["custom.scope"]);
   assert.deepEqual(c.redirectAllowlist, ["https://app/cb"]);
-  assert.equal(c.clientRef, "org:default-org:google");
+  assert.equal(c.clientRef, `${TEST_ROOT_SCOPE}:google`);
 });
 
 test("a provider with no org record falls back to env", async () => {
-  const store = createMemoryConfigStore("default-org", { connectorSecretKey: "k" });
+  const store = createMemoryConfigStore({ connectorSecretKey: "k" });
   const resolve = createConnectorClientResolver({
     reader: store,
-    orgScopeId: orgScope,
     secrets: createEnvSecretSource(envWithSlack),
   });
   const c = await resolve("slack", {});
@@ -99,21 +98,21 @@ test("a provider with no org record falls back to env", async () => {
 });
 
 test("a disabled org connector is refused (grays out the app grid)", async () => {
-  const store = createMemoryConfigStore("default-org", { connectorSecretKey: "k" });
-  await store.setConnectorClient(orgScope("default-org"), "google", {
+  const store = createMemoryConfigStore({ connectorSecretKey: "k" });
+  await store.setConnectorClient(TEST_ROOT_SCOPE, "google", {
     clientId: "c",
     clientSecret: "s",
     enabled: false,
   });
-  const resolve = createConnectorClientResolver({ reader: store, orgScopeId: orgScope });
+  const resolve = createConnectorClientResolver({ reader: store });
   await assert.rejects(resolve("google", {}), /disabled/);
 });
 
 test("deleting a connector record falls back to env / unconfigured", async () => {
-  const store = createMemoryConfigStore("default-org", { connectorSecretKey: "k" });
-  await store.setConnectorClient(orgScope("default-org"), "google", { clientId: "c", clientSecret: "s" });
-  assert.equal((await store.listConnectorClients(orgScope("default-org"))).length, 1);
-  await store.deleteConnectorClient(orgScope("default-org"), "google");
-  assert.equal((await store.listConnectorClients(orgScope("default-org"))).length, 0);
-  assert.equal(await store.getConnectorClientSecret(orgScope("default-org"), "google"), null);
+  const store = createMemoryConfigStore({ connectorSecretKey: "k" });
+  await store.setConnectorClient(TEST_ROOT_SCOPE, "google", { clientId: "c", clientSecret: "s" });
+  assert.equal((await store.listConnectorClients(TEST_ROOT_SCOPE)).length, 1);
+  await store.deleteConnectorClient(TEST_ROOT_SCOPE, "google");
+  assert.equal((await store.listConnectorClients(TEST_ROOT_SCOPE)).length, 0);
+  assert.equal(await store.getConnectorClientSecret(TEST_ROOT_SCOPE, "google"), null);
 });

@@ -14,6 +14,9 @@ import { createMemoryService } from "../src/memory/memory-service.ts";
 import { MemoryFactsMissing } from "../src/memory/facts.ts";
 import { testConfig } from "./support/test-config.ts";
 import { recallText } from "./support/recall-text.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function freshApp(overrides: Partial<Config> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-mem-"));
@@ -72,7 +75,7 @@ test("personal memory does NOT surface in a channel (boundary / differentiator)"
 test("default memory policy recalls visible org memory without crossing into personal memory", async () => {
   const { app, dataDir } = freshApp();
   const ws = createLocalWorkspaceStore(dataDir);
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await ws.ensureScope(org);
   await createMemoryService(ws).capture(org, ["Org launch metric is revenue quality"], Date.now(), "admin", {
     mode: "explicit",
@@ -92,7 +95,7 @@ test("default memory policy recalls visible org memory without crossing into per
 test("memory recall policy can be tightened to writable scope only", async () => {
   const { app, dataDir } = freshApp({ memoryRecall: "writable" });
   const ws = createLocalWorkspaceStore(dataDir);
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await ws.ensureScope(org);
   await createMemoryService(ws).capture(org, ["Org launch metric is revenue quality"], Date.now(), "admin", {
     mode: "explicit",

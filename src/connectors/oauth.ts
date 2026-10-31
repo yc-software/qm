@@ -5,6 +5,7 @@ import { decodeJwt } from "jose";
 import { mintSignedPayload, verifySignedPayload } from "../auth/signed-token.ts";
 import { swallow } from "../util/errors.ts";
 import { isObj } from "../util/objects.ts";
+import { currentTenant } from "../tenants/context.ts";
 
 export const ACCOUNT_TYPES = ["default", "personal", "company"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
@@ -590,7 +591,6 @@ export interface OAuthState {
   issuedAt: number;
   nonce: string;
   returnTo?: string;
-  orgId?: string;
   accountType?: AccountType;
   clientRef?: string;
   codeVerifier?: string;
@@ -607,7 +607,6 @@ function isOAuthState(v: unknown): v is OAuthState {
     typeof s.issuedAt === "number" &&
     typeof s.nonce === "string" &&
     (s.returnTo === undefined || typeof s.returnTo === "string") &&
-    (s.orgId === undefined || typeof s.orgId === "string") &&
     (s.accountType === undefined || isAccountType(s.accountType)) &&
     (s.clientRef === undefined || typeof s.clientRef === "string") &&
     (s.codeVerifier === undefined || typeof s.codeVerifier === "string") &&
@@ -625,6 +624,7 @@ export function sealOAuthState(
       ...state,
       issuedAt: state.issuedAt ?? (opts.now ?? Date.now)(),
       nonce: state.nonce ?? randomUUID(),
+      tenant: currentTenant(),
     },
     opts.secret,
   );
@@ -637,6 +637,8 @@ export async function openOAuthState(
   if (!opts.secret) throw new Error("OAuth state secret required");
   const parsed = await verifySignedPayload(sealed, opts.secret);
   if (!isOAuthState(parsed)) throw new Error("invalid OAuth state");
+  if ((parsed as { tenant?: unknown }).tenant !== currentTenant())
+    throw new Error("OAuth state is for a different tenant");
   const now = (opts.now ?? Date.now)();
   const maxAgeMs = opts.maxAgeMs ?? 10 * 60_000;
   if (parsed.issuedAt > now + 60_000 || now - parsed.issuedAt > maxAgeMs) {

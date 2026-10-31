@@ -12,6 +12,9 @@ import { createInsecureTestServer } from "../../src/api/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
 import { startMcpTestServer, type McpTestServer } from "../support/mcp-test-server.ts";
+import { bindTestTenant } from "../support/tenant.ts";
+
+bindTestTenant();
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 

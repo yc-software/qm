@@ -10,8 +10,10 @@ import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.
 import { scopeId } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const initiator = "U1";
 const HANDLE = { id: "h", rootDir: "/workspace" } as SandboxHandle;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
@@ -37,7 +39,7 @@ function registration(
   const grantees = defaultPublishAudience({
     kind,
     ...(isPrivate !== undefined ? { isPrivate } : {}),
-    orgScopeId: scopeId("org", ORG),
+    orgScopeId: TEST_ROOT_SCOPE,
     ownerId: initiator,
   }).grantees;
   return {

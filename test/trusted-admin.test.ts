@@ -13,6 +13,9 @@ import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemoryReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { trustedPrincipal } from "../plugins/portal/src/trusted-entry.ts";
 import { provisionTrustedAdmin } from "../plugins/portal/src/trusted-admin.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const signingSecret = "core-test-secret".repeat(3);
 const identitySecret = "portal-test-secret".repeat(3);
@@ -21,7 +24,6 @@ function start(enabled = true) {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "trusted-admin-")),
-      orgId: "default-org",
       ...(enabled ? { trustedOidcAdminIssuer: issuer } : {}),
     }),
   );
@@ -47,7 +49,6 @@ function claims(overrides: Record<string, unknown> = {}) {
     purpose: "trusted-entry-admin",
     issuer,
     subject: "founder-7",
-    org: "org:default-org",
     exp: Date.now() + 55_000,
     jti: crypto.randomUUID(),
     ...overrides,
@@ -72,7 +73,7 @@ async function send(base: string, payload: unknown, key = identitySecret, source
 test("portal provisioning creates a durable ordinary grant once and preserves existing grants", async (t) => {
   const s = start();
   t.after(s.close);
-  const config = { core: s.base, signingSecret, identitySecret, org: "default-org", issuer };
+  const config = { core: s.base, signingSecret, identitySecret, issuer };
   await Promise.all(Array.from({ length: 8 }, () => provisionTrustedAdmin(config, "founder-7")));
   const principal = { id: trustedPrincipal(issuer, "founder-7"), type: "internal" as const };
   assert.equal((await s.built.admin.adminStatusOf(principal)).isAdmin, true);
@@ -89,7 +90,6 @@ test("provisioning rejects forged, unrelated, expired, impersonated, and replaye
   t.after(s.close);
   for (const invalid of [
     { purpose: "session" },
-    { org: "org:other" },
     { issuer: "https://other.example.test" },
     { exp: Date.now() - 1 },
     { exp: Date.now() + 120_000 },

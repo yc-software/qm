@@ -6,7 +6,7 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import { scopeId, type Grant, type Principal } from "../src/types.ts";
-import { bindTestTenant, boundUrl } from "./support/tenant.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant, boundUrl } from "./support/tenant.ts";
 
 bindTestTenant();
 
@@ -25,7 +25,7 @@ before(async () => {
 
 const owner = scopeId("personal", "U1");
 const carol = scopeId("personal", "U2");
-const org = scopeId("org", "default-org");
+const org = TEST_ROOT_SCOPE;
 const person = (id: string, teamIds?: string[]): Principal => ({
   id,
   type: "internal",

@@ -6,6 +6,9 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createMemoryMap } from "../src/persistence/durable-map.ts";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type SlackSetupStatus = {
   configured: boolean;
@@ -22,11 +25,7 @@ type SlackSetupStatus = {
 
 async function fixture(t: test.TestContext) {
   const map = createMemoryMap();
-  const store = createSlackInstallationStore(
-    "test",
-    map as Parameters<typeof createSlackInstallationStore>[1],
-    "test-key",
-  );
+  const store = createSlackInstallationStore(map as Parameters<typeof createSlackInstallationStore>[0], "test-key");
   const calls: Array<{ path: string; body?: string }> = [];
   let remote = Response.json({ companyOwned: true, appReady: false, connected: false });
   const managedSlack = createManagedSlack({

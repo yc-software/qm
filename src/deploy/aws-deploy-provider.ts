@@ -1,5 +1,4 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { orgId as configOrgId } from "../config.ts";
 import { AssumeRoleCommand, STSClient } from "@aws-sdk/client-sts";
 import type { Deployment, DeploymentVersion } from "./deploy-store.ts";
 import type { DeployEndpoint, DeployProvider, DeployReconcileInput } from "./deploy-provider.ts";
@@ -65,7 +64,6 @@ export interface StoredDeployBody {
   dataCredsAtMs?: number;
   rotateNotBeforeMs?: number;
   replacementMicrovmId?: string;
-  orgId?: string;
 }
 
 export interface AwsDeployProviderOptions {
@@ -425,7 +423,6 @@ export function createAwsDeployProvider(opts: AwsDeployProviderOptions): DeployP
         endpoint: body.endpoint,
         createdAtMs: Date.now(),
         lastSnapshotMs: Date.now(),
-        orgId: configOrgId(),
       });
       return { id: body.id, endpoint: body.endpoint, fresh: true };
     });

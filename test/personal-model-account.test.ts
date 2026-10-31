@@ -12,13 +12,16 @@ import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "personal-account-test-signing-secret";
 
 test("personal account choice persists across instances without changing anyone else's choice", async () => {
   const individualModelAuth = createMemoryMap<PersistedScopedFlag>();
-  const first = createMemoryConfigStore("default-org", { individualModelAuth });
-  const second = createMemoryConfigStore("default-org", { individualModelAuth });
+  const first = createMemoryConfigStore({ individualModelAuth });
+  const second = createMemoryConfigStore({ individualModelAuth });
   assert.equal(await first.getIndividualModelAuthDurable("alice"), false);
   await first.setPersonalModelAuth("alice", true);
   assert.equal(await second.getIndividualModelAuthDurable("alice"), true);
@@ -43,7 +46,7 @@ test("account API binds choice to the signed-in person, preserves connections, a
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
-  async function request(account: unknown, principalId = "alice@default-org", signedIn = "alice@default-org") {
+  async function request(account: unknown, principalId = "alice", signedIn = "alice") {
     const path = "/v1/user-model-auth/account";
     const body = JSON.stringify({ account, principalId, nonce: crypto.randomUUID() });
     const ts = Math.floor(Date.now() / 1000);
@@ -61,8 +64,8 @@ test("account API binds choice to the signed-in person, preserves connections, a
   try {
     assert.equal((await request("personal")).status, 409);
     assert.equal((await request("invalid")).status, 400);
-    await built.userModelCredentials.setApiKey("alice@default-org", "anthropic", "test-personal-key");
-    assert.equal((await request("personal", "bob@default-org", "alice@default-org")).status, 403);
+    await built.userModelCredentials.setApiKey("alice", "anthropic", "test-personal-key");
+    assert.equal((await request("personal", "bob", "alice")).status, 403);
     const enabled = await request("personal");
     assert.equal(enabled.status, 200);
     assert.deepEqual(await enabled.json(), {
@@ -71,12 +74,12 @@ test("account API binds choice to the signed-in person, preserves connections, a
       account: "personal",
       connections: [{ provider: "anthropic", kind: "apikey" }],
     });
-    assert.equal(await built.config.getIndividualModelAuthDurable("bob@default-org"), false);
+    assert.equal(await built.config.getIndividualModelAuthDurable("bob"), false);
     assert.equal((await request("company")).status, 200);
-    assert.equal((await built.userModelCredentials.connections("alice@default-org")).length, 1);
+    assert.equal((await built.userModelCredentials.connections("alice")).length, 1);
     assert.equal((await request("personal")).status, 200);
-    await built.userModelCredentials.delete("alice@default-org", "anthropic");
-    assert.equal(await built.config.getIndividualModelAuthDurable("alice@default-org"), true);
+    await built.userModelCredentials.delete("alice", "anthropic");
+    assert.equal(await built.config.getIndividualModelAuthDurable("alice"), true);
     assert.equal((await request("company")).status, 200);
     await built.config.setIndividualModelAuth(true);
     assert.equal((await request("company")).status, 403);

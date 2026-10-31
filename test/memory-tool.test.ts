@@ -9,6 +9,9 @@ import { createLocalWorkspaceStore } from "../src/workspace/workspace-store.ts";
 import { createMemoryService } from "../src/memory/memory-service.ts";
 import { scopeId, type ScopeId, type WorkspaceLayer } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const at = Date.UTC(2026, 4, 31);
 
@@ -244,7 +247,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   const workspace = createLocalWorkspaceStore(mkdtempSync(join(tmpdir(), "ws-mem-multi-")));
   const memory = createMemoryService(workspace);
   const personal = scopeId("personal", "U1");
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   await workspace.ensureScope(personal);
   await workspace.ensureScope(org);
   await memory.capture(personal, ["deploys happen on Fridays"], at);
@@ -268,7 +271,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
   });
   assert.match(
     (await ctx.memoryRead(org)) ?? "",
-    /### org:default-org\n#1 \(2026-05-31\) deploys are frozen in December/,
+    new RegExp(`### ${TEST_ROOT_SCOPE}\\n#1 \\(2026-05-31\\) deploys are frozen in December`),
   );
   assert.equal(await ctx.memoryRead("personal:someone-else"), null);
   assert.equal(await ctx.memorySearch("deploys", 20, "personal:someone-else"), null);

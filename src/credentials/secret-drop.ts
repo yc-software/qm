@@ -12,7 +12,6 @@ export interface SecretDropField {
 
 export interface SecretDropRecord {
   ownerId: string;
-  orgId?: string;
   service: string;
   envKey?: string;
   host?: string;
@@ -70,12 +69,7 @@ export function createSecretDropStore(
           void backing.delete(id).catch(swallowAs("secret drop: delete expired drop", undefined));
           continue;
         }
-        if (
-          r.orgId === rec.orgId &&
-          r.audienceScopeId === rec.audienceScopeId &&
-          r.threadRef === rec.threadRef &&
-          r.service !== rec.service
-        )
+        if (r.audienceScopeId === rec.audienceScopeId && r.threadRef === rec.threadRef && r.service !== rec.service)
           out.push(r);
       }
       return out;

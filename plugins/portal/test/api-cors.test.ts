@@ -41,12 +41,12 @@ const base = `http://localhost:${(server.address() as AddressInfo).port}`;
 const sessionKey = deriveKey("api-cors-test-portal-secret-0123456789", "portal.session.v1");
 function sessionCookie(sub: string): string {
   const iat = Math.floor(Date.now() / 1000);
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 function impersonating(actor: string, target: string): string {
   const iat = Math.floor(Date.now() / 1000);
-  return `portal_impersonate=${encodeURIComponent(seal({ k: "impersonate", actor, target, org: "acme", iat, exp: iat + 3600 }, impersonateKey))}`;
+  return `portal_impersonate=${encodeURIComponent(seal({ k: "impersonate", actor, target, iat, exp: iat + 3600 }, impersonateKey))}`;
 }
 
 test.after(() => {

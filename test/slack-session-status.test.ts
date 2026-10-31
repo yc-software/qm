@@ -9,6 +9,9 @@ import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../src/processes/process-registry.ts";
 import type { Session, Monitor } from "../src/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 function deferred() {
   let resolve!: () => void;

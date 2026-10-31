@@ -10,7 +10,9 @@ import { oneShot } from "../src/harness/pi-harness.ts";
 import { buildApp } from "../src/wiring.ts";
 import { testConfig } from "./support/test-config.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
-import { scopeId } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const metadata = {
   model_group: "acme/future",
@@ -237,7 +239,7 @@ for (const protocol of ["openai", "anthropic", "unknown"] as const)
           refreshModels: built.refreshModels,
         },
       },
-      scopeId("org", "default-org"),
+      TEST_ROOT_SCOPE,
     );
     assert.deepEqual(runtime.modelsByHarness.pi, ["gateway/acme/future"]);
     assert.equal(runtime.modelCatalog["gateway/acme/future"]?.api, expectedApi);

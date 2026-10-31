@@ -14,6 +14,9 @@ import { buildApp } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createMemoryReplayDedupe, type ReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testConfig } from "./support/test-config.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "auth-broker-claim-test-secret".repeat(2);
 const CLAIM_PATH = "/v1/auth/broker/claim";
@@ -38,9 +41,7 @@ function start(
   dedupe: ReplayDedupe;
   close: () => Promise<void>;
 } {
-  const built: BuiltApp = buildApp(
-    testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-broker-claim-")), orgId: "acme" }),
-  );
+  const built: BuiltApp = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "auth-broker-claim-")) }));
   const server = createServer(built.app, {
     signingSecret: SECRET,
     replayDedupe,

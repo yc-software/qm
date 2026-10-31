@@ -1,8 +1,8 @@
 import { isSessionTurn, resolveTurnOrigin } from "../core/turn-origin.ts";
 import type { Run } from "../runs/run-store.ts";
+import { boundTenant } from "../tenants/context.ts";
 
 export function createProductAnalytics(
-  companyId: string,
   config: { apiKey?: string; host?: string } = {},
   send: typeof fetch = fetch,
 ): {
@@ -18,6 +18,7 @@ export function createProductAnalytics(
     insertId: string,
     properties: Record<string, string> = {},
   ): Promise<void> {
+    const companyId = boundTenant();
     if (!apiKey || !companyId || !principal || inFlight >= 16) return;
     inFlight++;
     try {
@@ -67,7 +68,7 @@ export function createProductAnalytics(
       if (run.status === "failed" || status === "failed") event = "response_failed";
       else if (status === "ok" || status === "silent" || status === "react") event = "response_completed";
       if (!event) return;
-      await capture(event, run.request.actor.id, `${companyId}:${run.id}:${event}`, {
+      await capture(event, run.request.actor.id, `${boundTenant()}:${run.id}:${event}`, {
         surface: run.request.surface === "web" || run.request.surface === "slack" ? run.request.surface : "core",
         completion_boundary: "run",
         result_status: status ?? "failed",

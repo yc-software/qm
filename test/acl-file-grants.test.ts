@@ -5,10 +5,13 @@ import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts
 import { createMemoryFileArtifactStore, type FileArtifactRef } from "../src/files/file-artifact-store.ts";
 import { principalEntitledToScope } from "../src/resolution/context-filter.ts";
 import type { Grant, Principal } from "../src/types.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const owner = "personal:alice";
 const recipient = "personal:bob";
-const org = "org:default-org";
+const org = TEST_ROOT_SCOPE;
 const bob: Principal = { id: "bob", type: "internal", teamIds: [] };
 const grant: Grant = {
   ownerScopeId: owner,

@@ -5,6 +5,9 @@ import { parseMemoryProviderConfig } from "../src/memory/provider-config.ts";
 import type { MemoryService } from "../src/memory/memory-service.ts";
 import { startMcpTestServer } from "./support/mcp-test-server.ts";
 import { recallText } from "./support/recall-text.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const defaultMemory: MemoryService = {
   async recall() {
@@ -48,9 +51,9 @@ test("configured provider runs OAuth MCP recall and explicit capture end to end"
   });
 
   assert.equal(recallText(await memory.recall("personal:u1", { query: "launch", actorId: "u1" })), "personal notebook");
-  assert.equal(recallText(await memory.recall("org:acme", { query: "launch", actorId: "u1" })), "org knowledge");
-  assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "automatic" }), 0);
-  assert.equal(await memory.capture("org:acme", ["decision"], 1, "u1", { mode: "explicit" }), 1);
+  assert.equal(recallText(await memory.recall(TEST_ROOT_SCOPE, { query: "launch", actorId: "u1" })), "org knowledge");
+  assert.equal(await memory.capture(TEST_ROOT_SCOPE, ["decision"], 1, "u1", { mode: "automatic" }), 0);
+  assert.equal(await memory.capture(TEST_ROOT_SCOPE, ["decision"], 1, "u1", { mode: "explicit" }), 1);
 
   assert.deepEqual(mcp.tokenRequests, ["ro", "rw"]);
   assert.deepEqual(

@@ -10,6 +10,9 @@ import { testConfig } from "./support/test-config.ts";
 import { createMemorySessionStore } from "../src/sessions/memory-session-store.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import { scopeId } from "../src/types.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 async function seed(sessions: SessionStore, threadRef: string, principal: string, texts: string[]): Promise<string> {
   const s = await sessions.getOrCreateByThread(threadRef, "dm", scopeId("personal", principal));

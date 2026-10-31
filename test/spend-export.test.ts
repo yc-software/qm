@@ -12,6 +12,9 @@ import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { bill } from "./support/spend-usage.ts";
 import { testConfig } from "./support/test-config.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const DAY = 86_400_000;
 const sourceSecret = "source-only-secret".repeat(3);
@@ -67,7 +70,7 @@ test("spend export: missing, wrong, admin-identity and source-signed requests ar
       { authorization: `Bearer ${exportToken}x` },
       { authorization: exportToken },
       { authorization: `Bearer ${sourceSecret}` },
-      { "x-admin-actor": "admin-alice@default-org" },
+      { "x-admin-actor": "admin-alice" },
       { "x-timestamp": String(ts), "x-signature": signRequest(sourceSecret, ts, `GET\n${path}\n`) },
     ];
     for (const headers of refused) {
@@ -109,7 +112,7 @@ test("spend export: rows keep the ledger grain with canonical people, sources an
     const res = await s.get(`/v1/spend/export?${window}`);
     assert.equal(res.status, 200);
     const body: any = await res.json();
-    assert.equal(body.scopeId, "org:default-org");
+    assert.equal(body.scopeId, TEST_ROOT_SCOPE);
     assert.deepEqual(body.window, { from: iso(today - DAY), to: iso(today + DAY) });
     assert.deepEqual(
       body.rows.map((r: any) => [

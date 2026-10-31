@@ -18,6 +18,9 @@ import {
   securityScreenChunks,
   securityScreenPayload,
 } from "../src/security/security-posture.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 test("security posture parses only the three named modes", () => {
   assert.equal(parseSecurityPosture("dangerous"), "dangerous");
@@ -162,16 +165,16 @@ test("auto screens only data-bearing inputs and parses a strict downgrade", () =
 
 test("scoped postures persist and resolve against the org floor", async () => {
   const backing = createMemoryMap<PersistedSecurityPosture>();
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const channel = scopeId("channel", "C1");
-  const first = createMemoryConfigStore("default-org", {
+  const first = createMemoryConfigStore({
     securityPostures: backing,
     defaultSecurityPosture: "dangerous",
   });
   await first.setSecurityPosture(org, "auto");
   await first.setSecurityPosture(channel, "strict");
 
-  const restarted = createMemoryConfigStore("default-org", {
+  const restarted = createMemoryConfigStore({
     securityPostures: backing,
     defaultSecurityPosture: "dangerous",
   });
@@ -186,9 +189,9 @@ test("scoped postures persist and resolve against the org floor", async () => {
 
 test("approval grant modes default to all-on and compose tighten-only", async () => {
   const backing = createMemoryMap<PersistedApprovalGrantModes>();
-  const org = scopeId("org", "acme");
+  const org = TEST_ROOT_SCOPE;
   const channel = scopeId("channel", "C1");
-  const store = createMemoryConfigStore("acme", { approvalGrantModes: backing });
+  const store = createMemoryConfigStore({ approvalGrantModes: backing });
 
   assert.deepEqual(await store.getApprovalGrantModesDurable(org), { session: true, always: true });
   assert.deepEqual(store.getApprovalGrantModes(channel), { session: true, always: true });
@@ -212,7 +215,7 @@ test("approval grant modes default to all-on and compose tighten-only", async ()
     "the scope's tightening never leaks back to the org",
   );
 
-  const restarted = createMemoryConfigStore("acme", { approvalGrantModes: backing });
+  const restarted = createMemoryConfigStore({ approvalGrantModes: backing });
   await restarted.hydrate?.();
   assert.deepEqual(
     restarted.getApprovalGrantModes(channel),

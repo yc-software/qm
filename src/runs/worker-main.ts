@@ -14,9 +14,10 @@ if (tenant) enterTenant(tenant);
 await built.sandboxResources.initialize();
 await built.config.hydrate?.();
 await built.identity.hydrate();
+void built.skillsReady();
 const { runtime } = built;
 runtime.start();
-console.log(`[qm:worker] draining runs (org=${config.orgId}, runStore=${config.runStore}, workers=${config.workers})`);
+console.log(`[qm:worker] draining runs (runStore=${config.runStore}, workers=${config.workers})`);
 
 let shuttingDown = false;
 function shutdown(signal: string): void {

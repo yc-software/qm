@@ -25,8 +25,10 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { scopeId, type Conversation, type Principal, type SessionEntry } from "../src/types.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
+import { bindTestTenant } from "./support/tenant.ts";
 
-const ORG = "default-org";
+bindTestTenant();
+
 const actor: Principal = { id: "U1", type: "internal" };
 const conversation: Conversation = { kind: "dm", threadRef: "web:U1:retry", audience: [actor] };
 scopeId("personal", "U1");
@@ -109,7 +111,7 @@ function buildScenario(interruptAfterToolResult = false) {
   const orchestrator = createOrchestrator({
     ...singleProcessDeps(),
     identity: createIdentityService(),
-    resolution: createResolutionService(ORG, createMemoryConfigStore(ORG), acl),
+    resolution: createResolutionService(createMemoryConfigStore(), acl),
     sessions,
     runs,
     workspace,

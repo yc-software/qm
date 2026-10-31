@@ -13,6 +13,9 @@ import { testConfig } from "./support/test-config.ts";
 import { CAPABILITY_TTL_MS, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
 import { artifactPath } from "../src/files/file-artifact-store.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 const principals = [
   { id: "alice@example.com", type: "internal" as const },
   { id: "bob@example.com", type: "internal" as const },

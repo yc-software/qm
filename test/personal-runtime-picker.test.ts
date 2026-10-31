@@ -7,6 +7,9 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { userRuntimeConfigBody } from "../src/api/runtime-config.ts";
 import { resolveModel } from "../src/model/pi-models.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 type Snapshot = Awaited<ReturnType<typeof userRuntimeConfigBody>>;
 
@@ -101,7 +104,7 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
     assert.ok((await s.get("U1", "group:room")).modelsByHarness.pi!.includes("gpt-5.6-terra"));
     assert.ok(!(await s.get("U2", "group:room")).modelsByHarness.pi!.includes("gpt-5.6-terra"));
     await s.built.config.setRuntimeSelection("personal:U1", { harnessId: "pi", modelId: "gpt-5.6-terra" });
-    await s.built.config.setWebuiModels("org:default-org", ["gpt-5.6-sol"]);
+    await s.built.config.setWebuiModels(TEST_ROOT_SCOPE, ["gpt-5.6-sol"]);
     assert.ok(!(await s.get()).modelsByHarness.pi!.includes("gpt-5.6-terra"));
     assert.equal((await s.put({ harnessId: "pi", modelId: "gpt-5.6-terra" })).status, 400);
     const refused = await s.built.app.turn({
@@ -115,7 +118,7 @@ test("personal picker keeps org restrictions and shared-scope caller isolation",
       model: "gpt-5.6-terra",
     });
     assert.equal(refused.status, "refused");
-    await s.built.config.setWebuiModels("org:default-org", []);
+    await s.built.config.setWebuiModels(TEST_ROOT_SCOPE, []);
     assert.ok((await s.get()).modelsByHarness.pi!.includes("gpt-5.6-terra"));
   } finally {
     await s.close();

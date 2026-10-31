@@ -10,8 +10,10 @@ import {
   createPostgresAdvisoryLock,
   type AdvisoryLock,
 } from "../src/persistence/advisory-lock.ts";
-import { scopeId } from "../src/types.ts";
 import { installSeedSkills } from "../src/skills/seed.ts";
+import { TEST_ROOT_SCOPE, bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const URL = process.env.DATABASE_URL;
 const factory = URL ? createPostgresMapFactory(URL) : null;
@@ -46,7 +48,7 @@ test("two servers seeding the same catalog at boot install each skill once", asy
   const { backing, lock } = await shared();
   const left = createSkillStore({ backing: slowReads(backing), signingSecret: "s", advisoryLock: lock() });
   const right = createSkillStore({ backing: slowReads(backing), signingSecret: "s", advisoryLock: lock() });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
 
   const seedModule = "../src/skills/seed.ts";
   type Seed = typeof import("../src/skills/seed.ts");
@@ -100,7 +102,7 @@ test("an admin archive racing another server's changed seed update leaves the sk
       },
     },
   });
-  const org = scopeId("org", "default-org");
+  const org = TEST_ROOT_SCOPE;
   const options = { dir, scopeId: org, respectArchived: true };
   const pending: Promise<unknown>[] = [];
   try {

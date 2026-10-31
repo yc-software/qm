@@ -75,7 +75,7 @@ const upstream = createServer((req: IncomingMessage, res) => {
     req.on("data", (c) => (body += c));
     return void req.on("end", () => {
       const actor = req.headers["x-admin-actor"];
-      const ok = typeof actor === "string" && actor.startsWith("U-admin@");
+      const ok = actor === "U-admin";
       res.writeHead(ok ? 200 : 403, { "content-type": "application/json" });
       res.end(
         JSON.stringify(
@@ -123,7 +123,7 @@ const sessionKey = deriveKey("router-test-portal-secret", "portal.session.v1");
 function sessionCookie(sub: string, ageS = 0): string {
   const now = Math.floor(Date.now() / 1000);
   const iat = now - ageS;
-  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, org: "acme", iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
+  return `portal_session=${encodeURIComponent(seal({ k: "session", sub, iat, exp: iat + SESSION_TTL_S }, sessionKey))}`;
 }
 
 test.after(() => {

@@ -9,6 +9,9 @@ import { buildApp } from "../../src/wiring.ts";
 import type { Config } from "../../src/config.ts";
 import type { TurnRequest } from "../../src/types.ts";
 import { testConfig } from "../support/test-config.ts";
+import { bindTestTenant } from "../support/tenant.ts";
+
+bindTestTenant();
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 const opts = { skip: NO_KEY ? "set ANTHROPIC_API_KEY to run live e2e" : false, timeout: 120_000 };

@@ -11,6 +11,9 @@ import { type BuiltApp } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
+import { bindTestTenant } from "./support/tenant.ts";
+
+bindTestTenant();
 
 const SECRET = "test-capability-secret";
 
@@ -18,7 +21,6 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "runtime-config-live-author-")),
-      orgId: "default-org",
       capabilitySecret: SECRET,
       seedSkills: false,
     }),
@@ -35,7 +37,7 @@ function start(): { base: string; built: BuiltApp; close: () => Promise<void> } 
 const token = (claims: Record<string, unknown>): Promise<string> =>
   mintCapabilityToken(
     {
-      actorId: "alice@default-org",
+      actorId: "alice",
       scopeId: "group:C123",
       aud: CONTROL_PLANE_AUD,
       exp: Date.now() + CAPABILITY_TTL_MS,
@@ -55,7 +57,7 @@ async function put(base: string, cap: string): Promise<Response> {
 test("runtime-config accepts a liveAuthor capability (a human replying in a thread)", async () => {
   const srv = start();
   try {
-    await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
+    await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice" }]);
     await srv.built.config.setApprovedHarnesses(["pi"]);
     const res = await put(srv.base, await token({ liveAuthor: true }));
     assert.equal(res.status, 200);
@@ -76,7 +78,7 @@ test("runtime-config accepts a liveAuthor capability (a human replying in a thre
 test("runtime-config still refuses an automated trigger with neither liveActor nor liveAuthor", async () => {
   const srv = start();
   try {
-    await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice@default-org" }]);
+    await srv.built.directory.replaceGroups([{ groupId: "C123", principalId: "alice" }]);
     await srv.built.config.setApprovedHarnesses(["pi"]);
     const res = await put(srv.base, await token({ triggered: true }));
     assert.equal(res.status, 403);
