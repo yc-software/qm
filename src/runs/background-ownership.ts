@@ -74,6 +74,19 @@ export function createBackgroundOwnershipStore(map: DurableMap<BackgroundOwnersh
       if (!result) throw new Error("Background ownership disappeared");
       return fromStored(result);
     },
+    async claimIfNeverSet(deploymentId: string): Promise<BackgroundOwnership> {
+      await ready();
+      const result = await map.update(key, (stored) =>
+        fromStored(stored).setAt === null
+          ? readableByMemberProtocol(
+              { ownerDeploymentId: deploymentId, setAt: new Date().toISOString(), setBy: deploymentId },
+              stored,
+            )
+          : stored,
+      );
+      if (!result) throw new Error("Background ownership disappeared");
+      return fromStored(result);
+    },
   };
 }
 

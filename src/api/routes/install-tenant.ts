@@ -14,7 +14,10 @@ async function installTenant(ctx: ApiCtx): Promise<void> {
       message: "tenant must be a tenant slug: lowercase letters, digits and inner hyphens",
     });
   try {
-    return sendJson(ctx.res, 200, await install(slug));
+    const installed = await install(slug);
+    const ownership = ctx.deps.backgroundOwnership;
+    if (ownership) await ownership.store.claimIfNeverSet(ownership.deploymentId);
+    return sendJson(ctx.res, 200, installed);
   } catch (error) {
     if (!(error instanceof UnknownTenant)) throw error;
     return sendJson(ctx.res, 404, {

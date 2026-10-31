@@ -7,8 +7,13 @@ import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testDatabaseUrl } from "./support/test-database.ts";
+import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 import { UnknownTenant } from "../src/tenants/install.ts";
+import {
+  createBackgroundOwnershipStore,
+  type BackgroundOwnership,
+  type BackgroundOwnershipControl,
+} from "../src/runs/background-ownership.ts";
 
 const sourceSecret = "source-only-secret".repeat(3);
 const controlSecret = "operator-only-secret".repeat(3);
@@ -17,6 +22,7 @@ const path = "/v1/install/tenant";
 async function fixture(
   secret: string | undefined,
   installTenant: (slug: string) => Promise<{ tenant: string; created: boolean }>,
+  backgroundOwnership?: BackgroundOwnershipControl,
 ) {
   const built = buildApp(testConfig({ signingSecret: sourceSecret }));
   const server = createServer(built.app, {
@@ -27,6 +33,7 @@ async function fixture(
     requireSignedPortalIdentity: true,
     deploymentControlSecret: secret,
     installTenant,
+    ...(backgroundOwnership ? { backgroundOwnership } : {}),
   });
   server.listen(0);
   const url = `http://localhost:${(server.address() as AddressInfo).port}${path}`;
@@ -100,6 +107,19 @@ test("the install tenant route reports an unknown slug with the existing ones", 
       tenant: "main",
       tenants: ["acme", "other"],
     });
+  } finally {
+    await srv.close();
+  }
+});
+
+test("a fresh install names the answering deployment as background owner so turns run without another step", async () => {
+  const store = createBackgroundOwnershipStore(testMap<BackgroundOwnership>());
+  const control = { store, instanceId: "i", deploymentId: "core:fresh", active: () => true };
+  const srv = await fixture(controlSecret, async () => ({ tenant: "t", created: true }), control);
+  try {
+    assert.equal((await store.get()).ownerDeploymentId, null);
+    assert.equal((await srv.request()).status, 200);
+    assert.equal((await store.get()).ownerDeploymentId, "core:fresh");
   } finally {
     await srv.close();
   }

@@ -846,11 +846,14 @@ test("background ownership requires durable storage and an independent deploymen
   assert.equal(loadConfig({ ...env, BACKGROUND_WORK_ENABLED: "false" }).backgroundWorkEnabled, false);
   assert.throws(() => loadConfig({ ...env, DATABASE_URL: "" }), /DATABASE_URL/);
   assert.throws(() => loadConfig({ ...env, DATABASE_OWNER_URL: "" }), /DATABASE_OWNER_URL/);
-  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), /distinct DEPLOYMENT_CONTROL_SECRET/);
-  assert.throws(
-    () => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }),
-    /distinct DEPLOYMENT_CONTROL_SECRET/,
-  );
+  const weak = /DEPLOYMENT_CONTROL_SECRET must be at least 32 characters and differ from CORE_SIGNING_SECRET/;
+  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: "short" }), weak);
+  assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: env.CORE_SIGNING_SECRET }), weak);
+  const { BACKGROUND_DEPLOYMENT_ID: _, ...operatorOnly } = env;
+  const plain = loadConfig(operatorOnly);
+  assert.equal(plain.deploymentControlSecret, env.DEPLOYMENT_CONTROL_SECRET);
+  assert.equal(plain.backgroundDeploymentId, undefined);
+  assert.throws(() => loadConfig({ ...operatorOnly, DEPLOYMENT_CONTROL_SECRET: "short" }), weak);
   assert.throws(() => loadConfig({ ...env, BACKGROUND_DEPLOYMENT_ID: " " }), /BACKGROUND_DEPLOYMENT_ID/);
   assert.throws(() => loadConfig({ ...env, CORE_SIGNING_SECRET: "short" }), /CORE_SIGNING_SECRET/);
   assert.throws(() => loadConfig({ ...env, DEPLOYMENT_CONTROL_SECRET: " ".repeat(32) }), /DEPLOYMENT_CONTROL_SECRET/);
