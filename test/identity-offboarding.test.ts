@@ -6,8 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp, TEST_TENANT, testTenantSettings } from "./support/build-app.ts";
-import { enterTenant } from "../src/tenants/context.ts";
+import { buildApp, testTenantSettings } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
@@ -15,8 +14,6 @@ import { scopeId } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-
-enterTenant(TEST_TENANT);
 
 const SECRET = "offboarding-secret".repeat(3);
 
@@ -40,13 +37,10 @@ describe("offboarding: directory sync and the /v1/principals routes drive deacti
   };
 
   before(async () => {
-    built = buildApp(
-      testConfig({
-        dataDir: mkdtempSync(join(tmpdir(), "offboarding-")),
-        signingSecret: SECRET,
-        emailAuthPrincipals: ["allowed@example.com"],
-      }),
-    );
+    const config = testConfig({ dataDir: mkdtempSync(join(tmpdir(), "offboarding-")), signingSecret: SECRET });
+    built = buildApp(config, {
+      tenantSettings: testTenantSettings({ AUTH_ALLOWED_EMAILS: "allowed@example.com" }, config.databaseUrl),
+    });
     await built.identity.refresh();
     server = createServer(built.app, {
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
