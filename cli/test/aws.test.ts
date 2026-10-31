@@ -4023,7 +4023,7 @@ test("aws logs never reinterprets --tail and interleaves all workloads instead o
     const twoServices = twoServiceConfig();
     await awsLogs(twoServices, undefined, { follow: false });
     const out = lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
-    assert.match(out, /edge\s*\| line-from-\/ecs\/acme-core\n/);
+    assert.match(out, /edge\s*\| line-from-\/ecs\/acme-core(?:\n|$)/);
     assert.match(out, /harness\s*\| line-from-\/ecs\/acme-core-harness/);
   } finally {
     console.log = log;
