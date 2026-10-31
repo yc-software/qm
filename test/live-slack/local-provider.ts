@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config.ts";
 import { buildApp } from "../../src/wiring.ts";
+import { migrateRegisteredPgSchemas } from "../../src/persistence/pg-pool.ts";
 import { setOnboardingStatus } from "../../src/onboarding/onboarding.ts";
 import { assertSandboxExecution } from "./scenarios-sandbox-providers.ts";
 
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   const name = `local-${randomUUID()}`;
   const failures: unknown[] = [];
   try {
+    await migrateRegisteredPgSchemas(process.env.DATABASE_URL);
     await built.identity.refresh();
     await built.deploymentLayerReady;
     await built.sandboxResources.initialize();
