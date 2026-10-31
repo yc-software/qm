@@ -484,6 +484,7 @@ function buildServer(app: App, deps: ServerOptions, unsignedTenant: string | nul
     capabilitySecret: deps.capabilitySecret ?? deps.signingSecret,
     ...(deps.deploymentControlSecret ? { controlSecret: deps.deploymentControlSecret } : {}),
     unsignedTenant,
+    app,
   };
   const server = createHttpServer((req, res) => {
     req.on("error", () => res.destroy());

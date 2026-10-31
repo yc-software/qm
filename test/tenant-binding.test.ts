@@ -33,21 +33,24 @@ describe("tenant resolution", () => {
   it("an owner row lookup binds the row's tenant and refuses unknown or ambiguous rows", async () => {
     const rows: Record<string, string[]> = { one: [OTHER_TENANT], none: [], both: [TEST_TENANT, OTHER_TENANT] };
     const statuses: Record<string, number> = {};
+    const readied: string[] = [];
+    const app = { tenantReady: async () => void readied.push(currentTenant()) };
     for (const id of Object.keys(rows)) {
       let seen: string | undefined;
       const res = new ServerResponse(new IncomingMessage(new Socket()));
       await withRowTenant(
-        res,
-        async (_table, _columns, value) => rows[value]!,
+        { res, app, deps: { rowTenants: async (_table, _columns, value) => rows[value]! } },
         { table: "webhooks", columns: ["id"], id },
         () => {
           seen = currentTenant();
+          assert.deepEqual(readied, [OTHER_TENANT]);
         },
       );
       statuses[id] = seen ? 200 : res.statusCode;
       if (seen) assert.equal(seen, OTHER_TENANT);
     }
     assert.deepEqual(statuses, { one: 200, none: 404, both: 404 });
+    assert.deepEqual(readied, [OTHER_TENANT]);
   });
 
   it("a portal identity only verifies inside the tenant it names", async () => {
