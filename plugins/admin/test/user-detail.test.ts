@@ -77,6 +77,20 @@ test("offboarding previews, applies only after confirmation, and reports each re
     api: async (method: string, path: string, body: any) => {
       if (method === "POST") {
         posts.push(JSON.parse(JSON.stringify([path, body])));
+        if (path.endsWith("/reactivate"))
+          return {
+            ok: true,
+            data: {
+              principal: {
+                principalId: "alex@example.com",
+                offboarded: false,
+                offboardedAt: 1700000000000,
+                offboardedBy: "admin-alice",
+                reactivatedAt: 1700000500000,
+                reactivatedBy: "admin-bob",
+              },
+            },
+          };
         return body?.apply
           ? {
               ok: true,
@@ -124,5 +138,12 @@ test("offboarding previews, applies only after confirmation, and reports each re
   assert.match(f.root.textContent!, /1 changes failed/);
   assert.ok(button("Reactivate sign-in"), "sign-in shows as deactivated");
   assert.match(f.root.textContent!, /offboarded\s+Offboarded 1700000000000 by admin-alice \(1 changes\)/);
+  button("Reactivate sign-in").click();
+  await settle();
+  assert.match(
+    f.root.textContent!,
+    /reactivated\s+Offboarded 1700000000000 by admin-alice \(1 changes\); reactivated 1700000500000 by admin-bob/,
+    "reactivating keeps the offboarding record on the card",
+  );
   f.dom.window.close();
 });

@@ -66,7 +66,7 @@ export function offboardingCard(
       () => s.api("POST", path("reactivate")),
       (data) => {
         deactivated = false;
-        record = data.principal || record;
+        record = data.principal ? { ...record, ...data.principal } : record;
         plan = null;
         hint = "Sign-in is back on.";
       },
