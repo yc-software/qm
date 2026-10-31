@@ -1,3 +1,4 @@
+import { turnFenceHeld } from "../turns/turn-fence.ts";
 import { EventEmitter } from "node:events";
 import { errMessage } from "../util/errors.ts";
 import { createPgPool } from "../persistence/pg-pool.ts";
@@ -147,16 +148,11 @@ END $base_schema$`,
     },
 
     async setDeliveryState(runId: string, leaseToken: string | null, state: RunDeliveryState): Promise<boolean> {
-      const { rowCount } =
-        leaseToken === null
-          ? await q(
-              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2",
-              [JSON.stringify(state), runId],
-            )
-          : await q(
-              "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND lease_token=$3 AND status='running'",
-              [JSON.stringify(state), runId, leaseToken],
-            );
+      if (leaseToken !== null && !(await turnFenceHeld({ query: q }, runId, leaseToken))) return false;
+      const { rowCount } = await q(
+        "UPDATE runs SET delivery_state=(COALESCE(delivery_state, '{}')::jsonb || $1::jsonb)::text WHERE id=$2 AND ($3::text IS NULL OR lease_token=$3)",
+        [JSON.stringify(state), runId, leaseToken],
+      );
       return rowCount > 0;
     },
 

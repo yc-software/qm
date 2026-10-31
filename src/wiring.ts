@@ -547,6 +547,7 @@ export function buildApp(
     canStart: () => !config.backgroundDeploymentId || backgroundAdmission(),
   });
   let inlineShutdown = new AbortController();
+  let runtimeStopping = false;
   const createSweeper: typeof createUntrackedSweeper = (work, interval, options) =>
     createUntrackedSweeper(() => admittedWork.run(work), interval, options);
   const databaseUrl = config.databaseUrl;
@@ -2242,7 +2243,7 @@ export function buildApp(
     orchestrator,
     runs,
     startTurns: () => {
-      if (!backgroundStopping && !inlineShutdown.signal.aborted) turnRunner.start();
+      if (!runtimeStopping) turnRunner.start();
     },
     maxAttempts,
     turnStream,
@@ -2854,6 +2855,7 @@ export function buildApp(
     return draining;
   }
   async function releaseInFlightRuns(): Promise<void> {
+    runtimeStopping = true;
     inlineShutdown.abort();
     await Promise.all([
       withTimeout(() => admittedWork.drained(), 3_000, "inline turn handback").catch(
@@ -2865,6 +2867,7 @@ export function buildApp(
   const runtime: Runtime = {
     start() {
       if (inlineShutdown.signal.aborted) inlineShutdown = new AbortController();
+      runtimeStopping = false;
       flyTunnel?.monitor();
       drain.start();
       if (config.backgroundWorkEnabled && !config.backgroundDeploymentId) startBackground();
@@ -2881,10 +2884,11 @@ export function buildApp(
     stopBackground,
     async backgroundDrained() {
       await backgroundStopping;
-      await admittedWork.drained();
+      await Promise.all([admittedWork.drained(), turnRunner.drained(config.shutdownDrainMs)]);
     },
     releaseInFlightRuns,
     async stop() {
+      runtimeStopping = true;
       await stopBackground();
       await Promise.all([
         withTimeout(() => admittedWork.drained(), config.shutdownDrainMs, "admitted work drain").catch(
