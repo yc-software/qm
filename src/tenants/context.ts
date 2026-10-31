@@ -3,28 +3,35 @@ import { scopeId, type ScopeId } from "../types.ts";
 
 export { boundTenant, isTenantId };
 
-const bindHooks = new Set<(tenant: string) => Promise<unknown>>();
-const firstBinds = new Map<string, Promise<void>>();
+type BindHook = (tenant: string) => Promise<unknown>;
+const bindHooks = new Map<BindHook, Map<string, Promise<void>>>();
 
-export function onFirstBind(hook: (tenant: string) => Promise<unknown>): () => void {
-  bindHooks.add(hook);
+export function onFirstBind(hook: BindHook): () => void {
+  bindHooks.set(hook, new Map());
   return () => bindHooks.delete(hook);
 }
 
+function prepare(tenant: string): Promise<void> {
+  const runs = [...bindHooks].map(([hook, done]) => {
+    const existing = done.get(tenant);
+    if (existing) return existing;
+    const run = Promise.resolve(tenant)
+      .then(hook)
+      .then(() => undefined);
+    done.set(tenant, run);
+    run.catch(() => done.get(tenant) === run && done.delete(tenant));
+    return run;
+  });
+  return Promise.all(runs).then(() => undefined);
+}
+
 function firstBind(tenant: string): string {
-  if (!bindHooks.size || firstBinds.has(tenant)) return tenant;
-  let settle!: (ready: Promise<void>) => void;
-  const pending = new Promise<void>((resolve) => (settle = resolve));
-  pending.catch(() => undefined);
-  firstBinds.set(tenant, pending);
-  const ready = Promise.all([...bindHooks].map((hook) => hook(tenant))).then(() => undefined);
-  ready.catch(() => firstBinds.delete(tenant));
-  settle(ready);
+  if (bindHooks.size) prepare(tenant).catch(() => undefined);
   return tenant;
 }
 
 export function tenantReady(): Promise<void> {
-  return firstBinds.get(currentTenant()) ?? Promise.resolve();
+  return prepare(currentTenant());
 }
 
 export function withTenant<T>(id: string, fn: () => T): T {

@@ -1,3 +1,4 @@
+import { inTenantOf } from "../../tenants/claim.ts";
 import { getSentEmail, listSentEmails } from "../../connectors/gmail-sent.ts";
 import { GmailApiError } from "../../connectors/gmail-api.ts";
 import {
@@ -26,7 +27,7 @@ import { personKey, samePerson } from "../../directory/person.ts";
 import { errMessage, swallowAs } from "../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../expiry.ts";
 import { sendJson, sendRedirect } from "../http.ts";
-import { currentTenant, withTenant } from "../../tenants/context.ts";
+import { currentTenant } from "../../tenants/context.ts";
 import { audit } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 
@@ -152,7 +153,7 @@ async function oauthCallback(ctx: BaseCtx): Promise<void> {
   if (!code || !stateParam) return sendJson(res, 400, { error: "bad_request", message: "code and state required" });
   const tenant = await oauthFlowTenant(deps, secret, stateParam);
   if (!tenant) return sendJson(res, 400, { error: "oauth_callback_failed", message: "invalid OAuth state" });
-  return withTenant(tenant, () => completeOAuthCallback(ctx, deps.connectorTokens!, code, stateParam));
+  return inTenantOf(tenant, () => completeOAuthCallback(ctx, deps.connectorTokens!, code, stateParam));
 }
 
 async function completeOAuthCallback(

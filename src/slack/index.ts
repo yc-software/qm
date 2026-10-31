@@ -1,4 +1,5 @@
-import { currentTenant, withTenant } from "../tenants/context.ts";
+import { inTenantOf } from "../tenants/claim.ts";
+import { currentTenant } from "../tenants/context.ts";
 import { continueInPrivate } from "./private-continuation.ts";
 import { externalSlackNamespace, type ExternalSlackAccess } from "./external-access.ts";
 import { registerKeychainApprovalActions } from "./keychain-approvals.ts";
@@ -564,7 +565,7 @@ export async function startSlackPlugin(
       .catch(swallowAs("slack: context request drain", undefined));
   void reconcileStatus();
 
-  const receive = (event: ReceiverEvent): Promise<void> => withTenant(TENANT, () => app.processEvent(event));
+  const receive = (event: ReceiverEvent): Promise<void> => inTenantOf(TENANT, () => app.processEvent(event));
   return {
     accountId: ACCOUNT_LABEL,
     ...(cfg.installationId ? { installationId: cfg.installationId } : {}),

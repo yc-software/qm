@@ -1,3 +1,4 @@
+import { inTenantOf } from "../../tenants/claim.ts";
 import { externalAppSharingAllowed } from "../../feature-flags.ts";
 import { DeployAccessError, type DeployAccessErrorCode } from "../../deploy/deploy-service.ts";
 import { SocksProxyAgent } from "socks-proxy-agent";
@@ -29,7 +30,7 @@ import { APP_SHELL_PATH_PREFIX, appShellHtml } from "../../deploy/app-shell.ts";
 import { notSharedHtml, REQUEST_ACCESS_PATH, signInFailedHtml } from "../../deploy/app-gate-pages.ts";
 import type { AppViewAuthMode } from "../../deploy/page-views.ts";
 import { principalDestination } from "../../reach/reach.ts";
-import { currentTenant, withTenant } from "../../tenants/context.ts";
+import { currentTenant } from "../../tenants/context.ts";
 import { FRAME_SESSION_COOKIE, portalSession, portalSessionFrom } from "../../deploy/viewer-session.ts";
 import { EMBED_ANCESTORS_HINT, parseEmbedAncestors } from "../../deploy/embed-ancestors.ts";
 import { proxyHeaders } from "../../util/http-proxy.ts";
@@ -1195,7 +1196,7 @@ async function serveDeploymentGit(ctx: BaseCtx): Promise<void> {
   const token = gitTokenFrom(ctx);
   const access = token ? await verifyDeployGitAccess(ctx.secret, token) : null;
   if (!access) return rejectGitAuth(ctx.res);
-  return withTenant(access.tenant, () => serveDeploymentGitAs(ctx, parts, isPush, access));
+  return inTenantOf(access.tenant, () => serveDeploymentGitAs(ctx, parts, isPush, access));
 }
 
 async function serveDeploymentGitAs(

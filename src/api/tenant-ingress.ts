@@ -1,7 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { verifyCapabilityToken, type VerifiedCapability } from "../auth/capability-token.ts";
-import { isTenantId, tenantReady, withTenant } from "../tenants/context.ts";
+import { inTenantOf } from "../tenants/claim.ts";
+import { isTenantId } from "../tenants/context.ts";
 import type { TenantResolver } from "../tenants/resolver.ts";
 import type { RowTenants } from "../tenants/row-tenant.ts";
 import { CAPABILITY_HEADER } from "./contract.ts";
@@ -79,10 +80,7 @@ export async function withRequestTenant(
     sendJson(res, 403, { error: "forbidden", message: "this credential belongs to another tenant" });
     return void req.resume();
   }
-  return withTenant(tenant, async () => {
-    await tenantReady();
-    return next();
-  });
+  return inTenantOf(tenant, next);
 }
 
 export async function withRowTenant(
@@ -93,5 +91,5 @@ export async function withRowTenant(
 ): Promise<void> {
   const tenants = rowTenants ? await rowTenants(row.table, row.columns, row.id) : [];
   if (tenants.length !== 1) return sendJson(res, 404, { error: "not_found" });
-  return withTenant(tenants[0]!, next);
+  return inTenantOf(tenants[0], next);
 }

@@ -1,4 +1,4 @@
-import { withTenant } from "../tenants/context.ts";
+import { inTenantOf } from "../tenants/claim.ts";
 import { SocketModeClient } from "@slack/socket-mode";
 import type { Receiver, ReceiverEvent, App as BoltApp } from "@slack/bolt";
 import { errMessage } from "../util/errors.ts";
@@ -153,7 +153,7 @@ export function createDeferredAckReceiver(opts: DeferredAckReceiverOptions): Rec
         await args.ack();
         return;
       }
-      await withTenant(tenant, async () => {
+      await inTenantOf(tenant, async () => {
         const { ack, gate } = createDeferredEnvelopeAck(args.ack, {
           gated: isGatedEnvelope(args.body),
           ...(opts.capMs !== undefined ? { capMs: opts.capMs } : {}),
