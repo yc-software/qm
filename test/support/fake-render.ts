@@ -304,6 +304,7 @@ export function serveFakeRenderApi(
   const tokenRequests: FakeRenderTokenRequest[] = [];
   const proxyCommands: string[] = [];
   let groupName: string | undefined = "Default";
+  let groupCreatedElsewhere: string | undefined;
   const uploads: Array<{ sandboxId: string; path: string; data: Buffer }> = [];
   const lifetimes = new Map<string, { timeoutSeconds: number; createdAt: string }>();
   const sandboxJson = (id: string) => ({
@@ -394,6 +395,10 @@ export function serveFakeRenderApi(
       concurrencyLimit: 20,
     });
     if (path === "/sandbox-groups" && request.method === "POST") {
+      if (groupCreatedElsewhere) {
+        groupName = groupCreatedElsewhere;
+        groupCreatedElsewhere = undefined;
+      }
       if (groupName) return Response.json({ message: "name taken" }, { status: 409 });
       groupName = ((await request.json()) as { name: string }).name;
       return Response.json(group(), { status: 201 });
@@ -467,6 +472,7 @@ export function serveFakeRenderApi(
     proxyCommands,
     uploads,
     removeSandboxGroups: () => (groupName = undefined),
+    createSandboxGroupDuringNextRequest: (name: string) => (groupCreatedElsewhere = name),
     sandboxGroupName: () => groupName,
   };
 }

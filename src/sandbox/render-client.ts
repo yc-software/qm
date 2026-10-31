@@ -238,18 +238,23 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       }
     },
     async importImage(source, name) {
-      const defaultGroup = async () =>
-        (
-          await retryOperation(() => api.listGroups(), "idempotent", { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS })
-        ).find((entry) => entry.sandboxGroup.isDefault)?.sandboxGroup.id;
-      let sandboxGroupId = await defaultGroup();
-      if (!sandboxGroupId) {
-        await api.createGroup({ name: "qm" }).catch((error: unknown) => {
-          if (!(error instanceof ClientError && error.statusCode === 409)) throw error;
-        });
-        sandboxGroupId = await defaultGroup();
+      const groups = () =>
+        retryOperation(() => api.listGroups(), "idempotent", { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS });
+      let listed = await groups();
+      if (!listed.length) {
+        await retryOperation(
+          () =>
+            api.createGroup({ name: "qm" }).catch((error: unknown) => {
+              if (!(error instanceof ClientError && error.statusCode === 409)) throw error;
+            }),
+          "idempotent",
+          { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS },
+        );
+        listed = await groups();
       }
-      if (!sandboxGroupId) throw new Error("Render workspace has no default sandbox group");
+      const sandboxGroupId = listed.find((entry) => entry.sandboxGroup.isDefault)?.sandboxGroup.id;
+      if (!sandboxGroupId)
+        throw new Error("Render workspace has no default sandbox group; set one in the Render dashboard");
       const image = await retryOperation(() => api.images.import({ sandboxGroupId, name, source }), "idempotent", {
         ...sdkErrors,
         timeoutMs: SUBMIT_TIMEOUT_MS,

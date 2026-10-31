@@ -172,6 +172,10 @@ test("Render SDK adapter creates the default sandbox group of a workspace that h
   assert.equal((await client.importImage(source, "qm-sandbox-base-0123456")).status, "succeeded");
   assert.equal(http.sandboxGroupName(), "qm");
   assert.equal((await client.importImage(source, "qm-sandbox-base-0123456")).status, "succeeded");
+
+  http.removeSandboxGroups();
+  http.createSandboxGroupDuringNextRequest("qm");
+  assert.equal((await client.importImage(source, "qm-sandbox-base-other")).status, "succeeded");
 });
 
 test("Render SDK adapter runs scripts with the environment of the QM sandbox base image", async (t) => {
