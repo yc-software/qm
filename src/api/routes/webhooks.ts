@@ -68,7 +68,7 @@ async function incomingWebhook(ctx: BaseCtx): Promise<void> {
     throw e;
   }
   const receiver = deps.webhookReceiver;
-  return withRowTenant(ctx, { table: "webhooks", columns: ["id"], id }, async () => {
+  return withRowTenant(res, deps.rowTenants, { table: "webhooks", columns: ["id"], id }, async () => {
     const out = await receiver.deliver(id, { headers: req.headers, rawBody });
     if (out.status === 200) {
       res.writeHead(200, { "content-type": "text/plain" });
